@@ -1,0 +1,38 @@
+.admin-grid { display: grid; gap: 18px; margin: 24px 0; }
+.admin-subpanel { padding: 22px; border: 1px solid var(--line); border-radius: 18px; background: #faf9f4; }
+.subpanel-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 18px; }
+.subpanel-heading h3 { margin: 0; font-family: Georgia, serif; font-size: 27px; font-weight: 400; }
+.subpanel-heading .eyebrow { margin-bottom: 7px; }
+.subpanel-heading > span, .admin-help { color: var(--muted); font-size: 12px; }
+.inline-form { display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 10px; align-items: end; }
+.inline-form label, .moderation-controls label, .appeal-review label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
+.inline-form input, .moderation-controls select, .moderation-controls textarea, .appeal-review select, .appeal-review textarea { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: white; color: var(--ink); font: inherit; }
+.inline-form input { min-height: 42px; }
+.one-time-token { padding: 12px; border: 1px solid #9db47c; border-radius: 10px; background: #eff8dd; color: #274a36; font-family: ui-monospace, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.admin-card-list { display: grid; gap: 12px; margin-top: 16px; }
+.admin-item { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: white; }
+.admin-item header { display: flex; align-items: center; gap: 9px; }
+.admin-item p { grid-column: 1; margin: 0; color: var(--muted); font-size: 11px; }
+.admin-item button { grid-column: 2; grid-row: 1 / span 2; align-self: center; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: white; cursor: pointer; }
+.queue-status { padding: 4px 7px; border-radius: 20px; background: #e9f1e9; color: var(--green); font-size: 10px; white-space: nowrap; }
+.moderation-panel { margin: 24px 0; }
+.moderation-card { padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: white; }
+.moderation-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.moderation-card > header div { display: grid; gap: 4px; }
+.moderation-card > header span { color: var(--muted); font-size: 11px; }
+.moderation-card .report-description { padding: 11px; border-left: 3px solid var(--orange); background: #fbf2eb; font-size: 13px; }
+.moderation-card details { margin: 14px 0; }
+.moderation-card summary { color: var(--green); font-size: 12px; cursor: pointer; }
+.moderation-card blockquote { margin: 9px 0; padding: 11px 13px; border: 1px solid var(--line); border-left: 3px solid var(--green); border-radius: 8px; background: #fafaf6; }
+.moderation-card blockquote strong, .moderation-card blockquote time { margin-right: 9px; font-size: 10px; }
+.moderation-card blockquote time, .moderation-card blockquote small { color: var(--muted); }
+.moderation-card blockquote p { margin: 7px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.moderation-controls { display: grid; grid-template-columns: 190px minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.moderation-controls textarea, .appeal-review textarea { min-height: 70px; resize: vertical; }
+.appeal-review { display: grid; grid-template-columns: 190px minmax(0,1fr) auto; gap: 10px; align-items: end; margin-top: 16px; padding: 15px; border: 1px solid #e6cda9; border-radius: 12px; background: #fff8ed; }
+.appeal-review h4, .appeal-review p { grid-column: 1 / -1; margin: 0; }
+.admin-table-title { margin: 30px 0 12px; font-family: Georgia, serif; font-size: 27px; font-weight: 400; }
+@media (max-width: 800px) {
+  .inline-form, .moderation-controls, .appeal-review { grid-template-columns: 1fr; }
+  .subpanel-heading, .moderation-card > header { align-items: flex-start; flex-direction: column; }
+}

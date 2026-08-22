@@ -1,0 +1,14 @@
+{$XMPP_DOMAIN} {
+    encode zstd gzip
+    route {
+        @metrics path /metrics
+        respond @metrics 404
+        reverse_proxy xmpp:8080
+    }
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    }
+}

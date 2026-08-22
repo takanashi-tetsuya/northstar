@@ -1,0 +1,130 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: xmpp
+      POSTGRES_USER: xmpp
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xmpp -d xmpp"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      - backend
+
+  xmpp:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      XMPP_DOMAIN: ${XMPP_DOMAIN:-localhost}
+      DATABASE_URL_FILE: /run/secrets/database_url
+      DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-32}
+      DATABASE_MIN_CONNECTIONS: ${DATABASE_MIN_CONNECTIONS:-2}
+      XMPP_BIND: 0.0.0.0:5222
+      S2S_BIND: 0.0.0.0:5269
+      HTTP_BIND: 0.0.0.0:8080
+      TRUSTED_PROXY_IPS: ${CADDY_PROXY_IP:-172.31.240.2}
+      PUBLIC_URL: https://${XMPP_DOMAIN:-localhost}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
+      SM_RESUME_TIMEOUT_SECONDS: ${SM_RESUME_TIMEOUT_SECONDS:-300}
+      OFFLINE_MESSAGE_TTL_DAYS: ${OFFLINE_MESSAGE_TTL_DAYS:-30}
+      UPLOAD_DIR: /data/uploads
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-26214400}
+      FEDERATION_ENABLED: ${FEDERATION_ENABLED:-true}
+      FEDERATION_ALLOWLIST: ${FEDERATION_ALLOWLIST:-}
+      FEDERATION_DENYLIST: ${FEDERATION_DENYLIST:-}
+      FEDERATION_ALLOW_PRIVATE_IPS: ${FEDERATION_ALLOW_PRIVATE_IPS:-false}
+      FEDERATION_DNS_OVERRIDES: ${FEDERATION_DNS_OVERRIDES:-}
+      FEDERATION_EXTRA_ROOT_CERT_PATH: ${FEDERATION_EXTRA_ROOT_CERT_PATH:-}
+      TLS_CERT_PATH: /run/secrets/northstar/server.crt
+      TLS_KEY_PATH: /run/secrets/northstar/server.key
+      OPEN_REGISTRATION: ${OPEN_REGISTRATION:-true}
+      INVITATION_REQUIRED: ${INVITATION_REQUIRED:-false}
+      REQUIRE_ENCRYPTED_ARCHIVE: ${REQUIRE_ENCRYPTED_ARCHIVE:-true}
+      REGISTRATION_RATE_PER_HOUR: ${REGISTRATION_RATE_PER_HOUR:-20}
+      POW_BASE_WORK_FACTOR: ${POW_BASE_WORK_FACTOR:-1024}
+      POW_MAX_WORK_FACTOR: ${POW_MAX_WORK_FACTOR:-524288}
+      ABUSE_WINDOW_SECONDS: ${ABUSE_WINDOW_SECONDS:-60}
+      ABUSE_COOLDOWN_SECONDS: ${ABUSE_COOLDOWN_SECONDS:-60}
+      ABUSE_MAX_WAIT_SECONDS: ${ABUSE_MAX_WAIT_SECONDS:-900}
+      LOG_DIR: ${LOG_DIR:-/data/logs}
+      LOG_ROTATION: ${LOG_ROTATION:-daily}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_RETENTION_FILES: ${LOG_RETENTION_FILES:-30}
+      RUST_LOG: ${RUST_LOG:-rust_xmpp_server=info,tower_http=info}
+    ports:
+      - "5222:5222"
+      - "5269:5269"
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - type: bind
+        source: ${TLS_CERT_HOST_PATH:-./certs/server.crt}
+        target: /run/secrets/northstar/server.crt
+        read_only: true
+      - type: bind
+        source: ${TLS_KEY_HOST_PATH:-./certs/server.key}
+        target: /run/secrets/northstar/server.key
+        read_only: true
+      - upload-data:/data/uploads
+      - log-data:/data/logs
+    secrets:
+      - database_url
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      frontend:
+        ipv4_address: ${XMPP_HTTP_IP:-172.31.240.3}
+      backend:
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - xmpp
+    environment:
+      XMPP_DOMAIN: ${XMPP_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+    networks:
+      frontend:
+        ipv4_address: ${CADDY_PROXY_IP:-172.31.240.2}
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:
+  upload-data:
+  log-data:
+
+secrets:
+  postgres_password:
+    file: ${POSTGRES_PASSWORD_SECRET_FILE:-./deploy/secrets/postgres_password}
+  database_url:
+    file: ${DATABASE_URL_SECRET_FILE:-./deploy/secrets/database_url}
+
+networks:
+  frontend:
+    ipam:
+      config:
+        - subnet: ${FRONTEND_SUBNET:-172.31.240.0/24}
+  backend:
+    internal: true

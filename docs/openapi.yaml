@@ -1,0 +1,297 @@
+openapi: 3.1.0
+info:
+  title: Northstar XMPP REST API
+  version: 0.1.0
+  description: Account, anti-abuse, reporting, encrypted-history, HTTP Upload and single-node administration API.
+servers:
+  - url: https://xmpp.example.com
+paths:
+  /healthz:
+    get:
+      summary: Process liveness probe
+      responses:
+        "200": { description: Process event loop is serving HTTP }
+  /readyz:
+    get:
+      summary: PostgreSQL readiness probe
+      responses:
+        "200": { description: Database query succeeded }
+        "500": { $ref: "#/components/responses/Error" }
+  /metrics:
+    get:
+      summary: Prometheus text metrics
+      description: Public at the application layer; restrict this route at the reverse proxy in production.
+      responses:
+        "200": { description: Prometheus text exposition }
+  /api/v1/config:
+    get:
+      summary: Read public server configuration
+      responses:
+        "200":
+          description: Public domain, registration, archive, WebSocket, MUC, upload and federation configuration
+  /api/v1/register:
+    post:
+      summary: Register an account when open registration is enabled
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Registration" }
+      responses:
+        "201": { description: Account created }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/anti-abuse/challenge:
+    post:
+      summary: Issue a one-use proof-of-work challenge
+      description: Registration challenges are public. Message, report and appeal challenges require a bearer session. A newer challenge for the same account action invalidates the previous challenge.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [registration, login, message, report, appeal] }
+      responses:
+        "200": { description: Challenge, current work/wait step, maximum work and cooldown information }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/login:
+    post:
+      summary: Create an API bearer session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Credentials" }
+      responses:
+        "200":
+          description: Authenticated session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/me:
+    get:
+      summary: Read the current account
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Current account }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/me/password:
+    patch:
+      summary: Change the current password and revoke every API session
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string }
+                new_password: { type: string, minLength: 10, maxLength: 1024 }
+      responses:
+        "200": { description: Password changed }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/history:
+    get:
+      summary: Read the current user's archived stanzas
+      description: Under the default policy, returned message payloads contain an OMEMO envelope and a generic fallback body only.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: with, schema: { type: string }, description: Bare peer JID }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
+      responses:
+        "200": { description: Archive page }
+  /api/v1/reports:
+    get:
+      summary: List the current user's reports and appeals
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Reports, selected evidence and outcomes }
+    post:
+      summary: Submit a report with 1–20 explicitly selected chat records
+      description: The client supplies plaintext only for records the user selected. A report proof-of-work challenge is required.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201": { description: Report submitted }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/reports/{id}/appeals:
+    post:
+      summary: Appeal one resolved report
+      description: Only one appeal is permitted per report. Appeals have stricter account limits, proof of work and a minimum hard wait.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "201": { description: Appeal submitted }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/upload/{id}:
+    put:
+      summary: Upload bytes into an XEP-0363 slot
+      description: The bearer value is the opaque, one-use token returned inside the XMPP slot response, not a REST login token. Content-Length and Content-Type must match the slot request.
+      security: [{ uploadSlot: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "201": { description: Ciphertext stored and ready at the slot GET URL }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /uploads/{id}:
+    get:
+      summary: Download bytes stored in an XEP-0363 slot
+      description: The URL is intentionally bearer-by-possession. The bundled Web client uploads only AES-GCM ciphertext and carries its key inside OMEMO.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Immutable uploaded bytes }
+        "404": { description: Slot is missing, expired before upload, or not uploaded }
+  /api/v1/admin/stats:
+    get:
+      summary: Read server counters
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Server statistics }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/users:
+    get:
+      summary: List accounts
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
+        - { in: query, name: offset, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        "200": { description: Account page }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/users/{id}:
+    patch:
+      summary: Enable, disable, promote or demote an account
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                disabled: { type: boolean }
+                admin: { type: boolean }
+      responses:
+        "200": { description: Account updated }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/reports:
+    get:
+      summary: List the moderation queue, selected evidence and appeals
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Moderation queue }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/reports/{id}:
+    patch:
+      summary: Update a report status and resolution
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Report updated and audited }
+  /api/v1/admin/appeals/{id}:
+    patch:
+      summary: Update an appeal status and resolution
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Appeal updated and audited }
+  /api/v1/admin/invitations:
+    get:
+      summary: List invitation metadata (never token secrets)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Invitation list }
+    post:
+      summary: Create an invitation token
+      description: The token secret is returned only in this response.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201": { description: Invitation created; copy the one-time token now }
+  /api/v1/admin/invitations/{id}:
+    delete:
+      summary: Revoke an invitation token
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Invitation revoked }
+  /api/v1/admin/tls/reload:
+    post:
+      summary: Reload the configured certificate and private key for new TLS handshakes
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Certificate reloaded and action audited }
+        "403": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+    uploadSlot:
+      type: http
+      scheme: bearer
+      description: Opaque one-use token returned by the XMPP upload service
+  schemas:
+    Credentials:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 3, maxLength: 64 }
+        password: { type: string, minLength: 10, maxLength: 1024 }
+    Registration:
+      allOf:
+        - { $ref: "#/components/schemas/Credentials" }
+        - type: object
+          properties:
+            invitation_token: { type: [string, "null"] }
+            pow: { $ref: "#/components/schemas/PowProof" }
+    PowProof:
+      type: object
+      required: [challenge_id, nonce]
+      properties:
+        challenge_id: { type: string, format: uuid }
+        nonce: { type: string, pattern: "^[0-9]+$", maxLength: 64 }
+    Session:
+      type: object
+      required: [token, jid, is_admin]
+      properties:
+        token: { type: string }
+        jid: { type: string }
+        is_admin: { type: boolean }
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: object
+                properties:
+                  code: { type: string }
+                  message: { type: string }
+    RateLimited:
+      description: Work proof, hard wait or cooldown is required; details contain current and maximum work and retry timing.
+      content:
+        application/json:
+          schema:
+            type: object

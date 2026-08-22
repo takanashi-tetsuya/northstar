@@ -1,0 +1,43 @@
+[package]
+name = "rust-xmpp-server"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A single-node, standards-oriented XMPP server written in Rust"
+
+[dependencies]
+anyhow = "1.0"
+argon2 = "0.5"
+axum = { version = "0.8", features = ["ws", "multipart"] }
+arc-swap = "1"
+bytes = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6.1"
+dotenvy = "0.15"
+futures = "0.3"
+rand = "0.8"
+roxmltree = "0.20"
+rustls-webpki = "0.103"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }
+thiserror = "2.0"
+hmac = "0.12"
+pbkdf2 = { version = "0.12", features = ["hmac"] }
+tokio = { version = "1.43", features = ["full"] }
+tokio-rustls = "0.26"
+tokio-util = { version = "0.7", features = ["rt", "io"] }
+tower-http = { version = "0.6", features = ["fs", "set-header", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1.12", features = ["v4", "serde"] }
+webpki-roots = "0.26"
+tracing-appender = "0.2.5"
+envy = "0.4.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

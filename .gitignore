@@ -1,0 +1,45 @@
+/target
+/target-wsl
+/.cargo-local
+/.cargo-linux
+/.rustup-local
+/.rustup-linux
+/.translation-tools
+/rustup-init.exe
+
+# Local configuration and runtime secrets. Keep example/template files tracked.
+.env
+.env.*
+!.env.example
+!.env.*.example
+**/secrets/*
+!deploy/secrets/README.md
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+.pgpass
+id_rsa
+id_ed25519
+
+# Runtime state, private keys/certificates, logs and local databases.
+/certs/
+/data/
+/logs/
+/scratch/
+*.log
+*.pid
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Generated diagnostics and interpreter caches.
+/cargo_check.json
+/funcs.json
+__pycache__/
+*.py[cod]
+.DS_Store

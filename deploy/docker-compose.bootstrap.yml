@@ -1,0 +1,11 @@
+services:
+  xmpp:
+    environment:
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/bootstrap_admin_password
+    secrets:
+      - bootstrap_admin_password
+
+secrets:
+  bootstrap_admin_password:
+    file: ${BOOTSTRAP_ADMIN_PASSWORD_SECRET_FILE:-./deploy/secrets/bootstrap_admin_password}

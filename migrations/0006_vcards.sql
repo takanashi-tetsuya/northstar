@@ -1,0 +1,5 @@
+CREATE TABLE vcards (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    payload TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

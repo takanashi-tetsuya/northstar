@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Northstar XMPP 服务入口与管理后台">
+  <title>Northstar XMPP</title>
+  <link rel="stylesheet" href="/styles.css?v=20260813-2">
+  <link rel="stylesheet" href="/admin.css?v=20260813-1">
+  <link rel="stylesheet" href="/i18n.css?v=20260813-3">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#home"><span class="mark">N</span><span>Northstar <small>XMPP</small></span></a>
+    <nav aria-label="主导航">
+      <a href="#home">概览</a><a href="/client.html">Web 客户端</a><a href="#admin">管理</a>
+    </nav>
+    <div class="language-host" data-language-host></div>
+    <span id="server-status" class="status"><i></i> 检查服务中</span>
+  </header>
+
+  <main>
+    <section id="home" class="hero panel">
+      <div>
+        <p class="eyebrow">开放 · 标准 · 自托管</p>
+        <h1>一颗属于你的<br><em>通信恒星</em></h1>
+        <p class="lede">面向千人规模的单机 XMPP 服务。标准客户端可直接连接，网页端支持 OMEMO 2 端到端加密，服务端只保存密文。</p>
+        <div class="actions"><a class="primary" href="/client.html">打开安全 Web 客户端</a><a class="secondary" href="#setup">查看连接参数</a></div>
+      </div>
+      <div class="orbit" aria-hidden="true"><span class="core"></span><span class="ring one"></span><span class="ring two"></span><b>5222</b><b>WSS</b><b>OMEMO</b></div>
+    </section>
+
+    <section class="feature-grid" aria-label="核心特性">
+      <article><span>01</span><h2>标准接入</h2><p>TCP + STARTTLS 与 RFC 7395 WebSocket，兼容桌面、移动和浏览器客户端。</p></article>
+      <article><span>02</span><h2>端到端加密</h2><p>网页端使用 OMEMO 2；身份密钥和会话密钥仅保存在用户选择的可信浏览器中。</p></article>
+      <article><span>03</span><h2>可观测</h2><p>结构化日志、健康检查与 Prometheus 指标，让单机运行状态保持透明。</p></article>
+    </section>
+
+    <section id="client" class="workspace panel client-launch">
+      <div>
+        <p class="eyebrow">Web Client</p>
+        <h2>完整浏览器客户端</h2>
+        <p>独立页面提供注册、联系人、在线状态、历史消息、送达状态以及 OMEMO 设备指纹管理。默认优先使用端到端加密。</p>
+        <p class="security-note">首次在可信设备登录时会生成本机 OMEMO 身份密钥。请核对联系人的设备指纹；共享或临时电脑不要勾选“可信设备”。</p>
+      </div>
+      <a class="primary launch-button" href="/client.html">进入客户端</a>
+    </section>
+
+    <section id="admin" class="admin panel">
+      <div class="section-heading"><div><p class="eyebrow">Operations</p><h2>运行控制台</h2></div><button id="refresh-admin" class="secondary" type="button">刷新</button></div>
+      <div id="admin-login" class="auth-card">
+        <h3>管理员登录</h3>
+        <form id="admin-form">
+          <label>用户名<input id="admin-username" required autocomplete="username"></label>
+          <label>密码<input id="admin-password" type="password" required autocomplete="current-password"></label>
+          <button class="primary" type="submit">登录控制台</button>
+          <p id="admin-error" class="error" role="alert"></p>
+        </form>
+      </div>
+      <div id="admin-content" class="hidden">
+        <div class="admin-actions"><span id="admin-identity"></span><button id="admin-logout" class="secondary" type="button">退出管理</button></div>
+        <div id="stats" class="stats"></div>
+        <div class="admin-grid">
+          <section class="admin-subpanel">
+            <div class="subpanel-heading"><div><p class="eyebrow">Invitations</p><h3>注册邀请码</h3></div></div>
+            <form id="invitation-form" class="inline-form">
+              <label>用途标签<input id="invitation-label" maxlength="128" required placeholder="例如：社区成员"></label>
+              <label>最多使用次数<input id="invitation-max-uses" type="number" min="1" max="100000" value="1" required></label>
+              <label>有效小时数<input id="invitation-hours" type="number" min="1" max="8760" value="168"></label>
+              <button class="primary" type="submit">创建邀请码</button>
+            </form>
+            <p id="invitation-token" class="one-time-token hidden"></p>
+            <div id="invitations" class="admin-card-list"></div>
+          </section>
+        </div>
+        <section class="admin-subpanel moderation-panel">
+          <div class="subpanel-heading"><div><p class="eyebrow">Moderation</p><h3>举报与申诉队列</h3></div><span>仅显示用户明确选取并提交的聊天记录</span></div>
+          <div id="reports" class="admin-card-list"></div>
+        </section>
+        <h3 class="admin-table-title">账户管理</h3>
+        <div class="table-wrap"><table><thead><tr><th>账户</th><th>权限</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="users"></tbody></table></div>
+      </div>
+    </section>
+
+    <section id="setup" class="setup panel">
+      <p class="eyebrow">Connection</p><h2>客户端连接参数</h2>
+      <dl><div><dt>JID 域</dt><dd id="domain-value">当前主机</dd></div><div><dt>客户端端口</dt><dd>5222 · STARTTLS</dd></div><div><dt>WebSocket</dt><dd><code>/xmpp-websocket</code></dd></div><div><dt>网页端加密</dt><dd>OMEMO 2 / Legacy OMEMO</dd></div></dl>
+    </section>
+  </main>
+  <footer>Northstar XMPP · Rust powered · Own your conversations.</footer>
+  <script type="module" src="/app.js?v=20260813-7"></script>
+</body>
+</html>

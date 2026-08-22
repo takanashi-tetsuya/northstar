@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Northstar 私密 XMPP 网页客户端">
+  <meta name="theme-color" content="#07110f">
+  <title>Northstar 私密聊天</title>
+  <link rel="stylesheet" href="/client.css?v=20260813-4">
+  <link rel="stylesheet" href="/i18n.css?v=20260813-3">
+</head>
+<body>
+  <noscript>此客户端需要启用 JavaScript。</noscript>
+  <div class="language-host auth-language" data-language-host></div>
+
+  <main id="auth-view" class="auth-view">
+    <section class="brand-panel" aria-labelledby="brand-title">
+      <a class="home-link" href="/" aria-label="返回 Northstar 首页">
+        <span class="brand-mark" aria-hidden="true">N</span>
+        <span>Northstar</span>
+      </a>
+      <div class="brand-copy">
+        <p class="eyebrow">PRIVATE XMPP</p>
+        <h1 id="brand-title">消息属于交谈的人。</h1>
+        <p>服务器负责可靠投递，OMEMO 负责让内容只在你的设备上打开。</p>
+      </div>
+      <div class="security-note">
+        <span class="status-dot"></span>
+        <span>默认启用端到端加密，不加载广告或远程资源</span>
+      </div>
+    </section>
+
+    <section class="auth-panel" aria-labelledby="auth-title">
+      <div class="auth-card">
+        <div class="auth-heading">
+          <p class="eyebrow">欢迎回来</p>
+          <h2 id="auth-title">登录聊天</h2>
+          <p id="server-label" class="muted">正在读取服务器配置…</p>
+        </div>
+
+        <div class="auth-tabs" role="tablist" aria-label="账号操作">
+          <button id="login-tab" class="auth-tab active" type="button" role="tab" aria-selected="true">登录</button>
+          <button id="register-tab" class="auth-tab" type="button" role="tab" aria-selected="false">注册</button>
+        </div>
+
+        <form id="login-form" class="auth-form" autocomplete="on">
+          <label>用户名
+            <div class="jid-input"><input id="login-username" name="username" autocomplete="username" required maxlength="64"><span id="login-domain">@…</span></div>
+          </label>
+          <label>密码
+            <div class="password-field"><input id="login-password" name="password" type="password" autocomplete="current-password" required><button class="reveal-button" type="button" data-reveal="login-password" aria-label="显示密码">显示</button></div>
+          </label>
+          <button class="primary-button" type="submit">安全登录</button>
+        </form>
+
+        <form id="register-form" class="auth-form hidden" autocomplete="off">
+          <label>用户名
+            <div class="jid-input"><input id="register-username" name="username" autocomplete="username" required maxlength="64"><span id="register-domain">@…</span></div>
+          </label>
+          <label>密码
+            <div class="password-field"><input id="register-password" name="password" type="password" autocomplete="new-password" minlength="10" required><button class="reveal-button" type="button" data-reveal="register-password" aria-label="显示密码">显示</button></div>
+          </label>
+          <label>确认密码
+            <input id="register-confirm" name="confirm" type="password" autocomplete="new-password" minlength="10" required>
+          </label>
+          <label id="invitation-field">邀请码（可选）
+            <input id="register-invitation" name="invitation" type="text" autocomplete="off" maxlength="256" spellcheck="false">
+          </label>
+          <p class="field-hint">至少 10 个字符。私钥只会保存在当前浏览器中。</p>
+          <p id="auth-pow-status" class="pow-status hidden" role="status"></p>
+          <button class="primary-button" type="submit">创建账号</button>
+        </form>
+
+        <p id="auth-error" class="form-message error hidden" role="alert"></p>
+        <p id="auth-success" class="form-message success hidden" role="status"></p>
+      </div>
+    </section>
+  </main>
+
+  <main id="chat-view" class="chat-view hidden">
+    <aside class="sidebar">
+      <header class="sidebar-header">
+        <a class="home-link compact" href="/" aria-label="返回 Northstar 首页"><span class="brand-mark" aria-hidden="true">N</span><span>Northstar</span></a>
+        <div class="language-host sidebar-language" data-language-host></div>
+        <button id="settings-button" class="icon-button" type="button" aria-label="打开设置" title="设置">⚙</button>
+      </header>
+
+      <section class="account-strip">
+        <div id="self-avatar" class="avatar large">N</div>
+        <div class="account-copy"><strong id="self-name">—</strong><span id="connection-label"><i class="presence offline"></i>未连接</span></div>
+      </section>
+
+      <div class="sidebar-actions">
+        <label class="search-box"><span aria-hidden="true">⌕</span><input id="contact-search" type="search" placeholder="搜索联系人"></label>
+        <button id="add-contact-button" class="square-button" type="button" aria-label="添加联系人" title="添加联系人">＋</button>
+      </div>
+
+      <nav id="conversation-list" class="conversation-list" aria-label="会话列表"></nav>
+
+      <footer class="sidebar-footer">
+        <button id="new-chat-button" class="secondary-button" type="button">＋ 发起会话</button>
+        <button id="new-group-button" class="secondary-button" type="button"># 创建或加入群聊</button>
+      </footer>
+    </aside>
+
+    <section class="conversation-pane">
+      <div id="empty-state" class="empty-state">
+        <div class="empty-orbit" aria-hidden="true"><span>N</span></div>
+        <p class="eyebrow">NORTHSTAR</p>
+        <h2>选择一个联系人开始交谈</h2>
+        <p>端到端加密会话会在发送前检查对方设备，并把密钥材料留在你的浏览器中。</p>
+        <button id="empty-new-chat" class="primary-button compact-button" type="button">发起新会话</button>
+      </div>
+
+      <div id="active-conversation" class="active-conversation hidden">
+        <header class="conversation-header">
+          <button id="mobile-back" class="icon-button mobile-only" type="button" aria-label="返回联系人">←</button>
+          <div id="peer-avatar" class="avatar">?</div>
+          <div class="peer-copy"><strong id="peer-name">—</strong><span id="peer-status"><i class="presence offline"></i>离线</span></div>
+          <div class="conversation-tools">
+            <button id="verify-button" class="security-button" type="button"><span aria-hidden="true">◇</span><span id="security-label">检查加密</span></button>
+            <button id="contact-menu-button" class="icon-button" type="button" aria-label="联系人菜单">•••</button>
+          </div>
+        </header>
+
+        <div id="security-banner" class="security-banner" role="status">
+          <span class="shield" aria-hidden="true">◇</span>
+          <div><strong>正在检查 OMEMO 设备</strong><span>发送前会验证对方的公开密钥。</span></div>
+          <button id="dismiss-security" class="icon-button" type="button" aria-label="关闭提示">×</button>
+        </div>
+
+        <div id="message-list" class="message-list" aria-live="polite"></div>
+        <button id="load-history-button" class="history-button hidden" type="button">查看更早的加密消息</button>
+
+        <div id="typing-indicator" class="typing-indicator hidden"></div>
+
+        <form id="message-form" class="composer">
+          <textarea id="message-input" rows="1" maxlength="8000" placeholder="输入消息" aria-label="消息"></textarea>
+          <div class="composer-row">
+            <div class="composer-left"><button id="attachment-button" class="attachment-button" type="button" aria-label="发送加密文件" title="发送加密文件">＋ 文件</button><div class="composer-security"><span id="composer-lock" aria-hidden="true">◇</span><span id="composer-mode">OMEMO 加密</span></div><span id="pow-status" class="pow-status compact hidden" role="status"></span></div>
+            <button id="send-button" class="send-button" type="submit" aria-label="发送消息">发送 <span aria-hidden="true">↑</span></button>
+          </div>
+          <input id="attachment-input" class="hidden" type="file">
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="contact-dialog" class="modal">
+    <form id="contact-form" method="dialog">
+      <header><div><p class="eyebrow">CONTACT</p><h2>添加联系人</h2></div><button class="icon-button" type="button" data-close-dialog="contact-dialog" aria-label="关闭">×</button></header>
+      <label>XMPP 地址<input id="contact-jid" type="text" inputmode="email" placeholder="用户名@服务器" required></label>
+      <label>备注名（可选）<input id="contact-name" type="text" maxlength="128" placeholder="对方的名字"></label>
+      <p class="field-hint">添加后会向对方发送联系人请求。</p>
+      <p id="contact-error" class="form-message error hidden" role="alert"></p>
+      <div class="modal-actions"><button class="secondary-button" type="button" data-close-dialog="contact-dialog">取消</button><button id="save-contact" class="primary-button compact-button" type="submit">发送请求</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="contact-actions-dialog" class="modal compact-modal">
+    <form method="dialog">
+      <header><div><p class="eyebrow">CONTACT</p><h2 id="contact-actions-name">联系人操作</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></header>
+      <div class="menu-stack">
+        <button id="report-contact-button" class="secondary-button" type="button">举报并选取聊天记录</button>
+        <button id="toggle-block-button" class="secondary-button" type="button">屏蔽联系人</button>
+        <button id="remove-contact-button" class="danger-button" type="button">从联系人列表移除</button>
+      </div>
+      <div class="modal-actions"><button class="secondary-button" value="cancel">关闭</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="group-dialog" class="modal">
+    <form id="group-form" method="dialog">
+      <header><div><p class="eyebrow">GROUP CHAT</p><h2>创建或加入群聊</h2></div><button class="icon-button" type="button" data-close-dialog="group-dialog" aria-label="关闭">×</button></header>
+      <label>房间名称<input id="group-room" type="text" maxlength="64" pattern="[a-zA-Z0-9_.-]+" placeholder="例如：team" required></label>
+      <label>显示名称（可选）<input id="group-name" type="text" maxlength="128" placeholder="例如：项目讨论"></label>
+      <label>你的群昵称<input id="group-nick" type="text" maxlength="64" required></label>
+      <p class="field-hint">房间地址为 <span id="group-domain">conference.服务器</span>。新房间由创建者管理；群消息使用 OMEMO 分别加密给在线成员的设备。</p>
+      <p id="group-error" class="form-message error hidden" role="alert"></p>
+      <div class="modal-actions"><button class="secondary-button" type="button" data-close-dialog="group-dialog">取消</button><button id="join-group-button" class="primary-button compact-button" type="submit">进入群聊</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="room-actions-dialog" class="modal wide-modal">
+    <form method="dialog">
+      <header><div><p class="eyebrow">GROUP CHAT</p><h2 id="room-actions-name">群聊成员</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></header>
+      <div id="room-member-list" class="member-list"></div>
+      <div class="modal-actions"><button id="leave-room-button" class="danger-button" type="button">退出群聊</button><button class="secondary-button" value="cancel">关闭</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="verify-dialog" class="modal wide-modal">
+    <form method="dialog">
+      <header><div><p class="eyebrow">OMEMO</p><h2>设备与指纹</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></header>
+      <p class="modal-copy">通过另一条可信渠道比对指纹。首次看到的密钥采用 TOFU（首次使用即信任）；密钥变化时客户端会停止发送。</p>
+      <div id="fingerprint-list" class="fingerprint-list"></div>
+      <div class="modal-actions"><button class="secondary-button" value="cancel">关闭</button><button id="refresh-devices" class="primary-button compact-button" value="default">重新检查</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="settings-dialog" class="modal wide-modal">
+    <form method="dialog">
+      <header><div><p class="eyebrow">SETTINGS</p><h2>本机设置</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></header>
+      <section class="settings-section"><h3>加密设备</h3><dl><div><dt>本机设备 ID</dt><dd id="own-device-id">—</dd></div><div><dt>本机指纹</dt><dd id="own-fingerprint">—</dd></div></dl></section>
+      <section class="settings-section"><h3>头像</h3><p>可选择最高 50 MiB 的常见图片。原图只在当前浏览器中读取，裁切、旋转、转码并压缩到 256 KiB 以下后才会发布为标准 XMPP 头像与 vCard 照片。</p><div class="avatar-setting"><div id="settings-avatar" class="avatar large">N</div><button id="avatar-button" class="secondary-button" type="button">选择并裁切头像</button><input id="avatar-input" class="hidden" type="file" accept="image/*,.avif,.bmp,.dib,.gif,.heic,.heif,.ico,.jfif,.jpe,.jpeg,.jpg,.png,.svg,.tif,.tiff,.webp"></div></section>
+      <section class="settings-section"><h3>举报与申诉</h3><p>查看举报处理结果，并在已处理的举报上提交一次申诉。申诉采用更严格的账号限流和工作量证明。</p><button id="report-history-button" class="secondary-button" type="button">查看举报与申诉</button></section>
+      <section class="settings-section danger-zone"><h3>会话</h3><p>退出后账号密码会从内存清除，OMEMO 私钥仍保存在当前浏览器中。</p><button id="logout-button" class="danger-button" value="default">退出登录</button></section>
+      <div class="modal-actions"><button class="secondary-button" value="cancel">关闭</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="report-dialog" class="modal wide-modal">
+    <form id="report-form" method="dialog">
+      <header><div><p class="eyebrow">REPORT</p><h2>举报会话</h2></div><button class="icon-button" type="button" data-close-dialog="report-dialog" aria-label="关闭">×</button></header>
+      <p class="modal-copy">请选择 1–20 条聊天记录作为证据。所选消息的明文会在你明确提交后发送给管理人员，即使原消息使用了 OMEMO；未选中的消息不会提交。</p>
+      <label>举报类型<select id="report-category" required><option value="spam">垃圾信息</option><option value="harassment">骚扰</option><option value="threat">威胁</option><option value="impersonation">冒充身份</option><option value="illegal">违法内容</option><option value="other">其他</option></select></label>
+      <fieldset class="evidence-fieldset"><legend>选取聊天记录</legend><div id="report-message-list" class="evidence-list"></div></fieldset>
+      <label>补充说明（可选）<textarea id="report-description" rows="4" maxlength="4000"></textarea></label>
+      <p class="pow-explanation">举报需要工作量证明。频繁举报会按台阶提高工作量和等待时间；限制有上限，停止频繁操作后会逐级冷却并恢复。最大工作量设计目标约为中端手机 8 秒。</p>
+      <p id="report-pow-status" class="pow-status hidden" role="status"></p>
+      <p id="report-error" class="form-message error hidden" role="alert"></p>
+      <div class="modal-actions"><button class="secondary-button" type="button" data-close-dialog="report-dialog">取消</button><button id="submit-report-button" class="primary-button compact-button" type="submit">计算并提交举报</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="report-history-dialog" class="modal wide-modal">
+    <form method="dialog">
+      <header><div><p class="eyebrow">REPORTS &amp; APPEALS</p><h2>举报处理记录</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></header>
+      <p class="modal-copy">每份举报只能申诉一次。申诉的账号限流和工作量证明比普通举报更严格，且同样会逐级冷却。</p>
+      <div id="report-history-list" class="report-history-list"></div>
+      <p id="appeal-pow-status" class="pow-status hidden" role="status"></p>
+      <p id="report-history-error" class="form-message error hidden" role="alert"></p>
+      <div class="modal-actions"><button class="secondary-button" value="cancel">关闭</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="avatar-editor-dialog" class="modal avatar-editor-modal">
+    <form method="dialog">
+      <header><div><p class="eyebrow">AVATAR</p><h2>裁切头像</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></header>
+      <p class="modal-copy">拖动图片调整位置，使用滑块或鼠标滚轮缩放。圆形线框显示头像在聊天中的可见范围。</p>
+      <div class="avatar-editor-stage">
+        <canvas id="avatar-crop-canvas" width="360" height="360" role="img" aria-label="头像裁切预览"></canvas>
+        <div class="avatar-crop-guide" aria-hidden="true"></div>
+      </div>
+      <p id="avatar-source-info" class="avatar-editor-info" data-i18n-ignore></p>
+      <label class="avatar-zoom-control"><span>缩放 <output id="avatar-zoom-value">100%</output></span><input id="avatar-zoom" type="range" min="1" max="4" step="0.01" value="1"></label>
+      <div class="avatar-edit-actions">
+        <button id="avatar-rotate-left" class="secondary-button" type="button" aria-label="向左旋转">↶ 向左旋转</button>
+        <button id="avatar-rotate-right" class="secondary-button" type="button" aria-label="向右旋转">↷ 向右旋转</button>
+        <button id="avatar-reset" class="secondary-button" type="button">重置</button>
+      </div>
+      <p id="avatar-output-info" class="avatar-editor-info"></p>
+      <p id="avatar-editor-error" class="form-message error" role="alert"></p>
+      <div class="modal-actions"><button class="secondary-button" value="cancel">取消</button><button id="avatar-save" class="primary-button compact-button" type="button">裁切并发布</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  <script type="module" src="/client.js?v=20260813-16"></script>
+</body>
+</html>

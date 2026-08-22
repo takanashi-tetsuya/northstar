@@ -1,0 +1,16 @@
+[advisories]
+# RUSTSEC-2023-0071 affects the `rsa` crate used by SQLx's optional MySQL
+# authentication path. Northstar enables SQLx with `default-features = false`
+# and the PostgreSQL driver only; `cargo tree -i rsa` is empty for the active
+# Windows and Linux dependency graphs. Cargo.lock still records SQLx's optional
+# MySQL dependency, so cargo-audit sees it even though it is not linked. Remove
+# this exception if MySQL support is ever enabled or SQLx stops recording it.
+ignore = ["RUSTSEC-2023-0071"]
+informational_warnings = ["unmaintained"]
+severity_threshold = "low"
+
+[output]
+deny = ["unmaintained", "unsound", "yanked"]
+format = "terminal"
+quiet = false
+show_tree = true

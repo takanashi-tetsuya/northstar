@@ -109,18 +109,131 @@ services:
       frontend:
         ipv4_address: ${CADDY_PROXY_IP:-172.31.240.2}
 
+  prometheus:
+    image: prom/prometheus:v3.12.0
+    profiles: ["monitoring"]
+    depends_on:
+      - xmpp
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+
+  grafana:
+    image: grafana/grafana:13.1.0
+    profiles: ["monitoring"]
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_HTTP_ADDR: 0.0.0.0
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/northstar-overview.json:/var/lib/grafana/dashboards/northstar-overview.json:ro
+    secrets:
+      - grafana_admin_password
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+
+  backup:
+    build:
+      context: .
+      dockerfile: deploy/backup.Dockerfile
+    profiles: ["backup"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - --database-url-file
+      - /run/secrets/database_url
+      - --upload-dir
+      - /uploads
+      - --output
+      - /backups
+    volumes:
+      - ./backups:/backups
+      - upload-data:/uploads:ro
+    secrets:
+      - database_url
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+
+  restore:
+    build:
+      context: .
+      dockerfile: deploy/backup.Dockerfile
+    profiles: ["restore"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["bash", "/opt/northstar/restore-backup.sh"]
+    command: ["--help"]
+    volumes:
+      - ./backups:/backups:ro
+      - upload-data:/uploads
+    secrets:
+      - database_url
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+
 volumes:
   postgres-data:
   caddy-data:
   caddy-config:
   upload-data:
   log-data:
+  prometheus-data:
+  grafana-data:
 
 secrets:
   postgres_password:
     file: ${POSTGRES_PASSWORD_SECRET_FILE:-./deploy/secrets/postgres_password}
   database_url:
     file: ${DATABASE_URL_SECRET_FILE:-./deploy/secrets/database_url}
+  grafana_admin_password:
+    file: ${GRAFANA_ADMIN_PASSWORD_SECRET_FILE:-./deploy/secrets/grafana_admin_password}
 
 networks:
   frontend:

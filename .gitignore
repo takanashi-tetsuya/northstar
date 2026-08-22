@@ -29,6 +29,7 @@ id_ed25519
 /data/
 /logs/
 /scratch/
+/backups/
 *.log
 *.pid
 *.db

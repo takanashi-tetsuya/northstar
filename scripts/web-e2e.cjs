@@ -115,10 +115,12 @@ async function main() {
   const failures = [];
   try {
     const aliceContext = await browser.newContext({ acceptDownloads: true });
+    const aliceSecondContext = await browser.newContext({ acceptDownloads: true });
     const bobContext = await browser.newContext({ acceptDownloads: true });
     const alicePage = await aliceContext.newPage();
+    const aliceSecondPage = await aliceSecondContext.newPage();
     const bobPage = await bobContext.newPage();
-    for (const [name, page] of [['alice', alicePage], ['bob', bobPage]]) {
+    for (const [name, page] of [['alice', alicePage], ['alice-second', aliceSecondPage], ['bob', bobPage]]) {
       page.on('pageerror', (error) => failures.push(`${name} page error: ${error.message}`));
       page.on('requestfailed', (request) => {
         if (['document', 'script', 'stylesheet', 'wasm'].includes(request.resourceType())) {
@@ -127,8 +129,16 @@ async function main() {
       });
     }
 
-    await login(alicePage, alice);
+    // Two fresh resources intentionally initialize concurrently. XEP-0384
+    // requires each resource to reannounce itself if the other's publication
+    // overwrites the shared `current` device-list item.
+    await Promise.all([login(alicePage, alice), login(aliceSecondPage, alice)]);
     await login(bobPage, bob);
+    check(
+      await alicePage.locator('#own-device-id').textContent()
+        !== await aliceSecondPage.locator('#own-device-id').textContent(),
+      'independent browser profiles reused an OMEMO device ID',
+    );
     await addContact(alicePage, `${bob}@localhost`);
     const approval = bobPage.locator('.toast.actionable', { hasText: `${alice}@localhost` });
     await approval.waitFor({ timeout: 20_000 });
@@ -137,17 +147,32 @@ async function main() {
     await reciprocalApproval.waitFor({ timeout: 20_000 });
     await reciprocalApproval.locator('button').click();
 
-    const directMessage = `OMEMO direct ${suffix}`;
-    await sendText(alicePage, directMessage);
     const aliceConversation = bobPage.locator(`.conversation-item[data-jid="${alice}@localhost"]`);
+    const bobConversationOnSecond = aliceSecondPage.locator(`.conversation-item[data-jid="${bob}@localhost"]`);
+    await bobConversationOnSecond.waitFor({ timeout: 20_000 });
+    await bobConversationOnSecond.click();
     await aliceConversation.waitFor({ timeout: 20_000 });
     await aliceConversation.click();
+    await bobPage.locator('#verify-button').click();
+    await bobPage.locator('#refresh-devices').click();
+    await bobPage.waitForFunction(
+      () => document.querySelectorAll('#fingerprint-list .fingerprint-card').length === 2,
+      null,
+      { timeout: 30_000 },
+    );
+    await bobPage.keyboard.press('Escape');
+    await bobPage.locator('#verify-dialog').waitFor({ state: 'hidden' });
+
+    const directMessage = `OMEMO direct ${suffix}`;
+    await sendText(alicePage, directMessage);
     await bobPage.locator('.message-row.incoming .message-bubble', { hasText: directMessage }).waitFor({ timeout: 30_000 });
     check(await bobPage.locator('.message-row.incoming .message-meta .encrypted').count() > 0, 'direct message was not marked encrypted');
+    await aliceSecondPage.locator('.message-row.outgoing .message-bubble', { hasText: directMessage }).waitFor({ timeout: 30_000 });
 
     const reply = `OMEMO reply ${suffix}`;
     await sendText(bobPage, reply);
     await alicePage.locator('.message-row.incoming .message-bubble', { hasText: reply }).waitFor({ timeout: 30_000 });
+    await aliceSecondPage.locator('.message-row.incoming .message-bubble', { hasText: reply }).waitFor({ timeout: 30_000 });
 
     const attachmentBytes = Buffer.from(`Northstar encrypted attachment ${suffix}`, 'utf8');
     await alicePage.locator('#attachment-input').setInputFiles({
@@ -202,7 +227,7 @@ async function main() {
     check(overflow <= 1, `mobile login layout overflows horizontally by ${overflow}px`);
 
     check(failures.length === 0, failures.join('\n'));
-    console.log('web-e2e: two independent OMEMO clients, direct/group messages, encrypted upload/download, avatar, admin dashboard and mobile layout passed');
+    console.log('web-e2e: concurrent same-account OMEMO devices, multi-device direct delivery, group messages, encrypted upload/download, avatar, admin dashboard and mobile layout passed');
   } finally {
     await browser.close();
   }

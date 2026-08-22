@@ -72,8 +72,63 @@ jobs:
         run: |
           node --check web/client.js
           node --check web/xmpp.js
+          node --check web/omemo.js
           node --check scripts/web-e2e.cjs
           node scripts/check-abuse.mjs
           node scripts/check-avatar-editor.mjs
+          node scripts/check-omemo.mjs
           node scripts/check-i18n.mjs
           node scripts/check-locales.mjs
+
+      - name: Check operational script syntax
+        run: |
+          bash -n scripts/backup.sh scripts/verify-backup.sh scripts/restore-backup.sh scripts/backup-restore-wsl.sh scripts/create-production-secrets.sh
+          python3 -m py_compile scripts/run-postgres.py
+
+  protocol-integration:
+    name: PostgreSQL protocol integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: xmpp_test
+          POSTGRES_USER: xmpp_test
+          POSTGRES_PASSWORD: xmpp-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U xmpp_test -d xmpp_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Run isolated protocol integration
+        env:
+          XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
+          XMPP_TEST_OFFLINE: "false"
+        run: bash scripts/integration-wsl.sh
+
+  disaster-recovery:
+    name: Isolated disaster-recovery drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install private PostgreSQL test tools
+        run: sudo apt-get update && sudo apt-get install -y postgresql postgresql-client
+
+      - name: Run backup, verification, and restore
+        run: bash scripts/backup-restore-wsl.sh

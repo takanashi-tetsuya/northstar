@@ -14,16 +14,23 @@ bash -n \
   build_and_start.sh \
   start_server.sh \
   scripts/create-production-secrets.sh \
+  scripts/backup.sh \
+  scripts/backup-restore-wsl.sh \
+  scripts/verify-backup.sh \
+  scripts/restore-backup.sh \
   scripts/release-preflight.sh \
   scripts/browser-e2e-server-wsl.sh \
   scripts/start-browser-test-wsl.sh \
   scripts/restart-browser-test-wsl.sh \
   scripts/stop-browser-test-wsl.sh
 
+python3 -m py_compile scripts/run-postgres.py
+
 bash scripts/verify-wsl.sh all
 bash scripts/integration-wsl.sh
 bash scripts/federation-wsl.sh
 bash scripts/load-1000-wsl.sh
+bash scripts/backup-restore-wsl.sh
 bash scripts/browser-e2e-wsl.sh
 
 echo "release runtime validation passed"

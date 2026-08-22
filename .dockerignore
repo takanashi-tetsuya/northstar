@@ -12,6 +12,7 @@ certs
 data
 logs
 scratch
+backups
 deploy/secrets
 target
 target-wsl

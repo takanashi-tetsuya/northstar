@@ -9,6 +9,7 @@ It creates the following ignored, mode-0600 files without printing their values:
 - `postgres_password`: consumed only by PostgreSQL.
 - `database_url`: consumed only by the XMPP server through `DATABASE_URL_FILE`.
 - `bootstrap_admin_password`: mounted only during the one-time bootstrap run.
+- `grafana_admin_password`: mounted only into the optional Grafana container.
 
 The database password embedded in `database_url` must match `postgres_password`.
 After the administrator has logged in and changed the bootstrap password, recreate

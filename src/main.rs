@@ -50,15 +50,18 @@ async fn main() -> Result<()> {
                     bg_state.abuse.cleanup_challenges();
                     if let Err(e) = db::cleanup_expired_sessions(&bg_state.pool).await {
                         tracing::error!("failed to cleanup expired sessions: {e}");
+                        bg_state.metrics.background_maintenance_failures_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     if let Err(e) = db::cleanup_expired_upload_slots(&bg_state.pool).await {
                         tracing::error!("failed to cleanup expired upload slots: {e}");
+                        bg_state.metrics.background_maintenance_failures_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     if let Err(e) = db::cleanup_expired_offline_messages(
                         &bg_state.pool,
                         bg_state.config.offline_message_ttl_days,
                     ).await {
                         tracing::error!("failed to cleanup expired offline messages: {e}");
+                        bg_state.metrics.background_maintenance_failures_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     let now = std::time::Instant::now();
                     bg_state

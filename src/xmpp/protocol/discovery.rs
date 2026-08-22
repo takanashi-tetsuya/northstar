@@ -50,6 +50,10 @@ impl ProtocolSession {
             "http://jabber.org/protocol/pubsub#pep",
             "http://jabber.org/protocol/pubsub#multi-items",
             "http://jabber.org/protocol/pubsub#persistent-items",
+            "http://jabber.org/protocol/pubsub#auto-create",
+            "http://jabber.org/protocol/pubsub#delete-items",
+            "http://jabber.org/protocol/pubsub#publish-options",
+            "http://jabber.org/protocol/pubsub#retract-items",
             "http://jabber.org/protocol/pubsub#retrieve-items",
             "jabber:iq:roster",
             "jabber:iq:version",
@@ -100,9 +104,26 @@ impl ProtocolSession {
         if jid_domain(from)
             .is_some_and(|domain| domain.eq_ignore_ascii_case(&self.state.config.domain))
         {
-            if let Ok(Some(owner)) = db::find_user(&self.state.pool, localpart(from)).await {
-                if let Ok(pep_nodes) = db::pep_nodes(&self.state.pool, owner.id).await {
-                    for node in pep_nodes {
+            if let Some(owner) = db::find_user(&self.state.pool, localpart(from)).await? {
+                let requester_jid = self.authenticated.as_ref().map(|requester| {
+                    format!("{}@{}", requester.username, self.state.config.domain)
+                });
+                for node in db::pep_nodes(&self.state.pool, owner.id).await? {
+                    let allowed = if let Some(requester_jid) = &requester_jid {
+                        super::pep::pep_access_allowed(
+                            &self.state.pool,
+                            &owner,
+                            &self.state.config.domain,
+                            &node,
+                            requester_jid,
+                        )
+                        .await?
+                    } else {
+                        db::pep_node(&self.state.pool, owner.id, &node)
+                            .await?
+                            .is_some_and(|config| config.access_model == "open")
+                    };
+                    if allowed {
                         query.push_str(&format!("<feature var='{}'/>", attr_escape(&node)));
                         query.push_str(&format!("<feature var='{}+notify'/>", attr_escape(&node)));
                     }

@@ -17,6 +17,8 @@ pub enum AppError {
     Conflict(String),
     #[error("rate limited")]
     RateLimited(serde_json::Value),
+    #[error("{0}")]
+    Unavailable(String),
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -28,6 +30,11 @@ impl IntoResponse for AppError {
             Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden", self.to_string()),
             Self::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request", self.to_string()),
             Self::Conflict(_) => (StatusCode::CONFLICT, "conflict", self.to_string()),
+            Self::Unavailable(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "service_unavailable",
+                self.to_string(),
+            ),
             Self::RateLimited(details) => {
                 return (
                     StatusCode::TOO_MANY_REQUESTS,

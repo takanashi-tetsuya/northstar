@@ -2,10 +2,13 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export PATH="$project_dir/.cargo-linux/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-export RUSTUP_HOME="$project_dir/.rustup-linux"
-export CARGO_HOME="$project_dir/.cargo-local"
-export CARGO_TARGET_DIR="$project_dir/target-wsl"
+if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
+  export PATH="$project_dir/.cargo-linux/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  export RUSTUP_HOME="$project_dir/.rustup-linux"
+  export CARGO_HOME="$project_dir/.cargo-local"
+  export CARGO_TARGET_DIR="$project_dir/target-wsl"
+fi
+target_dir="${CARGO_TARGET_DIR:-$project_dir/target}"
 
 cd "$project_dir"
 test_database="${XMPP_TEST_DATABASE:-xmpp_test}"
@@ -27,7 +30,11 @@ PGOPTIONS="-c search_path=$test_schema" PGPASSWORD=xmpp-test-password psql \
   --set ON_ERROR_STOP=1 \
   --command "DROP SCHEMA IF EXISTS \"$test_schema\" CASCADE; CREATE SCHEMA \"$test_schema\";" >/dev/null
 
-cargo build --locked --offline
+cargo_args=(--locked)
+if [[ "${XMPP_TEST_OFFLINE:-true}" == "true" ]]; then
+  cargo_args+=(--offline)
+fi
+cargo build "${cargo_args[@]}"
 
 server_pid=""
 cleanup() {
@@ -55,7 +62,7 @@ env \
   BOOTSTRAP_ADMIN_PASSWORD=integration-admin-password-123 \
   LOG_FORMAT=json \
   RUST_LOG="${RUST_LOG:-rust_xmpp_server=info}" \
-  "$CARGO_TARGET_DIR/debug/rust-xmpp-server" >integration-server.log 2>&1 &
+  "$target_dir/debug/rust-xmpp-server" >integration-server.log 2>&1 &
 server_pid=$!
 
 XMPP_TEST_HOST=127.0.0.1 \

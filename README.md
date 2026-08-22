@@ -926,9 +926,10 @@ These are test-only credentials. The fixtures use isolated PostgreSQL schemas an
 | Script | Coverage | Default isolated ports |
 | --- | --- | --- |
 | `scripts/integration-wsl.sh` | REST, STARTTLS/SASL, WebSocket, roster, PEP, vCard, routing, SM, Carbons, blocking, MUC, upload, push, MAM, metrics | C2S 16422, S2S 16425, HTTP 18480 |
-| `scripts/federation-wsl.sh` | Two domains, private DNS overrides, CA/SAN checks, SASL EXTERNAL, bidirectional/offline behavior | 15223/15224, S2S 15268/15269, HTTP 18081/18082 |
+| `scripts/federation-wsl.sh` | Two domains, private DNS overrides, CA/SAN checks, SASL EXTERNAL, PEP/vCard IQ, addressed PEP notifications, bidirectional/offline behavior | 15223/15224, S2S 15268/15269, HTTP 18081/18082 |
 | `scripts/load-1000-wsl.sh` | 1,000 authenticated WebSocket resources, active-session metric, pings | C2S 16222, S2S 16269, HTTP 18280 |
-| `scripts/browser-e2e-wsl.sh` | Two browser OMEMO clients, direct/group messages, encrypted attachment, avatar, admin, mobile layout | C2S 16322, S2S 16326, HTTP 18380 |
+| `scripts/backup-restore-wsl.sh` | Private SCRAM PostgreSQL cluster, backup hashes, confirmation guard, database/upload restore, rollback retention | Private Unix socket only |
+| `scripts/browser-e2e-wsl.sh` | Three isolated browser contexts: two devices for one account plus a peer, multi-device direct/group OMEMO, encrypted attachment, avatar, admin, mobile layout | C2S 16322, S2S 16326, HTTP 18380 |
 
 The isolated ports are test fixtures, not product defaults. Product defaults remain 5222/5269/8080.
 
@@ -937,6 +938,7 @@ JavaScript static checks:
 ```bash
 node scripts/check-abuse.mjs
 node scripts/check-avatar-editor.mjs
+node scripts/check-omemo.mjs
 node scripts/check-i18n.mjs
 node scripts/check-locales.mjs
 ```
@@ -955,15 +957,21 @@ powershell -ExecutionPolicy Bypass -File scripts/release-runtime-validation.ps1
 
 To rerun only the browser matrix, use `scripts/browser-e2e-windows.ps1`. Both PowerShell scripts stop only the exact temporary Northstar PID recorded by `browser-e2e-server-wsl.sh`; they never use broad process-name termination.
 
-It performs shell syntax checks, Rust formatting/check/test/clippy, integration, two-domain federation, 1,000 sessions, and browser E2E. It is intentionally expensive and requires the prepared PostgreSQL/WSL/browser environment.
+It performs shell/Python syntax checks, Rust formatting/check/test/clippy, integration, two-domain federation, 1,000 sessions, a private backup/restore drill, and browser E2E. It is intentionally expensive and requires the prepared PostgreSQL/WSL/browser environment.
 
-Last full runtime verification in this workspace on 2026-08-22 passed all 22 Rust tests, full integration, two-domain federation, 1,000 simultaneous authenticated sessions with sample pings, and browser E2E covering two independent OMEMO clients, direct/group encryption, encrypted upload/download, avatar processing, administration, and mobile layout. Repeat runtime tests after protocol/security changes and on the deployment host; results are not transferable capacity guarantees.
+Last full runtime verification in this workspace on 2026-08-22 passed all 25 Rust tests, full integration, two-domain federation, 1,000 simultaneous authenticated sessions with sample pings, a private PostgreSQL backup/verification/restore drill, and browser E2E covering two concurrent devices for one account plus a peer, multi-device direct/group OMEMO, encrypted upload/download, avatar processing, administration, and mobile layout. Repeat runtime tests after protocol/security changes and on the deployment host; results are not transferable capacity guarantees.
 
 ### Backup, restore, upgrade, and certificate rotation
 
 #### Backup
 
 Back up PostgreSQL and upload bytes as one consistency set. OMEMO browser keys are not on the server and cannot be included in a server backup.
+
+The repository now includes `scripts/backup.sh`, `scripts/verify-backup.sh`, and
+the deliberately guarded `scripts/restore-backup.sh`. See
+[`docs/PRODUCTION_OPERATIONS.md`](docs/PRODUCTION_OPERATIONS.md) for the exact
+online consistency model, off-host encryption responsibility, restore checks,
+Prometheus alerts, and the provisioned Grafana dashboard.
 
 For a simple single-node maintenance backup:
 
@@ -1703,13 +1711,14 @@ powershell -ExecutionPolicy Bypass -File scripts/release-runtime-validation.ps1
 | 脚本 | 覆盖内容 | 隔离端口 |
 | --- | --- | --- |
 | `integration-wsl.sh` | REST、TLS/SASL、WebSocket、roster、PEP、vCard、SM、Carbons、MUC、上传、push、MAM、指标 | 16422/16425/18480 |
-| `federation-wsl.sh` | 两个域、私有 DNS override、CA/SAN、EXTERNAL、双向与离线 | 15223/15224、15268/15269、18081/18082 |
+| `federation-wsl.sh` | 两个域、私有 DNS override、CA/SAN、EXTERNAL、PEP/vCard IQ、带地址的 PEP 通知、双向与离线 | 15223/15224、15268/15269、18081/18082 |
 | `load-1000-wsl.sh` | 1,000 认证 WebSocket 资源、指标、ping | 16222/16269/18280 |
-| `browser-e2e-wsl.sh` | 两个 OMEMO 网页客户端、单聊/群聊、附件、头像、管理、手机布局 | 16322/16326/18380 |
+| `backup-restore-wsl.sh` | 私有 SCRAM PostgreSQL、备份哈希、确认保护、数据库/上传恢复、旧文件保留 | 仅私有 Unix socket |
+| `browser-e2e-wsl.sh` | 三个隔离网页上下文：同一账号双设备加一个通信方，多设备 OMEMO 单聊/群聊、附件、头像、管理、手机布局 | 16322/16326/18380 |
 
 测试脚本使用独立 schema 和测试端口，不是产品默认端口，也不会抢占正式 5222/5269/8080。
 
-2026-08-22 在当前环境最后一次完整运行时验证通过：22/22 个 Rust 测试、完整协议集成、双域联邦、1,000 个同时认证会话与抽样 ping，以及覆盖两个独立 OMEMO 客户端、加密单聊/群聊、加密附件、头像、管理后台和移动布局的浏览器 E2E。协议或安全代码变更后必须重跑运行时矩阵，上线机器也必须重跑，不能把这次结果当作其他硬件的容量保证。
+2026-08-22 在当前环境最后一次完整运行时验证通过：25/25 个 Rust 测试、完整协议集成、双域联邦、1,000 个同时认证会话与抽样 ping、私有 PostgreSQL 备份/校验/恢复演练，以及覆盖同一账号两个并发设备和一个通信方、多设备 OMEMO 加密单聊/群聊、加密附件、头像、管理后台和移动布局的浏览器 E2E。协议或安全代码变更后必须重跑运行时矩阵，上线机器也必须重跑，不能把这次结果当作其他硬件的容量保证。
 
 ### 备份、恢复、升级和证书轮换
 

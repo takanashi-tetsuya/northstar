@@ -104,6 +104,21 @@ def run() -> None:
         "federated approver roster state was not persisted",
     )
 
+    bob.send(
+        "<iq xmlns='jabber:client' type='set' id='remote-pep-notify'>"
+        "<pubsub xmlns='http://jabber.org/protocol/pubsub'><publish node='urn:xmpp:omemo:2:devices'>"
+        "<item id='current'><devices xmlns='urn:xmpp:omemo:2'><device id='777'/><device id='778'/></devices></item>"
+        "</publish></pubsub></iq>"
+    )
+    bob.receive_until("remote-pep-notify")
+    pep_event, _ = alice.receive_until("device id='778'", timeout=20)
+    fixture.check(
+        "type='headline'" in pep_event
+        and "from='bob_fed@remote.localhost'" in pep_event
+        and "to='alice_fed@localhost'" in pep_event,
+        "federated PEP notification was not addressed or delivered correctly",
+    )
+
     alice.send(
         "<message xmlns='jabber:client' to='bob_fed@remote.localhost' type='chat' id='fed-a-b'>"
         "<encrypted xmlns='urn:xmpp:omemo:2'><header sid='111'/><payload>FEDERATED-CIPHERTEXT-A</payload></encrypted>"
@@ -145,7 +160,7 @@ def run() -> None:
 
     bob.close()
     alice.close()
-    print("federation: DNS override, STARTTLS, certificate validation, SASL EXTERNAL, PEP/vCard IQ, presence subscriptions, bidirectional and offline messaging passed")
+    print("federation: DNS override, STARTTLS, certificate validation, SASL EXTERNAL, PEP/vCard IQ, cross-domain PEP notifications, presence subscriptions, bidirectional and offline messaging passed")
 
 
 if __name__ == "__main__":

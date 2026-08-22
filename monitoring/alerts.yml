@@ -1,0 +1,66 @@
+groups:
+  - name: northstar-availability
+    rules:
+      - alert: NorthstarUnavailable
+        expr: up{job="rust-xmpp-server"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Northstar cannot be scraped
+          description: Prometheus has been unable to reach the Northstar metrics endpoint for two minutes.
+      - alert: NorthstarDatabaseUnavailable
+        expr: xmpp_database_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Northstar cannot query PostgreSQL
+          description: The server process is alive, but its database health probe is failing.
+      - alert: NorthstarDatabasePoolSaturated
+        expr: xmpp_database_pool_connections / xmpp_database_pool_max_connections > 0.85 and xmpp_database_pool_idle_connections < 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Northstar database pool is close to exhaustion
+          description: More than 85% of configured connections are open and fewer than two are idle.
+      - alert: NorthstarAuthenticationBackendFailure
+        expr: increase(xmpp_authentication_backend_failures_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Authentication backend failures detected
+          description: Authentication failed because of an internal backend error, not because of invalid credentials.
+      - alert: NorthstarMaintenanceFailure
+        expr: increase(xmpp_background_maintenance_failures_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: A Northstar maintenance job failed
+          description: Session, upload-slot, or offline-message cleanup reported an error.
+  - name: northstar-capacity-and-abuse
+    rules:
+      - alert: NorthstarSessionCapacityWarning
+        expr: xmpp_active_sessions > 900
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Active sessions exceed the validated design envelope
+          description: Northstar has more than 900 active resources; the current single-node design target is 1000.
+      - alert: NorthstarSustainedRateLimiting
+        expr: rate(xmpp_rate_limited_total[10m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Sustained anti-abuse rate limiting
+          description: More than one operation per second has been rate-limited for ten minutes.
+      - alert: NorthstarFederationFailureBurst
+        expr: increase(xmpp_federation_failures_total[10m]) >= 10
+        labels:
+          severity: warning
+        annotations:
+          summary: Federation failures increased sharply
+          description: Ten or more outbound federation workers failed in ten minutes.

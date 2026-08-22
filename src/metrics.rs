@@ -18,6 +18,11 @@ pub struct Metrics {
     pub rate_limited_total: AtomicU64,
     pub reports_total: AtomicU64,
     pub appeals_total: AtomicU64,
+    pub pep_items_published_total: AtomicU64,
+    pub pep_items_retracted_total: AtomicU64,
+    pub pep_retrievals_total: AtomicU64,
+    pub federation_inbound_active: AtomicU64,
+    pub background_maintenance_failures_total: AtomicU64,
 }
 
 impl Metrics {
@@ -56,7 +61,17 @@ impl Metrics {
                 "# TYPE xmpp_reports_total counter\n",
                 "xmpp_reports_total {}\n",
                 "# TYPE xmpp_appeals_total counter\n",
-                "xmpp_appeals_total {}\n"
+                "xmpp_appeals_total {}\n",
+                "# TYPE xmpp_pep_items_published_total counter\n",
+                "xmpp_pep_items_published_total {}\n",
+                "# TYPE xmpp_pep_items_retracted_total counter\n",
+                "xmpp_pep_items_retracted_total {}\n",
+                "# TYPE xmpp_pep_retrievals_total counter\n",
+                "xmpp_pep_retrievals_total {}\n",
+                "# TYPE xmpp_federation_inbound_active gauge\n",
+                "xmpp_federation_inbound_active {}\n",
+                "# TYPE xmpp_background_maintenance_failures_total counter\n",
+                "xmpp_background_maintenance_failures_total {}\n"
             ),
             read(&self.tcp_connections_total),
             read(&self.websocket_connections_total),
@@ -74,6 +89,11 @@ impl Metrics {
             read(&self.rate_limited_total),
             read(&self.reports_total),
             read(&self.appeals_total),
+            read(&self.pep_items_published_total),
+            read(&self.pep_items_retracted_total),
+            read(&self.pep_retrievals_total),
+            read(&self.federation_inbound_active),
+            read(&self.background_maintenance_failures_total),
         )
     }
 }

@@ -47,9 +47,11 @@ pub async fn serve(
                 let state = Arc::clone(&state);
                 let acceptor = acceptor.clone();
                 tokio::spawn(async move {
-                    if let Err(error) = inbound_connection(stream, state, acceptor).await {
+                    state.metrics.federation_inbound_active.fetch_add(1, Ordering::Relaxed);
+                    if let Err(error) = inbound_connection(stream, Arc::clone(&state), acceptor).await {
                         tracing::debug!(%peer, ?error, "inbound federation stream closed");
                     }
+                    state.metrics.federation_inbound_active.fetch_sub(1, Ordering::Relaxed);
                 });
             }
             envelope = outbound.recv() => {
@@ -325,6 +327,20 @@ pub(crate) async fn route_inbound_iq(
             else {
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
             };
+            if db::pep_node(&state.pool, owner.id, node).await?.is_none() {
+                return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
+            }
+            if !crate::xmpp::protocol::pep::pep_access_allowed(
+                &state.pool,
+                &owner,
+                &state.config.domain,
+                node,
+                from,
+            )
+            .await?
+            {
+                return Ok(Some(s2s_iq_error(id, to, from, "not-authorized")));
+            }
             let requested_id = items
                 .children()
                 .find(|node| node.is_element() && node.tag_name().name() == "item")

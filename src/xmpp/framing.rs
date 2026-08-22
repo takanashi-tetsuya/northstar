@@ -275,4 +275,35 @@ mod tests {
             .to_string()
             .contains("must not contain attributes"));
     }
+
+    #[test]
+    fn compatibility_corpus_survives_every_utf8_fragment_boundary() {
+        let corpus = [
+            "<message xmlns='jabber:client' id='carbon'><sent xmlns='urn:xmpp:carbons:2'><forwarded xmlns='urn:xmpp:forward:0'><message xmlns='jabber:client' id='inner'><body>carbon</body></message></forwarded></sent></message>",
+            "<message xmlns='jabber:client' id='mam'><result xmlns='urn:xmpp:mam:2'><forwarded xmlns='urn:xmpp:forward:0'><delay xmlns='urn:xmpp:delay' stamp='2026-08-22T00:00:00Z'/><message xmlns='jabber:client'><encrypted xmlns='urn:xmpp:omemo:2'><payload>密文</payload></encrypted></message></forwarded></result></message>",
+            "<iq xmlns='jabber:client' type='set' id='pep'><pubsub xmlns='http://jabber.org/protocol/pubsub'><publish node='urn:xmpp:omemo:2:bundles'><item id='42'><bundle xmlns='urn:xmpp:omemo:2'><prekeys><pk id='1'>AA==</pk></prekeys></bundle></item></publish></pubsub></iq>",
+            "<presence xmlns='jabber:client' data='a>b'><x xmlns='http://jabber.org/protocol/muc#user'><!-- occupant --><item jid='用户@example.test/device'/></x></presence>",
+        ];
+        for stanza in corpus {
+            for split in stanza
+                .char_indices()
+                .map(|(index, _)| index)
+                .chain(std::iter::once(stanza.len()))
+            {
+                let mut buffer = stanza[..split].to_owned();
+                let first = take_frame(&mut buffer).unwrap();
+                if split == stanza.len() {
+                    assert_eq!(first.as_deref(), Some(stanza));
+                    continue;
+                }
+                assert!(
+                    first.is_none(),
+                    "frame completed before split {split}: {stanza}"
+                );
+                buffer.push_str(&stanza[split..]);
+                assert_eq!(take_frame(&mut buffer).unwrap().as_deref(), Some(stanza));
+                assert!(buffer.is_empty());
+            }
+        }
+    }
 }

@@ -387,8 +387,18 @@ export class XmppClient extends EventTarget {
     return this.sendIq(`<pubsub xmlns='${NS.PUBSUB}'><items node='${xmlEscape(node)}'>${item}</items></pubsub>`, { to: bareJid(owner) });
   }
 
-  publishPep(node, itemId, payload) {
-    return this.sendIq(`<pubsub xmlns='${NS.PUBSUB}'><publish node='${xmlEscape(node)}'><item id='${xmlEscape(itemId)}'>${payload}</item></publish><publish-options><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE' type='hidden'><value>http://jabber.org/protocol/pubsub#publish-options</value></field><field var='pubsub#access_model'><value>open</value></field><field var='pubsub#max_items'><value>max</value></field></x></publish-options></pubsub>`, { type: 'set', timeout: 20000 });
+  publishPep(node, itemId, payload, options = null) {
+    const fields = [];
+    if (options?.accessModel) fields.push(`<field var='pubsub#access_model'><value>${xmlEscape(options.accessModel)}</value></field>`);
+    if (options?.maxItems) fields.push(`<field var='pubsub#max_items'><value>${xmlEscape(String(options.maxItems))}</value></field>`);
+    const publishOptions = fields.length
+      ? `<publish-options><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE' type='hidden'><value>http://jabber.org/protocol/pubsub#publish-options</value></field>${fields.join('')}</x></publish-options>`
+      : '';
+    return this.sendIq(`<pubsub xmlns='${NS.PUBSUB}'><publish node='${xmlEscape(node)}'><item id='${xmlEscape(itemId)}'>${payload}</item></publish>${publishOptions}</pubsub>`, { type: 'set', timeout: 20000 });
+  }
+
+  retractPep(node, itemId, notify = true) {
+    return this.sendIq(`<pubsub xmlns='${NS.PUBSUB}'><retract node='${xmlEscape(node)}' notify='${notify ? 'true' : 'false'}'><item id='${xmlEscape(itemId)}'/></retract></pubsub>`, { type: 'set', timeout: 20000 });
   }
 }
 

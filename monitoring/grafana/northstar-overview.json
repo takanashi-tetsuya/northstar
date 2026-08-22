@@ -1,0 +1,24 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "panels": [
+    {"type": "stat", "title": "Database", "id": 1, "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0}, "targets": [{"expr": "xmpp_database_up", "refId": "A"}], "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}, "type": "value"}], "color": {"mode": "thresholds"}}, "overrides": []}},
+    {"type": "stat", "title": "Active sessions", "id": 2, "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0}, "targets": [{"expr": "xmpp_active_sessions", "refId": "A"}]},
+    {"type": "stat", "title": "MUC occupants", "id": 3, "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0}, "targets": [{"expr": "xmpp_muc_occupants", "refId": "A"}]},
+    {"type": "stat", "title": "Inbound S2S", "id": 4, "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0}, "targets": [{"expr": "xmpp_federation_inbound_active", "refId": "A"}]},
+    {"type": "stat", "title": "Outbound S2S workers", "id": 5, "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0}, "targets": [{"expr": "xmpp_federation_outbound_workers", "refId": "A"}]},
+    {"type": "stat", "title": "Uptime", "id": 6, "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0}, "targets": [{"expr": "xmpp_uptime_seconds", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}},
+    {"type": "timeseries", "title": "Stanza and message throughput", "id": 7, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4}, "targets": [{"expr": "rate(xmpp_stanzas_in_total[5m])", "legendFormat": "stanzas in", "refId": "A"}, {"expr": "rate(xmpp_stanzas_out_total[5m])", "legendFormat": "stanzas out", "refId": "B"}, {"expr": "rate(xmpp_messages_routed_total[5m])", "legendFormat": "messages routed", "refId": "C"}]},
+    {"type": "timeseries", "title": "Database pool", "id": 8, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4}, "targets": [{"expr": "xmpp_database_pool_connections", "legendFormat": "open", "refId": "A"}, {"expr": "xmpp_database_pool_idle_connections", "legendFormat": "idle", "refId": "B"}, {"expr": "xmpp_database_pool_max_connections", "legendFormat": "maximum", "refId": "C"}]},
+    {"type": "timeseries", "title": "Security and backend failures", "id": 9, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12}, "targets": [{"expr": "increase(xmpp_authentication_backend_failures_total[5m])", "legendFormat": "auth backend", "refId": "A"}, {"expr": "increase(xmpp_federation_failures_total[5m])", "legendFormat": "federation", "refId": "B"}, {"expr": "increase(xmpp_background_maintenance_failures_total[5m])", "legendFormat": "maintenance", "refId": "C"}]},
+    {"type": "timeseries", "title": "PEP / OMEMO metadata", "id": 10, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12}, "targets": [{"expr": "rate(xmpp_pep_items_published_total[5m])", "legendFormat": "published", "refId": "A"}, {"expr": "rate(xmpp_pep_items_retracted_total[5m])", "legendFormat": "retracted", "refId": "B"}, {"expr": "rate(xmpp_pep_retrievals_total[5m])", "legendFormat": "retrieved", "refId": "C"}]}
+  ],
+  "schemaVersion": 41,
+  "tags": ["northstar", "xmpp"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "title": "Northstar Overview",
+  "uid": "northstar-overview",
+  "version": 1
+}

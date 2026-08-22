@@ -1556,6 +1556,7 @@ async function maybeReconnect() {
     await connectXmpp(localpart(state.account), state.sessionPassword);
     state.omemo.xmpp = state.xmpp;
     await state.omemo.publishBundle();
+    await state.omemo.ensureDeviceAnnouncement();
     await state.xmpp.getRoster().then(mergeRoster);
     state.blocked = new Set(await state.xmpp.getBlocklist());
     for (const room of state.rooms.values()) {

@@ -12,7 +12,8 @@ $wslScripts = @(
     "scripts/verify-wsl.sh all",
     "scripts/integration-wsl.sh",
     "scripts/federation-wsl.sh",
-    "scripts/load-1000-wsl.sh"
+    "scripts/load-1000-wsl.sh",
+    "scripts/backup-restore-wsl.sh"
 )
 foreach ($command in $wslScripts) {
     & wsl.exe -d $Distro -- bash -lc "cd '$projectWsl' && bash $command"

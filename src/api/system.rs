@@ -20,17 +20,64 @@ pub async fn health() -> &'static str {
 }
 
 pub async fn ready(State(state): State<Arc<AppState>>) -> Result<&'static str, AppError> {
-    sqlx::query_scalar::<_, i32>("SELECT 1")
-        .fetch_one(&state.pool)
-        .await?;
-    Ok("ready")
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&state.pool),
+    )
+    .await
+    {
+        Ok(Ok(_)) => Ok("ready"),
+        Ok(Err(error)) => {
+            tracing::warn!(?error, "readiness database probe failed");
+            Err(AppError::Unavailable("database is not ready".into()))
+        }
+        Err(_) => Err(AppError::Unavailable(
+            "database readiness probe timed out".into(),
+        )),
+    }
 }
 
 pub async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        state.metrics.render(),
+    let started = std::time::Instant::now();
+    let database_up = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&state.pool),
     )
+    .await
+    .is_ok_and(|result| result.is_ok());
+    let mut body = state.metrics.render();
+    body.push_str(&format!(
+        concat!(
+            "# TYPE xmpp_database_up gauge\n",
+            "xmpp_database_up {}\n",
+            "# TYPE xmpp_database_ping_duration_seconds gauge\n",
+            "xmpp_database_ping_duration_seconds {:.6}\n",
+            "# TYPE xmpp_database_pool_connections gauge\n",
+            "xmpp_database_pool_connections {}\n",
+            "# TYPE xmpp_database_pool_idle_connections gauge\n",
+            "xmpp_database_pool_idle_connections {}\n",
+            "# TYPE xmpp_database_pool_max_connections gauge\n",
+            "xmpp_database_pool_max_connections {}\n",
+            "# TYPE xmpp_resumable_sessions gauge\n",
+            "xmpp_resumable_sessions {}\n",
+            "# TYPE xmpp_muc_occupants gauge\n",
+            "xmpp_muc_occupants {}\n",
+            "# TYPE xmpp_federation_outbound_workers gauge\n",
+            "xmpp_federation_outbound_workers {}\n",
+            "# TYPE xmpp_uptime_seconds gauge\n",
+            "xmpp_uptime_seconds {}\n"
+        ),
+        u8::from(database_up),
+        started.elapsed().as_secs_f64(),
+        state.pool.size(),
+        state.pool.num_idle(),
+        state.config.database_max_connections,
+        state.resumable_sessions.len(),
+        state.muc_occupants.len(),
+        state.s2s_outbound_connections.len(),
+        state.started_at.elapsed().as_secs(),
+    ));
+    ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body)
 }
 
 pub async fn websocket(

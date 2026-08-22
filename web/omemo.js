@@ -9,8 +9,9 @@ import {
 import { getValue, setValue } from './storage.js';
 import { NS, bareJid, child, descendant, xmlEscape } from './xmpp.js';
 
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 const PREKEY_COUNT = 100;
+const MAX_KEY_ID = 0x7fffffff;
 const PROFILE = NS.OMEMO2;
 const SCE = 'urn:xmpp:sce:1';
 const EME = 'urn:xmpp:eme:0';
@@ -200,11 +201,12 @@ export class OmemoManager {
     this.deviceCache = new Map();
     this.ready = false;
     this.fresh = false;
+    this.deviceRepair = Promise.resolve();
   }
 
   async initialize() {
     this.state = await getValue('crypto', this.account);
-    if (!this.state || this.state.version !== STORE_VERSION) {
+    if (!this.state) {
       this.fresh = true;
       this.state = {
         version: STORE_VERSION,
@@ -214,11 +216,14 @@ export class OmemoManager {
         prekeys: {},
         identities: {},
         sessions: {},
+        nextPreKeyId: PREKEY_COUNT + 1,
       };
       this.store = new PersistentOmemoStore(this.account, this.state);
       await this.provision();
     } else {
+      this.upgradeState();
       this.store = new PersistentOmemoStore(this.account, this.state);
+      await this.store.persist();
       await this.ensurePrekeys();
     }
 
@@ -232,10 +237,23 @@ export class OmemoManager {
       if (existing.includes(Number(this.state.deviceId))) throw new Error('无法生成唯一的 OMEMO 设备 ID');
     }
     await this.publishBundle();
-    await this.publishDeviceList([...new Set([...existing, Number(this.state.deviceId)])]);
-    this.deviceCache.set(this.account, [...new Set([...existing, Number(this.state.deviceId)])]);
+    await this.ensureDeviceAnnouncement(existing);
     this.ready = true;
     return this.getOwnDevice();
+  }
+
+  upgradeState() {
+    this.state.version = STORE_VERSION;
+    this.state.prekeys ||= {};
+    this.state.identities ||= {};
+    this.state.sessions ||= {};
+    const highest = Object.keys(this.state.prekeys)
+      .map(Number)
+      .filter((id) => Number.isInteger(id) && id > 0 && id <= MAX_KEY_ID)
+      .reduce((maximum, id) => Math.max(maximum, id), 0);
+    if (!Number.isInteger(this.state.nextPreKeyId) || this.state.nextPreKeyId <= highest) {
+      this.state.nextPreKeyId = highest >= MAX_KEY_ID ? 1 : highest + 1;
+    }
   }
 
   async provision() {
@@ -245,16 +263,29 @@ export class OmemoManager {
     this.state.signedPreKey = { id: signed.keyId, keyPair: pairToJson(signed.keyPair), signature: bytesToBase64(signed.signature) };
     const prekeys = await Promise.all(Array.from({ length: PREKEY_COUNT }, (_, id) => KeyHelper.generatePreKey(id + 1)));
     for (const prekey of prekeys) this.state.prekeys[String(prekey.keyId)] = pairToJson(prekey.keyPair);
+    this.state.nextPreKeyId = PREKEY_COUNT + 1;
     await this.store.persist();
   }
 
   async ensurePrekeys() {
-    const existing = new Set(Object.keys(this.state.prekeys));
-    const missing = Array.from({ length: PREKEY_COUNT }, (_, index) => String(index + 1)).filter((id) => !existing.has(id));
-    if (!missing.length) return;
-    const generated = await Promise.all(missing.map((id) => KeyHelper.generatePreKey(Number(id))));
+    const missingCount = Math.max(0, PREKEY_COUNT - Object.keys(this.state.prekeys).length);
+    if (!missingCount) return false;
+    const ids = Array.from({ length: missingCount }, () => this.allocatePreKeyId());
+    const generated = await Promise.all(ids.map((id) => KeyHelper.generatePreKey(id)));
     for (const prekey of generated) this.state.prekeys[String(prekey.keyId)] = pairToJson(prekey.keyPair);
     await this.store.persist();
+    return true;
+  }
+
+  allocatePreKeyId() {
+    let candidate = Number(this.state.nextPreKeyId) || 1;
+    for (let attempts = 0; attempts < MAX_KEY_ID; attempts += 1) {
+      if (candidate <= 0 || candidate > MAX_KEY_ID) candidate = 1;
+      this.state.nextPreKeyId = candidate === MAX_KEY_ID ? 1 : candidate + 1;
+      if (!this.state.prekeys[String(candidate)]) return candidate;
+      candidate = this.state.nextPreKeyId;
+    }
+    throw new Error('OMEMO 预密钥编号空间已耗尽');
   }
 
   async publishBundle() {
@@ -263,12 +294,20 @@ export class OmemoManager {
     const edIdentity = await curvePubKeyToEd25519PubKey(identity.pubKey);
     const prekeys = Object.entries(this.state.prekeys).map(([id, pair]) => `<pk id='${id}'>${bytesToBase64(stripCurvePrefix(pairFromJson(pair).pubKey))}</pk>`).join('');
     const payload = `<bundle xmlns='${NS.OMEMO2}'><spk id='${signed.id}'>${bytesToBase64(stripCurvePrefix(pairFromJson(signed.keyPair).pubKey))}</spk><spks>${signed.signature}</spks><ik>${bytesToBase64(edIdentity)}</ik><prekeys>${prekeys}</prekeys></bundle>`;
-    await this.xmpp.publishPep(NS.OMEMO2_BUNDLES, String(this.state.deviceId), payload);
+    await this.xmpp.publishPep(NS.OMEMO2_BUNDLES, String(this.state.deviceId), payload, { accessModel: 'open', maxItems: 'max' });
   }
 
   publishDeviceList(ids) {
     const devices = ids.map((id) => `<device id='${Number(id)}'/>`).join('');
-    return this.xmpp.publishPep(NS.OMEMO2_DEVICES, 'current', `<devices xmlns='${NS.OMEMO2}'>${devices}</devices>`);
+    return this.xmpp.publishPep(NS.OMEMO2_DEVICES, 'current', `<devices xmlns='${NS.OMEMO2}'>${devices}</devices>`, { accessModel: 'open' });
+  }
+
+  async ensureDeviceAnnouncement(knownIds = null) {
+    const current = knownIds || await this.fetchDeviceIds(this.account, false);
+    const merged = [...new Set([...current, Number(this.state.deviceId)])].sort((left, right) => left - right);
+    await this.publishDeviceList(merged);
+    this.deviceCache.set(this.account, merged);
+    return merged;
   }
 
   async fetchDeviceIds(jid, useCache = true) {
@@ -287,7 +326,7 @@ export class OmemoManager {
       .filter((node) => node.localName === 'device')
       .map((node) => Number(node.getAttribute('id')))
       .filter((id) => Number.isInteger(id) && id > 0);
-    this.deviceCache.set(jid, [...new Set(ids)]);
+    this.deviceCache.set(jid, [...new Set(ids)].sort((left, right) => left - right));
     return this.deviceCache.get(jid);
   }
 
@@ -296,7 +335,22 @@ export class OmemoManager {
     if (!items || items.getAttribute('node') !== NS.OMEMO2_DEVICES) return;
     const devices = descendant(items, 'devices', NS.OMEMO2);
     const ids = [...(devices?.children || [])].filter((node) => node.localName === 'device').map((node) => Number(node.getAttribute('id'))).filter(Boolean);
-    this.deviceCache.set(bareJid(from), [...new Set(ids)]);
+    const owner = bareJid(from);
+    const normalized = [...new Set(ids)].sort((left, right) => left - right);
+    this.deviceCache.set(owner, normalized);
+    if (owner !== this.account || !this.state || normalized.includes(Number(this.state.deviceId))) return;
+
+    // XEP-0384 explicitly requires a device to reannounce itself if a
+    // concurrent device-list publication overwrites its ID. Serialize repairs
+    // and re-read the latest list so simultaneous resources converge.
+    this.deviceRepair = this.deviceRepair
+      .catch(() => {})
+      .then(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 75 + crypto.getRandomValues(new Uint8Array(1))[0]));
+        const latest = await this.fetchDeviceIds(this.account, false);
+        if (!latest.includes(Number(this.state.deviceId))) await this.ensureDeviceAnnouncement(latest);
+      })
+      .catch((error) => console.error('OMEMO device-list repair failed', error));
   }
 
   async fetchBundle(jid, deviceId) {
@@ -357,6 +411,10 @@ export class OmemoManager {
       }
     }
     if (!bundles.some((bundle) => bundle.jid === peer)) throw new Error(failures[0]?.error || '无法建立对方的 OMEMO 会话');
+    if (failures.length) {
+      const failed = failures.map(({ jid, id }) => `${jid}#${id}`).join(', ');
+      throw new Error(`设备列表与公钥包不一致，已停止发送以避免遗漏设备：${failed}`);
+    }
     return { bundles, failures };
   }
 
@@ -453,6 +511,29 @@ export class OmemoManager {
     const identity = pairFromJson(this.state.identityKeyPair);
     const edIdentity = await curvePubKeyToEd25519PubKey(identity.pubKey);
     return { id: Number(this.state.deviceId), fingerprint: fingerprint(edIdentity) };
+  }
+
+  async retireOwnDevice() {
+    const ownId = Number(this.state.deviceId);
+    const current = await this.fetchDeviceIds(this.account, false);
+    await this.publishDeviceList(current.filter((id) => id !== ownId));
+    await this.xmpp.retractPep(NS.OMEMO2_BUNDLES, String(ownId));
+    this.deviceCache.set(this.account, current.filter((id) => id !== ownId));
+    this.ready = false;
+  }
+
+  async retireOtherOwnDevice(deviceId) {
+    deviceId = Number(deviceId);
+    if (!Number.isInteger(deviceId) || deviceId <= 0 || deviceId === Number(this.state.deviceId)) {
+      throw new Error('不能通过此操作移除当前 OMEMO 设备');
+    }
+    const current = await this.fetchDeviceIds(this.account, false);
+    if (!current.includes(deviceId)) return;
+    const remaining = current.filter((id) => id !== deviceId);
+    await this.publishDeviceList(remaining);
+    await this.xmpp.retractPep(NS.OMEMO2_BUNDLES, String(deviceId));
+    this.deviceCache.set(this.account, remaining);
+    await this.store.removeAllSessions(`${this.account}.`);
   }
 }
 

@@ -352,6 +352,8 @@ def run() -> None:
     check(
         "http://jabber.org/protocol/pubsub#multi-items" in disco
         and "http://jabber.org/protocol/pubsub#persistent-items" in disco
+        and "http://jabber.org/protocol/pubsub#publish-options" in disco
+        and "http://jabber.org/protocol/pubsub#retract-items" in disco
         and "http://jabber.org/protocol/pubsub#retrieve-items" in disco
         and "urn:xmpp:omemo:2:devices+notify" in disco
         and "urn:xmpp:sce:1" in disco,
@@ -501,6 +503,87 @@ def run() -> None:
     )
     pep, _ = bob.receive_until("pep-get")
     check("device id='12345'" in pep, "OMEMO PEP item retrieval failed")
+
+    bundle = (
+        "<bundle xmlns='urn:xmpp:omemo:2'><spk id='1'>c3Br</spk>"
+        "<spks>c2ln</spks><ik>aWRlbnRpdHk=</ik><prekeys>"
+        "<pk id='1'>cHJla2V5</pk></prekeys></bundle>"
+    )
+    alice.send(
+        "<iq xmlns='jabber:client' type='set' id='pep-bundle-batch'>"
+        "<pubsub xmlns='http://jabber.org/protocol/pubsub'>"
+        "<publish node='urn:xmpp:omemo:2:bundles'>"
+        f"<item id='111'>{bundle}</item><item id='222'>{bundle}</item>"
+        "</publish><publish-options><x xmlns='jabber:x:data' type='submit'>"
+        "<field var='FORM_TYPE'><value>http://jabber.org/protocol/pubsub#publish-options</value></field>"
+        "<field var='pubsub#access_model'><value>open</value></field>"
+        "<field var='pubsub#max_items'><value>max</value></field>"
+        "</x></publish-options></pubsub></iq>"
+    )
+    bundle_result, _ = alice.receive_until("pep-bundle-batch")
+    check("type='result'" in bundle_result, "atomic OMEMO bundle batch publish failed")
+    bob.send(
+        f"<iq xmlns='jabber:client' type='get' id='pep-bundle-get' to='{ALICE}@{DOMAIN}'>"
+        "<pubsub xmlns='http://jabber.org/protocol/pubsub'>"
+        "<items node='urn:xmpp:omemo:2:bundles'/></pubsub></iq>"
+    )
+    bundles, _ = bob.receive_until("pep-bundle-get")
+    check("id='111'" in bundles and "id='222'" in bundles, "OMEMO multi-device bundles were not retained")
+    alice.send(
+        "<iq xmlns='jabber:client' type='set' id='pep-bundle-retract'>"
+        "<pubsub xmlns='http://jabber.org/protocol/pubsub'>"
+        "<retract node='urn:xmpp:omemo:2:bundles' notify='true'><item id='111'/></retract>"
+        "</pubsub></iq>"
+    )
+    retract_result, _ = alice.receive_until("pep-bundle-retract")
+    check("type='result'" in retract_result, "OMEMO bundle retraction failed")
+    bob.send(
+        f"<iq xmlns='jabber:client' type='get' id='pep-retracted-get' to='{ALICE}@{DOMAIN}'>"
+        "<pubsub xmlns='http://jabber.org/protocol/pubsub'>"
+        "<items node='urn:xmpp:omemo:2:bundles'><item id='111'/></items>"
+        "</pubsub></iq>"
+    )
+    retracted, _ = bob.receive_until("pep-retracted-get")
+    check("type='error'" in retracted and "item-not-found" in retracted, "retracted bundle remained retrievable")
+
+    alice.send(
+        "<iq xmlns='jabber:client' type='set' id='pep-atomic-invalid'>"
+        "<pubsub xmlns='http://jabber.org/protocol/pubsub'><publish node='urn:northstar:test:atomic'>"
+        "<item id='would-be-written'><value xmlns='urn:northstar:test'/></item>"
+        "<item id='invalid'><one xmlns='urn:northstar:test'/><two xmlns='urn:northstar:test'/></item>"
+        "</publish></pubsub></iq>"
+    )
+    invalid_batch, _ = alice.receive_until("pep-atomic-invalid")
+    check("type='error'" in invalid_batch and "invalid-payload" in invalid_batch, "invalid PEP batch was accepted")
+    alice.send(
+        "<iq xmlns='jabber:client' type='get' id='pep-atomic-check'>"
+        "<pubsub xmlns='http://jabber.org/protocol/pubsub'>"
+        "<items node='urn:northstar:test:atomic'><item id='would-be-written'/></items>"
+        "</pubsub></iq>"
+    )
+    atomic_check, _ = alice.receive_until("pep-atomic-check")
+    check("type='error'" in atomic_check and "item-not-found" in atomic_check, "invalid PEP batch was partially committed")
+
+    alice.send(
+        "<iq xmlns='jabber:client' type='set' id='pep-presence-publish'>"
+        "<pubsub xmlns='http://jabber.org/protocol/pubsub'>"
+        "<publish node='urn:northstar:test:presence'><item id='current'>"
+        "<value xmlns='urn:northstar:test'>private-metadata</value>"
+        "</item></publish></pubsub></iq>"
+    )
+    alice.receive_until("pep-presence-publish")
+    admin_xmpp = XmppWebSocket(ADMIN, ADMIN_PASSWORD, "admin-pep-access")
+    admin_xmpp.send(
+        f"<iq xmlns='jabber:client' type='get' id='pep-presence-denied' to='{ALICE}@{DOMAIN}'>"
+        "<pubsub xmlns='http://jabber.org/protocol/pubsub'>"
+        "<items node='urn:northstar:test:presence'/></pubsub></iq>"
+    )
+    presence_denied, _ = admin_xmpp.receive_until("pep-presence-denied")
+    check(
+        "type='error'" in presence_denied
+        and "presence-subscription-required" in presence_denied,
+        "presence-scoped PEP node was exposed to a non-contact",
+    )
     alice.send(
         "<iq xmlns='jabber:client' type='set' id='vcard-set'>"
         "<vCard xmlns='vcard-temp'><FN>Alice Integration</FN><PHOTO><TYPE>image/png</TYPE><BINVAL>UE5H</BINVAL></PHOTO></vCard></iq>"
@@ -997,12 +1080,20 @@ def run() -> None:
     check(stats["offline_stanzas"] == 0, "offline queue was not drained")
 
     status, metrics = api("GET", "/metrics")
-    check(status == 200 and "xmpp_messages_routed_total" in metrics, "Prometheus metrics missing")
+    check(
+        status == 200
+        and "xmpp_messages_routed_total" in metrics
+        and "xmpp_database_up 1" in metrics
+        and "xmpp_database_pool_connections" in metrics
+        and "xmpp_pep_items_retracted_total" in metrics,
+        "Prometheus metrics missing",
+    )
 
+    admin_xmpp.close()
     bob.close()
     alice_carbon.close()
     alice.close()
-    print("integration: REST, admin, STARTTLS, WebSocket, roster, PEP/vCard avatars, routing, SM resume, Carbons, blocking, MUC, HTTP Upload, XEP-0357 push, paged MAM and metrics passed")
+    print("integration: REST, admin, STARTTLS, WebSocket, roster, atomic/access-controlled PEP with OMEMO bundle retraction, vCard avatars, routing, SM resume, Carbons, blocking, MUC, HTTP Upload, XEP-0357 push, paged MAM and metrics passed")
 
 
 if __name__ == "__main__":

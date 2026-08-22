@@ -13,7 +13,7 @@ This matrix is the compatibility boundary for Northstar 0.1. `Core` means the im
 | XEP-0049 | Partial | Durable private XML get/set for one namespaced child per request; per-item size limits apply and no per-user quota is implemented |
 | XEP-0054 | Partial | Durable `vcard-temp` get/set, including photo data, locally and across federation |
 | XEP-0059 | Partial | Stable `before`/`after` paging, count and index for MAM |
-| XEP-0060 / XEP-0163 | Partial | Persistent PEP publish/retrieve and roster event fan-out for OMEMO and avatar nodes; not a general-purpose PubSub service |
+| XEP-0060 / XEP-0163 | Partial | Persistent atomic batch publish/retrieve, node access/max-item configuration, publish-options preconditions, item retraction and local/federated roster event fan-out for OMEMO/avatar nodes; not a general-purpose PubSub service |
 | XEP-0077 | Partial | TLS-only in-band account registration and authenticated password change; in-band registration is not advertised when administrator invitation tokens are mandatory; account removal remains |
 | XEP-0084 | Partial | Browser avatar publication/retrieval through avatar data/metadata PEP nodes, plus vCard fallback |
 | XEP-0092 | Core | Software version |
@@ -30,7 +30,7 @@ This matrix is the compatibility boundary for Northstar 0.1. `Core` means the im
 | XEP-0334 | Partial | `no-store` and `no-permanent-store` prevent archive/offline persistence |
 | XEP-0357 | Partial | Enable/disable and metadata-minimized summary publish locally or over S2S. The XEP itself is Deferred/experimental and requires an external push service |
 | XEP-0363 | Core | Stable 1.2 slot discovery/request, advertised size, opaque bearer header, exact size/type validation, expiring one-use PUT and immutable GET; local disk backend is replaceable |
-| XEP-0384 | Partial | Browser OMEMO 2 (`urn:xmpp:omemo:2`) device lists, bundles, X3DH/Double Ratchet sessions, fingerprint/TOFU UI, one-to-one and group encryption; wider native-client interoperability and key backup remain |
+| XEP-0384 | Partial | Browser OMEMO 2 (`urn:xmpp:omemo:2`) device lists, multi-item bundles, concurrent device-list self-repair, rotating one-time prekeys, X3DH/Double Ratchet sessions, fingerprint/TOFU UI, one-to-one and group encryption; wider native-client interoperability and key backup remain |
 | XEP-0389 | Partial | Pre-authentication registration form and credential submission for ordinary open registration; invitation-token and PoW fields are not carried by this protocol path |
 | XEP-0420 | Partial | Browser Stanza Content Encryption envelopes protect body and attachment metadata inside OMEMO |
 | XEP-0444 | Pass-through | Reactions can be carried in encrypted content; no server-side reaction index |

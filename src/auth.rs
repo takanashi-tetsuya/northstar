@@ -10,6 +10,10 @@ use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
 use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 
+pub const MIN_SCRAM_ITERATIONS: u32 = 4_096;
+pub const DEFAULT_SCRAM_ITERATIONS: u32 = 600_000;
+pub const MAX_SCRAM_ITERATIONS: u32 = 10_000_000;
+
 pub fn normalize_username(value: &str) -> Result<String> {
     let username = value.trim().to_ascii_lowercase();
     if username.len() < 3 || username.len() > 64 {
@@ -63,7 +67,16 @@ pub struct PasswordCredentials {
     pub scram_server_key: Vec<u8>,
 }
 
-pub fn hash_password(value: &str, validate: bool) -> Result<PasswordCredentials> {
+pub fn hash_password(
+    value: &str,
+    validate: bool,
+    scram_iterations: u32,
+) -> Result<PasswordCredentials> {
+    if !(MIN_SCRAM_ITERATIONS..=MAX_SCRAM_ITERATIONS).contains(&scram_iterations) {
+        anyhow::bail!(
+            "SCRAM iteration count must be between {MIN_SCRAM_ITERATIONS} and {MAX_SCRAM_ITERATIONS}"
+        );
+    }
     if validate {
         validate_password(value)?;
     }
@@ -74,7 +87,6 @@ pub fn hash_password(value: &str, validate: bool) -> Result<PasswordCredentials>
         .map_err(|error| anyhow::anyhow!("password hashing failed: {error}"))?;
 
     let scram_salt = generate_scram_salt();
-    let scram_iterations = 4096;
     let (scram_stored_key, scram_server_key) =
         compute_scram_sha256(value, &scram_salt, scram_iterations);
 
@@ -495,9 +507,20 @@ mod tests {
 
     #[test]
     fn password_round_trip() {
-        let creds = hash_password("correct horse battery staple", true).unwrap();
+        let creds = hash_password(
+            "correct horse battery staple",
+            true,
+            DEFAULT_SCRAM_ITERATIONS,
+        )
+        .unwrap();
+        assert_eq!(creds.scram_iterations, DEFAULT_SCRAM_ITERATIONS);
         assert!(verify_password(&creds.hash, "correct horse battery staple"));
         assert!(!verify_password(&creds.hash, "wrong password"));
+    }
+
+    #[test]
+    fn password_hashing_rejects_weak_scram_cost() {
+        assert!(hash_password("correct horse battery staple", true, 4_095).is_err());
     }
 
     #[test]

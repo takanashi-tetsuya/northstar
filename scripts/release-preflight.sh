@@ -25,6 +25,12 @@ fi
 cargo fmt --all -- --check
 cargo check --all-targets --locked
 cargo test --all-targets --locked
+cargo clippy --all-targets --locked -- -D warnings
+
+grep -F 'license = "AGPL-3.0-only"' Cargo.toml >/dev/null \
+    || fail "Cargo.toml license metadata is not AGPL-3.0-only"
+grep -F 'GNU AFFERO GENERAL PUBLIC LICENSE' LICENSE >/dev/null \
+    || fail "LICENSE is not the full GNU Affero GPL text"
 
 if [ "${1:-}" = "--production" ]; then
     [ -f .env ] || fail ".env is missing"

@@ -71,6 +71,8 @@ async function joinGroup(page, localpart, nick) {
   await page.locator('#group-room').fill(localpart);
   await page.locator('#group-name').fill('Web E2E Group');
   await page.locator('#group-nick').fill(nick);
+  check(await page.locator('#group-room').inputValue() === localpart, 'group room input changed before submission');
+  check(await page.locator('#group-nick').inputValue() === nick, 'group nickname input changed before submission');
   await page.locator('#join-group-button').click();
   await page.locator('#group-dialog').waitFor({ state: 'hidden' });
   await page.locator(`.conversation-item[data-jid="${localpart}@conference.localhost"]`).waitFor();

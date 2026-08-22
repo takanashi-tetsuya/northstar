@@ -22,6 +22,9 @@ pub struct RawConfig {
     #[serde(default = "default_db_min_connections")]
     pub database_min_connections: u32,
 
+    #[serde(default = "default_scram_iterations")]
+    pub scram_iterations: u32,
+
     #[serde(default = "default_sm_resume_timeout")]
     pub sm_resume_timeout_seconds: u64,
 
@@ -127,6 +130,9 @@ fn default_db_max_connections() -> u32 {
 }
 fn default_db_min_connections() -> u32 {
     2
+}
+fn default_scram_iterations() -> u32 {
+    crate::auth::DEFAULT_SCRAM_ITERATIONS
 }
 fn default_sm_resume_timeout() -> u64 {
     300
@@ -260,6 +266,15 @@ impl Config {
         {
             anyhow::bail!(
                 "DATABASE_MAX_CONNECTIONS must be positive and not smaller than DATABASE_MIN_CONNECTIONS"
+            );
+        }
+        if !(crate::auth::MIN_SCRAM_ITERATIONS..=crate::auth::MAX_SCRAM_ITERATIONS)
+            .contains(&raw.scram_iterations)
+        {
+            anyhow::bail!(
+                "SCRAM_ITERATIONS must be between {} and {}",
+                crate::auth::MIN_SCRAM_ITERATIONS,
+                crate::auth::MAX_SCRAM_ITERATIONS
             );
         }
         if !(1..=86_400).contains(&raw.sm_resume_timeout_seconds) {

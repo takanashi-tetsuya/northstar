@@ -40,7 +40,16 @@ impl ProtocolSession {
             return Ok(Action::Send(iq_error(id, "not-acceptable")));
         }
 
-        match db::create_user(&self.state.pool, username, password, false, false).await {
+        match db::create_user(
+            &self.state.pool,
+            username,
+            password,
+            false,
+            false,
+            self.state.config.scram_iterations,
+        )
+        .await
+        {
             Ok(user) => {
                 self.state
                     .metrics
@@ -77,7 +86,13 @@ impl ProtocolSession {
         {
             return Ok(Action::Send(iq_error(id, "not-acceptable")));
         }
-        db::change_password(&self.state.pool, user.id, password).await?;
+        db::change_password(
+            &self.state.pool,
+            user.id,
+            password,
+            self.state.config.scram_iterations,
+        )
+        .await?;
         db::audit(
             &self.state.pool,
             Some(user.id),

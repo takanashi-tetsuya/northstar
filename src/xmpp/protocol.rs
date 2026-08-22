@@ -196,33 +196,58 @@ impl ProtocolSession {
         mut step: crate::auth::SaslStep,
     ) -> Result<Action> {
         if let crate::auth::SaslStep::NeedsCredentials(ref username) = step {
-            if let Ok(Some(creds)) = db::get_scram_credentials(&self.state.pool, username).await {
-                step = sasl_mech.provide_credentials(
-                    creds.salt,
-                    creds.iterations,
-                    creds.stored_key,
-                    creds.server_key,
-                );
-            } else {
-                step = crate::auth::SaslStep::Failure("not-authorized".into());
+            match db::get_scram_credentials(&self.state.pool, username).await {
+                Ok(Some(creds)) => {
+                    step = sasl_mech.provide_credentials(
+                        creds.salt,
+                        creds.iterations,
+                        creds.stored_key,
+                        creds.server_key,
+                    );
+                }
+                Ok(None) => {
+                    step = crate::auth::SaslStep::Failure("not-authorized".into());
+                }
+                Err(error) => {
+                    return Ok(self.authentication_backend_failure(
+                        sasl_mech.name(),
+                        username,
+                        "load SCRAM verifier",
+                        &error,
+                    ));
+                }
             }
         }
 
         match step {
             crate::auth::SaslStep::Success(username, data_opt) => {
-                let user = if sasl_mech.name() == "PLAIN" {
+                let user_result = if sasl_mech.name() == "PLAIN" {
                     if let Some(password) = data_opt.as_ref() {
-                        db::authenticate(&self.state.pool, &username, password)
-                            .await
-                            .unwrap_or(None)
+                        db::authenticate(
+                            &self.state.pool,
+                            &username,
+                            password,
+                            self.state.config.scram_iterations,
+                        )
+                        .await
                     } else {
-                        None
+                        Ok(None)
                     }
                 } else {
                     db::find_user(&self.state.pool, &username)
                         .await
-                        .unwrap_or(None)
-                        .filter(|user| !user.is_disabled)
+                        .map(|user| user.filter(|user| !user.is_disabled))
+                };
+                let user = match user_result {
+                    Ok(user) => user,
+                    Err(error) => {
+                        return Ok(self.authentication_backend_failure(
+                            sasl_mech.name(),
+                            &username,
+                            "complete authentication",
+                            &error,
+                        ));
+                    }
                 };
 
                 match user {
@@ -280,6 +305,31 @@ impl ProtocolSession {
                 unreachable!("NeedsCredentials should be handled above")
             }
         }
+    }
+
+    fn authentication_backend_failure(
+        &mut self,
+        mechanism: &str,
+        username: &str,
+        operation: &str,
+        error: &anyhow::Error,
+    ) -> Action {
+        self.sasl_state = None;
+        self.state
+            .metrics
+            .authentication_backend_failures_total
+            .fetch_add(1, Ordering::Relaxed);
+        tracing::error!(
+            %mechanism,
+            %username,
+            %operation,
+            ?error,
+            "XMPP authentication backend failed"
+        );
+        Action::Send(failure(
+            "urn:ietf:params:xml:ns:xmpp-sasl",
+            "temporary-auth-failure",
+        ))
     }
 }
 

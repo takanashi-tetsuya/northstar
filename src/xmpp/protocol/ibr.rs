@@ -90,7 +90,16 @@ impl ProtocolSession {
         }
 
         // Passwords is good, create immediately
-        match db::create_user(&self.state.pool, &username, &password, false, false).await {
+        match db::create_user(
+            &self.state.pool,
+            &username,
+            &password,
+            false,
+            false,
+            self.state.config.scram_iterations,
+        )
+        .await
+        {
             Ok(user) => {
                 self.state
                     .metrics

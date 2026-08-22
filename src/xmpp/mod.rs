@@ -96,7 +96,7 @@ where
                 pending_utf8.extend_from_slice(&bytes[..count]);
                 append_utf8(&mut pending_utf8, &mut buffer)?;
                 if buffer.len() + pending_utf8.len() > 1024 * 1024 { anyhow::bail!("XMPP frame exceeds 1 MiB"); }
-                while let Some(frame) = take_frame(&mut buffer) {
+                while let Some(frame) = take_frame(&mut buffer)? {
                     match session.handle(&frame).await? {
                         Action::Send(reply) => { send(&mut io, &reply).await?; session.record_outbound(&reply); },
                         Action::SendMany(replies) => {
@@ -170,7 +170,20 @@ pub async fn websocket_connection(
         tokio::select! {
             incoming = socket.recv() => {
                 match incoming {
-                    Some(Ok(Message::Text(text))) => match session.handle(&text).await {
+                    Some(Ok(Message::Text(text))) => {
+                        let mut payload = text.to_string();
+                        let frame = match take_frame(&mut payload) {
+                            Ok(Some(frame)) if payload.trim().is_empty() => frame,
+                            Ok(_) => {
+                                tracing::debug!("WebSocket payload did not contain exactly one complete XMPP frame");
+                                break;
+                            }
+                            Err(error) => {
+                                tracing::debug!(?error, "invalid WebSocket XMPP framing");
+                                break;
+                            }
+                        };
+                        match session.handle(&frame).await {
                         Ok(Action::Send(reply)) => { if socket.send(Message::Text(reply.clone().into())).await.is_err() { break; } session.record_outbound(&reply); },
                         Ok(Action::SendMany(replies)) => {
                             for reply in replies {
@@ -193,6 +206,7 @@ pub async fn websocket_connection(
                         Ok(Action::None) => {}
                         Ok(Action::StartTls) => { let _ = socket.send(Message::Text("<failure xmlns='urn:ietf:params:xml:ns:xmpp-tls'><unexpected-request/></failure>".into())).await; }
                         Err(error) => { tracing::debug!(?error, "invalid WebSocket XMPP stanza"); break; }
+                    }
                     },
                     Some(Ok(Message::Ping(value))) => { if socket.send(Message::Pong(value)).await.is_err() { break; } }
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,

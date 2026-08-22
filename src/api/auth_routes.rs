@@ -62,6 +62,7 @@ pub async fn register(
         &body.password,
         body.invitation_token.as_deref(),
         state.config.invitation_required,
+        state.config.scram_iterations,
     )
     .await
     .map_err(|error| AppError::Conflict(error.to_string()))?;
@@ -118,7 +119,14 @@ pub async fn login(
             })?;
     }
 
-    let user = match db::authenticate(&state.pool, &body.username, &body.password).await? {
+    let user = match db::authenticate(
+        &state.pool,
+        &body.username,
+        &body.password,
+        state.config.scram_iterations,
+    )
+    .await?
+    {
         Some(user) => user,
         None => {
             state.abuse.record_failure(AbuseAction::Login, &actors);

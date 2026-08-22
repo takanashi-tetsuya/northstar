@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-quality:
+    name: Rust quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust tools
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      - name: Verify license metadata
+        run: |
+          grep -F 'license = "AGPL-3.0-only"' Cargo.toml
+          grep -F 'GNU AFFERO GENERAL PUBLIC LICENSE' LICENSE
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check all targets
+        run: cargo check --all-targets --locked
+
+      - name: Run tests
+        run: cargo test --all-targets --locked
+
+      - name: Deny Clippy warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+  dependency-audit:
+    name: RustSec dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Audit Cargo.lock
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  web-static:
+    name: Web static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check JavaScript syntax and invariants
+        run: |
+          node --check web/client.js
+          node --check web/xmpp.js
+          node --check scripts/web-e2e.cjs
+          node scripts/check-abuse.mjs
+          node scripts/check-avatar-editor.mjs
+          node scripts/check-i18n.mjs
+          node scripts/check-locales.mjs

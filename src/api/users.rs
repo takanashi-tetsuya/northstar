@@ -29,15 +29,26 @@ pub async fn change_password(
     Json(body): Json<PasswordChange>,
 ) -> Result<Json<Value>, AppError> {
     let user = current_user(&state, &headers).await?;
-    if db::authenticate(&state.pool, &user.username, &body.current_password)
-        .await?
-        .is_none()
+    if db::authenticate(
+        &state.pool,
+        &user.username,
+        &body.current_password,
+        state.config.scram_iterations,
+    )
+    .await?
+    .is_none()
     {
         return Err(AppError::Unauthorized);
     }
     auth::validate_password(&body.new_password)
         .map_err(|error| AppError::BadRequest(error.to_string()))?;
-    db::change_password(&state.pool, user.id, &body.new_password).await?;
+    db::change_password(
+        &state.pool,
+        user.id,
+        &body.new_password,
+        state.config.scram_iterations,
+    )
+    .await?;
     db::audit(
         &state.pool,
         Some(user.id),

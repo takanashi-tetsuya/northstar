@@ -6,28 +6,71 @@ export PATH="$project_dir/.cargo-linux/bin:/usr/local/sbin:/usr/local/bin:/usr/s
 export RUSTUP_HOME="$project_dir/.rustup-linux"
 export CARGO_HOME="$project_dir/.cargo-local"
 export CARGO_TARGET_DIR="$project_dir/target-wsl"
-cd "$project_dir"
 
 schema="${NORTHSTAR_BROWSER_SCHEMA:-northstar_browser_e2e_it}"
 http_port="${NORTHSTAR_BROWSER_HTTP_PORT:-18380}"
 xmpp_port="${NORTHSTAR_BROWSER_XMPP_PORT:-16322}"
 s2s_port="${NORTHSTAR_BROWSER_S2S_PORT:-16326}"
 browser_host="${NORTHSTAR_BROWSER_HOST:-127.0.0.1}"
-windows_curl="/mnt/c/Windows/System32/curl.exe"
-node_exe="/mnt/c/Users/Admin/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe"
+pid_file="$project_dir/browser-e2e-server.pid"
+binary="$CARGO_TARGET_DIR/debug/rust-xmpp-server"
+
 if [[ ! "$schema" =~ ^[a-z_][a-z0-9_]*$ ]]; then
   echo "NORTHSTAR_BROWSER_SCHEMA must be a simple lowercase PostgreSQL identifier" >&2
   exit 2
 fi
-if ! "$windows_curl" --version >/dev/null 2>&1; then
-  echo "WSL cannot execute Windows programs in this environment; run scripts/browser-e2e-windows.ps1 from PowerShell instead" >&2
-  exit 2
-fi
-if [[ ! -x "$node_exe" ]]; then
-  echo "Windows Node.js runtime not found at $node_exe" >&2
-  exit 2
-fi
+for port in "$http_port" "$xmpp_port" "$s2s_port"; do
+  if [[ ! "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+    echo "browser E2E ports must be integers between 1 and 65535" >&2
+    exit 2
+  fi
+done
 
+stop_server() {
+  if [[ ! -f "$pid_file" ]]; then
+    return
+  fi
+  local server_pid actual_binary resolved_binary
+  server_pid="$(cat "$pid_file")"
+  if [[ ! "$server_pid" =~ ^[0-9]+$ ]]; then
+    echo "invalid browser-e2e-server.pid" >&2
+    exit 1
+  fi
+  if kill -0 "$server_pid" 2>/dev/null; then
+    actual_binary="$(readlink "/proc/$server_pid/exe" 2>/dev/null || true)"
+    resolved_binary="$(readlink -f "$binary")"
+    if [[ "$actual_binary" != "$resolved_binary" && "$actual_binary" != "$resolved_binary (deleted)" ]]; then
+      echo "refusing to stop PID $server_pid because it is not the browser E2E server" >&2
+      exit 1
+    fi
+    kill "$server_pid"
+    for _ in $(seq 1 100); do
+      kill -0 "$server_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$server_pid" 2>/dev/null; then
+      echo "browser E2E server did not stop cleanly" >&2
+      exit 1
+    fi
+  fi
+  rm -f "$pid_file"
+}
+
+case "${1:-}" in
+  stop)
+    stop_server
+    exit 0
+    ;;
+  start)
+    ;;
+  *)
+    echo "usage: $0 start|stop" >&2
+    exit 2
+    ;;
+esac
+
+stop_server
+cd "$project_dir"
 mkdir -p certs "data/browser-$schema"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
   -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
@@ -38,16 +81,7 @@ PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbnam
   --command "DROP SCHEMA IF EXISTS \"$schema\" CASCADE; CREATE SCHEMA \"$schema\";" >/dev/null
 
 cargo build --locked --offline
-server_pid=""
-cleanup() {
-  if [[ -n "$server_pid" ]]; then
-    kill "$server_pid" 2>/dev/null || true
-    wait "$server_pid" 2>/dev/null || true
-  fi
-}
-trap cleanup EXIT
-
-env \
+nohup env \
   XMPP_DOMAIN=localhost \
   DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema" \
   XMPP_BIND="127.0.0.1:$xmpp_port" \
@@ -65,21 +99,25 @@ env \
   FEDERATION_ENABLED=false \
   LOG_FORMAT=json \
   RUST_LOG="${RUST_LOG:-rust_xmpp_server=info}" \
-  "$CARGO_TARGET_DIR/debug/rust-xmpp-server" >browser-e2e-server.log 2>&1 &
+  "$binary" >browser-e2e-server.log 2>&1 </dev/null &
 server_pid=$!
+echo "$server_pid" >"$pid_file"
 
+cleanup_on_error() {
+  stop_server || true
+}
+trap cleanup_on_error ERR
 for _ in $(seq 1 150); do
-  if curl --silent --fail "http://127.0.0.1:$http_port/readyz" >/dev/null; then break; fi
+  if curl --silent --fail "http://127.0.0.1:$http_port/readyz" >/dev/null; then
+    trap - ERR
+    echo "$server_pid"
+    exit 0
+  fi
+  if ! kill -0 "$server_pid" 2>/dev/null; then
+    cat browser-e2e-server.log >&2
+    exit 1
+  fi
   sleep 0.1
 done
-curl --silent --fail "http://127.0.0.1:$http_port/readyz" >/dev/null
-
-for _ in $(seq 1 150); do
-  if "$windows_curl" --silent --fail --output NUL "http://$browser_host:$http_port/readyz"; then break; fi
-  sleep 0.1
-done
-"$windows_curl" --silent --fail --output NUL "http://$browser_host:$http_port/readyz"
-
-"$node_exe" \
-  "$(wslpath -w "$project_dir/scripts/web-e2e.cjs")" \
-  "http://$browser_host:$http_port"
+echo "browser E2E server did not become ready" >&2
+exit 1

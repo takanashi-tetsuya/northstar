@@ -612,7 +612,7 @@ function openContactDialog() {
   $('#contact-jid').value = '';
   $('#contact-name').value = '';
   $('#contact-dialog').showModal();
-  setTimeout(() => $('#contact-jid').focus(), 30);
+  $('#contact-jid').focus();
 }
 
 function roomStorageKey() {
@@ -640,7 +640,7 @@ function openGroupDialog() {
   $('#group-name').value = '';
   $('#group-nick').value = localpart(state.account);
   $('#group-dialog').showModal();
-  setTimeout(() => $('#group-room').focus(), 30);
+  $('#group-room').focus();
 }
 
 async function joinGroup(event) {

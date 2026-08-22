@@ -17,7 +17,7 @@ pub struct User {
     #[serde(skip_serializing)]
     pub password_hash: String,
     #[serde(skip_serializing)]
-    pub scram_ready: bool,
+    pub scram_iterations: Option<u32>,
     pub display_name: Option<String>,
     pub is_admin: bool,
     pub is_disabled: bool,
@@ -42,6 +42,7 @@ pub async fn create_user(
     password: &str,
     admin: bool,
     force: bool,
+    scram_iterations: u32,
 ) -> Result<User> {
     let username = auth::normalize_username(username)?;
     let password = password.to_owned();
@@ -49,9 +50,11 @@ pub async fn create_user(
         .acquire()
         .await
         .context("password worker queue closed")?;
-    let creds = tokio::task::spawn_blocking(move || auth::hash_password(&password, !force))
-        .await
-        .context("password hashing task failed")??;
+    let creds = tokio::task::spawn_blocking(move || {
+        auth::hash_password(&password, !force, scram_iterations)
+    })
+    .await
+    .context("password hashing task failed")??;
     drop(_permit);
     let row = sqlx::query(
         "INSERT INTO users (id, username, password_hash, is_admin, scram_sha256_salt, scram_sha256_iterations, scram_sha256_stored_key, scram_sha256_server_key) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *",
@@ -89,24 +92,36 @@ pub async fn get_scram_credentials(
     .fetch_optional(pool)
     .await?;
 
-    if let Some(row) = row {
-        let salt: Option<Vec<u8>> = row.get("scram_sha256_salt");
-        let iterations: Option<i32> = row.get("scram_sha256_iterations");
-        let stored_key: Option<Vec<u8>> = row.get("scram_sha256_stored_key");
-        let server_key: Option<Vec<u8>> = row.get("scram_sha256_server_key");
-
-        if let (Some(salt), Some(iterations), Some(stored_key), Some(server_key)) =
-            (salt, iterations, stored_key, server_key)
-        {
-            return Ok(Some(ScramCredentials {
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let values = (
+        row.get::<Option<Vec<u8>>, _>("scram_sha256_salt"),
+        row.get::<Option<i32>, _>("scram_sha256_iterations"),
+        row.get::<Option<Vec<u8>>, _>("scram_sha256_stored_key"),
+        row.get::<Option<Vec<u8>>, _>("scram_sha256_server_key"),
+    );
+    match values {
+        (None, None, None, None) => Ok(None),
+        (Some(salt), Some(iterations), Some(stored_key), Some(server_key)) => {
+            let iterations =
+                u32::try_from(iterations).context("stored SCRAM iteration count is negative")?;
+            if !(auth::MIN_SCRAM_ITERATIONS..=auth::MAX_SCRAM_ITERATIONS).contains(&iterations)
+                || salt.is_empty()
+                || stored_key.len() != 32
+                || server_key.len() != 32
+            {
+                anyhow::bail!("stored SCRAM credentials are invalid");
+            }
+            Ok(Some(ScramCredentials {
                 salt,
-                iterations: iterations as u32,
+                iterations,
                 stored_key,
                 server_key,
-            }));
+            }))
         }
+        _ => anyhow::bail!("stored SCRAM credentials are incomplete"),
     }
-    Ok(None)
 }
 
 pub async fn create_user_with_invitation(
@@ -115,6 +130,7 @@ pub async fn create_user_with_invitation(
     password: &str,
     invitation_token: Option<&str>,
     invitation_required: bool,
+    scram_iterations: u32,
 ) -> Result<User> {
     let username = auth::normalize_username(username)?;
     let password = password.to_owned();
@@ -122,9 +138,10 @@ pub async fn create_user_with_invitation(
         .acquire()
         .await
         .context("password worker queue closed")?;
-    let creds = tokio::task::spawn_blocking(move || auth::hash_password(&password, true))
-        .await
-        .context("password hashing task failed")??;
+    let creds =
+        tokio::task::spawn_blocking(move || auth::hash_password(&password, true, scram_iterations))
+            .await
+            .context("password hashing task failed")??;
     drop(_permit);
     let mut tx = pool.begin().await?;
     if let Some(token) = invitation_token.filter(|token| !token.trim().is_empty()) {
@@ -170,7 +187,15 @@ pub async fn ensure_bootstrap_admin(pool: &PgPool, config: &Config) -> Result<()
         }
         return Ok(());
     }
-    create_user(pool, &username, password, true, false).await?;
+    create_user(
+        pool,
+        &username,
+        password,
+        true,
+        false,
+        config.scram_iterations,
+    )
+    .await?;
     tracing::warn!(%username, "created bootstrap administrator; rotate its password immediately");
     Ok(())
 }
@@ -183,7 +208,12 @@ pub async fn find_user(pool: &PgPool, username: &str) -> Result<Option<User>> {
     Ok(row.as_ref().map(user_from_row))
 }
 
-pub async fn authenticate(pool: &PgPool, username: &str, password: &str) -> Result<Option<User>> {
+pub async fn authenticate(
+    pool: &PgPool,
+    username: &str,
+    password: &str,
+    scram_iterations: u32,
+) -> Result<Option<User>> {
     let Ok(username) = auth::normalize_username(username) else {
         return Ok(None);
     };
@@ -198,7 +228,8 @@ pub async fn authenticate(pool: &PgPool, username: &str, password: &str) -> Resu
             .context("dummy password verification task failed")?;
         return Ok(None);
     };
-    let hash = user.password_hash.clone();
+    let stored_password_hash = user.password_hash.clone();
+    let hash = stored_password_hash.clone();
     let candidate = password.to_owned();
     let scram_password = candidate.clone();
     let _permit = PASSWORD_WORK
@@ -211,21 +242,26 @@ pub async fn authenticate(pool: &PgPool, username: &str, password: &str) -> Resu
     if user.is_disabled || !valid {
         return Ok(None);
     }
-    if !user.scram_ready {
+    if user
+        .scram_iterations
+        .is_none_or(|stored_iterations| stored_iterations < scram_iterations)
+    {
         let salt = auth::generate_scram_salt();
         let calculation_salt = salt.clone();
         let (stored_key, server_key) = tokio::task::spawn_blocking(move || {
-            auth::compute_scram_sha256(&scram_password, &calculation_salt, 4096)
+            auth::compute_scram_sha256(&scram_password, &calculation_salt, scram_iterations)
         })
         .await
         .context("SCRAM credential upgrade task failed")?;
         sqlx::query(
-            "UPDATE users SET scram_sha256_salt = $2, scram_sha256_iterations = 4096, scram_sha256_stored_key = $3, scram_sha256_server_key = $4 WHERE id = $1 AND scram_sha256_salt IS NULL",
+            "UPDATE users SET scram_sha256_salt = $2, scram_sha256_iterations = $3, scram_sha256_stored_key = $4, scram_sha256_server_key = $5 WHERE id = $1 AND password_hash = $6",
         )
         .bind(user.id)
         .bind(salt)
+        .bind(scram_iterations as i32)
         .bind(stored_key)
         .bind(server_key)
+        .bind(stored_password_hash)
         .execute(pool)
         .await?;
     }
@@ -262,15 +298,21 @@ pub async fn user_for_token(pool: &PgPool, token: &str) -> Result<Option<User>> 
     Ok(row.as_ref().map(user_from_row))
 }
 
-pub async fn change_password(pool: &PgPool, user_id: Uuid, new_password: &str) -> Result<()> {
+pub async fn change_password(
+    pool: &PgPool,
+    user_id: Uuid,
+    new_password: &str,
+    scram_iterations: u32,
+) -> Result<()> {
     let password = new_password.to_owned();
     let _permit = PASSWORD_WORK
         .acquire()
         .await
         .context("password worker queue closed")?;
-    let creds = tokio::task::spawn_blocking(move || auth::hash_password(&password, true))
-        .await
-        .context("password hashing task failed")??;
+    let creds =
+        tokio::task::spawn_blocking(move || auth::hash_password(&password, true, scram_iterations))
+            .await
+            .context("password hashing task failed")??;
     drop(_permit);
     let mut tx = pool.begin().await?;
     sqlx::query("UPDATE users SET password_hash = $2, scram_sha256_salt = $3, scram_sha256_iterations = $4, scram_sha256_stored_key = $5, scram_sha256_server_key = $6 WHERE id = $1")
@@ -362,11 +404,29 @@ pub async fn registrations_last_hour(pool: &PgPool) -> Result<i64> {
 }
 
 fn user_from_row(row: &sqlx::postgres::PgRow) -> User {
+    let salt = row.get::<Option<Vec<u8>>, _>("scram_sha256_salt");
+    let iterations = row
+        .get::<Option<i32>, _>("scram_sha256_iterations")
+        .and_then(|iterations| u32::try_from(iterations).ok());
+    let stored_key = row.get::<Option<Vec<u8>>, _>("scram_sha256_stored_key");
+    let server_key = row.get::<Option<Vec<u8>>, _>("scram_sha256_server_key");
+    let scram_iterations = match (salt, iterations, stored_key, server_key) {
+        (Some(salt), Some(iterations), Some(stored_key), Some(server_key))
+            if !salt.is_empty()
+                && (auth::MIN_SCRAM_ITERATIONS..=auth::MAX_SCRAM_ITERATIONS)
+                    .contains(&iterations)
+                && stored_key.len() == 32
+                && server_key.len() == 32 =>
+        {
+            Some(iterations)
+        }
+        _ => None,
+    };
     User {
         id: row.get("id"),
         username: row.get("username"),
         password_hash: row.get("password_hash"),
-        scram_ready: row.get::<Option<Vec<u8>>, _>("scram_sha256_salt").is_some(),
+        scram_iterations,
         display_name: row.get("display_name"),
         is_admin: row.get("is_admin"),
         is_disabled: row.get("is_disabled"),

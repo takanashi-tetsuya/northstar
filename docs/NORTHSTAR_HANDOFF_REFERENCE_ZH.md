@@ -156,11 +156,11 @@ PostgreSQL 是持久状态源；在线连接、SM 恢复、PoW 挑战和处罚�
 新建/改密时同时生成：
 
 1. Argon2id PHC 字符串，供 REST 和 SASL PLAIN 校验。
-2. 32 字节随机 SCRAM salt、4096 次 PBKDF2-HMAC-SHA-256，以及 StoredKey/ServerKey，供 SCRAM-SHA-256。
+2. 32 字节随机 SCRAM salt、可配置的 PBKDF2-HMAC-SHA-256 迭代次数（`SCRAM_ITERATIONS`，默认 600000），以及 StoredKey/ServerKey，供 SCRAM-SHA-256。
 
 最多 8 个密码哈希/校验任务并发，CPU 工作放到 blocking worker，防止阻塞 Tokio I/O。未知但格式合法的用户名也会执行一次 dummy Argon2 校验，减弱按响应时间枚举用户的问题。
 
-迁移 0011 以前的用户没有 SCRAM verifier，无法从 Argon2 哈希反推。本轮加入了兼容升级：这类用户第一次成功使用 PLAIN/REST 密码登录后，服务器用当次明文密码补写 SCRAM verifier；以后可用 SCRAM。数据库泄漏时，SCRAM verifier 的 4096 次 PBKDF2 抗离线猜测强度低于 Argon2，这是兼容 SCRAM 带来的安全权衡。
+迁移 0011 以前的用户没有 SCRAM verifier，无法从 Argon2 哈希反推。这类用户第一次成功使用 PLAIN/REST 密码登录后，服务器用当次明文密码补写 SCRAM verifier；已有 verifier 低于当前 `SCRAM_ITERATIONS` 时也会在密码登录后升级。SCRAM-only 登录不会把密码交给服务器，因此不能自行升级。数据库泄漏时，攻击者仍可针对 SCRAM verifier 离线猜测，这是兼容 SCRAM 带来的安全权衡；默认 600000 次显著强于旧版 4096 次，但部署者仍应在目标服务器和移动客户端上 benchmark。
 
 ### SASL PLAIN
 
@@ -204,7 +204,7 @@ PostgreSQL 是持久状态源；在线连接、SM 恢复、PoW 挑战和处罚�
 
 ### TCP C2S
 
-监听 5222，先读取 XML stream，广告 STARTTLS；TLS 完成后重开 stream，进行 SASL、重新开流、资源绑定。单个输入 frame 上限约 1 MiB，分帧器能处理一个 UTF-8 字符被拆在两个网络读取中的情况。
+监听 5222，先读取 XML stream，广告 STARTTLS；TLS 完成后重开 stream，进行 SASL、重新开流、资源绑定。单个输入 frame 上限约 1 MiB。分帧器会跨网络读取保留不完整 UTF-8，按 XML token、引号和标签栈增量追踪结构，因此 Forwarding、Carbons、MAM 内层再次出现 `<message>` 时不会提前截断；DTD、错配标签、非法 stream close 和超过 256 层的嵌套会被拒绝。C2S、S2S 共用该分帧器，WebSocket 额外要求每个文本消息恰好包含一个完整 frame。
 
 ### RFC 7395 WebSocket
 

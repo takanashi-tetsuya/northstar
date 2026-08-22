@@ -9,5 +9,7 @@ licensed under GNU GPL 3.0. The license is included as
 `web/crypto/LICENSE-GPL-3.0.txt`; corresponding source is available from
 <https://github.com/conversejs/libomemo.js>.
 
-The cryptographic component keeps its own license. The MIT license for the
-Rust server and Northstar interface does not replace or restrict that license.
+Northstar-owned code is licensed under AGPL-3.0-only. The cryptographic
+component keeps its own GPL-3.0 license; Northstar's AGPL license does not
+replace or restrict that component's license. Review both license texts and
+the corresponding-source obligations before redistribution or network use.

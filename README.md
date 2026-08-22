@@ -63,6 +63,7 @@ Northstar is not a re-skinned copy of Converse.js and does not contain sponsor p
 #### Transport, streams, and authentication
 
 - RFC 6120-style XML streams over TCP.
+- Incremental, quote-aware XML token framing with balanced element tracking, a 256-element nesting cap, and DTD rejection; nested forwarded/Carbon/MAM stanzas remain one outer frame.
 - Mandatory STARTTLS on the native C2S listener.
 - RFC 7395 XMPP framing over WebSocket at `/xmpp-websocket`, requiring the `xmpp` subprotocol.
 - Incremental UTF-8 handling when a multibyte character is split across network reads.
@@ -567,6 +568,7 @@ Runtime configuration is loaded from environment variables. A project-root `.env
 | `DATABASE_URL_FILE` | unset | File containing the complete URL; regular file under 64 KiB; trailing CR/LF removed |
 | `DATABASE_MAX_CONNECTIONS` | `32` | Positive SQLx pool maximum |
 | `DATABASE_MIN_CONNECTIONS` | `2` | Pool minimum; cannot exceed maximum |
+| `SCRAM_ITERATIONS` | `600000` | PBKDF2-HMAC-SHA-256 work factor for new/upgraded SCRAM verifiers; allowed range `4096..=10000000` |
 
 #### Accounts, sessions, and persistence
 
@@ -868,6 +870,7 @@ Operational cautions:
 | `xmpp_stanzas_out_total` | counter | Written/replayed outbound stanzas |
 | `xmpp_registrations_total` | counter | Accounts created since process start |
 | `xmpp_authentication_failures_total` | counter | XMPP authentication failures |
+| `xmpp_authentication_backend_failures_total` | counter | Database/backend failures during XMPP authentication |
 | `xmpp_messages_routed_total` | counter | Accepted routed messages |
 | `xmpp_federation_inbound_connections_total` | counter | Accepted S2S connections |
 | `xmpp_federation_outbound_deliveries_total` | counter | Stanzas written to outbound S2S |
@@ -899,6 +902,8 @@ cargo check --all-targets --locked
 cargo test --all-targets --locked
 cargo clippy --all-targets --locked -- -D warnings
 ```
+
+The same four gates run automatically for every push and pull request in `.github/workflows/ci.yml`. Separate least-privilege jobs check `Cargo.lock` against the RustSec advisory database with the repository's `.cargo/audit.toml` policy and run the JavaScript/i18n static invariants. CI also verifies that Cargo metadata and the full license text remain AGPL-3.0-only/AGPLv3-consistent.
 
 #### WSL offline verification
 
@@ -942,9 +947,17 @@ Full release runtime validation:
 bash scripts/release-runtime-validation.sh
 ```
 
+On Windows, use the PowerShell orchestrator below. It also works when WSL cannot execute Windows binaries: WSL owns only the isolated server processes, while Windows launches and closes its own headless Chrome instance.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/release-runtime-validation.ps1
+```
+
+To rerun only the browser matrix, use `scripts/browser-e2e-windows.ps1`. Both PowerShell scripts stop only the exact temporary Northstar PID recorded by `browser-e2e-server-wsl.sh`; they never use broad process-name termination.
+
 It performs shell syntax checks, Rust formatting/check/test/clippy, integration, two-domain federation, 1,000 sessions, and browser E2E. It is intentionally expensive and requires the prepared PostgreSQL/WSL/browser environment.
 
-Last verified in this workspace on 2026-08-22: 15 Rust tests, full integration, two-domain federation, 1,000 simultaneous authenticated sessions, and browser E2E passed. Repeat these tests on the deployment host; results are not transferable capacity guarantees.
+Last full runtime verification in this workspace on 2026-08-22 passed all 22 Rust tests, full integration, two-domain federation, 1,000 simultaneous authenticated sessions with sample pings, and browser E2E covering two independent OMEMO clients, direct/group encryption, encrypted upload/download, avatar processing, administration, and mobile layout. Repeat runtime tests after protocol/security changes and on the deployment host; results are not transferable capacity guarantees.
 
 ### Backup, restore, upgrade, and certificate rotation
 
@@ -1112,16 +1125,16 @@ Do not trust arbitrary proxies. The direct proxy IP must exactly match `TRUSTED_
 - No automated upload orphan reconciliation or per-user upload quota.
 - No per-user private XML quota beyond per-item size.
 - No public account-deletion/admin audit-log browsing endpoint in the current REST API.
-- Accounts created before migration `0011_scram_credentials.sql` may lack a SCRAM verifier. They can authenticate with TLS-protected PLAIN and populate SCRAM material by changing their password.
+- Accounts created before migration `0011_scram_credentials.sql` may lack a SCRAM verifier. A successful TLS-protected PLAIN or REST password login creates it; a later password-based login also upgrades a verifier below `SCRAM_ITERATIONS`. A SCRAM-only login cannot upgrade itself because the server never receives the password.
 - The PoW eight-second statement is an approximate advertised cap, not dynamic device benchmarking.
 - The 1,000-session fixture validates connection retention and sample pings, not 1,000 users continuously sending large encrypted messages.
 - Production security and client interoperability require independent review.
 
 ### License and third-party code
 
-The Rust server and Northstar-owned interface code are distributed under the [MIT License](LICENSE).
+The Rust server and Northstar-owned interface code are distributed under [GNU AGPL v3 only (`AGPL-3.0-only`)](LICENSE). In particular, operators who modify Northstar and let users interact with that modified version over a network must provide those users access to the corresponding source as required by AGPL section 13. This is a strong network-copyleft license; there is no `or later` option.
 
-`web/crypto/libomemo.js` and its Curve25519 WebAssembly module are distributed under GPL-3.0 with their license in `web/crypto/LICENSE-GPL-3.0.txt`. Their source provenance and boundary are described in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The MIT license does not replace the third-party component's license. Review redistribution obligations before shipping a modified bundle.
+`web/crypto/libomemo.js` and its Curve25519 WebAssembly module retain their GPL-3.0 license in `web/crypto/LICENSE-GPL-3.0.txt`. Their source provenance and boundary are described in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Northstar's AGPL license does not replace the third-party component's license. Review both sets of obligations before network deployment or redistribution.
 
 ---
 
@@ -1179,6 +1192,7 @@ Northstar 网页界面不是 Converse.js 的换皮版本，也没有赞助商、
 - `/xmpp-websocket` 上的 RFC 7395 WebSocket 帧，子协议必须为 `xmpp`。
 - 正确处理被网络分片拆开的 UTF-8 字符。
 - XMPP 缓冲帧和 WebSocket 单消息最大 1 MiB。
+- XML 增量分帧会识别引号、注释和 CDATA，并按标签栈平衡元素；嵌套的 Forwarding/Carbons/MAM stanza 不会被内层 `</message>` 截断，同时拒绝 DTD 和超过 256 层的嵌套。
 - `SCRAM-SHA-256` 保存盐、迭代次数、stored key 和 server key。
 - `PLAIN` 仅在 TLS/WSS 后公布。
 - 资源绑定、完整 JID 冲突检测、会话建立、优雅退出。
@@ -1494,6 +1508,7 @@ Compose 中 PostgreSQL 只在 internal backend 网络；XMPP 根文件系统只�
 | `DATABASE_URL_FILE` | 未设置 | 保存完整 URL 的 secret 文件 |
 | `DATABASE_MAX_CONNECTIONS` | `32` | 连接池最大值，必须大于 0 |
 | `DATABASE_MIN_CONNECTIONS` | `2` | 连接池最小值，不能大于最大值 |
+| `SCRAM_ITERATIONS` | `600000` | 新建或升级 SCRAM verifier 的 PBKDF2-HMAC-SHA-256 工作因子；允许范围 `4096..=10000000` |
 
 #### 注册、会话和持久化
 
@@ -1644,7 +1659,7 @@ Prometheus 指标包括：
 - `xmpp_tcp_connections_total`、`xmpp_websocket_connections_total`
 - `xmpp_active_sessions`
 - `xmpp_stanzas_in_total`、`xmpp_stanzas_out_total`
-- `xmpp_registrations_total`、`xmpp_authentication_failures_total`
+- `xmpp_registrations_total`、`xmpp_authentication_failures_total`、`xmpp_authentication_backend_failures_total`
 - `xmpp_messages_routed_total`
 - `xmpp_federation_inbound_connections_total`
 - `xmpp_federation_outbound_deliveries_total`
@@ -1667,11 +1682,21 @@ cargo test --all-targets --locked
 cargo clippy --all-targets --locked -- -D warnings
 ```
 
+`.github/workflows/ci.yml` 会在每次 push 和 pull request 自动执行上述四项门禁；独立的最小权限 job 会按 `.cargo/audit.toml` 策略使用 RustSec 检查 `Cargo.lock`，并运行 JavaScript/i18n 静态约束，同时验证 Cargo 元数据与完整许可证文本仍一致为 `AGPL-3.0-only`/AGPLv3。
+
 完整验证：
 
 ```bash
 bash scripts/release-runtime-validation.sh
 ```
+
+Windows 环境建议从 PowerShell 运行下列编排器；即使 WSL 禁止直接执行 Windows `.exe`，它仍可让 WSL 只负责隔离测试服务，再由 Windows 启动并关闭独立的无头 Chrome：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/release-runtime-validation.ps1
+```
+
+只重跑网页矩阵可使用 `scripts/browser-e2e-windows.ps1`。清理逻辑只终止 `browser-e2e-server-wsl.sh` 记录且验证过可执行文件路径的临时 Northstar PID，不使用按进程名批量终止。
 
 测试矩阵：
 
@@ -1684,7 +1709,7 @@ bash scripts/release-runtime-validation.sh
 
 测试脚本使用独立 schema 和测试端口，不是产品默认端口，也不会抢占正式 5222/5269/8080。
 
-2026-08-22 在当前环境最后一次验证通过：15 个 Rust 测试、完整协议集成、双域联邦、1,000 个同时认证会话和浏览器 E2E。上线机器必须重新运行，不能把这次结果当作其他硬件的容量保证。
+2026-08-22 在当前环境最后一次完整运行时验证通过：22/22 个 Rust 测试、完整协议集成、双域联邦、1,000 个同时认证会话与抽样 ping，以及覆盖两个独立 OMEMO 客户端、加密单聊/群聊、加密附件、头像、管理后台和移动布局的浏览器 E2E。协议或安全代码变更后必须重跑运行时矩阵，上线机器也必须重跑，不能把这次结果当作其他硬件的容量保证。
 
 ### 备份、恢复、升级和证书轮换
 
@@ -1763,4 +1788,4 @@ PUT 必须使用槽位 token、完全一致的 Content-Type 和字节数；槽�
 
 ### 许可证
 
-Rust 服务端和 Northstar 自有界面代码使用 [MIT License](LICENSE)。`web/crypto/libomemo.js` 与 Curve25519 WebAssembly 模块使用 GPL-3.0，许可证位于 `web/crypto/LICENSE-GPL-3.0.txt`，来源和边界见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。MIT 不会替代第三方组件的 GPL 义务，分发修改版之前应审查相应要求。
+Rust 服务端和 Northstar 自有界面代码严格使用 [GNU AGPL v3 only（`AGPL-3.0-only`）](LICENSE)，不包含 `or later` 选项。特别是：修改 Northstar 后通过网络向用户提供服务的运营者，必须依照 AGPL 第 13 条向这些用户提供相应源码。`web/crypto/libomemo.js` 与 Curve25519 WebAssembly 模块保留 GPL-3.0，许可证位于 `web/crypto/LICENSE-GPL-3.0.txt`，来源和边界见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。Northstar 的 AGPL 不会替代第三方组件许可证；上线或分发修改版前应同时审查两者义务。

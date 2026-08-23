@@ -55,7 +55,9 @@ async fn run_outbound_connection(
     target_domain: String,
     mut rx: mpsc::Receiver<FederationEnvelope>,
 ) -> Result<()> {
-    if state.island_mode.load(std::sync::atomic::Ordering::Relaxed) || !state.config.federation_domain_allowed(&target_domain) {
+    if state.island_mode.load(std::sync::atomic::Ordering::Relaxed)
+        || !state.config.federation_domain_allowed(&target_domain)
+    {
         anyhow::bail!("target domain is denied by federation policy");
     }
     let endpoint = resolve_federation_endpoint(&state, &target_domain).await?;

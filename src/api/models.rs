@@ -84,6 +84,53 @@ pub struct InvitationRequest {
     pub expires_in_hours: Option<i32>,
 }
 
+#[derive(Deserialize)]
+pub struct NukeRequest {
+    pub confirm_phrase: String,
+}
+
+#[derive(Deserialize)]
+pub struct ServerNamePatch {
+    pub server_name: String,
+}
+
+#[derive(Deserialize)]
+pub struct BooleanToggle {
+    pub enabled: bool,
+}
+
+#[derive(Serialize)]
+pub struct SessionView {
+    pub jid: String,
+    pub ip: Option<String>,
+    pub resource: String,
+    pub connected_duration_seconds: u64,
+}
+
+#[derive(Serialize)]
+pub struct OfflineMessagesStats {
+    pub total_messages: i64,
+    pub estimated_bytes: i64,
+}
+
+#[derive(Serialize)]
+pub struct MucRoomView {
+    pub localpart: String,
+    pub title: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub public: bool,
+    pub persistent: bool,
+    pub members_only: bool,
+    pub moderated: bool,
+    pub non_anonymous: bool,
+    pub current_occupants: usize,
+}
+
+#[derive(Deserialize)]
+pub struct BroadcastRequest {
+    pub message: String,
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct Page {
     pub limit: Option<i64>,

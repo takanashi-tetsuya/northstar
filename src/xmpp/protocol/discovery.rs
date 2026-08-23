@@ -13,14 +13,15 @@ impl ProtocolSession {
         let upload_domain = self.upload_domain();
         if bare_jid(from).eq_ignore_ascii_case(&upload_domain) {
             let query = format!(
-                    "<query xmlns='http://jabber.org/protocol/disco#info'><identity category='store' type='file' name='Northstar File Upload'/><feature var='urn:xmpp:http:upload:0'/><x xmlns='jabber:x:data' type='result'><field var='FORM_TYPE' type='hidden'><value>urn:xmpp:http:upload:0</value></field><field var='max-file-size'><value>{}</value></field></x></query>",
+                    "<query xmlns='http://jabber.org/protocol/disco#info'><identity category='store' type='file' name='{} File Upload'/><feature var='urn:xmpp:http:upload:0'/><x xmlns='jabber:x:data' type='result'><field var='FORM_TYPE' type='hidden'><value>urn:xmpp:http:upload:0</value></field><field var='max-file-size'><value>{}</value></field></x></query>",
+                    attr_escape(&self.state.config.server_name),
                     self.state.config.upload_max_bytes
                 );
             return Ok(Action::Send(iq_result_from(id, from, &query)));
         }
         if bare_jid(from).eq_ignore_ascii_case(&muc_domain) {
-            let query = "<query xmlns='http://jabber.org/protocol/disco#info'><identity category='conference' type='text' name='Northstar Group Chat'/><feature var='http://jabber.org/protocol/disco#info'/><feature var='http://jabber.org/protocol/disco#items'/><feature var='http://jabber.org/protocol/muc'/><feature var='http://jabber.org/protocol/muc#unique'/></query>";
-            return Ok(Action::Send(iq_result_from(id, from, query)));
+            let query = format!("<query xmlns='http://jabber.org/protocol/disco#info'><identity category='conference' type='text' name='{} Group Chat'/><feature var='http://jabber.org/protocol/disco#info'/><feature var='http://jabber.org/protocol/disco#items'/><feature var='http://jabber.org/protocol/muc'/><feature var='http://jabber.org/protocol/muc#unique'/></query>", attr_escape(&self.state.config.server_name));
+            return Ok(Action::Send(iq_result_from(id, from, &query)));
         }
         if jid_domain(from).is_some_and(|domain| domain.eq_ignore_ascii_case(&muc_domain)) {
             let Some(room) =
@@ -151,12 +152,14 @@ impl ProtocolSession {
             }
         } else if bare_jid(from).eq_ignore_ascii_case(&self.state.config.domain) {
             query.push_str(&format!(
-                "<item jid='{}' name='Northstar Group Chat'/>",
-                attr_escape(&muc_domain)
+                "<item jid='{}' name='{} Group Chat'/>",
+                attr_escape(&muc_domain),
+                attr_escape(&self.state.config.server_name)
             ));
             query.push_str(&format!(
-                "<item jid='{}' name='Northstar File Upload'/>",
-                attr_escape(&upload_domain)
+                "<item jid='{}' name='{} File Upload'/>",
+                attr_escape(&upload_domain),
+                attr_escape(&self.state.config.server_name)
             ));
         }
         query.push_str("</query>");

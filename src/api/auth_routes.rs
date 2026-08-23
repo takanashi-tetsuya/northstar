@@ -22,7 +22,7 @@ pub async fn register(
     headers: HeaderMap,
     Json(body): Json<RegistrationRequest>,
 ) -> Result<(StatusCode, Json<Value>), AppError> {
-    if !state.config.open_registration {
+    if state.registration_closed.load(std::sync::atomic::Ordering::Relaxed) {
         return Err(AppError::Forbidden);
     }
     if db::registrations_last_hour(&state.pool).await?

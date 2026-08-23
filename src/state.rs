@@ -28,6 +28,9 @@ pub struct OnlineSession {
     pub carbons: Arc<AtomicBool>,
     pub priority: Arc<AtomicI16>,
     pub blocklist_requested: Arc<AtomicBool>,
+    pub ip: Option<std::net::IpAddr>,
+    pub resource: String,
+    pub connected_at: Instant,
 }
 
 pub struct ResumableSession {
@@ -70,6 +73,8 @@ pub struct AppState {
     pub abuse: AbuseGuard,
     pub started_at: Instant,
     pub tls: std::sync::Arc<crate::tls::ReloadableTlsConfig>,
+    pub island_mode: AtomicBool,
+    pub registration_closed: AtomicBool,
 }
 
 impl AppState {
@@ -88,6 +93,7 @@ impl AppState {
         });
         let tls = crate::tls::ReloadableTlsConfig::new(&config.tls_cert_path, &config.tls_key_path)
             .context("failed to load TLS certificate and key")?;
+        let open_registration = config.open_registration;
         Ok(Arc::new(Self {
             config,
             pool,
@@ -102,6 +108,8 @@ impl AppState {
             abuse,
             started_at: Instant::now(),
             tls,
+            island_mode: AtomicBool::new(false),
+            registration_closed: AtomicBool::new(!open_registration),
         }))
     }
 

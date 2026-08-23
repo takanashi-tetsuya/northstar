@@ -11,6 +11,9 @@ pub struct RawConfig {
     #[serde(default = "default_domain")]
     pub xmpp_domain: String,
 
+    #[serde(default = "default_server_name")]
+    pub server_name: String,
+
     #[serde(default)]
     pub database_url: String,
 
@@ -124,6 +127,9 @@ pub struct RawConfig {
 // Defaults
 fn default_domain() -> String {
     "localhost".to_string()
+}
+fn default_server_name() -> String {
+    "Northstar".to_string()
 }
 fn default_db_max_connections() -> u32 {
     32

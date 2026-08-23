@@ -99,6 +99,9 @@ impl ProtocolSession {
                     carbons: Arc::clone(&resumable.carbons),
                     priority: Arc::clone(&resumable.priority),
                     blocklist_requested: Arc::clone(&resumable.blocklist_requested),
+                    ip: Some(self.peer_ip),
+                    resource: resumable.full_jid.split('/').nth(1).unwrap_or("").to_string(),
+                    connected_at: std::time::Instant::now(),
                 });
             }
         }

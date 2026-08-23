@@ -77,6 +77,7 @@ pub(crate) async fn inbound_connection(
     let claimed_domain = stream_attribute(&opening, "from").unwrap_or_default();
     let target = stream_attribute(&opening, "to").unwrap_or_default();
     if !target.eq_ignore_ascii_case(&state.config.domain)
+        || state.island_mode.load(std::sync::atomic::Ordering::Relaxed)
         || !state.config.federation_domain_allowed(&claimed_domain)
     {
         send_stream_error(&mut stream, "host-unknown").await?;

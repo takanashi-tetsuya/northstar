@@ -133,6 +133,9 @@ impl ProtocolSession {
                     carbons: Arc::clone(&self.carbons),
                     priority: Arc::clone(&self.priority),
                     blocklist_requested: Arc::clone(&self.blocklist_requested),
+                    ip: Some(self.peer_ip),
+                    resource: resource.to_string(),
+                    connected_at: std::time::Instant::now(),
                 });
             }
         }

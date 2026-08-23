@@ -111,9 +111,10 @@ impl ProtocolSession {
         let Some(user) = self.authenticated.clone() else {
             return Ok(Action::Send(iq_error(id, "not-authorized")));
         };
+        let generated = uuid::Uuid::new_v4().to_string();
         let resource = child_text(bind, "resource")
             .filter(|r| valid_resource(r))
-            .unwrap_or("web");
+            .unwrap_or(&generated);
         let jid = format!(
             "{}@{}/{}",
             user.username, self.state.config.domain, resource

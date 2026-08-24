@@ -2,103 +2,79 @@
 
 # Northstar XMPP Server
 
-A lightweight XMPP server built from scratch in Rust. Supports OMEMO end-to-end encryption, multi-user chat, S2S federation, HTTP file upload, REST admin API, and proof-of-work anti-abuse.
+Northstar is a modern, lightweight, and incredibly fast XMPP server built from scratch in Rust. It is designed with a strict **Zero-Knowledge & Privacy-First** philosophy, focusing on secure communication, end-to-end encryption (OMEMO), and high-performance concurrency.
 
-## Quick Start
+## 🌟 Core Philosophy & Features
 
+- **Privacy First (Zero-Knowledge Admin)**: The server has absolutely no ability to intercept, read, or inspect user messages. All moderation tools (Panic Disconnect, Island Mode, Account Nuke) are designed to act on metadata and network layers, fully respecting user privacy.
+- **Modern Encryption**: Fully supports OMEMO (XEP-0384) end-to-end encryption.
+- **Blazing Fast & Safe**: Written in Rust, leveraging `tokio` for async I/O. Safe from memory leaks and thread races.
+- **RESTful Administration**: Includes a built-in JSON HTTP API for server administration, completely replacing the clunky XML-based admin workflows of traditional servers.
+- **Built-in Web Client & Anti-Abuse**: Features Proof-of-Work (PoW) registration limits and invitation code systems.
+
+## 🔐 Registration Workflow (Important)
+
+Unlike traditional XMPP servers where you can register directly inside clients like Gajim or Conversations (In-Band Registration), **Northstar requires registration via HTTP REST API for enhanced security and anti-abuse control.**
+
+**How to get started as a user:**
+1. Open the server's built-in **Web Client/Portal** in your browser (or use curl/Postman to hit `POST /api/v1/register`).
+2. Fill out the registration form with your desired **Username**, **Password**, and the required **Invitation Token** (provided by the server administrator).
+3. The backend securely validates the invitation token, verifies the Proof-of-Work (if enabled), and creates the account.
+4. Once the account is created successfully via the Web, open your favorite XMPP client (e.g., Gajim, Conversations, Siskin) and **log in** using those credentials.
+
+## 🚀 Quick Start
+
+### 1. Prerequisites
+- Rust (latest stable)
+- PostgreSQL database
+
+### 2. Configure Environment
 ```bash
-# 1. Configure environment
 cp .env.example .env
-# Edit .env — at minimum set DATABASE_URL and XMPP_DOMAIN
-
-# 2. Build and run
-cargo run
+# Edit .env — you MUST configure DATABASE_URL and XMPP_DOMAIN
 ```
 
-The server listens on three ports simultaneously:
-- **5222** — XMPP C2S (client connections)
-- **8080** — HTTP API + WebSocket + Web client
-- **5269** — XMPP S2S (federation)
+### 3. Build and Run
+```bash
+cargo run --release
+```
 
-## Supported Protocols
+The server binds to three primary ports:
+- **5222** — XMPP C2S (Client-to-Server connections)
+- **5269** — XMPP S2S (Server-to-Server federation)
+- **8080** — HTTP API + Web Client + WebSockets
 
-| Standard | Name | Status |
-|----------|------|--------|
-| RFC 6120 | XMPP Core (Stream, TLS, SASL, Bind) | ✅ Full |
-| RFC 6121 | IM & Presence (Roster, Offline Messages) | ✅ Full |
+## 📡 Supported Protocols (XEPs)
+
+| Standard | Description | Status |
+|----------|-------------|--------|
+| RFC 6120/6121 | XMPP Core, IM & Presence | ✅ Full |
 | RFC 7395 | XMPP over WebSocket | ✅ Full |
-| RFC 7677 | SCRAM-SHA-256 | ✅ Full |
-| XEP-0030 | Service Discovery | ✅ Full (dynamic PEP injection) |
+| RFC 7677 | SCRAM-SHA-256 Authentication | ✅ Full |
+| XEP-0030 | Service Discovery | ✅ Full |
 | XEP-0045 | Multi-User Chat (MUC) | ✅ Full |
-| XEP-0060 | PubSub / PEP | ✅ Full (OMEMO-ready) |
-| XEP-0077 | In-Band Registration | ✅ Full |
-| XEP-0163 | Personal Eventing Protocol | ✅ Full |
-| XEP-0191 | Blocking Command | ✅ Full |
-| XEP-0198 | Stream Management | ✅ Full |
-| XEP-0280 | Message Carbons | ✅ Full |
-| XEP-0313 | Message Archive Management (MAM) | ✅ Full (with RSM paging) |
-| XEP-0357 | Push Notifications | ✅ Basic |
+| XEP-0060/0163 | PubSub & Personal Eventing Protocol | ✅ Full |
+| XEP-0198 | Stream Management (Session resumption)| ✅ Full |
+| XEP-0280 | Message Carbons (Multi-device sync) | ✅ Full |
+| XEP-0313 | Message Archive Management (MAM) | ✅ Full |
 | XEP-0363 | HTTP File Upload | ✅ Full |
-| XEP-0384 | OMEMO Encryption (server-side) | ✅ Full |
+| XEP-0384 | OMEMO Encryption | ✅ Full |
 
-## Project Structure
+## 🛠️ API & Administration
 
-```
-src/
-├── main.rs           # Entrypoint: starts TCP/HTTP/S2S listeners
-├── config.rs         # .env configuration parsing (envy)
-├── state.rs          # Shared state (AppState, DashMap)
-├── auth.rs           # SASL PLAIN + SCRAM-SHA-256 + password hashing
-├── error.rs          # HTTP error types
-├── tls.rs            # TLS certificate loading & hot-reload
-├── storage.rs        # Upload storage abstraction (trait UploadStore)
-├── metrics.rs        # Prometheus metrics
-├── abuse.rs          # PoW anti-abuse + rate limiting
-├── api/              # REST API (auth, admin, upload, reports)
-├── db/               # Database layer (users, roster, pep, muc, archive...)
-├── xmpp/             # XMPP protocol core
-│   ├── mod.rs        # TCP/WebSocket connection driver
-│   ├── framing.rs    # XML stream framer
-│   ├── xml_util.rs   # XML helper functions
-│   └── protocol/     # Protocol handlers (15 submodules)
-│       ├── dispatch.rs, messaging.rs, presence.rs, roster.rs,
-│       ├── muc.rs, pep.rs, mam.rs, sm.rs, blocking.rs,
-│       ├── discovery.rs, upload.rs, vcard.rs, ibr.rs,
-│       ├── misc.rs, private.rs
-└── s2s/              # S2S federation (dns, tls, inbound, outbound)
-```
+Northstar exposes a powerful REST API on port `8080`. 
 
-## API Endpoints
+**Public Endpoints:**
+- `POST /api/v1/register`: Account registration (requires JSON payload with invitation token).
+- `POST /api/v1/login`: Authenticate and receive a Bearer token for API access.
+- `GET /healthz` & `/metrics`: Server health and Prometheus metrics.
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/healthz` | None | Health check |
-| GET | `/readyz` | None | Readiness check |
-| GET | `/metrics` | None | Prometheus metrics |
-| POST | `/api/v1/register` | None | Register new user |
-| POST | `/api/v1/login` | None | Login, returns Bearer token |
-| GET | `/api/v1/me` | Bearer | Current user info |
-| PATCH | `/api/v1/me/password` | Bearer | Change password |
-| GET | `/api/v1/history` | Bearer | Message history |
-| GET/POST | `/api/v1/reports` | Bearer | Abuse reports |
-| PUT | `/api/v1/upload/{id}` | Bearer | File upload |
-| GET | `/uploads/{id}` | None | File download |
-| GET | `/api/v1/admin/stats` | Admin | Server statistics |
-| GET | `/api/v1/admin/users` | Admin | User list |
-| PATCH | `/api/v1/admin/users/{id}` | Admin | Update user status |
-| POST | `/api/v1/admin/tls/reload` | Admin | Hot-reload TLS certs |
-| GET/POST | `/api/v1/admin/invitations` | Admin | Invitation management |
+**Zero-Knowledge Admin Endpoints (Requires Admin Token):**
+- `POST /api/v1/admin/island_mode`: Cut off all S2S federation instantly.
+- `POST /api/v1/admin/registration`: Toggle public registration on/off.
+- `POST /api/v1/admin/panic_disconnect`: Force disconnect all active connections.
+- `GET /api/v1/admin/sessions`: Monitor active network sessions.
+- `DELETE /api/v1/admin/offline_messages`: Truncate offline message spools to free up space.
+- `DELETE /api/v1/admin/muc_rooms/{localpart}`: Destroy a group chat without inspecting its contents.
 
-## Configuration
-
-All configuration is managed via the `.env` file. See [`.env.example`](.env.example) for the full list. Key options:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `XMPP_DOMAIN` | `localhost` | Server domain |
-| `DATABASE_URL` | — | PostgreSQL connection string |
-| `XMPP_BIND` | `0.0.0.0:5222` | C2S listen address |
-| `HTTP_BIND` | `0.0.0.0:8080` | HTTP/WS listen address |
-| `FEDERATION_ENABLED` | `true` | Enable S2S federation |
-| `OPEN_REGISTRATION` | `true` | Allow public registration |
-| `SCRAM_ITERATIONS` | `600000` | PBKDF2 iteration count |
+For detailed API usage and administration, see the built-in Swagger UI or the `docs/` folder.

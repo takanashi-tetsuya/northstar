@@ -1392,47 +1392,70 @@ mod tests {
             async move {
                 let request =
                     report_idempotency_request(&reporter, key, first_report.as_bytes(), body);
-                let mut tx = pool.begin().await.unwrap();
-                assert!(
-                    crate::db::authorize_user_in_tx(&mut tx, reporter, 0, &session)
-                        .await
-                        .unwrap()
-                );
-                let lease = acquired(
-                    crate::db::acquire_idempotency_in_tx(&keyring, &mut tx, &request)
-                        .await
-                        .unwrap(),
-                );
-                assert!(
-                    crate::db::mark_idempotency_guard_verified_in_tx(&mut tx, &lease)
-                        .await
-                        .unwrap()
-                );
-                let status = match create_appeal_in_tx(
-                    &mut tx,
-                    first_report,
-                    reporter,
-                    "This is a sufficiently long concurrent appeal reason.",
-                    Some(lease.request_id),
-                )
-                .await
-                {
-                    Ok(_) => 201,
-                    Err(AppealCreateError::Conflict) => 409,
-                    Err(AppealCreateError::Internal(error)) => panic!("appeal failed: {error:?}"),
-                };
-                assert!(crate::db::complete_idempotency_in_tx(
-                    &keyring,
-                    &mut tx,
-                    &lease,
-                    status,
-                    &headers,
-                    status.to_string().as_bytes(),
-                )
-                .await
-                .unwrap());
-                tx.commit().await.unwrap();
-                status
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                loop {
+                    let mut tx = pool.begin().await.unwrap();
+                    assert!(
+                        crate::db::authorize_user_in_tx(&mut tx, reporter, 0, &session)
+                            .await
+                            .unwrap()
+                    );
+                    let lease =
+                        match crate::db::acquire_idempotency_in_tx(&keyring, &mut tx, &request)
+                            .await
+                            .unwrap()
+                        {
+                            crate::db::IdempotencyAcquire::Acquired(lease) => lease,
+                            crate::db::IdempotencyAcquire::Busy {
+                                retry_after_seconds,
+                            } => {
+                                tx.rollback().await.unwrap();
+                                let remaining = deadline
+                                    .checked_duration_since(tokio::time::Instant::now())
+                                    .expect("appeal admission remained busy after five seconds");
+                                tokio::time::sleep(
+                                    Duration::from_secs(retry_after_seconds.max(1)).min(remaining),
+                                )
+                                .await;
+                                continue;
+                            }
+                            other => {
+                                panic!("expected a newly acquired appeal lease, got {other:?}")
+                            }
+                        };
+                    assert!(
+                        crate::db::mark_idempotency_guard_verified_in_tx(&mut tx, &lease)
+                            .await
+                            .unwrap()
+                    );
+                    let status = match create_appeal_in_tx(
+                        &mut tx,
+                        first_report,
+                        reporter,
+                        "This is a sufficiently long concurrent appeal reason.",
+                        Some(lease.request_id),
+                    )
+                    .await
+                    {
+                        Ok(_) => 201,
+                        Err(AppealCreateError::Conflict) => 409,
+                        Err(AppealCreateError::Internal(error)) => {
+                            panic!("appeal failed: {error:?}")
+                        }
+                    };
+                    assert!(crate::db::complete_idempotency_in_tx(
+                        &keyring,
+                        &mut tx,
+                        &lease,
+                        status,
+                        &headers,
+                        status.to_string().as_bytes(),
+                    )
+                    .await
+                    .unwrap());
+                    tx.commit().await.unwrap();
+                    return status;
+                }
             }
         };
         let (left, right) = tokio::join!(

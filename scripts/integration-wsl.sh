@@ -33,6 +33,7 @@ if [[ ! "$test_schema" =~ ^northstar_integration_it_[0-9a-f]{16}$ ]]; then
   exit 2
 fi
 runtime_dir="$(mktemp -d /tmp/northstar-integration.XXXXXX)"
+mkdir -p "$runtime_dir/logs"
 export METRICS_BIND="127.0.0.1:$test_metrics_port"
 server_pid=""
 cleanup() {
@@ -196,6 +197,7 @@ start_server() {
     C2S_CLIENT_TRUST_ROOT_CERT_PATH="$runtime_dir/client-ca.crt" \
     OPEN_REGISTRATION=true \
     REQUIRE_ENCRYPTED_ARCHIVE=true \
+    SCRAM_ITERATIONS=4096 \
     SCRAM_SHA1_ENABLED=true \
     SM_REQUIRE_SAME_DEVICE=false \
     REGISTRATION_RATE_PER_HOUR=20 \
@@ -209,6 +211,7 @@ start_server() {
     PUBSUB_MAX_NODES_PER_OWNER=2 \
     BOOTSTRAP_ADMIN_USERNAME=admin_it \
     BOOTSTRAP_ADMIN_PASSWORD=integration-admin-password-123 \
+    LOG_DIR="$runtime_dir/logs" \
     LOG_FORMAT=json \
     RUST_LOG="${RUST_LOG:-rust_xmpp_server=info}" \
     "$target_dir/debug/rust-xmpp-server" >>"$runtime_dir/integration-server.log" 2>&1 &

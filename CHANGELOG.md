@@ -90,6 +90,17 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   incrementing federation-failure metrics. Cancellation diagnostics distinguish
   that lifecycle event from a live certificate session explicitly revoked by
   the active CRL.
+- Single-node MUC subject changes now use their own transactionally authorized
+  path instead of requiring a clustered occupancy row. Local and federated room
+  actors are revalidated against the exact room epoch, account/affiliation and
+  role before the subject changes; plaintext subjects update room state without
+  entering MAM when encrypted-only archive policy is active. Clustered rooms
+  continue to use their durable operation/outbox path.
+- CI protocol fixtures now use an explicit RFC-compatible low-cost SCRAM profile
+  instead of running production password-hardening parameters in a debug build,
+  and isolate runtime logs. Concurrent report/appeal validation now treats the
+  global idempotency admission lock's documented `Busy` result as retryable
+  rather than as an impossible test outcome.
 - Production qualification still requires the target-environment and external
   gates in [the release checklist](docs/RELEASE_CHECKLIST.md).
 

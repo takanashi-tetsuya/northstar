@@ -564,6 +564,23 @@ impl From<db::MucDiscussionAdmission> for MucDiscussionAdmission {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MucSubjectOutcome {
+    Applied,
+    Unauthorized,
+    Stale,
+}
+
+impl From<db::MucSubjectOutcome> for MucSubjectOutcome {
+    fn from(outcome: db::MucSubjectOutcome) -> Self {
+        match outcome {
+            db::MucSubjectOutcome::Applied => Self::Applied,
+            db::MucSubjectOutcome::Unauthorized => Self::Unauthorized,
+            db::MucSubjectOutcome::Stale => Self::Stale,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum MucActorPrincipal<'a> {
     Local {
@@ -1447,6 +1464,36 @@ impl MucService {
         Ok(db::admit_muc_discussion(&self.pool, message.into_db())
             .await?
             .into())
+    }
+
+    pub(crate) async fn set_local_subject(
+        &self,
+        mutation: MucSubjectMutation<'_>,
+        archive: bool,
+        authority: MucActorAuthority<'_>,
+    ) -> Result<MucSubjectOutcome> {
+        if !authority.local_scope_matches_configured_domain(&self.configured_domain) {
+            return Ok(MucSubjectOutcome::Unauthorized);
+        }
+        let cluster_target = authority.cluster_target.as_ref().map(Into::into);
+        let authority = db::MucActorAuthority {
+            clustered: authority.clustered,
+            expected_room_epoch: authority.expected_room_epoch,
+            principal: (&authority.principal).into(),
+            actor_scope: authority.actor_scope,
+            full_jid: authority.full_jid,
+            nick: authority.nick,
+            occupant_incarnation: authority.occupant_incarnation,
+            connection_uuid: authority.connection_uuid,
+            expected_role: authority.expected_role,
+            expected_affiliation: authority.expected_affiliation,
+            cluster_target,
+        };
+        Ok(
+            db::set_local_muc_subject(&self.pool, mutation.into_db(), archive, authority)
+                .await?
+                .into(),
+        )
     }
 
     pub(crate) async fn set_local_cluster_subject(

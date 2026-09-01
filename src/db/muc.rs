@@ -122,6 +122,13 @@ pub enum MucDiscussionAdmission {
     Stale,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MucSubjectOutcome {
+    Applied,
+    Unauthorized,
+    Stale,
+}
+
 pub struct MucDiscussion<'a> {
     pub id: Uuid,
     pub room_id: Uuid,
@@ -1707,14 +1714,17 @@ pub async fn admit_muc_discussion(
     Ok(MucDiscussionAdmission::Replay(existing_id))
 }
 
-/// Change a room subject and archive the subject stanza in one transaction.
-/// A failed archive insert therefore cannot leave a subject that MAM cannot
-/// explain, and a missing room never produces an orphan history row.
-#[cfg(test)]
-pub async fn set_muc_subject_and_archive(
+/// Change a single-node room subject under the same database authority fence
+/// as discussion and retraction admission. The optional MAM projection is in
+/// the same transaction, so a failed archive insert cannot leave a subject
+/// that history cannot explain. Plaintext subjects may still update room state
+/// when encrypted-only archive policy deliberately disables that projection.
+pub async fn set_local_muc_subject(
     pool: &PgPool,
     mutation: MucSubjectMutation<'_>,
-) -> Result<bool> {
+    archive: bool,
+    authority: MucActorAuthority<'_>,
+) -> Result<MucSubjectOutcome> {
     let actor_scope = canonical_history_actor(mutation.actor_scope)?;
     let sender_jid = canonical_history_sender(mutation.sender_jid)?;
     validate_history_payload(mutation.nick, mutation.stanza)?;
@@ -1722,44 +1732,75 @@ pub async fn set_muc_subject_and_archive(
         mutation.subject.len() <= MAX_HISTORY_STANZA_BYTES,
         "MUC subject exceeds 1048576 bytes"
     );
+    if authority.clustered || authority.cluster_target.is_some() {
+        return Ok(MucSubjectOutcome::Stale);
+    }
+    if authority.actor_scope != actor_scope
+        || authority.full_jid != sender_jid
+        || authority.nick != mutation.nick
+    {
+        return Ok(MucSubjectOutcome::Unauthorized);
+    }
 
     let mut transaction = pool.begin().await?;
-    #[cfg(test)]
-    maybe_pause_muc_authorization_for_test("retraction").await;
+    let locked =
+        match lock_muc_actor_authority(&mut transaction, mutation.room_id, &authority).await? {
+            MucAuthorityCheck::Authorized(actor) => actor,
+            MucAuthorityCheck::Unauthorized => {
+                transaction.rollback().await?;
+                return Ok(MucSubjectOutcome::Unauthorized);
+            }
+            MucAuthorityCheck::Stale => {
+                transaction.rollback().await?;
+                return Ok(MucSubjectOutcome::Stale);
+            }
+        };
+    let allow_subject_change: bool =
+        sqlx::query_scalar("SELECT allow_subject_change FROM muc_rooms WHERE id=$1")
+            .bind(mutation.room_id)
+            .fetch_one(&mut *transaction)
+            .await?;
+    if locked.role != "moderator" && !(locked.role == "participant" && allow_subject_change) {
+        transaction.rollback().await?;
+        return Ok(MucSubjectOutcome::Unauthorized);
+    }
     let changed = sqlx::query(
         "UPDATE muc_rooms
          SET subject=$2, subject_set_by=$3, subject_stanza_id=$4,
-             subject_changed_at=NOW()
-         WHERE id=$1",
+             subject_changed_at=clock_timestamp()
+         WHERE id=$1 AND room_epoch=$5 AND destroyed_at IS NULL",
     )
     .bind(mutation.room_id)
     .bind(mutation.subject)
     .bind(&actor_scope)
     .bind(mutation.stanza_id)
+    .bind(authority.expected_room_epoch)
     .execute(&mut *transaction)
     .await?
     .rows_affected()
         == 1;
     if !changed {
         transaction.rollback().await?;
-        return Ok(false);
+        return Ok(MucSubjectOutcome::Stale);
     }
-    sqlx::query(
-        "INSERT INTO muc_messages
-         (id, room_id, sender_jid, nick, stanza, encrypted, message_kind, actor_scope)
-         VALUES ($1, $2, $3, $4, $5, $6, 'subject', $7)",
-    )
-    .bind(mutation.stanza_id)
-    .bind(mutation.room_id)
-    .bind(sender_jid)
-    .bind(mutation.nick)
-    .bind(mutation.stanza)
-    .bind(mutation.encrypted)
-    .bind(actor_scope)
-    .execute(&mut *transaction)
-    .await?;
+    if archive {
+        sqlx::query(
+            "INSERT INTO muc_messages
+             (id, room_id, sender_jid, nick, stanza, encrypted, message_kind, actor_scope)
+             VALUES ($1, $2, $3, $4, $5, $6, 'subject', $7)",
+        )
+        .bind(mutation.stanza_id)
+        .bind(mutation.room_id)
+        .bind(sender_jid)
+        .bind(mutation.nick)
+        .bind(mutation.stanza)
+        .bind(mutation.encrypted)
+        .bind(actor_scope)
+        .execute(&mut *transaction)
+        .await?;
+    }
     transaction.commit().await?;
-    Ok(true)
+    Ok(MucSubjectOutcome::Applied)
 }
 
 /// Replace a discussion payload with a tombstone and archive the author
@@ -3015,13 +3056,13 @@ mod tests {
         hash_muc_password, install_muc_authorization_test_pause, muc_history_since,
         muc_origin_digest, muc_reserved_nick, muc_room, public_muc_room_page,
         register_local_muc_member, retract_muc_message_and_archive_action,
-        set_federated_muc_affiliation, set_muc_affiliation, set_muc_affiliations_batch,
-        set_muc_subject_and_archive, unregister_local_muc_member, update_muc_config,
+        set_federated_muc_affiliation, set_local_muc_subject, set_muc_affiliation,
+        set_muc_affiliations_batch, unregister_local_muc_member, update_muc_config,
         verify_muc_password, DurableMucInviteOutcome, MucActorAuthority, MucActorPrincipal,
         MucAdminSnapshot, MucAffiliationBatchOutcome, MucAffiliationChange, MucAffiliationOutcome,
         MucAffiliationTarget, MucConfigUpdate, MucConfigurationOutcome, MucDiscussion,
         MucDiscussionAdmission, MucRegistrationOutcome, MucRetractionKind, MucRetractionMutation,
-        MucRetractionOutcome, MucSubjectMutation,
+        MucRetractionOutcome, MucSubjectMutation, MucSubjectOutcome,
     };
     use crate::db::{OfflineStorePolicy, S2sOutboxPolicy};
     use std::fs::OpenOptions;
@@ -4061,7 +4102,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert!(set_muc_subject_and_archive(
+        assert!(set_local_muc_subject(
             &pool,
             MucSubjectMutation {
                 stanza_id: Uuid::new_v4(),
@@ -4073,6 +4114,16 @@ mod tests {
                 stanza: "<message><subject>must roll back</subject></message>",
                 encrypted: false,
             },
+            true,
+            local_process_authority(
+                room_epoch,
+                owner_id,
+                "alice@local.test",
+                "alice@local.test/Phone",
+                "Alice",
+                "moderator",
+                "none",
+            ),
         )
         .await
         .is_err());
@@ -4093,21 +4144,34 @@ mod tests {
             .unwrap();
 
         let subject_id = Uuid::new_v4();
-        assert!(set_muc_subject_and_archive(
-            &pool,
-            MucSubjectMutation {
-                stanza_id: subject_id,
-                room_id,
-                actor_scope: "alice@local.test",
-                sender_jid: "alice@local.test/Phone",
-                nick: "Alice",
-                subject: "committed",
-                stanza: "<message><subject>committed</subject></message>",
-                encrypted: false,
-            },
-        )
-        .await
-        .unwrap());
+        assert_eq!(
+            set_local_muc_subject(
+                &pool,
+                MucSubjectMutation {
+                    stanza_id: subject_id,
+                    room_id,
+                    actor_scope: "alice@local.test",
+                    sender_jid: "alice@local.test/Phone",
+                    nick: "Alice",
+                    subject: "committed",
+                    stanza: "<message><subject>committed</subject></message>",
+                    encrypted: false,
+                },
+                true,
+                local_process_authority(
+                    room_epoch,
+                    owner_id,
+                    "alice@local.test",
+                    "alice@local.test/Phone",
+                    "Alice",
+                    "moderator",
+                    "none",
+                ),
+            )
+            .await
+            .unwrap(),
+            MucSubjectOutcome::Applied
+        );
         let subject_state: (Option<String>, Option<Uuid>, i64) = sqlx::query_as(
             "SELECT r.subject,r.subject_stanza_id,
                     (SELECT COUNT(*) FROM muc_messages m
@@ -4123,6 +4187,45 @@ mod tests {
             subject_state,
             (Some("committed".to_owned()), Some(subject_id), 1)
         );
+        let unarchived_subject_id = Uuid::new_v4();
+        assert_eq!(
+            set_local_muc_subject(
+                &pool,
+                MucSubjectMutation {
+                    stanza_id: unarchived_subject_id,
+                    room_id,
+                    actor_scope: "alice@local.test",
+                    sender_jid: "alice@local.test/Phone",
+                    nick: "Alice",
+                    subject: "state only",
+                    stanza: "<message><subject>state only</subject></message>",
+                    encrypted: false,
+                },
+                false,
+                local_process_authority(
+                    room_epoch,
+                    owner_id,
+                    "alice@local.test",
+                    "alice@local.test/Phone",
+                    "Alice",
+                    "moderator",
+                    "none",
+                ),
+            )
+            .await
+            .unwrap(),
+            MucSubjectOutcome::Applied
+        );
+        let state_only: (Option<String>, i64) = sqlx::query_as(
+            "SELECT subject,(SELECT COUNT(*) FROM muc_messages WHERE id=$2)
+               FROM muc_rooms WHERE id=$1",
+        )
+        .bind(room_id)
+        .bind(unarchived_subject_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(state_only, (Some("state only".to_owned()), 0));
         assert!(muc_history_since(&pool, room_id, 0, None)
             .await
             .unwrap()

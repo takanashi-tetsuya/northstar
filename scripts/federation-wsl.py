@@ -752,7 +752,11 @@ def run() -> None:
         f"<message xmlns='jabber:client' to='{federated_room}' type='groupchat' id='fed-muc-subject'>"
         "<subject>Federated Subject</subject></message>"
     )
-    alice.receive_until("fed-muc-subject")
+    accepted_subject, _ = alice.receive_until("fed-muc-subject")
+    fixture.check(
+        "type='error'" not in accepted_subject and "Federated Subject" in accepted_subject,
+        f"federated MUC subject seed was rejected: {accepted_subject}",
+    )
 
     schema_a = os.environ.get("FEDERATION_TEST_SCHEMA_A", "")
     fixture.check(

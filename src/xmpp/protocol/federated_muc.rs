@@ -11,7 +11,7 @@ use crate::services::muc::{
     MucAffiliationBatchOutcome, MucAffiliationChange, MucAffiliationTarget, MucConfigUpdate,
     MucConfigurationOutcome, MucDiscussion, MucDiscussionAdmission, MucRegistrationOutcome,
     MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucSubjectMutation,
-    OfflineStoreOutcome, OfflineStorePolicy,
+    MucSubjectOutcome, OfflineStoreOutcome, OfflineStorePolicy,
 };
 use crate::state::{
     bare_jid, localpart, AppState, MucOccupant, MucOccupantEndpoint, SerializableMucOccupant,
@@ -3174,27 +3174,60 @@ async fn federated_muc_message_owned(
         }
     } else if let Some(subject) = subject_command {
         let service = state.muc_service();
-        let Some(actor_target) = service
-            .local_cluster_occupancy_target_by_nick(room.id, room.room_epoch, &own.nick)
-            .await?
-        else {
-            return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
-        };
-        if actor_target.full_jid != own.full_jid
-            || actor_target.connection_uuid != own.connection_id
-        {
-            return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
+        if state.cluster.is_enabled() {
+            let Some(actor_target) = service
+                .local_cluster_occupancy_target_by_nick(room.id, room.room_epoch, &own.nick)
+                .await?
+            else {
+                return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
+            };
+            if actor_target.full_jid != own.full_jid
+                || actor_target.connection_uuid != own.connection_id
+            {
+                return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
+            }
+            let operation_id =
+                crate::services::muc::MucService::operation_id(&serde_json::json!({
+                    "kind":"subject","stream":connection_id,"stanza_id":request.stanza.id,
+                    "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
+                }))?;
+            match service
+                .set_local_cluster_subject(
+                    operation_id,
+                    room.room_epoch,
+                    room.config_version,
+                    &actor_target,
+                    MucSubjectMutation {
+                        stanza_id: stable_id,
+                        room_id: room.id,
+                        actor_scope: &actor_scope,
+                        sender_jid: &actor_full_jid,
+                        nick: &own.nick,
+                        subject,
+                        stanza: &archive,
+                        encrypted,
+                    },
+                    archive_enabled,
+                )
+                .await?
+            {
+                ClusterMucTransitionOutcome::Applied | ClusterMucTransitionOutcome::Replay => {}
+                ClusterMucTransitionOutcome::Unauthorized => {
+                    return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
+                }
+                _ => return Ok(federated_error(&request.stanza, from, "cancel", "conflict")),
+            }
+            if let Err(error) = state
+                .muc_service()
+                .wake_committed_operation(&state.cluster, operation_id)
+                .await
+            {
+                tracing::warn!(?error, %operation_id, "committed federated MUC subject wake failed; PostgreSQL outbox will catch up");
+            }
+            return Ok(None);
         }
-        let operation_id = crate::services::muc::MucService::operation_id(&serde_json::json!({
-            "kind":"subject","stream":connection_id,"stanza_id":request.stanza.id,
-            "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
-        }))?;
         match service
-            .set_local_cluster_subject(
-                operation_id,
-                room.room_epoch,
-                room.config_version,
-                &actor_target,
+            .set_local_subject(
                 MucSubjectMutation {
                     stanza_id: stable_id,
                     room_id: room.id,
@@ -3206,23 +3239,18 @@ async fn federated_muc_message_owned(
                     encrypted,
                 },
                 archive_enabled,
+                actor_authority,
             )
             .await?
         {
-            ClusterMucTransitionOutcome::Applied | ClusterMucTransitionOutcome::Replay => {}
-            ClusterMucTransitionOutcome::Unauthorized => {
+            MucSubjectOutcome::Applied => {}
+            MucSubjectOutcome::Unauthorized => {
                 return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
             }
-            _ => return Ok(federated_error(&request.stanza, from, "cancel", "conflict")),
+            MucSubjectOutcome::Stale => {
+                return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
+            }
         }
-        if let Err(error) = state
-            .muc_service()
-            .wake_committed_operation(&state.cluster, operation_id)
-            .await
-        {
-            tracing::warn!(?error, %operation_id, "committed federated MUC subject wake failed; PostgreSQL outbox will catch up");
-        }
-        return Ok(None);
     } else {
         let admission = state
             .muc_service()

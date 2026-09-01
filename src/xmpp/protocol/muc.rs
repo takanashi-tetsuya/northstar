@@ -6,7 +6,7 @@ use crate::services::muc::{
     MucAdminSnapshot, MucAffiliationBatchOutcome, MucAffiliationChange, MucAffiliationTarget,
     MucConfigUpdate, MucConfigurationOutcome, MucDiscussion, MucDiscussionAdmission,
     MucRegistrationOutcome, MucRetractionKind, MucRetractionMutation, MucRetractionOutcome,
-    MucRoom, MucSubjectMutation, OfflineStoreOutcome, OfflineStorePolicy,
+    MucRoom, MucSubjectMutation, MucSubjectOutcome, OfflineStoreOutcome, OfflineStorePolicy,
 };
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
@@ -3215,38 +3215,81 @@ impl ProtocolSession {
             }
         } else if let Some(subject) = subject_command.as_deref() {
             let service = self.state.muc_service();
-            let Some(actor_target) = service
-                .local_cluster_occupancy_target_by_nick(room.id, room.room_epoch, &own.nick)
-                .await?
-            else {
-                return Ok(Action::Send(muc_stanza_error(
-                    root,
-                    from,
-                    "auth",
-                    "forbidden",
-                )));
-            };
-            if actor_target.full_jid != own.full_jid
-                || actor_target.connection_uuid != own.connection_id
-            {
-                return Ok(Action::Send(muc_stanza_error(
-                    root,
-                    from,
-                    "auth",
-                    "forbidden",
-                )));
+            if self.state.cluster.is_enabled() {
+                let Some(actor_target) = service
+                    .local_cluster_occupancy_target_by_nick(room.id, room.room_epoch, &own.nick)
+                    .await?
+                else {
+                    return Ok(Action::Send(muc_stanza_error(
+                        root,
+                        from,
+                        "auth",
+                        "forbidden",
+                    )));
+                };
+                if actor_target.full_jid != own.full_jid
+                    || actor_target.connection_uuid != own.connection_id
+                {
+                    return Ok(Action::Send(muc_stanza_error(
+                        root,
+                        from,
+                        "auth",
+                        "forbidden",
+                    )));
+                }
+                let operation_id = crate::services::muc::MucService::operation_id(
+                    &serde_json::json!({
+                        "kind":"subject","stream":self.connection_id,"stanza_id":root.attribute("id"),
+                        "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
+                    }),
+                )?;
+                match service
+                    .set_local_cluster_subject(
+                        operation_id,
+                        room.room_epoch,
+                        room.config_version,
+                        &actor_target,
+                        MucSubjectMutation {
+                            stanza_id: stable_id,
+                            room_id: room.id,
+                            actor_scope: &actor_scope,
+                            sender_jid: from,
+                            nick: &own.nick,
+                            subject,
+                            stanza: &archive,
+                            encrypted,
+                        },
+                        archive_enabled,
+                    )
+                    .await?
+                {
+                    ClusterMucTransitionOutcome::Applied | ClusterMucTransitionOutcome::Replay => {}
+                    ClusterMucTransitionOutcome::Unauthorized => {
+                        return Ok(Action::Send(muc_stanza_error(
+                            root,
+                            from,
+                            "auth",
+                            "forbidden",
+                        )));
+                    }
+                    _ => {
+                        return Ok(Action::Send(muc_stanza_error(
+                            root, from, "cancel", "conflict",
+                        )));
+                    }
+                }
+                if let Err(error) = self
+                    .state
+                    .muc_service()
+                    .wake_committed_operation(&self.state.cluster, operation_id)
+                    .await
+                {
+                    tracing::warn!(?error, %operation_id, "committed MUC subject wake failed; PostgreSQL outbox will catch up");
+                }
+                return Ok(Action::None);
             }
-            let operation_id =
-                crate::services::muc::MucService::operation_id(&serde_json::json!({
-                    "kind":"subject","stream":self.connection_id,"stanza_id":root.attribute("id"),
-                    "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
-                }))?;
             match service
-                .set_local_cluster_subject(
-                    operation_id,
-                    room.room_epoch,
-                    room.config_version,
-                    &actor_target,
+                .set_local_subject(
                     MucSubjectMutation {
                         stanza_id: stable_id,
                         room_id: room.id,
@@ -3258,11 +3301,12 @@ impl ProtocolSession {
                         encrypted,
                     },
                     archive_enabled,
+                    actor_authority,
                 )
                 .await?
             {
-                ClusterMucTransitionOutcome::Applied | ClusterMucTransitionOutcome::Replay => {}
-                ClusterMucTransitionOutcome::Unauthorized => {
+                MucSubjectOutcome::Applied => {}
+                MucSubjectOutcome::Unauthorized => {
                     return Ok(Action::Send(muc_stanza_error(
                         root,
                         from,
@@ -3270,21 +3314,12 @@ impl ProtocolSession {
                         "forbidden",
                     )));
                 }
-                _ => {
+                MucSubjectOutcome::Stale => {
                     return Ok(Action::Send(muc_stanza_error(
                         root, from, "cancel", "conflict",
                     )));
                 }
             }
-            if let Err(error) = self
-                .state
-                .muc_service()
-                .wake_committed_operation(&self.state.cluster, operation_id)
-                .await
-            {
-                tracing::warn!(?error, %operation_id, "committed MUC subject wake failed; PostgreSQL outbox will catch up");
-            }
-            return Ok(Action::None);
         } else {
             let admission = self
                 .state

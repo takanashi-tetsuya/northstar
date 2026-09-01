@@ -51,6 +51,11 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - CI now hashes canonical LF-only migration bytes, pins the exact Rust 1.97.1
   builder digest, uses a genuinely loopback PostgreSQL runtime fixture, and
   exercises production-shaped upload capacity and disaster-recovery rollback.
+- CI runtime fixtures now emit redacted, fixture-specific failure annotations,
+  so failures remain diagnosable without replaying privileged or adversarial
+  network tests on a developer workstation. The two-domain federation fixture
+  also retries harmless duplicate ephemeral-port selections while keeping
+  explicit operator-supplied port collisions fatal.
 - Runtime schema attestation now follows the connection's already pinned
   schema, so privilege-separated and isolated-schema deployments cannot read a
   different `public` migration ledger. Authentication database fixtures also

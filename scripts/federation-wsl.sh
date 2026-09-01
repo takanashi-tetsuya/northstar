@@ -21,27 +21,48 @@ pick_port() {
   python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }
 declare -a allocated_ports=()
+port_is_allocated() {
+  local candidate="$1"
+  local allocated=""
+  for allocated in "${allocated_ports[@]}"; do
+    if [[ "$allocated" == "$candidate" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 assign_port() {
   local destination="$1"
   local environment_name="$2"
   local port=""
-  local allocated=""
   if [[ -v "$environment_name" ]]; then
     port="${!environment_name}"
   else
-    port="$(pick_port)"
+    # The kernel may hand the same recently released ephemeral port to two
+    # consecutive probes. Retry automatic allocation instead of turning that
+    # harmless collision into a flaky exit-code-2 CI failure. Explicit caller
+    # overrides remain strict and must never alias another listener.
+    for _ in {1..100}; do
+      port="$(pick_port)"
+      if ! port_is_allocated "$port"; then
+        break
+      fi
+      port=""
+    done
+    if [[ -z "$port" ]]; then
+      echo "could not allocate a unique federation test port" >&2
+      exit 1
+    fi
   fi
   if [[ ! "$port" =~ ^[1-9][0-9]{0,4}$ ]] || (( port > 65535 )); then
     echo "$environment_name must be a TCP port from 1 through 65535" >&2
     exit 2
   fi
   port="$((port))"
-  for allocated in "${allocated_ports[@]}"; do
-    if [[ "$allocated" == "$port" ]]; then
-      echo "$environment_name duplicates federation test port $port" >&2
-      exit 2
-    fi
-  done
+  if port_is_allocated "$port"; then
+    echo "$environment_name duplicates federation test port $port" >&2
+    exit 2
+  fi
   allocated_ports+=("$port")
   printf -v "$destination" '%s' "$port"
 }

@@ -351,11 +351,11 @@ jobs:
           XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
           XMPP_TEST_OFFLINE: "false"
         run: |
-          bash scripts/integration-wsl.sh
-          bash scripts/message-pow-wire-wsl.sh
-          bash scripts/profile-storage-runtime-wsl.sh
-          bash scripts/omemo-runtime-wsl.sh
-          bash scripts/moderation-runtime-wsl.sh
+          bash scripts/github-ci-run.sh "Protocol integration" bash scripts/integration-wsl.sh
+          bash scripts/github-ci-run.sh "Message PoW wire integration" bash scripts/message-pow-wire-wsl.sh
+          bash scripts/github-ci-run.sh "Profile storage runtime" bash scripts/profile-storage-runtime-wsl.sh
+          bash scripts/github-ci-run.sh "OMEMO runtime" bash scripts/omemo-runtime-wsl.sh
+          bash scripts/github-ci-run.sh "Moderation runtime" bash scripts/moderation-runtime-wsl.sh
 
       - name: Stop loopback-only PostgreSQL fixture
         if: always()
@@ -460,38 +460,38 @@ jobs:
           # Service-layer persistence fences previously exercised only by the
           # release validation list; they share this job's build cache and run
           # strictly serially against the single disposable postgres service.
-          bash scripts/auth-admin-db-wsl.sh
-          bash scripts/admin-session-cleanup-db-wsl.sh
-          bash scripts/authentication-service-db-wsl.sh
-          bash scripts/abuse-reporting-db-wsl.sh
-          bash scripts/abuse-key-deployment-db-wsl.sh
-          bash scripts/message-pow-db-wsl.sh
-          bash scripts/api-operations-db-wsl.sh
-          bash scripts/api-pages-db-wsl.sh
-          bash scripts/migration-upgrade-wsl.sh
-          bash scripts/migration-0056-db-wsl.sh
-          bash scripts/rfc7622-identity-db-wsl.sh
-          bash scripts/identity-audit-db-wsl.sh
-          bash scripts/jid-identity-db-wsl.sh
-          bash scripts/authorization-jid-identity-db-wsl.sh
-          bash scripts/push-jid-identity-db-wsl.sh
-          bash scripts/push-delivery-db-wsl.sh
-          bash scripts/mix-jid-identity-db-wsl.sh
-          bash scripts/session-jid-identity-db-wsl.sh
-          bash scripts/profile-jid-identity-db-wsl.sh
-          bash scripts/roster-service-db-wsl.sh
-          bash scripts/muc-db-wsl.sh
-          bash scripts/pie-db-wsl.sh
-          bash scripts/privacy-db-wsl.sh
-          bash scripts/offline-replay-db-wsl.sh
-          bash scripts/pubsub-db-wsl.sh
-          bash scripts/pubsub-outbox-db-wsl.sh
-          bash scripts/pubsub-wire-wsl.sh
-          bash scripts/retention-db-wsl.sh
-          bash scripts/sm-db-wsl.sh
-          bash scripts/s2s-db-wsl.sh
-          bash scripts/upload-db-wsl.sh
-          bash scripts/muc-cluster-wsl.sh
+          bash scripts/github-ci-run.sh "Auth/admin database" bash scripts/auth-admin-db-wsl.sh
+          bash scripts/github-ci-run.sh "Admin session cleanup database" bash scripts/admin-session-cleanup-db-wsl.sh
+          bash scripts/github-ci-run.sh "Authentication service database" bash scripts/authentication-service-db-wsl.sh
+          bash scripts/github-ci-run.sh "Abuse reporting database" bash scripts/abuse-reporting-db-wsl.sh
+          bash scripts/github-ci-run.sh "Abuse key deployment database" bash scripts/abuse-key-deployment-db-wsl.sh
+          bash scripts/github-ci-run.sh "Message PoW database" bash scripts/message-pow-db-wsl.sh
+          bash scripts/github-ci-run.sh "API operations database" bash scripts/api-operations-db-wsl.sh
+          bash scripts/github-ci-run.sh "API pages database" bash scripts/api-pages-db-wsl.sh
+          bash scripts/github-ci-run.sh "Migration upgrade" bash scripts/migration-upgrade-wsl.sh
+          bash scripts/github-ci-run.sh "Migration 0056 compatibility" bash scripts/migration-0056-db-wsl.sh
+          bash scripts/github-ci-run.sh "RFC 7622 identity database" bash scripts/rfc7622-identity-db-wsl.sh
+          bash scripts/github-ci-run.sh "Identity audit database" bash scripts/identity-audit-db-wsl.sh
+          bash scripts/github-ci-run.sh "JID identity database" bash scripts/jid-identity-db-wsl.sh
+          bash scripts/github-ci-run.sh "Authorization JID identity database" bash scripts/authorization-jid-identity-db-wsl.sh
+          bash scripts/github-ci-run.sh "Push JID identity database" bash scripts/push-jid-identity-db-wsl.sh
+          bash scripts/github-ci-run.sh "Push delivery database" bash scripts/push-delivery-db-wsl.sh
+          bash scripts/github-ci-run.sh "MIX JID identity database" bash scripts/mix-jid-identity-db-wsl.sh
+          bash scripts/github-ci-run.sh "Session JID identity database" bash scripts/session-jid-identity-db-wsl.sh
+          bash scripts/github-ci-run.sh "Profile JID identity database" bash scripts/profile-jid-identity-db-wsl.sh
+          bash scripts/github-ci-run.sh "Roster service database" bash scripts/roster-service-db-wsl.sh
+          bash scripts/github-ci-run.sh "MUC database" bash scripts/muc-db-wsl.sh
+          bash scripts/github-ci-run.sh "PIE database" bash scripts/pie-db-wsl.sh
+          bash scripts/github-ci-run.sh "Privacy database" bash scripts/privacy-db-wsl.sh
+          bash scripts/github-ci-run.sh "Offline replay database" bash scripts/offline-replay-db-wsl.sh
+          bash scripts/github-ci-run.sh "PubSub database" bash scripts/pubsub-db-wsl.sh
+          bash scripts/github-ci-run.sh "PubSub outbox database" bash scripts/pubsub-outbox-db-wsl.sh
+          bash scripts/github-ci-run.sh "PubSub wire integration" bash scripts/pubsub-wire-wsl.sh
+          bash scripts/github-ci-run.sh "Retention database" bash scripts/retention-db-wsl.sh
+          bash scripts/github-ci-run.sh "Stream Management database" bash scripts/sm-db-wsl.sh
+          bash scripts/github-ci-run.sh "S2S database" bash scripts/s2s-db-wsl.sh
+          bash scripts/github-ci-run.sh "HTTP Upload database" bash scripts/upload-db-wsl.sh
+          bash scripts/github-ci-run.sh "MUC cluster database" bash scripts/muc-cluster-wsl.sh
 
       - name: Stop loopback-only PostgreSQL fixture
         if: always()
@@ -534,8 +534,8 @@ jobs:
           XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
           XMPP_TEST_OFFLINE: "false"
         run: |
-          bash scripts/mix-runtime-wsl.sh
-          bash scripts/mix-federation-runtime-wsl.sh
+          bash scripts/github-ci-run.sh "MIX single-node runtime" bash scripts/mix-runtime-wsl.sh
+          bash scripts/github-ci-run.sh "MIX federation runtime" bash scripts/mix-federation-runtime-wsl.sh
 
       - name: Stop loopback-only PostgreSQL fixture
         if: always()
@@ -566,20 +566,20 @@ jobs:
         env:
           XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
           XMPP_TEST_OFFLINE: "false"
-        run: bash scripts/federation-wsl.sh
+        run: bash scripts/github-ci-run.sh "SASL EXTERNAL federation" bash scripts/federation-wsl.sh
 
       - name: Verify forced XEP-0220 Dialback federation
         env:
           XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
           XMPP_TEST_OFFLINE: "false"
           S2S_SASL_EXTERNAL_ENABLED: "false"
-        run: bash scripts/federation-wsl.sh
+        run: bash scripts/github-ci-run.sh "XEP-0220 Dialback federation" bash scripts/federation-wsl.sh
 
       - name: Verify external component accept, connect and Deferred bind profiles
         env:
           XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
           XMPP_TEST_OFFLINE: "false"
-        run: bash scripts/component-runtime-wsl.sh
+        run: bash scripts/github-ci-run.sh "External component runtime" bash scripts/component-runtime-wsl.sh
 
       - name: Stop loopback-only PostgreSQL fixture
         if: always()
@@ -611,7 +611,7 @@ jobs:
 
       - name: Bind only the isolated HTTPS fixture as root
         run: |
-          sudo env \
+          bash scripts/github-ci-run.sh "XEP-0487 privileged HTTPS runtime" sudo env \
             XEP0487_RUNTIME_UID="$(id -u)" \
             CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" \
             NORTHSTAR_XEP0487_SKIP_BUILD=true \

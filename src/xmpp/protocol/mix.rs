@@ -47,6 +47,10 @@ const MAX_CHANNELS_PER_OWNER: i64 = 100;
 const MAX_ITEMS_PAGE: i64 = 200;
 const MIX_IQ_RELAY_LIMIT: usize = 1_024;
 const MIX_IQ_RELAY_TTL: Duration = Duration::from_secs(30);
+// Main grants background workers 15 seconds to join. MIX delivery cancellation
+// releases claimed leases immediately, leaving one second for the supervisor
+// and registry to record the terminal health transition.
+const MIX_OUTBOX_DRAIN_GRACE: Duration = Duration::from_secs(14);
 
 #[derive(Debug)]
 struct PermanentMixDeliveryError {
@@ -72,6 +76,17 @@ impl std::fmt::Display for MixCapabilityPending {
 }
 
 impl std::error::Error for MixCapabilityPending {}
+
+#[derive(Debug)]
+struct MixOutboxShutdown;
+
+impl std::fmt::Display for MixOutboxShutdown {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("MIX outbox worker is shutting down")
+    }
+}
+
+impl std::error::Error for MixOutboxShutdown {}
 
 fn permanent_mix_delivery_error(reason: &'static str, detail: impl Into<String>) -> anyhow::Error {
     PermanentMixDeliveryError {
@@ -1400,10 +1415,25 @@ fn parse_remote_pam_success(raw: &str, channel_jid: &str) -> Result<Option<Remot
         root.tag_name().name() == "iq" && root.attribute("type") == Some("result"),
         "not a MIX result"
     );
-    let payload_count = root.children().filter(Node::is_element).count();
-    match payload_count {
-        0 => Ok(None),
-        1 => parse_remote_join_result(raw, channel_jid).map(Some),
+    let payloads = root.children().filter(Node::is_element).collect::<Vec<_>>();
+    match payloads.as_slice() {
+        [leave]
+            if leave.tag_name().name() == "leave"
+                && leave.tag_name().namespace() == Some(CORE_NS) =>
+        {
+            anyhow::ensure!(
+                leave.attributes().len() == 0
+                    && !leave.children().any(|node| node.is_element())
+                    && leave
+                        .children()
+                        .filter(Node::is_text)
+                        .all(|node| node.text().is_none_or(|text| text.trim().is_empty())),
+                "invalid MIX leave result payload"
+            );
+            Ok(None)
+        }
+        [] => Ok(None),
+        [_] => parse_remote_join_result(raw, channel_jid).map(Some),
         _ => anyhow::bail!("invalid MIX result payload count"),
     }
 }
@@ -2102,6 +2132,7 @@ fn addressed_mix_delivery(template: &str, recipient: &str) -> Result<String> {
 async fn process_claimed_mix_delivery(
     state: Arc<AppState>,
     delivery: crate::services::mix::ClaimedMixDelivery,
+    cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     let stanza = match addressed_mix_delivery(&delivery.stanza, &delivery.recipient.jid) {
         Ok(stanza) => stanza,
@@ -2144,6 +2175,10 @@ async fn process_claimed_mix_delivery(
     renew.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let result = loop {
         tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                break Err(MixOutboxShutdown.into());
+            }
             result = &mut operation => {
                 break result
                     .map_err(|_| anyhow::anyhow!("MIX outbox delivery timed out"))
@@ -2170,7 +2205,16 @@ async fn process_claimed_mix_delivery(
                 .await?
         }
         Err(error) => {
-            if error.downcast_ref::<MixCapabilityPending>().is_some() {
+            if error.downcast_ref::<MixOutboxShutdown>().is_some() {
+                // Do not count an orderly shutdown as a failed attempt. The
+                // one-second defer releases the ordered head lease before the
+                // process exits, while a possibly accepted network side effect
+                // remains safe under stanza-id replay semantics.
+                state
+                    .mix_service()
+                    .defer_mix_delivery(delivery.delivery_id, delivery.lease_token, 1)
+                    .await?
+            } else if error.downcast_ref::<MixCapabilityPending>().is_some() {
                 state
                     .mix_service()
                     .defer_mix_delivery(delivery.delivery_id, delivery.lease_token, 2)
@@ -2270,7 +2314,11 @@ async fn deliver_claimed_pam_result(
     Ok(PamResultRoute::Offline)
 }
 
-async fn process_claimed_pam_result(state: Arc<AppState>, result: ClaimedPamResult) -> Result<()> {
+async fn process_claimed_pam_result(
+    state: Arc<AppState>,
+    result: ClaimedPamResult,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<()> {
     let mut delivery = Box::pin(tokio::time::timeout(
         Duration::from_secs(20),
         deliver_claimed_pam_result(&state, &result),
@@ -2279,6 +2327,10 @@ async fn process_claimed_pam_result(state: Arc<AppState>, result: ClaimedPamResu
     renew.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let routed = loop {
         tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                break Err(MixOutboxShutdown.into());
+            }
             routed = &mut delivery => {
                 break routed
                     .map_err(|_| anyhow::anyhow!("PAM result delivery timed out"))
@@ -2309,6 +2361,12 @@ async fn process_claimed_pam_result(state: Arc<AppState>, result: ClaimedPamResu
             state
                 .mix_service()
                 .defer_pam_result(result.operation_id, result.lease_token, 5)
+                .await?
+        }
+        Err(error) if error.downcast_ref::<MixOutboxShutdown>().is_some() => {
+            state
+                .mix_service()
+                .defer_pam_result(result.operation_id, result.lease_token, 1)
                 .await?
         }
         Err(error) => {
@@ -2361,11 +2419,12 @@ pub(crate) fn start_mix_delivery_outbox(
     cancel: tokio_util::sync::CancellationToken,
 ) {
     let registry = Arc::clone(state.worker_registry());
-    registry.supervise(
+    registry.supervise_draining(
         "mix-delivery-outbox",
         crate::workers::WorkerCriticality::Restartable,
         crate::workers::WorkerMode::Continuous,
         Some(Duration::from_secs(30)),
+        MIX_OUTBOX_DRAIN_GRACE,
         cancel.clone(),
         move |heartbeat| {
             let state = Arc::clone(&state);
@@ -2402,21 +2461,34 @@ pub(crate) fn start_mix_delivery_outbox(
                         .await?;
                     let pam_results = state.mix_service().claim_pam_results(32).await?;
                     let batch_state = Arc::clone(&state);
+                    let batch_cancel = cancel.clone();
                     let mut batch = Box::pin(async move {
-                        let mix_outcomes = stream::iter(deliveries.into_iter().map(|delivery| {
-                            process_claimed_mix_delivery(Arc::clone(&batch_state), delivery)
-                        }))
-                        .buffer_unordered(16)
-                        .collect::<Vec<_>>();
-                        let pam_outcomes = stream::iter(pam_results.into_iter().map(|result| {
-                            process_claimed_pam_result(Arc::clone(&batch_state), result)
-                        }))
-                        // A peer's signed cluster listener processes delivery
-                        // receipts in order. Bound concurrent exact-resource
-                        // IQs so their transport receipts cannot consume the
-                        // two-second correlated ACK window as one burst.
-                        .buffer_unordered(2)
-                        .collect::<Vec<_>>();
+                        let mix_state = Arc::clone(&batch_state);
+                        let mix_cancel = batch_cancel.clone();
+                        let mix_outcomes =
+                            stream::iter(deliveries.into_iter().map(move |delivery| {
+                                process_claimed_mix_delivery(
+                                    Arc::clone(&mix_state),
+                                    delivery,
+                                    mix_cancel.clone(),
+                                )
+                            }))
+                            .buffer_unordered(16)
+                            .collect::<Vec<_>>();
+                        let pam_outcomes =
+                            stream::iter(pam_results.into_iter().map(move |result| {
+                                process_claimed_pam_result(
+                                    Arc::clone(&batch_state),
+                                    result,
+                                    batch_cancel.clone(),
+                                )
+                            }))
+                            // A peer's signed cluster listener processes delivery
+                            // receipts in order. Bound concurrent exact-resource
+                            // IQs so their transport receipts cannot consume the
+                            // two-second correlated ACK window as one burst.
+                            .buffer_unordered(2)
+                            .collect::<Vec<_>>();
                         let (mix_outcomes, pam_outcomes) =
                             futures::future::join(mix_outcomes, pam_outcomes).await;
                         for outcome in mix_outcomes {
@@ -2442,20 +2514,53 @@ pub(crate) fn start_mix_delivery_outbox(
                     // Delivery calls carry their own row-lease renewal, while
                     // this independent pulse proves the worker itself is live
                     // even for an 80-second worst-case batch.
-                    let mut pulse = tokio::time::interval(Duration::from_secs(5));
-                    pulse.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                    loop {
-                        tokio::select! {
-                            _ = &mut batch => break,
-                            _ = pulse.tick() => heartbeat.ok(),
-                            _ = cancel.cancelled() => return Ok(()),
-                        }
-                    }
+                    let shutdown_requested =
+                        complete_mix_outbox_batch(&mut batch, &cancel, || heartbeat.ok()).await;
                     heartbeat.ok();
+                    if shutdown_requested {
+                        return Ok(());
+                    }
                 }
             }
         },
     );
+}
+
+async fn complete_mix_outbox_batch<F, H>(
+    batch: F,
+    cancel: &tokio_util::sync::CancellationToken,
+    mut heartbeat: H,
+) -> bool
+where
+    F: std::future::Future<Output = ()>,
+    H: FnMut(),
+{
+    tokio::pin!(batch);
+    let mut pulse = tokio::time::interval(Duration::from_secs(5));
+    pulse.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut batch_mode = MixOutboxBatchMode::Active;
+    loop {
+        tokio::select! {
+            _ = &mut batch => break,
+            _ = pulse.tick() => heartbeat(),
+            _ = cancel.cancelled(), if batch_mode == MixOutboxBatchMode::Active => {
+                // Claims already carry durable side effects and a strict
+                // per-recipient sequence. Dropping these futures during an
+                // orderly shutdown strands their leases until expiry, so an
+                // immediate restart can block every later stanza for that
+                // recipient. Stop claiming new work, but let this bounded
+                // batch acknowledge, retry, or defer each exact lease.
+                batch_mode = MixOutboxBatchMode::Draining;
+            },
+        }
+    }
+    batch_mode == MixOutboxBatchMode::Draining
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MixOutboxBatchMode {
+    Active,
+    Draining,
 }
 
 async fn push_mix_roster_update(
@@ -6544,6 +6649,35 @@ mod tests {
     use super::*;
     use crate::services::mix::MamRsmPage;
 
+    #[tokio::test]
+    async fn graceful_shutdown_drains_the_claimed_mix_batch_before_stopping() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let task_cancel = cancel.clone();
+        let task = tokio::spawn(async move {
+            complete_mix_outbox_batch(
+                async move {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.await;
+                },
+                &task_cancel,
+                || {},
+            )
+            .await
+        });
+
+        started_rx.await.unwrap();
+        cancel.cancel();
+        tokio::task::yield_now().await;
+        assert!(
+            !task.is_finished(),
+            "shutdown must not drop a batch that owns durable delivery leases"
+        );
+        release_tx.send(()).unwrap();
+        assert!(task.await.unwrap(), "the worker must stop after draining");
+    }
+
     #[test]
     fn replay_commitments_are_stable_and_purpose_separated() {
         let target = Uuid::parse_str("00112233-4455-6677-8899-aabbccddeeff").unwrap();
@@ -6818,6 +6952,24 @@ mod tests {
                 .unwrap(),
             None
         );
+        assert_eq!(
+            parse_remote_pam_success(
+                "<iq type='result' id='leave'><leave xmlns='urn:xmpp:mix:core:1'/></iq>",
+                "room@mix.remote.test",
+            )
+            .unwrap(),
+            None
+        );
+        assert!(parse_remote_pam_success(
+            "<iq type='result' id='bad-leave'><leave xmlns='urn:xmpp:mix:core:1' unexpected='true'/></iq>",
+            "room@mix.remote.test",
+        )
+        .is_err());
+        assert!(parse_remote_pam_success(
+            "<iq type='result' id='bad-leave-text'><leave xmlns='urn:xmpp:mix:core:1'> <!-- split -->unexpected</leave></iq>",
+            "room@mix.remote.test",
+        )
+        .is_err());
         assert!(parse_remote_pam_success(
             "<iq type='result' id='bad'><unexpected/></iq>",
             "room@mix.remote.test",

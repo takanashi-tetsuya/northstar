@@ -70,10 +70,26 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - Upload capability projections now explicitly convert the historical
   `VARCHAR(255)` content type to their declared PostgreSQL `TEXT` return type,
   preventing first PUT and public-file retrieval failures.
+- Federated MIX-PAM completion now distinguishes direct `<join/>` and
+  `<leave/>` success payloads. Remote leave previously reached the strict join
+  parser, leaving the local PAM operation pending until timeout even though the
+  peer had completed it successfully.
+- Orderly shutdown now drains the already-claimed MIX and PAM delivery batch
+  before its worker exits. This prevents a cancelled future from retaining the
+  per-recipient head lease and blocking post-restart messages until lease
+  expiry.
 - Upload database fixtures now isolate incompatible immutable capacity-policy
   profiles in separate schemas. Authentication publication tests also verify
   that expiry cleanup uses `SKIP LOCKED` without deleting a protected lease,
   then reclaims it after the publication transaction releases the lock.
+- Protocol integration now treats the equivalent XML empty-element forms
+  `<unblock/>` and `<unblock></unblock>` alike. The abuse-key rotation test also
+  expires each generated proof while exercising issuance-window continuity, so
+  the independent active-challenge ceiling cannot mask the intended boundary.
+- Orderly server shutdown now closes outbound S2S actors at debug level without
+  incrementing federation-failure metrics. Cancellation diagnostics distinguish
+  that lifecycle event from a live certificate session explicitly revoked by
+  the active CRL.
 - Production qualification still requires the target-environment and external
   gates in [the release checklist](docs/RELEASE_CHECKLIST.md).
 

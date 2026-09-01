@@ -4908,10 +4908,22 @@ mod tests {
         let issue_subject = format!("report:issue-window:{issue_actor}");
         let old_issue_guard = AbuseGuard::new_persistent(config, pool.clone(), Some(secret), None);
         for _ in 0..(old_issue_guard.challenge_issue_limit(AbuseAction::Report) - 1) {
-            old_issue_guard
+            let issued = old_issue_guard
                 .issue(AbuseAction::Report, &issue_subject, &issue_actors)
                 .await
                 .unwrap();
+            // This section isolates issuance-window continuity across key
+            // rotation. Expire each proof after issuance so the independent
+            // active-challenge ceiling cannot become the first limiter.
+            sqlx::query(
+                "UPDATE abuse_pow_challenges
+                    SET expires_at=clock_timestamp()
+                  WHERE id=$1",
+            )
+            .bind(issued.challenge_id)
+            .execute(&pool)
+            .await
+            .unwrap();
         }
         let rotated_issue_guard = AbuseGuard::new_persistent_for_deployment(
             config,

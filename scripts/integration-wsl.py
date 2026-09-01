@@ -3960,7 +3960,9 @@ def run() -> None:
     )
     unblock_all_result, _ = alice_carbon.receive_until("unblock-all")
     check("type='result'" in unblock_all_result, "unblock-all failed")
-    unblock_all_push, _ = alice.receive_until("<unblock xmlns='urn:xmpp:blocking'>")
+    # XML serializers may use either `<unblock .../>` or an explicit closing
+    # tag. Match the element start rather than one lexical empty-element form.
+    unblock_all_push, _ = alice.receive_until("<unblock xmlns='urn:xmpp:blocking'")
     check("<item " not in unblock_all_push, "unblock-all push was not empty")
 
     room = f"integration-room@conference.{DOMAIN}"

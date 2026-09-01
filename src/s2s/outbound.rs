@@ -107,6 +107,21 @@ fn is_dialback_authorization_error(error: &anyhow::Error) -> bool {
         .is_some()
 }
 
+fn outbound_cancellation_message(server_shutting_down: bool, phase: &str) -> String {
+    if server_shutting_down {
+        format!("outbound S2S connection closed during server shutdown{phase}")
+    } else {
+        format!("outbound S2S certificate was explicitly revoked{phase}")
+    }
+}
+
+fn outbound_cancellation_error(state: &AppState, phase: &str) -> anyhow::Error {
+    anyhow::anyhow!(outbound_cancellation_message(
+        state.connection_actors().shutdown_token().is_cancelled(),
+        phase,
+    ))
+}
+
 pub(crate) fn get_or_create_outbound(
     state: &Arc<AppState>,
     source_domain: &str,
@@ -154,6 +169,22 @@ pub(crate) fn get_or_create_outbound(
         .catch_unwind()
         .await;
         match &result {
+            Ok(Err(error))
+                if state_clone
+                    .connection_actors()
+                    .shutdown_token()
+                    .is_cancelled() =>
+            {
+                // The actor's cancellation token is a child of the global
+                // connection-registry token, so an orderly process shutdown
+                // reaches the same select branches as a live CRL revocation.
+                // Shutdown is expected lifecycle, not a federation failure.
+                tracing::debug!(
+                    domain = %domain_clone,
+                    ?error,
+                    "federation outbound connection closed during server shutdown"
+                );
+            }
             Ok(Err(error)) => {
                 state_clone
                     .metrics
@@ -560,7 +591,7 @@ async fn connect_and_multiplex_inner(
         None
     };
     if disconnect.is_cancelled() {
-        anyhow::bail!("outbound S2S certificate was explicitly revoked before delivery");
+        return Err(outbound_cancellation_error(state, " before delivery"));
     }
 
     // Only this post-authentication state may accept an ephemeral stanza.
@@ -581,7 +612,7 @@ async fn connect_and_multiplex_inner(
     tokio::select! {
         biased;
         _ = disconnect.cancelled() => {
-            anyhow::bail!("outbound S2S certificate was explicitly revoked before first delivery");
+            return Err(outbound_cancellation_error(state, " before first delivery"));
         }
         result = deliver_envelope(state, &mut secure, initial.envelope, peer_limits.max_bytes) => {
             result?;
@@ -595,7 +626,7 @@ async fn connect_and_multiplex_inner(
         tokio::select! {
             _ = disconnect.cancelled() => {
                 let _ = send_stream_error(&mut secure, "not-authorized").await;
-                anyhow::bail!("outbound S2S certificate was explicitly revoked");
+                return Err(outbound_cancellation_error(state, ""));
             }
             _ = keepalive_interval.tick() => {
                 if let Err(e) = write_xml(&mut secure, " ").await {
@@ -1402,6 +1433,18 @@ fn delivery_failure_stanza(stanza: &str, condition: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outbound_cancellation_distinguishes_shutdown_from_certificate_revocation() {
+        assert_eq!(
+            outbound_cancellation_message(true, " before delivery"),
+            "outbound S2S connection closed during server shutdown before delivery"
+        );
+        assert_eq!(
+            outbound_cancellation_message(false, " before delivery"),
+            "outbound S2S certificate was explicitly revoked before delivery"
+        );
+    }
 
     #[test]
     fn happy_eyeballs_staggers_candidates_deterministically() {

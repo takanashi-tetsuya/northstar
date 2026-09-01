@@ -23,8 +23,13 @@ command_status=${PIPESTATUS[0]}
 if (( command_status != 0 )) && [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
   summary="$({
     sed -E 's/\x1B\[[0-9;]*[mK]//g' "$log_file" |
+      # Cleanup may print hundreds of structured server events from deliberate
+      # negative-path probes. Keep those in the ordinary job log, but prefer
+      # the fixture's own traceback/assertion when building the 4 KiB check
+      # annotation so the root cause is not displaced by expected JSON errors.
+      grep -v -E '^[[:space:]]*\{' |
       grep -E -i -B 8 -A 4 \
-        '(^|[^[:alnum:]_])(error|failed|failure|panic|assertion|traceback|timed out|timeout|refused|denied|does not exist|mismatch)([^[:alnum:]_]|$)' |
+        '(^|[^[:alnum:]_])(error|failed|failure|panic|assertion|traceback|timed out|timeout|expected|missing|refused|denied|does not exist|mismatch)([^[:alnum:]_]|$)' |
       tail -n 60
   } || true)"
 

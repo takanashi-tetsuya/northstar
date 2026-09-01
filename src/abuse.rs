@@ -5057,15 +5057,17 @@ mod tests {
             }));
         }
         let mut successful_subject = None;
+        let mut successful_challenge_id = None;
         let mut accepted = 0;
         let mut limited = 0;
         for task in tasks {
             let (index, outcome) = task.await.unwrap();
             match outcome {
-                Ok(_) => {
+                Ok(challenge) => {
                     accepted += 1;
                     successful_subject
                         .get_or_insert_with(|| format!("message:concurrent-capacity:{index}"));
+                    successful_challenge_id.get_or_insert(challenge.challenge_id);
                 }
                 Err(error) => {
                     assert!(error.downcast_ref::<ChallengeCapacityExceeded>().is_some());
@@ -5096,15 +5098,15 @@ mod tests {
             .unwrap_err();
         assert!(error.downcast_ref::<ChallengeCapacityExceeded>().is_some());
 
-        sqlx::query(
+        let expired = sqlx::query(
             "UPDATE abuse_pow_challenges SET expires_at=clock_timestamp()
-             WHERE id=(SELECT id FROM abuse_pow_challenges
-                       WHERE expires_at > clock_timestamp()
-                       ORDER BY expires_at,id LIMIT 1)",
+             WHERE id=$1 AND expires_at > clock_timestamp()",
         )
+        .bind(successful_challenge_id.expect("at least one account challenge was accepted"))
         .execute(&pool)
         .await
         .unwrap();
+        assert_eq!(expired.rows_affected(), 1);
         restarted
             .issue(
                 AbuseAction::Message,

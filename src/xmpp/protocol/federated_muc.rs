@@ -2316,6 +2316,96 @@ async fn federated_muc_message_owned(
                 if !allow {
                     return Ok(None);
                 }
+                if !state.cluster.is_enabled() {
+                    // A single-node room deliberately keeps live occupancy
+                    // authority in this process. Cluster occupancy rows do
+                    // not exist in that deployment mode, so requiring one
+                    // would reject every otherwise valid federated voice
+                    // approval. Serialize the mutation with joins, leaves,
+                    // configuration changes and SM restoration, then re-check
+                    // both exact transport incarnations before granting the
+                    // role. This prevents a departed occupant from inheriting
+                    // an approval after reusing the same nickname.
+                    let service = state.muc_service();
+                    let _guard = service.lock_local_room_mutation(room.id).await;
+                    let Some(current_room) = service
+                        .federated_room_snapshot(localpart(&room_jid))
+                        .await?
+                    else {
+                        return Ok(federated_error(
+                            &request.stanza,
+                            from,
+                            "cancel",
+                            "item-not-found",
+                        ));
+                    };
+                    if current_room.id != room.id || current_room.room_epoch != room.room_epoch {
+                        return Ok(federated_error(
+                            &request.stanza,
+                            from,
+                            "cancel",
+                            "item-not-found",
+                        ));
+                    }
+                    let actor_key = muc_occupant_key(&room_jid, &own.nick);
+                    let Some(current_actor) = state
+                        .muc_occupants
+                        .get(&actor_key)
+                        .map(|entry| entry.value().clone())
+                    else {
+                        return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
+                    };
+                    if current_actor.full_jid != own.full_jid
+                        || current_actor.connection_id != own.connection_id
+                        || current_actor.cluster_epoch != own.cluster_epoch
+                        || current_actor.role != "moderator"
+                        || !federated_endpoint_matches(&current_actor, authenticated_domain)
+                    {
+                        return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
+                    }
+                    let target_key = muc_occupant_key(&room_jid, &target.nick);
+                    let Some(mut current_target) = state.muc_occupants.get_mut(&target_key) else {
+                        return Ok(federated_error(
+                            &request.stanza,
+                            from,
+                            "cancel",
+                            "item-not-found",
+                        ));
+                    };
+                    if current_target.full_jid != target.full_jid
+                        || current_target.connection_id != target.connection_id
+                        || current_target.cluster_epoch != target.cluster_epoch
+                        || current_target.role != "visitor"
+                    {
+                        return Ok(federated_error(
+                            &request.stanza,
+                            from,
+                            "cancel",
+                            "item-not-found",
+                        ));
+                    }
+                    current_target.role = "participant".to_owned();
+                    let updated = SerializableMucOccupant::from(&*current_target);
+                    drop(current_target);
+                    for (_, recipient) in state.muc_occupants_for(&room_jid) {
+                        let self_presence = recipient.full_jid == updated.full_jid
+                            && recipient.connection_id == updated.connection_id
+                            && recipient.cluster_epoch == updated.cluster_epoch;
+                        let presence = muc_presence_stanza(
+                            &updated,
+                            &recipient.full_jid,
+                            false,
+                            self_presence,
+                            false,
+                            request.stanza.id.as_deref(),
+                            updated.room_non_anonymous
+                                || self_presence
+                                || recipient.role == "moderator",
+                        );
+                        let _ = state.deliver_to_muc_occupant(&recipient, presence).await;
+                    }
+                    return Ok(None);
+                }
                 let service = state.muc_service();
                 let Some(actor_target) = service
                     .local_cluster_occupancy_target_by_nick(room.id, room.room_epoch, &own.nick)

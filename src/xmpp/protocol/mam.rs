@@ -28,6 +28,14 @@ struct MamRoomTarget {
     bare_jid: String,
 }
 
+/// Reassert the queried account's immutable archive UID at the MAM output
+/// boundary.  Besides repairing legacy/tombstoned rows that predate identity
+/// preservation, `add_stanza_id` removes any same-authority claim before
+/// adding the trusted value while retaining other authorities' provenance.
+fn personal_mam_stanza(item: &ArchiveRow, account_bare_jid: &str) -> String {
+    add_stanza_id(&item.stanza, account_bare_jid, item.id)
+}
+
 fn empty_mam_command(node: Node<'_, '_>, name: &str) -> bool {
     node.tag_name().namespace() == Some(MAM_NS)
         && node.tag_name().name() == name
@@ -369,6 +377,7 @@ impl ProtocolSession {
             .as_ref()
             .map(|access| format!("{}@{}", access.localpart(), self.muc_domain()))
             .or_else(|| self.personal_archive_reply_from(to));
+        let personal_archive_by = format!("{}@{}", user.username, self.state.config.domain);
         let mut replies = Vec::with_capacity(page.rows.len() + 1);
         let rows: Box<dyn Iterator<Item = &ArchiveRow>> = if parsed.flip_page {
             Box::new(page.rows.iter().rev())
@@ -381,7 +390,7 @@ impl ProtocolSession {
                 let authoritative = set_muc_occupant_id(&item.stanza, &occupant_id);
                 mam_muc_stanza(&authoritative, &item.peer_jid, access.reveal_real_jid())
             } else {
-                item.stanza.clone()
+                personal_mam_stanza(item, &personal_archive_by)
             };
             let forwarded = XmlElement::namespaced("forwarded", "urn:xmpp:forward:0")
                 .child(
@@ -537,6 +546,54 @@ mod tests {
         let parsed = parse("<query xmlns='urn:xmpp:mam:2'/>").unwrap();
         assert_eq!(parsed.query.page, MamRsmPage::First);
         assert_eq!(parsed.query.max, MAX_MAM_RESULTS);
+    }
+
+    #[test]
+    fn personal_mam_reasserts_the_account_archive_uid_as_stanza_id() {
+        let id = Uuid::parse_str("de305d54-75b4-431b-adb2-eb6b9e546013").unwrap();
+        let expected_id = id.to_string();
+        for stanza in [
+            "<message xmlns='jabber:client'><retracted xmlns='urn:xmpp:message-retract:1' id='action'/><stanza-id xmlns='urn:xmpp:sid:0' id='remote-id' by='remote.test'/></message>",
+            "<message xmlns='jabber:client'><retracted xmlns='urn:xmpp:message-retract:1' id='action'/><stanza-id xmlns='urn:xmpp:sid:0' id='forged-local' by='Alice@Example.test'/><stanza-id xmlns='urn:xmpp:sid:0' id='remote-id' by='remote.test'/></message>",
+        ] {
+            let item = ArchiveRow {
+                id,
+                peer_jid: "bob@example.test".to_owned(),
+                stanza: stanza.to_owned(),
+                encrypted: false,
+                stanza_id: Some("client-id".to_owned()),
+                created_at: Utc::now(),
+            };
+
+            let rendered = personal_mam_stanza(&item, "alice@example.test");
+            let document = Document::parse(&rendered).unwrap();
+            let stanza_ids = document
+                .root_element()
+                .children()
+                .filter(|node| {
+                    node.is_element()
+                        && node.tag_name().namespace() == Some("urn:xmpp:sid:0")
+                        && node.tag_name().name() == "stanza-id"
+                })
+                .collect::<Vec<_>>();
+            let account_ids = stanza_ids
+                .iter()
+                .filter(|node| {
+                    node.attribute("by").is_some_and(|by| {
+                        crate::jid::canonicalize(by).ok().as_deref()
+                            == Some("alice@example.test")
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(account_ids.len(), 1, "{rendered}");
+            assert_eq!(account_ids[0].attribute("id"), Some(expected_id.as_str()));
+            assert!(stanza_ids.iter().any(|node| {
+                node.attribute("id") == Some("remote-id")
+                    && node.attribute("by") == Some("remote.test")
+            }));
+            assert!(!rendered.contains("forged-local"));
+        }
     }
 
     #[test]

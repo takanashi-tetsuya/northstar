@@ -101,6 +101,17 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   and isolate runtime logs. Concurrent report/appeal validation now treats the
   global idempotency admission lock's documented `Busy` result as retryable
   rather than as an impossible test outcome.
+- Single-node federated MUC moderators can now approve voice requests without a
+  nonexistent clustered occupancy row. The room, authenticated remote actor and
+  target transport incarnation are revalidated under the room mutation gate
+  before the participant role is broadcast.
+- Message retraction tombstones retain only structurally valid direct
+  XEP-0359 `stanza-id` elements, and personal MAM output reasserts the queried
+  account's archive UUID as its authoritative ID. This repairs historical
+  tombstones while preserving valid provenance from other authorities.
+- The concurrent PoW capacity regression now expires the exact challenge
+  returned by its successful account request, so challenges created by earlier
+  isolated-database cases cannot make the restart/capacity assertion flaky.
 - Production qualification still requires the target-environment and external
   gates in [the release checklist](docs/RELEASE_CHECKLIST.md).
 

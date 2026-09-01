@@ -1432,6 +1432,44 @@ pub(crate) fn tombstone_message(original: Node<'_, '_>, retraction_id: &str) -> 
             message = message.attr(attribute, value);
         }
     }
+    // A tombstone replaces user content, not the server-assigned identity of
+    // the archived item.  Retaining structurally valid direct stanza IDs keeps
+    // XEP-0313 result IDs and XEP-0359 references stable after a retraction.
+    // Rebuild the elements through the typed serializer instead of copying raw
+    // XML from durable storage; malformed, nested, or extension-bearing claims
+    // are deliberately discarded.
+    for stanza_id in original.children().filter_map(|node| {
+        if !node.is_element()
+            || node.tag_name().namespace() != Some(NS_STANZA_ID)
+            || node.tag_name().name() != "stanza-id"
+            || node.attributes().len() != 2
+            || node
+                .attributes()
+                .any(|attribute| !matches!(attribute.name(), "id" | "by"))
+            || node.children().any(|child| {
+                child.is_element()
+                    || child.is_comment()
+                    || child.is_pi()
+                    || child.text().is_some_and(|text| !text.trim().is_empty())
+            })
+        {
+            return None;
+        }
+        let id = node.attribute("id")?;
+        let by = node.attribute("by")?;
+        if validate_stable_id(id, "archived stanza id").is_err()
+            || crate::jid::CanonicalJid::parse(by).is_err()
+        {
+            return None;
+        }
+        Some(
+            XmlElement::namespaced("stanza-id", NS_STANZA_ID)
+                .attr("id", id)
+                .attr("by", by),
+        )
+    }) {
+        message.push_child(stanza_id);
+    }
     let stamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
     message
         .child(
@@ -1456,6 +1494,57 @@ mod tests {
         assert!(source.contains("pg_catalog.md5(peer_jid)=pg_catalog.md5($2::TEXT)"));
         assert!(source.contains("SELECT EXISTS("));
         assert!(!source.contains("SELECT COUNT(*) FROM message_archive\n                  WHERE owner_id=$1\n                    AND pg_catalog.md5(stanza_id)"));
+    }
+
+    #[test]
+    fn tombstone_preserves_only_structurally_valid_direct_stanza_ids() {
+        let document = Document::parse(
+            "<message xmlns='jabber:client' from='alice@example.test/Phone' to='alice@example.test' id='original'>\
+             <body>secret</body>\
+             <stanza-id xmlns='urn:xmpp:sid:0' id='account-id' by='alice@example.test'/>\
+             <stanza-id xmlns='urn:xmpp:sid:0' id='remote-id' by='remote.test'></stanza-id>\
+             <stanza-id xmlns='urn:xmpp:sid:0' id='extra-id' by='remote.test' extra='1'/>\
+             <wrapper><stanza-id xmlns='urn:xmpp:sid:0' id='nested-id' by='alice@example.test'/></wrapper>\
+             <stanza-id xmlns='urn:xmpp:sid:0' id='invalid-by' by='not a jid'/>\
+             </message>",
+        )
+        .unwrap();
+
+        let tombstone = tombstone_message(document.root_element(), "retraction-id");
+        let tombstone_document = Document::parse(&tombstone).unwrap();
+        let root = tombstone_document.root_element();
+        let stanza_ids = root
+            .children()
+            .filter(|node| {
+                node.is_element()
+                    && node.tag_name().namespace() == Some(NS_STANZA_ID)
+                    && node.tag_name().name() == "stanza-id"
+            })
+            .map(|node| {
+                (
+                    node.attribute("id").unwrap().to_owned(),
+                    node.attribute("by").unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            stanza_ids,
+            vec![
+                ("account-id".to_owned(), "alice@example.test".to_owned()),
+                ("remote-id".to_owned(), "remote.test".to_owned()),
+            ]
+        );
+        assert!(!tombstone.contains("secret"));
+        assert!(!tombstone.contains("extra-id"));
+        assert!(!tombstone.contains("nested-id"));
+        assert!(!tombstone.contains("invalid-by"));
+        assert!(root.children().any(|node| {
+            node.is_element()
+                && node.tag_name().namespace() == Some(NS_RETRACT)
+                && node.tag_name().name() == "retracted"
+                && node.attribute("id") == Some("retraction-id")
+        }));
     }
 
     async fn isolated_pool() -> (PgPool, PgPool, String) {

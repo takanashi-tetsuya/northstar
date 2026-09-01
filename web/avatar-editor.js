@@ -2,12 +2,12 @@ export const MAX_AVATAR_INPUT_BYTES = 50 * 1024 * 1024;
 export const MAX_AVATAR_OUTPUT_BYTES = (256 * 1024) - 1;
 export const AVATAR_EDITOR_SIZE = 360;
 
-function canvasToBlob(canvas, type, quality) {
+function canvasToBlob(canvas, type) {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
       else reject(new Error('浏览器无法生成处理后的头像'));
-    }, type, quality);
+    }, type);
   });
 }
 
@@ -202,17 +202,17 @@ export class AvatarCropper {
 
   async exportAvatar() {
     if (!this.source) throw new Error('请先选择头像图片');
-    const dimensions = [512, 448, 384, 320, 256, 224, 192];
-    const qualities = [.92, .86, .8, .74, .68, .6, .52, .44, .36];
+    // XEP-0084 requires the inline avatar:data representation to be PNG.
+    // Canvas PNG has no quality control, so reduce dimensions until the
+    // encoded payload fits the server's bounded avatar profile.
+    const dimensions = [512, 448, 384, 320, 256, 224, 192, 160, 128, 96, 64, 48, 32];
     for (const dimension of dimensions) {
       const output = document.createElement('canvas');
       output.width = dimension;
       output.height = dimension;
       this.draw(output.getContext('2d', { alpha: false }), dimension);
-      for (const quality of qualities) {
-        const blob = await canvasToBlob(output, 'image/jpeg', quality);
-        if (blob.size <= MAX_AVATAR_OUTPUT_BYTES) return { blob, dimension, quality };
-      }
+      const blob = await canvasToBlob(output, 'image/png');
+      if (blob.size <= MAX_AVATAR_OUTPUT_BYTES) return { blob, dimension };
     }
     throw new Error('无法将头像压缩到 256 KiB 以下');
   }

@@ -1,0 +1,12 @@
+services:
+  xmpp:
+    environment:
+      ABUSE_STATE_HMAC_PREVIOUS_KEY_FILE: /run/secrets/abuse_state_hmac_previous_key
+      ABUSE_STATE_HMAC_KEY_EPOCH: ${ABUSE_STATE_HMAC_KEY_EPOCH:?set the next monotonic abuse key epoch}
+      ABUSE_STATE_HMAC_RETIRE_PREVIOUS: ${ABUSE_STATE_HMAC_RETIRE_PREVIOUS:-false}
+    secrets:
+      - abuse_state_hmac_previous_key
+
+secrets:
+  abuse_state_hmac_previous_key:
+    file: ${ABUSE_STATE_HMAC_PREVIOUS_KEY_HOST_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/abuse_state_hmac_previous_key}

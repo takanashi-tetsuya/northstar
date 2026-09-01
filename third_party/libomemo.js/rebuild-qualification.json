@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "component": "pkg:npm/libomemo.js@2.0.2",
+  "release": {
+    "version": "2.0.2",
+    "tag": "v2.0.2",
+    "commit": "df3d34cab03306d34d6ed0bf8b3a3db152173bb4",
+    "status": "provenance-traced-not-reproducible",
+    "currentExceptionVersion": "2.0.2"
+  },
+  "source": {
+    "archive": "third_party/libomemo.js/libomemo.js-v2.0.2-source.tar.gz",
+    "sha256": "952172631c2e16085420779b3ea039ce59a2ac0b1b20255ff16d1941d4226343",
+    "archiveRoot": "libomemo.js-v2.0.2/",
+    "regularFileCount": 183,
+    "paxCommit": "df3d34cab03306d34d6ed0bf8b3a3db152173bb4",
+    "signedTagObject": null,
+    "detachedSignature": null,
+    "signerFingerprint": null,
+    "signatureTrustRecord": null
+  },
+  "npmDistribution": {
+    "url": "https://registry.npmjs.org/libomemo.js/-/libomemo.js-2.0.2.tgz",
+    "sha1": "6029b4a76dda80a7e7a9ebed89a5f2943aa7527f",
+    "sha256": null,
+    "vendoredTarball": null,
+    "registryAttestation": null
+  },
+  "javascriptBuild": {
+    "node": "v24.14.0",
+    "npm": null,
+    "lockfileVersion": 3,
+    "lockedPackageCount": 344,
+    "registryPackageCount": 344,
+    "registryPackagesMissingIntegrity": 0,
+    "rollup": "4.62.2",
+    "esbuild": "0.28.1",
+    "typescript": "6.0.3",
+    "protobufjs": "8.6.4",
+    "packageJsonSha256": "e3e9dd0b3842b8a830a45db57581f761b9838b73b5e12667f67430dca94f9302",
+    "packageLockSha256": "c4d1357ce31520e9372e7b8c83a33ecf957b7f956cfa7c88be18769277ea32e8",
+    "rollupConfigSha256": "5f5ff0e9f74e51d726452d5c692d91390616061999c34de991ec069cb30280d2"
+  },
+  "wasmBuild": {
+    "archiveArtifactSha256": "3a32503ade92ed2bf522d49d51106a227dadb39c2a7b08a1023c216c7eec1286",
+    "compileScriptSha256": "42d0f030ef5309758fe96e14b766e74172ac8e08fa1a435604893d28a8ee12c8",
+    "emscripten": null,
+    "llvm": null,
+    "binaryen": null,
+    "customSections": [],
+    "producers": null,
+    "flags": [
+      "-O1",
+      "-Qunused-arguments",
+      "-Inative/ed25519/nacl_includes",
+      "-Inative/ed25519",
+      "-Inative/ed25519/sha512",
+      "-s EXPORTED_FUNCTIONS=[_curve25519_donna,_curve25519_verify,_crypto_sign_ed25519_ref10_ge_scalarmult_base,_sph_sha512_init,_malloc,_free,_xed25519_sign,_xed25519_verify,_curve25519_pubkey_to_ed25519_pubkey,_ed25519_pubkey_to_curve25519_pubkey]",
+      "-s EXPORT_ES6=1",
+      "-s MODULARIZE=1",
+      "-s EXPORT_NAME=Curve25519Module"
+    ]
+  },
+  "rebuild": {
+    "qualified": false,
+    "builderImage": null,
+    "builderImageSignature": null,
+    "builderPlatform": null,
+    "versionProbeCommand": null,
+    "buildCommand": null,
+    "network": "none",
+    "locale": null,
+    "timezone": null,
+    "sourceDateEpoch": null,
+    "sourceTreeMustDeleteBeforeBuild": ["build", "dist", "node_modules"],
+    "independentBuildsRequired": 2,
+    "expectedOutputs": {
+      "dist/libomemo.esm.min.js": "29848fa0791bc07f6982e7e86a5261a3226518f581aba268ec8b030a11e30385",
+      "dist/curve25519_compiled.wasm": "3a32503ade92ed2bf522d49d51106a227dadb39c2a7b08a1023c216c7eec1286"
+    },
+    "inTotoProvenance": null,
+    "twoBuildEvidence": null
+  },
+  "missingEvidence": [
+    "exact npm executable version used for the 2.0.2 release",
+    "official npm tarball bytes or registry attestation available for offline verification",
+    "signed tag object, signature, trusted signer fingerprint and trust record",
+    "Emscripten, LLVM and Binaryen versions",
+    "digest-pinned compiler image and immutable system package set",
+    "release platform, locale, timezone and source-file glob ordering",
+    "two independent clean source rebuilds with byte-identical JavaScript and WASM",
+    "signed in-toto or SLSA provenance for the published npm artifact"
+  ]
+}

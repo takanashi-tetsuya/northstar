@@ -17,8 +17,9 @@ assert.equal(formatAvatarBytes(255 * 1024), '255 KiB');
 assert.match(editorSource, /decodeWithImageBitmap/);
 assert.match(editorSource, /decodeWithWebCodecs/);
 assert.match(editorSource, /decodeWithImageElement/);
-assert.match(editorSource, /canvasToBlob\(output, 'image\/jpeg', quality\)/);
-assert.match(editorSource, /\[512, 448, 384, 320, 256, 224, 192\]/);
+assert.match(editorSource, /canvasToBlob\(output, 'image\/png'\)/);
+assert.doesNotMatch(editorSource, /canvasToBlob\(output, 'image\/jpeg'/);
+assert.match(editorSource, /\[512, 448, 384, 320, 256, 224, 192, 160, 128, 96, 64, 48, 32\]/);
 assert.match(editorSource, /blob\.size <= MAX_AVATAR_OUTPUT_BYTES/);
 
 const html = await readFile(new URL('web/client.html', root), 'utf8');
@@ -31,7 +32,12 @@ assert.match(client, /file\.size > MAX_AVATAR_INPUT_BYTES/);
 assert.match(client, /avatarCropper\.moveBy/);
 assert.match(client, /avatarCropper\.rotate\(-90\)/);
 assert.match(client, /await avatarCropper\.exportAvatar\(\)/);
+assert.match(client, /blob\.type \|\| 'image\/png'/);
 assert.match(client, /bytes='\$\{blob\.size\}' height='\$\{dimension\}'/);
+assert.match(client, /!candidate\.hasAttribute\('url'\).*image\/png/);
+assert.match(client, /textContent\?\.replace\(\/\\s\/g, ''\)/);
+assert.doesNotMatch(client, /await state\.xmpp\.setVCard\(/);
+assert.match(client, /subscribePep\(jid, NS\.AVATAR_METADATA\)/);
 assert.match(css, /\.avatar-crop-guide/);
 
 console.log('avatar editor static checks passed');

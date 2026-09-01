@@ -1,13 +1,20 @@
 use axum::{
-    http::header,
+    body::{to_bytes, Body},
+    extract::{ConnectInfo, FromRequest, FromRequestParts, Request, State},
+    http::{header, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post, put},
-    Router,
+    Json, Router,
 };
+use serde::de::DeserializeOwned;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 
 use crate::abuse::AbuseAction;
+use crate::auth;
 use crate::db;
 use crate::error::{AppError, Result};
 use crate::state::AppState;
@@ -15,60 +22,347 @@ use crate::state::AppState;
 use crate::abuse::GuardError;
 use axum::extract::DefaultBodyLimit;
 use axum::http::header::{HeaderMap, HeaderName, HeaderValue};
-use axum::routing::{delete, patch};
+use axum::routing::{delete, options, patch};
 use std::net::IpAddr;
+use std::ops::Deref;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
+use axum::http::request::Parts;
+
+pub mod extract;
+pub use extract::{ApiPath, ApiQuery};
+
+const API_BODY_LIMIT_BYTES: usize = 256 * 1024;
+const API_TOKEN_LENGTH: usize = 64;
+const API_IDEMPOTENCY_TTL_SECONDS: i64 = 24 * 60 * 60;
+const API_IDEMPOTENCY_LEASE_SECONDS: i64 = 180;
+const SPA_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
+#[derive(Clone, Copy, Debug)]
+pub struct ApiRequestId(pub uuid::Uuid);
+
+pub struct ApiJson<T> {
+    pub value: T,
+    request_id: ApiRequestId,
+    request_fingerprint: [u8; 32],
+    idempotency_key: String,
+}
+
+pub struct ApiEmpty {
+    request_id: ApiRequestId,
+    request_fingerprint: [u8; 32],
+    idempotency_key: String,
+}
+
+fn idempotency_key(headers: &HeaderMap) -> Result<String, AppError> {
+    let mut keys = headers.get_all("idempotency-key").iter();
+    let key = match (keys.next(), keys.next()) {
+        (None, None) => None,
+        (Some(value), None) => Some(
+            value
+                .to_str()
+                .map_err(|_| AppError::BadRequest("Idempotency-Key is invalid".into()))?
+                .to_owned(),
+        ),
+        _ => {
+            return Err(AppError::BadRequest(
+                "exactly one Idempotency-Key header is allowed".into(),
+            ));
+        }
+    };
+    if key.as_ref().is_some_and(|key| {
+        !(8..=200).contains(&key.len()) || !key.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+    }) {
+        return Err(AppError::BadRequest(
+            "Idempotency-Key must contain 8 to 200 visible ASCII bytes".into(),
+        ));
+    }
+    Ok(key.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()))
+}
+
+impl<T> Deref for ApiJson<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<S, T> FromRequest<S> for ApiJson<T>
+where
+    S: Send + Sync,
+    T: DeserializeOwned,
+{
+    type Rejection = AppError;
+
+    async fn from_request(request: Request, _state: &S) -> Result<Self, Self::Rejection> {
+        let media_type = request
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .filter(|value| value == "application/json" || value.ends_with("+json"))
+            .ok_or_else(|| AppError::BadRequest("Content-Type must be application/json".into()))?;
+        let idempotency_key = idempotency_key(request.headers())?;
+        let request_id = request
+            .extensions()
+            .get::<ApiRequestId>()
+            .copied()
+            .unwrap_or_else(|| ApiRequestId(uuid::Uuid::new_v4()));
+        let bytes = to_bytes(request.into_body(), API_BODY_LIMIT_BYTES)
+            .await
+            .map_err(|_| AppError::PayloadTooLarge)?;
+        let value = serde_json::from_slice(&bytes)
+            .map_err(|_| AppError::BadRequest("request body is not valid JSON".into()))?;
+        Ok(Self {
+            value,
+            request_id,
+            request_fingerprint: db::api_request_fingerprint(&media_type, &bytes),
+            idempotency_key,
+        })
+    }
+}
+
+impl<S> FromRequest<S> for ApiEmpty
+where
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request(request: Request, _state: &S) -> Result<Self, Self::Rejection> {
+        let request_id = request
+            .extensions()
+            .get::<ApiRequestId>()
+            .copied()
+            .unwrap_or_else(|| ApiRequestId(uuid::Uuid::new_v4()));
+        let idempotency_key = idempotency_key(request.headers())?;
+        let bytes = to_bytes(request.into_body(), 1)
+            .await
+            .map_err(|_| AppError::BadRequest("request body must be empty".into()))?;
+        if !bytes.is_empty() {
+            return Err(AppError::BadRequest("request body must be empty".into()));
+        }
+        Ok(Self {
+            request_id,
+            request_fingerprint: db::api_request_fingerprint("", &bytes),
+            idempotency_key,
+        })
+    }
+}
+
+impl<T> ApiJson<T> {
+    pub fn idempotency<'a>(
+        &'a self,
+        actor_id: Option<uuid::Uuid>,
+        principal_scope: &'a [u8],
+        principal_kind: db::ApiPrincipalKind,
+        method: &'a str,
+        route: &'a str,
+    ) -> db::IdempotencyRequest<'a> {
+        db::IdempotencyRequest {
+            request_id: self.request_id.0,
+            actor_id,
+            principal_scope,
+            capacity_scope: principal_scope,
+            target_scope: b"",
+            principal_kind,
+            method,
+            route,
+            idempotency_key: &self.idempotency_key,
+            request_fingerprint: self.request_fingerprint,
+            ttl_seconds: API_IDEMPOTENCY_TTL_SECONDS,
+            lease_seconds: API_IDEMPOTENCY_LEASE_SECONDS,
+        }
+    }
+}
+
+impl ApiEmpty {
+    pub fn idempotency<'a>(
+        &'a self,
+        actor_id: Option<uuid::Uuid>,
+        principal_scope: &'a [u8],
+        principal_kind: db::ApiPrincipalKind,
+        method: &'a str,
+        route: &'a str,
+    ) -> db::IdempotencyRequest<'a> {
+        db::IdempotencyRequest {
+            request_id: self.request_id.0,
+            actor_id,
+            principal_scope,
+            capacity_scope: principal_scope,
+            target_scope: b"",
+            principal_kind,
+            method,
+            route,
+            idempotency_key: &self.idempotency_key,
+            request_fingerprint: self.request_fingerprint,
+            ttl_seconds: API_IDEMPOTENCY_TTL_SECONDS,
+            lease_seconds: API_IDEMPOTENCY_LEASE_SECONDS,
+        }
+    }
+}
+
+pub fn json_replay_headers() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("cache-control".to_owned(), "no-store, max-age=0".to_owned()),
+        ("content-type".to_owned(), "application/json".to_owned()),
+    ])
+}
+
+pub fn idempotency_replay_response(replay: db::IdempotentResponse) -> Result<Response, AppError> {
+    let status =
+        StatusCode::from_u16(replay.status).map_err(|error| AppError::Internal(error.into()))?;
+    let mut response = Response::builder().status(status);
+    for (name, value) in replay.headers {
+        response = response.header(name, value);
+    }
+    response = response.header("idempotency-replayed", "true").header(
+        "idempotency-original-request-id",
+        replay.request_id.to_string(),
+    );
+    response
+        .body(Body::from(replay.body))
+        .map_err(|error| AppError::Internal(error.into()))
+}
+
+pub fn json_bytes_response(status: StatusCode, body: Vec<u8>) -> Result<Response, AppError> {
+    Response::builder()
+        .status(status)
+        .header(header::CACHE_CONTROL, "no-store, max-age=0")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .map_err(|error| AppError::Internal(error.into()))
+}
+
 pub mod models;
 pub use models::*;
 pub mod auth_routes;
+pub mod cursor;
+pub mod data_lifecycle;
+pub(crate) mod idempotency;
+pub mod pagination;
 pub use auth_routes::*;
+pub use data_lifecycle::*;
 pub mod admin;
+pub mod omemo_recovery;
+pub mod operations;
 pub mod reports;
 pub mod system;
 pub mod upload;
+pub mod upload_admin;
 pub mod users;
 
 pub use admin::*;
+pub use omemo_recovery::*;
+pub use operations::*;
 pub use reports::*;
 pub use system::*;
 pub use upload::*;
+pub use upload_admin::*;
 pub use users::*;
 
 pub fn router(state: Arc<AppState>) -> Router {
     let upload_limit = usize::try_from(state.config.upload_max_bytes).unwrap_or(usize::MAX);
-    Router::new()
+    let bosh_enabled = state.config.bosh_enabled;
+    let readiness = ReadyEndpointState::new(Arc::clone(&state));
+    let router = Router::new()
         .route("/healthz", get(health))
-        .route("/readyz", get(ready))
-        .route("/metrics", get(metrics))
+        .route("/readyz", get(ready).with_state(readiness))
         .route("/xmpp-websocket", get(websocket))
+        .route("/.well-known/host-meta", get(host_meta_xml))
+        .route("/.well-known/host-meta.json", get(host_meta_json))
+        // Keep the API namespace out of the static SPA fallback. Without an
+        // explicit root route, `ServeDir` can treat `/api` as a client-side
+        // page and return `index.html` with HTTP 200 instead of the API's JSON
+        // not-found contract.
+        .route("/api", get(api_root_not_found))
+        .route("/api/openapi.yaml", get(openapi_document))
+        .route("/api/docs", get(api_docs))
+        .nest_service(
+            "/api/docs/assets/5.32.14",
+            ServeDir::new("third_party/swagger-ui/dist"),
+        )
         .route("/api/v1/config", get(public_config))
         .route("/api/v1/register", post(register))
         .route("/api/v1/anti-abuse/challenge", post(anti_abuse_challenge))
         .route("/api/v1/login", post(login))
+        .route("/api/v1/session", delete(logout))
         .route("/api/v1/me", get(me))
+        .route(
+            "/api/v1/me/retention",
+            get(get_my_retention).put(update_my_retention),
+        )
         .route("/api/v1/me/password", patch(change_password))
+        .route(
+            "/api/v1/me/omemo-recovery-transfers",
+            post(prepare_omemo_recovery),
+        )
+        .route(
+            "/api/v1/me/omemo-recovery-authority",
+            get(get_omemo_recovery_authority),
+        )
+        .route(
+            "/api/v1/me/omemo-recovery-transfers/{id}",
+            get(get_omemo_recovery)
+                .put(seal_omemo_recovery)
+                .delete(revoke_omemo_recovery),
+        )
+        .route(
+            "/api/v1/me/omemo-recovery-transfers/{id}/consume",
+            post(consume_omemo_recovery),
+        )
+        .route(
+            "/api/v1/omemo-recovery-transfers/{id}/poll",
+            post(poll_omemo_recovery),
+        )
         .route("/api/v1/history", get(history))
         .route("/api/v1/reports", get(my_reports).post(create_report))
         .route("/api/v1/reports/{id}/appeals", post(create_appeal))
         .route(
+            "/api/v1/muc_rooms/{id}/retention",
+            get(get_muc_retention).put(update_muc_retention),
+        )
+        .route(
             "/api/v1/upload/{id}",
-            put(upload_put).layer(DefaultBodyLimit::max(upload_limit)),
+            // The storage reader deliberately consumes one byte beyond the
+            // reserved size to distinguish an oversized stream from an exact
+            // upload without buffering it. Let that sentinel byte reach the
+            // handler instead of converting it into an opaque body-limit I/O
+            // error.
+            put(upload_put)
+                .delete(upload_delete)
+                .layer(DefaultBodyLimit::max(upload_limit.saturating_add(1))),
         )
         .route("/uploads/{id}", get(upload_get))
         .route("/api/v1/admin/stats", get(admin_stats))
         .route("/api/v1/admin/nuke", post(admin_nuke))
-        .route("/api/v1/admin/server_identity", patch(admin_rename_server))
-        .route("/api/v1/admin/panic_disconnect", post(admin_panic_disconnect))
+        .route(
+            "/api/v1/admin/panic_disconnect",
+            post(admin_panic_disconnect),
+        )
         .route("/api/v1/admin/island_mode", post(admin_toggle_island_mode))
-        .route("/api/v1/admin/registration", post(admin_toggle_registration))
+        .route(
+            "/api/v1/admin/registration",
+            post(admin_toggle_registration),
+        )
         .route("/api/v1/admin/sessions", get(admin_sessions))
-        .route("/api/v1/admin/sessions/{jid}", delete(admin_kick_session))
-        .route("/api/v1/admin/offline_messages", get(admin_offline_messages_stats).delete(admin_clear_offline_messages))
+        .route(
+            "/api/v1/admin/sessions/{connection_id}",
+            delete(admin_kick_session),
+        )
+        .route(
+            "/api/v1/admin/offline_messages",
+            get(admin_offline_messages_stats).delete(admin_clear_offline_messages),
+        )
         .route("/api/v1/admin/muc_rooms", get(admin_muc_rooms))
-        .route("/api/v1/admin/muc_rooms/{localpart}", delete(admin_destroy_muc_room))
+        .route(
+            "/api/v1/admin/muc_rooms/{localpart}",
+            delete(admin_destroy_muc_room),
+        )
         .route("/api/v1/admin/broadcast", post(admin_broadcast))
         .route("/api/v1/admin/users", get(admin_users))
         .route("/api/v1/admin/users/{id}", patch(admin_update_user))
@@ -76,14 +370,62 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/admin/reports/{id}", patch(admin_update_report))
         .route("/api/v1/admin/appeals/{id}", patch(admin_update_appeal))
         .route("/api/v1/admin/tls/reload", post(admin_tls_reload))
-        .route("/api/v1/admin/invitations", get(admin_invitations).post(admin_create_invitation))
-        .route("/api/v1/admin/invitations/{id}", delete(admin_revoke_invitation))
+        .route(
+            "/api/v1/admin/upload-dead-letters",
+            get(admin_upload_dead_letters),
+        )
+        .route(
+            "/api/v1/admin/upload-dead-letters/{kind}/{id}/retry",
+            post(admin_retry_upload_dead_letter),
+        )
+        .route("/api/v1/admin/operations", get(list_operations))
+        .route("/api/v1/admin/operations/{id}", get(get_operation))
+        .route("/api/v1/admin/operations/{id}/targets", get(list_targets))
+        .route(
+            "/api/v1/admin/operations/{operation_id}/targets/{target_id}",
+            get(get_target),
+        )
+        .route(
+            "/api/v1/admin/operations/{id}/cancel",
+            post(cancel_operation),
+        )
+        .route(
+            "/api/v1/admin/operations/{id}/reconcile",
+            post(reconcile_operation),
+        )
+        .route(
+            "/api/v1/admin/operations/{operation_id}/targets/{target_id}/reconcile",
+            post(reconcile_target),
+        )
+        .route(
+            "/api/v1/admin/legal-holds",
+            get(list_legal_holds).post(create_legal_hold),
+        )
+        .route(
+            "/api/v1/admin/legal-holds/{id}/release",
+            post(release_legal_hold),
+        )
+        .route(
+            "/api/v1/admin/legal-holds/{id}/export",
+            post(export_legal_hold),
+        )
+        .route("/api/v1/admin/audit/export", post(export_audit))
+        .route(
+            "/api/v1/admin/invitations",
+            get(admin_invitations).post(admin_create_invitation),
+        )
+        .route(
+            "/api/v1/admin/invitations/{id}",
+            delete(admin_revoke_invitation),
+        )
         .fallback_service(ServeDir::new("web").append_index_html_on_directories(true))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            secure_http_transport,
+        ))
         .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("content-security-policy"),
-            HeaderValue::from_static(
-                "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ws: wss:; media-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
-            ),
+            HeaderValue::from_static(SPA_CONTENT_SECURITY_POLICY),
         ))
         .layer(SetResponseHeaderLayer::if_not_present(
             header::X_CONTENT_TYPE_OPTIONS,
@@ -93,8 +435,189 @@ pub fn router(state: Arc<AppState>) -> Router {
             header::REFERRER_POLICY,
             HeaderValue::from_static("no-referrer"),
         ))
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("camera=(), microphone=(), geolocation=(), payment=()"),
+        ))
+        .layer(middleware::from_fn(api_cache_policy))
+        .layer(middleware::from_fn(api_error_envelope))
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &Request| {
+                let request_id = request
+                    .extensions()
+                    .get::<ApiRequestId>()
+                    .map(|value| value.0.to_string())
+                    .unwrap_or_else(|| "missing".to_owned());
+                tracing::info_span!(
+                    "http_request",
+                    request_id = %request_id,
+                    http.method = %request.method(),
+                    http.target = %request.uri().path()
+                )
+            }),
+        )
+        .layer(DefaultBodyLimit::max(API_BODY_LIMIT_BYTES))
+        // This must be the outermost layer so tracing and every rejection can
+        // use the same identifier that is returned to the caller.
+        .layer(middleware::from_fn(api_request_id));
+    let router = if bosh_enabled {
+        router
+            .route("/http-bind", post(crate::bosh::http_bind))
+            .route("/http-bind", options(crate::bosh::http_bind_options))
+            .route("/bosh", post(crate::bosh::http_bind))
+            .route("/bosh", options(crate::bosh::http_bind_options))
+    } else {
+        router
+    };
+    router.with_state(state)
+}
+
+async fn api_request_id(mut request: Request, next: Next) -> Response {
+    let request_id = ApiRequestId(uuid::Uuid::new_v4());
+    request.extensions_mut().insert(request_id);
+    let mut response = next.run(request).await;
+    if let Ok(value) = HeaderValue::from_str(&request_id.0.to_string()) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-request-id"), value);
+    }
+    response
+}
+
+async fn secure_http_transport(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if plaintext_observability_path(request.uri().path())
+        || secure_http_request(
+            peer.ip(),
+            request.headers(),
+            &state.config.trusted_proxy_ips,
+        )
+    {
+        return next.run(request).await;
+    }
+
+    let rejected = state
+        .metrics
+        .http_insecure_requests_rejected_total
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    if rejected.is_power_of_two() {
+        tracing::warn!(
+            peer_ip = %peer.ip(),
+            rejected_total = rejected,
+            "rejected HTTP request without a trusted HTTPS transport assertion"
+        );
+    }
+    let mut response = (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "error": {
+                "code": "https_required",
+                "message": "HTTPS is required for this resource"
+            }
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    response
+}
+
+fn plaintext_observability_path(path: &str) -> bool {
+    matches!(path, "/healthz" | "/readyz")
+}
+
+fn secure_http_request(peer_ip: IpAddr, headers: &HeaderMap, trusted: &[IpAddr]) -> bool {
+    let mut forwarded = headers.get_all("x-forwarded-proto").iter();
+    match (forwarded.next(), forwarded.next()) {
+        (None, None) => peer_ip.is_loopback(),
+        (Some(value), None) => {
+            trusted.contains(&peer_ip)
+                && value.to_str().ok().is_some_and(|value| {
+                    !value.contains(',') && value.trim().eq_ignore_ascii_case("https")
+                })
+        }
+        _ => false,
+    }
+}
+
+async fn api_cache_policy(request: Request, next: Next) -> Response {
+    let sensitive = is_api_path(request.uri().path());
+    let mut response = next.run(request).await;
+    if sensitive {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store, max-age=0"),
+        );
+        response
+            .headers_mut()
+            .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    }
+    response
+}
+
+async fn api_error_envelope(request: Request, next: Next) -> Response {
+    let is_api = is_api_path(request.uri().path());
+    let response = next.run(request).await;
+    if !is_api {
+        return response;
+    }
+
+    // A routed handler may intentionally return a typed resource-level 404.
+    // Preserve that JSON contract; only translate Axum/static-service routing
+    // rejections, whose bodies are not API JSON.
+    if response.status() == StatusCode::NOT_FOUND
+        && response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .is_some_and(|value| {
+                let value = value.trim();
+                value.eq_ignore_ascii_case("application/json")
+                    || value.to_ascii_lowercase().ends_with("+json")
+            })
+    {
+        return response;
+    }
+
+    let (code, message) = match response.status() {
+        StatusCode::NOT_FOUND => ("not_found", "API endpoint was not found"),
+        StatusCode::METHOD_NOT_ALLOWED => (
+            "method_not_allowed",
+            "HTTP method is not allowed for this API endpoint",
+        ),
+        _ => return response,
+    };
+    let status = response.status();
+    let allow = response.headers().get(header::ALLOW).cloned();
+    let mut replacement = (
+        status,
+        Json(json!({"error":{"code":code,"message":message}})),
+    )
+        .into_response();
+    if let Some(allow) = allow {
+        replacement.headers_mut().insert(header::ALLOW, allow);
+    }
+    replacement
+}
+
+fn is_api_path(path: &str) -> bool {
+    path == "/api" || path.starts_with("/api/")
+}
+
+async fn api_root_not_found() -> Result<(), AppError> {
+    Err(AppError::NotFound("API endpoint was not found".into()))
 }
 
 pub fn ip_actor(ip: IpAddr) -> String {
@@ -105,19 +628,54 @@ pub fn client_ip(peer_ip: IpAddr, headers: &HeaderMap, state: &AppState) -> IpAd
     if !state.config.trusted_proxy_ips.contains(&peer_ip) {
         return peer_ip;
     }
-    headers
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .and_then(|value| value.trim().parse().ok())
-        .filter(|ip: &IpAddr| !ip.is_unspecified())
+    forwarded_client_ip_from_headers(peer_ip, headers, &state.config.trusted_proxy_ips)
+}
+
+fn forwarded_client_ip_from_headers(
+    peer_ip: IpAddr,
+    headers: &HeaderMap,
+    trusted: &[IpAddr],
+) -> IpAddr {
+    // Multiple field-lines are ambiguous because intermediaries disagree on
+    // whether the first or last value wins. Fail closed to the proxy address
+    // so an attacker cannot split the HTTP authorization identity from the
+    // anti-abuse/rate-limit identity.
+    let mut forwarded_values = headers.get_all("x-forwarded-for").iter();
+    let Some(forwarded) = forwarded_values.next() else {
+        return peer_ip;
+    };
+    if forwarded_values.next().is_some() {
+        return peer_ip;
+    }
+    let Ok(forwarded) = forwarded.to_str() else {
+        return peer_ip;
+    };
+    forwarded_client_ip(peer_ip, forwarded, trusted)
+}
+
+fn forwarded_client_ip(peer_ip: IpAddr, forwarded: &str, trusted: &[IpAddr]) -> IpAddr {
+    let chain = forwarded
+        .split(',')
+        .map(str::trim)
+        .map(str::parse::<IpAddr>)
+        .collect::<std::result::Result<Vec<_>, _>>();
+    let Ok(chain) = chain else {
+        return peer_ip;
+    };
+    if chain.iter().any(IpAddr::is_unspecified) {
+        return peer_ip;
+    }
+    chain
+        .into_iter()
+        .rev()
+        .find(|ip| !trusted.contains(ip))
         .unwrap_or(peer_ip)
 }
 
 pub fn abuse_identity(
     action: AbuseAction,
     ip: IpAddr,
-    user: Option<&db::User>,
+    user: Option<&db::ApiPrincipal>,
 ) -> (String, Vec<String>) {
     if action == AbuseAction::Registration {
         return (format!("registration:{ip}"), vec![ip_actor(ip)]);
@@ -133,29 +691,175 @@ pub fn abuse_identity(
     )
 }
 
+pub fn login_abuse_identity(ip: IpAddr, username: &str) -> Option<(String, Vec<String>)> {
+    if username.is_empty() || username.len() > 1024 {
+        return None;
+    }
+    let identity = auth::normalize_username(username).unwrap_or_else(|_| username.to_owned());
+    let digest = auth::token_hash(&identity);
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let account_actor = format!("login-account:{}", URL_SAFE_NO_PAD.encode(digest));
+    Some((
+        format!("login:{ip}:{account_actor}"),
+        vec![ip_actor(ip), account_actor],
+    ))
+}
+
+pub fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {
+    let mut values = headers.get_all(header::AUTHORIZATION).iter();
+    let value = match (values.next(), values.next()) {
+        (Some(value), None) => value.to_str().map_err(|_| AppError::Unauthorized)?,
+        _ => return Err(AppError::Unauthorized),
+    };
+    let mut parts = value.split_ascii_whitespace();
+    let scheme = parts.next().ok_or(AppError::Unauthorized)?;
+    let token = parts.next().ok_or(AppError::Unauthorized)?;
+    if !scheme.eq_ignore_ascii_case("Bearer")
+        || parts.next().is_some()
+        || token.len() != API_TOKEN_LENGTH
+        || !token.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    {
+        return Err(AppError::Unauthorized);
+    }
+    Ok(token)
+}
+
 pub fn rate_limited(error: GuardError) -> AppError {
     AppError::RateLimited(json!({"message":error.message(),"requirement":error.requirement()}))
 }
 
-pub async fn current_user(state: &AppState, headers: &HeaderMap) -> Result<db::User, AppError> {
-    let value = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
-        .ok_or(AppError::Unauthorized)?;
-    let token = value
-        .strip_prefix("Bearer ")
-        .ok_or(AppError::Unauthorized)?;
-    db::user_for_token(&state.pool, token)
-        .await?
-        .ok_or(AppError::Unauthorized)
+pub struct ApiUser {
+    user: db::ApiPrincipal,
+    session_token: zeroize::Zeroizing<String>,
 }
 
-pub async fn admin(state: &AppState, headers: &HeaderMap) -> Result<db::User, AppError> {
-    let user = current_user(state, headers).await?;
+impl ApiUser {
+    pub fn session_token(&self) -> &str {
+        self.session_token.as_str()
+    }
+
+    /// Start a repeatable authorization snapshot for a sensitive read.
+    ///
+    /// The shared locks taken by `authorize_user_in_tx` keep password
+    /// rotation, account disablement and explicit bearer revocation from
+    /// committing between this check and the caller's final database read.
+    pub(crate) async fn begin_authorized_read<'a>(
+        &self,
+        state: &'a AppState,
+    ) -> Result<sqlx::Transaction<'a, sqlx::Postgres>, AppError> {
+        let mut tx = state.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .execute(&mut *tx)
+            .await?;
+        if !db::authorize_user_in_tx(&mut tx, self.id, self.auth_generation, self.session_token())
+            .await?
+        {
+            tx.rollback().await?;
+            return Err(AppError::Unauthorized);
+        }
+        Ok(tx)
+    }
+}
+
+impl Deref for ApiUser {
+    type Target = db::ApiPrincipal;
+
+    fn deref(&self) -> &Self::Target {
+        &self.user
+    }
+}
+
+pub async fn current_user(state: &AppState, headers: &HeaderMap) -> Result<ApiUser, AppError> {
+    let _authentication_timer = state.metrics.authentication_duration_seconds.start_timer();
+    let token = bearer_token(headers)?;
+    let database_timer = state
+        .metrics
+        .database_operation_duration_seconds
+        .start_timer();
+    let user = db::user_for_token(&state.pool, token)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+    drop(database_timer);
+    Ok(ApiUser {
+        user,
+        session_token: zeroize::Zeroizing::new(token.to_owned()),
+    })
+}
+
+pub struct ApiAdmin {
+    user: ApiUser,
+}
+
+impl ApiAdmin {
+    pub fn session_token(&self) -> &str {
+        self.user.session_token()
+    }
+
+    /// Hold the exact administrator bearer, credential generation and role
+    /// stable until a sensitive read has produced its complete projection.
+    pub(crate) async fn begin_authorized_read<'a>(
+        &self,
+        state: &'a AppState,
+    ) -> Result<sqlx::Transaction<'a, sqlx::Postgres>, AppError> {
+        let mut tx = state.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .execute(&mut *tx)
+            .await?;
+        if !db::authorize_admin_in_tx(&mut tx, self.id, self.auth_generation, self.session_token())
+            .await?
+        {
+            tx.rollback().await?;
+            return Err(AppError::Forbidden);
+        }
+        Ok(tx)
+    }
+}
+
+impl Deref for ApiAdmin {
+    type Target = db::ApiPrincipal;
+
+    fn deref(&self) -> &Self::Target {
+        &self.user.user
+    }
+}
+
+impl FromRequestParts<Arc<AppState>> for ApiAdmin {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        let token = bearer_token(&parts.headers)?;
+        let user = db::user_for_token(&state.pool, token)
+            .await?
+            .ok_or(AppError::Unauthorized)?;
+        if !user.is_admin {
+            return Err(AppError::Forbidden);
+        }
+        Ok(Self {
+            user: ApiUser {
+                user,
+                session_token: zeroize::Zeroizing::new(token.to_owned()),
+            },
+        })
+    }
+}
+
+pub async fn admin(state: &AppState, headers: &HeaderMap) -> Result<ApiAdmin, AppError> {
+    let token = bearer_token(headers)?;
+    let user = db::user_for_token(&state.pool, token)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
     if !user.is_admin {
         return Err(AppError::Forbidden);
     }
-    Ok(user)
+    Ok(ApiAdmin {
+        user: ApiUser {
+            user,
+            session_token: zeroize::Zeroizing::new(token.to_owned()),
+        },
+    })
 }
 
 pub async fn serve(
@@ -173,10 +877,27 @@ pub async fn serve(
     Ok(())
 }
 
+pub async fn serve_metrics(
+    state: Arc<AppState>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<()> {
+    let endpoint = MetricsEndpointState::new(Arc::clone(&state));
+    let listener = tokio::net::TcpListener::bind(state.config.metrics_bind).await?;
+    tracing::info!(address = %state.config.metrics_bind, "private metrics listener ready");
+    let router = Router::new()
+        .route("/metrics", get(metrics))
+        .with_state(endpoint);
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(cancel.cancelled_owned())
+    .await?;
+    Ok(())
+}
+
 pub async fn shutdown_signal() {
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
+    let ctrl_c = tokio::signal::ctrl_c();
     #[cfg(unix)]
     let terminate = async {
         let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
@@ -185,5 +906,265 @@ pub async fn shutdown_signal() {
     };
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
-    tokio::select! { _ = ctrl_c => {}, _ = terminate => {} }
+    wait_for_shutdown_signal(ctrl_c, terminate).await;
+}
+
+async fn wait_for_shutdown_signal<C, T>(ctrl_c: C, terminate: T)
+where
+    C: std::future::Future<Output = std::io::Result<()>>,
+    T: std::future::Future<Output = ()>,
+{
+    let ctrl_c = async {
+        match ctrl_c.await {
+            Ok(()) => {}
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    "could not register Ctrl+C shutdown handler; continuing to serve"
+                );
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    tokio::pin!(ctrl_c);
+    tokio::pin!(terminate);
+    tokio::select! { _ = &mut ctrl_c => {}, _ = &mut terminate => {} }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shutdown_signal_registration_error_does_not_request_shutdown() {
+        let ctrl_c = std::future::ready(Err(std::io::Error::other(
+            "injected signal registration failure",
+        )));
+        let wait = wait_for_shutdown_signal(ctrl_c, std::future::pending());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), wait)
+                .await
+                .is_err(),
+            "a Ctrl+C handler registration error must not stop the server"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_signal_success_requests_shutdown() {
+        let ctrl_c = std::future::ready(Ok(()));
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            wait_for_shutdown_signal(ctrl_c, std::future::pending()),
+        )
+        .await
+        .expect("a successful Ctrl+C signal should stop the server");
+    }
+
+    #[test]
+    fn api_path_boundary_includes_the_api_root_without_matching_prefixes() {
+        assert!(is_api_path("/api"));
+        assert!(is_api_path("/api/"));
+        assert!(is_api_path("/api/v1/status"));
+        assert!(!is_api_path("/apiary"));
+        assert!(!is_api_path("/client.html"));
+    }
+
+    #[tokio::test]
+    async fn api_json_preserves_exact_body_identity_and_enforces_its_limit() {
+        let request_id = ApiRequestId(uuid::Uuid::new_v4());
+        let body = br#"{"username":"alice","password":"test-password"}"#;
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/login")
+            .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+            .header("idempotency-key", "login-request-key-0001")
+            .body(Body::from(body.as_slice()))
+            .unwrap();
+        request.extensions_mut().insert(request_id);
+        let parsed = ApiJson::<Credentials>::from_request(request, &())
+            .await
+            .unwrap();
+        assert_eq!(parsed.username, "alice");
+        let idempotency = parsed.idempotency(
+            None,
+            b"login:127.0.0.1:alice",
+            db::ApiPrincipalKind::Anonymous,
+            "POST",
+            "/api/v1/login",
+        );
+        assert_eq!(idempotency.request_id, request_id.0);
+        assert_eq!(idempotency.idempotency_key, "login-request-key-0001");
+        assert_eq!(
+            idempotency.request_fingerprint,
+            db::api_request_fingerprint("application/json", body)
+        );
+
+        let oversized = Request::builder()
+            .method("POST")
+            .uri("/api/v1/login")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(vec![b' '; API_BODY_LIMIT_BYTES + 1]))
+            .unwrap();
+        assert!(matches!(
+            ApiJson::<Credentials>::from_request(oversized, &()).await,
+            Err(AppError::PayloadTooLarge)
+        ));
+    }
+
+    #[tokio::test]
+    async fn idempotency_replay_marks_the_original_attempt() {
+        let original_request_id = uuid::Uuid::new_v4();
+        let replay = db::IdempotentResponse {
+            request_id: original_request_id,
+            status: StatusCode::OK.as_u16(),
+            headers: json_replay_headers(),
+            body: br#"{"token":"stored"}"#.to_vec(),
+        };
+        let response = idempotency_replay_response(replay).unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("idempotency-replayed")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("idempotency-original-request-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap(),
+            original_request_id.to_string()
+        );
+        assert_eq!(
+            to_bytes(response.into_body(), 1024).await.unwrap(),
+            br#"{"token":"stored"}"#.as_slice()
+        );
+    }
+
+    #[test]
+    fn bearer_parser_has_an_exact_non_ambiguous_boundary() {
+        let valid = "A".repeat(API_TOKEN_LENGTH);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("bearer {valid}").parse().unwrap(),
+        );
+        assert_eq!(bearer_token(&headers).unwrap(), valid);
+
+        for invalid in [
+            format!("Bearer {} extra", "A".repeat(API_TOKEN_LENGTH)),
+            format!("Basic {}", "A".repeat(API_TOKEN_LENGTH)),
+            format!("Bearer {}", "_".repeat(API_TOKEN_LENGTH)),
+            format!("Bearer {}", "A".repeat(API_TOKEN_LENGTH - 1)),
+        ] {
+            headers.insert(header::AUTHORIZATION, invalid.parse().unwrap());
+            assert!(matches!(
+                bearer_token(&headers),
+                Err(AppError::Unauthorized)
+            ));
+        }
+
+        headers.clear();
+        headers.append(
+            header::AUTHORIZATION,
+            format!("Bearer {valid}").parse().unwrap(),
+        );
+        headers.append(
+            header::AUTHORIZATION,
+            format!("Bearer {valid}").parse().unwrap(),
+        );
+        assert!(matches!(
+            bearer_token(&headers),
+            Err(AppError::Unauthorized)
+        ));
+    }
+
+    #[test]
+    fn forwarded_chain_uses_the_nearest_untrusted_hop() {
+        let peer: IpAddr = "10.0.0.1".parse().unwrap();
+        let trusted = vec![peer, "10.0.0.2".parse().unwrap()];
+        assert_eq!(
+            forwarded_client_ip(peer, "198.51.100.99, 203.0.113.7, 10.0.0.2", &trusted),
+            "203.0.113.7".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            forwarded_client_ip(peer, "spoofed, 203.0.113.7", &trusted),
+            peer
+        );
+        assert_eq!(forwarded_client_ip(peer, "0.0.0.0", &trusted), peer);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("198.51.100.99, 10.0.0.2"),
+        );
+        assert_eq!(
+            forwarded_client_ip_from_headers(peer, &headers, &trusted),
+            "198.51.100.99".parse::<IpAddr>().unwrap()
+        );
+        headers.append("x-forwarded-for", HeaderValue::from_static("203.0.113.7"));
+        assert_eq!(
+            forwarded_client_ip_from_headers(peer, &headers, &trusted),
+            peer
+        );
+    }
+
+    #[test]
+    fn http_transport_requires_loopback_or_one_trusted_https_assertion() {
+        let loopback: IpAddr = "127.0.0.1".parse().unwrap();
+        let proxy: IpAddr = "10.0.0.2".parse().unwrap();
+        let external: IpAddr = "203.0.113.9".parse().unwrap();
+        let trusted = vec![proxy];
+        let mut headers = HeaderMap::new();
+
+        assert!(secure_http_request(loopback, &headers, &trusted));
+        assert!(!secure_http_request(external, &headers, &trusted));
+
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        assert!(secure_http_request(proxy, &headers, &trusted));
+        assert!(!secure_http_request(external, &headers, &trusted));
+
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("http"));
+        assert!(!secure_http_request(proxy, &headers, &trusted));
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https, http"));
+        assert!(!secure_http_request(proxy, &headers, &trusted));
+        headers.remove("x-forwarded-proto");
+        headers.append("x-forwarded-proto", HeaderValue::from_static("https"));
+        headers.append("x-forwarded-proto", HeaderValue::from_static("https"));
+        assert!(!secure_http_request(proxy, &headers, &trusted));
+        assert!(plaintext_observability_path("/healthz"));
+        assert!(plaintext_observability_path("/readyz"));
+        assert!(!plaintext_observability_path("/metrics"));
+        assert!(!plaintext_observability_path("/client.html"));
+        assert!(!plaintext_observability_path("/uploads/example"));
+    }
+
+    #[test]
+    fn browser_csp_does_not_allow_inline_code_or_styles() {
+        assert!(!SPA_CONTENT_SECURITY_POLICY.contains("'unsafe-inline'"));
+        assert!(!SPA_CONTENT_SECURITY_POLICY.contains("'unsafe-eval'"));
+        assert!(SPA_CONTENT_SECURITY_POLICY.contains("object-src 'none'"));
+        assert!(SPA_CONTENT_SECURITY_POLICY.contains("connect-src 'self'"));
+        assert!(!SPA_CONTENT_SECURITY_POLICY.contains(" ws:"));
+        assert!(!SPA_CONTENT_SECURITY_POLICY.contains(" wss:"));
+        assert!(SPA_CONTENT_SECURITY_POLICY.contains("worker-src 'self'"));
+        assert!(!SPA_CONTENT_SECURITY_POLICY.contains("worker-src 'self' blob:"));
+        assert!(SPA_CONTENT_SECURITY_POLICY.contains("base-uri 'none'"));
+        assert!(SPA_CONTENT_SECURITY_POLICY.contains("form-action 'self'"));
+        assert!(SPA_CONTENT_SECURITY_POLICY.contains("frame-ancestors 'none'"));
+    }
+
+    #[test]
+    fn login_pow_identity_is_bound_to_ip_and_normalized_account() {
+        let ip: IpAddr = "203.0.113.9".parse().unwrap();
+        let alice = login_abuse_identity(ip, "Alice").unwrap();
+        let alice_case_variant = login_abuse_identity(ip, "alice").unwrap();
+        let bob = login_abuse_identity(ip, "bob").unwrap();
+        assert_eq!(alice, alice_case_variant);
+        assert_ne!(alice.0, bob.0);
+        assert_ne!(alice.1, bob.1);
+        assert!(login_abuse_identity(ip, "").is_none());
+    }
 }

@@ -25,6 +25,121 @@ groups:
         annotations:
           summary: Northstar database pool is close to exhaustion
           description: More than 85% of configured connections are open and fewer than two are idle.
+      - alert: NorthstarDatabaseMetricsCollectorUnavailable
+        expr: xmpp_database_collector_up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Northstar operational metrics snapshot is unavailable
+          description: PostgreSQL-backed queue and resumable-session gauges are intentionally absent rather than reported as zero; inspect database latency and query failures.
+      - alert: NorthstarClusterFailClosed
+        expr: xmpp_cluster_operational_state == 3 or xmpp_cluster_operational_state == 5
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: Experimental cluster routing is fail-closed
+          description: The node is rejecting clustered mutations and delivery, or its safety lease requires shutdown. Keep it out of service and inspect Redis, PostgreSQL authority, instance fencing, listener generation and logs.
+      - alert: NorthstarClusterDegraded
+        expr: xmpp_cluster_operational_state == 1 or xmpp_cluster_operational_state == 4
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Experimental cluster routing is reconciling or durable-direct-only
+          description: Readiness is intentionally failing. Only the documented PostgreSQL-spooled direct-message class may be accepted in state 4; binds, resumes, MUC/admin mutations and transient messages remain rejected.
+      - alert: NorthstarClusterEnvelopeAuthenticationFailures
+        expr: increase(xmpp_cluster_authentication_failures_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Signed cluster envelopes failed authentication
+          description: Inspect source-node allowlists, key/instance epochs, channel binding, clock skew and possible unauthorized Redis publishers. Do not weaken application signature verification.
+      - alert: NorthstarClusterReplayRejected
+        expr: increase(xmpp_cluster_replay_rejections_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Signed cluster envelope replay was rejected
+          description: A duplicate event reached the bounded replay cache. Correlate source node, instance epoch and Redis failover/retry behavior.
+      - alert: NorthstarClusterDegradedTransition
+        expr: increase(xmpp_cluster_degraded_transitions_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Experimental cluster control plane degraded
+          description: A node left healthy routing. Confirm readiness removal and follow the ordered recovery procedure before returning it to service.
+      - alert: NorthstarClusterMucOutboxBacklog
+        expr: xmpp_cluster_muc_outbox_queued > 1000 or xmpp_cluster_muc_outbox_oldest_age_seconds > 120
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Clustered MUC audience delivery is falling behind
+          description: Keep the node out of rotation if the backlog grows; inspect PostgreSQL, exact local occupancy reconciliation, worker health and signed Redis wake delivery. Polling remains the recovery path.
+      - alert: NorthstarClusterMucDeadLetters
+        expr: xmpp_cluster_muc_outbox_dead_letters > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Clustered MUC notifications reached terminal delivery
+          description: Inspect the immutable operation/event ID and exact audience incarnation before replaying. Never synthesize a new mutation from a dead letter.
+      - alert: NorthstarClusterMucAuthorityRejected
+        expr: increase(xmpp_cluster_muc_authority_rejections_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: A local MUC cache actor failed PostgreSQL authority fencing
+          description: This can indicate an expired lease, delayed reused nickname, stale process or incomplete post-Redis reconciliation. Correlate the room and connection logs.
+      - alert: NorthstarC2sBackpressureDisconnects
+        expr: increase(xmpp_c2s_backpressure_disconnects_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Slow XMPP clients saturated durable outbound queues
+          description: Northstar terminated at least one client before newer messages could cross a durable delivery gap. Inspect client/network health and verify that SM or offline replay drains the retained rows.
+      - alert: NorthstarSmMemoryNearlyExhausted
+        expr: xmpp_sm_memory_reserved_bytes / xmpp_sm_memory_limit_bytes >= 0.9
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: XEP-0198 process memory authority is nearly exhausted
+          description: Retained live, suspended, claim and transient snapshot bytes exceed 90 percent of the hard process budget. Drain or revoke the highest-retention sessions; do not raise the limit without validating host memory and 1000-session behavior.
+      - alert: NorthstarSmRecoveryCapacityNearlyExhausted
+        expr: >-
+          xmpp_sm_recovery_queue_jobs / xmpp_sm_recovery_queue_job_limit >= 0.9
+          or xmpp_sm_recovery_queue_bytes / xmpp_sm_recovery_queue_byte_limit >= 0.9
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: XEP-0198 suspension recovery queue is nearly exhausted
+          description: Exact SM suspension or MUC promotion debt exceeds 90 percent of a hard job or byte limit. Inspect PostgreSQL latency and the supervised recovery worker; never delete a queued exact snapshot to make room.
+      - alert: NorthstarSmRecoveryStalled
+        expr: xmpp_sm_recovery_queue_jobs > 0 and xmpp_sm_recovery_queue_oldest_age_seconds > 60
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: XEP-0198 suspension recovery work is not converging
+          description: The oldest exact recovery owner has remained queued or in flight for over one minute. Inspect database claims, worker heartbeats and capacity rejections before resumable streams expire.
+      - alert: NorthstarSmCapacityInvariantFailure
+        expr: increase(xmpp_sm_capacity_invariant_failures_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: XEP-0198 memory or recovery ownership invariant failed
+          description: Readiness is fail-closed because capacity permits, exact epoch ownership or queue accounting became inconsistent. Preserve logs and process state and investigate before returning the node to service.
+      - alert: NorthstarSmCapacityAdmissionRejected
+        expr: increase(xmpp_sm_capacity_admission_rejections_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: XEP-0198 memory admission rejected work
+          description: A live growth, cross-process claim or recovery job reached its configured hard bound. Correlate with memory and recovery utilization; the server intentionally revoked or rejected resumability instead of retaining unaccounted state.
       - alert: NorthstarAuthenticationBackendFailure
         expr: increase(xmpp_authentication_backend_failures_total[5m]) > 0
         labels:
@@ -39,6 +154,179 @@ groups:
         annotations:
           summary: A Northstar maintenance job failed
           description: Session, upload-slot, or offline-message cleanup reported an error.
+      - alert: NorthstarAccountDeletionRecoveryFailure
+        expr: increase(xmpp_account_deletion_recovery_failures_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: A crash-recovered account deletion could not finish
+          description: The account remains fail-closed and the durable job will retry with bounded backoff. Inspect SM teardown, PostgreSQL and upload-storage capacity; do not manually re-enable the account or delete the recovery row.
+      - alert: NorthstarAccountDeletionRecoveryLeaseLost
+        expr: increase(xmpp_account_deletion_recovery_lease_losses_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: An account-deletion recovery worker lost its lease
+          description: Another worker may have taken ownership after a long or stalled attempt. Verify worker health and database latency; deletion remains idempotent and only the lease owner may release retry state.
+      - alert: NorthstarApiOperationIndeterminate
+        expr: xmpp_api_operations_indeterminate > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: An administrator operation needs manual reconciliation
+          description: At least one durable administrator operation crossed its point of no return without a provable result. Inspect its operation and target evidence before reconciling it.
+      - alert: NorthstarApiOperationStalled
+        expr: xmpp_api_operations_oldest_active_age_seconds > 300
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: An administrator operation has remained active for too long
+          description: The oldest pending or running administrator operation has been active for more than five minutes. Inspect the worker, target leases, and PostgreSQL health.
+      - alert: NorthstarAdminSessionCleanupStalled
+        expr: (xmpp_admin_session_cleanup_pending + xmpp_admin_session_cleanup_running) > 0 and xmpp_admin_session_cleanup_oldest_age_seconds > 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Committed XEP-0133 session cleanup is not converging
+          description: A credential or exact-connection teardown has retried for more than five minutes. Inspect Redis acknowledgements, PostgreSQL leases and the durable operation worker; do not delete the effect row manually.
+      - alert: NorthstarAdminSessionCleanupCapacityHigh
+        expr: xmpp_admin_session_cleanup_capacity_used / xmpp_admin_session_cleanup_capacity_limit > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Administrator session cleanup queue is nearing its hard bound
+          description: More than 80 percent of the fixed cleanup-effect capacity is occupied. XEP-0133 mutations fail closed at the bound; resolve the oldest delivery failure before retrying commands.
+      - alert: NorthstarPostAcceptSideEffectFailure
+        expr: increase(xmpp_post_accept_side_effect_failures_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: An accepted operation lost a required follow-up effect
+          description: Northstar accepted an operation but a required post-accept action failed; inspect logs and reconcile durable state before acknowledging recovery.
+      - alert: NorthstarPostCommitDeliveryFailure
+        expr: sum(increase(xmpp_muc_post_commit_delivery_failures_total[5m]) + increase(xmpp_mix_post_commit_delivery_failures_total[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A committed XMPP event was not delivered
+          description: A MUC or MIX mutation committed but at least one immediate delivery attempt failed; use the per-protocol counters and logs to identify the affected path. PubSub and PEP use their durable event-outbox alerts instead.
+      - alert: NorthstarPubSubOutboxDeadLetter
+        expr: xmpp_pubsub_event_outbox_dead_letter_rows > 0 or increase(xmpp_pubsub_event_outbox_dead_letters_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A PubSub or PEP event reached a terminal delivery state
+          description: Inspect the dead-letter metadata, target routing policy and downstream health. The immutable payload digest is retained but the stanza body is not duplicated in dead-letter storage.
+      - alert: NorthstarUnverifiablePepOutboxDrop
+        expr: increase(xmpp_pubsub_event_outbox_unverifiable_pep_drops_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: A legacy or unverifiable PEP outbox row was dropped
+          description: A PEP notification lacked the immutable authorization subject required for safe delivery. This is expected only while draining pre-0116 rows; investigate migration or unauthorized producer drift if it persists.
+      - alert: NorthstarPubSubOutboxBacklog
+        expr: xmpp_pubsub_event_outbox_pending_rows > 100000 or xmpp_pubsub_event_outbox_pending_bytes > 1073741824
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: PubSub and PEP durable event backlog is growing
+          description: More than 100000 event recipients or 1 GiB of exact event bytes have remained queued for ten minutes. Inspect local sockets, cluster routing, S2S and PostgreSQL latency.
+      - alert: NorthstarPubSubOutboxCapacityRejected
+        expr: increase(xmpp_pubsub_event_outbox_capacity_rejections_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A PubSub or PEP mutation was rejected by event-outbox capacity
+          description: The mutation was rolled back rather than accepted without its notification. Drain the affected shard/domain and review abuse or downstream availability.
+      - alert: NorthstarPubSubMutationAdmissionPressure
+        expr: increase(xmpp_pubsub_mutation_admission_rejections_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: PubSub or PEP mutations are exceeding bounded database admission
+          description: Same-owner, collection-graph, or total mutation pressure exceeded the two-second pre-database admission window. Requests fail with resource-constraint while authentication and routing capacity remains reserved; inspect abusive accounts and PostgreSQL lock latency.
+      - alert: NorthstarPushDeliveryFailure
+        expr: increase(xmpp_push_notifications_failed_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Push notification delivery failed
+          description: At least one XEP-0357 notification could not be routed or was rejected; inspect the push service and subscription cleanup logs.
+      - alert: NorthstarRetentionCleanupFailure
+        expr: increase(xmpp_retention_cleanup_failures_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Retention cleanup failed
+          description: Personal/MUC MAM, offline, released-hold snapshot, moderation evidence, or bounded audit cleanup did not complete; storage growth may be unbounded until recovery.
+      - alert: NorthstarLegalHoldOperationFailure
+        expr: increase(xmpp_legal_hold_operation_failures_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A legal-hold control operation failed
+          description: Review the request audit trail and confirm retention remains fail-closed; never bypass the database hold guards to force deletion.
+      - alert: NorthstarAuditExportFailure
+        expr: increase(xmpp_audit_export_operation_failures_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: An audit export failed
+          description: Reconcile the idempotency request and access-audit transaction, reduce max_rows after a 1 MiB response rejection, and keep the immutable audit guard enabled.
+      - alert: NorthstarGovernanceExportCursorRejections
+        expr: increase(xmpp_governance_export_cursor_rejections_total[15m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Governance export cursors are repeatedly rejected
+          description: Check administrator/filter binding, shared cursor keys and the fixed 15-minute export lease. Do not extend or bypass an expired legal-hold lease.
+      - alert: NorthstarGovernanceExportLeaseCleanupStalled
+        expr: xmpp_governance_export_leases_expired_incomplete > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Expired governance export leases are not being cleaned
+          description: The bounded retention worker should promptly remove abandoned leases. Check worker readiness before attempting hold release or audit-retention maintenance.
+      - alert: NorthstarTlsCertificateExpiring
+        expr: xmpp_tls_certificate_seconds_until_expiry < 1209600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Northstar TLS certificate expires within 14 days
+          description: Replace the full chain and private key atomically, then invoke the authenticated TLS reload endpoint.
+      - alert: NorthstarTlsReloadFailure
+        expr: increase(xmpp_tls_reload_failures_total[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Northstar rejected a TLS identity reload
+          description: The previous in-memory certificate remains active; inspect certificate chain, domain, purpose, key match, and file permissions.
+      - alert: NorthstarTlsRevokedSessionDrained
+        expr: increase(xmpp_tls_revoked_sessions_drained_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: TLS reload drained an explicitly revoked EXTERNAL session
+          description: Correlate the durable TLS reload operation with structured connection, certificate fingerprint, issuer, serial and handshake-generation logs; confirm that the deployment CA revocation was intended.
+      - alert: NorthstarTlsRevocationRecheckInconclusive
+        expr: increase(xmpp_tls_revocation_recheck_inconclusive_total[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Active certificate chains were not classifiable after TLS reload
+          description: Existing streams were deliberately retained because revocation was not explicit. Inspect the CRL issuer, signature, nextUpdate, chain coverage and changed trust roots; new applicable PKIX handshakes remain fail-closed, while DANE-EE follows its separately documented RFC 7673 policy.
   - name: northstar-capacity-and-abuse
     rules:
       - alert: NorthstarSessionCapacityWarning
@@ -49,6 +337,32 @@ groups:
         annotations:
           summary: Active sessions exceed the validated design envelope
           description: Northstar has more than 900 active resources; the current single-node design target is 1000.
+      - alert: NorthstarDeploymentCapacityNearLimit
+        expr: >-
+          xmpp_capacity_accounts_used / xmpp_capacity_accounts_limit > 0.9
+          or xmpp_capacity_muc_rooms_used / xmpp_capacity_muc_rooms_limit > 0.9
+          or xmpp_capacity_live_sessions_used / xmpp_capacity_live_sessions_limit > 0.9
+          or xmpp_capacity_resumable_sessions_used / xmpp_capacity_resumable_sessions_limit > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: A deployment-wide PostgreSQL capacity ledger is near its ceiling
+          description: Inspect the four used/limit gauges, remove obsolete resources or deliberately advance DEPLOYMENT_CAPACITY_EPOCH with a measured higher limit.
+      - alert: NorthstarDeploymentCapacityRejections
+        expr: increase(xmpp_capacity_reservations_rejected_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Deployment-wide capacity rejected new work
+          description: At least one account, room, live binding or retained SM admission reached its global or per-account authority limit.
+      - alert: NorthstarDeploymentSessionLeaseLoss
+        expr: increase(xmpp_capacity_session_lease_losses_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A routable C2S session lost its PostgreSQL capacity lease
+          description: Northstar disconnected the affected route fail closed. Inspect PostgreSQL availability, worker health, clock behavior and lease/heartbeat headroom.
       - alert: NorthstarSustainedRateLimiting
         expr: rate(xmpp_rate_limited_total[10m]) > 1
         for: 10m
@@ -57,6 +371,21 @@ groups:
         annotations:
           summary: Sustained anti-abuse rate limiting
           description: More than one operation per second has been rate-limited for ten minutes.
+      - alert: NorthstarAntiAbuseBackendFailure
+        expr: increase(xmpp_anti_abuse_backend_failures_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Anti-abuse decision backend failures detected
+          description: PostgreSQL could not make a pre-acceptance abuse decision; affected operations were failed closed with retryable protocol errors.
+      - alert: NorthstarModerationQueueBacklog
+        expr: xmpp_moderation_pending_reports > 100 or xmpp_moderation_pending_appeals > 25
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Moderation queue has a sustained backlog
+          description: More than 100 reports or 25 stricter-rate-limited appeals have remained pending for thirty minutes; assign reviewers and inspect abuse traffic before the queue grows further.
       - alert: NorthstarFederationFailureBurst
         expr: increase(xmpp_federation_failures_total[10m]) >= 10
         labels:
@@ -64,3 +393,266 @@ groups:
         annotations:
           summary: Federation failures increased sharply
           description: Ten or more outbound federation workers failed in ten minutes.
+      - alert: NorthstarClusterPresenceProbeFailures
+        expr: increase(xmpp_cluster_presence_probe_failures_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Cross-node presence convergence failed
+          description: An acknowledged initial-presence replay could not be completed; inspect Redis and node listener health.
+      - alert: NorthstarS2sOutboxNearCapacity
+        expr: xmpp_s2s_outbox_pending_rows / xmpp_s2s_outbox_max_rows > 0.8 or xmpp_s2s_outbox_pending_bytes / xmpp_s2s_outbox_max_bytes > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable S2S outbox is near its configured capacity
+          description: More than 80% of the configured row or byte envelope is occupied. Inspect remote-domain failures before new admissions are rejected.
+      - alert: NorthstarS2sOutboxOldestItemDelayed
+        expr: xmpp_s2s_outbox_oldest_age_seconds > 900
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable S2S delivery has been delayed
+          description: The oldest unexpired federation or component stanza has remained queued for more than fifteen minutes.
+      - alert: NorthstarS2sOutboxRetryBurst
+        expr: increase(xmpp_s2s_outbox_retries_total[15m]) >= 100
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable S2S retry activity increased sharply
+          description: One hundred or more federation or component delivery retries were scheduled in fifteen minutes; inspect remote reachability and component health.
+      - alert: NorthstarS2sOutboxDeliveryLoss
+        expr: increase(xmpp_s2s_outbox_expired_total[10m]) + increase(xmpp_s2s_outbox_permanent_failures_total[10m]) + increase(xmpp_s2s_outbox_lease_lost_total[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Durable S2S outbox lost or ambiguously delivered a stanza
+          description: A stanza expired, was permanently dropped, or was written after its database lease was lost. Inspect the individual counters and delivery logs.
+      - alert: NorthstarS2sOutboxCapacityRejections
+        expr: increase(xmpp_s2s_outbox_capacity_rejections_total[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Durable S2S admissions were rejected at capacity
+          description: At least one federation or component admission was rejected because the durable outbox reached a configured row, byte, or per-domain limit.
+      - alert: NorthstarComponentDeliveryUnavailable
+        expr: sum by (job) (xmpp_component_outbox_pending_rows) > 0 and sum by (job) (xmpp_component_connections_active) == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: External-component traffic is queued without a connection
+          description: At least one durable component stanza is pending while no authenticated XEP-0114/XEP-0225 connection is active.
+      - alert: NorthstarComponentFailureBurst
+        expr: increase(xmpp_component_failures_total[10m]) >= 5
+        labels:
+          severity: warning
+        annotations:
+          summary: External-component failures increased sharply
+          description: Five or more component authentication, connection, or delivery failures occurred in ten minutes.
+      - alert: NorthstarInsecureHttpRequestsSustained
+        expr: rate(xmpp_http_insecure_requests_rejected_total[10m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Sustained plaintext requests are reaching protected HTTP routes
+          description: The HTTPS enforcement middleware has rejected more than one request every ten seconds for ten minutes; inspect proxy configuration and source traffic.
+      - alert: NorthstarInsecureHttpRequestBurst
+        expr: increase(xmpp_http_insecure_requests_rejected_total[5m]) >= 100
+        labels:
+          severity: warning
+        annotations:
+          summary: Plaintext HTTP rejection burst detected
+          description: One hundred or more insecure requests reached protected HTTP routes in five minutes; inspect for a proxy regression or active scanning.
+  - name: northstar-latency
+    rules:
+      - alert: NorthstarAuthenticationLatencyHigh
+        expr: >-
+          histogram_quantile(0.95, sum by (le) (rate(xmpp_authentication_duration_seconds_bucket[5m]))) > 1
+          and sum(rate(xmpp_authentication_duration_seconds_count[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Authentication p95 latency is above one second
+          description: Inspect PostgreSQL latency, password-verifier cost, worker health and CPU saturation before increasing authentication capacity.
+      - alert: NorthstarDatabaseOperationLatencyHigh
+        expr: >-
+          histogram_quantile(0.95, sum by (le) (rate(xmpp_database_operation_duration_seconds_bucket[5m]))) > 0.5
+          and sum(rate(xmpp_database_operation_duration_seconds_count[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Instrumented database-operation p95 latency is high
+          description: The service-boundary database p95 has exceeded 500 ms for ten minutes; inspect pool saturation, locks, storage I/O and slow queries.
+      - alert: NorthstarRoutingLatencyHigh
+        expr: >-
+          histogram_quantile(0.95, sum by (le) (rate(xmpp_routing_duration_seconds_bucket[5m]))) > 0.5
+          and sum(rate(xmpp_routing_duration_seconds_count[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Message-routing p95 latency is high
+          description: Routing admission has exceeded 500 ms at p95; inspect anti-abuse admission, database locks, local backpressure, Redis and federation queues.
+      - alert: NorthstarOutboxDeliveryLatencyHigh
+        expr: >-
+          histogram_quantile(0.95, sum by (le) (rate(xmpp_outbox_delivery_duration_seconds_bucket[5m]))) > 5
+          and sum(rate(xmpp_outbox_delivery_duration_seconds_count[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable-outbox delivery attempts are slow
+          description: Delivery attempts have exceeded five seconds at p95; inspect local sockets, components, federation peers, retries and lease headroom.
+      - alert: NorthstarRedisOperationLatencyHigh
+        expr: >-
+          histogram_quantile(0.95, sum by (le) (rate(xmpp_redis_operation_duration_seconds_bucket[5m]))) > 0.5
+          and sum(rate(xmpp_redis_operation_duration_seconds_count[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Redis control-plane p95 latency is high
+          description: Redis operations have exceeded 500 ms at p95; keep experimental cluster traffic inside its configured failure policy and inspect the control plane.
+      - alert: NorthstarUploadLatencyHigh
+        expr: >-
+          histogram_quantile(0.95, sum by (le) (rate(xmpp_upload_operation_duration_seconds_bucket[5m]))) > 10
+          and sum(rate(xmpp_upload_operation_duration_seconds_count[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: HTTP Upload p95 latency is high
+          description: End-to-end upload operations have exceeded ten seconds at p95; inspect client bandwidth, storage I/O, quota contention and proxy timeouts.
+      - alert: NorthstarUploadStorageIntegrityFailure
+        expr: increase(xmpp_upload_storage_integrity_failures_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: An immutable upload failed integrity verification
+          description: A promoted upload did not match its PostgreSQL-authoritative size or SHA-256 digest. Keep the node out of rotation, preserve the object and database evidence, and investigate storage corruption or namespace reuse before retrying.
+      - alert: NorthstarUploadStorageCredentialRefreshFailure
+        expr: increase(xmpp_upload_storage_credential_refresh_failures_total[15m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Shared upload-store credentials did not refresh
+          description: Existing requests may still hold the previous client, but expiring credentials can stop upload reconciliation. Check the protected credential files or ambient workload identity without placing secret values in logs.
+      - alert: NorthstarUploadStorageReconciliationFailure
+        expr: increase(xmpp_upload_storage_reconciliation_failures_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable upload reconciliation is failing
+          description: Promotion, stage deletion, object deletion, queue collection or PostgreSQL reconciliation failed. Readiness will degrade after repeated worker errors; inspect the action-specific counters and bounded queue.
+      - alert: NorthstarUploadCapacityLedgerMismatch
+        expr: >-
+          xmpp_upload_storage_capacity_ledger_mismatches > 0
+          or xmpp_upload_storage_capacity_authority_violations > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Upload capacity enforcement authority is inconsistent
+          description: The integrity scans found trigger-maintained counters that disagree with durable rows, or found changed policy, ownership, routine, ACL or trigger authority. The worker stops object I/O and readiness degrades. Keep the node out of rotation, preserve PostgreSQL and object evidence, and repair only through audited migration or offline reconciliation procedures.
+      - alert: NorthstarUploadSafetyGateClosed
+        expr: xmpp_upload_storage_safety_gate_state >= 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Upload object I/O safety gate is closed
+          description: The process cannot prove its upload namespace, capacity authority, or durable ledger. New object mutations are blocked until the exact authority is restored; preserve PostgreSQL and object-store evidence before repair.
+      - alert: NorthstarUploadStorageBacklogStalled
+        expr: >-
+          xmpp_upload_storage_oldest_pending_age_seconds > 300
+          and (xmpp_upload_storage_jobs_pending + xmpp_upload_storage_cleanup_pending) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable upload work is not draining
+          description: The oldest promotion or cleanup row has remained pending for more than five minutes. Inspect object-store reachability, PostgreSQL leases, retry errors and worker readiness before the queue reaches its configured operational budget.
+      - alert: NorthstarUploadStorageDeadLetterPresent
+        expr: xmpp_upload_storage_dead_letter_jobs > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Durable upload work reached its retry limit
+          description: At least one promotion or deletion projection is dead-lettered and readiness is degraded. Preserve the PostgreSQL row and immutable object evidence, reconcile its exact generation and fence, and never retry or delete by an unfenced object name.
+      - alert: NorthstarUploadStorageScrubFailurePresent
+        expr: xmpp_upload_storage_scrub_failures > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: A committed upload failed persistent manifest verification
+          description: Exact-version size or SHA-256 verification failed and readiness is degraded. Quarantine the node, preserve the database locator and provider version, and investigate corruption or namespace reuse before any recovery action.
+      - alert: NorthstarUploadStorageScrubOverdue
+        expr: xmpp_upload_storage_scrub_oldest_overdue_seconds > 86400
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Manifest verification is more than one day overdue
+          description: The bounded scrub worker cannot keep up with committed S3 objects. Readiness is degraded; inspect object size, provider latency and worker health, then adjust the retention or scrub capacity envelope before admitting more data.
+      - alert: NorthstarUploadStorageCleanupObligationOverdue
+        expr: xmpp_upload_storage_cleanup_oldest_overdue_seconds > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Expired upload cleanup obligations are not entering the bounded queue
+          description: At least one expired physical upload has waited more than fifteen minutes for a durable cleanup projection. Inspect the capacity ledger, queue reserve and reconciliation worker; do not bypass the hard queue bound.
+      - alert: NorthstarUploadRecoveryCapacityNearlyExhausted
+        expr: >-
+          xmpp_upload_storage_configured_pending_limit > 0
+          and
+          (xmpp_upload_storage_jobs_pending + xmpp_upload_storage_cleanup_pending + xmpp_upload_storage_cleanup_obligation_debt)
+          / xmpp_upload_storage_configured_pending_limit >= 0.9
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Upload recovery capacity including future cleanup debt is nearly exhausted
+          description: Pending projections plus reserved cleanup obligations exceed 90 percent of the immutable deployment limit. Stop ordinary upload admission and drain exact fenced cleanup work; never delete debt or raise the limit only to hide retained objects.
+      - alert: NorthstarUploadLegacyCapacityDraining
+        expr: xmpp_upload_storage_legacy_overcommit_draining > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Legacy upload cleanup obligations exceed the bound deployment policy
+          description: New upload work is blocked, but debt-to-pending conversion and exact deletion remain enabled so the historical backlog can drain monotonically. Do not raise the durable authority merely to hide this condition.
+      - alert: NorthstarMixDeliveryCapacityRejected
+        expr: increase(xmpp_mix_delivery_capacity_rejections_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable MIX delivery admission was rejected
+          description: The bounded normalized MIX outbox reached its row or byte envelope, or a non-blocking capacity fence was busy. Inspect sustained fan-out, worker health and PostgreSQL latency; do not bypass the ledger.
+      - alert: NorthstarMixDeliveryLeaseLost
+        expr: increase(xmpp_mix_delivery_lease_lost_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: A MIX delivery worker lost a fenced lease
+          description: Another worker reclaimed the row or completion exceeded its renewable lease. Delivery remains at-least-once and ordered per recipient, but repeated loss indicates PostgreSQL or transport latency outside the operating envelope.
+      - alert: NorthstarMixDeliveryDeadLetterCreated
+        expr: increase(xmpp_mix_delivery_dead_letters_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: A durable MIX projection became terminal
+          description: A recipient projection expired, reached the attempt limit, or failed a permanent authorization/template check. Preserve the bounded dead-letter evidence and use the fenced recovery surface only after correcting the cause.

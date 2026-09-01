@@ -1,0 +1,25 @@
+# Deprecated compatibility overlay. age encryption is mandatory in the base
+# production profile; the backup receives only public recipients and restore
+# receives only the private identity. This file may be removed from commands.
+services:
+  backup:
+    environment:
+      BACKUP_AGE_RECIPIENT_FILE: /run/secrets/backup_age_recipients
+      BACKUP_PLAINTEXT_STAGING_DIR: /scratch
+    tmpfs:
+      - /scratch:size=${BACKUP_PLAINTEXT_SCRATCH_SIZE:-4g},uid=10001,gid=10001,mode=0700
+    secrets:
+      - backup_age_recipients
+
+  restore:
+    environment:
+      BACKUP_AGE_IDENTITY_FILE: /run/secrets/backup_age_identity
+      RESTORE_PLAINTEXT_STAGING_DIR: /scratch
+    secrets:
+      - backup_age_identity
+
+secrets:
+  backup_age_recipients:
+    file: ${BACKUP_AGE_RECIPIENTS_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/backup_age_recipients.txt}
+  backup_age_identity:
+    file: ${BACKUP_AGE_IDENTITY_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/backup_age_identity.txt}

@@ -175,10 +175,7 @@
   right: 18px;
   bottom: 18px;
   z-index: 115;
-  display: flex;
   max-width: min(380px, calc(100vw - 36px));
-  align-items: center;
-  gap: 9px;
   padding: 11px 14px;
   border: 1px solid rgba(224, 166, 54, .42);
   border-radius: 12px;
@@ -186,6 +183,36 @@
   color: #593e08;
   box-shadow: 0 14px 40px rgba(34, 29, 14, .18);
   font: 650 12px/1.45 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.machine-translation-notice summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.machine-translation-notice summary::-webkit-details-marker {
+  display: none;
+}
+
+.machine-translation-notice summary::after {
+  content: '›';
+  margin-left: auto;
+  font-size: 18px;
+  line-height: 1;
+  transition: transform .16s ease;
+}
+
+.machine-translation-notice[open] summary::after {
+  transform: rotate(90deg);
+}
+
+.machine-translation-notice p {
+  margin: 9px 0 1px 25px;
+  max-width: 46ch;
+  font-weight: 500;
 }
 
 .machine-translation-notice.hidden {

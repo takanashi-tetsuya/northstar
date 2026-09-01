@@ -45,6 +45,29 @@ const TEMPLATE_SOURCE = Object.freeze({
   download_failed: 'File download failed (__NSVALUE1__)',
   device_label: '__NSVALUE1__ · Device __NSVALUE2__',
   bundle_incomplete: 'The OMEMO public-key bundle for device __NSVALUE1__ is incomplete',
+  join_failed: 'Could not join __NSVALUE1__: __NSVALUE2__',
+  replace_session: 'Replace the OMEMO session for __NSVALUE1__ · Device __NSVALUE2__?',
+  remove_remote_device: 'Remove __NSVALUE1__ · Device __NSVALUE2__ from the account? That browser will no longer receive new encrypted messages.',
+  device_erase_failed: 'The device was not erased: __NSVALUE1__',
+  invitation_once: 'Shown once only; copy it now: __NSVALUE1__',
+  disconnect_resource: 'Disconnect __NSVALUE1__? The client may reconnect automatically.',
+  destroy_room: 'Permanently destroy __NSVALUE1__? All occupants will be disconnected.',
+  reconcile_operation: 'Manually mark this indeterminate operation as __NSVALUE1__? Verify external evidence first.',
+  reconcile_target: 'Manually mark this indeterminate target as __NSVALUE1__? Verify external evidence first.',
+  security_tofu: 'Encrypting to __NSVALUE1__ devices; __NSVALUE2__ were accepted using TOFU and were not independently verified.',
+  security_distrusted: 'Encrypting to __NSVALUE1__ devices; __NSVALUE2__ explicitly distrusted devices were excluded.',
+  report_submitted: 'Submitted __NSVALUE1__ · __NSVALUE2__ evidence items',
+  offline_removed: 'Removed __NSVALUE1__ queued messages.',
+  pow_wait: 'Sending is too frequent. Wait __NSVALUE1__ seconds before computing again to prevent work from piling up.',
+  pow_solved: 'Proof of work completed in __NSVALUE1__ seconds.',
+  pow_tier: 'Abuse-prevention tier __NSVALUE1__ · Work __NSVALUE2__ / maximum __NSVALUE3__ · Cooldown drops one tier every __NSVALUE4__ seconds',
+  pow_working_rate: 'Computing proof of work… __NSVALUE1__ hashes · __NSVALUE2__/second',
+  pow_working: 'Computing proof of work… __NSVALUE1__ hashes',
+  plaintext_reason: 'The peer requested plaintext (__NSVALUE1__). Northstar blocked the downgrade.',
+  transfer_export_failed: 'Transfer export failed: __NSVALUE1__',
+  transfer_export_uncertain: 'The transfer export outcome is uncertain and the source device remains frozen: __NSVALUE1__',
+  transfer_cancel_failed: 'Transfer cancellation failed: __NSVALUE1__',
+  transfer_import_failed: 'Transfer import failed: __NSVALUE1__',
 });
 const TEMPLATE_OVERRIDES = Object.freeze({
   bg: {
@@ -56,8 +79,29 @@ const TEMPLATE_OVERRIDES = Object.freeze({
     receiving_devices: 'Βρέθηκαν __NSVALUE1__ συσκευές λήψης· ο διακομιστής μπορεί να αποθηκεύσει μόνο κρυπτογραφημένο κείμενο.',
     file_key_devices_failed: '__NSVALUE1__ συσκευές δεν έλαβαν το κλειδί αρχείου',
   },
+  ga: {
+    replace_session: 'Ionadaigh an seisiún OMEMO do __NSVALUE1__ · Gléas __NSVALUE2__?',
+  },
+  ka: {
+    history_failed: 'ისტორიის წაკითხვა ვერ მოხერხდა: __NSVALUE1__',
+  },
+  ku: {
+    security_tofu: 'Ji bo __NSVALUE1__ cîhazan tê şîfrekirin; __NSVALUE2__ bi TOFU hatin pejirandin û bi serbixwe nehatin piştrastkirin.',
+    security_distrusted: 'Ji bo __NSVALUE1__ cîhazan tê şîfrekirin; __NSVALUE2__ cîhazên ku bi eşkere nehatine pêbawerkirin hatin derxistin.',
+    pow_wait: 'Şandin pir zêde ye. Ji bo ku kar li hev nekomin, berî hesabkirina dî __NSVALUE1__ çirkeyan bisekine.',
+    pow_solved: 'Delîla karê di __NSVALUE1__ çirkeyan de qediya.',
+  },
+  la: {
+    pow_working_rate: 'Probatio operis computatur… __NSVALUE1__ digestiones · __NSVALUE2__ per secundum',
+  },
+  ps: {
+    pow_tier: 'د ناوړه ګټې مخنیوي کچه __NSVALUE1__ · کار __NSVALUE2__ / اعظمي __NSVALUE3__ · د سړېدو کچه په هر __NSVALUE4__ ثانیو کې یو پړاو راټیټېږي',
+  },
   ur: { connected_to: '__NSVALUE1__ سے منسلک' },
-  yo: { group_topic: 'Àkòrí ẹgbẹ́: __NSVALUE1__' },
+  yo: {
+    group_topic: 'Àkòrí ẹgbẹ́: __NSVALUE1__',
+    disconnect_resource: 'Ge asopọ __NSVALUE1__? Oníbàárà lè tún sopọ̀ laifọwọyi.',
+  },
 });
 const TRANSLATION_OVERRIDES = Object.freeze({
   el: {
@@ -67,6 +111,11 @@ const TRANSLATION_OVERRIDES = Object.freeze({
     '图片像素尺寸过大，无法安全处理': 'Girman piksel na hoton ya yi yawa don a sarrafa shi cikin aminci',
   },
   yo: {
+    '从我的账户移除此设备': 'Yọ ẹ̀rọ yìí kúrò nínú àkọọlẹ̀ mi',
+    '从账户移除此浏览器设备并永久删除其本地 OMEMO 密钥？加密历史记录无法恢复这些棘轮密钥。': 'Yọ ẹ̀rọ aṣàwákiri yìí kúrò nínú àkọọlẹ̀ kí o sì pa àwọn bọ́tìnì OMEMO agbègbè rẹ̀ rẹ́ títí láé? Ìtàn ìfiránṣẹ́ tí a parọ́ kò lè mú àwọn bọ́tìnì ratchet wọ̀nyí padà.',
+    '正在加载操作证据…': 'Ń ṣàkójọ ẹ̀rí iṣẹ́…',
+    '请输入不含秘密的证据说明，解释结果如何得到验证：': 'Tẹ àlàyé ẹ̀rí tí kò ní àṣírí, kí o sì ṣàlàyé bí a ṣe jẹ́rìí sí àbájáde náà:',
+    '删除所有排队的离线消息？此操作无法撤销。': 'Pa gbogbo àwọn ìfiránṣẹ́ aìlórí ayélujára tí ó wà ní ìdúró? A kò lè dá ìṣe yìí padà.',
     '独立页面提供注册、联系人、在线状态、历史消息、送达状态以及 OMEMO 设备指纹管理。默认优先使用端到端加密。': 'Ojú-ìwé ọ̀tọ̀ yìí n pèsè ìforúkọsílẹ̀, àwọn olùbásọ̀rọ̀, ipò lórí ayélujára, ìtàn ìfiránṣẹ́, ipò jíṣẹ́ àti ìṣàkóso ìka ọwọ́ ẹrọ OMEMO. A máa ń yan ìfipamọ́ láti ìbẹ̀rẹ̀ dé òpin ní àkọ́kọ́.',
     '查看举报处理结果，并在已处理的举报上提交一次申诉。申诉采用更严格的账号限流和工作量证明。': 'Wo àbájáde ìṣètò ẹ̀sùn, kí o sì fi ẹ̀bẹ̀ kan sílẹ̀ fún ẹ̀sùn tí a ti yanjú. Àwọn ẹ̀bẹ̀ ní ìdíwọ̀n oṣùwọ̀n àkọọlẹ̀ àti ẹ̀rí iṣẹ́ tó muna ju.',
     '请选择 1–20 条聊天记录作为证据。所选消息的明文会在你明确提交后发送给管理人员，即使原消息使用了 OMEMO；未选中的消息不会提交。': 'Yan ìgbasilẹ ìjíròrò 1–20 gẹ́gẹ́ bí ẹ̀rí. Nígbà tí o bá fi ránṣẹ́ ní kedere, ọ̀rọ̀ gbangba nínú àwọn ìfiránṣẹ́ tí o yàn ni a ó fi ranṣẹ́ sí àwọn alábòójútó, bí ó tilẹ̀ jẹ́ pé OMEMO ni a lò; àwọn tí o kò yàn kì yóò lọ.',
@@ -228,7 +277,9 @@ async function translateLanguage(language, entries, progress) {
     process.stdout.write(`updated ${language} (+${missingEntries.length}, ${Object.keys(pack).length} strings)\n`);
   }
 
-  if (progress.templates[language]) return;
+  if (progress.templates[language]
+    && Object.keys(TEMPLATE_SOURCE).every((key) => progress.templates[language][key]?.trim())
+    && !progress.degradedTemplates[language]?.length) return;
 
   const templateEntries = Object.entries(TEMPLATE_SOURCE)
     .map(([key, english]) => ({ key: `__template__${key}`, english }));
@@ -237,38 +288,41 @@ async function translateLanguage(language, entries, progress) {
   for (const key of Object.keys(TEMPLATE_SOURCE)) {
     const entry = { key: `__template__${key}`, english: TEMPLATE_SOURCE[key] };
     let value = TEMPLATE_OVERRIDES[language]?.[key] || translated.get(entry.key);
-    const placeholdersPreserved = () => value?.includes('__NSVALUE1__')
-      && (key !== 'device_label' || value.includes('__NSVALUE2__'));
+    const placeholders = [...entry.english.matchAll(/__NSVALUE(\d+)__/g)]
+      .map((match) => match[0]);
+    const sentinels = ['987654321', '123456789', '246813579', '975318642'];
+    const placeholderSignature = (text) => [...String(text || '').matchAll(/__NSVALUE\d+__/g)]
+      .map((match) => match[0])
+      .sort()
+      .join('|');
+    const expectedPlaceholderSignature = placeholderSignature(entry.english);
+    const placeholdersPreserved = () => placeholderSignature(value) === expectedPlaceholderSignature;
     if (!placeholdersPreserved()) {
       const sentinelEntry = {
         ...entry,
-        english: entry.english.replaceAll('__NSVALUE1__', '987654321').replaceAll('__NSVALUE2__', '123456789'),
+        english: placeholders.reduce((text, placeholder, index) =>
+          text.replaceAll(placeholder, sentinels[index]), entry.english),
       };
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         const retry = await translateBatch(language, [sentinelEntry], `retry-${key}-${attempt}`);
         const candidate = retry.get(entry.key);
-        if (candidate?.includes('987654321') && (key !== 'device_label' || candidate.includes('123456789'))) {
-          value = candidate.replaceAll('987654321', '__NSVALUE1__').replaceAll('123456789', '__NSVALUE2__');
+        if (placeholders.every((_, index) => candidate?.split(sentinels[index]).length - 1 === 1)
+          && sentinels.filter((sentinel) => candidate?.includes(sentinel)).length === placeholders.length) {
+          value = placeholders.reduce((text, placeholder, index) =>
+            text.replaceAll(sentinels[index], placeholder), candidate);
           break;
         }
       }
     }
     if (!placeholdersPreserved()) {
-      const translatedPhrase = (value || TEMPLATE_SOURCE[key])
-        .replaceAll('987654321', '').replaceAll('123456789', '').trim();
-      if (key === 'device_label') {
-        value = `__NSVALUE1__ · ${translatedPhrase} __NSVALUE2__`;
-      } else if (TEMPLATE_SOURCE[key].startsWith('__NSVALUE1__')) {
-        value = `__NSVALUE1__ ${translatedPhrase}`;
-      } else if (TEMPLATE_SOURCE[key].endsWith('__NSVALUE1__')) {
-        value = `${translatedPhrase} __NSVALUE1__`;
-      } else {
-        value = `__NSVALUE1__ ${translatedPhrase}`;
-      }
+      // Fail closed to the stable English source rather than emitting a
+      // translation with reordered or missing runtime values.
+      value = TEMPLATE_SOURCE[key];
       progress.degradedTemplates[language] ||= [];
       if (!progress.degradedTemplates[language].includes(key)) progress.degradedTemplates[language].push(key);
     }
-    templates[key] = value.replaceAll('__NSVALUE1__', '$1').replaceAll('__NSVALUE2__', '$2');
+    templates[key] = placeholders.reduce((text, placeholder, index) =>
+      text.replaceAll(placeholder, `$${index + 1}`), value);
   }
   progress.translations[language] = pack;
   progress.templates[language] = templates;
@@ -302,7 +356,10 @@ await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, ()
 for (const [language, overrides] of Object.entries(TEMPLATE_OVERRIDES)) {
   if (!progress.templates[language]) continue;
   for (const [key, value] of Object.entries(overrides)) {
-    progress.templates[language][key] = value.replaceAll('__NSVALUE1__', '$1').replaceAll('__NSVALUE2__', '$2');
+    progress.templates[language][key] = [1, 2, 3, 4].reduce(
+      (rendered, position) => rendered.replaceAll(`__NSVALUE${position}__`, `$${position}`),
+      value,
+    );
     if (progress.degradedTemplates[language]) {
       progress.degradedTemplates[language] = progress.degradedTemplates[language].filter((id) => id !== key);
       if (!progress.degradedTemplates[language].length) delete progress.degradedTemplates[language];

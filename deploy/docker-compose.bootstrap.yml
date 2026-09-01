@@ -8,4 +8,4 @@ services:
 
 secrets:
   bootstrap_admin_password:
-    file: ${BOOTSTRAP_ADMIN_PASSWORD_SECRET_FILE:-./deploy/secrets/bootstrap_admin_password}
+    file: ${BOOTSTRAP_ADMIN_PASSWORD_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/bootstrap_admin_password}

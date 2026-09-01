@@ -1,0 +1,30 @@
+# Manual, loopback-only S3 compatibility fixture. It is intentionally not
+# merged into the production Compose file and is never started by CI's static
+# checks. The default is an upstream release pinned by digest so a tag cannot
+# silently change; operators may override it with an equivalently pinned
+# internal mirror.
+services:
+  minio-upload-test:
+    image: ${MINIO_TEST_IMAGE:-quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e}
+    profiles: ["storage-test"]
+    command: ["server", "/data", "--address", ":9000"]
+    environment:
+      MINIO_ROOT_USER_FILE: /run/secrets/minio_test_access_key
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_test_secret_key
+    ports:
+      - "127.0.0.1:${MINIO_TEST_PORT:-19000}:9000"
+    secrets:
+      - minio_test_access_key
+      - minio_test_secret_key
+    tmpfs:
+      - /data:size=512m,mode=0700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+secrets:
+  minio_test_access_key:
+    file: ${MINIO_TEST_ACCESS_KEY_FILE:?set a temporary owner-only access-key file}
+  minio_test_secret_key:
+    file: ${MINIO_TEST_SECRET_KEY_FILE:?set a temporary owner-only secret-key file}

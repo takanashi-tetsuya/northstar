@@ -1,50 +1,264 @@
+x-bounded-logging: &bounded-logging
+  driver: local
+  options:
+    max-size: "${DOCKER_LOG_MAX_SIZE:-10m}"
+    max-file: "${DOCKER_LOG_MAX_FILES:-5}"
+
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     environment:
       POSTGRES_DB: xmpp
-      POSTGRES_USER: xmpp
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      # The image bootstrap identity is deliberately not an application
+      # identity.  The init script creates separate owner, runtime and backup
+      # roles from file-backed passwords on a fresh volume.
+      POSTGRES_USER: northstar_bootstrap
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_bootstrap_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=scram-sha-256
+      NORTHSTAR_MIGRATOR_PASSWORD_FILE: /run/secrets/northstar_migrator_password
+      NORTHSTAR_RUNTIME_PASSWORD_FILE: /run/secrets/northstar_runtime_password
+      NORTHSTAR_COMMAND_PASSWORD_FILE: /run/secrets/northstar_command_password
+      NORTHSTAR_BACKUP_PASSWORD_FILE: /run/secrets/northstar_backup_password
     secrets:
-      - postgres_password
+      - postgres_bootstrap_password
+      - northstar_migrator_password
+      - northstar_runtime_password
+      - northstar_command_password
+      - northstar_backup_password
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./deploy/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U xmpp -d xmpp"]
+      test: ["CMD-SHELL", "pg_isready -U northstar_bootstrap -d xmpp"]
       interval: 5s
       timeout: 3s
       retries: 20
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    logging: *bounded-logging
+    networks:
+      - backend
+
+  # Schema ownership is a short-lived capability.  This job sees only the
+  # migrator URL, runs to completion, and exits before the long-lived service
+  # can start.
+  migrate:
+    build:
+      context: .
+      args:
+        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-1.1.0}
+        VCS_REF: ${NORTHSTAR_VCS_REF:-unknown}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    user: "10001:10001"
+    init: true
+    environment:
+      NORTHSTAR_DISABLE_DOTENV: "true"
+      XMPP_DOMAIN: ${XMPP_DOMAIN:-localhost}
+      MIGRATOR_DATABASE_URL_FILE: /run/secrets/migrator_database_url
+    # Bypass the normal server entrypoint: this job has a read-only root
+    # filesystem and deliberately mounts neither upload nor log storage.
+    entrypoint: ["/usr/local/bin/xmpp-server"]
+    command: ["migrate"]
+    secrets:
+      - migrator_database_url
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    logging: *bounded-logging
+    networks:
+      - backend
+
+  # Refresh current-object ACLs after every migration with the same owner URL,
+  # but without exposing PostgreSQL's bootstrap superuser. The image digest is
+  # coupled to the migration tree so an old completed job cannot be reused
+  # after a release adds objects.
+  database-grants:
+    build:
+      context: .
+      dockerfile: deploy/database-grants.Dockerfile
+      args:
+        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-1.1.0}
+        VCS_REF: ${NORTHSTAR_VCS_REF:-unknown}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    user: "10001:10001"
+    init: true
+    environment:
+      MIGRATOR_DATABASE_URL_FILE: /run/secrets/migrator_database_url
+    secrets:
+      - migrator_database_url
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    logging: *bounded-logging
     networks:
       - backend
 
   xmpp:
-    build: .
+    build:
+      context: .
+      args:
+        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-1.1.0}
+        VCS_REF: ${NORTHSTAR_VCS_REF:-unknown}
     depends_on:
-      postgres:
-        condition: service_healthy
+      database-grants:
+        condition: service_completed_successfully
+    user: "10001:10001"
+    init: true
     environment:
       XMPP_DOMAIN: ${XMPP_DOMAIN:-localhost}
-      DATABASE_URL_FILE: /run/secrets/database_url
+      SERVER_NAME: ${SERVER_NAME:-Northstar}
+      ADMIN_ADDRESSES: ${ADMIN_ADDRESSES:-}
+      ABUSE_ADDRESSES: ${ABUSE_ADDRESSES:-}
+      SUPPORT_ADDRESSES: ${SUPPORT_ADDRESSES:-}
+      FEEDBACK_ADDRESSES: ${FEEDBACK_ADDRESSES:-}
+      SALES_ADDRESSES: ${SALES_ADDRESSES:-}
+      SECURITY_ADDRESSES: ${SECURITY_ADDRESSES:-}
+      DATABASE_URL_FILE: /run/secrets/runtime_database_url
+      ADMIN_COMMAND_DATABASE_URL_FILE: /run/secrets/command_database_url
       DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-32}
       DATABASE_MIN_CONNECTIONS: ${DATABASE_MIN_CONNECTIONS:-2}
       SCRAM_ITERATIONS: ${SCRAM_ITERATIONS:-600000}
+      SCRAM_SHA1_ENABLED: ${SCRAM_SHA1_ENABLED:-false}
+      FAST_TOKEN_SECRET_FILE: /run/secrets/fast_token_secret
+      DUMMY_SCRAM_SECRET_FILE: /run/secrets/dummy_scram_secret
+      ABUSE_STATE_HMAC_KEY_FILE: /run/secrets/abuse_state_hmac_key
+      ABUSE_STATE_HMAC_KEY_EPOCH: ${ABUSE_STATE_HMAC_KEY_EPOCH:-1}
+      ABUSE_STATE_HMAC_RETIRE_PREVIOUS: ${ABUSE_STATE_HMAC_RETIRE_PREVIOUS:-false}
+      API_CONTROL_SECRET_FILE: /run/secrets/api_control_secret
+      METRICS_BIND: 0.0.0.0:9091
+      METRICS_BEARER_TOKEN_FILE: /run/secrets/metrics_bearer_token
+      FAST_TOKEN_TTL_DAYS: ${FAST_TOKEN_TTL_DAYS:-30}
+      FAST_TOKEN_ROTATION_DAYS: ${FAST_TOKEN_ROTATION_DAYS:-7}
+      FAST_STRONG_REAUTH_MAX_DAYS: ${FAST_STRONG_REAUTH_MAX_DAYS:-90}
       XMPP_BIND: 0.0.0.0:5222
+      XMPPS_BIND: 0.0.0.0:5223
       S2S_BIND: 0.0.0.0:5269
+      S2S_TLS_BIND: 0.0.0.0:5270
       HTTP_BIND: 0.0.0.0:8080
+      WEBSOCKET_ALLOWED_ORIGINS: ${WEBSOCKET_ALLOWED_ORIGINS:-}
+      XEP_0487_IPS: ${XEP_0487_IPS:-}
+      XEP_0487_TTL_SECONDS: ${XEP_0487_TTL_SECONDS:-300}
+      XEP_0487_PRIORITY: ${XEP_0487_PRIORITY:-10}
+      XEP_0487_WEIGHT: ${XEP_0487_WEIGHT:-50}
+      BOSH_ENABLED: ${BOSH_ENABLED:-false}
+      BOSH_MAX_SESSIONS: ${BOSH_MAX_SESSIONS:-2048}
+      BOSH_MAX_CONCURRENT_BODY_READS: ${BOSH_MAX_CONCURRENT_BODY_READS:-128}
+      BOSH_BODY_READ_TIMEOUT_SECONDS: ${BOSH_BODY_READ_TIMEOUT_SECONDS:-15}
+      BOSH_MAX_WAIT_SECONDS: ${BOSH_MAX_WAIT_SECONDS:-60}
+      BOSH_INACTIVITY_SECONDS: ${BOSH_INACTIVITY_SECONDS:-30}
+      BOSH_POLLING_SECONDS: ${BOSH_POLLING_SECONDS:-5}
+      BOSH_MAX_PAUSE_SECONDS: ${BOSH_MAX_PAUSE_SECONDS:-120}
+      BOSH_MAX_REQUEST_BYTES: ${BOSH_MAX_REQUEST_BYTES:-1048576}
+      BOSH_MAX_RESPONSE_BYTES: ${BOSH_MAX_RESPONSE_BYTES:-1048576}
+      BOSH_MAX_STANZAS_PER_REQUEST: ${BOSH_MAX_STANZAS_PER_REQUEST:-64}
+      BOSH_MAX_OUTPUT_STANZAS: ${BOSH_MAX_OUTPUT_STANZAS:-128}
+      BOSH_MAX_OUTPUT_BYTES: ${BOSH_MAX_OUTPUT_BYTES:-4194304}
       TRUSTED_PROXY_IPS: ${CADDY_PROXY_IP:-172.31.240.2}
       PUBLIC_URL: https://${XMPP_DOMAIN:-localhost}
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
       SM_RESUME_TIMEOUT_SECONDS: ${SM_RESUME_TIMEOUT_SECONDS:-300}
+      SM_LIVE_LEASE_SECONDS: ${SM_LIVE_LEASE_SECONDS:-120}
+      SM_CLAIM_LEASE_SECONDS: ${SM_CLAIM_LEASE_SECONDS:-30}
+      SM_MAX_UNACKED_STANZAS: ${SM_MAX_UNACKED_STANZAS:-512}
+      SM_MAX_UNACKED_BYTES: ${SM_MAX_UNACKED_BYTES:-4194304}
+      SM_MAX_SNAPSHOT_BYTES: ${SM_MAX_SNAPSHOT_BYTES:-4194304}
+      SM_MEMORY_BUDGET_BYTES: ${SM_MEMORY_BUDGET_BYTES:-1073741824}
+      SM_RECOVERY_MAX_BYTES: ${SM_RECOVERY_MAX_BYTES:-268435456}
+      SM_RECOVERY_MAX_JOBS: ${SM_RECOVERY_MAX_JOBS:-1024}
+      SM_MAX_RESUMABLE_SESSIONS: ${SM_MAX_RESUMABLE_SESSIONS:-4096}
+      SM_IP_BINDING: ${SM_IP_BINDING:-subnet}
+      SM_REQUIRE_SAME_DEVICE: ${SM_REQUIRE_SAME_DEVICE:-true}
       OFFLINE_MESSAGE_TTL_DAYS: ${OFFLINE_MESSAGE_TTL_DAYS:-30}
+      MAM_RETENTION_DAYS: ${MAM_RETENTION_DAYS:-365}
+      MUC_MAM_RETENTION_DAYS: ${MUC_MAM_RETENTION_DAYS:-365}
+      MODERATION_RETENTION_DAYS: ${MODERATION_RETENTION_DAYS:-365}
+      RETENTION_CLEANUP_BATCH_SIZE: ${RETENTION_CLEANUP_BATCH_SIZE:-1000}
+      RETENTION_CLEANUP_INTERVAL_SECONDS: ${RETENTION_CLEANUP_INTERVAL_SECONDS:-60}
+      OFFLINE_MAX_MESSAGES_PER_ACCOUNT: ${OFFLINE_MAX_MESSAGES_PER_ACCOUNT:-1000}
+      OFFLINE_MAX_BYTES_PER_ACCOUNT: ${OFFLINE_MAX_BYTES_PER_ACCOUNT:-104857600}
+      MAX_CLIENT_CONNECTIONS: ${MAX_CLIENT_CONNECTIONS:-4096}
+      MAX_CONNECTIONS_PER_IP: ${MAX_CONNECTIONS_PER_IP:-512}
+      MAX_SESSIONS_PER_ACCOUNT: ${MAX_SESSIONS_PER_ACCOUNT:-64}
+      UNAUTHENTICATED_TIMEOUT_SECONDS: ${UNAUTHENTICATED_TIMEOUT_SECONDS:-30}
+      RESOURCE_BIND_TIMEOUT_SECONDS: ${RESOURCE_BIND_TIMEOUT_SECONDS:-30}
+      MAX_S2S_CONNECTIONS: ${MAX_S2S_CONNECTIONS:-512}
+      S2S_OUTBOX_TTL_SECONDS: ${S2S_OUTBOX_TTL_SECONDS:-604800}
+      S2S_OUTBOX_MAX_ROWS: ${S2S_OUTBOX_MAX_ROWS:-100000}
+      S2S_OUTBOX_MAX_BYTES: ${S2S_OUTBOX_MAX_BYTES:-1073741824}
+      S2S_OUTBOX_MAX_PER_DOMAIN: ${S2S_OUTBOX_MAX_PER_DOMAIN:-10000}
+      S2S_OUTBOX_RETRY_BASE_SECONDS: ${S2S_OUTBOX_RETRY_BASE_SECONDS:-5}
+      S2S_OUTBOX_RETRY_MAX_SECONDS: ${S2S_OUTBOX_RETRY_MAX_SECONDS:-3600}
+      S2S_OUTBOX_MAX_ATTEMPTS: ${S2S_OUTBOX_MAX_ATTEMPTS:-200}
+      S2S_OUTBOX_CLAIM_BATCH: ${S2S_OUTBOX_CLAIM_BATCH:-128}
+      S2S_OUTBOX_LEASE_SECONDS: ${S2S_OUTBOX_LEASE_SECONDS:-120}
+      PUBSUB_MAX_NODES_PER_OWNER: ${PUBSUB_MAX_NODES_PER_OWNER:-100}
+      PUBSUB_MAX_STORAGE_BYTES_PER_OWNER: ${PUBSUB_MAX_STORAGE_BYTES_PER_OWNER:-104857600}
+      PEP_MAX_NODES_PER_ACCOUNT: ${PEP_MAX_NODES_PER_ACCOUNT:-100}
+      PEP_MAX_STORAGE_BYTES_PER_ACCOUNT: ${PEP_MAX_STORAGE_BYTES_PER_ACCOUNT:-104857600}
+      MIX_MUC_MIRROR_ENABLED: ${MIX_MUC_MIRROR_ENABLED:-false}
+      UPLOAD_STORAGE_BACKEND: ${UPLOAD_STORAGE_BACKEND:-local}
       UPLOAD_DIR: /data/uploads
+      UPLOAD_S3_ENDPOINT: ${UPLOAD_S3_ENDPOINT:-}
+      UPLOAD_S3_REGION: ${UPLOAD_S3_REGION:-us-east-1}
+      UPLOAD_S3_BUCKET: ${UPLOAD_S3_BUCKET:-}
+      UPLOAD_S3_PREFIX: ${UPLOAD_S3_PREFIX:-northstar/uploads}
+      UPLOAD_S3_PATH_STYLE: ${UPLOAD_S3_PATH_STYLE:-false}
+      UPLOAD_S3_ALLOW_HTTP: ${UPLOAD_S3_ALLOW_HTTP:-false}
+      UPLOAD_S3_CREDENTIAL_MODE: ${UPLOAD_S3_CREDENTIAL_MODE:-ambient}
+      UPLOAD_S3_CREDENTIAL_BUNDLE_FILE: ${UPLOAD_S3_CREDENTIAL_BUNDLE_FILE:-}
+      UPLOAD_S3_ACCESS_KEY_ID_FILE: ${UPLOAD_S3_ACCESS_KEY_ID_FILE:-}
+      UPLOAD_S3_SECRET_ACCESS_KEY_FILE: ${UPLOAD_S3_SECRET_ACCESS_KEY_FILE:-}
+      UPLOAD_S3_SESSION_TOKEN_FILE: ${UPLOAD_S3_SESSION_TOKEN_FILE:-}
+      UPLOAD_S3_SSE_KMS_KEY_ID_FILE: ${UPLOAD_S3_SSE_KMS_KEY_ID_FILE:-}
       UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-26214400}
+      UPLOAD_MAX_FILES_PER_USER: ${UPLOAD_MAX_FILES_PER_USER:-1000}
+      UPLOAD_MAX_BYTES_PER_USER: ${UPLOAD_MAX_BYTES_PER_USER:-1073741824}
+      UPLOAD_DOWNLOAD_MAX_CONCURRENT: ${UPLOAD_DOWNLOAD_MAX_CONCURRENT:-64}
+      UPLOAD_DOWNLOAD_MAX_PER_IP: ${UPLOAD_DOWNLOAD_MAX_PER_IP:-8}
+      UPLOAD_DOWNLOAD_READ_TIMEOUT_SECONDS: ${UPLOAD_DOWNLOAD_READ_TIMEOUT_SECONDS:-30}
+      UPLOAD_DOWNLOAD_MAX_SECONDS: ${UPLOAD_DOWNLOAD_MAX_SECONDS:-600}
+      UPLOAD_STORAGE_MAX_PENDING_JOBS: ${UPLOAD_STORAGE_MAX_PENDING_JOBS:-100000}
+      UPLOAD_STORAGE_MAX_RETAINED_FILES: ${UPLOAD_STORAGE_MAX_RETAINED_FILES:-1000000}
+      UPLOAD_STORAGE_MAX_RETAINED_BYTES: ${UPLOAD_STORAGE_MAX_RETAINED_BYTES:-1099511627776}
+      UPLOAD_RETENTION_SECONDS: ${UPLOAD_RETENTION_SECONDS:-2592000}
       FEDERATION_ENABLED: ${FEDERATION_ENABLED:-true}
+      S2S_SASL_EXTERNAL_ENABLED: ${S2S_SASL_EXTERNAL_ENABLED:-true}
+      DIALBACK_ENABLED: ${DIALBACK_ENABLED:-true}
+      DIALBACK_SECRET_FILE: /run/secrets/dialback_secret
       FEDERATION_ALLOWLIST: ${FEDERATION_ALLOWLIST:-}
       FEDERATION_DENYLIST: ${FEDERATION_DENYLIST:-}
       FEDERATION_ALLOW_PRIVATE_IPS: ${FEDERATION_ALLOW_PRIVATE_IPS:-false}
       FEDERATION_DNS_OVERRIDES: ${FEDERATION_DNS_OVERRIDES:-}
       FEDERATION_EXTRA_ROOT_CERT_PATH: ${FEDERATION_EXTRA_ROOT_CERT_PATH:-}
+      FEDERATION_CRL_PATH: ${FEDERATION_CRL_PATH:-}
+      FEDERATION_DANE_MODE: ${FEDERATION_DANE_MODE:-off}
+      C2S_CLIENT_TRUST_ROOT_CERT_PATH: ${C2S_CLIENT_TRUST_ROOT_CERT_PATH:-}
+      C2S_CLIENT_CRL_PATH: ${C2S_CLIENT_CRL_PATH:-}
+      # Null values are inherited only when the operator explicitly sets them;
+      # unlike an empty string, absence keeps these Option<String> fields unset.
+      STUN_SERVER:
+      TURN_SERVER:
+      TURN_SHARED_SECRET_FILE: ${TURN_SHARED_SECRET_FILE:-}
+      TURN_CREDENTIALS_TTL_SECONDS: ${TURN_CREDENTIALS_TTL_SECONDS:-3600}
+      TURN_CREDENTIAL_REQUESTS_PER_MINUTE: ${TURN_CREDENTIAL_REQUESTS_PER_MINUTE:-12}
       TLS_CERT_PATH: /run/secrets/northstar/server.crt
       TLS_KEY_PATH: /run/secrets/northstar/server.key
       OPEN_REGISTRATION: ${OPEN_REGISTRATION:-true}
@@ -53,6 +267,9 @@ services:
       REGISTRATION_RATE_PER_HOUR: ${REGISTRATION_RATE_PER_HOUR:-20}
       POW_BASE_WORK_FACTOR: ${POW_BASE_WORK_FACTOR:-1024}
       POW_MAX_WORK_FACTOR: ${POW_MAX_WORK_FACTOR:-524288}
+      ABUSE_MESSAGE_FREE_BURST: ${ABUSE_MESSAGE_FREE_BURST:-60}
+      POW_MAX_DEVICE_SECONDS: ${POW_MAX_DEVICE_SECONDS:-8}
+      POW_V1_COMPATIBILITY_UNTIL: ${POW_V1_COMPATIBILITY_UNTIL:-}
       ABUSE_WINDOW_SECONDS: ${ABUSE_WINDOW_SECONDS:-60}
       ABUSE_COOLDOWN_SECONDS: ${ABUSE_COOLDOWN_SECONDS:-60}
       ABUSE_MAX_WAIT_SECONDS: ${ABUSE_MAX_WAIT_SECONDS:-900}
@@ -61,9 +278,14 @@ services:
       LOG_FORMAT: ${LOG_FORMAT:-json}
       LOG_RETENTION_FILES: ${LOG_RETENTION_FILES:-30}
       RUST_LOG: ${RUST_LOG:-rust_xmpp_server=info,tower_http=info}
+      ENABLE_DESTRUCTIVE_ADMIN: ${ENABLE_DESTRUCTIVE_ADMIN:-false}
+      ENABLE_XMPP_SERVICE_CONTROL: ${ENABLE_XMPP_SERVICE_CONTROL:-false}
+      ADMIN_IDLE_SECONDS: ${ADMIN_IDLE_SECONDS:-900}
     ports:
       - "5222:5222"
+      - "5223:5223"
       - "5269:5269"
+      - "5270:5270"
       - "127.0.0.1:8080:8080"
     volumes:
       - type: bind
@@ -74,11 +296,26 @@ services:
         source: ${TLS_KEY_HOST_PATH:-./certs/server.key}
         target: /run/secrets/northstar/server.key
         read_only: true
+      # Optional public trust roots and CRLs use the same relative
+      # certs/trust/... paths in native and Compose deployments. The rest of
+      # certs/ (including development private keys) is never mounted here.
+      - type: bind
+        source: ./certs/trust
+        target: /app/certs/trust
+        read_only: true
       - upload-data:/data/uploads
       - log-data:/data/logs
     secrets:
-      - database_url
+      - runtime_database_url
+      - command_database_url
+      - dialback_secret
+      - fast_token_secret
+      - dummy_scram_secret
+      - abuse_state_hmac_key
+      - api_control_secret
+      - metrics_bearer_token
     restart: unless-stopped
+    stop_grace_period: 15s
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
@@ -86,15 +323,18 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    pids_limit: 1024
+    logging: *bounded-logging
     networks:
       frontend:
         ipv4_address: ${XMPP_HTTP_IP:-172.31.240.3}
       backend:
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
     depends_on:
-      - xmpp
+      xmpp:
+        condition: service_healthy
     environment:
       XMPP_DOMAIN: ${XMPP_DOMAIN:-localhost}
     ports:
@@ -105,12 +345,23 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    pids_limit: 256
+    logging: *bounded-logging
     networks:
       frontend:
         ipv4_address: ${CADDY_PROXY_IP:-172.31.240.2}
 
   prometheus:
-    image: prom/prometheus:v3.12.0
+    image: prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac
     profiles: ["monitoring"]
     depends_on:
       - xmpp
@@ -124,6 +375,8 @@ services:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
+    secrets:
+      - prometheus_metrics_bearer_token
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -132,14 +385,18 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    pids_limit: 256
+    logging: *bounded-logging
     networks:
       - backend
 
   grafana:
-    image: grafana/grafana:13.1.0
+    image: grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63
     profiles: ["monitoring"]
     depends_on:
       - prometheus
+    user: "472:0"
+    init: true
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
@@ -154,10 +411,16 @@ services:
     secrets:
       - grafana_admin_password
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/log/grafana:size=16m,uid=472,gid=0,mode=0750
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    pids_limit: 512
+    logging: *bounded-logging
     networks:
       - backend
 
@@ -165,13 +428,22 @@ services:
     build:
       context: .
       dockerfile: deploy/backup.Dockerfile
+      args:
+        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-1.1.0}
+        VCS_REF: ${NORTHSTAR_VCS_REF:-unknown}
     profiles: ["backup"]
+    environment:
+      BACKUP_SECURITY_POLICY: production
+      BACKUP_SIGNING_KEY_FILE: /run/secrets/backup_signing_key
+      BACKUP_AGE_RECIPIENT_FILE: /run/secrets/backup_age_recipients
+      BACKUP_SEQUENCE_STATE_FILE: /state/backup-sequence
+      BACKUP_PLAINTEXT_STAGING_DIR: /scratch
     depends_on:
       postgres:
         condition: service_healthy
     command:
       - --database-url-file
-      - /run/secrets/database_url
+      - /run/secrets/backup_database_url
       - --upload-dir
       - /uploads
       - --output
@@ -179,16 +451,22 @@ services:
     volumes:
       - ./backups:/backups
       - upload-data:/uploads:ro
+      - backup-sequence-state:/state
     secrets:
-      - database_url
+      - backup_database_url
+      - backup_signing_key
+      - backup_age_recipients
     restart: "no"
     read_only: true
     tmpfs:
       - /tmp:size=32m,mode=1777
+      - /scratch:size=${BACKUP_PLAINTEXT_SCRATCH_SIZE:-4g},uid=10001,gid=10001,mode=0700
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    pids_limit: 256
+    logging: *bounded-logging
     networks:
       - backend
 
@@ -196,25 +474,45 @@ services:
     build:
       context: .
       dockerfile: deploy/backup.Dockerfile
+      args:
+        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-1.1.0}
+        VCS_REF: ${NORTHSTAR_VCS_REF:-unknown}
     profiles: ["restore"]
     depends_on:
       postgres:
         condition: service_healthy
     entrypoint: ["bash", "/opt/northstar/restore-backup.sh"]
     command: ["--help"]
+    environment:
+      BACKUP_SECURITY_POLICY: production
+      BACKUP_VERIFY_KEY_FILE: /run/secrets/backup_verify_key
+      BACKUP_AGE_IDENTITY_FILE: /run/secrets/backup_age_identity
+      BACKUP_ROLLBACK_STATE_FILE: /state/restore-floor
+      DATABASE_URL_FILE: /run/secrets/migrator_database_url
+      RESTORE_PLAINTEXT_STAGING_DIR: /scratch
+      RESTORE_MAX_UPLOAD_OBJECT_BYTES: ${RESTORE_MAX_UPLOAD_OBJECT_BYTES:-1073741824}
+      RESTORE_MAX_UPLOAD_TOTAL_BYTES: ${RESTORE_MAX_UPLOAD_TOTAL_BYTES:-68719476736}
+      RESTORE_RESERVE_FREE_BYTES: ${RESTORE_RESERVE_FREE_BYTES:-1073741824}
     volumes:
       - ./backups:/backups:ro
       - upload-data:/uploads
+      - restore-rollback:/rollback
+      - restore-floor-state:/state
     secrets:
-      - database_url
+      - migrator_database_url
+      - backup_verify_key
+      - backup_age_identity
     restart: "no"
     read_only: true
     tmpfs:
       - /tmp:size=32m,mode=1777
+      - /scratch:size=${RESTORE_PLAINTEXT_SCRATCH_SIZE:-4g},uid=10001,gid=10001,mode=0700
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    pids_limit: 256
+    logging: *bounded-logging
     networks:
       - backend
 
@@ -224,16 +522,55 @@ volumes:
   caddy-config:
   upload-data:
   log-data:
+  restore-rollback:
+  backup-sequence-state:
+  restore-floor-state:
   prometheus-data:
   grafana-data:
 
 secrets:
-  postgres_password:
-    file: ${POSTGRES_PASSWORD_SECRET_FILE:-./deploy/secrets/postgres_password}
-  database_url:
-    file: ${DATABASE_URL_SECRET_FILE:-./deploy/secrets/database_url}
+  postgres_bootstrap_password:
+    file: ${POSTGRES_BOOTSTRAP_PASSWORD_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/postgres_bootstrap_password}
+  northstar_migrator_password:
+    file: ${NORTHSTAR_MIGRATOR_PASSWORD_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/northstar_migrator_password}
+  northstar_runtime_password:
+    file: ${NORTHSTAR_RUNTIME_PASSWORD_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/northstar_runtime_password}
+  northstar_command_password:
+    file: ${NORTHSTAR_COMMAND_PASSWORD_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/northstar_command_password}
+  northstar_backup_password:
+    file: ${NORTHSTAR_BACKUP_PASSWORD_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/northstar_backup_password}
+  migrator_database_url:
+    file: ${MIGRATOR_DATABASE_URL_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/migrator_database_url}
+  runtime_database_url:
+    file: ${RUNTIME_DATABASE_URL_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/runtime_database_url}
+  command_database_url:
+    file: ${COMMAND_DATABASE_URL_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/command_database_url}
+  backup_database_url:
+    file: ${BACKUP_DATABASE_URL_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/backup_database_url}
+  backup_signing_key:
+    file: ${BACKUP_SIGNING_KEY_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/backup_signing_ed25519.pem}
+  backup_verify_key:
+    file: ${BACKUP_VERIFY_KEY_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/backup_signing_ed25519.pub.pem}
+  backup_age_recipients:
+    file: ${BACKUP_AGE_RECIPIENTS_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/backup_age_recipients.txt}
+  backup_age_identity:
+    file: ${BACKUP_AGE_IDENTITY_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/backup_age_identity.txt}
+  dialback_secret:
+    file: ${DIALBACK_SECRET_HOST_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/dialback_secret}
+  fast_token_secret:
+    file: ${FAST_TOKEN_SECRET_HOST_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/fast_token_secret}
+  dummy_scram_secret:
+    file: ${DUMMY_SCRAM_SECRET_HOST_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/dummy_scram_secret}
+  abuse_state_hmac_key:
+    file: ${ABUSE_STATE_HMAC_KEY_HOST_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/abuse_state_hmac_key}
+  api_control_secret:
+    file: ${API_CONTROL_SECRET_HOST_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/api_control_secret}
+  metrics_bearer_token:
+    file: ${METRICS_BEARER_TOKEN_HOST_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/metrics_bearer_token}
+  prometheus_metrics_bearer_token:
+    file: ${PROMETHEUS_METRICS_BEARER_TOKEN_HOST_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/prometheus_metrics_bearer_token}
   grafana_admin_password:
-    file: ${GRAFANA_ADMIN_PASSWORD_SECRET_FILE:-./deploy/secrets/grafana_admin_password}
+    file: ${GRAFANA_ADMIN_PASSWORD_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/grafana_admin_password}
 
 networks:
   frontend:

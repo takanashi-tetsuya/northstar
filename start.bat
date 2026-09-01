@@ -8,11 +8,12 @@ echo =========================================
 if exist ".env" (
     echo [INFO] 检测到 .env 文件，将使用其中的环境变量配置。
 ) else (
-    echo [ERROR] 未检测到 .env。请复制 .env.example 为 .env 并填写本地配置。
+    echo [ERROR] 未检测到 .env。请复制 .env.development.example 为 .env，并填写本机数据库配置。
     exit /b 1
 )
 
-echo [INFO] 正在编译并启动服务器...
+echo [INFO] 此脚本仅供本机开发，不会执行 migration，也不能代替正式环境 supervisor。
+echo [INFO] 正在编译并以前台模式启动服务器...
 cargo run --locked
 
 if %ERRORLEVEL% NEQ 0 (

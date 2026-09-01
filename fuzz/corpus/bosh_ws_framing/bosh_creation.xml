@@ -1,0 +1,1 @@
+<body xmlns='http://jabber.org/protocol/httpbind' rid='1' to='example.test' wait='60' hold='1' xmlns:xmpp='urn:xmpp:xbosh' xmpp:version='1.0'/>

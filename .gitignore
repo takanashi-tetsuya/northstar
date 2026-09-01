@@ -1,5 +1,8 @@
 /target
 /target-wsl
+/target-*/
+/fuzz/target
+/fuzz/artifacts
 /.cargo-local
 /.cargo-linux
 /.rustup-local
@@ -14,6 +17,9 @@
 !.env.*.example
 **/secrets/*
 !deploy/secrets/README.md
+/deploy/components.json
+/deploy/cluster-peers.json
+*.pkcs8.b64
 *.key
 *.pem
 *.p12
@@ -25,7 +31,10 @@ id_rsa
 id_ed25519
 
 # Runtime state, private keys/certificates, logs and local databases.
-/certs/
+/certs/*
+!/certs/trust/
+/certs/trust/*
+!/certs/trust/README.md
 /data/
 /logs/
 /scratch/

@@ -6,7 +6,7 @@
   <meta name="description" content="Northstar XMPP 服务入口与管理后台">
   <title>Northstar XMPP</title>
   <link rel="stylesheet" href="/styles.css?v=20260813-2">
-  <link rel="stylesheet" href="/admin.css?v=20260813-1">
+  <link rel="stylesheet" href="/admin.css?v=20260827-1">
   <link rel="stylesheet" href="/i18n.css?v=20260813-3">
 </head>
 <body>
@@ -62,6 +62,19 @@
         <div id="stats" class="stats"></div>
         <div class="admin-grid">
           <section class="admin-subpanel">
+            <div class="subpanel-heading"><div><p class="eyebrow">Runtime controls</p><h3>Service controls</h3></div><span>Every change is authenticated and audited.</span></div>
+            <div class="runtime-control-grid">
+              <label class="switch-row"><span><strong>Open registration</strong><small>Allow new accounts under the configured invitation policy.</small></span><input id="registration-toggle" type="checkbox"></label>
+              <label class="switch-row"><span><strong>Island mode</strong><small>Temporarily stop federation while keeping local service available.</small></span><input id="island-toggle" type="checkbox"></label>
+            </div>
+            <div class="admin-button-row">
+              <button id="save-runtime-controls" class="primary" type="button">Apply runtime controls</button>
+              <button id="reload-tls" class="secondary" type="button">Reload TLS identity</button>
+              <button id="panic-disconnect" class="danger-action" type="button">Disconnect all sessions</button>
+            </div>
+            <p id="runtime-control-status" class="admin-help" role="status"></p>
+          </section>
+          <section class="admin-subpanel">
             <div class="subpanel-heading"><div><p class="eyebrow">Invitations</p><h3>注册邀请码</h3></div></div>
             <form id="invitation-form" class="inline-form">
               <label>用途标签<input id="invitation-label" maxlength="128" required placeholder="例如：社区成员"></label>
@@ -72,7 +85,38 @@
             <p id="invitation-token" class="one-time-token hidden"></p>
             <div id="invitations" class="admin-card-list"></div>
           </section>
+          <section class="admin-subpanel">
+            <div class="subpanel-heading"><div><p class="eyebrow">Sessions</p><h3>Connected resources</h3></div><button id="refresh-sessions" class="secondary" type="button">Refresh</button></div>
+            <div id="sessions" class="admin-card-list"></div>
+          </section>
+          <section class="admin-subpanel">
+            <div class="subpanel-heading"><div><p class="eyebrow">Rooms</p><h3>Multi-user chat rooms</h3></div><button id="refresh-rooms" class="secondary" type="button">Refresh</button></div>
+            <div id="rooms" class="admin-card-list"></div>
+          </section>
+          <section class="admin-subpanel">
+            <div class="subpanel-heading"><div><p class="eyebrow">Delivery</p><h3>Offline queue</h3></div></div>
+            <p id="offline-stats" class="admin-help">Loading queue statistics…</p>
+            <button id="clear-offline" class="danger-action" type="button">Clear all queued offline messages</button>
+          </section>
+          <section class="admin-subpanel">
+            <div class="subpanel-heading"><div><p class="eyebrow">Announcement</p><h3>Broadcast message</h3></div></div>
+            <form id="broadcast-form" class="stack-form">
+              <label>Message<textarea id="broadcast-message" minlength="1" maxlength="4000" required></textarea></label>
+              <button class="primary" type="submit">Queue broadcast</button>
+            </form>
+            <p id="broadcast-status" class="admin-help" role="status"></p>
+          </section>
         </div>
+        <section class="admin-subpanel operations-panel">
+          <div class="subpanel-heading"><div><p class="eyebrow">Durable operations</p><h3>Operation journal</h3></div><button id="refresh-operations" class="secondary" type="button">Refresh</button></div>
+          <p class="admin-help">Long-running and safety-sensitive changes are recorded here. Indeterminate operations require evidence-based manual reconciliation.</p>
+          <form id="operation-lookup-form" class="operation-lookup-form">
+            <label for="operation-lookup-id">Exact operation ID</label>
+            <input id="operation-lookup-id" type="text" inputmode="text" autocomplete="off" spellcheck="false" maxlength="36" placeholder="00000000-0000-0000-0000-000000000000" required>
+            <button class="secondary" type="submit">Find operation</button>
+          </form>
+          <div id="operations" class="admin-card-list"></div>
+        </section>
         <section class="admin-subpanel moderation-panel">
           <div class="subpanel-heading"><div><p class="eyebrow">Moderation</p><h3>举报与申诉队列</h3></div><span>仅显示用户明确选取并提交的聊天记录</span></div>
           <div id="reports" class="admin-card-list"></div>
@@ -88,6 +132,6 @@
     </section>
   </main>
   <footer>Northstar XMPP · Rust powered · Own your conversations.</footer>
-  <script type="module" src="/app.js?v=20260813-7"></script>
+  <script type="module" src="/app.js?v=20260827-1"></script>
 </body>
 </html>

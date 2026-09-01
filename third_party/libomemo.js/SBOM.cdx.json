@@ -1,0 +1,97 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:5f213238-e871-4cb5-bbc0-0f9b8a339aa3",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "bom-ref": "northstar-web-client",
+      "name": "Northstar Web Client"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/libomemo.js@2.0.2",
+      "group": "conversejs",
+      "name": "libomemo.js",
+      "version": "2.0.2",
+      "purl": "pkg:npm/libomemo.js@2.0.2",
+      "licenses": [{ "license": { "id": "GPL-3.0-only" } }],
+      "hashes": [
+        { "alg": "SHA-256", "content": "29848fa0791bc07f6982e7e86a5261a3226518f581aba268ec8b030a11e30385" }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/conversejs/libomemo.js/tree/df3d34cab03306d34d6ed0bf8b3a3db152173bb4"
+        },
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/libomemo.js/-/libomemo.js-2.0.2.tgz",
+          "hashes": [
+            { "alg": "SHA-1", "content": "6029b4a76dda80a7e7a9ebed89a5f2943aa7527f" }
+          ]
+        }
+      ],
+      "properties": [
+        { "name": "northstar:upstream-commit", "value": "df3d34cab03306d34d6ed0bf8b3a3db152173bb4" },
+        { "name": "northstar:source-archive-sha256", "value": "952172631c2e16085420779b3ea039ce59a2ac0b1b20255ff16d1941d4226343" },
+        { "name": "northstar:source-archive-pax-commit", "value": "df3d34cab03306d34d6ed0bf8b3a3db152173bb4" },
+        { "name": "northstar:rebuild-qualification", "value": "provenance-traced-not-reproducible" },
+        { "name": "northstar:qualification-manifest-sha256", "value": "ef20fe46c0b15b4f7fafd3c7dca76067cd98321c82a99f6fdbd91697adcb3455" },
+        { "name": "northstar:node-version", "value": "v24.14.0" },
+        { "name": "northstar:npm-version", "value": "unknown-not-recorded" },
+        { "name": "northstar:emscripten-version", "value": "unknown-not-recorded" },
+        { "name": "northstar:llvm-version", "value": "unknown-not-recorded" },
+        { "name": "northstar:binaryen-version", "value": "unknown-not-recorded" }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "northstar:web/crypto/curve25519_compiled.wasm",
+      "name": "curve25519_compiled.wasm",
+      "version": "libomemo.js-2.0.2",
+      "hashes": [
+        { "alg": "SHA-256", "content": "3a32503ade92ed2bf522d49d51106a227dadb39c2a7b08a1023c216c7eec1286" }
+      ],
+      "properties": [
+        { "name": "northstar:upstream-package", "value": "pkg:npm/libomemo.js@2.0.2" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/protobufjs@8.6.4",
+      "name": "protobufjs",
+      "version": "8.6.4",
+      "purl": "pkg:npm/protobufjs@8.6.4",
+      "licenses": [{ "license": { "id": "BSD-3-Clause" } }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/long@5.3.2",
+      "name": "long",
+      "version": "5.3.2",
+      "purl": "pkg:npm/long@5.3.2",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "northstar-web-client",
+      "dependsOn": ["pkg:npm/libomemo.js@2.0.2"]
+    },
+    {
+      "ref": "pkg:npm/libomemo.js@2.0.2",
+      "dependsOn": [
+        "northstar:web/crypto/curve25519_compiled.wasm",
+        "pkg:npm/protobufjs@8.6.4"
+      ]
+    },
+    {
+      "ref": "pkg:npm/protobufjs@8.6.4",
+      "dependsOn": ["pkg:npm/long@5.3.2"]
+    }
+  ]
+}

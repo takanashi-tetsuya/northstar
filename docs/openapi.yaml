@@ -1,11 +1,86 @@
 openapi: 3.1.0
 info:
   title: Northstar XMPP REST API
-  version: 0.1.0
-  description: Account, anti-abuse, reporting, encrypted-history, HTTP Upload and single-node administration API.
+  version: 1.1.0
+  description: |
+    Account, anti-abuse, reporting, encrypted-history, HTTP Upload and administration API.
+    Generic XMPP protocol features are documented separately in XEP_MATRIX.md.
+
+    Every `/api/` response carries `X-Request-ID`. JSON request bodies reject unknown fields.
+    Path/query decoding failures use the same non-diagnostic `bad_request` error object. Collection
+    cursors are opaque, short-lived, scope-bound keyset cursors: clients must not inspect them and
+    must repeat the same principal and filters when following `next_cursor`.
+
+    Mutations referencing the optional `IdempotencyKey` parameter accept zero or one 8-200 byte visible-ASCII value. Mutations referencing `RequiredIdempotencyKey`, including upload dead-letter retry, require exactly one such value.
+    On optional endpoints, omitting it gives the request a server-generated one-shot identity; a
+    required endpoint rejects omission. Clients that need safe retry must send and retain their own
+    key. A replay has `Idempotency-Replayed: true` and
+    `Idempotency-Original-Request-ID`. Reusing a key for different bytes, media type, route, target,
+    principal or authorization generation is rejected.
 servers:
   - url: https://xmpp.example.com
 paths:
+  /.well-known/host-meta:
+    get:
+      summary: XMPP host-meta discovery document (XEP-0156)
+      responses:
+        "200": { description: XML XRD containing the WebSocket and optional BOSH links }
+  /.well-known/host-meta.json:
+    get:
+      summary: XMPP host-meta discovery document as JRD (XEP-0156)
+      responses:
+        "200": { description: JSON JRD containing the WebSocket and optional BOSH links }
+  /xmpp-websocket:
+    get:
+      summary: XMPP over WebSocket upgrade (RFC 7395)
+      description: Requires the xmpp subprotocol, an allowed Origin when present, and WSS in production. This is an XMPP transport rather than a JSON REST operation.
+      responses:
+        "101": { description: WebSocket protocol upgrade accepted }
+        "400": { description: Secure transport or the xmpp subprotocol is missing }
+        "403": { description: Browser Origin is not permitted }
+  /http-bind:
+    post:
+      summary: XMPP over BOSH (XEP-0124/XEP-0206)
+      description: Optional XML binding endpoint. It is enabled with BOSH_ENABLED and accepts security-sensitive authentication only when a trusted reverse proxy reports HTTPS. This is an XMPP transport rather than a JSON REST operation.
+      requestBody:
+        required: true
+        content:
+          text/xml:
+            schema: { type: string }
+          application/xml:
+            schema: { type: string }
+      responses:
+        "200":
+          description: A BOSH body response, including protocol-level terminate conditions
+          content:
+            text/xml:
+              schema: { type: string }
+        "413": { description: Request exceeds the configured BOSH byte limit }
+    options:
+      summary: BOSH CORS preflight
+      responses:
+        "204": { description: CORS policy for the public BOSH endpoint }
+  /bosh:
+    post:
+      summary: Alias for /http-bind
+      requestBody:
+        required: true
+        content:
+          text/xml:
+            schema: { type: string }
+          application/xml:
+            schema: { type: string }
+      responses:
+        "200":
+          description: A BOSH body response
+          content:
+            text/xml:
+              schema: { type: string }
+        "413": { description: Request exceeds the configured BOSH byte limit }
+    options:
+      summary: BOSH alias CORS preflight
+      responses:
+        "204": { description: CORS policy for the public BOSH endpoint }
   /healthz:
     get:
       summary: Process liveness probe
@@ -13,16 +88,46 @@ paths:
         "200": { description: Process event loop is serving HTTP }
   /readyz:
     get:
-      summary: PostgreSQL readiness probe
+      summary: PostgreSQL and supervised-worker readiness probe
+      description: Internal orchestration endpoint. The default Caddy policy returns 404 for this path; trusted load balancers and container health checks reach the application listener directly. Duplicate probes share a two-second cache and one bounded single-flight database check.
       responses:
-        "200": { description: Database query succeeded }
-        "500": { $ref: "#/components/responses/Error" }
+        "200": { description: Database query succeeded and registered workers are healthy }
+        "503": { $ref: "#/components/responses/Error" }
   /metrics:
     get:
       summary: Prometheus text metrics
-      description: Public at the application layer; restrict this route at the reverse proxy in production.
+      description: Served only by the dedicated METRICS_BIND listener, never by the public HTTP router. A loopback listener accepts local scrapes; a non-loopback listener requires the independently mounted metrics bearer token.
+      security: [{ metricsBearer: [] }, {}]
       responses:
         "200": { description: Prometheus text exposition }
+        "401": { description: Missing or invalid metrics bearer token }
+        "503": { description: A concurrent collector already holds the single-flight slot }
+  /api:
+    get:
+      summary: Reserved API namespace root
+      description: This sentinel keeps the reserved API namespace out of the static web-client fallback. Versioned operations begin at `/api/v1`; this path always returns the normal JSON not-found envelope.
+      responses:
+        "404": { $ref: "#/components/responses/Error" }
+  /api/docs:
+    get:
+      summary: Browse the REST contract in the self-hosted Swagger UI
+      description: Swagger UI 5.32.14 is served entirely from this Northstar instance under a documentation-specific CSP. Authorization controls, request submission, credential persistence and the external validator are disabled, so this is a read-only contract browser rather than an alternate API control plane.
+      responses:
+        "200":
+          description: Read-only Swagger UI HTML shell
+          content:
+            text/html:
+              schema: { type: string }
+  /api/openapi.yaml:
+    get:
+      summary: Download the exact reviewed OpenAPI contract
+      description: The response is the same checked-in file used by router-contract CI and by the self-hosted documentation UI. It is never fetched from or sent to a third party.
+      responses:
+        "200":
+          description: Northstar OpenAPI 3.1 contract
+          content:
+            application/yaml:
+              schema: { type: string }
   /api/v1/config:
     get:
       summary: Read public server configuration
@@ -32,6 +137,8 @@ paths:
   /api/v1/register:
     post:
       summary: Register an account when open registration is enabled
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody:
         required: true
         content:
@@ -44,22 +151,35 @@ paths:
   /api/v1/anti-abuse/challenge:
     post:
       summary: Issue a one-use proof-of-work challenge
-      description: Registration challenges are public. Message, report and appeal challenges require a bearer session. A newer challenge for the same account action invalidates the previous challenge.
+      description: Registration and login challenges are public; login also requires username. Message, report, appeal and password-change challenges require a bearer session. A v2 request must send only a SHA-256 commitment to the canonical pow-less mutation body, never the password, report text, OMEMO envelope or other sensitive body. Method, canonical path, body digest, actor, subject, difficulty, issue/expiry times, random server nonce and key generation are bound into the one-use challenge. The optional v1 form is accepted only before the operator-configured migration deadline. A newer challenge replaces an older challenge for the same account action. The advertised max-device-seconds is an operator calibration target, not a timing guarantee for every device.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [action]
               properties:
-                action: { type: string, enum: [registration, login, message, report, appeal] }
+                action: { type: string, enum: [registration, login, message, report, appeal, password_change] }
+                username: { type: [string, "null"], minLength: 1, maxLength: 1024, description: Required only for login; the prepared localpart must contain 3 to 64 UTF-8 octets }
+                intent:
+                  oneOf:
+                    - { $ref: "#/components/schemas/PowIntent" }
+                    - { type: "null" }
+                  description: Required for v2. Omission/null requests deprecated v1 and fails after POW_V1_COMPATIBILITY_UNTIL.
       responses:
-        "200": { description: Challenge, current work/wait step, maximum work and cooldown information }
+        "200":
+          description: Versioned challenge, bound intent, key generation, issue/expiry times, current work/wait step, maximum work and cooldown information
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PowChallenge" }
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/login:
     post:
       summary: Create an API bearer session
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody:
         required: true
         content:
@@ -67,10 +187,22 @@ paths:
             schema: { $ref: "#/components/schemas/Credentials" }
       responses:
         "200":
-          description: Authenticated session
+          description: Authenticated session. An exact replay returns the stored session response and identifies the original request in the two idempotency replay headers.
+          headers:
+            Idempotency-Replayed: { $ref: "#/components/headers/IdempotencyReplayed" }
+            Idempotency-Original-Request-ID: { $ref: "#/components/headers/IdempotencyOriginalRequestId" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/session:
+    delete:
+      summary: Revoke the current API bearer session
+      description: Deletes the presented bearer token immediately. Web and administrative clients should invoke this endpoint before discarding their local token.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Session revoked and logout audit attempted }
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/me:
     get:
@@ -83,39 +215,207 @@ paths:
     patch:
       summary: Change the current password and revoke every API session
       security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [current_password, new_password]
               properties:
                 current_password: { type: string }
                 new_password: { type: string, minLength: 10, maxLength: 1024 }
+                pow: { $ref: "#/components/schemas/PowProof" }
       responses:
         "200": { description: Password changed }
         "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/me/omemo-recovery-authority:
+    get:
+      summary: Read the account's monotonic OMEMO device-transfer fence
+      description: Returns only transfer generations, transfer IDs, and SHA-256 consumer commitments. Consumer secrets, private OMEMO state, the encrypted package, its passphrase and derived key are never returned or stored. A destination browser with a local transfer marker must check this endpoint before publishing the moved device.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current durable one-consumer high-water fence
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OmemoRecoveryAuthority" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/me/omemo-recovery-transfers:
+    post:
+      summary: Allocate a one-time OMEMO device-transfer generation
+      description: The client-generated transfer UUID, source device ID and 256-bit source poll secret make an uncertain retry idempotent. Only an account/transfer-bound SHA-256 digest of that poll secret is stored. An account may have only one active allocation; it must be explicitly revoked or expire before a different UUID is accepted. This endpoint stores no encrypted package or private material.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OmemoRecoveryPrepare" }
+      responses:
+        "201": { description: Generation allocated }
+        "200": { description: Exact transfer-UUID replay }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/me/omemo-recovery-transfers/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Read one owned OMEMO device-transfer record
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Server-blind transfer metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OmemoRecoveryTransfer" }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      summary: Seal a transfer to the local encrypted package SHA-256
+      description: Stores only the exact SHA-256 of the encrypted local file. The package itself remains on the user's devices.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OmemoRecoverySeal" }
+      responses:
+        "200": { description: Transfer sealed or exact replay }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Revoke an unconsumed OMEMO device transfer
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "204": { description: Transfer revoked or already revoked }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/me/omemo-recovery-transfers/{id}/consume:
+    post:
+      summary: Commit one destination as the transfer's sole consumer
+      description: Atomically advances the account high-water fence, records only a SHA-256 commitment to a client-generated 256-bit destination secret, rotates the account authorization generation, and invalidates every API, FAST and resumable XMPP bearer authenticated before the move. Post-commit transport teardown is generation-scoped, so a replay cannot disconnect a destination which has logged in again. Because the committing bearer is intentionally revoked, an uncertain caller preserves its sealed destination state and reauthenticates before checking or replaying the exact secret/digest; reading every authenticated GET response is insufficient to forge that replay.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OmemoRecoveryConsume" }
+      responses:
+        "200": { description: Transfer consumed or exact same-consumer replay }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/omemo-recovery-transfers/{id}/poll:
+    post:
+      summary: Resolve one source transfer after its ordinary bearer was revoked
+      description: Read-only capability endpoint. The 256-bit poll secret is sent only in the JSON body; the server stores only its account/transfer-bound SHA-256 digest. The response contains only state and generation, may be retried idempotently after a lost response, and expires no later than 24 hours after a terminal transition or 24 hours after the transfer expiry. No ordinary bearer is accepted or required. Before any database lookup, the trusted-proxy-resolved client IP is admitted through an independent 30-request sliding one-minute window and a four-request global concurrency gate. Polls use a separate two-connection database pool with a 1.5-second statement timeout. Unknown IDs, wrong secrets and expired capabilities share the same 404 response.
+      security: []
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OmemoRecoveryPoll" }
+      responses:
+        "200":
+          description: Minimal source-observable transfer status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OmemoRecoveryPollStatus" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /api/v1/history:
     get:
       summary: Read the current user's archived stanzas
-      description: Under the default policy, returned message payloads contain an OMEMO envelope and a generic fallback body only.
+      description: |
+        Reuses the same repeatable-read, XEP-0191-aware query implementation as XMPP MAM.
+        `with` accepts a canonical bare or full JID. `start`, `end`, `after_id`,
+        `before_id` and `ids` are the XEP-0313 extended-form filters. RSM page
+        selection uses exactly one of `page`, `before`, `after` or `index` and
+        `max`; a referenced archive UID must belong to this account and be
+        viewer-visible in the same snapshot. `flip=true` reverses only the
+        returned page, while `first`, `last` and `first_index` remain
+        chronological metadata.
+
+        Existing clients may continue to send only `with`, `limit` and the
+        opaque `cursor`. That legacy mode remains newest-first and returns a
+        `next_cursor`; it is implemented by translating the authenticated
+        cursor to the shared MAM `before` page, not by separate archive SQL.
+        Direct MAM controls cannot be combined with `cursor`; `max` and
+        `limit` are mutually exclusive. A direction filter is deliberately
+        not advertised because historical archive rows do not carry an
+        authoritative direction field. Unknown parameters, including
+        `direction`, are rejected instead of being silently ignored.
+
+        Under the default archive policy, returned message payloads contain an
+        OMEMO envelope and a generic fallback body only.
       security: [{ bearerAuth: [] }]
       parameters:
-        - { in: query, name: with, schema: { type: string }, description: Bare peer JID }
-        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
+        - { in: query, name: with, schema: { type: string }, description: Canonical bare or full peer JID }
+        - { in: query, name: start, schema: { type: string, format: date-time }, description: Inclusive archive timestamp lower bound }
+        - { in: query, name: end, schema: { type: string, format: date-time }, description: Inclusive archive timestamp upper bound }
+        - { in: query, name: after_id, schema: { type: string, format: uuid }, description: Extended-form lower archive UID bound, independent of RSM page selection }
+        - { in: query, name: before_id, schema: { type: string, format: uuid }, description: Extended-form upper archive UID bound, independent of RSM page selection }
+        - in: query
+          name: ids
+          style: form
+          explode: false
+          schema: { type: array, minItems: 1, maxItems: 100, uniqueItems: true, items: { type: string, format: uuid } }
+          description: Comma-separated immutable archive UIDs; every UID must be visible in this archive
+        - { in: query, name: page, schema: { type: string, enum: [first, last] }, description: RSM edge page; mutually exclusive with before, after and index }
+        - { in: query, name: before, schema: { type: string, format: uuid }, description: RSM page strictly before this archive UID }
+        - { in: query, name: after, schema: { type: string, format: uuid }, description: RSM page strictly after this archive UID }
+        - { in: query, name: index, schema: { type: integer, minimum: 0, maximum: 1000000 }, description: Optional bounded XEP-0059 zero-based index page }
+        - { in: query, name: max, schema: { type: integer, minimum: 0, maximum: 100, default: 100 }, description: MAM/RSM page size; zero returns only metadata }
+        - { in: query, name: flip, schema: { type: boolean, default: false }, description: Return this page in reverse chronological order without changing RSM metadata }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 100 }, description: Legacy page-size alias retained for cursor clients; mutually exclusive with max }
+        - { $ref: "#/components/parameters/Cursor" }
       responses:
-        "200": { description: Archive page }
+        "200":
+          description: Stable archive page and RSM metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HistoryPage" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error", description: One or more explicitly referenced archive UIDs are absent or not visible }
   /api/v1/reports:
     get:
       summary: List the current user's reports and appeals
       security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 25, default: 25 } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { in: query, name: status, schema: { $ref: "#/components/schemas/ReportStatus" } }
       responses:
         "200": { description: Reports, selected evidence and outcomes }
     post:
       summary: Submit a report with 1–20 explicitly selected chat records
-      description: The client supplies plaintext only for records the user selected. A report proof-of-work challenge is required.
+      description: Every selected item must name a message_archive row owned by the reporter and associated with reported_jid. Plaintext is copied from the server archive. For OMEMO, body_text is user-decrypted and explicitly unverified; the server retains the archived ciphertext reference and SHA-256 digest. A single-use report proof-of-work challenge is required.
       security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Report" }
       responses:
         "201": { description: Report submitted }
         "429": { $ref: "#/components/responses/RateLimited" }
@@ -126,6 +426,12 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Appeal" }
       responses:
         "201": { description: Appeal submitted }
         "409": { $ref: "#/components/responses/Error" }
@@ -133,7 +439,7 @@ paths:
   /api/v1/upload/{id}:
     put:
       summary: Upload bytes into an XEP-0363 slot
-      description: The bearer value is the opaque, one-use token returned inside the XMPP slot response, not a REST login token. Content-Length and Content-Type must match the slot request.
+      description: The bearer value is the opaque, short-lived slot capability returned inside the XMPP slot response, not a REST login token. Content-Type and the actual byte count must match the reservation; Content-Length, when sent, must also match. A byte-identical retry within the capability lifetime returns 201 and is marked as replayed; different bytes are rejected. Content-Range and non-identity Content-Encoding are rejected.
       security: [{ uploadSlot: [] }]
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
@@ -143,9 +449,21 @@ paths:
           application/octet-stream:
             schema: { type: string, format: binary }
       responses:
-        "201": { description: Ciphertext stored and ready at the slot GET URL }
+        "201":
+          description: Bytes stored and ready at the slot GET URL, or a byte-identical completed PUT replay
+          headers:
+            Idempotency-Replayed: { $ref: "#/components/headers/IdempotencyReplayed" }
         "401": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Delete one upload owned by the authenticated account
+      description: Atomically removes the slot from the public download namespace, writes an audit record, and enqueues idempotent object cleanup. Missing UUIDs and uploads owned by another account both return 204 without changing state, preventing ownership enumeration. An already-open download may finish; future GET requests return 404. Because encrypted attachment URLs are carried inside OMEMO ciphertext, the server cannot discover or rewrite message references.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Upload is absent or durable cleanup was queued }
+        "401": { $ref: "#/components/responses/Error" }
   /uploads/{id}:
     get:
       summary: Download bytes stored in an XEP-0363 slot
@@ -158,17 +476,143 @@ paths:
   /api/v1/admin/stats:
     get:
       summary: Read server counters
+      description: Includes the current runtime registration, federation, and island-mode switches in addition to durable and process-local counters.
       security: [{ bearerAuth: [] }]
       responses:
         "200": { description: Server statistics }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/nuke:
+    post:
+      summary: Disabled REST factory-reset placeholder
+      description: This route always returns 503. Factory reset is available only through the staged operator recovery procedure; it cannot be enabled through the REST API.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {}
+      responses:
+        "503": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/panic_disconnect:
+    post:
+      summary: Cancel all local XMPP client connections and invalidate resumable sessions
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/island_mode:
+    post:
+      summary: Enable or disable the runtime federation isolation switch
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooleanToggle" }
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/registration:
+    post:
+      summary: Open or close new registration at runtime
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooleanToggle" }
+      responses:
+        "200": { description: Registration state updated and audited }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/sessions:
+    get:
+      summary: List local connected XMPP resources
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200": { description: Local session page keyed by immutable connection_id, with next_cursor }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/sessions/{connection_id}:
+    delete:
+      summary: Cancel exactly one local XMPP connection
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: connection_id, required: true, schema: { type: string, format: uuid }, description: Immutable ID returned by the session list; a reconnect receives a different ID }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/offline_messages:
+    get:
+      summary: Read offline-spool count and estimated bytes
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Offline spool statistics }
+        "403": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Clear all queued offline messages
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "200": { description: Offline spool cleared and action audited }
+        "409": { description: A transport currently owns one or more queued deliveries; end those sessions before retrying }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/muc_rooms:
+    get:
+      summary: List local MUC rooms and local occupant counts
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200": { description: Room list }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/muc_rooms/{localpart}:
+    delete:
+      summary: Destroy one local MUC room
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: localpart, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/broadcast:
+    post:
+      summary: Send a headline announcement to every local connected resource
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [message]
+              properties:
+                message: { type: string, minLength: 1, maxLength: 32768, description: Maximum is measured in UTF-8 bytes after trimming }
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
         "403": { $ref: "#/components/responses/Error" }
   /api/v1/admin/users:
     get:
       summary: List accounts
       security: [{ bearerAuth: [] }]
       parameters:
-        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
-        - { in: query, name: offset, schema: { type: integer, minimum: 0, default: 0 } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
+        - { $ref: "#/components/parameters/Cursor" }
       responses:
         "200": { description: Account page }
         "403": { $ref: "#/components/responses/Error" }
@@ -178,22 +622,32 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
+              anyOf:
+                - required: [disabled]
+                - required: [admin]
               properties:
                 disabled: { type: boolean }
                 admin: { type: boolean }
       responses:
         "200": { description: Account updated }
+        "202": { $ref: "#/components/responses/AcceptedOperation", description: Account disabled durably; session cleanup was queued }
         "403": { $ref: "#/components/responses/Error" }
   /api/v1/admin/reports:
     get:
       summary: List the moderation queue, selected evidence and appeals
       security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 25, default: 25 } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { in: query, name: status, schema: { $ref: "#/components/schemas/ReportStatus" } }
       responses:
         "200": { description: Moderation queue }
         "403": { $ref: "#/components/responses/Error" }
@@ -203,26 +657,59 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReportModerationPatch" }
       responses:
         "200": { description: Report updated and audited }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/admin/appeals/{id}:
     patch:
       summary: Update an appeal status and resolution
       security: [{ bearerAuth: [] }]
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AppealModerationPatch" }
       responses:
         "200": { description: Appeal updated and audited }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/admin/invitations:
     get:
       summary: List invitation metadata (never token secrets)
       security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 25, default: 25 } }
+        - { $ref: "#/components/parameters/Cursor" }
       responses:
         "200": { description: Invitation list }
     post:
       summary: Create an invitation token
       description: The token secret is returned only in this response.
       security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [label]
+              properties:
+                label: { type: string, minLength: 1, maxLength: 128 }
+                max_uses: { type: integer, minimum: 1, maximum: 100000, default: 1 }
+                expires_in_hours: { type: [integer, "null"], minimum: 1, maximum: 8760 }
       responses:
         "201": { description: Invitation created; copy the one-time token now }
   /api/v1/admin/invitations/{id}:
@@ -231,67 +718,1015 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       responses:
         "200": { description: Invitation revoked }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/admin/tls/reload:
     post:
       summary: Reload the configured certificate and private key for new TLS handshakes
       security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       responses:
-        "200": { description: Certificate reloaded and action audited }
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
         "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/upload-dead-letters:
+    get:
+      summary: List upload-storage recovery dead letters
+      description: Administrator-only queue-ID keyset page over one exact queue kind, backed by the existing partial dead-letter index. Cleanup entries use an independently random recovery UUID rather than the upload object identity. Object-store keys, versions, bucket names and the original worker error are never returned. `error_summary` is a bounded, fixed diagnostic class; use kind, recovery ID and request ID to correlate it with protected logs and the immutable retry audit.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: kind
+          required: true
+          schema: { $ref: "#/components/schemas/UploadDeadLetterKind" }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: A kind-isolated dead-letter page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UploadDeadLetterPage" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/upload-dead-letters/{kind}/{id}/retry:
+    post:
+      summary: Requeue one exact upload-storage dead letter
+      description: Requires exactly one explicit idempotency key. Its request fingerprint binds the administrator authorization generation, so the same key cannot replay across credential rotation. The transaction revalidates the exact administrator bearer, locks the exact dead-letter row, refuses an active worker lease, clears dead-letter and claim state, resets attempts, schedules the row immediately and appends an immutable audit record. The physical recovery proof and original stored error are retained; this endpoint never deletes or discards recovery work. Missing, already-recovered and actively leased rows share one stored 404 response. That exact 404 is replayed for the bounded error-replay lifetime with `Idempotency-Replayed: true` and `Idempotency-Original-Request-ID`; use a new key for a later operator decision after an active lease expires.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: kind
+          required: true
+          schema: { $ref: "#/components/schemas/UploadDeadLetterKind" }
+        - in: path
+          name: id
+          required: true
+          description: For storage_job, an integer from 1 through 9223372036854775807 serialized as canonical positive decimal. For cleanup, a canonical lowercase hyphenated, non-nil RFC 4122 UUIDv4 recovery ID. The cleanup value is never an upload object ID or storage key.
+          schema:
+            oneOf:
+              - { type: integer, format: int64, minimum: 1, maximum: 9223372036854775807 }
+              - { type: string, minLength: 36, maxLength: 36, pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", not: { const: "00000000-0000-0000-0000-000000000000" } }
+        - { $ref: "#/components/parameters/RequiredIdempotencyKey" }
+      responses:
+        "202":
+          description: The durable recovery row was requeued for the normal fenced worker
+          headers:
+            Idempotency-Replayed: { $ref: "#/components/headers/IdempotencyReplayed" }
+            Idempotency-Original-Request-ID: { $ref: "#/components/headers/IdempotencyOriginalRequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UploadDeadLetterRetry" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error", description: Missing, already recovered or actively leased; the non-diagnostic decision is stored for exact replay, which adds Idempotency-Replayed and Idempotency-Original-Request-ID }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/operations:
+    get:
+      summary: List durable administrative operations
+      description: Results are ordered by `(created_at, id)` descending. Worker lease tokens and worker identities are never exposed.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: status, schema: { $ref: "#/components/schemas/OperationStatus" } }
+        - { in: query, name: kind, schema: { $ref: "#/components/schemas/OperationKind" } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 25, default: 25 } }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: Durable operation page
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/CursorPage" }
+                  - type: object
+                    required: [items]
+                    properties:
+                      items: { type: array, items: { $ref: "#/components/schemas/OperationSummary" } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/operations/{id}:
+    get:
+      summary: Read one durable administrative operation
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/OperationId" }
+      responses:
+        "200":
+          description: Operation state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Operation" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/operations/{id}/targets:
+    get:
+      summary: List the durable targets of one operation
+      description: Filter by exact target status when reconciling a large fan-out operation. The opaque cursor is bound to the administrator, operation ID and status filter.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/OperationId" }
+        - { in: query, name: status, schema: { $ref: "#/components/schemas/OperationStatus" } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 25, default: 25 } }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: Operation-target page
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/CursorPage" }
+                  - type: object
+                    required: [items]
+                    properties:
+                      items: { type: array, items: { $ref: "#/components/schemas/OperationTargetSummary" } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/operations/{operation_id}/targets/{target_id}:
+    get:
+      summary: Read one durable operation target, including its payload and result
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: operation_id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: target_id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Full operation-target state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OperationTarget" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/operations/{id}/cancel:
+    post:
+      summary: Request cancellation of a durable operation
+      description: Cancellation is cooperative and is refused for unsupported kinds, terminal operations, or work past its point of no return.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/OperationId" }
+        - { $ref: "#/components/parameters/RequiredIdempotencyKey" }
+      responses:
+        "200": { $ref: "#/components/responses/MutationOutcome" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error", description: The operation does not exist; this decision is stored for exact replay }
+        "409": { $ref: "#/components/responses/Error", description: The kind is not cancelable or the operation/one of its targets passed the point of no return; this decision is stored for exact replay }
+  /api/v1/admin/operations/{id}/reconcile:
+    post:
+      summary: Manually reconcile an indeterminate operation
+      description: This is an evidence-bearing terminal decision and succeeds only while the operation is indeterminate. Indeterminate means a worker lease was lost, or an executor returned an error, after the point of no return; it never means that the server proved the effect failed.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/OperationId" }
+        - { $ref: "#/components/parameters/RequiredIdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Reconciliation" }
+      responses:
+        "200": { $ref: "#/components/responses/MutationOutcome" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error", description: The operation does not exist; this decision is stored for exact replay }
+        "409": { $ref: "#/components/responses/Error", description: The operation is not indeterminate, an indeterminate target still needs its own reconciliation, or a requested success conflicts with a non-successful target; this decision is stored for exact replay }
+  /api/v1/admin/operations/{operation_id}/targets/{target_id}/reconcile:
+    post:
+      summary: Manually reconcile one indeterminate operation target
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: operation_id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: target_id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/RequiredIdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Reconciliation" }
+      responses:
+        "200": { $ref: "#/components/responses/MutationOutcome" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error", description: The target is missing or does not belong to the operation; this decision is stored for exact replay }
+        "409": { $ref: "#/components/responses/Error", description: The target is not indeterminate; this decision is stored for exact replay }
+  /api/v1/me/retention:
+    get:
+      summary: Read the authenticated account's retention overrides and operator ceilings
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Current optional overrides; null inherits the operator ceiling }
+        "401": { $ref: "#/components/responses/Error" }
+    put:
+      summary: Shorten the authenticated account's data retention
+      description: A user may only move an effective cutoff earlier. Restoring or lengthening a policy requires an administrator; no value may exceed the operator ceiling. Moderation evidence has a 30-day floor.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/RequiredIdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserRetentionPolicy" }
+      responses:
+        "200": { $ref: "#/components/responses/MutationOutcome" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/muc_rooms/{id}/retention:
+    get:
+      summary: Read a room's shared-archive retention policy
+      description: Restricted to administrators and room owners; it is not a participant-history identity oracle.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Optional room override and operator ceiling }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      summary: Change a room's shared-archive retention policy
+      description: Room owners may shorten only. Restoring or lengthening requires a server administrator; neither may exceed the global MUC retention ceiling.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/RequiredIdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MucRetentionPolicy" }
+      responses:
+        "200": { $ref: "#/components/responses/MutationOutcome" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/legal-holds:
+    get:
+      summary: List legal holds
+      description: Administrator-only and access-audited. Query results never contain held stanza payloads.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/RequiredIdempotencyKey" }
+        - { in: query, name: active_only, schema: { type: boolean, default: false } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
+      responses:
+        "200":
+          description: Legal-hold metadata and typed target counts
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegalHoldList" }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      summary: Create a typed legal hold
+      description: Administrator-only, idempotent and audited. Exact targets are row-locked; controlled scopes use a table barrier so concurrent retention cannot lose a row while the hold is established.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/RequiredIdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LegalHoldCreate" }
+      responses:
+        "201": { $ref: "#/components/responses/LegalHoldMutationOutcome" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/legal-holds/{id}/release:
+    post:
+      summary: Release an active legal hold without rewriting its history
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/RequiredIdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LegalHoldRelease" }
+      responses:
+        "200": { $ref: "#/components/responses/LegalHoldMutationOutcome" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/legal-holds/{id}/export:
+    post:
+      summary: Page through a frozen held-data snapshot with a continuous SHA-256 chain
+      description: Administrator-only, access-audited and idempotently replayed. Follow next_cursor with a new Idempotency-Key and the same hold/filter until it is null. An active hold receives a non-renewable 15-minute database export lease; release fails closed while that lease is unfinished. A released hold is exported only when all rows fit in one page, otherwise 409 is returned because its payload can no longer be frozen. At most 100 records are returned per call. OMEMO archive/offline payloads remain ciphertext; user-supplied decrypted report evidence is omitted when marked encrypted. A serialized response over the 1 MiB idempotent-replay limit is rejected atomically with 400; reduce max_rows and use a new key. A record is never silently truncated. Each page begins at the preceding chain_root_sha256; anchor or sign the final root outside Northstar.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/RequiredIdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LegalHoldExportRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/LegalHoldExportOutcome" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/audit/export:
+    post:
+      summary: Page through a fixed audit high-water mark with a continuous SHA-256 chain
+      description: Administrator-only, access-audited and idempotently replayed. The first page fixes database snapshot_at and snapshot_max_id under a short writer barrier; later pages use id keyset continuation and cannot include their own per-page access audits. Follow next_cursor with a new Idempotency-Key and identical start/end filters within the non-renewable 15-minute lease. A serialized response over the 1 MiB idempotent-replay limit is rejected atomically with 400; reduce max_rows and use a new key. A record is never silently truncated. The final root proves an exported copy relative to its bound snapshot; use independent WORM/KMS signing to defend against a database-owner compromise.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/RequiredIdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GovernanceExport" }
+      responses:
+        "200": { $ref: "#/components/responses/AuditExportOutcome" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
 components:
+  parameters:
+    Cursor:
+      in: query
+      name: cursor
+      required: false
+      description: Opaque scope-bound keyset cursor returned as `next_cursor`; expires after 15 minutes.
+      schema: { type: string, minLength: 1 }
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: false
+      description: Client-chosen retry identity. Exactly one header is allowed; retain the identical method, route, target, principal, media type and body bytes when retrying.
+      schema: { type: string, minLength: 8, maxLength: 200, pattern: "^[!-~]+$" }
+    RequiredIdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      description: Required durable mutation identity. Send exactly one 8-200 byte visible-ASCII value and reuse it only with the identical method, route, target, principal, media type and body bytes.
+      schema: { type: string, minLength: 8, maxLength: 200, pattern: "^[!-~]+$" }
+    OperationId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+  headers:
+    RequestId:
+      description: Server-generated correlation identifier for this HTTP attempt.
+      schema: { type: string, format: uuid }
+    IdempotencyReplayed:
+      description: Present only on a stored-response replay, with the exact value `true`.
+      schema: { type: string, const: "true" }
+    IdempotencyOriginalRequestId:
+      description: Present only on a stored-response replay; UUID of the original attempt whose status, body and stored headers were returned.
+      schema: { type: string, format: uuid }
+    Location:
+      description: Relative URL of the durable operation resource.
+      schema: { type: string, pattern: "^/api/v1/admin/operations/[0-9a-f-]{36}$" }
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
+    metricsBearer:
+      type: http
+      scheme: bearer
+      description: Independent file-backed token for the private metrics listener; not a user or administrator session token
     uploadSlot:
       type: http
       scheme: bearer
-      description: Opaque one-use token returned by the XMPP upload service
+      description: Opaque short-lived capability returned by the XMPP upload service; it can replay only the identical completed object during its PUT lifetime
   schemas:
+    OmemoRecoveryPrepare:
+      type: object
+      additionalProperties: false
+      required: [transfer_id, source_device_id, poll_secret]
+      properties:
+        transfer_id: { type: string, format: uuid }
+        source_device_id: { type: integer, minimum: 1, maximum: 2147483647 }
+        poll_secret: { type: string, pattern: "^[A-Za-z0-9_-]{43}$", description: Canonical unpadded Base64url encoding of 32 random bytes }
+    OmemoRecoverySeal:
+      type: object
+      additionalProperties: false
+      required: [package_sha256]
+      properties:
+        package_sha256: { type: string, pattern: "^[0-9a-fA-F]{64}$" }
+    OmemoRecoveryConsume:
+      type: object
+      additionalProperties: false
+      required: [package_sha256, consumer_secret]
+      properties:
+        package_sha256: { type: string, pattern: "^[0-9a-fA-F]{64}$" }
+        consumer_secret: { type: string, pattern: "^[A-Za-z0-9_-]{43}$", description: Canonical unpadded Base64url encoding of 32 random bytes; never persisted by the server }
+    OmemoRecoveryPoll:
+      type: object
+      additionalProperties: false
+      required: [poll_secret]
+      properties:
+        poll_secret: { type: string, pattern: "^[A-Za-z0-9_-]{43}$" }
+    OmemoRecoveryPollStatus:
+      type: object
+      additionalProperties: false
+      required: [generation, state]
+      properties:
+        generation: { type: integer, minimum: 1, maximum: 9007199254740990 }
+        state: { type: string, enum: [preparing, prepared, consumed, revoked, expired] }
+    OmemoRecoveryAuthority:
+      type: object
+      additionalProperties: false
+      required: [next_generation, latest_consumed_generation, latest_consumed_transfer_id, latest_consumer_commitment]
+      properties:
+        next_generation: { type: integer, minimum: 1, maximum: 9007199254740991 }
+        latest_consumed_generation: { type: integer, minimum: 0, maximum: 9007199254740990 }
+        latest_consumed_transfer_id: { type: [string, "null"], format: uuid }
+        latest_consumer_commitment: { type: [string, "null"], pattern: "^[0-9a-f]{64}$" }
+    OmemoRecoveryTransfer:
+      type: object
+      additionalProperties: false
+      required: [id, generation, source_device_id, package_sha256, state, consumer_commitment, created_at, prepared_at, consumed_at, revoked_at, expires_at]
+      properties:
+        id: { type: string, format: uuid }
+        generation: { type: integer, minimum: 1, maximum: 9007199254740990 }
+        source_device_id: { type: integer, minimum: 1, maximum: 2147483647 }
+        package_sha256: { type: [string, "null"], pattern: "^[0-9a-f]{64}$" }
+        state: { type: string, enum: [preparing, prepared, consumed, revoked, expired] }
+        consumer_commitment: { type: [string, "null"], pattern: "^[0-9a-f]{64}$" }
+        created_at: { type: string, format: date-time }
+        prepared_at: { type: [string, "null"], format: date-time }
+        consumed_at: { type: [string, "null"], format: date-time }
+        revoked_at: { type: [string, "null"], format: date-time }
+        expires_at: { type: string, format: date-time }
+    UserRetentionPolicy:
+      type: object
+      additionalProperties: false
+      properties:
+        personal_mam_days: { type: [integer, "null"], minimum: 1, maximum: 36500 }
+        offline_message_days: { type: [integer, "null"], minimum: 1, maximum: 36500 }
+        moderation_evidence_days: { type: [integer, "null"], minimum: 30, maximum: 36500 }
+    MucRetentionPolicy:
+      type: object
+      additionalProperties: false
+      required: [retention_days]
+      properties:
+        retention_days: { type: [integer, "null"], minimum: 1, maximum: 36500 }
+    LegalHoldTarget:
+      type: object
+      additionalProperties: false
+      required: [kind, id]
+      properties:
+        kind:
+          type: string
+          enum: [personal_archive, muc_archive, offline_message, report_evidence, personal_archive_owner, muc_archive_room, offline_message_recipient, report_evidence_report]
+        id: { type: string, format: uuid }
+    LegalHoldCreate:
+      type: object
+      additionalProperties: false
+      required: [title, authority_reference, reason, targets]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 256 }
+        authority_reference: { type: string, minLength: 1, maxLength: 512 }
+        reason: { type: string, minLength: 1, maxLength: 16384 }
+        targets:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/LegalHoldTarget" }
+    LegalHoldRelease:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 16384 }
+    GovernanceExport:
+      type: object
+      additionalProperties: false
+      properties:
+        start: { type: [string, "null"], format: date-time }
+        end: { type: [string, "null"], format: date-time }
+        max_rows: { type: [integer, "null"], minimum: 1, maximum: 500 }
+        cursor: { type: [string, "null"], minLength: 1, maxLength: 2732, description: Opaque signed continuation from the previous page; requires a fresh Idempotency-Key while keeping start/end unchanged }
+    LegalHoldExportRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        max_rows: { type: [integer, "null"], minimum: 1, maximum: 100 }
+        cursor: { type: [string, "null"], minLength: 1, maxLength: 2732, description: Opaque signed continuation from the previous page; requires a fresh Idempotency-Key }
+    LegalHoldSummary:
+      type: object
+      additionalProperties: false
+      required: [id, title, authority_reference, reason, created_by, created_at, released_by, released_at, release_reason, target_count]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        authority_reference: { type: string }
+        reason: { type: string }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        released_by: { type: [string, "null"], format: uuid }
+        released_at: { type: [string, "null"], format: date-time }
+        release_reason: { type: [string, "null"] }
+        target_count: { type: integer, minimum: 0 }
+    LegalHoldList:
+      type: object
+      additionalProperties: false
+      required: [legal_holds]
+      properties:
+        legal_holds:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/LegalHoldSummary" }
+    LegalHoldMutation:
+      type: object
+      additionalProperties: false
+      required: [id, active]
+      properties:
+        id: { type: string, format: uuid }
+        active: { type: boolean }
+        target_count: { type: integer, minimum: 1, maximum: 1000 }
+    HeldRecordExport:
+      type: object
+      additionalProperties: false
+      required: [resource_type, record_id, subject_id, encrypted, record_created_at, server_visible_payload, payload_disposition, previous_hash, entry_hash]
+      properties:
+        resource_type: { type: string, enum: [personal_archive, muc_archive, offline_message, report_evidence] }
+        record_id: { type: string, format: uuid }
+        subject_id: { type: string, format: uuid }
+        encrypted: { type: boolean }
+        record_created_at: { type: string, format: date-time }
+        server_visible_payload: { type: [string, "null"] }
+        payload_disposition: { type: string, enum: [ciphertext, server_plaintext, encrypted_evidence_plaintext_omitted, released_record_expired] }
+        previous_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        entry_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+    LegalHoldExportResult:
+      type: object
+      additionalProperties: false
+      required: [format, export_id, exported_at, snapshot_at, lease_expires_at, hold, records, chain_start_sha256, chain_root_sha256, complete, truncated, next_cursor]
+      properties:
+        format: { type: string, const: northstar-legal-hold-chain-v2 }
+        export_id: { type: string, format: uuid }
+        exported_at: { type: string, format: date-time }
+        snapshot_at: { type: string, format: date-time, description: Fixed database-time upper bound for every scope target in this export }
+        lease_expires_at: { type: [string, "null"], format: date-time, description: Fixed non-renewable deadline for an active-hold export; null for a released one-page export }
+        hold: { $ref: "#/components/schemas/LegalHoldSummary" }
+        records: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/HeldRecordExport" } }
+        chain_start_sha256: { type: string, pattern: "^[0-9a-f]{64}$", description: Genesis on the first page; exactly the preceding page chain_root_sha256 thereafter }
+        chain_root_sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        complete: { type: boolean, description: True only when the frozen collection has been exhausted and the lease is completed }
+        truncated: { type: boolean, deprecated: true, description: Compatibility inverse of complete; use next_cursor }
+        next_cursor: { type: [string, "null"], description: Signed administrator/hold/snapshot/keyset/hash-chain continuation; null on the final page }
+    AuditExportEntry:
+      type: object
+      additionalProperties: false
+      required: [id, actor_id, action, target, details, ip_address, request_id, operation_id, created_at, previous_hash, entry_hash]
+      properties:
+        id: { type: integer, minimum: 1 }
+        actor_id: { type: [string, "null"], format: uuid }
+        action: { type: string }
+        target: { type: [string, "null"] }
+        details: { type: object, additionalProperties: true }
+        ip_address: { type: [string, "null"] }
+        request_id: { type: [string, "null"], format: uuid }
+        operation_id: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        previous_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        entry_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+    AuditExportResult:
+      type: object
+      additionalProperties: false
+      required: [format, export_id, exported_at, snapshot_at, snapshot_max_id, lease_expires_at, first_id, last_id, entries, chain_start_sha256, chain_root_sha256, complete, truncated, next_cursor]
+      properties:
+        format: { type: string, const: northstar-audit-chain-v2 }
+        export_id: { type: string, format: uuid }
+        exported_at: { type: string, format: date-time }
+        snapshot_at: { type: string, format: date-time }
+        snapshot_max_id: { type: integer, minimum: 0, description: Fixed inclusive high-water mark; every per-page access audit has a greater id }
+        lease_expires_at: { type: string, format: date-time, description: Fixed non-renewable continuation deadline }
+        first_id: { type: [integer, "null"], minimum: 1 }
+        last_id: { type: [integer, "null"], minimum: 1 }
+        entries: { type: array, maxItems: 500, items: { $ref: "#/components/schemas/AuditExportEntry" } }
+        chain_start_sha256: { type: string, pattern: "^[0-9a-f]{64}$", description: Genesis on the first page; exactly the preceding page chain_root_sha256 thereafter }
+        chain_root_sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        complete: { type: boolean }
+        truncated: { type: boolean, deprecated: true, description: Compatibility inverse of complete; use next_cursor }
+        next_cursor: { type: [string, "null"], description: Signed administrator/filter/snapshot/keyset/hash-chain continuation; null on the final page }
+    HistoryMessage:
+      type: object
+      additionalProperties: false
+      required: [id, peer_jid, peer_full_jid, stanza, encrypted, stanza_id, created_at]
+      properties:
+        id: { type: string, format: uuid, description: Immutable MAM archive UID used by every history bound and RSM cursor }
+        peer_jid: { type: string, description: Canonical bare peer JID retained for response compatibility }
+        peer_full_jid: { type: string, description: Canonical full peer JID when the archived exchange was resource-specific; otherwise equal to peer_jid }
+        stanza: { type: string, description: Exact server-accepted archived XML stanza }
+        encrypted: { type: boolean }
+        stanza_id: { type: [string, "null"], description: Client-provided stanza id when one was admitted; distinct from immutable archive UID id }
+        created_at: { type: string, format: date-time }
+    HistoryPage:
+      type: object
+      additionalProperties: false
+      required: [messages, next_cursor, all_end_to_end_encrypted, archive_policy, complete, count, first_index, first, last, stable, order, query_mode]
+      properties:
+        messages: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/HistoryMessage" } }
+        next_cursor: { type: [string, "null"], description: Present only when a legacy newest-first page has older results; direct MAM clients continue with first/last archive UIDs }
+        all_end_to_end_encrypted: { type: boolean }
+        archive_policy: { type: string, enum: [encrypted_only, all] }
+        complete: { type: boolean, description: No additional row exists in the selected RSM traversal direction }
+        count: { type: integer, minimum: 0, description: Total viewer-visible rows matching the independent with/time/id filters }
+        first_index: { type: integer, minimum: 0, description: Zero-based chronological index of the page's earliest row; independent of flip }
+        first: { type: [string, "null"], format: uuid, description: Chronologically earliest archive UID in this page; independent of flip }
+        last: { type: [string, "null"], format: uuid, description: Chronologically latest archive UID in this page; independent of flip }
+        stable: { type: boolean, const: true }
+        order: { type: string, enum: [chronological, reverse_chronological] }
+        query_mode: { type: string, enum: [legacy, mam] }
+    ReportStatus:
+      type: string
+      enum: [submitted, reviewing, actioned, rejected, closed]
+    OperationStatus:
+      type: string
+      enum: [pending, running, succeeded, failed, canceled, indeterminate]
+    OperationKind:
+      type: string
+      enum: [admin.user_session_cleanup, admin.tls_reload, admin.panic_disconnect, admin.session_kick, admin.broadcast, admin.muc_destroy, admin.island_converge]
+    UploadDeadLetterKind:
+      type: string
+      enum: [storage_job, cleanup]
+    UploadDeadLetter:
+      type: object
+      additionalProperties: false
+      required: [kind, id, operation, attempts, dead_lettered_at, available_at, created_at, error_summary]
+      properties:
+        kind: { $ref: "#/components/schemas/UploadDeadLetterKind" }
+        id: { type: string, minLength: 1, maxLength: 36, description: Queue-local retry identity. Storage-job values are canonical positive decimal no greater than 9223372036854775807; cleanup values are independently random RFC 4122 UUIDv4 recovery IDs, never object IDs or object-store locators. }
+        operation: { type: string, enum: [promote, delete_stage, delete_object, cleanup] }
+        attempts: { type: integer, minimum: 0 }
+        dead_lettered_at: { type: string, format: date-time }
+        available_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        error_summary: { type: [string, "null"], maxLength: 240, description: Bounded scrubbed diagnostic hint; never the original last_error }
+    UploadDeadLetterPage:
+      type: object
+      additionalProperties: false
+      required: [kind, items, limit, next_cursor]
+      properties:
+        kind: { $ref: "#/components/schemas/UploadDeadLetterKind" }
+        items: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/UploadDeadLetter" } }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        next_cursor: { type: [string, "null"], description: Signed administrator/kind/keyset continuation; null on the final page }
+    UploadDeadLetterRetry:
+      type: object
+      additionalProperties: false
+      required: [kind, id, state]
+      properties:
+        kind: { $ref: "#/components/schemas/UploadDeadLetterKind" }
+        id: { type: string, minLength: 1, maxLength: 36, description: The same queue-local storage-job ID or random cleanup recovery UUID from the request }
+        state: { type: string, const: queued }
+    CursorPage:
+      type: object
+      required: [next_cursor]
+      properties:
+        next_cursor: { type: [string, "null"], description: Null when no later page exists }
+    OperationAccepted:
+      type: object
+      additionalProperties: false
+      required: [operation_id, status]
+      properties:
+        operation_id: { type: string, format: uuid }
+        status: { type: string, const: pending }
+    OperationSummary:
+      type: object
+      additionalProperties: false
+      description: Collection representation. It deliberately omits payload and result; use the item detail route when those fields are needed.
+      required: [id, request_id, actor_subject_id, authorization_policy, kind, target, status, payload_version, error_code, attempts, max_attempts, next_attempt_at, deadline_at, cancel_requested_at, point_of_no_return_at, created_at, completed_at]
+      properties:
+        id: { type: string, format: uuid }
+        request_id: { type: string, format: uuid }
+        actor_subject_id: { type: string, format: uuid }
+        authorization_policy: { type: string, enum: [reauthorize_until_effect, committed_consequence] }
+        kind: { $ref: "#/components/schemas/OperationKind" }
+        target: { type: [string, "null"], maxLength: 4096 }
+        status: { $ref: "#/components/schemas/OperationStatus" }
+        payload_version: { type: integer, minimum: 1 }
+        error_code: { type: [string, "null"], maxLength: 128 }
+        attempts: { type: integer, minimum: 0 }
+        max_attempts: { type: integer, minimum: 1 }
+        next_attempt_at: { type: string, format: date-time }
+        deadline_at: { type: string, format: date-time }
+        cancel_requested_at: { type: [string, "null"], format: date-time }
+        point_of_no_return_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        completed_at: { type: [string, "null"], format: date-time }
+    Operation:
+      type: object
+      additionalProperties: false
+      required: [id, request_id, actor_subject_id, authorization_policy, kind, target, status, payload_version, payload, result, error_code, attempts, max_attempts, next_attempt_at, deadline_at, cancel_requested_at, point_of_no_return_at, created_at, completed_at]
+      properties:
+        id: { type: string, format: uuid }
+        request_id: { type: string, format: uuid }
+        actor_subject_id: { type: string, format: uuid }
+        authorization_policy: { type: string, enum: [reauthorize_until_effect, committed_consequence] }
+        kind: { $ref: "#/components/schemas/OperationKind" }
+        target: { type: [string, "null"] }
+        status: { $ref: "#/components/schemas/OperationStatus" }
+        payload_version: { type: integer, minimum: 1 }
+        payload: {}
+        result: { type: [object, array, string, number, integer, boolean, "null"] }
+        error_code: { type: [string, "null"], maxLength: 128 }
+        attempts: { type: integer, minimum: 0 }
+        max_attempts: { type: integer, minimum: 1 }
+        next_attempt_at: { type: string, format: date-time }
+        deadline_at: { type: string, format: date-time }
+        cancel_requested_at: { type: [string, "null"], format: date-time }
+        point_of_no_return_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        completed_at: { type: [string, "null"], format: date-time }
+    OperationTarget:
+      type: object
+      additionalProperties: false
+      required: [id, operation_id, target_key, ordinal, status, payload, result, error_code, attempts, max_attempts, next_attempt_at, deadline_at, cancel_requested_at, point_of_no_return_at, created_at, completed_at]
+      properties:
+        id: { type: string, format: uuid }
+        operation_id: { type: string, format: uuid }
+        target_key: { type: string }
+        ordinal: { type: integer, minimum: 0 }
+        status: { $ref: "#/components/schemas/OperationStatus" }
+        payload: {}
+        result: { type: [object, array, string, number, integer, boolean, "null"] }
+        error_code: { type: [string, "null"], maxLength: 128 }
+        attempts: { type: integer, minimum: 0 }
+        max_attempts: { type: integer, minimum: 1 }
+        next_attempt_at: { type: string, format: date-time }
+        deadline_at: { type: string, format: date-time }
+        cancel_requested_at: { type: [string, "null"], format: date-time }
+        point_of_no_return_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        completed_at: { type: [string, "null"], format: date-time }
+    OperationTargetSummary:
+      type: object
+      additionalProperties: false
+      description: Collection representation. It deliberately omits payload and result; use the target detail route when those fields are needed.
+      required: [id, operation_id, target_key, ordinal, status, error_code, attempts, max_attempts, next_attempt_at, deadline_at, cancel_requested_at, point_of_no_return_at, created_at, completed_at]
+      properties:
+        id: { type: string, format: uuid }
+        operation_id: { type: string, format: uuid }
+        target_key: { type: string, maxLength: 4096 }
+        ordinal: { type: integer, minimum: 0 }
+        status: { $ref: "#/components/schemas/OperationStatus" }
+        error_code: { type: [string, "null"], maxLength: 128 }
+        attempts: { type: integer, minimum: 0 }
+        max_attempts: { type: integer, minimum: 1 }
+        next_attempt_at: { type: string, format: date-time }
+        deadline_at: { type: string, format: date-time }
+        cancel_requested_at: { type: [string, "null"], format: date-time }
+        point_of_no_return_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        completed_at: { type: [string, "null"], format: date-time }
+    Reconciliation:
+      type: object
+      additionalProperties: false
+      description: |
+        Manual, audited evidence for resolving indeterminate work. `evidence_note` is trimmed and
+        limited to 4096 UTF-8 bytes; unsafe controls, bidi overrides/isolates and credential-like
+        text are rejected. The note must not contain recognizable Authorization, Bearer/Basic,
+        Cookie, password, token, client-secret or private-key material. Nested result objects must
+        not use secret-bearing key names such as password, token, authorization or private key.
+        A successful decision may include a JSON result (encoded size at most 1 MiB) and must not
+        include a non-null error code. A failed decision must omit `result` and must include an
+        error code made only of lowercase ASCII letters, digits, underscore or hyphen.
+      required: [succeeded, evidence_note]
+      properties:
+        succeeded: { type: boolean }
+        result: { type: [object, array, string, number, integer, boolean, "null"] }
+        error_code: { type: [string, "null"], minLength: 1, maxLength: 128, pattern: "^[a-z0-9_-]+$" }
+        evidence_note: { type: string, minLength: 1, maxLength: 4096, description: Maximum is enforced in UTF-8 bytes after trimming }
+      oneOf:
+        - title: Successful reconciliation
+          properties:
+            succeeded: { const: true }
+            error_code: { type: "null" }
+        - title: Failed reconciliation
+          required: [error_code]
+          properties:
+            succeeded: { const: false }
+            error_code: { type: string, minLength: 1, maxLength: 128, pattern: "^[a-z0-9_-]+$" }
+            result: false
+    MutationOutcome:
+      type: object
+      additionalProperties: false
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [requested, canceled, already_terminal, succeeded, failed]
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [unauthorized, forbidden, https_required, bad_request, invalid_cursor, conflict, idempotency_key_conflict, idempotency_in_progress, idempotency_replay_invalidated, idempotency_busy, payload_too_large, rate_limited, service_unavailable, operation_disabled, internal_error, not_found]
+            message: { type: string }
+            details: { description: Present only for proof-of-work, cooldown and behavioral rate-limit responses }
     Credentials:
       type: object
+      additionalProperties: false
       required: [username, password]
       properties:
-        username: { type: string, minLength: 3, maxLength: 64 }
-        password: { type: string, minLength: 10, maxLength: 1024 }
+        username: { type: string, minLength: 1, maxLength: 1024, description: After PRECIS preparation the localpart must contain 3 to 64 UTF-8 octets }
+        password: { type: string, minLength: 1, maxLength: 1024, description: Login accepts an existing credential; new passwords use the stricter Registration policy }
+        pow: { $ref: "#/components/schemas/PowProof" }
     Registration:
-      allOf:
-        - { $ref: "#/components/schemas/Credentials" }
-        - type: object
-          properties:
-            invitation_token: { type: [string, "null"] }
-            pow: { $ref: "#/components/schemas/PowProof" }
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 1024, description: After PRECIS preparation the localpart must contain 3 to 64 UTF-8 octets }
+        password: { type: string, minLength: 10, maxLength: 1024, description: Length is enforced in UTF-8 octets }
+        invitation_token: { type: [string, "null"], maxLength: 512 }
+        pow: { $ref: "#/components/schemas/PowProof" }
     PowProof:
       type: object
+      additionalProperties: false
       required: [challenge_id, nonce]
       properties:
         challenge_id: { type: string, format: uuid }
         nonce: { type: string, pattern: "^[0-9]+$", maxLength: 64 }
+    PowIntent:
+      type: object
+      additionalProperties: false
+      required: [version, method, path, body_sha256]
+      properties:
+        version: { type: integer, enum: [1, 2], description: Version 1 is emitted only inside the explicit compatibility window. }
+        method: { type: string, enum: [POST, PATCH, XMPP] }
+        path: { type: string, minLength: 1, maxLength: 512, pattern: "^/" }
+        body_sha256: { type: string, pattern: "^[A-Za-z0-9_-]{43}$", description: Unpadded base64url SHA-256 of the canonical operation body }
+    PowChallenge:
+      type: object
+      additionalProperties: false
+      required: [version, challenge_id, prefix, key_id, issued_at, expires_at, expires_in_seconds, server_nonce, intent, requirement]
+      properties:
+        version: { type: integer, enum: [2] }
+        challenge_id: { type: string, format: uuid }
+        prefix: { type: string }
+        key_id: { type: string, minLength: 8, maxLength: 32 }
+        issued_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        expires_in_seconds: { type: integer, minimum: 1 }
+        server_nonce: { type: string, pattern: "^[A-Za-z0-9_-]+$" }
+        intent:
+          oneOf:
+            - { $ref: "#/components/schemas/PowIntent" }
+            - { type: "null" }
+          description: Non-null for version 2; null only for deprecated version 1.
+        requirement: { type: object, additionalProperties: true }
     Session:
       type: object
+      additionalProperties: false
       required: [token, jid, is_admin]
       properties:
-        token: { type: string }
+        token: { type: string, pattern: "^[A-Za-z0-9]{64}$" }
         jid: { type: string }
         is_admin: { type: boolean }
+    BooleanToggle:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+    Evidence:
+      type: object
+      additionalProperties: false
+      description: Input evidence. Sender, timestamp, encryption flag and provenance are derived by the server and are not trusted from the client.
+      required: [archive_id, body_text]
+      properties:
+        archive_id: { type: string, format: uuid }
+        client_message_id: { type: [string, "null"], minLength: 1, maxLength: 128 }
+        body_text: { type: string, minLength: 1, maxLength: 8000, description: Ignored for plaintext archives; required as the reporter's unverified decrypted text for OMEMO evidence }
+    Report:
+      type: object
+      additionalProperties: false
+      required: [reported_jid, category, evidence]
+      properties:
+        reported_jid: { type: string }
+        category: { type: string, enum: [spam, harassment, threat, impersonation, illegal, other] }
+        evidence:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items: { $ref: "#/components/schemas/Evidence" }
+        description: { type: [string, "null"], maxLength: 4000 }
+        pow: { $ref: "#/components/schemas/PowProof" }
+    Appeal:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 20, maxLength: 4000 }
+        pow: { $ref: "#/components/schemas/PowProof" }
+    ReportModerationPatch:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, enum: [submitted, reviewing, actioned, rejected, closed] }
+        resolution: { type: [string, "null"], maxLength: 8000, description: Required and non-blank for actioned, rejected or closed }
+    AppealModerationPatch:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, enum: [submitted, reviewing, upheld, denied] }
+        resolution: { type: [string, "null"], maxLength: 8000, description: Required and non-blank for upheld or denied }
   responses:
+    LegalHoldMutationOutcome:
+      description: Legal-hold creation or immutable release decision; an identical retry receives the exact original body.
+      headers:
+        X-Request-ID: { $ref: "#/components/headers/RequestId" }
+        Idempotency-Replayed: { $ref: "#/components/headers/IdempotencyReplayed" }
+        Idempotency-Original-Request-ID: { $ref: "#/components/headers/IdempotencyOriginalRequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/LegalHoldMutation" }
+    LegalHoldExportOutcome:
+      description: Exact held-data snapshot and deterministic hash-chain metadata.
+      headers:
+        X-Request-ID: { $ref: "#/components/headers/RequestId" }
+        Idempotency-Replayed: { $ref: "#/components/headers/IdempotencyReplayed" }
+        Idempotency-Original-Request-ID: { $ref: "#/components/headers/IdempotencyOriginalRequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/LegalHoldExportResult" }
+    AuditExportOutcome:
+      description: Bounded audit snapshot and deterministic hash-chain metadata.
+      headers:
+        X-Request-ID: { $ref: "#/components/headers/RequestId" }
+        Idempotency-Replayed: { $ref: "#/components/headers/IdempotencyReplayed" }
+        Idempotency-Original-Request-ID: { $ref: "#/components/headers/IdempotencyOriginalRequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AuditExportResult" }
+    AcceptedOperation:
+      description: The durable operation was committed and queued. Poll `Location`; a 202 response does not mean that the external effect has completed.
+      headers:
+        Location: { $ref: "#/components/headers/Location" }
+        X-Request-ID: { $ref: "#/components/headers/RequestId" }
+        Idempotency-Replayed: { $ref: "#/components/headers/IdempotencyReplayed" }
+        Idempotency-Original-Request-ID: { $ref: "#/components/headers/IdempotencyOriginalRequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/OperationAccepted" }
+    MutationOutcome:
+      description: Mutation decision. A replay returns the original status and body and adds exactly the two idempotency replay headers documented below.
+      headers:
+        X-Request-ID: { $ref: "#/components/headers/RequestId" }
+        Idempotency-Replayed: { $ref: "#/components/headers/IdempotencyReplayed" }
+        Idempotency-Original-Request-ID: { $ref: "#/components/headers/IdempotencyOriginalRequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MutationOutcome" }
     Error:
-      description: Error response
+      description: |
+        Error response. Idempotently stored 404/409 decisions replay the original status and body
+        and add exactly `Idempotency-Replayed: true` and
+        `Idempotency-Original-Request-ID: <original UUID>`.
+      headers:
+        Retry-After:
+          description: Present on in-progress or temporarily busy idempotency admission and other time-based denials.
+          schema: { type: integer, minimum: 1 }
+        WWW-Authenticate:
+          description: Present on 401 responses.
+          schema: { type: string, const: 'Bearer realm="northstar"' }
+        X-Request-ID: { $ref: "#/components/headers/RequestId" }
+        Idempotency-Replayed: { $ref: "#/components/headers/IdempotencyReplayed" }
+        Idempotency-Original-Request-ID: { $ref: "#/components/headers/IdempotencyOriginalRequestId" }
       content:
         application/json:
-          schema:
-            type: object
-            properties:
-              error:
-                type: object
-                properties:
-                  code: { type: string }
-                  message: { type: string }
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
     RateLimited:
-      description: Work proof, hard wait or cooldown is required; details contain current and maximum work and retry timing.
+      description: Work proof, hard wait or cooldown is required. The response includes the current quadratic step, fixed operator maximum, retry timing, cooldown and approximate device calibration target. Limits decay one step at a time after activity stops.
+      headers:
+        Retry-After:
+          description: Required wait in seconds when non-zero.
+          schema: { type: integer, minimum: 1 }
+        X-Request-ID: { $ref: "#/components/headers/RequestId" }
+        Idempotency-Replayed: { $ref: "#/components/headers/IdempotencyReplayed" }
+        Idempotency-Original-Request-ID: { $ref: "#/components/headers/IdempotencyOriginalRequestId" }
       content:
         application/json:
-          schema:
-            type: object
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }

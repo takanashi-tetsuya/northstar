@@ -1,8 +1,8 @@
 {$XMPP_DOMAIN} {
     encode zstd gzip
     route {
-        @metrics path /metrics
-        respond @metrics 404
+        @private_observability path /metrics /readyz
+        respond @private_observability 404
         reverse_proxy xmpp:8080
     }
     header {

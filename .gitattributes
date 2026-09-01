@@ -13,6 +13,9 @@
 *.css text eol=lf
 *.md text eol=lf
 *.sql text eol=lf
+# Published migration bytes are checksum authority. Do not normalize an
+# existing file merely to remove its historical blank line at EOF.
+migrations/*.sql whitespace=-blank-at-eof
 Dockerfile text eol=lf
 Makefile text eol=lf
 *.bat text eol=crlf

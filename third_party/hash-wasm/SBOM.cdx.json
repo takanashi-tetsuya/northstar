@@ -1,0 +1,50 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:4716f30f-06b6-45a7-b035-78c47dc1e0df",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "bom-ref": "northstar:web-omemo-device-transfer",
+      "name": "Northstar web OMEMO device transfer"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/hash-wasm@4.12.0",
+      "name": "hash-wasm",
+      "version": "4.12.0",
+      "purl": "pkg:npm/hash-wasm@4.12.0",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "hashes": [
+        { "alg": "SHA-256", "content": "1db32a125fb46177932ec8ac438d3cd8214ebdfaccb5d6611b657d88eb586f92" },
+        { "alg": "SHA-1", "content": "f9f1a9f9121e027a9acbf6db5d59452ace1ef9bb" },
+        { "alg": "SHA-512", "content": "fbfd81dab60b6f8f08fdebdd38884ff8afc30f671ad9f8018e9e8ef860449c20e4d9ee2ba5e5c82bc1af23244f8d37b38265a7f6098ac244238f1e81b6a0c755" }
+      ],
+      "externalReferences": [
+        { "type": "vcs", "url": "https://github.com/Daninet/hash-wasm/tree/373b796205ab55fb4a657374dad6ea589bf75815" },
+        { "type": "distribution", "url": "https://registry.npmjs.org/hash-wasm/-/hash-wasm-4.12.0.tgz" }
+      ],
+      "properties": [
+        { "name": "northstar:npm-integrity", "value": "sha512-+/2B2rYLb48I/evdOIhP+K/DD2ca2fgBjp6O+GBEnCDk2e4rpeXIK8GvIyRPjTezgmWn9gmKwkQjjx6BtqDHVQ==" },
+        { "name": "northstar:rebuild-status", "value": "provenance-traced-not-reproducible" }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "northstar:web/crypto/hash-wasm-argon2.umd.min.js",
+      "name": "hash-wasm Argon2 UMD browser artifact",
+      "hashes": [
+        { "alg": "SHA-256", "content": "dcec617a2e1b700fa132d1583a186cb70611113395e869f2dd6cc82b415d3094" }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "northstar:web-omemo-device-transfer",
+      "dependsOn": ["pkg:npm/hash-wasm@4.12.0", "northstar:web/crypto/hash-wasm-argon2.umd.min.js"]
+    }
+  ]
+}

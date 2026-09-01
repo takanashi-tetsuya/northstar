@@ -1,0 +1,10 @@
+services:
+  xmpp:
+    environment:
+      API_CONTROL_PREVIOUS_SECRET_FILE: /run/secrets/api_control_previous_secret
+    secrets:
+      - api_control_previous_secret
+
+secrets:
+  api_control_previous_secret:
+    file: ${API_CONTROL_PREVIOUS_SECRET_HOST_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/api_control_previous_secret}

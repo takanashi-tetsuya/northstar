@@ -1,0 +1,12 @@
+{
+  "components": [
+    {
+      "jid": "gateway.example.com",
+      "aliases": ["irc.gateway.example.com"],
+      "secret_file": "/run/secrets/gateway_component_secret",
+      "connection": "accept",
+      "legacy_0114": false,
+      "modern_0225": true
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+services:
+  xmpp:
+    environment:
+      COMPONENTS_ENABLED: "true"
+      COMPONENTS_CONFIG_FILE: /run/secrets/components_config
+      # Container listeners cannot bind the host loopback. The published port
+      # below remains host-loopback-only and the example profile is TLS-only.
+      COMPONENT_BIND: 0.0.0.0:5347
+    ports:
+      - "127.0.0.1:5347:5347"
+    secrets:
+      - components_config
+      - gateway_component_secret
+
+secrets:
+  components_config:
+    file: ./deploy/components.json
+  gateway_component_secret:
+    file: ${GATEWAY_COMPONENT_SECRET_HOST_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/gateway_component_secret}

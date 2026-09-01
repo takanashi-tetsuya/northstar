@@ -6,7 +6,7 @@
   <meta name="description" content="Northstar 私密 XMPP 网页客户端">
   <meta name="theme-color" content="#07110f">
   <title>Northstar 私密聊天</title>
-  <link rel="stylesheet" href="/client.css?v=20260813-4">
+  <link rel="stylesheet" href="/client.css?v=20260826-3">
   <link rel="stylesheet" href="/i18n.css?v=20260813-3">
 </head>
 <body>
@@ -66,7 +66,7 @@
           <label id="invitation-field">邀请码（可选）
             <input id="register-invitation" name="invitation" type="text" autocomplete="off" maxlength="256" spellcheck="false">
           </label>
-          <p class="field-hint">至少 10 个字符。私钥只会保存在当前浏览器中。</p>
+          <p class="field-hint">至少 10 个字符。OMEMO 私钥仅保存在当前浏览器，并由不可导出的本机密钥加密。</p>
           <p id="auth-pow-status" class="pow-status hidden" role="status"></p>
           <button class="primary-button" type="submit">创建账号</button>
         </form>
@@ -192,7 +192,7 @@
   <dialog id="verify-dialog" class="modal wide-modal">
     <form method="dialog">
       <header><div><p class="eyebrow">OMEMO</p><h2>设备与指纹</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></header>
-      <p class="modal-copy">通过另一条可信渠道比对指纹。首次看到的密钥采用 TOFU（首次使用即信任）；密钥变化时客户端会停止发送。</p>
+      <p class="modal-copy">请通过另一条可信渠道比对指纹，并明确标记为已验证或不信任。首次看到的密钥可按 TOFU 使用；身份密钥变化后，客户端会暂停发送，直到你处理新指纹。</p>
       <div id="fingerprint-list" class="fingerprint-list"></div>
       <div class="modal-actions"><button class="secondary-button" value="cancel">关闭</button><button id="refresh-devices" class="primary-button compact-button" value="default">重新检查</button></div>
     </form>
@@ -201,10 +201,10 @@
   <dialog id="settings-dialog" class="modal wide-modal">
     <form method="dialog">
       <header><div><p class="eyebrow">SETTINGS</p><h2>本机设置</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></header>
-      <section class="settings-section"><h3>加密设备</h3><dl><div><dt>本机设备 ID</dt><dd id="own-device-id">—</dd></div><div><dt>本机指纹</dt><dd id="own-fingerprint">—</dd></div></dl></section>
+      <section class="settings-section"><h3>加密设备</h3><dl><div><dt>本机设备 ID</dt><dd id="own-device-id">—</dd></div><div><dt>本机指纹</dt><dd id="own-fingerprint">—</dd></div></dl><p>Northstar 可通过保存在本地、由独立口令加密的一次性文件，将当前 OMEMO 设备完整迁移到另一个浏览器。该操作会移动棘轮状态，并非可重复使用的备份。成功导入后请删除文件，并重新验证所有联系人设备。</p><div class="recovery-controls"><label>独立迁移口令<input id="omemo-transfer-passphrase" type="password" autocomplete="new-password" minlength="12" maxlength="1024"></label><label>确认迁移口令<input id="omemo-transfer-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="1024"></label><button id="export-omemo-device" class="secondary-button" type="button">导出一次性设备迁移文件</button><button id="cancel-omemo-transfer" class="danger-button hidden" type="button">取消待处理迁移并重新启用此设备</button><hr><label>加密的迁移文件<input id="omemo-transfer-file" type="file" accept="application/json,.json,.northstar-omemo-transfer.json"></label><label>迁移口令<input id="omemo-import-passphrase" type="password" autocomplete="off" minlength="12" maxlength="1024"></label><button id="import-omemo-device" class="secondary-button" type="button">导入并替换此浏览器设备</button><p id="omemo-transfer-status" class="form-message hidden" role="status"></p></div><button id="forget-omemo-device" class="danger-button" type="button">移除此设备并删除本地加密密钥</button></section>
       <section class="settings-section"><h3>头像</h3><p>可选择最高 50 MiB 的常见图片。原图只在当前浏览器中读取，裁切、旋转、转码并压缩到 256 KiB 以下后才会发布为标准 XMPP 头像与 vCard 照片。</p><div class="avatar-setting"><div id="settings-avatar" class="avatar large">N</div><button id="avatar-button" class="secondary-button" type="button">选择并裁切头像</button><input id="avatar-input" class="hidden" type="file" accept="image/*,.avif,.bmp,.dib,.gif,.heic,.heif,.ico,.jfif,.jpe,.jpeg,.jpg,.png,.svg,.tif,.tiff,.webp"></div></section>
       <section class="settings-section"><h3>举报与申诉</h3><p>查看举报处理结果，并在已处理的举报上提交一次申诉。申诉采用更严格的账号限流和工作量证明。</p><button id="report-history-button" class="secondary-button" type="button">查看举报与申诉</button></section>
-      <section class="settings-section danger-zone"><h3>会话</h3><p>退出后账号密码会从内存清除，OMEMO 私钥仍保存在当前浏览器中。</p><button id="logout-button" class="danger-button" value="default">退出登录</button></section>
+      <section class="settings-section danger-zone"><h3>会话</h3><p>退出后账号密码会从内存清除；加密封装的 OMEMO 状态仍保存在当前浏览器中。</p><button id="logout-button" class="danger-button" value="default">退出登录</button></section>
       <div class="modal-actions"><button class="secondary-button" value="cancel">关闭</button></div>
     </form>
   </dialog>
@@ -256,6 +256,6 @@
   </dialog>
 
   <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
-  <script type="module" src="/client.js?v=20260813-16"></script>
+  <script type="module" src="/client.js?v=20260829-3"></script>
 </body>
 </html>

@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export DATABASE_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT=true
+export MIGRATOR_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT=true
+export METRICS_BIND=127.0.0.1:0
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 expected_binary="$project_dir/target-wsl/debug/rust-xmpp-server"
 pid_file="$project_dir/browser-server.pid"
 test_schema="northstar_browser_manual_it"
+browser_http_bind="127.0.0.1"
+if [[ "${NORTHSTAR_BROWSER_ALLOW_NON_LOOPBACK_BIND:-false}" == "true" ]]; then
+  browser_http_bind="0.0.0.0"
+elif [[ "${NORTHSTAR_BROWSER_ALLOW_NON_LOOPBACK_BIND:-false}" != "false" ]]; then
+  echo "NORTHSTAR_BROWSER_ALLOW_NON_LOOPBACK_BIND must be true or false" >&2
+  exit 2
+fi
 cd "$project_dir"
 
 if [[ ! -x "$expected_binary" ]]; then
@@ -40,20 +50,41 @@ fi
 PGPASSWORD=xmpp-test-password psql \
   --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
   --set ON_ERROR_STOP=1 \
-  --command "DROP SCHEMA IF EXISTS $test_schema CASCADE; CREATE SCHEMA $test_schema;" >/dev/null
+  --command "DROP SCHEMA IF EXISTS \"$test_schema\" CASCADE; CREATE SCHEMA \"$test_schema\";" >/dev/null
 
 mkdir -p certs
+mkdir -p data/browser-secrets
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
   -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
   -keyout certs/browser.key -out certs/browser.crt >/dev/null 2>&1
+for secret in api-control abuse-state fast-token dummy-scram; do
+  if [[ ! -s "data/browser-secrets/$secret.secret" ]]; then
+    openssl rand -base64 -out "data/browser-secrets/$secret.secret" 48
+  fi
+  chmod 0600 "data/browser-secrets/$secret.secret"
+done
+
+database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema"
+env \
+  NORTHSTAR_DISABLE_DOTENV=true \
+  XMPP_DOMAIN=localhost \
+  MIGRATOR_DATABASE_URL="$database_url" \
+  "$expected_binary" migrate
 
 nohup env \
+  NORTHSTAR_DISABLE_DOTENV=true \
   XMPP_DOMAIN=localhost \
-  DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+  DATABASE_URL="$database_url" \
   XMPP_BIND=127.0.0.1:15222 \
+  XMPPS_BIND=127.0.0.1:0 \
   S2S_BIND=127.0.0.1:15226 \
-  HTTP_BIND=0.0.0.0:18080 \
+  S2S_TLS_BIND=127.0.0.1:0 \
+  HTTP_BIND="$browser_http_bind:18080" \
   PUBLIC_URL=http://127.0.0.1:18080 \
+  API_CONTROL_SECRET_FILE="$project_dir/data/browser-secrets/api-control.secret" \
+  ABUSE_STATE_HMAC_KEY_FILE="$project_dir/data/browser-secrets/abuse-state.secret" \
+  FAST_TOKEN_SECRET_FILE="$project_dir/data/browser-secrets/fast-token.secret" \
+  DUMMY_SCRAM_SECRET_FILE="$project_dir/data/browser-secrets/dummy-scram.secret" \
   UPLOAD_DIR="$project_dir/data/browser-uploads" \
   TLS_CERT_PATH="$project_dir/certs/browser.crt" \
   TLS_KEY_PATH="$project_dir/certs/browser.key" \

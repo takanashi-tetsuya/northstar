@@ -1,0 +1,28 @@
+{
+  "namespace": "example.org",
+  "nodes": [
+    {
+      "node_id": "node-b",
+      "key_epoch": 1,
+      "current_public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "allowed_kinds": [
+        "ack",
+        "direct_delivery",
+        "blocking_presence",
+        "presence_probe",
+        "session_teardown",
+        "account_generation_teardown",
+        "user_agent_replacement",
+        "sm_session_teardown",
+        "sm_muc_teardown",
+        "muc_broadcast",
+        "muc_private",
+        "muc_presence",
+        "muc_nickname_change",
+        "muc_role_change",
+        "muc_evict",
+        "muc_destroy"
+      ]
+    }
+  ]
+}

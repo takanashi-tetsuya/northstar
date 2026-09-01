@@ -1,0 +1,37 @@
+# Deprecated compatibility overlay. The base Compose file now enforces this
+# authenticated, encrypted, monotonic policy. Keeping the duplicate mappings
+# avoids breaking an existing deployment command while adding no weaker path.
+services:
+  backup:
+    environment:
+      BACKUP_REQUIRE_SIGNATURE: "true"
+      BACKUP_SIGNING_KEY_FILE: /run/secrets/backup_signing_key
+      BACKUP_SEQUENCE_STATE_FILE: /state/backup-sequence
+      NORTHSTAR_BACKUP_APPLICATION_VERSION: ${NORTHSTAR_BACKUP_VERSION:-1.1.0}
+    volumes:
+      - backup-sequence-state:/state
+    secrets:
+      - backup_signing_key
+
+  restore:
+    environment:
+      BACKUP_REQUIRE_SIGNATURE: "true"
+      BACKUP_VERIFY_KEY_FILE: /run/secrets/backup_verify_key
+      BACKUP_ROLLBACK_STATE_FILE: /state/restore-floor
+    volumes:
+      - restore-floor-state:/state
+    secrets:
+      - backup_verify_key
+
+volumes:
+  # These capabilities must not share a writable volume. The producer can
+  # advance backup sequence state; only the restore role can advance the
+  # trusted replay floor.
+  backup-sequence-state:
+  restore-floor-state:
+
+secrets:
+  backup_signing_key:
+    file: ${BACKUP_SIGNING_KEY_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/backup_signing_ed25519.pem}
+  backup_verify_key:
+    file: ${BACKUP_VERIFY_KEY_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/backup_signing_ed25519.pub.pem}

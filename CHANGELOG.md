@@ -51,6 +51,16 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - CI now hashes canonical LF-only migration bytes, pins the exact Rust 1.97.1
   builder digest, uses a genuinely loopback PostgreSQL runtime fixture, and
   exercises production-shaped upload capacity and disaster-recovery rollback.
+- Runtime schema attestation now follows the connection's already pinned
+  schema, so privilege-separated and isolated-schema deployments cannot read a
+  different `public` migration ledger. Authentication database fixtures also
+  use one fresh schema per exact test.
+- Strict XEP-0198 same-device policy no longer issues an unusable resume bearer
+  to legacy SASL clients that cannot present a SASL2/XEP-0388 device UUID; they
+  retain ordinary Stream Management with `resume=false`.
+- Upload capability projections now explicitly convert the historical
+  `VARCHAR(255)` content type to their declared PostgreSQL `TEXT` return type,
+  preventing first PUT and public-file retrieval failures.
 - Production qualification still requires the target-environment and external
   gates in [the release checklist](docs/RELEASE_CHECKLIST.md).
 

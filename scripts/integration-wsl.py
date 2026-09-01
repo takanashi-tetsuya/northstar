@@ -1347,9 +1347,13 @@ def tcp_sasl_core_conformance() -> None:
 
     # Unknown and disabled users both complete the full server-first/final
     # exchange with account- and family-specific dummy material. Their public
-    # round-trip count, salt/iteration shape and terminal condition remain
-    # indistinguishable; corrupt stored verifiers are tested separately as a
-    # temporary backend failure in the random-schema database suite.
+    # round-trip count, salt/iteration syntax and terminal condition remain
+    # indistinguishable. Iteration *values* are deliberately selected by a
+    # deployment-keyed account mapping from every live profile, so two
+    # different usernames need not receive the same value. Requiring equality
+    # here made the fixture depend on the random dummy-SCRAM secret. Corrupt
+    # stored verifiers are tested separately as a temporary backend failure in
+    # the random-schema database suite.
     status, admin_login = api(
         "POST", "/api/v1/login", {"username": ADMIN, "password": ADMIN_PASSWORD}
     )
@@ -1376,9 +1380,10 @@ def tcp_sasl_core_conformance() -> None:
             and len(base64.b64decode(unknown_shape["s"]))
             == len(base64.b64decode(disabled_shape["s"]))
             == 32
-            and unknown_shape["i"] == disabled_shape["i"]
+            and 4096 <= int(unknown_shape["i"]) <= 10_000_000
+            and 4096 <= int(disabled_shape["i"]) <= 10_000_000
             and unknown_shape["s"] != disabled_shape["s"],
-            "unknown and disabled SCRAM server-first wire shapes diverged or reused one salt",
+            "unknown and disabled SCRAM server-first wire shapes diverged, used an invalid cost, or reused one salt",
         )
         check(
             b"<not-authorized" in unknown_result
@@ -1728,6 +1733,10 @@ class XmppWebSocket:
             except TimeoutError as error:
                 raise TimeoutError(
                     f"timed out waiting for {marker!r}; frames={frames!r}"
+                ) from error
+            except (EOFError, ConnectionError) as error:
+                raise EOFError(
+                    f"WebSocket closed while waiting for {marker!r}; frames={frames!r}"
                 ) from error
             frames.append(frame)
             if marker in frame:

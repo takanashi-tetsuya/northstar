@@ -47,6 +47,14 @@ fn sm_resume_token_hash(emitted_bearer: &str) -> [u8; 32] {
     Sha256::digest(emitted_bearer.as_bytes()).into()
 }
 
+fn resumability_allowed(
+    requested: bool,
+    require_same_device: bool,
+    user_agent_id: Option<uuid::Uuid>,
+) -> bool {
+    requested && (!require_same_device || user_agent_id.is_some())
+}
+
 impl ProtocolSession {
     /// Enables XEP-0198 as an inline Bind 2 feature and returns the exact XML
     /// that belongs inside `<bound/>`. Resume tokens are 256-bit random
@@ -59,6 +67,17 @@ impl ProtocolSession {
         if self.full_jid.is_none() || self.sm_enabled {
             return Err("unexpected-request");
         }
+        // XEP-0388 supplies a stable user-agent UUID, while legacy SASL has no
+        // standard way to prove device continuity.  Under the strict policy,
+        // negotiate ordinary stream management for an unidentifiable legacy
+        // client instead of issuing a bearer that the claim authority must
+        // later reject.  Operators can explicitly disable the policy when
+        // legacy resumption is an intended compatibility boundary.
+        let resume = resumability_allowed(
+            resume,
+            self.state.config.sm_require_same_device,
+            self.user_agent_id,
+        );
         self.sm_enabled = true;
         self.sm_resume_allowed = resume;
         self.sm_inbound_h = 0;
@@ -335,6 +354,11 @@ impl ProtocolSession {
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                 }
                 SmResumeClaimOutcome::Pending => {
+                    tracing::debug!(
+                        user_id = %current_user.id,
+                        connection_id = %self.connection_id,
+                        "timed out waiting for the previous SM transport to publish its resumable snapshot"
+                    );
                     return Ok((Action::Send(sm_failed("item-not-found")), None));
                 }
             }
@@ -646,15 +670,41 @@ impl ProtocolSession {
             .state
             .begin_suspended_muc_resume(&paused_muc, remaining.len(), exact_base_bytes)
             .await;
-        let route_is_current = self.state.sessions.get_mut(&key).is_some_and(|session| {
-            session.connection_id == self.connection_id
-                && session.user_id == current_user.id
-                && session.auth_generation == current_user.auth_generation
-                && Arc::ptr_eq(&session.lifecycle, &self.route_lifecycle)
-                && !session.disconnect.is_cancelled()
-                && session.lifecycle.load(Ordering::Acquire) == 0
+        let route_state = self.state.sessions.get_mut(&key).map(|session| {
+            (
+                session.connection_id == self.connection_id,
+                session.user_id == current_user.id,
+                session.auth_generation == current_user.auth_generation,
+                Arc::ptr_eq(&session.lifecycle, &self.route_lifecycle),
+                session.disconnect.is_cancelled(),
+                session.lifecycle.load(Ordering::Acquire),
+            )
         });
+        let route_is_current = route_state.is_some_and(
+            |(
+                same_connection,
+                same_user,
+                same_auth_generation,
+                same_lifecycle,
+                cancelled,
+                state,
+            )| {
+                same_connection
+                    && same_user
+                    && same_auth_generation
+                    && same_lifecycle
+                    && !cancelled
+                    && state == 0
+            },
+        );
         if !route_is_current || !muc_resume_ready {
+            tracing::warn!(
+                sm_session_id = %claim.session_id,
+                connection_id = %self.connection_id,
+                ?route_state,
+                muc_resume_ready,
+                "committed SM resume lost its staged local route before transport publication"
+            );
             self.state
                 .remove_session_if_connection(&key, self.connection_id);
             let abort_snapshot = SmSessionSnapshot {
@@ -1221,9 +1271,9 @@ fn validated_sm_session_key(full_jid: &str, resource: &str, account: &str) -> Op
 mod tests {
     use super::{
         acknowledgement_delta, claim_sm_route_lifecycle, handled_count_too_high_stream_error,
-        matching_sm_route, muc_resume_failure_stanza, resumed_offline_replay_eligible,
-        sm_resume_token_hash, stage_muc_replay_suffix, valid_sm_control, validated_sm_session_key,
-        SmRouteTakeover,
+        matching_sm_route, muc_resume_failure_stanza, resumability_allowed,
+        resumed_offline_replay_eligible, sm_resume_token_hash, stage_muc_replay_suffix,
+        valid_sm_control, validated_sm_session_key, SmRouteTakeover,
     };
     use roxmltree::Document;
 
@@ -1315,6 +1365,15 @@ mod tests {
         assert!(resumed_offline_replay_eligible(true, i16::MAX));
         assert!(!resumed_offline_replay_eligible(false, 0));
         assert!(!resumed_offline_replay_eligible(true, -1));
+    }
+
+    #[test]
+    fn strict_same_device_policy_does_not_issue_unclaimable_legacy_bearers() {
+        let device = uuid::Uuid::new_v4();
+        assert!(resumability_allowed(true, true, Some(device)));
+        assert!(resumability_allowed(true, false, None));
+        assert!(!resumability_allowed(true, true, None));
+        assert!(!resumability_allowed(false, false, Some(device)));
     }
 
     #[test]

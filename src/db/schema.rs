@@ -97,8 +97,13 @@ pub async fn verify_schema(pool: &PgPool, domain: &str) -> Result<()> {
         .execute(&mut *transaction)
         .await
         .context("could not enforce read-only schema verification")?;
+    // Production connections are pinned to `public` by
+    // `pin_public_application_schema`. The explicit loopback-only development
+    // escape hatch instead supplies a random isolated schema in its DSN. Keep
+    // these verification reads on that already-pinned connection schema so a
+    // test process cannot accidentally inspect a different shared schema.
     let rows: Vec<(i64, bool, Vec<u8>)> = sqlx::query_as(
-        "SELECT version,success,checksum FROM public._sqlx_migrations ORDER BY version",
+        "SELECT version,success,checksum FROM _sqlx_migrations ORDER BY version",
     )
     .fetch_all(&mut *transaction)
     .await
@@ -118,18 +123,18 @@ pub async fn verify_schema(pool: &PgPool, domain: &str) -> Result<()> {
     // These canonicalizers intentionally run after SQLx's DDL migrations. A
     // migrator crash between those phases must not allow a runtime process to
     // start merely because the SQLx ledger is current.
-    let identity_rows: Vec<(String, i32)> = sqlx::query_as(
-        "SELECT migration,canonicalizer_version FROM public.jid_identity_migrations",
-    )
-    .fetch_all(&mut *transaction)
-    .await
-    .context("could not read the RFC 7622 identity-migration ledger")?;
-    validate_identity_migrations(&required_identity_migrations(domain), &identity_rows)?;
-    let session_authority_healthy: bool =
-        sqlx::query_scalar("SELECT public.northstar_session_capability_catalog_healthy('public')")
-            .fetch_one(&mut *transaction)
+    let identity_rows: Vec<(String, i32)> =
+        sqlx::query_as("SELECT migration,canonicalizer_version FROM jid_identity_migrations")
+            .fetch_all(&mut *transaction)
             .await
-            .context("could not attest session capability ownership/ACLs")?;
+            .context("could not read the RFC 7622 identity-migration ledger")?;
+    validate_identity_migrations(&required_identity_migrations(domain), &identity_rows)?;
+    let session_authority_healthy: bool = sqlx::query_scalar(
+        "SELECT northstar_session_capability_catalog_healthy(pg_catalog.current_schema())",
+    )
+    .fetch_one(&mut *transaction)
+    .await
+    .context("could not attest session capability ownership/ACLs")?;
     anyhow::ensure!(
         session_authority_healthy,
         "session capability ownership, search_path, or runtime ACL attestation failed; reconcile database grants before startup"

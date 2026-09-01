@@ -2566,6 +2566,21 @@ mod tests {
                 "missing upload invariant: {invariant}"
             );
         }
+        // `upload_slots.content_type` is VARCHAR(255), while the public
+        // capabilities intentionally expose TEXT. PL/pgSQL RETURN QUERY does
+        // not apply that conversion implicitly, so every projection must keep
+        // an explicit cast or the first PUT fails at runtime.
+        assert_eq!(
+            authority
+                .matches("slot_row.content_type::pg_catalog.text")
+                .count(),
+            2,
+            "upload claim replay/acquire projections must cast VARCHAR to TEXT"
+        );
+        assert!(
+            authority.contains("slot.content_type::pg_catalog.text"),
+            "public upload-file projection must cast VARCHAR to TEXT"
+        );
         for (function_name, terminator) in [
             (
                 "northstar_upload_confirm_cleanup_absence",

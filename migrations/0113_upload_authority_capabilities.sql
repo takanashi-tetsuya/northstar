@@ -1452,7 +1452,7 @@ RETURNS TABLE(
 LANGUAGE sql
 SECURITY DEFINER
 AS $northstar_upload_public_file$
-    SELECT slot.id,slot.content_type,slot.size,slot.storage_backend,
+    SELECT slot.id,slot.content_type::pg_catalog.text,slot.size,slot.storage_backend,
            slot.storage_object_key,slot.storage_object_version,
            GREATEST(0,pg_catalog.ceil(EXTRACT(
              EPOCH FROM slot.expires_at-pg_catalog.clock_timestamp()
@@ -1620,7 +1620,7 @@ BEGIN
           NULL::pg_catalog.int8;
       ELSE
         RETURN QUERY SELECT 'replay'::pg_catalog.text,slot_row.id,
-          slot_row.content_type,slot_row.size,slot_row.remaining_seconds,
+          slot_row.content_type::pg_catalog.text,slot_row.size,slot_row.remaining_seconds,
           slot_row.storage_backend,slot_row.storage_object_key,
           slot_row.storage_object_version,slot_row.content_sha256,
           NULL::pg_catalog.uuid,slot_row.storage_fence,NULL::pg_catalog.int8;
@@ -1754,7 +1754,7 @@ BEGIN
       RETURN;
     END IF;
     RETURN QUERY SELECT 'acquired'::pg_catalog.text,slot_row.id,
-      slot_row.content_type,slot_row.size,slot_row.remaining_seconds,
+      slot_row.content_type::pg_catalog.text,slot_row.size,slot_row.remaining_seconds,
       slot_row.storage_backend,slot_row.storage_object_key,
       slot_row.storage_object_version,NULL::pg_catalog.bytea,new_claim,
       claimed_row.storage_fence,claimed_row.remaining_seconds;

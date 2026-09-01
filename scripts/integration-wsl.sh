@@ -197,6 +197,7 @@ start_server() {
     OPEN_REGISTRATION=true \
     REQUIRE_ENCRYPTED_ARCHIVE=true \
     SCRAM_SHA1_ENABLED=true \
+    SM_REQUIRE_SAME_DEVICE=false \
     REGISTRATION_RATE_PER_HOUR=20 \
     RESOURCE_BIND_TIMEOUT_SECONDS=5 \
     ADMIN_ADDRESSES=mailto:admin@example.test \

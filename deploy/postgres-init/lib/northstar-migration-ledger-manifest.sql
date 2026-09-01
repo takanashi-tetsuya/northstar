@@ -123,7 +123,7 @@ INSERT INTO pg_temp.northstar_migration_ledger_manifest(
   (110,'sm volatile stanza identity',pg_catalog.decode('69df3ad2ecd73ba265bdaccb29bbb19eb4df50e79544c7fbb6dc5b9592873d64fb55cf93083d1a3094fe7839ea0e5daf','hex')),
   (111,'admin session cleanup effects',pg_catalog.decode('5329ed6f541b6d977fa57a8ea0fd4edabd6ff54a1c6435e4a366519af6e5f29a50314c9ae85870d6833c8cf3d319fdee','hex')),
   (112,'cluster runtime capacity and authority',pg_catalog.decode('6751e411841f630d517bdffc565a1f45f277f6dd9447f09d72a0ebb72746a570f1eb9ed88d339b4e142b4bd78b3ada94','hex')),
-  (113,'upload authority capabilities',pg_catalog.decode('ab85461447d1f469facc9cdeaadacb4d63e89ba6ec40f8b3cfea68a60aebdf87fc4649074063da2d83b758f24f5b9ec3','hex')),
+  (113,'upload authority capabilities',pg_catalog.decode('7b6cd46b73dd7a6f15fdbaf4729f5a187c1ac18cf444abb569fd8e44c3a7a62cd72166c2da41ab8fcda9f9f12f06b2e2','hex')),
   (114,'session authority capabilities',pg_catalog.decode('c7cfbee33ac2d195b095312f7d18038f13898bf409fe26078747f2922448d0a711a45e209020aecd242e77224ac64ec2','hex')),
   (115,'upload runtime reconciliation bounds',pg_catalog.decode('7f10478094d5e3682117fdb85b4cf585528ef9196a5ee9cbfb5fce40094955fbed752dec1ca40ab72129f519bf0e6d3a','hex')),
   (116,'pep outbox authorization',pg_catalog.decode('454a050d07a02886445b68cb6b2b40f97df2f7cf5909b9321ca6b8229add3cfa6eeba427983738c85d4d5ab871b14dff','hex')),

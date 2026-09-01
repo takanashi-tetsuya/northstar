@@ -33,6 +33,16 @@ def psql_schema(schema: str, sql: str) -> str:
     )
     psql_env = os.environ.copy()
     psql_env["PGPASSWORD"] = "xmpp-test-password"
+    # Configure the schema at connection startup instead of prepending a SQL
+    # `SET` statement. psql prints the `SET` command tag even with
+    # --tuples-only/--no-align, which turns a scalar result such as `0` into
+    # `SET\n0` and can make a privacy assertion report false persistence.
+    # The schema is restricted above to an identifier-safe ASCII subset.
+    existing_pgoptions = psql_env.get("PGOPTIONS", "").strip()
+    schema_option = f"-c search_path={schema}"
+    psql_env["PGOPTIONS"] = " ".join(
+        option for option in (existing_pgoptions, schema_option) if option
+    )
     return subprocess.run(
         [
             "psql",
@@ -47,7 +57,7 @@ def psql_schema(schema: str, sql: str) -> str:
             "--set",
             "ON_ERROR_STOP=1",
             "--command",
-            f'SET search_path TO "{schema}"; {sql}',
+            sql,
         ],
         check=True,
         capture_output=True,

@@ -65,7 +65,7 @@
 
 | 项目 | 结果 | 证据范围 |
 | --- | --- | --- |
-| `0126`–`0128`、SM 与 Caps 确定性回归 | 当前候选为 `1,182 total / 1,015 passed / 167 ignored / 0 failed` | 这是最终暂存工作树的普通 Rust 测试结果；ignored 的隔离 PostgreSQL/Redis 项没有执行，不能视为通过。发布 CI 仍须把结果绑定到最终 commit |
+| `0126`–`0128`、SM、Caps 与 WebSocket 终止序列确定性回归 | 当前候选为 `1,184 total / 1,017 passed / 167 ignored / 0 failed` | 这是最终工作树的普通 Rust 测试结果；ignored 的隔离 PostgreSQL/Redis 项没有执行，不能视为通过。发布 CI 仍须把结果绑定到最终 commit |
 | Rust 最终静态质量门禁 | `fmt`、all-target/all-feature `check`、Clippy `-D warnings` 全部通过 | 结果对应 2026-09-02 的最终暂存工作树；提交后 CI 必须重跑，不能由这条记录替代 |
 | 架构静态门禁 | `AppState=9`；协议树 `0 db authority / 0 db domain-model / 0 state.pool / 0 sqlx:: / 0 PgPool` | MIX producer service gate、Caps queue/cache 非权威与 exact-owner teardown、SM event/recheck 静态不变量均通过；静态匹配仍不是权限或故障安全的运行证明 |
 | 外发 XML 与文档/迁移门禁 | 通过：raw-XML 基线为零，127 个 migration，152 个 capability，ledger/checksum 和文档一致 | 迁移当前最大值为 `0128`；实际应用迁移、角色授权与回滚仍由隔离 CI/目标环境证明 |

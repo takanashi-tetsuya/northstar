@@ -3496,6 +3496,16 @@ mod tests {
 
         for statement in [
             "CREATE TABLE users(id UUID PRIMARY KEY, username TEXT NOT NULL UNIQUE, is_disabled BOOLEAN NOT NULL DEFAULT FALSE)",
+            // Keep the fixture aligned with the complete retention/legal-hold
+            // authority read performed by `admit_local_muc_invite`. PostgreSQL
+            // resolves every relation in that statement even when this test
+            // has no active policy or hold rows, so omitting one turns a valid
+            // admission into a schema error before the transaction invariant
+            // under test is reached.
+            "CREATE TABLE user_retention_policies(user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, offline_message_days INTEGER CHECK (offline_message_days BETWEEN 1 AND 36500))",
+            "CREATE TABLE legal_holds(id UUID PRIMARY KEY, released_at TIMESTAMPTZ)",
+            "CREATE TABLE legal_hold_offline_messages(hold_id UUID NOT NULL REFERENCES legal_holds(id) ON DELETE RESTRICT, message_id UUID NOT NULL, PRIMARY KEY(hold_id,message_id))",
+            "CREATE TABLE legal_hold_scopes(hold_id UUID NOT NULL REFERENCES legal_holds(id) ON DELETE RESTRICT, scope_type VARCHAR(40) NOT NULL CHECK (scope_type IN ('personal_archive_owner','muc_archive_room','offline_message_recipient','report_evidence_report')), subject_id UUID NOT NULL, PRIMARY KEY(hold_id,scope_type,subject_id))",
             "CREATE TABLE muc_affiliations(room_id UUID NOT NULL, user_id UUID NOT NULL, affiliation TEXT NOT NULL, reserved_nick VARCHAR(128), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(room_id,user_id))",
             "CREATE TABLE muc_external_affiliations(room_id UUID NOT NULL, jid TEXT NOT NULL, affiliation TEXT NOT NULL, reserved_nick VARCHAR(128), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(room_id,jid))",
             "CREATE TABLE offline_messages(id UUID PRIMARY KEY, recipient_id UUID NOT NULL, sender_jid TEXT NOT NULL, stanza TEXT NOT NULL, target_resource VARCHAR(1023), encrypted BOOLEAN NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), delivery_claim_id UUID, delivery_claim_expires_at TIMESTAMPTZ)",

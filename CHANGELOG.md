@@ -56,6 +56,11 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   network tests on a developer workstation. The two-domain federation fixture
   also retries harmless duplicate ephemeral-port selections while keeping
   explicit operator-supplied port collisions fatal.
+- The quoted-schema database-role fixture now replays each ordinary migration
+  in its own transaction while honoring explicit `-- no-transaction`
+  migrations, matching SQLx's migration contract. This preserves the atomic
+  table-lock cut-overs in `0126`/`0128` without placing concurrent-index
+  migrations `0035`–`0037` in an invalid transaction block.
 - Runtime schema attestation now follows the connection's already pinned
   schema, so privilege-separated and isolated-schema deployments cannot read a
   different `public` migration ledger. Authentication database fixtures also
@@ -87,6 +92,10 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   remain owned by the socket write-boundary completion path. A debug-only
   assertion previously treated this valid path as impossible and could panic a
   C2S WebSocket actor during ordinary durable delivery.
+- Administrative kick and actor shutdown now complete one exact RFC 7395
+  terminal sequence. Live writes remain cancellable, but the already-latched
+  cancellation can no longer cancel its own `<close/>` and WebSocket Close
+  frames; a one-shot state prevents duplicate shutdown sequences.
 - Upload capability projections now explicitly convert the historical
   `VARCHAR(255)` content type to their declared PostgreSQL `TEXT` return type,
   preventing first PUT and public-file retrieval failures.
@@ -137,6 +146,10 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - The federation no-store persistence probe now terminates its temporary
   PL/pgSQL trigger function correctly; the missing dollar-quote delimiter had
   stopped the fixture before it could exercise the live S2S route.
+- The same federation probe now sets its isolated schema through connection
+  options. Its former `SET; SELECT` command returned `SET\n0`, falsely
+  reporting persisted content even though every durable projection count was
+  zero; the exact zero-persistence assertion remains unchanged.
 - OMEMO 2/SCE validation now keeps XEP-0420's required direct `<store/>`
   structural marker separate from XEP-0334 persistence policy. A message that
   also carries `<no-store/>` is accepted for an existing authenticated live S2S
@@ -151,6 +164,10 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - The session-identity PostgreSQL fixture now creates a structurally valid
   capability-backed admin command session after migration 0108 made its
   32-byte bearer hash mandatory.
+- The durable MUC-invitation failure fixture now includes the complete
+  retention and legal-hold authority relations read by production admission,
+  so it reaches the intended transaction rollback checks instead of failing
+  during PostgreSQL statement planning.
 - The MIX runtime fixture now establishes an ordered recipient outbox/capability
   barrier before live group delivery, separates C2S admission from asynchronous
   delivery, keeps the normal delivery deadline so latency regressions remain

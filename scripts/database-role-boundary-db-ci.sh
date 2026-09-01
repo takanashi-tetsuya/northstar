@@ -1123,18 +1123,28 @@ exact_trigger_function_catalog_restored=$(psql_as "$runtime_role" "$runtime_pass
 # Execute the real migration chain in a schema containing both whitespace and
 # an embedded quote while the fully-populated public installation remains as a
 # decoy. Formatting-only tests cannot detect an accidental public. reference.
-quoted_migration_driver="$runtime_dir/quoted-schema-migrations.sql"
+quoted_migration_driver="$runtime_dir/quoted-schema-migration.sql"
 psql_as "$migrator_role" "$migrator_password" <<'PSQL'
 CREATE SCHEMA "northstar ci ""quoted" AUTHORIZATION northstar_migrator;
 PSQL
-{
-  printf '%s\n' '\set ON_ERROR_STOP on'
-  printf '%s\n' 'SET search_path TO "northstar ci ""quoted";'
-  for migration_path in "$project_dir"/migrations/[0-9][0-9][0-9][0-9]_*.sql; do
-    printf '\\i %s\n' "$migration_path"
-  done
-} >"$quoted_migration_driver"
-psql_as "$migrator_role" "$migrator_password" --file "$quoted_migration_driver"
+for migration_path in "$project_dir"/migrations/[0-9][0-9][0-9][0-9]_*.sql; do
+  {
+    printf '%s\n' '\set ON_ERROR_STOP on'
+    printf '%s\n' 'SET search_path TO "northstar ci ""quoted";'
+    printf '%s\n' '\i :migration_path'
+  } >"$quoted_migration_driver"
+  if [[ "$(sed -n '1p' "$migration_path")" == '-- no-transaction' ]]; then
+    psql_as "$migrator_role" "$migrator_password" \
+      --set=migration_path="$migration_path" --file "$quoted_migration_driver"
+  else
+    # Match SQLx's per-migration transaction boundary.  In particular, the
+    # 0126/0128 accounting cut-overs require their table locks and authority
+    # replacement to commit atomically, while explicitly non-transactional
+    # concurrent-index migrations above remain outside a transaction block.
+    psql_as "$migrator_role" "$migrator_password" --single-transaction \
+      --set=migration_path="$migration_path" --file "$quoted_migration_driver"
+  fi
+done
 quoted_schema_chain_ok=$(psql_as "$migrator_role" "$migrator_password" \
   --tuples-only --no-align <<'PSQL'
 WITH probes AS (

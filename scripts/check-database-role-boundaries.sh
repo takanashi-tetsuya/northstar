@@ -643,6 +643,14 @@ require_literal "$database_acceptance" 'NORTHSTAR_DATABASE_ROLE_CI' \
 require_literal "$database_acceptance" \
   'python3 scripts/generate-database-migration-ledger.py --check' \
   'database acceptance does not reject a stale repository migration ledger before mutation'
+for quoted_replay_boundary in \
+  'quoted-schema-migration.sql' \
+  '[[ "$(sed -n '\''1p'\'' "$migration_path")" == '\''-- no-transaction'\'' ]]' \
+  '--set=migration_path="$migration_path" --file "$quoted_migration_driver"' \
+  'psql_as "$migrator_role" "$migrator_password" --single-transaction'; do
+  require_literal "$database_acceptance" "$quoted_replay_boundary" \
+    "quoted-schema migration replay omits transaction boundary: $quoted_replay_boundary"
+done
 require_literal "$database_acceptance" '--demote-legacy-xmpp' \
   'database-backed acceptance test does not exercise the legacy-role cutover'
 require_literal "$database_acceptance" \

@@ -16,6 +16,7 @@ use framing::XmlEntityFramer;
 use futures::FutureExt;
 use protocol::{Action, ProtocolSession};
 use std::{
+    future::Future,
     net::SocketAddr,
     panic::AssertUnwindSafe,
     sync::{atomic::Ordering, Arc},
@@ -763,20 +764,46 @@ async fn websocket_send_live(
     }
 }
 
-async fn websocket_send_terminal(
-    socket: &mut WebSocket,
-    message: Message,
-    cancellation: &WebSocketSendCancellation<'_>,
-) -> bool {
-    tokio::select! {
-        biased;
-        _ = cancellation.actor_shutdown.cancelled() => false,
-        _ = cancellation.disconnect.cancelled() => false,
-        _ = cancellation.backpressure_disconnect.cancelled() => false,
-        result = tokio::time::timeout(WEBSOCKET_TERMINAL_WRITE_TIMEOUT, socket.send(message)) => {
-            matches!(result, Ok(Ok(())))
+async fn websocket_send_terminal(socket: &mut WebSocket, message: Message) -> bool {
+    bounded_websocket_terminal_write(socket.send(message)).await
+}
+
+async fn bounded_websocket_terminal_write<F, T, E>(write: F) -> bool
+where
+    F: Future<Output = std::result::Result<T, E>>,
+{
+    matches!(
+        tokio::time::timeout(WEBSOCKET_TERMINAL_WRITE_TIMEOUT, write).await,
+        Ok(Ok(_))
+    )
+}
+
+#[derive(Default)]
+struct WebSocketTerminalSequence {
+    started: bool,
+}
+
+impl WebSocketTerminalSequence {
+    fn begin(&mut self) -> bool {
+        if self.started {
+            false
+        } else {
+            self.started = true;
+            true
         }
     }
+
+    fn has_started(&self) -> bool {
+        self.started
+    }
+}
+
+fn needs_shutdown_terminal_sequence(
+    actor_shutdown: bool,
+    session_disconnect: bool,
+    terminal: &WebSocketTerminalSequence,
+) -> bool {
+    (actor_shutdown || session_disconnect) && !terminal.has_started()
 }
 
 async fn websocket_fatal_error(
@@ -784,50 +811,41 @@ async fn websocket_fatal_error(
     domain: &str,
     opening: bool,
     error: String,
-    cancellation: &WebSocketSendCancellation<'_>,
+    terminal: &mut WebSocketTerminalSequence,
 ) {
+    if !terminal.begin() {
+        return;
+    }
     // RFC 7395 section 3.5 requires a server opening frame before an error
     // raised while the peer's opening frame is being processed.
     if opening
-        && !websocket_send_terminal(
-            socket,
-            Message::Text(websocket_server_open(domain).into()),
-            cancellation,
-        )
-        .await
+        && !websocket_send_terminal(socket, Message::Text(websocket_server_open(domain).into()))
+            .await
     {
         return;
     }
-    if !websocket_send_terminal(socket, Message::Text(error.into()), cancellation).await {
+    if !websocket_send_terminal(socket, Message::Text(error.into())).await {
         return;
     }
-    if !websocket_send_terminal(
-        socket,
-        Message::Text(websocket_close().into()),
-        cancellation,
-    )
-    .await
-    {
+    if !websocket_send_terminal(socket, Message::Text(websocket_close().into())).await {
         return;
     }
     // Sending the XMPP <close/> is not the WebSocket closing handshake.
-    let _ = websocket_send_terminal(socket, Message::Close(None), cancellation).await;
+    let _ = websocket_send_terminal(socket, Message::Close(None)).await;
 }
 
 async fn websocket_orderly_close(
     socket: &mut WebSocket,
     stream_opened: bool,
-    cancellation: &WebSocketSendCancellation<'_>,
+    terminal: &mut WebSocketTerminalSequence,
 ) {
-    if stream_opened {
-        let _ = websocket_send_terminal(
-            socket,
-            Message::Text(websocket_close().into()),
-            cancellation,
-        )
-        .await;
+    if !terminal.begin() {
+        return;
     }
-    let _ = websocket_send_terminal(socket, Message::Close(None), cancellation).await;
+    if stream_opened {
+        let _ = websocket_send_terminal(socket, Message::Text(websocket_close().into())).await;
+    }
+    let _ = websocket_send_terminal(socket, Message::Close(None)).await;
 }
 
 async fn send<S: AsyncWrite + Unpin>(io: &mut S, stanza: &str) -> Result<()> {
@@ -1012,6 +1030,7 @@ pub async fn websocket_connection(
     sm_lease_watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut peer_idle =
         PeerIdleTracker::new(session.authenticated.is_some(), tokio::time::Instant::now());
+    let mut terminal_sequence = WebSocketTerminalSequence::default();
     let transport = AssertUnwindSafe(async {
         loop {
         peer_idle.synchronize_authentication(
@@ -1027,7 +1046,7 @@ pub async fn websocket_connection(
                 websocket_orderly_close(
                     &mut socket,
                     opened,
-                    &send_cancellation,
+                    &mut terminal_sequence,
                 ).await;
                 break;
             }
@@ -1038,7 +1057,7 @@ pub async fn websocket_connection(
             _ = disconnect.cancelled() => {
                 session.sm_resume_allowed = false;
                 let opened = session.stream_opened;
-                websocket_orderly_close(&mut socket, opened, &send_cancellation).await;
+                websocket_orderly_close(&mut socket, opened, &mut terminal_sequence).await;
                 break;
             }
             _ = tokio::time::sleep_until(peer_idle.deadline) => {
@@ -1051,7 +1070,7 @@ pub async fn websocket_connection(
                     &domain,
                     opening,
                     crate::xmpp::xml_util::stream_error("policy-violation"),
-                    &send_cancellation,
+                    &mut terminal_sequence,
                 ).await;
                 break;
             }
@@ -1068,7 +1087,7 @@ pub async fn websocket_connection(
                         &domain,
                         opening,
                         crate::xmpp::xml_util::stream_error("policy-violation"),
-                        &send_cancellation,
+                        &mut terminal_sequence,
                     ).await;
                     break;
                 }
@@ -1083,7 +1102,7 @@ pub async fn websocket_connection(
                         &domain,
                         opening,
                         crate::xmpp::xml_util::stream_error("internal-server-error"),
-                        &send_cancellation,
+                        &mut terminal_sequence,
                     ).await;
                     break;
                 }
@@ -1097,7 +1116,7 @@ pub async fn websocket_connection(
                     &domain,
                     opening,
                     crate::xmpp::xml_util::stream_error("policy-violation"),
-                    &send_cancellation,
+                    &mut terminal_sequence,
                 ).await;
                 break;
             }
@@ -1127,7 +1146,7 @@ pub async fn websocket_connection(
                                     &domain,
                                     opening,
                                     crate::xmpp::xml_util::stream_error(condition),
-                                    &send_cancellation,
+                                    &mut terminal_sequence,
                                 ).await;
                                 break;
                             }
@@ -1141,7 +1160,7 @@ pub async fn websocket_connection(
                                 &domain,
                                 opening,
                                 crate::xmpp::xml_util::stream_error("invalid-namespace"),
-                                &send_cancellation,
+                                &mut terminal_sequence,
                             ).await;
                             break;
                         }
@@ -1154,7 +1173,7 @@ pub async fn websocket_connection(
                                 &domain,
                                 opening,
                                 crate::xmpp::xml_util::stream_error("not-well-formed"),
-                                &send_cancellation,
+                                &mut terminal_sequence,
                             ).await;
                             break;
                         }
@@ -1181,7 +1200,7 @@ pub async fn websocket_connection(
                                         &domain,
                                         opening,
                                         crate::xmpp::xml_util::stream_error("internal-server-error"),
-                                        &send_cancellation,
+                                        &mut terminal_sequence,
                                     ).await;
                                     break;
                                 }
@@ -1207,7 +1226,7 @@ pub async fn websocket_connection(
                                             &domain,
                                             opening,
                                             crate::xmpp::xml_util::stream_error("internal-server-error"),
-                                            &send_cancellation,
+                                            &mut terminal_sequence,
                                         ).await;
                                         failed = true;
                                         break;
@@ -1235,6 +1254,7 @@ pub async fn websocket_connection(
                                         &mut session,
                                         item,
                                         opening,
+                                        &mut terminal_sequence,
                                         &send_cancellation,
                                     )
                                     .await
@@ -1294,7 +1314,11 @@ pub async fn websocket_connection(
                                     }
                                 }
                                 if !failed {
-                                    websocket_orderly_close(&mut socket, true, &send_cancellation).await;
+                                    websocket_orderly_close(
+                                        &mut socket,
+                                        true,
+                                        &mut terminal_sequence,
+                                    ).await;
                                 }
                                 break;
                             }
@@ -1314,7 +1338,7 @@ pub async fn websocket_connection(
                                         &domain,
                                         opening,
                                         crate::xmpp::xml_util::stream_error("internal-server-error"),
-                                        &send_cancellation,
+                                        &mut terminal_sequence,
                                     ).await;
                                     break;
                                 }
@@ -1374,7 +1398,11 @@ pub async fn websocket_connection(
                             }
                             Ok(Action::Close) => {
                                 session.sm_resume_allowed = false;
-                                websocket_orderly_close(&mut socket, true, &send_cancellation).await;
+                                websocket_orderly_close(
+                                    &mut socket,
+                                    true,
+                                    &mut terminal_sequence,
+                                ).await;
                                 break;
                             }
                             Ok(Action::CloseWith(reply)) => {
@@ -1385,7 +1413,7 @@ pub async fn websocket_connection(
                                     &domain,
                                     opening,
                                     reply,
-                                    &send_cancellation,
+                                    &mut terminal_sequence,
                                 ).await;
                                 break;
                             }
@@ -1408,7 +1436,7 @@ pub async fn websocket_connection(
                                     &domain,
                                     opening,
                                     crate::xmpp::xml_util::stream_error("internal-server-error"),
-                                    &send_cancellation,
+                                    &mut terminal_sequence,
                                 ).await;
                                 break;
                             }
@@ -1428,11 +1456,12 @@ pub async fn websocket_connection(
                         // A WebSocket-only close is an implicit XMPP close.
                         // Preserve the resumable stream lease if XEP-0198 was
                         // negotiated, and complete the WebSocket handshake.
-                        let _ = websocket_send_terminal(
-                            &mut socket,
-                            Message::Close(frame),
-                            &send_cancellation,
-                        ).await;
+                        if terminal_sequence.begin() {
+                            let _ = websocket_send_terminal(
+                                &mut socket,
+                                Message::Close(frame),
+                            ).await;
+                        }
                         break;
                     }
                     None | Some(Err(_)) => break,
@@ -1449,7 +1478,7 @@ pub async fn websocket_connection(
                             &domain,
                             opening,
                             crate::xmpp::xml_util::stream_error("unsupported-stanza-type"),
-                            &send_cancellation,
+                            &mut terminal_sequence,
                         ).await;
                         break;
                     }
@@ -1466,6 +1495,7 @@ pub async fn websocket_connection(
                         &mut session,
                         outgoing,
                         opening,
+                        &mut terminal_sequence,
                         &send_cancellation,
                     )
                     .await
@@ -1485,6 +1515,14 @@ pub async fn websocket_connection(
     if disconnect.is_cancelled() {
         session.sm_resume_allowed = false;
     }
+    if needs_shutdown_terminal_sequence(
+        actor_shutdown.is_cancelled(),
+        disconnect.is_cancelled(),
+        &terminal_sequence,
+    ) {
+        let opened = session.stream_opened;
+        websocket_orderly_close(&mut socket, opened, &mut terminal_sequence).await;
+    }
     finish_protocol_session(&mut session, transport).await;
 }
 
@@ -1493,6 +1531,7 @@ async fn websocket_record_and_send_item(
     session: &mut ProtocolSession,
     item: crate::outbound::OutboundItem,
     opening: bool,
+    terminal: &mut WebSocketTerminalSequence,
     cancellation: &WebSocketSendCancellation<'_>,
 ) -> bool {
     let managed_by_sm = match session.record_outbound_item(&item).await {
@@ -1505,7 +1544,7 @@ async fn websocket_record_and_send_item(
                 &domain,
                 opening,
                 crate::xmpp::xml_util::stream_error("internal-server-error"),
-                cancellation,
+                terminal,
             )
             .await;
             return false;
@@ -1528,7 +1567,7 @@ async fn websocket_record_and_send_item(
                     &domain,
                     opening,
                     crate::xmpp::xml_util::stream_error("internal-server-error"),
-                    cancellation,
+                    terminal,
                 )
                 .await;
                 return false;
@@ -1542,7 +1581,7 @@ async fn websocket_record_and_send_item(
                     &domain,
                     opening,
                     crate::xmpp::xml_util::stream_error("internal-server-error"),
-                    cancellation,
+                    terminal,
                 )
                 .await;
                 return false;
@@ -1588,6 +1627,32 @@ async fn websocket_record_and_send_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn websocket_terminal_write_runs_after_session_disconnect_is_latched() {
+        let disconnect = tokio_util::sync::CancellationToken::new();
+        disconnect.cancel();
+        let mut write_polled = false;
+
+        assert!(
+            bounded_websocket_terminal_write(async {
+                assert!(disconnect.is_cancelled());
+                write_polled = true;
+                Ok::<(), ()>(())
+            })
+            .await
+        );
+        assert!(write_polled);
+    }
+
+    #[test]
+    fn websocket_shutdown_finishes_exactly_one_terminal_sequence() {
+        let mut terminal = WebSocketTerminalSequence::default();
+        assert!(needs_shutdown_terminal_sequence(false, true, &terminal));
+        assert!(terminal.begin());
+        assert!(!needs_shutdown_terminal_sequence(true, true, &terminal));
+        assert!(!terminal.begin());
+    }
 
     #[test]
     fn peer_idle_deadline_changes_only_for_peer_traffic_or_authentication() {

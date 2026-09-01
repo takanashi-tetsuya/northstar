@@ -1363,7 +1363,9 @@ fn parse_remote_join_result(raw: &str, channel_jid: &str) -> Result<RemoteJoinRe
     anyhow::ensure!(
         join.tag_name().name() == "join"
             && matches!(join.tag_name().namespace(), Some(CORE_NS | ANON_NS)),
-        "invalid MIX join result payload"
+        "invalid MIX join result payload element name={:?} namespace={:?}",
+        join.tag_name().name(),
+        join.tag_name().namespace()
     );
     let participant_id = match (join.attribute("id"), join.attribute("jid")) {
         (Some(participant_id), None) => {

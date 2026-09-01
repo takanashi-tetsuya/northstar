@@ -793,8 +793,11 @@ impl ProtocolSession {
         &mut self,
         item: &crate::outbound::OutboundItem,
     ) -> Result<bool> {
-        let managed_by_sm =
-            self.sm_enabled && is_counted_stanza(&item.stanza) && item.durable_delivery.is_some();
+        let managed_by_sm = durable_delivery_managed_by_sm(
+            self.sm_enabled,
+            &item.stanza,
+            item.durable_delivery.is_some(),
+        );
         self.record_outbound_with_delivery(&item.stanza, item.durable_delivery)
             .await?;
         if managed_by_sm {
@@ -850,11 +853,11 @@ impl ProtocolSession {
                 ));
             self.checkpoint_sm().await?;
         } else if durable_delivery.is_some() {
-            // A durable item which is not an RFC 6120 stanza cannot be bound
-            // to an SM handled-count.  Keep the transport write-boundary
-            // completion path instead of silently retaining an unreachable
-            // fence.
-            debug_assert!(!is_counted_stanza(stanza));
+            // With SM disabled, counted RFC 6120 stanzas are legitimately
+            // completed at the transport write boundary. Non-counted control
+            // elements always use that path as well. Only an active SM session
+            // can take ownership of a counted stanza's durable fence.
+            debug_assert!(!self.sm_enabled || !is_counted_stanza(stanza));
         }
         Ok(())
     }
@@ -1966,17 +1969,39 @@ impl Drop for ProtocolSession {
         }
     }
 }
+
+fn durable_delivery_managed_by_sm(
+    sm_enabled: bool,
+    stanza: &str,
+    has_durable_delivery: bool,
+) -> bool {
+    sm_enabled && has_durable_delivery && is_counted_stanza(stanza)
+}
+
 #[cfg(test)]
 mod legacy_sasl_wire_tests {
     use super::{
-        client_stream_limits_feature, drop_requires_local_quiesce, legacy_sasl_auth,
-        legacy_sasl_payload, reserve_sasl_attempt, resource_bind_deadline_for, Action,
-        ClientTransport, PostActionSupervisor, ResumePayload,
+        client_stream_limits_feature, drop_requires_local_quiesce, durable_delivery_managed_by_sm,
+        legacy_sasl_auth, legacy_sasl_payload, reserve_sasl_attempt, resource_bind_deadline_for,
+        Action, ClientTransport, PostActionSupervisor, ResumePayload,
     };
     use roxmltree::Document;
 
     fn document(xml: &str) -> Document<'_> {
         Document::parse(xml).unwrap()
+    }
+
+    #[test]
+    fn durable_counted_stanza_uses_transport_ownership_without_stream_management() {
+        let stanza = "<message xmlns='jabber:client' to='bob@example.test'/>";
+        assert!(!durable_delivery_managed_by_sm(false, stanza, true));
+        assert!(durable_delivery_managed_by_sm(true, stanza, true));
+        assert!(!durable_delivery_managed_by_sm(true, stanza, false));
+        assert!(!durable_delivery_managed_by_sm(
+            true,
+            "<a xmlns='urn:xmpp:sm:3' h='1'/>",
+            true
+        ));
     }
 
     #[test]

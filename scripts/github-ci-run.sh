@@ -22,13 +22,14 @@ command_status=${PIPESTATUS[0]}
 
 if (( command_status != 0 )) && [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
   summary="$({
-    grep -E -i \
-      'error|failed|failure|panic|assert|traceback|timeout|refus|denied|does not exist|mismatch' \
-      "$log_file" | tail -n 12
+    sed -E 's/\x1B\[[0-9;]*[mK]//g' "$log_file" |
+      grep -E -i -B 8 -A 4 \
+        '(^|[^[:alnum:]_])(error|failed|failure|panic|assertion|traceback|timed out|timeout|refused|denied|does not exist|mismatch)([^[:alnum:]_]|$)' |
+      tail -n 60
   } || true)"
 
   if [[ -z "$summary" ]]; then
-    summary="$(tail -n 12 "$log_file")"
+    summary="$(tail -n 40 "$log_file")"
   fi
 
   # GitHub already masks registered secrets. Apply an additional local redaction

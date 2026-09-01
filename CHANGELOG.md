@@ -63,9 +63,17 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - Strict XEP-0198 same-device policy no longer issues an unusable resume bearer
   to legacy SASL clients that cannot present a SASL2/XEP-0388 device UUID; they
   retain ordinary Stream Management with `resume=false`.
+- Counted durable stanzas on connections without active Stream Management now
+  remain owned by the socket write-boundary completion path. A debug-only
+  assertion previously treated this valid path as impossible and could panic a
+  C2S WebSocket actor during ordinary durable delivery.
 - Upload capability projections now explicitly convert the historical
   `VARCHAR(255)` content type to their declared PostgreSQL `TEXT` return type,
   preventing first PUT and public-file retrieval failures.
+- Upload database fixtures now isolate incompatible immutable capacity-policy
+  profiles in separate schemas. Authentication publication tests also verify
+  that expiry cleanup uses `SKIP LOCKED` without deleting a protected lease,
+  then reclaims it after the publication transaction releases the lock.
 - Production qualification still requires the target-environment and external
   gates in [the release checklist](docs/RELEASE_CHECKLIST.md).
 

@@ -1839,7 +1839,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires TEST_DATABASE_URL; creates and removes a random isolated schema"]
-    async fn publication_lease_lock_blocks_reserve_release_and_expiry_cleanup() {
+    async fn publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup() {
         let pool = isolated_pool().await;
         db::reconcile_deployment_capacity(
             &pool,
@@ -1990,17 +1990,30 @@ mod tests {
             db::cleanup_expired_live_session_leases(&cleanup_pool, 10).await
         });
         cleanup_started_rx.await.unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(
-            !cleanup_task.is_finished(),
-            "expiry cleanup deleted a lease locked by publication"
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), cleanup_task)
+                .await
+                .expect("expiry cleanup blocked instead of skipping a publication-locked lease")
+                .unwrap()
+                .unwrap(),
+            0,
+            "expiry cleanup reported deleting a publication-locked lease"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM deployment_session_leases WHERE connection_id=$1",
+            )
+            .bind(expired_connection)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1,
+            "expiry cleanup removed a lease protected by publication"
         );
         publication.rollback().await.unwrap();
         assert!(
-            tokio::time::timeout(Duration::from_secs(2), cleanup_task)
+            db::cleanup_expired_live_session_leases(&pool, 10)
                 .await
-                .expect("expiry cleanup remained blocked after publication rollback")
-                .unwrap()
                 .unwrap()
                 >= 1
         );

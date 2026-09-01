@@ -107,7 +107,7 @@ run_exact_ignored \
 run_exact_ignored \
   services::authentication::tests::login_epoch_publication_is_fenced_invisible_and_atomic_with_binding
 run_exact_ignored \
-  services::authentication::tests::publication_lease_lock_blocks_reserve_release_and_expiry_cleanup
+  services::authentication::tests::publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
 run_exact_ignored \
   db::fast::tests::fast_derivation_integrity_failures_are_side_effect_free
 

@@ -106,7 +106,12 @@ class Inbox:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(f"MIX inbox timed out for {marker!r}: {self.pending!r}")
-            self.pending.append(self.client.receive(remaining))
+            try:
+                self.pending.append(self.client.receive(remaining))
+            except TimeoutError as error:
+                raise TimeoutError(
+                    f"MIX inbox timed out for {marker!r}: {self.pending!r}"
+                ) from error
 
     def send(self, stanza: str) -> None:
         self.client.send(stanza)
@@ -237,6 +242,21 @@ def run() -> None:
     check(public_from is not None and public_from.group(1).startswith(bob_encoded + "/"), f"anonymous public resource invalid: {reflected}")
     check(not public_from.group(1).endswith("/mix-b"), f"real resource leaked: {reflected}")
 
+    # The MIX outbox is intentionally strict per recipient.  Receiving this
+    # reverse-direction presence proves Bob's verified capability route and
+    # drains every earlier Bob delivery before the message assertion below;
+    # a generic IQ ping only orders C2S input and is not an outbox barrier.
+    alice.send(
+        "<presence xmlns='jabber:client' to='%s'><show>chat</show>"
+        "<status>MIX Bob delivery barrier</status></presence>" % CHANNEL
+    )
+    bob_barrier = bob.wait("MIX Bob delivery barrier", timeout=30)
+    barrier_from = re.search(r"from='([^']+)'", bob_barrier)
+    check(
+        barrier_from is not None and barrier_from.group(1).startswith(alice_encoded + "/"),
+        f"reverse MIX delivery barrier used the wrong participant identity: {bob_barrier}",
+    )
+
     alice.send_message(
         f"<message xmlns='jabber:client' type='chat' id='private-blocked' to='{bob_encoded}'><body>blocked private</body></message>",
         alice_token,
@@ -261,7 +281,27 @@ def run() -> None:
         f"<message xmlns='jabber:client' type='groupchat' id='group-one' to='{CHANNEL}'><body>MIX runtime message</body></message>",
         alice_token,
     )
-    group = bob.wait("MIX runtime message")
+    # The ping is an input-order barrier: if message admission produced a
+    # stanza error, that error must already be in Alice's ordered output before
+    # the ping result.  Live delivery remains a separate durable outbox effect.
+    group_barrier = iq(
+        alice,
+        "group-admission-barrier",
+        "<ping xmlns='urn:xmpp:ping'/>",
+        DOMAIN,
+        "get",
+    )
+    check("type='result'" in group_barrier, f"MIX message admission barrier failed: {group_barrier}")
+    group_errors = [
+        frame
+        for frame in alice.pending
+        if "id='group-one'" in frame and "type='error'" in frame
+    ]
+    check(not group_errors, f"MIX group message admission failed: {group_errors}")
+    # Unknown capability delivery is intentionally retried for at most thirty
+    # seconds.  Keep the acceptance deadline just beyond that product bound so
+    # a slow CI runner cannot turn a bounded capability wait into a false loss.
+    group = bob.wait("MIX runtime message", timeout=40)
     stanza_id = re.search(r"stanza-id[^>]+id='([0-9a-f-]{36})'", group)
     check(stanza_id is not None and f"<jid>{ALICE}@{DOMAIN}</jid>" in group, f"live maybe-visible identity/stanza-id failed: {group}")
     archive_id = stanza_id.group(1)

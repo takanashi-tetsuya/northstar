@@ -20,6 +20,7 @@ read -r xmpp_port xmpps_port http_port < <(
   python3 -c "import socket; s=[socket.socket() for _ in range(3)]; [x.bind(('127.0.0.1',0)) for x in s]; print(*(x.getsockname()[1] for x in s)); [x.close() for x in s]"
 )
 runtime_dir="$(mktemp -d /tmp/northstar-mix.XXXXXX)"
+mkdir -p "$runtime_dir/logs"
 server_pid=""
 cleanup() {
   status=$?
@@ -31,6 +32,12 @@ cleanup() {
   if [[ $status -ne 0 && -f "$runtime_dir/server.log" ]]; then
     echo "MIX runtime server log after failure:" >&2
     tail -n 200 "$runtime_dir/server.log" >&2 || true
+  fi
+  if [[ $status -ne 0 && -d "$runtime_dir/logs" ]]; then
+    while IFS= read -r -d '' log_file; do
+      echo "MIX runtime rolling log after failure: $log_file" >&2
+      tail -n 200 "$log_file" >&2 || true
+    done < <(find "$runtime_dir/logs" -mindepth 1 -maxdepth 1 -type f -name 'server.log*' -print0)
   fi
   PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
     --set ON_ERROR_STOP=1 --command "DROP SCHEMA IF EXISTS \"$schema\" CASCADE;" >/dev/null 2>&1 || true
@@ -81,7 +88,8 @@ env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
   ABUSE_STATE_HMAC_KEY_FILE="$runtime_dir/abuse-state.secret" \
   FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token.secret" \
   DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram.secret" \
-  UPLOAD_DIR="$runtime_dir/uploads" TLS_CERT_PATH="$runtime_dir/server.crt" TLS_KEY_PATH="$runtime_dir/server.key" \
+  UPLOAD_DIR="$runtime_dir/uploads" LOG_DIR="$runtime_dir/logs" \
+  TLS_CERT_PATH="$runtime_dir/server.crt" TLS_KEY_PATH="$runtime_dir/server.key" \
   OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=false REGISTRATION_RATE_PER_HOUR=20 \
   BOOTSTRAP_ADMIN_USERNAME=mix_runtime_admin BOOTSTRAP_ADMIN_PASSWORD=mix-runtime-admin-password-123 \
   FEDERATION_ENABLED=false LOG_FORMAT=json RUST_LOG=rust_xmpp_server=debug \

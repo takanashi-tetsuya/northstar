@@ -5058,6 +5058,7 @@ mod tests {
         }
         let mut successful_subject = None;
         let mut successful_challenge_id = None;
+        let mut issued_challenge_ids = Vec::new();
         let mut accepted = 0;
         let mut limited = 0;
         for task in tasks {
@@ -5068,6 +5069,7 @@ mod tests {
                     successful_subject
                         .get_or_insert_with(|| format!("message:concurrent-capacity:{index}"));
                     successful_challenge_id.get_or_insert(challenge.challenge_id);
+                    issued_challenge_ids.push(challenge.challenge_id);
                 }
                 Err(error) => {
                     assert!(error.downcast_ref::<ChallengeCapacityExceeded>().is_some());
@@ -5107,7 +5109,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(expired.rows_affected(), 1);
-        restarted
+        let after_expiry = restarted
             .issue(
                 AbuseAction::Message,
                 "message:concurrent-capacity:after-expiry",
@@ -5115,11 +5117,12 @@ mod tests {
             )
             .await
             .unwrap();
+        issued_challenge_ids.push(after_expiry.challenge_id);
 
         let ip_actor = format!("ip:198.51.100.{}", Uuid::new_v4().as_bytes()[0]);
         let ip_actors = vec![ip_actor.clone()];
         for index in 0..MAX_ACTIVE_POW_CHALLENGES_PER_IP {
-            restarted
+            let challenge = restarted
                 .issue(
                     AbuseAction::Registration,
                     &format!("registration:ip-capacity:{index}"),
@@ -5127,6 +5130,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
+            issued_challenge_ids.push(challenge.challenge_id);
         }
         let error = restarted
             .issue(
@@ -5250,6 +5254,23 @@ mod tests {
         assert!(persisted_capacity_keys
             .iter()
             .all(|key| { !key.contains(&account_actor) && !key.contains("198.51.100") }));
+
+        // This test deliberately fills the process-wide challenge ceiling.
+        // The WSL invariant suite runs several PostgreSQL tests in one
+        // isolated schema, so retain only pre-existing fixture rows and remove
+        // every challenge created here before the next test process starts.
+        let cleaned = sqlx::query(
+            "DELETE FROM abuse_pow_challenges
+             WHERE id=ANY($1) OR key_id=$2",
+        )
+        .bind(&issued_challenge_ids)
+        .bind(&marker)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let expected_cleaned =
+            u64::try_from(issued_challenge_ids.len()).unwrap() + u64::try_from(fill_count).unwrap();
+        assert_eq!(cleaned.rows_affected(), expected_cleaned);
 
         pool.close().await;
     }

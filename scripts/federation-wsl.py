@@ -1511,6 +1511,7 @@ def run() -> None:
             END IF;
             RETURN NEW;
         END;
+        $$;
         DROP TRIGGER IF EXISTS reject_federated_no_store_outbox ON s2s_outbox;
         CREATE TRIGGER reject_federated_no_store_outbox
         BEFORE INSERT ON s2s_outbox

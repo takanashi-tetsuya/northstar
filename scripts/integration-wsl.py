@@ -3619,6 +3619,14 @@ def run() -> None:
     # Keep the client XML untouched while the server internally binds the
     # missing recipient to Alice's bare account for authorization, replay and
     # durable C2S projection identity.
+    archive_status, archive_baseline = api(
+        "GET", "/api/v1/admin/stats", token=admin_token
+    )
+    check(
+        archive_status == 200,
+        f"could not establish the personal-archive baseline: {archive_baseline}",
+    )
+    archive_count_before_self_retraction = archive_baseline["archived_stanzas"]
     alice.send_with_pow(
         "<message xmlns='jabber:client' type='chat' id='encrypted-self-target'>"
         + omemo2_envelope(
@@ -5080,7 +5088,15 @@ def run() -> None:
     )
 
     status, stats = api("GET", "/api/v1/admin/stats", token=admin_token)
-    check(status == 200 and stats["archived_stanzas"] == 4, f"unexpected archive count: {stats}")
+    # The self-target is one deduplicated owner row retained as a tombstone;
+    # encrypted-offline and encrypted-page-two each create sender and recipient
+    # projections. Compare with the pre-flow baseline so unrelated setup rows
+    # cannot make this exact five-row ownership assertion drift.
+    check(
+        status == 200
+        and stats["archived_stanzas"] == archive_count_before_self_retraction + 5,
+        f"unexpected archive count: baseline={archive_count_before_self_retraction} stats={stats}",
+    )
     check(stats["offline_stanzas"] == 0, "offline queue was not drained")
     check(
         stats["registration_open"] is True

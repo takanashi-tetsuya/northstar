@@ -111,7 +111,19 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   tombstones while preserving valid provenance from other authorities.
 - The concurrent PoW capacity regression now expires the exact challenge
   returned by its successful account request, so challenges created by earlier
-  isolated-database cases cannot make the restart/capacity assertion flaky.
+  isolated-database cases cannot make the restart/capacity assertion flaky. It
+  also removes only the challenge UUIDs and randomized global-capacity rows it
+  created before the next test reuses that isolated schema.
+- The federation no-store persistence probe now terminates its temporary
+  PL/pgSQL trigger function correctly; the missing dollar-quote delimiter had
+  stopped the fixture before it could exercise the live S2S route.
+- Protocol integration derives its exact five-row personal archive delta from
+  a pre-flow baseline, accounting for one retained self-message tombstone and
+  both owner projections of two encrypted peer messages.
+- The MIX runtime fixture now establishes an ordered recipient outbox/capability
+  barrier before live group delivery, separates C2S admission from asynchronous
+  delivery, aligns its deadline with the bounded capability retry window, and
+  retains fixture-owned rolling logs on failure.
 - Production qualification still requires the target-environment and external
   gates in [the release checklist](docs/RELEASE_CHECKLIST.md).
 

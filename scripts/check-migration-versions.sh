@@ -660,10 +660,10 @@ if [ "$(grep -Ec '^CREATE OR REPLACE FUNCTION northstar_upload_queue_snapshot\(\
 fi
 echo "migration 0115 bounds high-frequency upload health probes and preserves exact low-frequency reconciliation"
 
-# Versions 0001-0013 shipped before the 1.1 migration series and are an
-# immutable upgrade baseline. SQLx will reject changed content in an existing
-# database; this repository-side manifest catches the same mistake before a
-# database is touched.
+# Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
+# development line. They are immutable: SQLx will reject changed content in an
+# existing database, and this repository-side manifest catches the same mistake
+# before a database is touched.
 baseline_manifest="scripts/fixtures/migrations-0001-0013.sha256"
 [ -f "$baseline_manifest" ] || {
     echo "published migration checksum manifest is missing: $baseline_manifest" >&2

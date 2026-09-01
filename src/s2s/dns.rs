@@ -701,8 +701,9 @@ async fn fetch_https_address(
     } else {
         format!("{}:{}", location.host, location.port)
     };
+    const USER_AGENT: &str = concat!("Northstar-XMPP/", env!("CARGO_PKG_VERSION"));
     let request = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: application/jrd+json, application/json\r\nUser-Agent: Northstar-XMPP/1.1\r\nConnection: close\r\n\r\n",
+        "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: application/jrd+json, application/json\r\nUser-Agent: {USER_AGENT}\r\nConnection: close\r\n\r\n",
         location.path_and_query, host_header
     );
     tokio::time::timeout(HOST_META_IO_TIMEOUT, secure.write_all(request.as_bytes()))

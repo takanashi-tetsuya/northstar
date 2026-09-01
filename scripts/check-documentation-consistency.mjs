@@ -83,6 +83,58 @@ for (const [relativePath, marker] of [
     throw new Error(`${relativePath} does not carry release version ${packageVersion}`);
   }
 }
+
+const releaseWorkflow = read('.github/workflows/release.yml');
+const releaseCompose = read('deploy/docker-compose.release.yml');
+const releaseAssetMarkers = [
+  `northstar-\${RELEASE_VERSION}-linux-amd64.tar.gz`,
+  `northstar-\${RELEASE_VERSION}-linux-amd64`,
+  `northstar-$env:RELEASE_VERSION-windows-amd64.zip`,
+  `northstar-$env:RELEASE_VERSION-windows-amd64.exe`,
+];
+for (const marker of releaseAssetMarkers) {
+  if (!releaseWorkflow.includes(marker)) {
+    throw new Error(`release workflow is missing package marker: ${marker}`);
+  }
+}
+for (const marker of [
+  'x86_64-unknown-linux-gnu',
+  'x86_64-pc-windows-msvc',
+  'matrix.image }}',
+  'northstar-backup',
+  'northstar-database-grants',
+  'SHA256SUMS',
+  'IMAGE_DIGESTS',
+  '--draft',
+]) {
+  if (!releaseWorkflow.includes(marker)) {
+    throw new Error(`release workflow is missing required behavior: ${marker}`);
+  }
+}
+if (releaseWorkflow.includes('type=raw,value=latest')) {
+  throw new Error('draft release preparation must not advance the mutable latest image tag');
+}
+for (const image of [
+  `ghcr.io/takanashi-tetsuya/northstar:${packageVersion}`,
+  `ghcr.io/takanashi-tetsuya/northstar-backup:${packageVersion}`,
+  `ghcr.io/takanashi-tetsuya/northstar-database-grants:${packageVersion}`,
+]) {
+  if (!releaseCompose.includes(image) || !read('.env.example').includes(image)) {
+    throw new Error(`release Compose and environment example must agree on ${image}`);
+  }
+}
+if (!releaseCompose.includes('build: !reset null')) {
+  throw new Error('release Compose override must remove checkout-local image builds');
+}
+if (!read('SECURITY.md').includes(`\`${packageVersion.split('.').slice(0, 2).join('.')}.x\``)) {
+  throw new Error('SECURITY.md does not identify the supported release line');
+}
+if (read('src/s2s/dns.rs').includes('User-Agent: Northstar-XMPP/1.1')) {
+  throw new Error('XEP-0487 HTTP identity retains a stale hard-coded release version');
+}
+if (read('src/xmpp/protocol/dispatch.rs').includes('<os>Linux</os>')) {
+  throw new Error('XEP-0092 still reports Linux for non-Linux release binaries');
+}
 const pinnedToolchain = read('rust-toolchain.toml').match(/^channel = "([^"]+)"$/m)?.[1];
 const minimumRust = packageSection.match(/^rust-version = "([^"]+)"$/m)?.[1];
 if (!pinnedToolchain || !minimumRust || !pinnedToolchain.startsWith(`${minimumRust}.`)) {

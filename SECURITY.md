@@ -14,9 +14,9 @@ and [release checklist](docs/RELEASE_CHECKLIST.md).
 
 ## Supported versions
 
-Security fixes are developed for the current `1.1.x` line. Historical 0.1
-snapshots and point-in-time validation reports are not supported release
-contracts.
+Security fixes are developed for the current pre-1.0 `0.2.x` line. The `0.1.0`
+baseline and point-in-time validation reports are historical records, not
+supported release contracts.
 
 ## Reporting a vulnerability
 

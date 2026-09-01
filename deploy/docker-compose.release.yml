@@ -1,0 +1,35 @@
+# Consume release images published by the GitHub release workflow instead of
+# rebuilding Northstar from the local checkout. For an immutable deployment,
+# override each *_IMAGE_REF with the published name@sha256:digest reference.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.release.yml pull
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.release.yml up -d
+#
+# Docker Compose 2.24.4 or newer is required for the !reset merge tag.
+
+services:
+  migrate:
+    image: "${NORTHSTAR_SERVER_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar:0.2.0}"
+    build: !reset null
+    pull_policy: always
+
+  database-grants:
+    image: "${NORTHSTAR_DATABASE_GRANTS_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.0}"
+    build: !reset null
+    pull_policy: always
+
+  xmpp:
+    image: "${NORTHSTAR_SERVER_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar:0.2.0}"
+    build: !reset null
+    pull_policy: always
+
+  backup:
+    image: "${NORTHSTAR_BACKUP_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0}"
+    build: !reset null
+    pull_policy: always
+
+  restore:
+    image: "${NORTHSTAR_BACKUP_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0}"
+    build: !reset null
+    pull_policy: always

@@ -17,9 +17,48 @@ See the [documentation index](docs/README.md), [security policy](SECURITY.md),
 
 ## How to use
 
+### Release packages
+
+Northstar `0.2.0` is distributed through
+[GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) with
+the following files:
+
+| Asset | Intended use |
+|---|---|
+| `northstar-0.2.0-linux-amd64.tar.gz` | Complete Linux AMD64 distribution with `xmpp-server`, the Web client, Swagger UI, `.env.example`, and license notices |
+| `northstar-0.2.0-linux-amd64` | Raw Linux AMD64 ELF binary |
+| `northstar-0.2.0-windows-amd64.zip` | Complete Windows AMD64 development/evaluation distribution with `xmpp-server.exe` and the same runtime assets and notices |
+| `northstar-0.2.0-windows-amd64.exe` | Raw Windows AMD64 executable for development/evaluation |
+| `SHA256SUMS` | SHA-256 checksums for the four packages and `IMAGE_DIGESTS` |
+| `IMAGE_DIGESTS` | Exact `name@sha256:digest` references produced for the three GHCR images by a successful tag run |
+
+`AMD64` means the Rust `x86_64` targets. Linux AMD64 is the production
+baseline; the Windows build is for development and evaluation, not a supported
+production deployment. The raw binaries do not contain the runtime Web,
+Swagger UI, configuration, or license files. Use the complete archive, or keep
+the raw binary beside the matching-tag archive contents and run it from that
+directory.
+
+Download all required files, verify the matching entries in `SHA256SUMS`, and
+verify the GitHub build provenance before execution. On Linux, for example:
+
+```sh
+mkdir northstar-0.2.0
+sha256sum --check SHA256SUMS
+tar -xzf northstar-0.2.0-linux-amd64.tar.gz -C northstar-0.2.0
+cd northstar-0.2.0
+./xmpp-server --version
+```
+
+On Windows, compare `(Get-FileHash -Algorithm SHA256 <file>).Hash` with the
+corresponding `SHA256SUMS` entry before extracting the ZIP. A checksum obtained
+from the same Release detects corruption; provenance verification is the
+separate source/build-identity check.
+
 ### Requirements
 
-- Linux for deployment. WSL2 is supported for development and the supplied integration suites.
+- Linux AMD64 for the supported production baseline. WSL2 and the Windows
+  AMD64 package are supported for development and evaluation.
 - Rust `1.97.1` for release-equivalent source builds (pinned by
   `rust-toolchain.toml`; `Cargo.toml` declares the minimum supported version).
 - PostgreSQL 15 or newer (the Compose deployment uses PostgreSQL 17).
@@ -182,11 +221,11 @@ Northstar builds three non-root images. Docker Compose is the recommended
 deployment method and manages service ordering, secrets, private networks and
 persistent volumes.
 
-| Dockerfile | Compose services | Purpose |
-|---|---|---|
-| `Dockerfile` | `migrate`, `xmpp` | Database migrations and the XMPP/HTTP server |
-| `deploy/database-grants.Dockerfile` | `database-grants` | Post-migration PostgreSQL grant reconciliation |
-| `deploy/backup.Dockerfile` | `backup`, `restore` | Signed/encrypted backup, verification and stopped restore |
+| Dockerfile | Release image | Compose services | Purpose |
+|---|---|---|---|
+| `Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar:0.2.0` | `migrate`, `xmpp` | Database migrations and the XMPP/HTTP server |
+| `deploy/database-grants.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.0` | `database-grants` | Post-migration PostgreSQL grant reconciliation |
+| `deploy/backup.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0` | `backup`, `restore` | Signed/encrypted backup, verification and stopped restore |
 
 The complete production procedure is in
 [Production operations](docs/PRODUCTION_OPERATIONS.md). Database capabilities
@@ -195,9 +234,10 @@ trust boundaries are in [Backup security](docs/BACKUP_SECURITY.md).
 
 ### Requirements
 
-Use a current Docker Engine with Linux containers, BuildKit and a Compose plugin
-that provides `docker compose`. Docker Desktop with WSL2 is suitable for Windows
-development, while production deployments should use native Linux.
+Use a current Docker Engine with Linux containers, BuildKit and Docker Compose
+`2.24.4` or newer. The release-image override uses Compose's `!reset` merge tag.
+Docker Desktop with WSL2 is suitable for Windows development, while production
+deployments should use native Linux.
 
 Run from the repository root and verify the active engine:
 
@@ -253,7 +293,7 @@ northstar_revision="$(git rev-parse HEAD)"
 docker build --pull \
   --build-arg NORTHSTAR_VERSION="$northstar_version" \
   --build-arg VCS_REF="$northstar_revision" \
-  --tag "northstar-server:$northstar_version" .
+  --tag "northstar:$northstar_version" .
 
 docker build --pull --file deploy/database-grants.Dockerfile \
   --build-arg NORTHSTAR_VERSION="$northstar_version" \
@@ -266,8 +306,37 @@ docker build --pull --file deploy/backup.Dockerfile \
   --tag "northstar-backup:$northstar_version" .
 ```
 
-Manual tags are for registry publication or offline transfer. The supplied
+Manual tags are for registry publication or offline transfer. The supplied base
 Compose file uses `build:` and does not automatically select those tags.
+
+### Use release images
+
+The three Linux AMD64 release images listed above have immutable references in
+the release's `IMAGE_DIGESTS` file. Copy `.env.example` to `.env`, configure the
+deployment, and set all three image variables to the matching
+`name@sha256:digest` values. The `:0.2.0` tags select the release conveniently,
+but a digest is the production identity.
+
+```dotenv
+NORTHSTAR_SERVER_IMAGE_REF=ghcr.io/takanashi-tetsuya/northstar@sha256:<digest>
+NORTHSTAR_DATABASE_GRANTS_IMAGE_REF=ghcr.io/takanashi-tetsuya/northstar-database-grants@sha256:<digest>
+NORTHSTAR_BACKUP_IMAGE_REF=ghcr.io/takanashi-tetsuya/northstar-backup@sha256:<digest>
+```
+
+Render the merged configuration before pulling. Enable the backup and restore
+profiles when verifying all three images:
+
+```sh
+docker compose -f docker-compose.yml -f deploy/docker-compose.release.yml \
+  --profile backup --profile restore config --quiet
+docker compose -f docker-compose.yml -f deploy/docker-compose.release.yml \
+  --profile backup --profile restore pull
+docker compose -f docker-compose.yml -f deploy/docker-compose.release.yml up -d
+```
+
+The override removes the local `build:` definitions; it must never silently
+fall back to the checkout. Confirm the rendered `image:` values match the three
+reviewed digests before exposing traffic.
 
 ### First production start
 

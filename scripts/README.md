@@ -31,6 +31,7 @@ peer or an external toolchain.
 | Entry point | Purpose |
 | --- | --- |
 | `release-preflight.sh` | Full repository quality/dependency policy plus optional Compose production certificate, secret, role and image checks; `--production` requires Docker |
+| `.github/workflows/release.yml` | On ordinary `main` pushes, builds dry-run Linux/Windows AMD64 packages; on an exact version tag, publishes three GHCR images, generates `SHA256SUMS`, `IMAGE_DIGESTS` and provenance, and prepares a draft GitHub Release for manual review |
 | `release-runtime-validation.sh` | Umbrella runtime suite; do not run unattended in a sensitive environment |
 | `create-production-secrets.sh` | Create the file-backed production secret set in a protected external directory |
 | `reconcile-database-roles.sh` / `reconcile-database-grants.sh` | Bootstrap and attest PostgreSQL role separation |
@@ -42,6 +43,17 @@ Follow [the release checklist](../docs/RELEASE_CHECKLIST.md), [production
 operations](../docs/PRODUCTION_OPERATIONS.md) and [backup security
 policy](../docs/BACKUP_SECURITY.md). Never place real credentials in a command
 line, log or committed file.
+
+The `0.2.0` workflow names its complete packages
+`northstar-0.2.0-linux-amd64.tar.gz` and
+`northstar-0.2.0-windows-amd64.zip`; it also emits raw
+`northstar-0.2.0-linux-amd64` and
+`northstar-0.2.0-windows-amd64.exe` binaries. A successful tag run creates or
+updates a draft Release—it does not authorize or perform final GitHub Release
+publication. The tag run does push the three GHCR images, so pushing the tag is
+itself a publication-sensitive action. Review the four package checksums, the
+three exact GHCR references in `IMAGE_DIGESTS`, and the GitHub provenance before
+publishing the draft. Never invent or copy a hash from a different workflow run.
 
 The root `build.sh`, `build_and_start.sh`, `start_server.sh`, `start.bat` and
 `Makefile` targets are compatibility wrappers for local development. They do

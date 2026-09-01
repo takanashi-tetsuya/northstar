@@ -6,7 +6,7 @@ Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 伺服器。它提供 TCP、Direct TLS、WebSocket 與選用 BOSH 連線，以及聯邦、
 群聊、OMEMO 相容服務、網頁用戶端、REST 管理、防濫用、日誌及監控。
 
-目前版本為 `0.2.0`，仍屬 1.0 之前的開發版本，尚未接受獨立安全稽核。
+目前發行版本為 `0.2.0`，仍屬 1.0 之前的版本，尚未接受獨立安全稽核。
 公開部署前請閱讀 [XEP 支援矩陣](XEP_MATRIX.md)與
 [已知限制](docs/KNOWN_ISSUES.md)。
 
@@ -16,7 +16,43 @@ Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 
 ## 如何使用
 
+### 發行套件
+
+Northstar `0.2.0` 透過
+[GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases)
+提供下列檔案：
+
+| 資產 | 用途 |
+|---|---|
+| `northstar-0.2.0-linux-amd64.tar.gz` | 完整 Linux AMD64 發行套件，包含 `xmpp-server`、Web 用戶端、Swagger UI、`.env.example` 及授權聲明 |
+| `northstar-0.2.0-linux-amd64` | 裸 Linux AMD64 ELF binary |
+| `northstar-0.2.0-windows-amd64.zip` | 完整 Windows AMD64 開發／評估套件，包含 `xmpp-server.exe` 及相同的 runtime 資產與授權聲明 |
+| `northstar-0.2.0-windows-amd64.exe` | 供開發／評估使用的裸 Windows AMD64 executable |
+| `SHA256SUMS` | 四個套件與 `IMAGE_DIGESTS` 的 SHA-256 checksum |
+| `IMAGE_DIGESTS` | 成功 tag 執行為三個 GHCR 映像產生的精確 `name@sha256:digest` 參照 |
+
+`AMD64` 即 Rust 的 `x86_64` targets。Linux AMD64 是正式環境基線；Windows
+build 僅供開發及評估，不是支援的正式部署平台。裸 binary 不包含執行時所需的
+Web、Swagger UI、設定及授權檔案。請使用完整 archive，或把裸 binary 與同一
+tag archive 的內容放在一起，並從該目錄啟動。
+
+下載所需檔案後，請在執行前核對 `SHA256SUMS` 中的對應項目，並驗證 GitHub
+build provenance。Linux 範例：
+
+```sh
+mkdir northstar-0.2.0
+sha256sum --check SHA256SUMS
+tar -xzf northstar-0.2.0-linux-amd64.tar.gz -C northstar-0.2.0
+cd northstar-0.2.0
+./xmpp-server --version
+```
+
+Windows 請先用 `(Get-FileHash -Algorithm SHA256 <file>).Hash` 與
+`SHA256SUMS` 的對應項目比較，再解開 ZIP。與套件來自同一 Release 的 checksum
+可偵測傳輸損壞；provenance 驗證則是另一項來源／build 身分檢查。
+
 正式部署需要 Linux、PostgreSQL 15+、DNS 名稱及公信 CA 核發的憑證。
+正式環境基線為 Linux AMD64；WSL2 與 Windows AMD64 套件僅供開發及評估。
 從原始碼建置使用 `rust-toolchain.toml` 所指定的 Rust toolchain。
 Docker Compose、Caddy、Prometheus/Grafana 及 Redis 依部署方式選用。
 
@@ -154,11 +190,11 @@ HTTP 服務提供帳號管理、歷史、檢舉與申訴、uploads、XMPP WebSoc
 Northstar 會建置三個非 root 映像。建議使用 Docker Compose 部署，由它管理
 服務啟動順序、secrets、私有網路及持久卷。
 
-| Dockerfile | Compose 服務 | 用途 |
-|---|---|---|
-| `Dockerfile` | `migrate`、`xmpp` | 執行資料庫遷移及 XMPP/HTTP 服務 |
-| `deploy/database-grants.Dockerfile` | `database-grants` | 遷移後重新核對 PostgreSQL 權限 |
-| `deploy/backup.Dockerfile` | `backup`、`restore` | 已簽章／加密的備份、驗證及停機還原 |
+| Dockerfile | 發行映像 | Compose 服務 | 用途 |
+|---|---|---|---|
+| `Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar:0.2.0` | `migrate`、`xmpp` | 執行資料庫遷移及 XMPP/HTTP 服務 |
+| `deploy/database-grants.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.0` | `database-grants` | 遷移後重新核對 PostgreSQL 權限 |
+| `deploy/backup.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0` | `backup`、`restore` | 已簽章／加密的備份、驗證及停機還原 |
 
 完整正式環境流程請參閱[正式環境維運](docs/PRODUCTION_OPERATIONS.md)；
 資料庫能力邊界請參閱[資料庫角色](docs/DATABASE_ROLES.md)；
@@ -166,9 +202,10 @@ Northstar 會建置三個非 root 映像。建議使用 Docker Compose 部署，
 
 ### 前置條件
 
-請使用支援 Linux containers、BuildKit 及 `docker compose` plugin 的近期
-Docker Engine。Docker Desktop 與 WSL2 適合 Windows 開發；正式部署應使用
-原生 Linux。
+請使用支援 Linux containers 與 BuildKit 的近期 Docker Engine，以及
+Docker Compose `2.24.4` 或更新版本。發行映像 override 使用 Compose 的
+`!reset` merge tag。Docker Desktop 與 WSL2 適合 Windows 開發；正式部署應
+使用原生 Linux。
 
 在 repository 根目錄確認目前連線的 engine：
 
@@ -224,7 +261,7 @@ northstar_revision="$(git rev-parse HEAD)"
 docker build --pull \
   --build-arg NORTHSTAR_VERSION="$northstar_version" \
   --build-arg VCS_REF="$northstar_revision" \
-  --tag "northstar-server:$northstar_version" .
+  --tag "northstar:$northstar_version" .
 
 docker build --pull --file deploy/database-grants.Dockerfile \
   --build-arg NORTHSTAR_VERSION="$northstar_version" \
@@ -237,7 +274,34 @@ docker build --pull --file deploy/backup.Dockerfile \
   --tag "northstar-backup:$northstar_version" .
 ```
 
-隨附的 Compose 檔使用 `build:`，不會自動選用上述手動標籤。
+隨附的基礎 Compose 檔使用 `build:`，不會自動選用上述手動標籤。
+
+### 使用發行映像
+
+上表三個 Linux AMD64 發行映像的 immutable references 記錄於 Release 的
+`IMAGE_DIGESTS`。請先把 `.env.example` 複製為 `.env` 並完成部署設定，再將
+三個映像變數設為其中相符的 `name@sha256:digest`。`:0.2.0` tag 方便選取版本，
+但正式環境身分應以 digest 為準。
+
+```dotenv
+NORTHSTAR_SERVER_IMAGE_REF=ghcr.io/takanashi-tetsuya/northstar@sha256:<digest>
+NORTHSTAR_DATABASE_GRANTS_IMAGE_REF=ghcr.io/takanashi-tetsuya/northstar-database-grants@sha256:<digest>
+NORTHSTAR_BACKUP_IMAGE_REF=ghcr.io/takanashi-tetsuya/northstar-backup@sha256:<digest>
+```
+
+先 render 合併後的設定再 pull。驗證全部三個映像時需啟用 backup 及 restore
+profiles：
+
+```sh
+docker compose -f docker-compose.yml -f deploy/docker-compose.release.yml \
+  --profile backup --profile restore config --quiet
+docker compose -f docker-compose.yml -f deploy/docker-compose.release.yml \
+  --profile backup --profile restore pull
+docker compose -f docker-compose.yml -f deploy/docker-compose.release.yml up -d
+```
+
+override 會移除本機 `build:` 定義，不得靜默退回目前 checkout。對外開放服務
+前，請確認 render 後的 `image:` 值與三個已審閱 digest 完全一致。
 
 ### 第一次正式啟動
 

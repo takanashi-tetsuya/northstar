@@ -61,7 +61,7 @@ for _ in $(seq 1 60); do
       "$container_name" \
       psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
       --tuples-only --no-align --set ON_ERROR_STOP=1 \
-      --command 'SELECT pg_catalog.inet_server_addr()::pg_catalog.text')"
+      --command 'SELECT pg_catalog.host(pg_catalog.inet_server_addr())')"
     server_address="${server_address//[[:space:]]/}"
     if [[ "$server_address" != 127.0.0.1 ]]; then
       echo "PostgreSQL did not accept the fixture over loopback: $server_address" >&2

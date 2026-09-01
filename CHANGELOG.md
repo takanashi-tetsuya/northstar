@@ -4,7 +4,7 @@ All notable Northstar changes are documented here. Protocol support claims are
 normative only in [XEP_MATRIX.md](XEP_MATRIX.md), and unresolved release
 boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-09-01
 
 - The complete change set from the previous committed `0.1.0` baseline is
   recorded in the [0.2 development changelog](changelog/v0.2.md).
@@ -19,6 +19,20 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - Pinned the release Rust toolchain, added Cargo repository metadata, and added
   OCI source/revision/version/license labels plus project license notices to all
   Northstar images.
+- Added tag-driven release preparation for `0.2.0`. It builds a complete Linux
+  AMD64 tarball plus raw ELF binary and a complete Windows AMD64 ZIP plus raw
+  executable, generates `SHA256SUMS` and GitHub build provenance, publishes the
+  `northstar`, `northstar-backup` and `northstar-database-grants` Linux AMD64
+  images to GHCR, records their exact refs in `IMAGE_DIGESTS`, and prepares a
+  draft GitHub Release for manual review. This changelog does not claim that the
+  draft has been published or predeclare hashes from a run that has not occurred.
+- Added `deploy/docker-compose.release.yml` for deploying the three release
+  images without a local build. It requires Docker Compose `2.24.4` or newer;
+  production operators replace the convenient `:0.2.0` defaults with the exact
+  digest refs from the successful tag run.
+- Added a side-effect-free `xmpp-server --version` identity check. Linux AMD64
+  remains the production baseline; the Windows AMD64 package is for development
+  and evaluation.
 - Production preflight now validates the independent command database role and
   fails closed when its Compose/Docker validation cannot run. Parser fuzzing now
   joins the heavy runtime envelopes as a scheduled/manual-only CI job instead
@@ -52,3 +66,6 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 Point-in-time handoff, validation and planning reports are retained under
 [`docs/archive/`](docs/archive/). They are evidence of prior work, not current
 feature or security declarations.
+
+[0.2.0]: https://github.com/takanashi-tetsuya/northstar/releases/tag/v0.2.0
+[0.1.0]: https://github.com/takanashi-tetsuya/northstar/commit/998396915ab38a9deadf47ae871be561e11f7ef2

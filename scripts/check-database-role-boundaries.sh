@@ -35,6 +35,7 @@ restore_runner="$project_dir/scripts/restore-backup.sh"
 disaster_fixture="$project_dir/scripts/backup-restore-wsl.sh"
 role_runner="$project_dir/scripts/reconcile-database-roles.sh"
 database_acceptance="$project_dir/scripts/database-role-boundary-db-ci.sh"
+loopback_fixture="$project_dir/scripts/loopback-postgres-ci.sh"
 secret_generator="$project_dir/scripts/create-production-secrets.sh"
 release_preflight="$project_dir/scripts/release-preflight.sh"
 ci_workflow="$project_dir/.github/workflows/ci.yml"
@@ -71,7 +72,8 @@ for file in "$compose" "$init_script" "$grant_policy" "$grant_boundary" "$grant_
   "$session_authority_migration" \
   "$admin_cleanup_fixture" \
   "$restore_runner" "$role_runner" \
-  "$disaster_fixture" "$database_acceptance" "$secret_generator" "$release_preflight" \
+  "$disaster_fixture" "$database_acceptance" "$loopback_fixture" \
+  "$secret_generator" "$release_preflight" \
   "$ci_workflow"; do
   [[ -f "$file" ]] || fail "required policy file is missing: ${file#$project_dir/}"
 done
@@ -627,6 +629,13 @@ require_literal "$disaster_fixture" '__RESTORE_PEER_SURVIVED__' \
 
 require_literal "$ci_workflow" 'database-role-boundary:' \
   'CI must contain a database-backed role-boundary job'
+require_literal "$loopback_fixture" '--network host' \
+  'CI runtime database fixture must share the runner network namespace'
+require_literal "$loopback_fixture" '-c listen_addresses=127.0.0.1' \
+  'CI runtime database fixture must bind PostgreSQL only to IPv4 loopback'
+require_literal "$loopback_fixture" \
+  'SELECT pg_catalog.host(pg_catalog.inet_server_addr())' \
+  'CI runtime database fixture must attest a loopback host address without an inet netmask'
 require_literal "$ci_workflow" 'bash scripts/database-role-boundary-db-ci.sh' \
   'CI does not execute the database-backed role-boundary acceptance script'
 require_literal "$database_acceptance" 'NORTHSTAR_DATABASE_ROLE_CI' \

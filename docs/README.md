@@ -84,7 +84,13 @@ not part of an unattended default command.
 ## Release history
 
 - [Project changelog](../CHANGELOG.md)
-- [Northstar 0.2 development changelog](../changelog/v0.2.md)
+- [Northstar 0.2.0 development and release-preparation record](../changelog/v0.2.md)
+- [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases)
+  contains public downloads only after a maintainer reviews and publishes the
+  draft created by the tag workflow. The repository does not predeclare hashes
+  or image digests for an unbuilt release.
+- [Release checklist](RELEASE_CHECKLIST.md) defines tag, draft review, package,
+  checksum, provenance, GHCR digest and publication gates.
 - [`archive/`](archive/) contains point-in-time handoff, validation and planning
   reports. These files are historical evidence, not current capability or
   release claims.

@@ -6,6 +6,15 @@ use anyhow::Result;
 use roxmltree::{Document, Node};
 use std::sync::atomic::Ordering;
 
+fn xmpp_version_os() -> &'static str {
+    match std::env::consts::OS {
+        "linux" => "Linux",
+        "windows" => "Windows",
+        "macos" => "macOS",
+        other => other,
+    }
+}
+
 fn map_pubsub_capacity_result(id: &str, result: Result<Action>) -> Result<Action> {
     match result {
         Err(error) if crate::services::pubsub::is_pubsub_mutation_busy(&error) => {
@@ -784,9 +793,10 @@ impl ProtocolSession {
             ("query", "jabber:iq:version", "get") => Ok(Action::Send(iq_result(
                 id,
                 &format!(
-                    "<query xmlns='jabber:iq:version'><name>{}</name><version>{}</version><os>Linux</os></query>",
+                    "<query xmlns='jabber:iq:version'><name>{}</name><version>{}</version><os>{}</os></query>",
                     crate::state::xml_escape(&self.state.config.server_name),
-                    env!("CARGO_PKG_VERSION")
+                    env!("CARGO_PKG_VERSION"),
+                    xmpp_version_os()
                 ),
             ))),
             ("services", "urn:xmpp:extdisco:2", "get") => self.external_services(id, root, child),
@@ -1026,6 +1036,7 @@ mod tests {
         authoritative_client_stanza, full_jid_iq_visible, is_caps_disco_get, is_stream_close,
         missing_full_jid_iq_needs_error, pre_auth_registration_iq, resource_binding_iq,
         tls_failure, valid_bind_payload, valid_client_stanza_namespace, valid_empty_iq_payload,
+        xmpp_version_os,
     };
     use crate::xmpp::stanza_validation::validate_client_stanza;
     use roxmltree::Document;
@@ -1033,6 +1044,17 @@ mod tests {
     fn with_root(xml: &str, check: impl FnOnce(roxmltree::Node<'_, '_>)) {
         let document = Document::parse(xml).expect("test stanza must be XML");
         check(document.root_element());
+    }
+
+    #[test]
+    fn version_response_reports_the_compilation_target_os() {
+        let expected = match std::env::consts::OS {
+            "linux" => "Linux",
+            "windows" => "Windows",
+            "macos" => "macOS",
+            other => other,
+        };
+        assert_eq!(xmpp_version_os(), expected);
     }
 
     #[test]

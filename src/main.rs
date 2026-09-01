@@ -50,6 +50,10 @@ const CAPACITY_AUTHORITY_QUERY_TIMEOUT: std::time::Duration = std::time::Duratio
 const SERVICE_TASK_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const SERVICE_TASK_ABORT_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
+const fn version_line() -> &'static str {
+    concat!("xmpp-server ", env!("CARGO_PKG_VERSION"))
+}
+
 enum ServiceTaskExit {
     Finished {
         name: &'static str,
@@ -177,6 +181,16 @@ fn install_crypto_provider() -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if matches!(
+        arguments.first().map(String::as_str),
+        Some("--version" | "-V")
+    ) {
+        if arguments.len() != 1 {
+            anyhow::bail!("usage: xmpp-server --version");
+        }
+        println!("{}", version_line());
+        return Ok(());
+    }
     if arguments.first().map(String::as_str) == Some("--healthcheck") {
         let address = arguments
             .get(1)
@@ -975,10 +989,18 @@ fn init_logging(config: &Config) -> Result<Option<tracing_appender::non_blocking
 mod container_healthcheck_tests {
     use super::{
         container_healthcheck, drain_service_tasks, migration_environment_from_values,
-        spawn_service_task, unexpected_task_exit,
+        spawn_service_task, unexpected_task_exit, version_line,
     };
     use std::path::PathBuf;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn version_output_matches_the_cargo_package_version() {
+        assert_eq!(
+            version_line(),
+            concat!("xmpp-server ", env!("CARGO_PKG_VERSION"))
+        );
+    }
 
     async fn endpoint(status: &'static str) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -73,11 +73,25 @@ production baseline; Windows AMD64 artifacts are for development and evaluation.
 ## 3. Rehearse migration and rollback
 
 - [ ] Restore a recent production-shaped backup into an isolated environment.
+- [ ] Treat migration `0126` as a stopped-writer boundary: stop and verify the
+  absence of every runtime, MIX worker and maintenance writer before migration;
+  never roll pre-`0126` and post-`0126` processes together. Startup ledger
+  attestation blocks an old binary from restarting, not one left running.
+- [ ] Keep all runtimes stopped through migration `0127`, which atomically
+  replaces the SM claim projection and installs its version/notification
+  authority. Reconcile exact grants before starting the new binary.
+- [ ] Keep all runtimes stopped through migration `0128`, which installs exact
+  owner-maintained MIX-PAM counters/capabilities and independently committed
+  MIX delivery reclamation. Verify the startup counter audit and exact grants.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 124 migrations from `0001` through the current
-  repository maximum `0125`, with `0021` as the sole intentional gap.
+  identity and verify all 127 migrations from `0001` through the current
+  repository maximum `0128`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
+- [ ] Budget one additional PostgreSQL connection per process for the
+  supervised `sm-authority-listener`; verify listener restart makes readiness
+  degrade and recovery wakes Pending resume claims for an authoritative
+  recheck without periodic polling.
 - [ ] Exercise the documented rollback/forward-fix decision; never rewrite a
   migration that has been published or applied.
 - [ ] Preserve pre-migration backup, encryption/signature keys and recovery
@@ -98,8 +112,15 @@ production baseline; Windows AMD64 artifacts are for development and evaluation.
 
 ## 5. Capacity, storage and recovery
 
-- [ ] Capacity ledger epoch/limits match the target database and do not create
-  an overcommit that cannot drain.
+- [ ] MIX delivery and PAM capacity audits match the target database. Prove an
+  actual hard-cap rejection is distinct from lock contention and that complete,
+  independently committed reconciliation makes released capacity visible
+  without a fixed retry count, GC page size or worker interval.
+- [ ] Exercise XEP-0115 exact-owner replacement/teardown, cache eviction,
+  complete `+notify` projection, hint-queue saturation, failed-effect recovery
+  and local/federated fairness. A cache or hint limit may affect latency only;
+  federated resource exhaustion must reject presence before routing instead of
+  silently accepting incomplete PEP/OMEMO/MIX work.
 - [ ] Local upload storage is used only for one process; a cluster uses the
   qualified shared object-store profile.
 - [ ] Backups fail closed without signing and age encryption; off-host copies

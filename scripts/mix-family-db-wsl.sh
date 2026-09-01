@@ -64,3 +64,8 @@ TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_t
   cargo test --locked --offline \
   db::mix::mam_integration_tests::mix_anon_misc_permissions_are_atomic_and_private \
   -- --ignored --nocapture
+
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+  cargo test --locked --offline \
+  db::mix::delivery_capacity_integration_tests::delivery_ack_is_independent_of_the_producer_fence_and_release_is_atomic \
+  -- --ignored --nocapture

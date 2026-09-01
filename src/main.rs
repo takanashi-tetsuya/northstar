@@ -499,7 +499,6 @@ async fn main() -> Result<()> {
                         }
                     }
                     let now = std::time::Instant::now();
-                    bg_state.pending_caps().sweep(now);
                     bg_state.caps_cache().sweep(now);
                     let failures_after = bg_state
                         .metrics

@@ -488,8 +488,10 @@ mod tests {
         let admin_id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO admin_command_sessions
-               (id,owner_id,owner_full_jid,owner_auth_generation,node,stage,expires_at)
-             VALUES($1,$2,'alice@bücher.example/Console',0,'test:command','form',NOW()+INTERVAL '5 minutes')",
+               (id,owner_id,owner_full_jid,owner_auth_generation,node,stage,
+                expires_at,bearer_hash)
+             VALUES($1,$2,'alice@bücher.example/Console',0,'test:command','form',
+                    NOW()+INTERVAL '5 minutes',decode(repeat('a1',32),'hex'))",
         )
         .bind(admin_id)
         .bind(user.id)

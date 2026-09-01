@@ -130,6 +130,49 @@ Legacy SASL restarts the XML stream. SASL2 does not. Successful inline SM
 resume is evaluated before a fresh Bind2, and failed resume is reported before
 new binding. Resource publication and token/login state are transaction-gated.
 
+## Entity-capability observation authority
+
+XEP-0115 state is owned by the accepted full-JID presence observation, not by
+the disco cache or an asynchronous work queue. Each local observation carries
+the exact C2S `(connection_id, generation)`; each federated observation carries
+the authenticated S2S/component `connection_id` plus a unique observation ID
+that distinguishes repeated advertisements on one stream. A per-resource gate
+orders federated available/unavailable presence, disco correlation and the
+resulting PEP/MIX effects. Local cleanup and every federated connection teardown
+compare-remove only their own incarnation, so a late response, unavailable or
+worker completion cannot recreate or modify a replacement observation.
+
+Hash verification produces a compact semantic projection containing only the
+two MIX feature decisions consumed by server behavior and the complete
+top-level `+notify` node list. That list is not page-truncated: the existing
+64-KiB disco payload and 512-child parser limits are its explicit wire/resource
+boundary. The current observation owns its projection independently of the
+optional raw-document and same-key summary cache. Cache expiry, byte pressure
+or LRU eviction may cause a new query or a disco-proxy miss, but cannot change a
+verified PEP/OMEMO/MIX interest decision into a negative answer.
+
+Asynchronous side effects remain authoritative for the lifetime of the
+in-process observation as pending/running effect bits. The bounded dispatcher contains
+only deduplicated wake hints, with independent local and federated FIFO classes
+served alternately. Saturation or a worker cancellation does not remove an
+effect bit; saturation sets an event-driven rescan flag, and worker cleanup
+restores in-flight bits before requesting the same reconstruction. A failed
+effect records an exact exponential `retry_at`, and the worker sleeps until the
+earliest retry or pending-IQ expiration rather than polling. There is no retry
+count, cache TTL or queue-capacity condition that declares accepted semantic
+work complete. A full exact local transport disconnects instead of reporting a
+successful disco/PEP send.
+
+The remaining limits are explicit memory and peer-isolation policy. Local
+observation count is bounded by C2S admission. Federated observations have
+global and per-domain hard counts and are admitted before presence routing;
+over-budget remote presence receives `resource-constraint`. Raw cache,
+reusable-summary cache, current-observation summaries and effect execution each
+have separate byte/count/concurrency budgets. Summary pressure retains the
+observation and its pending verification rather than silently discarding node
+interest. These bounds protect process availability; they do not substitute
+for ownership, ordering or effect completeness.
+
 ## Persistent state and migrations
 
 PostgreSQL stores every state that must survive a normal restart: identities,
@@ -167,6 +210,26 @@ fence to the exact response RID before exposing the response; only a later
 authenticated response `ack` completes it, and duplicate RID replay reuses the
 same cached bytes. Session loss or lease expiry removes the owner but leaves
 the spool row eligible for ordered replay.
+
+Competing XEP-0198 resume requests do not poll PostgreSQL. Migration `0127`
+adds a monotonic `state_version` to each durable SM row; every insert, update
+or delete emits a commit-ordered `northstar_sm_authority_v1` notification that
+contains only the installation schema, session UUID and version. Each process
+owns one supervised `PgListener` connection outside the request pool and fans
+these hints into session-scoped watch slots. A resume request subscribes and
+then immediately repeats the authoritative claim statement, closing the
+query/subscribe lost-wakeup window. It subsequently waits for exactly one of a
+matching one-shot notification edge, listener-generation change, exact local
+route removal, new-connection cancellation or the database-returned
+lease/expiry boundary. The notification's `state_version` is only an exact-edge
+optimization: every delivered edge advances a process-local sequence and is
+consumed by an authoritative recheck, so a stale or forged high version earns
+at most one extra query and cannot suppress a later real transition.
+The process-local maximum-snapshot reservation exists only during an actual
+claim query and is released for the entire Pending wait. A valid bearer may
+cancel only the exact local connection incarnation named by PostgreSQL;
+cross-node ownership is never inferred from an in-memory event and changes
+only after a committed authority transition or its persisted boundary.
 
 Members-only direct and mediated MUC invitations use this same ownership
 contract. Their affiliation and spool row commit atomically; local and Redis
@@ -292,6 +355,42 @@ on another process use the Redis cluster route, but Redis is only a live-route
 optimization and never the event authority. Remote-domain subscribers use
 authenticated S2S. See `docs/PUBSUB_EVENT_OUTBOX.md` for snapshot ordering,
 capacity, TTL, dead-letter and non-coalescing rules.
+
+### MIX delivery and PAM capacity authority
+
+Every application-service method capable of creating a durable MIX delivery
+enters one clone-shared FIFO gate before checking out a PostgreSQL connection.
+The repository first commits migration-`0128`'s complete orphan-event cleanup
+and release-journal fold, then opens the producer transaction. Its first SQL
+statement takes a schema-local blocking advisory fence before any channel,
+participant, event, recipient or sequence lock. The process gate preserves the
+request pool under same-process contention; the database fence is the
+cross-process serialization and fixed lock-order authority. Neither is a
+rate-limit or a substitute for the capacity ledger.
+
+An exact `(delivery_id, lease_token)` ACK deletes only its leased recipient.
+Owner-held delete triggers append immutable row/template release facts without
+taking the producer fence or mutating a shared capacity bucket. Admission drains
+those facts and reserves exact row/byte deltas atomically. Reconciliation commits
+before the later producer decision, so rejecting a genuinely full admission
+cannot roll back the cleanup needed to make future space visible. A release
+that commits after reconciliation is a later linearized transition and is seen
+by a following admission; correctness does not rely on a fixed retry count,
+bounded GC page or worker interval. Stable delivery IDs retain the ordinary
+at-least-once recovery boundary if database completion is uncertain.
+
+MIX-PAM has separate owner-maintained exact global and per-account counters.
+Join, leave and retention-prune entry points share another pre-pool FIFO gate;
+database triggers use the fixed account-row, global-counter, user-counter order.
+Runtime cannot insert/delete the operation journal or update counters directly.
+The owner-held insertion capability revalidates the enabled account, pending
+membership and matching durable S2S outbox in the same transaction. A complete,
+independently committed reconciliation removes every retention-eligible
+terminal operation before producer admission, while unresolved late-result
+authority remains charged by design. The `100,000` delivery rows/`256 MiB`
+delivery bytes and `10,000` global/`64` per-account PAM records are explicit
+hard resource policy; an actual ceiling returns an error instead of weakening
+transactional ownership.
 
 ## Federation security
 

@@ -1068,6 +1068,7 @@ async fn drive_authenticated_inbound(
             .s2s_connection_registry()
             .remove_bidirectional_if_connection(&route_key, connection_id);
     }
+    crate::xmpp::protocol::caps::federated_caps_connection_closed(&state, connection_id).await;
     let cleanup = AssertUnwindSafe(
         crate::xmpp::protocol::federated_muc::federated_muc_connection_closed(
             &state,
@@ -1605,6 +1606,10 @@ async fn route_inbound_scoped(
     if !from_is_authenticated || (!to_is_local_domain && !to_is_pubsub_service) {
         return Ok(Some(s2s_stanza_error(root, "auth", "not-authorized")));
     }
+    let connection_id = match authority {
+        InboundRouteAuthority::Federation { connection_id }
+        | InboundRouteAuthority::Component { connection_id } => connection_id,
+    };
     match root.tag_name().name() {
         "message" if to_is_pubsub_service => {
             crate::xmpp::protocol::pubsub::handle_authorization_response(state, &from, root)
@@ -1615,7 +1620,9 @@ async fn route_inbound_scoped(
             route_inbound_message(state, root, &client_raw, &from, &to, authenticated_domain).await
         }
         "iq" => route_inbound_iq(state, root, &client_raw, &from, &to).await,
-        "presence" => route_inbound_presence(state, root, &client_raw, &from, &to).await,
+        "presence" => {
+            route_inbound_presence(state, root, &client_raw, &from, &to, connection_id).await
+        }
         _ => Ok(Some(s2s_stanza_error(
             root,
             "cancel",
@@ -1700,6 +1707,7 @@ pub(crate) async fn route_inbound_presence(
     raw: &str,
     from: &str,
     to: &str,
+    connection_id: uuid::Uuid,
 ) -> Result<Option<String>> {
     let Ok(to_jid) = CanonicalJid::parse(to) else {
         return Ok(Some(s2s_stanza_error(root, "modify", "jid-malformed")));
@@ -1712,6 +1720,19 @@ pub(crate) async fn route_inbound_presence(
     };
     let recipient_bare = format!("{}@{}", recipient.username, state.config.domain);
     let kind = root.attribute("type").unwrap_or("available");
+    // Multiple authenticated streams for one remote domain can concurrently
+    // carry presence for the same full JID. Choose one server-side order and
+    // retain it through capability side effects and final local/cluster
+    // routing; otherwise an older available could be delivered after a newer
+    // unavailable even if the caps cache itself had already been cleaned.
+    let federated_presence_epoch = if matches!(kind, "available" | "unavailable") {
+        match crate::jid::canonical_session_key(from) {
+            Ok(full_jid) => Some(state.federated_caps_gates().lock(&full_jid).await),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
     if kind == "probe" {
         return route_inbound_presence_probe(state, root, from, &to_jid, &recipient).await;
     }
@@ -1745,8 +1766,24 @@ pub(crate) async fn route_inbound_presence(
     let canonical_subscription = subscription_from
         .as_deref()
         .map(|contact| canonical_subscription_stanza(raw, contact, to));
-    if matches!(kind, "available" | "unavailable") {
-        crate::xmpp::protocol::caps::observe_federated_caps(state, root, from).await;
+    if let Some(resource_epoch) = federated_presence_epoch.as_ref() {
+        match crate::xmpp::protocol::caps::observe_federated_caps(
+            state,
+            root,
+            from,
+            connection_id,
+            resource_epoch,
+        )
+        .await
+        {
+            crate::xmpp::protocol::caps::FederatedCapsObservationResult::Accepted => {}
+            crate::xmpp::protocol::caps::FederatedCapsObservationResult::StaleOwner => {
+                return Ok(None);
+            }
+            crate::xmpp::protocol::caps::FederatedCapsObservationResult::Saturated => {
+                return Ok(Some(s2s_stanza_error(root, "wait", "resource-constraint")));
+            }
+        }
     }
     if subscription_kind {
         let contact = subscription_from.as_deref().expect("guarded above");

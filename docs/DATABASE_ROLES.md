@@ -172,7 +172,7 @@ This script has no bootstrap secret. It refuses to continue unless:
 - it is connected to database `xmpp`.
 
 Grant application is ledger-gated. The exact manifest for this release contains
-124 migrations from `0001` through `0125`; `0021` is the sole intentional gap.
+127 migrations from `0001` through `0128`; `0021` is the sole intentional gap.
 Every listed row is identified by version, SQLx description and SHA-384 checksum.
 `bootstrap` accepts only a genuinely empty
 database with no sqlx ledger or application object. `auto` accepts either that
@@ -181,7 +181,7 @@ migrated installation. Both non-empty shapes must match the checked-in manifest
 by exact version, SQLx description and SHA-384 checksum; the intentional `0021`
 gap is part of that set. Missing, unknown, failed, duplicated or modified rows,
 one-sided 0114/0115, and post-0115-without-boundary ledgers fail closed. `exact`
-requires the complete checked-in `0001`-`0125` manifest, not merely the
+requires the complete checked-in `0001`-`0128` manifest, not merely the
 `0114`/`0115` transition boundary. Bootstrap and prepare
 leave runtime, command, and backup with **zero** database, schema, object, type,
 or routine capability. Only post-migration exact reconciliation installs the
@@ -282,8 +282,8 @@ that marker before cleanup. It then:
    and separately proves empty bootstrap plus partial/tampered-ledger rejection;
    demotion;
 4. runs Northstar's real `migrate` command as `northstar_migrator`, comparing
-   the successful sqlx ledger with all 124 checked-in migrations from `0001`
-   through `0125` (including the intentional numbering gap at `0021`);
+   the successful sqlx ledger with all 127 checked-in migrations from `0001`
+   through `0128` (including the intentional numbering gap at `0021`);
 5. reapplies the shared `exact` post-migration ACL policy;
 6. removes the function/type override rows and injects missing, unknown, failed,
    and checksum/description-tampered ledger states to prove every audit fails
@@ -313,7 +313,11 @@ Those probes assert that:
   trigger name, function OID/signature, event bitmask, enabled state, absence of
   a `WHEN` predicate, `UPDATE OF` column numbers/order, argument count/bytes,
   constraint/deferrability flags, parent-trigger OID, trigger-function ABI,
-  fixed path, required `SECURITY INVOKER` mode, and absence of extra triggers;
+  fixed path, the exact per-trigger security mode, and absence of extra
+  triggers. Migration `0127`'s version/notification trigger functions and
+  migration `0128`'s MIX capacity projection triggers are
+  owner-only `private` definers; runtime cannot execute them or select the
+  sensitive `state_version` column directly;
 - runtime can select `users` but cannot insert, update, delete, truncate,
   reference, attach triggers, or retain column-level write grants; negative
   probes cover direct DML, forged/cross-target/expired/replayed claims and old
@@ -373,7 +377,7 @@ role also remains a true superuser by design; isolation depends on keeping its
 secret inside the PostgreSQL/bootstrap trust boundary and using it only for
 explicit maintenance.
 
-The `0001`-`0125` migration SQL and checksums used by both the one-shot migrator
+The `0001`-`0128` migration SQL and checksums used by both the one-shot migrator
 and normal startup verifier are embedded in the release binary. The checked-in
 migration directory remains an auditable source/build input, but replacing
 files beside an installed binary cannot redefine the schema that binary accepts.

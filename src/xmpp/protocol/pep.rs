@@ -17,7 +17,7 @@ use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use roxmltree::Node;
 use sha1::{Digest, Sha1};
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 const NS_PUBSUB: &str = "http://jabber.org/protocol/pubsub";
 const NS_PUBSUB_EVENT: &str = "http://jabber.org/protocol/pubsub#event";
@@ -967,14 +967,10 @@ impl ProtocolSession {
                     }
                 }
             } else {
-                for full_jid in state.caps_by_jid().iter().filter_map(|entry| {
-                    crate::jid::canonical_bare_key(entry.key())
-                        .is_ok_and(|bare| bare == contact_bare)
-                        .then(|| entry.key().clone())
-                }) {
-                    if super::caps::wants_pep_node(state, &full_jid, node)
-                        && delivered.insert(full_jid.clone())
-                    {
+                for full_jid in
+                    super::caps::interested_resources_for_bare(state, &contact_bare, node)
+                {
+                    if delivered.insert(full_jid.clone()) {
                         plan.push((full_jid.clone(), event_for(&full_jid, true)?));
                     }
                 }
@@ -992,16 +988,8 @@ impl ProtocolSession {
                 continue;
             }
             let subscription_bare = parsed.bare();
-            let interested_resources = state
-                .caps_by_jid()
-                .iter()
-                .filter_map(|entry| {
-                    crate::jid::canonical_bare_key(entry.key())
-                        .is_ok_and(|candidate| candidate == subscription_bare)
-                        .then(|| entry.key().clone())
-                })
-                .filter(|resource| super::caps::wants_pep_node(state, resource, node))
-                .collect::<Vec<_>>();
+            let interested_resources =
+                super::caps::interested_resources_for_bare(state, &subscription_bare, node);
             if interested_resources.is_empty() {
                 if delivered.insert(subscription_jid.clone()) {
                     plan.push((
@@ -1063,14 +1051,10 @@ impl ProtocolSession {
                     }
                 }
             } else {
-                for full_jid in state.caps_by_jid().iter().filter_map(|entry| {
-                    crate::jid::canonical_bare_key(entry.key())
-                        .is_ok_and(|bare| bare == contact_bare)
-                        .then(|| entry.key().clone())
-                }) {
-                    if super::caps::wants_pep_node(state, &full_jid, node)
-                        && delivered.insert(full_jid.clone())
-                    {
+                for full_jid in
+                    super::caps::interested_resources_for_bare(state, &contact_bare, node)
+                {
+                    if delivered.insert(full_jid.clone()) {
                         plan.push((full_jid.clone(), event_for(&full_jid, true)?));
                     }
                 }
@@ -1088,16 +1072,8 @@ impl ProtocolSession {
                 continue;
             }
             let subscription_bare = parsed.bare();
-            let interested_resources = state
-                .caps_by_jid()
-                .iter()
-                .filter_map(|entry| {
-                    crate::jid::canonical_bare_key(entry.key())
-                        .is_ok_and(|candidate| candidate == subscription_bare)
-                        .then(|| entry.key().clone())
-                })
-                .filter(|resource| super::caps::wants_pep_node(state, resource, node))
-                .collect::<Vec<_>>();
+            let interested_resources =
+                super::caps::interested_resources_for_bare(state, &subscription_bare, node);
             if interested_resources.is_empty() {
                 if delivered.insert(subscription_jid.clone()) {
                     plan.push((
@@ -1760,16 +1736,22 @@ async fn route_pep_message(
     sender_bare_jid: &str,
     recipient: &str,
     message: String,
+    expected_local_epoch: Option<crate::state::LocalCapsEpoch>,
 ) -> Result<()> {
     let sender_bare_jid = crate::jid::canonicalize_bare(sender_bare_jid)?;
     let recipient_jid = crate::jid::CanonicalJid::parse(recipient)?;
     let domain = recipient_jid.domainpart();
     if domain == state.config.domain {
         let mut delivered = false;
-        let targets = state.session_entries_for(recipient);
+        let recipient_key = recipient_jid.to_string();
+        let targets = state.session_entries_for(&recipient_key);
         let same_account = recipient_jid.bare() == sender_bare_jid;
         let mut policy_eligible = 0_usize;
         for (_, target) in &targets {
+            if expected_local_epoch.is_some_and(|epoch| target.connection_id != epoch.connection_id)
+            {
+                continue;
+            }
             if !same_account
                 && !state
                     .privacy_allows_session(
@@ -1782,10 +1764,53 @@ async fn route_pep_message(
                 continue;
             }
             policy_eligible += 1;
+            if let Some(epoch) = expected_local_epoch {
+                // The potentially slow policy/database work above stays
+                // outside the resource gate. Only the final route check and
+                // nonblocking send are linearized with a newer caps
+                // observation or live SM takeover.
+                let expected_gate = Arc::clone(&target.mix_presence_gate);
+                let _epoch_guard = Arc::clone(&expected_gate).lock_owned().await;
+                let exact_route = state.sessions.get(&recipient_key).is_some_and(|current| {
+                    super::caps::local_caps_route_epoch_matches(
+                        current.connection_id,
+                        current
+                            .caps_observation_generation
+                            .load(std::sync::atomic::Ordering::Acquire),
+                        current.routable.load(std::sync::atomic::Ordering::Acquire),
+                        current.disconnect.is_cancelled(),
+                        current.lifecycle.load(std::sync::atomic::Ordering::Acquire),
+                        Arc::ptr_eq(&current.mix_presence_gate, &expected_gate),
+                        epoch,
+                    )
+                });
+                if !exact_route {
+                    continue;
+                }
+                match target.sender.try_send(message.clone()) {
+                    Ok(()) => delivered = true,
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        // The gate and epoch check above identify this exact
+                        // transport incarnation. Saturation is a transport
+                        // failure: retain the caps effect and tear down the
+                        // slow route so it cannot be reported as delivered.
+                        target.sender.disconnect_backpressured_transport();
+                        anyhow::bail!(
+                            "exact local PEP transport queue is full for {recipient_key}"
+                        );
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        anyhow::bail!(
+                            "exact local PEP transport queue is closed for {recipient_key}"
+                        );
+                    }
+                }
+                continue;
+            }
             delivered |= target.sender.try_send(message.clone()).is_ok();
         }
         let mut remote_nodes = 0_usize;
-        if !delivered {
+        if !delivered && expected_local_epoch.is_none() {
             for node_id in state.cluster.lookup_nodes(recipient).await? {
                 if node_id != state.cluster.node_id {
                     remote_nodes += 1;
@@ -1801,6 +1826,9 @@ async fn route_pep_message(
             }
         }
         if !delivered {
+            if expected_local_epoch.is_some() {
+                return Ok(());
+            }
             if remote_nodes == 0 && !targets.is_empty() && policy_eligible == 0 {
                 return Ok(());
             }
@@ -1822,7 +1850,7 @@ pub(super) async fn route_pep_outbox_message(
     recipient: &str,
     message: String,
 ) -> Result<()> {
-    route_pep_message(state, sender_bare_jid, recipient, message).await
+    route_pep_message(state, sender_bare_jid, recipient, message, None).await
 }
 
 pub(crate) async fn send_pep_last_item(
@@ -1831,6 +1859,7 @@ pub(crate) async fn send_pep_last_item(
     node: &str,
     recipient: &str,
     on_presence: bool,
+    expected_local_epoch: Option<crate::state::LocalCapsEpoch>,
 ) -> Result<()> {
     send_pep_last_item_for_owner(
         state,
@@ -1839,6 +1868,7 @@ pub(crate) async fn send_pep_last_item(
         node,
         recipient,
         on_presence,
+        expected_local_epoch,
     )
     .await
 }
@@ -1887,6 +1917,7 @@ async fn send_pep_last_item_for_owner(
     node: &str,
     recipient: &str,
     on_presence: bool,
+    expected_local_epoch: Option<crate::state::LocalCapsEpoch>,
 ) -> Result<()> {
     let Some(config) = state.pubsub_service().pep_node(owner_id, node).await? else {
         return Ok(());
@@ -1921,7 +1952,7 @@ async fn send_pep_last_item_for_owner(
                 .attr("stamp", item.updated_at.to_rfc3339()),
         )
         .finish();
-    route_pep_message(state, &owner_jid, recipient, message).await
+    route_pep_message(state, &owner_jid, recipient, message, expected_local_epoch).await
 }
 
 /// Delivers XEP-0060 send-last events for durable explicit subscriptions.
@@ -1930,6 +1961,7 @@ async fn send_pep_last_item_for_owner(
 pub(crate) async fn deliver_explicit_pep_last_items_for_resource(
     state: &crate::state::AppState,
     full_jid: &str,
+    expected_local_epoch: Option<crate::state::LocalCapsEpoch>,
 ) -> Result<()> {
     let full_jid = crate::jid::canonical_session_key(full_jid)?;
     for subscription in state
@@ -1954,6 +1986,7 @@ pub(crate) async fn deliver_explicit_pep_last_items_for_resource(
                 &subscription.node,
                 &full_jid,
                 true,
+                expected_local_epoch,
             )
             .await?;
         }
@@ -1964,6 +1997,7 @@ pub(crate) async fn deliver_explicit_pep_last_items_for_resource(
 pub(crate) async fn deliver_pep_last_items_for_resource(
     state: &crate::state::AppState,
     full_jid: &str,
+    expected_local_epoch: crate::state::LocalCapsEpoch,
 ) -> Result<()> {
     let wanted = super::caps::pep_notify_nodes(state, full_jid);
     if wanted.is_empty() {
@@ -1984,7 +2018,7 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
         .into_iter()
         .map(|subscription| (subscription.owner_id, subscription.node))
         .collect::<HashSet<_>>();
-    for node in wanted.iter().take(128) {
+    for node in &wanted {
         if !explicit.contains(&(subscriber.id, node.clone()))
             && state
                 .pubsub_service()
@@ -1992,7 +2026,15 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
                 .await?
                 .is_some()
         {
-            send_pep_last_item(state, &subscriber, node, full_jid, true).await?;
+            send_pep_last_item(
+                state,
+                &subscriber,
+                node,
+                full_jid,
+                true,
+                Some(expected_local_epoch),
+            )
+            .await?;
         }
     }
     for (contact, _, subscription, _) in state.pubsub_service().roster(subscriber.id).await? {
@@ -2018,7 +2060,7 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
         if state.pubsub_service().is_blocked(owner.id, &bare).await? {
             continue;
         }
-        for node in wanted.iter().take(128) {
+        for node in &wanted {
             if !explicit.contains(&(owner.id, node.clone()))
                 && pep_access_allowed(
                     state.pubsub_service(),
@@ -2029,7 +2071,15 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
                 )
                 .await?
             {
-                send_pep_last_item(state, &owner, node, full_jid, true).await?;
+                send_pep_last_item(
+                    state,
+                    &owner,
+                    node,
+                    full_jid,
+                    true,
+                    Some(expected_local_epoch),
+                )
+                .await?;
             }
         }
     }
@@ -2067,7 +2117,7 @@ pub(crate) async fn deliver_pep_last_items_for_federated_resource(
         if state.pubsub_service().is_blocked(owner.id, &bare).await? {
             continue;
         }
-        for node in wanted.iter().take(128) {
+        for node in &wanted {
             if !explicit.contains(&(owner.id, node.clone()))
                 && pep_access_allowed(
                     state.pubsub_service(),
@@ -2078,7 +2128,7 @@ pub(crate) async fn deliver_pep_last_items_for_federated_resource(
                 )
                 .await?
             {
-                send_pep_last_item(state, &owner, node, full_jid, true).await?;
+                send_pep_last_item(state, &owner, node, full_jid, true, None).await?;
             }
         }
     }

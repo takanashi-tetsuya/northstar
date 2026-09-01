@@ -63,6 +63,22 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - Strict XEP-0198 same-device policy no longer issues an unusable resume bearer
   to legacy SASL clients that cannot present a SASL2/XEP-0388 device UUID; they
   retain ordinary Stream Management with `resume=false`.
+- Competing XEP-0198 resume claims are now event driven. Migration `0127`
+  versions every durable SM transition and emits a commit-ordered,
+  schema/session/version-only PostgreSQL notification. A supervised dedicated
+  listener fans these hints into race-safe session watches; subscribe-then-
+  recheck closes lost wakeups, while exact route/cancellation/database lease
+  boundaries replace the former fixed 10 ms and 500 ms polling loops.
+- SM notifications now advance a one-shot process-local edge sequence instead
+  of trusting the retained payload version for deduplication. A stale or forged
+  high `state_version` causes at most one extra authoritative read and cannot
+  make the waiter spin or suppress a later lower real notification.
+- Pending resume claims release their process memory reservation between
+  authority probes. Exact local live owners may be cancelled only when the
+  full JID, connection, account and SM session incarnation all match; cross-node
+  ownership remains database-authoritative. Listener reconnect generation,
+  participant RAII and Arc-identity cleanup prevent silent notification gaps
+  and stale watch-slot accumulation.
 - Counted durable stanzas on connections without active Stream Management now
   remain owned by the socket write-boundary completion path. A debug-only
   assertion previously treated this valid path as impossible and could panic a
@@ -117,13 +133,96 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - The federation no-store persistence probe now terminates its temporary
   PL/pgSQL trigger function correctly; the missing dollar-quote delimiter had
   stopped the fixture before it could exercise the live S2S route.
-- Protocol integration derives its exact five-row personal archive delta from
-  a pre-flow baseline, accounting for one retained self-message tombstone and
-  both owner projections of two encrypted peer messages.
+- OMEMO 2/SCE validation now keeps XEP-0420's required direct `<store/>`
+  structural marker separate from XEP-0334 persistence policy. A message that
+  also carries `<no-store/>` is accepted for an existing authenticated live S2S
+  route while remaining ineligible for the S2S outbox, MAM and offline storage;
+  omitting the required `<store/>` from a payload message remains an error.
+  Failed volatile route admission now emits a domain-only debug diagnostic
+  without logging stanza content.
+- Protocol integration derives its exact six-row personal archive delta from
+  a pre-flow baseline, accounting for one retained self-message tombstone, its
+  separately auditable retraction action and both owner projections of two
+  encrypted peer messages. It also verifies the tombstone/action shapes.
+- The session-identity PostgreSQL fixture now creates a structurally valid
+  capability-backed admin command session after migration 0108 made its
+  32-byte bearer hash mandatory.
 - The MIX runtime fixture now establishes an ordered recipient outbox/capability
   barrier before live group delivery, separates C2S admission from asynchronous
-  delivery, aligns its deadline with the bounded capability retry window, and
-  retains fixture-owned rolling logs on failure.
+  delivery, keeps the normal delivery deadline so latency regressions remain
+  visible, and retains fixture-owned rolling logs on failure.
+- MIX capacity release is now a write-once, transactionally consumed
+  PostgreSQL journal rather than a
+  hot-bucket mutation in the delivered stanza's ACK transaction. Recipient and
+  final event deletion atomically append independent release facts without a
+  capacity advisory lock; the next producer folds every currently eligible
+  fact into the exact ledger before checking the row/byte ceilings. All
+  delivery-producing application-service operations share a fair clone-safe
+  gate before PgPool checkout, then take the blocking schema-local database
+  fence as the transaction's first statement. Same-process contention neither
+  consumes waiting pool connections nor becomes a false capacity rejection;
+  cross-process writers wait before owning any business row lock. Normal ACKs
+  therefore cannot return `55P03` merely
+  because another producer is reserving capacity. ACK deletes only its exact
+  leased recipient, so even a 5,000-recipient event has no shared completion
+  lock; bounded `SKIP LOCKED` GC remains a maintenance optimization for empty
+  events and sequence rows, not the admission correctness path.
+  Runtime has read-only access to release facts: owner-held trigger functions
+  append them and one allowlisted SECURITY DEFINER drain applies and deletes
+  them atomically. The existing event-leading recipient unique index keeps
+  drain/GC parent probes indexed at the 100,000-row queue ceiling.
+  Concurrent dead-letter requeues elect one event-template creator with
+  `INSERT ... ON CONFLICT DO NOTHING RETURNING`, so only the physical creator
+  reserves template capacity, and multi-recipient producers acquire global
+  recipient sequence rows in canonical JID order.
+  PostgreSQL/I/O failure leaves the durable 90-second lease for ordinary
+  at-least-once recovery instead of entering a timing-based retry loop, and the
+  authoritative stanza ID remains the recipient-side deduplication key.
+  The isolated MIX database suite now holds the producer fence while committing
+  an ACK, then proves release reconciliation rollback and committed recovery are
+  both exact.
+  Migration 0126 is a stopped-writer cut-over: every pre-0126 runtime and MIX
+  worker must be stopped before it is applied, and old/new writers must not run
+  concurrently.
+- Migration 0128 makes capacity reclamation authoritative instead of
+  timing-dependent. MIX delivery orphan cleanup and release-ledger folding
+  commit before producer admission, so a later hard-cap rejection cannot roll
+  back the progress needed to leave a false-full state. A completion that
+  commits after that reconciliation is a later linearized state transition;
+  the following admission observes it without relying on a fixed retry count,
+  worker page size or maintenance cadence.
+- MIX-PAM now uses owner-maintained exact global/per-account counters under a
+  fixed lock order. A clone-shared FIFO service gate precedes PgPool checkout;
+  runtime has no direct counter or operation INSERT/DELETE authority, and the
+  insertion capability atomically revalidates the enabled account, pending
+  membership and durable S2S outbox projection. Startup fails closed on counter
+  drift. The 10,000-global/64-per-account ceilings remain explicit hard resource
+  boundaries, not contention or reclamation retries.
+- The asynchronous verified-capability presence fallback is now an atomic
+  insert-if-absent operation under the channel lock. A delayed capability job
+  can no longer overwrite a newer explicit MIX presence such as
+  `<show>away</show>` with a synthetic empty available state.
+- XEP-0115 processing now keeps one authoritative observation per accepted
+  available full JID. Local ownership is fenced by the exact connection and
+  observation generation; federated ownership adds both the authenticated
+  connection and a same-stream observation ID. Available/unavailable changes,
+  disco correlation and their PEP/MIX side effects cross the same per-resource
+  ordering boundary, so a stale response or teardown cannot recreate a newer
+  resource state.
+- Verified observations retain the complete bounded `+notify` projection and
+  the two MIX feature decisions they consume. Raw disco XML and cross-resource
+  summary reuse are optional byte-bounded caches: expiry or eviction can cause
+  another query or a disco proxy miss, but cannot change PEP/MIX interest.
+  Pending effect bits live on the observation; the bounded wake queue is only a
+  deduplicated scheduling hint. Saturation/worker restart requests an immediate
+  rescan, while failures sleep to the earliest retained retry deadline; separate
+  alternating local/federated ready queues prevent starvation without a fixed
+  polling loop. Retry timestamps affect when work runs, never whether accepted
+  semantic work still exists. Explicit global/per-domain federated-resource
+  ceilings reject the presence with `resource-constraint` before routing.
+  Independent observation-summary byte pressure leaves verification pending
+  for later retry instead of
+  recording truncated or negative OMEMO/PEP/MIX interest.
 - Production qualification still requires the target-environment and external
   gates in [the release checklist](docs/RELEASE_CHECKLIST.md).
 

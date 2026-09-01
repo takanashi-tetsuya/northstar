@@ -482,6 +482,7 @@ async fn outbound_component_connection(
     )
     .await;
     state.component_registry().remove_connection(connection_id);
+    crate::xmpp::protocol::caps::federated_caps_connection_closed(&state, connection_id).await;
     cleanup_component_muc(
         Arc::clone(&state),
         credential.allowed_domains.clone(),
@@ -690,6 +691,7 @@ async fn legacy_connection(
     )
     .await;
     state.component_registry().remove_connection(connection_id);
+    crate::xmpp::protocol::caps::federated_caps_connection_closed(&state, connection_id).await;
     cleanup_component_muc(
         Arc::clone(&state),
         credential.allowed_domains.clone(),
@@ -934,6 +936,7 @@ async fn modern_connection(
     )
     .await;
     state.component_registry().remove_connection(connection_id);
+    crate::xmpp::protocol::caps::federated_caps_connection_closed(&state, connection_id).await;
     cleanup_component_muc(
         Arc::clone(&state),
         credential.allowed_domains.clone(),

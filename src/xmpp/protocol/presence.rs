@@ -9,7 +9,7 @@ use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use roxmltree::Node;
-use std::sync::atomic::Ordering;
+use std::sync::{atomic::Ordering, Arc};
 
 // Keep the live-session bound aligned with the durable XEP-0198 snapshot
 // validator. An accepted directed presence must remain representable across
@@ -50,10 +50,6 @@ impl ProtocolSession {
             return Ok(Action::None);
         };
         let kind = root.attribute("type").unwrap_or("available");
-        if root.attribute("to").is_none() {
-            self.observe_caps(root, &from);
-            self.forward_presence_to_mix_channels(raw).await?;
-        }
         if let Some(raw_to) = root.attribute("to") {
             let target_jid = match crate::jid::CanonicalJid::parse(raw_to) {
                 Ok(target) => target,
@@ -462,6 +458,28 @@ impl ProtocolSession {
                 }
             }
         } else {
+            // MIX presence is an account/resource epoch, not a best-effort
+            // side effect. Serialize the database projection with the exact
+            // in-memory availability/generation transition, then release the
+            // per-resource gate before roster, federation and replay work.
+            let mix_presence_epoch = Arc::clone(&self.mix_presence_gate).lock_owned().await;
+            if !super::mix::mix_presence_route_is_current(
+                &self.state,
+                &from,
+                self.connection_id,
+                &self.mix_presence_gate,
+                false,
+            ) {
+                return Ok(Action::None);
+            }
+            let advertised_mix_capability = self.advertised_mix_capability(root, &from);
+            self.forward_presence_to_mix_channels(kind, advertised_mix_capability, raw)
+                .await?;
+            if matches!(kind, "available" | "unavailable") {
+                // A broadcast transition supersedes every earlier directed
+                // per-channel suppression for this resource.
+                self.mix_presence_fallback_suppressed.clear();
+            }
             let user = self.authenticated.as_ref().expect("authenticated session");
             let now_available = kind == "available";
             let was_available = self
@@ -478,6 +496,8 @@ impl ProtocolSession {
             if let Some(available) = &self.available {
                 available.store(now_available, Ordering::Release);
             }
+            self.commit_caps_observation(root, &from);
+            drop(mix_presence_epoch);
             let show = if kind == "available" {
                 match child_text(root, "show") {
                     Some("away") => 2,

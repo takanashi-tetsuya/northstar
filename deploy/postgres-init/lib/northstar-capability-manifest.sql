@@ -14,7 +14,7 @@ CREATE TEMPORARY TABLE northstar_capability_manifest (
   workload pg_catalog.text NOT NULL
     CHECK (workload IN ('runtime','command','private')),
   origin pg_catalog.text NOT NULL
-    CHECK (origin IN ('baseline-0111','0112','0113','0114'))
+    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128'))
 );
 
 INSERT INTO pg_temp.northstar_capability_manifest(signature,workload,origin)
@@ -156,4 +156,18 @@ VALUES
   ('northstar_sm_expire_before_generation(uuid,int8)','runtime','0114'),
   ('northstar_sm_privacy_list_in_use(uuid,text)','runtime','0114'),
   ('northstar_sm_privacy_state(uuid)','runtime','0114'),
-  ('northstar_session_capability_catalog_healthy(text)','runtime','0114');
+  ('northstar_session_capability_catalog_healthy(text)','runtime','0114'),
+  ('northstar_mix_delivery_recipient_capacity_delete()','private','0126'),
+  ('northstar_mix_delivery_event_capacity_delete()','private','0126'),
+  ('northstar_mix_delivery_capacity_drain()','runtime','0126'),
+  ('northstar_sm_state_version()','private','0127'),
+  ('northstar_sm_state_notify()','private','0127'),
+  ('northstar_mix_pam_capacity_lock()','private','0128'),
+  ('northstar_mix_pam_account_capacity_lock(uuid,text)','runtime','0128'),
+  ('northstar_mix_pam_operation_capacity_insert()','private','0128'),
+  ('northstar_mix_pam_operation_capacity_delete()','private','0128'),
+  ('northstar_mix_pam_user_predelete_lock()','private','0128'),
+  ('northstar_mix_pam_operation_insert(uuid,uuid,text,text,text,text,text,text,bytea,uuid,bool,text,text,text[],int8,text)','runtime','0128'),
+  ('northstar_mix_pam_operation_prune(int8)','runtime','0128'),
+  ('northstar_mix_pam_capacity_reconcile()','runtime','0128'),
+  ('northstar_mix_delivery_capacity_reconcile()','runtime','0128');

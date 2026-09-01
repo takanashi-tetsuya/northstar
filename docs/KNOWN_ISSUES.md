@@ -1,6 +1,6 @@
 # Northstar 当前剩余妥协、设计边界与发布门禁
 
-> 基线：2026-08-31 当前工作区；本轮已执行不含对抗流量、故障注入或极限负载的 Rust 测试与纯静态门禁。
+> 基线：2026-09-02 当前工作区；迁移 `0126`–`0128`、XEP-0198 事件通知与 XEP-0115 observation 重构已经进入代码，但发布前仍须对最终提交重新保存完整门禁证据。
 > 定位：这是当前唯一的剩余问题与妥协清单。已经解决的历史问题属于 changelog 或历史验收报告，不应继续出现在这里。
 > 证据边界：仓库测试和静态检查不等于生产环境、公网互操作或独立安全认证。按用户要求，本轮没有执行可能触发 cybersecurity 拦截的 fuzz、畸形/对抗网络流量、故障注入、攻击式反滥用验证或极限负载；这些项目已移至 [MANUAL_SECURITY_VALIDATION.md](MANUAL_SECURITY_VALIDATION.md) 供授权操作者在隔离环境中手动执行。
 
@@ -38,7 +38,7 @@
 | DESIGN-NOSTORE | `no-store`、signal-only、headline、Carbons、presence/typing 和部分 post-commit 通知是 `volatile`/best-effort | 刻意设计＋隐私语义 | **不应统一持久化** | `no-store` 不进入 MAM、spool 或 outbox；没有有界在线 route 时显式失败。瞬态状态可在背压、断线或集群故障中丢失，避免违反隐私承诺或形成无界积压 | 逐类定义可靠性；只有不违反 XEP-0334 和用户预期的类别才可增加持久 outbox。必须永久避免把 `no-store` 静默降级为存储 |
 | DESIGN-PRIVACY | 匿名房间 MAM 的 sender filter 被拒绝 | 刻意隐私设计 | **不建议改变** | 对匿名历史按真实发送者过滤会成为身份 oracle；服务器宁可拒绝该查询形状 | 除非能证明不会泄露匿名身份并经过隐私审查，否则永久保留拒绝行为 |
 | DESIGN-ENDPOINT | Jingle 媒体、ICE、TURN 数据面、call state、已读/反应渲染和 push 数据面不由核心服务器执行 | 刻意分层＋外部依赖 | **不是服务器缺陷** | Northstar 验证/路由 Jingle 与消息扩展，通过 XEP-0215 发现服务和签发 coturn 凭据；实际 STUN/TURN、媒体和 XEP-0357 push service 必须独立部署。Push 所依赖规范仍有 Deferred 范围 | 关闭的是部署门禁：配置真实服务并做端到端通话/推送测试；不能把核心服务器宣传为 TURN、媒体服务器或移动平台 push gateway |
-| DESIGN-BOUNDS | 容量 reserve、dead-letter、过载拒绝、有限 TTL 和 fail-closed readiness 可能主动拒绝新工作 | 刻意安全设计 | **不应取消** | 有界队列和恢复预算避免磁盘、连接池或对象存储债务失控；遗留 overcommit 只排空，不继续扩张 | 用目标 SLO、告警和排空 runbook 验证参数。关闭条件不是取消上限，而是证明拒绝行为可观测、可恢复且符合部署容量 |
+| DESIGN-BOUNDS | 明确的持久容量、内存、并发、dead-letter、保留期与 fail-closed readiness 上限可能拒绝真正的新工作 | 刻意资源安全设计 | **不应取消；不得用它掩盖正确性缺陷** | MIX 在独立提交的完整 reconciliation 后才应用 `100,000` row/`256 MiB` 与 PAM `10,000` global/`64` per-account 硬上限；这些上限不决定 ACK、释放或锁所有权。Caps 的 observation 才是语义权威，cache 与有界 dispatcher 只保存可丢弃的复用数据/唤醒提示；提示饱和或 TTL 到期不删除 effect，federated resource 超限则在 presence 路由前显式返回 `resource-constraint`。其他持久队列同样在写入前执行明确 admission，避免磁盘、连接池、对象存储或恢复债务无界增长 | 用目标 SLO、告警、恢复与排空 runbook 验证参数。若必须增加上限、等待固定轮询/重试次数、依赖 cache 驻留或重复请求才能消除 false-full、丢 effect、错 owner，即属于待修架构缺陷而不是容量调优。保留上限的条件是拒绝可观测、语义完整、释放可线性化且恢复不依赖任意时间常数 |
 | DESIGN-RETENTION | replay/idempotency tombstone、集群 operation journal 和审计在线窗口都有有限保留期 | 刻意资源与隐私设计 | **边界永久，期限可配置/审查** | 这些行支持在线重试而非永久 WORM 证据；到期后无法无限期识别旧 replay。legal hold 会阻止受保护内容删除 | 根据威胁模型和法规设置期限；需要永久证据时使用外部 WORM/签名锚定，不把在线 PostgreSQL 表宣传成永久取证系统 |
 | DESIGN-UPLOAD-SCAN | 服务端无法对 OMEMO 加密附件做有意义的明文恶意内容扫描 | 密码学边界＋刻意 E2EE | **永久边界** | 服务器只能验证密文大小、类型声明、hash 和存储完整性；服务器端解密扫描会破坏 E2EE | 可在客户端加密前扫描，或对明确未加密上传接入扫描器；不得声称“密文已经完成恶意内容扫描” |
 | DESIGN-OMEMO | OMEMO 私钥、信任决定和 fingerprint 验证属于端点；举报解密明文无法由服务器证明 | 标准/密码学边界 | **永久边界** | 服务端保存 PEP 公共材料和 archive ciphertext/digest，不托管私钥。举报中的解密文本必须标注为 `user-supplied/unverified`，所以 moderation 不是 zero knowledge | 保留人工指纹/QR 验证、设备撤销和密文证据链；服务器不得自动信任设备、伪造验证或宣称能证明用户解密结果 |
@@ -61,16 +61,15 @@
 | EXT-SECURITY | 尚无独立 RFC/XEP 审查、安全审计和渗透测试 | 外部资格 | **第三方完成后可关闭证据项** | 内部静态检查、单元测试和自审不能构成认证，也不能证明不存在未知漏洞 | 固定 release commit、binary digest、SBOM、部署拓扑和 threat model，委托独立方审查 XML/state machine、REST/WebSocket/BOSH/S2S/component、Redis/object store、浏览器密码学和权限模型。高风险公网部署前必须完成 |
 | EXT-OPERATIONS | 真实告警接收、升级/静默/恢复、离机备份和灾难恢复尚缺目标部署演练 | 外部运维证据 | **演练后可关闭证据项** | 仓库有 metrics、Prometheus rules、Grafana 和 runbook，但阈值与通知链没有目标流量基线；代码不能证明值班人员或备份目的地有效 | 完成通知演练、恢复演练、容量阈值校准和定期 restore drill，记录负责人、时间、RTO/RPO 和失败处置 |
 
-## 当前工作区已获得的证据
+## 当前发布候选的证据状态
 
 | 项目 | 结果 | 证据范围 |
 | --- | --- | --- |
-| Rust 测试集 | `1167 total, 1002 passed, 165 ignored, 0 failed` | 验证了当前工作区中已启用的确定性单元/进程内测试；165 个 ignored 项目不得视为通过，也不覆盖本文所列外部运行门禁 |
-| Rust 最终静态质量门禁 | `cargo clippy --all-targets --all-features --locked -- -D warnings` 通过 | 只证明当前全 target/feature 的 Clippy 诊断为零；不是动态互操作、性能或安全审计证据 |
-| 架构静态门禁 | `AppState=9`；协议树 `0 db authority / 0 db domain-model / 0 state.pool / 0 sqlx:: / 0 PgPool` | 只证明被脚本识别的代码结构没有超过当前单调预算；不是权限正确性或故障安全证明 |
-| 外发 XML 静态门禁 | 所有已列入基线的生产文件均为 `current=0, baseline=0` | 防止已跟踪文件恢复原始 XML 字面量构造；不覆盖未列入的专用序列化器，也不等于形式化 XML 安全证明 |
-| 仓库静态门禁组 | 最终 14 项门禁全部通过，覆盖 parser/fuzz-target 连接性、架构边界、外发 XML、文档一致性、abuse、OMEMO/recovery、outbox、进程/迁移/会话边界、敏感文件与 web auth 等检查 | 门禁通过只证明对应脚本编码的静态不变式；这里的 parser/fuzz 项只检查 fuzz target 是否连到生产 parser，未执行 fuzz。`libomemo.js` 仍不具备从源码到最终字节的可重现资格，见 `SUPPLY-WASM` |
-| 普通 Windows 前台启动探测 | 进程按设计 fail closed，未进入 ready | 当前生产式配置缺少可访问的 Dialback/abuse/API secret file；使用临时非敏感覆盖后，又因缺少独立 `ADMIN_COMMAND_DATABASE_URL(_FILE)` 而拒绝启动。没有读取或修改 `.env`，临时文件已删除。该证据只证明两个配置门禁正确拒绝，不证明服务器已成功启动、迁移或完成客户端互操作 |
+| `0126`–`0128`、SM 与 Caps 确定性回归 | 当前候选为 `1,182 total / 1,015 passed / 167 ignored / 0 failed` | 这是最终暂存工作树的普通 Rust 测试结果；ignored 的隔离 PostgreSQL/Redis 项没有执行，不能视为通过。发布 CI 仍须把结果绑定到最终 commit |
+| Rust 最终静态质量门禁 | `fmt`、all-target/all-feature `check`、Clippy `-D warnings` 全部通过 | 结果对应 2026-09-02 的最终暂存工作树；提交后 CI 必须重跑，不能由这条记录替代 |
+| 架构静态门禁 | `AppState=9`；协议树 `0 db authority / 0 db domain-model / 0 state.pool / 0 sqlx:: / 0 PgPool` | MIX producer service gate、Caps queue/cache 非权威与 exact-owner teardown、SM event/recheck 静态不变量均通过；静态匹配仍不是权限或故障安全的运行证明 |
+| 外发 XML 与文档/迁移门禁 | 通过：raw-XML 基线为零，127 个 migration，152 个 capability，ledger/checksum 和文档一致 | 迁移当前最大值为 `0128`；实际应用迁移、角色授权与回滚仍由隔离 CI/目标环境证明 |
+| 运行时/外部证据 | 本轮未新增 | 没有执行 fuzz、畸形网络流量、故障注入、极限负载、公网联邦或客户端 GUI 验证；实现变化不能自动继承旧制品的运行证据 |
 
 本轮明确未执行 fuzz、WebSocket/BOSH 畸形帧、Slowloris/churn、反滥用/密码学攻击式矩阵、SIGKILL/磁盘满/断电点、PostgreSQL/Redis/对象存储故障注入、千会话极限负载或公网联邦安全探测。详细手动验证方案见 [MANUAL_SECURITY_VALIDATION.md](MANUAL_SECURITY_VALIDATION.md)。
 

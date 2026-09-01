@@ -26,6 +26,119 @@ enum SmRouteTakeover {
     Conflict,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RouteRemovalWait {
+    Removed,
+    ConnectionCancelled,
+    ClaimLeaseExpired,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClaimBoundWaitAbort {
+    ConnectionCancelled,
+    ClaimLeaseExpired,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingAuthorityWait {
+    AuthorityChanged,
+    RouteRemoved,
+    ConnectionCancelled,
+    RetryBoundary,
+}
+
+async fn wait_for_route_removed(mut removed: tokio::sync::watch::Receiver<bool>) {
+    while !*removed.borrow() {
+        if removed.changed().await.is_err() {
+            break;
+        }
+    }
+}
+
+async fn wait_for_pending_authority(
+    subscription: &mut crate::services::sm::SmAuthoritySubscription,
+    route_removed: Option<tokio::sync::watch::Receiver<bool>>,
+    disconnect: &tokio_util::sync::CancellationToken,
+    retry_at: tokio::time::Instant,
+) -> PendingAuthorityWait {
+    let route = async move {
+        match route_removed {
+            Some(removed) => wait_for_route_removed(removed).await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::pin!(route);
+    tokio::select! {
+        biased;
+        _ = subscription.changed() => PendingAuthorityWait::AuthorityChanged,
+        _ = &mut route => PendingAuthorityWait::RouteRemoved,
+        _ = disconnect.cancelled() => PendingAuthorityWait::ConnectionCancelled,
+        _ = tokio::time::sleep_until(retry_at) => PendingAuthorityWait::RetryBoundary,
+    }
+}
+
+async fn lock_mix_presence_gate_for_claim(
+    gate: Arc<tokio::sync::Mutex<()>>,
+    disconnect: &tokio_util::sync::CancellationToken,
+    claim_deadline: tokio::time::Instant,
+) -> std::result::Result<tokio::sync::OwnedMutexGuard<()>, ClaimBoundWaitAbort> {
+    if tokio::time::Instant::now() >= claim_deadline {
+        return Err(ClaimBoundWaitAbort::ClaimLeaseExpired);
+    }
+    let guard = tokio::select! {
+        biased;
+        _ = disconnect.cancelled() => return Err(ClaimBoundWaitAbort::ConnectionCancelled),
+        _ = tokio::time::sleep_until(claim_deadline) => return Err(ClaimBoundWaitAbort::ClaimLeaseExpired),
+        guard = gate.lock_owned() => guard,
+    };
+    if tokio::time::Instant::now() >= claim_deadline {
+        drop(guard);
+        return Err(ClaimBoundWaitAbort::ClaimLeaseExpired);
+    }
+    Ok(guard)
+}
+
+/// Wait for the terminal notification of one exact route incarnation.
+///
+/// `watch` retains the terminal value, which closes the subscribe-after-remove
+/// lost-wakeup window. Callers must still re-read the route map after
+/// `Removed`: another connection may already have installed the same full JID.
+async fn wait_for_exact_route_removal(
+    mut removed: tokio::sync::watch::Receiver<bool>,
+    disconnect: &tokio_util::sync::CancellationToken,
+    claim_deadline: tokio::time::Instant,
+) -> RouteRemovalWait {
+    loop {
+        if *removed.borrow() {
+            return RouteRemovalWait::Removed;
+        }
+        tokio::select! {
+            biased;
+            changed = removed.changed() => {
+                if changed.is_err() || *removed.borrow() {
+                    return RouteRemovalWait::Removed;
+                }
+            }
+            _ = disconnect.cancelled() => {
+                // Prefer a concurrently committed removal over abandoning the
+                // claim; either result is safe, but this preserves progress.
+                return if *removed.borrow() {
+                    RouteRemovalWait::Removed
+                } else {
+                    RouteRemovalWait::ConnectionCancelled
+                };
+            }
+            _ = tokio::time::sleep_until(claim_deadline) => {
+                return if *removed.borrow() {
+                    RouteRemovalWait::Removed
+                } else {
+                    RouteRemovalWait::ClaimLeaseExpired
+                };
+            }
+        }
+    }
+}
+
 fn matching_sm_route(
     existing_user: uuid::Uuid,
     existing_sm_id: Option<uuid::Uuid>,
@@ -316,22 +429,35 @@ impl ProtocolSession {
         };
         let previd = Zeroizing::new(previd.to_owned());
         let token_hash = sm_resume_token_hash(previd.as_str());
-        // Reserve the maximum materialized snapshot before PostgreSQL can
-        // return it. The lease is RAII: every rejected/pending/error branch
-        // drops it, while a successful claim shrinks to the exact resident
-        // size and transfers it to the resumed live session or recovery job.
-        let claim_capacity = match self.state.sm_memory_governor().try_reserve_claim() {
-            Ok(capacity) => capacity,
-            Err(_) => {
-                self.state
-                    .metrics
-                    .capacity_reservations_rejected_total
-                    .fetch_add(1, Ordering::Relaxed);
-                return Ok((Action::Send(sm_failed("resource-constraint")), None));
-            }
-        };
-        let claim_deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
-        let claim = loop {
+        let mut pending_subscription: Option<(
+            uuid::Uuid,
+            crate::services::sm::SmAuthoritySubscription,
+        )> = None;
+        // The first database-owned retry boundary is also this attempt's
+        // terminal ownership horizon. A healthy old stream may extend its
+        // lease after that point; following every extension would let one
+        // resume request wait forever. This is not an application timeout: it
+        // is the exact lease/expiry boundary returned under the authority row
+        // lock by the first valid Pending decision.
+        let mut pending_ownership_horizon: Option<std::time::Instant> = None;
+        let (claim, claim_ownership_deadline, claim_capacity) = loop {
+            // Only an actual authority probe reserves the maximum possible
+            // materialized snapshot. A Pending response drops this RAII lease
+            // before waiting, so valid contention cannot pin the process-wide
+            // SM memory budget for a live lease's entire duration.
+            let claim_capacity = match self.state.sm_memory_governor().try_reserve_claim() {
+                Ok(capacity) => capacity,
+                Err(_) => {
+                    self.state
+                        .metrics
+                        .capacity_reservations_rejected_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    return Ok((Action::Send(sm_failed("resource-constraint")), None));
+                }
+            };
+            let before_probe = pending_subscription
+                .as_ref()
+                .map(|(_, subscription)| subscription.probe_stamp());
             match self
                 .state
                 .sm_service()
@@ -346,20 +472,102 @@ impl ProtocolSession {
                 })
                 .await?
             {
-                SmResumeClaimOutcome::Claimed(claim) => break *claim,
+                SmResumeClaimOutcome::Claimed(claim) => {
+                    let claim_deadline = tokio::time::Instant::from_std(claim.claim_deadline);
+                    break (*claim, claim_deadline, claim_capacity);
+                }
                 SmResumeClaimOutcome::Rejected => {
                     return Ok((Action::Send(sm_failed("item-not-found")), None));
                 }
-                SmResumeClaimOutcome::Pending if tokio::time::Instant::now() < claim_deadline => {
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                }
-                SmResumeClaimOutcome::Pending => {
-                    tracing::debug!(
-                        user_id = %current_user.id,
-                        connection_id = %self.connection_id,
-                        "timed out waiting for the previous SM transport to publish its resumable snapshot"
+                SmResumeClaimOutcome::Pending(pending) => {
+                    drop(claim_capacity);
+                    let ownership_horizon =
+                        *pending_ownership_horizon.get_or_insert(pending.retry_at);
+                    if std::time::Instant::now() >= ownership_horizon {
+                        tracing::debug!(
+                            session_id = %pending.session_id,
+                            old_connection_id = %pending.old_connection_id,
+                            reason = ?pending.reason,
+                            "durable SM owner remained authoritative through the initial lease boundary"
+                        );
+                        return Ok((Action::Send(sm_failed("item-not-found")), None));
+                    }
+                    let needs_subscription = pending_subscription
+                        .as_ref()
+                        .is_none_or(|(session_id, _)| *session_id != pending.session_id);
+                    if needs_subscription {
+                        // Subscribe first and immediately re-probe. A commit
+                        // between the first query and LISTEN/watch registration
+                        // is therefore observed by the second authoritative
+                        // statement instead of becoming a lost wakeup.
+                        pending_subscription = Some((
+                            pending.session_id,
+                            self.state
+                                .sm_service()
+                                .subscribe_authority(pending.session_id),
+                        ));
+                        continue;
+                    }
+                    let (_, subscription) = pending_subscription
+                        .as_mut()
+                        .expect("pending SM subscription was installed above");
+                    if subscription.acknowledge_probe(
+                        pending.state_version,
+                        before_probe.expect("existing subscription has a pre-probe stamp"),
+                    ) {
+                        continue;
+                    }
+                    let route_removed =
+                        self.state
+                            .sessions
+                            .get(&pending.full_jid)
+                            .and_then(|session| {
+                                let exact_sm = session
+                                    .sm_session_id
+                                    .read()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                    .is_some_and(|session_id| session_id == pending.session_id);
+                                let exact_route = session.connection_id
+                                    == pending.old_connection_id
+                                    && session.user_id == current_user.id
+                                    && exact_sm;
+                                if exact_route
+                                    && matches!(
+                                        pending.reason,
+                                        crate::services::sm::SmPendingReason::Live
+                                            | crate::services::sm::SmPendingReason::LiveAndClaim
+                                    )
+                                {
+                                    // A valid resume bearer may supersede only the
+                                    // exact local incarnation named by PostgreSQL.
+                                    // Cancellation starts normal cleanup/snapshot
+                                    // persistence; it never fabricates claim
+                                    // completion. Cross-node owners converge only
+                                    // through their committed DB transition or the
+                                    // authoritative lease boundary.
+                                    session.disconnect.cancel();
+                                }
+                                exact_route.then(|| session.route_incarnation.subscribe())
+                            });
+                    let retry_at =
+                        tokio::time::Instant::from_std(pending.retry_at.min(ownership_horizon));
+                    let wait = wait_for_pending_authority(
+                        subscription,
+                        route_removed,
+                        &self.disconnect,
+                        retry_at,
+                    )
+                    .await;
+                    if wait == PendingAuthorityWait::ConnectionCancelled {
+                        return Ok((Action::Send(sm_failed("item-not-found")), None));
+                    }
+                    tracing::trace!(
+                        session_id = %pending.session_id,
+                        old_connection_id = %pending.old_connection_id,
+                        ?wait,
+                        reason = ?pending.reason,
+                        "rechecking durable SM resume authority after an exact wake boundary"
                     );
-                    return Ok((Action::Send(sm_failed("item-not-found")), None));
                 }
             }
         };
@@ -395,6 +603,63 @@ impl ProtocolSession {
                 return Ok((Action::Send(sm_failed("item-not-found")), None));
             }
         };
+        // A live exact-route replacement inherits the old resource's MIX
+        // presence epoch. A suspended route has already published its durable
+        // resume authority while holding that same gate, so a fresh gate is
+        // safe once no live entry remains.
+        let (
+            mut mix_presence_gate,
+            mut mix_presence_fallback_suppressed,
+            mut caps_observation_generation,
+        ) = self
+            .state
+            .sessions
+            .get(&key)
+            .map(|session| {
+                (
+                    Arc::clone(&session.mix_presence_gate),
+                    Arc::clone(&session.mix_presence_fallback_suppressed),
+                    Arc::clone(&session.caps_observation_generation),
+                )
+            })
+            .unwrap_or_else(|| {
+                // A durable resume restores the last projected presence. Do
+                // not let a later caps completion infer a new item until the
+                // resumed client sends a new broadcast available. Directed
+                // available remains authoritative for its addressed channel,
+                // but deliberately does not re-enable fallback elsewhere.
+                (
+                    Arc::clone(&self.mix_presence_gate),
+                    {
+                        let suppressed = Arc::new(dashmap::DashSet::new());
+                        suppressed.insert("*".to_owned());
+                        suppressed
+                    },
+                    Arc::clone(&self.caps_observation_generation),
+                )
+            });
+        let mut mix_presence_epoch = match lock_mix_presence_gate_for_claim(
+            Arc::clone(&mix_presence_gate),
+            &self.disconnect,
+            claim_ownership_deadline,
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(reason) => {
+                self.state
+                    .sm_service()
+                    .release_claim(claim.session_id, claim.claim_token)
+                    .await?;
+                tracing::debug!(
+                    ?reason,
+                    connection_id = %self.connection_id,
+                    sm_session_id = %claim.session_id,
+                    "SM resume abandoned while waiting for the resource presence epoch"
+                );
+                return Ok((Action::Send(sm_failed("item-not-found")), None));
+            }
+        };
         let available = Arc::new(std::sync::atomic::AtomicBool::new(claim.available));
         let carbons = Arc::new(std::sync::atomic::AtomicBool::new(claim.carbons));
         let priority = Arc::new(std::sync::atomic::AtomicI16::new(claim.priority));
@@ -422,15 +687,22 @@ impl ProtocolSession {
         let last_presence = Arc::new(std::sync::RwLock::new(claim.last_presence.clone()));
         let sm_session_id_shared = Arc::new(std::sync::RwLock::new(Some(claim.session_id)));
         let effective_user_agent = self.user_agent_id.or(claim.user_agent_id);
-        let mut installed = false;
-        for _ in 0..100 {
+        loop {
             match self.state.sessions.entry(key.clone()) {
                 Entry::Vacant(entry) => {
                     entry.insert(crate::state::OnlineSession {
                         user_id: current_user.id,
                         auth_generation: current_user.auth_generation,
+                        route_incarnation: crate::state::RouteIncarnationSignal::new(
+                            self.connection_id,
+                        ),
                         sender: self.outbound.clone(),
                         available: Arc::clone(&available),
+                        mix_presence_gate: Arc::clone(&mix_presence_gate),
+                        mix_presence_fallback_suppressed: Arc::clone(
+                            &mix_presence_fallback_suppressed,
+                        ),
+                        caps_observation_generation: Arc::clone(&caps_observation_generation),
                         carbons: Arc::clone(&carbons),
                         priority: Arc::clone(&priority),
                         show: Arc::clone(&show),
@@ -460,7 +732,6 @@ impl ProtocolSession {
                         .metrics
                         .active_sessions
                         .fetch_add(1, Ordering::Relaxed);
-                    installed = true;
                     break;
                 }
                 Entry::Occupied(entry) => {
@@ -482,9 +753,45 @@ impl ProtocolSession {
                             .await?;
                         return Ok((Action::Send(sm_failed("conflict")), None));
                     }
+                    if !Arc::ptr_eq(&mix_presence_gate, &existing.mix_presence_gate) {
+                        let replacement_gate = Arc::clone(&existing.mix_presence_gate);
+                        let replacement_suppression =
+                            Arc::clone(&existing.mix_presence_fallback_suppressed);
+                        let replacement_caps_generation =
+                            Arc::clone(&existing.caps_observation_generation);
+                        drop(entry);
+                        drop(mix_presence_epoch);
+                        mix_presence_gate = replacement_gate;
+                        mix_presence_fallback_suppressed = replacement_suppression;
+                        caps_observation_generation = replacement_caps_generation;
+                        mix_presence_epoch = match lock_mix_presence_gate_for_claim(
+                            Arc::clone(&mix_presence_gate),
+                            &self.disconnect,
+                            claim_ownership_deadline,
+                        )
+                        .await
+                        {
+                            Ok(guard) => guard,
+                            Err(reason) => {
+                                self.state
+                                    .sm_service()
+                                    .release_claim(claim.session_id, claim.claim_token)
+                                    .await?;
+                                tracing::debug!(
+                                    ?reason,
+                                    connection_id = %self.connection_id,
+                                    sm_session_id = %claim.session_id,
+                                    "SM route takeover lost its claim while adopting the current presence epoch"
+                                );
+                                return Ok((Action::Send(sm_failed("item-not-found")), None));
+                            }
+                        };
+                        continue;
+                    }
                     let old_connection_id = existing.connection_id;
                     let old_lifecycle = Arc::clone(&existing.lifecycle);
                     let old_disconnect = existing.disconnect.clone();
+                    let old_route_incarnation = Arc::clone(&existing.route_incarnation);
                     drop(entry);
                     match claim_sm_route_lifecycle(&old_lifecycle) {
                         SmRouteTakeover::Acquired => {
@@ -506,7 +813,45 @@ impl ProtocolSession {
                             }
                         }
                         SmRouteTakeover::Dropping => {
-                            tokio::time::sleep(std::time::Duration::from_millis(1)).await
+                            debug_assert_eq!(
+                                old_route_incarnation.connection_id(),
+                                old_connection_id
+                            );
+                            match wait_for_exact_route_removal(
+                                old_route_incarnation.subscribe(),
+                                &self.disconnect,
+                                claim_ownership_deadline,
+                            )
+                            .await
+                            {
+                                RouteRemovalWait::Removed => {
+                                    // Re-enter the DashMap and validate the
+                                    // current incarnation. It may be vacant,
+                                    // or an ABA replacement may already own the
+                                    // full JID; neither conclusion is inferred
+                                    // from the old signal alone.
+                                }
+                                RouteRemovalWait::ConnectionCancelled => {
+                                    self.state
+                                        .sm_service()
+                                        .release_claim(claim.session_id, claim.claim_token)
+                                        .await?;
+                                    return Ok((Action::Send(sm_failed("item-not-found")), None));
+                                }
+                                RouteRemovalWait::ClaimLeaseExpired => {
+                                    self.state
+                                        .sm_service()
+                                        .release_claim(claim.session_id, claim.claim_token)
+                                        .await?;
+                                    tracing::debug!(
+                                        user_id = %current_user.id,
+                                        connection_id = %self.connection_id,
+                                        sm_session_id = %claim.session_id,
+                                        "SM route takeover did not quiesce before its exact claim lease expired"
+                                    );
+                                    return Ok((Action::Send(sm_failed("item-not-found")), None));
+                                }
+                            }
                         }
                         SmRouteTakeover::Conflict => {
                             self.state
@@ -519,13 +864,11 @@ impl ProtocolSession {
                 }
             }
         }
-        if !installed {
-            self.state
-                .sm_service()
-                .release_claim(claim.session_id, claim.claim_token)
-                .await?;
-            return Ok((Action::Send(sm_failed("conflict")), None));
-        }
+        // The old route has been replaced atomically by a staged, non-routable
+        // route carrying this same gate and suppression state. No MIX effect
+        // can now target the old connection, so release before cluster/SM/MUC
+        // database work rather than making teardown wait on that work.
+        drop(mix_presence_epoch);
         match self
             .state
             .cluster
@@ -815,6 +1158,13 @@ impl ProtocolSession {
         self.full_jid = Some(key.clone());
         self.registered_key = Some(key.clone());
         self.available = Some(available);
+        self.mix_presence_gate = mix_presence_gate;
+        self.mix_presence_fallback_suppressed = mix_presence_fallback_suppressed;
+        self.caps_observation_generation = caps_observation_generation;
+        self.resumed_caps_presence = claim
+            .available
+            .then(|| claim.last_presence.clone())
+            .flatten();
         self.carbons = carbons;
         self.priority = priority;
         self.show = show;
@@ -826,6 +1176,9 @@ impl ProtocolSession {
         self.privacy_requested = privacy_requested;
         self.directed_presence = directed_presence;
         self.last_presence = last_presence;
+        // The staged route owns the same gate as the replaced route. It
+        // remains non-routable until the later transport-success publication,
+        // so caps effects must recheck and will skip it.
         self.user_agent_id = effective_user_agent;
         self.user_agent_epoch = None;
         self.sm_enabled = true;
@@ -1167,6 +1520,7 @@ impl ProtocolSession {
 
     pub(crate) fn reset_sm(&mut self) {
         self.sm_enabled = false;
+        self.resumed_caps_presence = None;
         self.sm_db_id = None;
         *self
             .sm_session_id_shared
@@ -1271,11 +1625,108 @@ fn validated_sm_session_key(full_jid: &str, resource: &str, account: &str) -> Op
 mod tests {
     use super::{
         acknowledgement_delta, claim_sm_route_lifecycle, handled_count_too_high_stream_error,
-        matching_sm_route, muc_resume_failure_stanza, resumability_allowed,
-        resumed_offline_replay_eligible, sm_resume_token_hash, stage_muc_replay_suffix,
-        valid_sm_control, validated_sm_session_key, SmRouteTakeover,
+        lock_mix_presence_gate_for_claim, matching_sm_route, muc_resume_failure_stanza,
+        resumability_allowed, resumed_offline_replay_eligible, sm_resume_token_hash,
+        stage_muc_replay_suffix, valid_sm_control, validated_sm_session_key,
+        wait_for_exact_route_removal, ClaimBoundWaitAbort, RouteRemovalWait, SmRouteTakeover,
     };
     use roxmltree::Document;
+
+    #[tokio::test]
+    async fn ready_mix_gate_cannot_outlive_the_database_claim() {
+        let gate = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let disconnect = tokio_util::sync::CancellationToken::new();
+        let expired = tokio::time::Instant::now()
+            .checked_sub(std::time::Duration::from_millis(1))
+            .expect("a one millisecond earlier instant is representable");
+
+        assert!(
+            matches!(
+                lock_mix_presence_gate_for_claim(gate, &disconnect, expired).await,
+                Err(ClaimBoundWaitAbort::ClaimLeaseExpired)
+            ),
+            "an immediately ready mutex must not outrank an already-expired database lease"
+        );
+    }
+
+    #[tokio::test]
+    async fn route_removal_wait_rechecks_the_map_and_cannot_miss_an_aba_replacement() {
+        let key = "alice@example.test/Phone".to_owned();
+        let old_connection = uuid::Uuid::new_v4();
+        let replacement_connection = uuid::Uuid::new_v4();
+        let routes = std::sync::Arc::new(dashmap::DashMap::new());
+        routes.insert(key.clone(), old_connection);
+        let (removed, receiver) = tokio::sync::watch::channel(false);
+        let disconnect = tokio_util::sync::CancellationToken::new();
+
+        let writer_routes = std::sync::Arc::clone(&routes);
+        let writer_key = key.clone();
+        let writer = tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            assert!(writer_routes
+                .remove_if(&writer_key, |_, connection| *connection == old_connection)
+                .is_some());
+            // Deliberately install the ABA replacement before publishing the
+            // old incarnation's terminal event.
+            writer_routes.insert(writer_key, replacement_connection);
+            removed.send_replace(true);
+        });
+
+        assert_eq!(
+            wait_for_exact_route_removal(
+                receiver,
+                &disconnect,
+                tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            )
+            .await,
+            RouteRemovalWait::Removed
+        );
+        writer.await.expect("writer completes");
+        assert_eq!(
+            routes.get(&key).map(|route| *route),
+            Some(replacement_connection),
+            "the old event is only permission to re-read; it is not proof of vacancy"
+        );
+    }
+
+    #[tokio::test]
+    async fn route_removal_wait_observes_a_notification_published_before_subscribe() {
+        let (removed, receiver) = tokio::sync::watch::channel(false);
+        removed.send_replace(true);
+        let disconnect = tokio_util::sync::CancellationToken::new();
+        assert_eq!(
+            wait_for_exact_route_removal(
+                receiver,
+                &disconnect,
+                tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            )
+            .await,
+            RouteRemovalWait::Removed
+        );
+    }
+
+    #[tokio::test]
+    async fn route_removal_wait_is_bounded_only_by_cancellation_or_the_claim_lease() {
+        let (_removed, receiver) = tokio::sync::watch::channel(false);
+        let disconnect = tokio_util::sync::CancellationToken::new();
+        disconnect.cancel();
+        assert_eq!(
+            wait_for_exact_route_removal(
+                receiver,
+                &disconnect,
+                tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            )
+            .await,
+            RouteRemovalWait::ConnectionCancelled
+        );
+
+        let (_removed, receiver) = tokio::sync::watch::channel(false);
+        let disconnect = tokio_util::sync::CancellationToken::new();
+        assert_eq!(
+            wait_for_exact_route_removal(receiver, &disconnect, tokio::time::Instant::now()).await,
+            RouteRemovalWait::ClaimLeaseExpired
+        );
+    }
 
     #[test]
     fn resumed_muc_replay_suffix_is_tracked_after_the_unacked_prefix() {

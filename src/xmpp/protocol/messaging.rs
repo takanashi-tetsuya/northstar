@@ -368,6 +368,11 @@ impl ProtocolSession {
                 )
                 .await
                 {
+                    tracing::debug!(
+                        source_domain = %self.state.config.domain,
+                        target_domain = %domain,
+                        "volatile no-store stanza was not accepted by an authenticated S2S route"
+                    );
                     return Ok(message_error(root, "wait", "service-unavailable"));
                 }
                 self.finalize_message_admission(&mut message_admission_lease, "remote-no-store")

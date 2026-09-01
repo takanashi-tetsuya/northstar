@@ -316,7 +316,9 @@ impl ProtocolSession {
         // non-empty, bounded id and one of the four RFC 6120 IQ types.
         let id = root.attribute("id").unwrap_or_default();
         let kind = root.attribute("type").unwrap_or_default();
-        if matches!(kind, "result" | "error") && self.handle_caps_response(id, kind, root, raw) {
+        if matches!(kind, "result" | "error")
+            && self.handle_caps_response(id, kind, root, raw).await
+        {
             return Ok(Action::None);
         }
         if matches!(kind, "result" | "error") && self.handle_push_response(id, kind, root).await? {

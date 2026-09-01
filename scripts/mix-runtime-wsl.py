@@ -298,10 +298,10 @@ def run() -> None:
         if "id='group-one'" in frame and "type='error'" in frame
     ]
     check(not group_errors, f"MIX group message admission failed: {group_errors}")
-    # Unknown capability delivery is intentionally retried for at most thirty
-    # seconds.  Keep the acceptance deadline just beyond that product bound so
-    # a slow CI runner cannot turn a bounded capability wait into a false loss.
-    group = bob.wait("MIX runtime message", timeout=40)
+    # The reverse-direction delivery above already proved the recipient's
+    # capability route and drained earlier ordered work. Keep the normal
+    # deadline here so a new admission or fan-out latency regression fails CI.
+    group = bob.wait("MIX runtime message")
     stanza_id = re.search(r"stanza-id[^>]+id='([0-9a-f-]{36})'", group)
     check(stanza_id is not None and f"<jid>{ALICE}@{DOMAIN}</jid>" in group, f"live maybe-visible identity/stanza-id failed: {group}")
     archive_id = stanza_id.group(1)

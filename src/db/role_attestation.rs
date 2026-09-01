@@ -865,7 +865,13 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
                ('northstar_sm_expire_before_generation(uuid,int8)'),
                ('northstar_sm_privacy_list_in_use(uuid,text)'),
                ('northstar_sm_privacy_state(uuid)'),
-               ('northstar_session_capability_catalog_healthy(text)')
+               ('northstar_session_capability_catalog_healthy(text)'),
+               ('northstar_mix_delivery_capacity_drain()'),
+               ('northstar_mix_delivery_capacity_reconcile()'),
+               ('northstar_mix_pam_account_capacity_lock(uuid,text)'),
+               ('northstar_mix_pam_operation_insert(uuid,uuid,text,text,text,text,text,text,bytea,uuid,bool,text,text,text[],int8,text)'),
+               ('northstar_mix_pam_operation_prune(int8)'),
+               ('northstar_mix_pam_capacity_reconcile()')
            ), resolved_definer AS (
              SELECT signature,
                     pg_catalog.to_regprocedure('public.' || signature) AS oid
@@ -876,7 +882,10 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
                ('legal_hold_personal_archives',FALSE),('legal_hold_muc_archives',FALSE),
                ('legal_hold_offline_messages',FALSE),('legal_hold_report_evidence',FALSE),
                ('legal_hold_scopes',FALSE),('legal_hold_offline_snapshots',FALSE),
-               ('cluster_muc_operations',FALSE),('cluster_muc_delivery_handoffs',TRUE)
+               ('cluster_muc_operations',FALSE),('cluster_muc_delivery_handoffs',TRUE),
+               ('mix_delivery_capacity_releases',TRUE),
+               ('mix_pam_operation_capacity',TRUE),
+               ('mix_pam_operation_user_capacity',TRUE)
            ), migration_ledger(name) AS (
              VALUES ('_sqlx_migrations'),('jid_identity_migrations')
            )
@@ -960,7 +969,93 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
                     OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'REFERENCES')
              )
              AND NOT EXISTS (
+                 SELECT 1 FROM (SELECT pg_catalog.to_regclass(
+                   pg_catalog.format(
+                     '%I.mix_delivery_capacity_releases',namespace.nspname
+                   )
+                 ) AS oid) relation
+                 WHERE relation.oid IS NULL
+                    OR NOT pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'SELECT')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'INSERT')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'UPDATE')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'DELETE')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'TRUNCATE')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'REFERENCES')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'TRIGGER')
+                    OR pg_catalog.has_any_column_privilege(
+                         current_user,relation.oid,'INSERT')
+                    OR pg_catalog.has_any_column_privilege(
+                         current_user,relation.oid,'UPDATE')
+                    OR pg_catalog.has_any_column_privilege(
+                         current_user,relation.oid,'REFERENCES')
+              )
+             AND NOT EXISTS (
                  SELECT 1 FROM (VALUES
+                   ('mix_pam_operation_capacity'),
+                   ('mix_pam_operation_user_capacity')
+                 ) authority(name)
+                 CROSS JOIN LATERAL (
+                   SELECT pg_catalog.to_regclass(
+                     pg_catalog.format('%I.%I',namespace.nspname,authority.name)
+                   ) AS oid
+                 ) relation
+                 WHERE relation.oid IS NULL
+                    OR NOT pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'SELECT')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'INSERT')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'UPDATE')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'DELETE')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'TRUNCATE')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'REFERENCES')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'TRIGGER')
+                    OR pg_catalog.has_any_column_privilege(
+                         current_user,relation.oid,'INSERT')
+                    OR pg_catalog.has_any_column_privilege(
+                         current_user,relation.oid,'UPDATE')
+                    OR pg_catalog.has_any_column_privilege(
+                         current_user,relation.oid,'REFERENCES')
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM (SELECT pg_catalog.to_regclass(
+                   pg_catalog.format(
+                     '%I.mix_pam_operations',namespace.nspname
+                   )
+                 ) AS oid) relation
+                 WHERE relation.oid IS NULL
+                    OR NOT pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'SELECT')
+                    OR NOT pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'UPDATE')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'INSERT')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'DELETE')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'TRUNCATE')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'REFERENCES')
+                    OR pg_catalog.has_table_privilege(
+                         current_user,relation.oid,'TRIGGER')
+                    OR pg_catalog.has_any_column_privilege(
+                         current_user,relation.oid,'INSERT')
+                    OR pg_catalog.has_any_column_privilege(
+                         current_user,relation.oid,'REFERENCES')
+             )
+             AND NOT EXISTS (
+                  SELECT 1 FROM (VALUES
                    ('admin_service_messages'),
                    ('federation_runtime_rules'),
                    ('admin_service_control')
@@ -1223,6 +1318,16 @@ mod tests {
         assert!(signatures
             .iter()
             .all(|signature| signature.contains('(') && signature.ends_with(')')));
+        for signature in [
+            "northstar_sm_state_version()",
+            "northstar_sm_state_notify()",
+        ] {
+            let index = signatures
+                .iter()
+                .position(|candidate| candidate == signature)
+                .expect("SM event-authority capability is absent");
+            assert_eq!(workloads[index], "private");
+        }
     }
 
     #[test]
@@ -1240,6 +1345,8 @@ mod tests {
         assert!(manifest.versions.contains(&113));
         assert!(manifest.versions.contains(&114));
         assert!(manifest.versions.contains(&115));
+        assert_eq!(manifest.versions.last(), Some(&128));
+        assert_eq!(manifest.versions.len(), 127);
         assert!(!manifest.versions.contains(&21));
         assert!(manifest
             .checksum_hex

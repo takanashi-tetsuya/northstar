@@ -48,6 +48,7 @@ pub(crate) enum SessionSmCleanup {
 
 pub(crate) struct SessionCleanupPlan {
     pub(crate) connection_id: Uuid,
+    pub(crate) mix_presence_gate: Arc<tokio::sync::Mutex<()>>,
     pub(crate) account: Option<SessionCleanupAccount>,
     pub(crate) registered_key: Option<String>,
     pub(crate) full_jid: Option<String>,
@@ -411,6 +412,7 @@ impl SmSuspensionRecoveryQueue {
 
 pub(crate) struct QuiescedSessionCleanup {
     connection_id: Uuid,
+    mix_presence_gate: Arc<tokio::sync::Mutex<()>>,
     account: Option<SessionCleanupAccount>,
     registered_key: Option<String>,
     full_jid: Option<String>,
@@ -657,6 +659,7 @@ impl SessionCleanupService {
 
         QuiescedSessionCleanup {
             connection_id: plan.connection_id,
+            mix_presence_gate: plan.mix_presence_gate,
             account: plan.account,
             registered_key: plan.registered_key,
             full_jid: plan.full_jid,
@@ -674,6 +677,14 @@ impl SessionCleanupService {
     /// budget. Failure never short-circuits later security/capacity cleanup.
     /// The report names the durable recovery mechanism for each missed step.
     pub(crate) async fn finish(&self, work: QuiescedSessionCleanup) -> CleanupReport {
+        // Cross the exact resource epoch after `quiesce` removes the route.
+        // A caps worker that already entered finishes before this barrier;
+        // one that wakes afterwards must re-read the route and observe that
+        // it is gone. Do not retain the gate across database/cluster cleanup:
+        // finalization has a finite budget and the epoch protects only the
+        // route-to-MIX ordering boundary.
+        let mix_presence_epoch = Arc::clone(&work.mix_presence_gate).lock_owned().await;
+        drop(mix_presence_epoch);
         let deadline = Instant::now() + CLEANUP_TOTAL_BUDGET;
         let mut report = CleanupReport::default();
         self.state
@@ -864,22 +875,6 @@ impl SessionCleanupService {
                 .await;
         }
 
-        // A successfully suspended stream retains its deployment capacity
-        // lease across resume. Every other path releases only this connection.
-        if !suspended {
-            let _ = self
-                .step(
-                    deadline,
-                    "release-live-session",
-                    CleanupRecovery::LeaseOrEpoch,
-                    self.state
-                        .sm_service()
-                        .release_live_session(work.connection_id),
-                    &mut report,
-                )
-                .await;
-        }
-
         if let Some(account) = &work.account {
             let _ = self
                 .step(
@@ -936,6 +931,25 @@ impl SessionCleanupService {
                     )
                     .await;
             }
+        }
+
+        // A successfully suspended stream retains its deployment capacity
+        // lease across resume. On every terminal path, keep the exact resource
+        // lease until its unavailable projection has completed (or entered
+        // the documented recovery path), so a new bind cannot be followed by
+        // stale cleanup from the connection it replaced.
+        if !suspended {
+            let _ = self
+                .step(
+                    deadline,
+                    "release-live-session",
+                    CleanupRecovery::LeaseOrEpoch,
+                    self.state
+                        .sm_service()
+                        .release_live_session(work.connection_id),
+                    &mut report,
+                )
+                .await;
         }
 
         self.complete_report(report)

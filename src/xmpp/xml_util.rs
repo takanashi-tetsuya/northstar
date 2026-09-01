@@ -1749,20 +1749,19 @@ fn validate_omemo2_envelope(root: Node<'_, '_>) -> Result<(), &'static str> {
         {
             return Err("bad-request");
         }
-        let mut store = 0usize;
-        let mut contrary_storage_hint = false;
-        for hint in root.children().filter(|node| {
-            node.is_element() && node.tag_name().namespace() == Some("urn:xmpp:hints")
-        }) {
-            match hint.tag_name().name() {
-                "store" => store += 1,
-                "no-store" | "no-permanent-store" => contrary_storage_hint = true,
-                _ => {}
-            }
-        }
-        if store != 1 || contrary_storage_hint {
-            // SCE messages have no body and therefore require the explicit
-            // XEP-0334 storage hint to remain eligible for MAM.
+        let store = root
+            .children()
+            .filter(|node| {
+                node.is_element() && node.tag_name().namespace() == Some("urn:xmpp:hints")
+            })
+            .filter(|node| node.tag_name().name() == "store")
+            .count();
+        if store != 1 {
+            // XEP-0420 requires this structural hint because an SCE payload
+            // has no plaintext body. Other XEP-0334 hints are an independent
+            // storage-policy decision: in particular, `no-store` may override
+            // persistence while an already authenticated live route still
+            // carries the ciphertext.
             return Err("not-acceptable");
         }
     }
@@ -3904,6 +3903,31 @@ mod tests {
             "<message><encrypted xmlns='urn:xmpp:omemo:2'><header sid='7'><keys jid='alice@example.test'><key rid='9'>AQ==</key></keys></header><payload>{oversized_payload}</payload></encrypted><store xmlns='urn:xmpp:hints'/></message>"
         );
         assert!(!modern_payload_valid(&oversized));
+    }
+
+    #[test]
+    fn omemo2_payload_store_requirement_does_not_override_no_store_policy() {
+        let no_store = "<message type='chat'><encrypted xmlns='urn:xmpp:omemo:2'><header sid='7'><keys jid='alice@example.test'><key rid='9'>AQ==</key></keys></header><payload>Ag==</payload></encrypted><encryption xmlns='urn:xmpp:eme:0' namespace='urn:xmpp:omemo:2'/><store xmlns='urn:xmpp:hints'/><no-store xmlns='urn:xmpp:hints'/></message>";
+        let document = Document::parse(no_store).unwrap();
+        let root = document.root_element();
+
+        assert_eq!(validate_modern_message_payloads(root), Ok(()));
+        assert_eq!(
+            message_storage_policy(root),
+            Ok(super::MessageStoragePolicy {
+                temporary: false,
+                permanent: false,
+            })
+        );
+        assert!(!offline_storage_permitted(root));
+        assert!(!mam_storage_eligible(root));
+
+        let missing_store = "<message type='chat'><encrypted xmlns='urn:xmpp:omemo:2'><header sid='7'><keys jid='alice@example.test'><key rid='9'>AQ==</key></keys></header><payload>Ag==</payload></encrypted><encryption xmlns='urn:xmpp:eme:0' namespace='urn:xmpp:omemo:2'/><no-store xmlns='urn:xmpp:hints'/></message>";
+        let document = Document::parse(missing_store).unwrap();
+        assert_eq!(
+            validate_modern_message_payloads(document.root_element()),
+            Err("not-acceptable")
+        );
     }
 
     #[test]

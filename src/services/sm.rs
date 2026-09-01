@@ -1,10 +1,23 @@
 //! Application boundary for durable resource binding and XEP-0198 ownership.
 
 use crate::db;
-use anyhow::Result;
-use sqlx::PgPool;
-use std::net::IpAddr;
+use anyhow::{Context, Result};
+use dashmap::mapref::entry::Entry;
+use sqlx::{
+    postgres::{PgConnectOptions, PgListener, PgPoolOptions},
+    PgPool,
+};
+use std::{
+    net::IpAddr,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Weak,
+    },
+};
+use tokio::sync::watch;
 use uuid::Uuid;
+
+const SM_AUTHORITY_NOTIFICATION_CHANNEL: &str = "northstar_sm_authority_v1";
 
 /// Application-layer proof that one already-authorized C2S lifecycle may
 /// claim a cluster route. Protocol code never receives a database DTO.
@@ -165,6 +178,7 @@ impl From<&SmSessionSnapshot> for db::SmSessionSnapshot {
 pub(crate) struct SmResumeClaim {
     pub(crate) session_id: Uuid,
     pub(crate) claim_token: Uuid,
+    pub(crate) claim_deadline: std::time::Instant,
     pub(crate) full_jid: String,
     pub(crate) resource: String,
     pub(crate) resume_timeout_seconds: u64,
@@ -233,6 +247,7 @@ impl From<db::SmResumeClaim> for SmResumeClaim {
         Self {
             session_id: value.session_id,
             claim_token: value.claim_token,
+            claim_deadline: value.claim_deadline,
             full_jid: value.full_jid,
             resource: value.resource,
             resume_timeout_seconds: value.resume_timeout_seconds,
@@ -303,8 +318,313 @@ pub(crate) struct SmResumeClaimRequest<'a> {
 #[derive(Debug)]
 pub(crate) enum SmResumeClaimOutcome {
     Claimed(Box<SmResumeClaim>),
-    Pending,
+    Pending(SmResumePending),
     Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SmPendingReason {
+    Live,
+    Claim,
+    LiveAndClaim,
+}
+
+impl From<db::SmPendingReason> for SmPendingReason {
+    fn from(value: db::SmPendingReason) -> Self {
+        match value {
+            db::SmPendingReason::Live => Self::Live,
+            db::SmPendingReason::Claim => Self::Claim,
+            db::SmPendingReason::LiveAndClaim => Self::LiveAndClaim,
+        }
+    }
+}
+
+/// Authoritative reason and wake boundary for a valid, but not yet claimable,
+/// XEP-0198 resume epoch. These values are produced under the same row lock as
+/// the claim decision; protocol code never guesses a retry interval.
+#[derive(Clone, Debug)]
+pub(crate) struct SmResumePending {
+    pub(crate) session_id: Uuid,
+    pub(crate) old_connection_id: Uuid,
+    pub(crate) full_jid: String,
+    pub(crate) state_version: i64,
+    pub(crate) reason: SmPendingReason,
+    pub(crate) retry_at: std::time::Instant,
+}
+
+impl From<db::SmResumePending> for SmResumePending {
+    fn from(value: db::SmResumePending) -> Self {
+        Self {
+            session_id: value.session_id,
+            old_connection_id: value.old_connection_id,
+            full_jid: value.full_jid,
+            state_version: value.state_version,
+            reason: value.reason.into(),
+            retry_at: value.retry_at,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SmAuthorityStamp {
+    state_version: i64,
+    listener_generation: u64,
+    /// Process-local edge counter for accepted notification hints. Unlike the
+    /// untrusted NOTIFY payload's state version, this value is consumed once
+    /// per authority probe and cannot leave a receiver permanently ahead of
+    /// PostgreSQL.
+    notification_sequence: u64,
+}
+
+/// One session-scoped notification receiver. A reconnect changes the same
+/// stamp as a durable row transition, so a waiter has one lossless wake source
+/// and always follows it with an authoritative claim probe.
+pub(crate) struct SmAuthoritySubscription {
+    receiver: watch::Receiver<SmAuthorityStamp>,
+    session_id: Uuid,
+    slot: Arc<SmAuthoritySlot>,
+    broker: Weak<SmAuthorityBroker>,
+}
+
+impl SmAuthoritySubscription {
+    pub(crate) fn probe_stamp(&self) -> SmAuthorityStamp {
+        *self.receiver.borrow()
+    }
+
+    /// Consume every wake visible when an authoritative database probe
+    /// completed. An edge which arrived after `before_probe` asks for at most
+    /// one more probe, unless this probe's authoritative state version already
+    /// identifies that exact notification. A retained or forged high version
+    /// cannot spin the caller forever. `borrow_and_update` also makes
+    /// `changed()` wait for a genuinely later edge.
+    pub(crate) fn acknowledge_probe(
+        &mut self,
+        pending_state_version: i64,
+        before_probe: SmAuthorityStamp,
+    ) -> bool {
+        let current = *self.receiver.borrow_and_update();
+        let notification_changed =
+            current.notification_sequence != before_probe.notification_sequence;
+        let listener_changed = current.listener_generation != before_probe.listener_generation;
+        let exact_notification_observed =
+            notification_changed && current.state_version == pending_state_version;
+        if notification_changed && !exact_notification_observed {
+            // An old or forged version earns at most this one authoritative
+            // read; it never becomes a durable fact or a sticky reprobe
+            // condition. Equality is only an exact-event optimization: the
+            // database version remains authoritative.
+            tracing::trace!(
+                notification_state_version = current.state_version,
+                pending_state_version,
+                "consumed an SM authority notification hint not observed by this probe"
+            );
+        }
+        listener_changed || (notification_changed && !exact_notification_observed)
+    }
+
+    pub(crate) async fn changed(&mut self) {
+        // A closed sender is also an authority-boundary transition: the
+        // owning service is shutting down or being rebuilt, and the caller's
+        // connection cancellation branch will decide whether it may continue.
+        let _ = self.receiver.changed().await;
+    }
+}
+
+impl Drop for SmAuthoritySubscription {
+    fn drop(&mut self) {
+        let Some(broker) = self.broker.upgrade() else {
+            let previous = self.slot.participants.fetch_sub(1, Ordering::AcqRel);
+            debug_assert!(previous > 0, "SM authority participant count underflow");
+            return;
+        };
+        broker.release_participant(self.session_id, &self.slot);
+    }
+}
+
+/// RAII ownership between incrementing the explicit participant count and
+/// constructing the watch receiver. Test barriers and future fallible setup
+/// cannot strand a zero-receiver slot in the broker if construction unwinds.
+struct SmAuthorityParticipantRegistration {
+    session_id: Uuid,
+    slot: Option<Arc<SmAuthoritySlot>>,
+    broker: Weak<SmAuthorityBroker>,
+}
+
+impl SmAuthorityParticipantRegistration {
+    fn into_subscription(
+        mut self,
+        receiver: watch::Receiver<SmAuthorityStamp>,
+    ) -> SmAuthoritySubscription {
+        let slot = self
+            .slot
+            .take()
+            .expect("SM authority participant registration was already consumed");
+        SmAuthoritySubscription {
+            receiver,
+            session_id: self.session_id,
+            slot,
+            broker: self.broker.clone(),
+        }
+    }
+}
+
+impl Drop for SmAuthorityParticipantRegistration {
+    fn drop(&mut self) {
+        let Some(slot) = self.slot.take() else {
+            return;
+        };
+        let Some(broker) = self.broker.upgrade() else {
+            let previous = slot.participants.fetch_sub(1, Ordering::AcqRel);
+            debug_assert!(previous > 0, "SM authority participant count underflow");
+            return;
+        };
+        broker.release_participant(self.session_id, &slot);
+    }
+}
+
+#[derive(Debug)]
+struct SmAuthoritySlot {
+    state: watch::Sender<SmAuthorityStamp>,
+    participants: std::sync::atomic::AtomicUsize,
+}
+
+#[derive(Debug)]
+struct SmAuthorityBroker {
+    schema: String,
+    listener_generation: AtomicU64,
+    notification_sequence: AtomicU64,
+    sessions: dashmap::DashMap<Uuid, Arc<SmAuthoritySlot>>,
+}
+
+impl SmAuthorityBroker {
+    fn new(schema: String) -> Result<Arc<Self>> {
+        anyhow::ensure!(
+            !schema.is_empty() && schema.len() <= 63 && !schema.contains('\0'),
+            "invalid PostgreSQL schema for SM authority listener"
+        );
+        Ok(Arc::new(Self {
+            schema,
+            listener_generation: AtomicU64::new(0),
+            notification_sequence: AtomicU64::new(0),
+            sessions: dashmap::DashMap::new(),
+        }))
+    }
+
+    fn subscribe(self: &Arc<Self>, session_id: Uuid) -> SmAuthoritySubscription {
+        self.subscribe_after_participant(session_id, || {})
+    }
+
+    fn subscribe_after_participant(
+        self: &Arc<Self>,
+        session_id: Uuid,
+        after_participant: impl FnOnce(),
+    ) -> SmAuthoritySubscription {
+        let generation = self.listener_generation.load(Ordering::Acquire);
+        let notification_sequence = self.notification_sequence.load(Ordering::Acquire);
+        let slot = match self.sessions.entry(session_id) {
+            Entry::Occupied(entry) => {
+                entry.get().participants.fetch_add(1, Ordering::AcqRel);
+                Arc::clone(entry.get())
+            }
+            Entry::Vacant(entry) => {
+                let (state, _) = watch::channel(SmAuthorityStamp {
+                    state_version: 0,
+                    listener_generation: generation,
+                    notification_sequence,
+                });
+                Arc::clone(&entry.insert(Arc::new(SmAuthoritySlot {
+                    state,
+                    participants: std::sync::atomic::AtomicUsize::new(1),
+                })))
+            }
+        };
+        let participant = SmAuthorityParticipantRegistration {
+            session_id,
+            slot: Some(Arc::clone(&slot)),
+            broker: Arc::downgrade(self),
+        };
+        after_participant();
+        let receiver = slot.state.subscribe();
+        participant.into_subscription(receiver)
+    }
+
+    fn release_participant(&self, session_id: Uuid, slot: &Arc<SmAuthoritySlot>) {
+        let previous = slot.participants.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "SM authority participant count underflow");
+        if previous != 1 {
+            return;
+        }
+        // Compare both Arc identity and the explicit participant count under
+        // the entry lock. A new subscriber increments under that same lock
+        // before it constructs its receiver, closing the clone-before-receiver
+        // removal race.
+        if let Entry::Occupied(entry) = self.sessions.entry(session_id) {
+            if Arc::ptr_eq(entry.get(), slot) && slot.participants.load(Ordering::Acquire) == 0 {
+                entry.remove();
+            }
+        };
+    }
+
+    fn publish_state(&self, session_id: Uuid, state_version: i64) {
+        if state_version <= 0 {
+            return;
+        }
+        let Some(slot) = self.sessions.get(&session_id) else {
+            return;
+        };
+        let current = *slot.state.borrow();
+        // Every delivery is a fresh one-shot edge, while the retained payload
+        // is monotonic. The payload is not trusted for deduplication, so a
+        // forged value cannot pre-play and suppress a later real notification;
+        // retaining the maximum also prevents a forged lower value from
+        // masking a real edge which was coalesced into this watch update.
+        let notification_sequence = self
+            .notification_sequence
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        slot.state.send_replace(SmAuthorityStamp {
+            state_version: current.state_version.max(state_version),
+            notification_sequence,
+            ..current
+        });
+    }
+
+    /// A listener start, transparent reconnect, or terminal receive error may
+    /// have lost notifications. Advance a process-global generation and wake
+    /// every actual waiter; the waiter immediately re-reads PostgreSQL.
+    fn publish_listener_transition(&self) {
+        let generation = self
+            .listener_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
+        let mut unused = Vec::new();
+        for entry in &self.sessions {
+            if entry.participants.load(Ordering::Acquire) == 0 {
+                unused.push(*entry.key());
+                continue;
+            }
+            let current = *entry.state.borrow();
+            entry.state.send_replace(SmAuthorityStamp {
+                listener_generation: generation,
+                ..current
+            });
+        }
+        for session_id in unused {
+            if let Entry::Occupied(entry) = self.sessions.entry(session_id) {
+                if entry.get().participants.load(Ordering::Acquire) == 0 {
+                    entry.remove();
+                }
+            }
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SmAuthorityNotification {
+    schema: String,
+    session_id: Uuid,
+    state_version: i64,
 }
 
 fn same_device_binding_matches(
@@ -368,11 +688,19 @@ pub(crate) enum SmResumeFinalizationOutcome {
 #[derive(Clone)]
 pub(crate) struct SmService {
     pool: PgPool,
+    authority: Arc<SmAuthorityBroker>,
 }
 
 impl SmService {
-    pub(crate) fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub(crate) fn new(pool: PgPool, schema: String) -> Result<Self> {
+        Ok(Self {
+            pool,
+            authority: SmAuthorityBroker::new(schema)?,
+        })
+    }
+
+    pub(crate) fn subscribe_authority(&self, session_id: Uuid) -> SmAuthoritySubscription {
+        self.authority.subscribe(session_id)
     }
 
     pub(crate) async fn create_session(
@@ -443,7 +771,9 @@ impl SmService {
                         SmResumeClaimOutcome::Claimed(Box::new((*claim).into()))
                     }
                 }
-                db::SmClaimStatus::Pending => SmResumeClaimOutcome::Pending,
+                db::SmClaimStatus::Pending(pending) => {
+                    SmResumeClaimOutcome::Pending(pending.into())
+                }
                 db::SmClaimStatus::Rejected => SmResumeClaimOutcome::Rejected,
             },
         )
@@ -781,16 +1111,257 @@ impl SmService {
     }
 }
 
+async fn run_sm_authority_listener(
+    connect_options: PgConnectOptions,
+    authority: Arc<SmAuthorityBroker>,
+    cancel: tokio_util::sync::CancellationToken,
+    heartbeat: crate::workers::WorkerHeartbeat,
+) -> Result<()> {
+    // PgListener internally retains this one-connection pool solely to rebuild
+    // its socket after a PostgreSQL failover. It is deliberately unrelated to
+    // the application PgPool, so a blocked LISTEN cannot consume one of the
+    // request/transaction connections.
+    let listener_pool = PgPoolOptions::new()
+        .min_connections(0)
+        .max_connections(1)
+        .max_lifetime(None)
+        .idle_timeout(None)
+        .connect_with(connect_options)
+        .await
+        .context("could not establish the dedicated SM authority listener connection")?;
+    let actual_schema: String = sqlx::query_scalar("SELECT current_schema()")
+        .fetch_one(&listener_pool)
+        .await
+        .context("could not attest the SM authority listener schema")?;
+    anyhow::ensure!(
+        actual_schema == authority.schema,
+        "SM authority listener connected to an unexpected PostgreSQL schema"
+    );
+    let mut listener = PgListener::connect_with(&listener_pool)
+        .await
+        .context("could not acquire the dedicated SM authority LISTEN connection")?;
+    listener
+        .listen(SM_AUTHORITY_NOTIFICATION_CHANNEL)
+        .await
+        .context("could not subscribe to SM authority notifications")?;
+    authority.publish_listener_transition();
+    heartbeat.ok();
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                authority.publish_listener_transition();
+                return Ok(());
+            }
+            notification = listener.try_recv() => {
+                match notification {
+                    Ok(Some(notification)) => {
+                        if notification.channel() != SM_AUTHORITY_NOTIFICATION_CHANNEL
+                            || notification.payload().len() > 256
+                        {
+                            continue;
+                        }
+                        let Ok(event) = serde_json::from_str::<SmAuthorityNotification>(
+                            notification.payload(),
+                        ) else {
+                            tracing::warn!(
+                                channel = notification.channel(),
+                                "discarded malformed SM authority notification"
+                            );
+                            continue;
+                        };
+                        if event.schema == authority.schema && event.state_version > 0 {
+                            authority.publish_state(event.session_id, event.state_version);
+                        }
+                        heartbeat.ok();
+                    }
+                    Ok(None) => {
+                        // PgListener has already re-established LISTEN before
+                        // returning None. Notifications in the disconnect gap
+                        // are unknowable, so generation is the loss marker and
+                        // every current waiter performs a fresh authority read.
+                        authority.publish_listener_transition();
+                        heartbeat.ok();
+                    }
+                    Err(error) => {
+                        authority.publish_listener_transition();
+                        return Err(error).context("SM authority notification listener failed");
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn start_sm_authority_listener(
+    service: SmService,
+    connect_options: PgConnectOptions,
+    registry: Arc<crate::workers::WorkerRegistry>,
+    cancel: tokio_util::sync::CancellationToken,
+) {
+    let authority = Arc::clone(&service.authority);
+    registry.supervise(
+        "sm-authority-listener",
+        crate::workers::WorkerCriticality::Restartable,
+        crate::workers::WorkerMode::Continuous,
+        None,
+        cancel.clone(),
+        move |heartbeat| {
+            let authority = Arc::clone(&authority);
+            let connect_options = connect_options.clone();
+            let cancel = cancel.clone();
+            async move {
+                run_sm_authority_listener(connect_options, authority, cancel, heartbeat).await
+            }
+        },
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         same_device_binding_matches, BindingFinalizationOutcome, BindingReservationOutcome,
-        SmResumeFinalizationOutcome, SmResumeFinalizationRequest, SmService,
+        SmAuthorityBroker, SmAuthorityNotification, SmResumeFinalizationOutcome,
+        SmResumeFinalizationRequest, SmService,
     };
     use crate::db::{self, DeploymentCapacityConfiguration, SmClaimStatus, SmSessionSnapshot};
     use sqlx::postgres::PgPoolOptions;
-    use std::{net::IpAddr, str::FromStr, time::Duration};
+    use std::{
+        net::IpAddr,
+        str::FromStr,
+        sync::{Arc, Barrier},
+        time::Duration,
+    };
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn authority_subscription_retains_state_and_reconnect_wakes() {
+        let broker = SmAuthorityBroker::new("public".to_owned()).unwrap();
+        let session_id = Uuid::new_v4();
+        let mut subscription = broker.subscribe(session_id);
+        let before = subscription.probe_stamp();
+        broker.publish_state(session_id, 7);
+        subscription.changed().await;
+        assert!(subscription.acknowledge_probe(6, before));
+        let after_probe = subscription.probe_stamp();
+        assert!(!subscription.acknowledge_probe(7, after_probe));
+
+        let before_reconnect = subscription.probe_stamp();
+        broker.publish_listener_transition();
+        subscription.changed().await;
+        assert!(subscription.acknowledge_probe(7, before_reconnect));
+        drop(subscription);
+        assert!(broker.sessions.is_empty());
+    }
+
+    #[test]
+    fn authority_notification_is_consumed_once_and_high_hint_cannot_stick() {
+        let broker = SmAuthorityBroker::new("public".to_owned()).unwrap();
+        let session_id = Uuid::new_v4();
+        let mut subscription = broker.subscribe(session_id);
+
+        let before_forged = subscription.probe_stamp();
+        broker.publish_state(session_id, i64::MAX);
+        assert!(subscription.acknowledge_probe(7, before_forged));
+        let after_forged = subscription.probe_stamp();
+        assert!(
+            !subscription.acknowledge_probe(7, after_forged),
+            "a retained high hint must not force another database probe"
+        );
+
+        // A later delivery with the same payload is still a fresh edge: an
+        // attacker cannot pre-play a future state version and suppress its
+        // real notification.
+        let before_replayed = subscription.probe_stamp();
+        broker.publish_state(session_id, i64::MAX);
+        assert!(subscription.acknowledge_probe(7, before_replayed));
+
+        // A later real version below the forged value is also a fresh edge.
+        let before_real = subscription.probe_stamp();
+        broker.publish_state(session_id, 8);
+        assert!(subscription.acknowledge_probe(7, before_real));
+        let after_real = subscription.probe_stamp();
+        assert!(!subscription.acknowledge_probe(8, after_real));
+
+        // A notification delivered during the probe needs no extra read when
+        // the authoritative result identifies that exact event.
+        let exact_session_id = Uuid::new_v4();
+        let mut exact_subscription = broker.subscribe(exact_session_id);
+        let before_exact = exact_subscription.probe_stamp();
+        broker.publish_state(exact_session_id, 9);
+        assert!(!exact_subscription.acknowledge_probe(9, before_exact));
+
+        // A forged lower delivery cannot overwrite a coalesced real edge and
+        // make a stale database result look exact.
+        let masked_session_id = Uuid::new_v4();
+        let mut masked_subscription = broker.subscribe(masked_session_id);
+        let before_masked = masked_subscription.probe_stamp();
+        broker.publish_state(masked_session_id, 8);
+        broker.publish_state(masked_session_id, 7);
+        assert!(masked_subscription.acknowledge_probe(7, before_masked));
+    }
+
+    #[tokio::test]
+    async fn authority_participant_registration_closes_receiver_construction_race() {
+        let broker = SmAuthorityBroker::new("public".to_owned()).unwrap();
+        let session_id = Uuid::new_v4();
+        let old = broker.subscribe(session_id);
+        let participant_registered = Arc::new(Barrier::new(2));
+        let construct_receiver = Arc::new(Barrier::new(2));
+        let task = {
+            let broker = Arc::clone(&broker);
+            let participant_registered = Arc::clone(&participant_registered);
+            let construct_receiver = Arc::clone(&construct_receiver);
+            std::thread::spawn(move || {
+                broker.subscribe_after_participant(session_id, || {
+                    participant_registered.wait();
+                    construct_receiver.wait();
+                })
+            })
+        };
+        participant_registered.wait();
+        drop(old);
+        assert!(broker.sessions.contains_key(&session_id));
+        construct_receiver.wait();
+        let mut replacement = task.join().unwrap();
+        broker.publish_state(session_id, 9);
+        replacement.changed().await;
+        assert!(replacement.acknowledge_probe(8, Default::default()));
+        drop(replacement);
+        assert!(broker.sessions.is_empty());
+    }
+
+    #[test]
+    fn authority_participant_registration_unwinds_without_leaking_a_slot() {
+        let broker = SmAuthorityBroker::new("public".to_owned()).unwrap();
+        let session_id = Uuid::new_v4();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
+            let broker = Arc::clone(&broker);
+            move || {
+                let _ = broker.subscribe_after_participant(session_id, || {
+                    panic!("controlled receiver-construction interruption");
+                });
+            }
+        }));
+        assert!(result.is_err());
+        assert!(broker.sessions.is_empty());
+    }
+
+    #[test]
+    fn authority_notification_payload_is_minimal_and_schema_scoped() {
+        let session_id = Uuid::new_v4();
+        let accepted =
+            format!(r#"{{"schema":"tenant_a","session_id":"{session_id}","state_version":8}}"#);
+        let event: SmAuthorityNotification = serde_json::from_str(&accepted).unwrap();
+        assert_eq!(event.schema, "tenant_a");
+        assert_eq!(event.session_id, session_id);
+        assert_eq!(event.state_version, 8);
+        assert!(serde_json::from_str::<SmAuthorityNotification>(&format!(
+            r#"{{"schema":"tenant_a","session_id":"{session_id}","state_version":8,"full_jid":"secret@example.test/resource"}}"#
+        ))
+        .is_err());
+    }
 
     #[test]
     fn strict_same_device_precheck_rejects_every_unprovable_binding() {
@@ -853,7 +1424,11 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let service = SmService::new(pool.clone());
+        let schema: String = sqlx::query_scalar("SELECT current_schema()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let service = SmService::new(pool.clone(), schema).unwrap();
         let first_connection = Uuid::new_v4();
         let first_jid = format!("{username}@example.test/first");
         assert_eq!(
@@ -1045,7 +1620,11 @@ mod tests {
         .await
         .unwrap();
         let new_connection = Uuid::new_v4();
-        let service = SmService::new(pool.clone());
+        let schema: String = sqlx::query_scalar("SELECT current_schema()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let service = SmService::new(pool.clone(), schema).unwrap();
         let request = || SmResumeFinalizationRequest {
             session_id,
             claim_token: claim.claim_token,
@@ -1334,7 +1913,11 @@ mod tests {
         .await
         .unwrap());
 
-        let sm = SmService::new(pool.clone());
+        let schema: String = sqlx::query_scalar("SELECT current_schema()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let sm = SmService::new(pool.clone(), schema).unwrap();
         let device_id = Uuid::new_v4();
 
         // A completed phase two whose response never reaches the transport

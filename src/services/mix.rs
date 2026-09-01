@@ -11,6 +11,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use std::collections::BTreeSet;
+use std::sync::Arc;
+use tokio::sync::{Mutex, MutexGuard};
 use uuid::Uuid;
 
 // XEP-0369 node identifiers owned by the application boundary.  The repository
@@ -717,6 +719,17 @@ pub(crate) struct MixService {
     pool: PgPool,
     message_identity: MixMessageContentKeyring,
     retraction_identity: MixRetractionContentKeyring,
+    /// Fair, process-local admission gate. Every application operation that
+    /// can add a durable MIX delivery acquires this before asking PgPool for a
+    /// transaction. PostgreSQL keeps the cross-process authority; this gate
+    /// prevents ordinary same-process concurrency from occupying a pool of
+    /// connections while queued behind that authority.
+    delivery_admission: Arc<Mutex<()>>,
+    /// Clone-shared FIFO gate for the durable MIX-PAM operation counter. It is
+    /// acquired before repository code can check out a PostgreSQL connection,
+    /// so one process contributes at most one waiter to the cross-process
+    /// singleton authority while unrelated database work retains pool access.
+    pam_capacity_admission: Arc<Mutex<()>>,
 }
 
 macro_rules! delegate {
@@ -738,7 +751,17 @@ impl MixService {
             pool,
             message_identity,
             retraction_identity,
+            delivery_admission: Arc::new(Mutex::new(())),
+            pam_capacity_admission: Arc::new(Mutex::new(())),
         }
+    }
+
+    async fn delivery_admission_guard(&self) -> MutexGuard<'_, ()> {
+        self.delivery_admission.lock().await
+    }
+
+    async fn pam_capacity_admission_guard(&self) -> MutexGuard<'_, ()> {
+        self.pam_capacity_admission.lock().await
     }
 
     #[cfg(test)]
@@ -841,6 +864,7 @@ impl MixService {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
         let federated = federated.map(federated_mutation_db);
+        let _admission = self.delivery_admission_guard().await;
         db::destroy_mix_channel(&self.pool, channel_id, actor, self, federated.as_ref()).await
     }
     pub(crate) async fn join_mix_channel(
@@ -861,6 +885,7 @@ impl MixService {
             .as_ref()
             .map(db::MixParticipantPreference::from);
         let federated = federated.map(federated_mutation_db);
+        let _admission = self.delivery_admission_guard().await;
         let outcome = db::join_mix_channel(
             &self.pool,
             channel_id,
@@ -904,6 +929,7 @@ impl MixService {
         &self,
         cutoff: DateTime<Utc>,
     ) -> Result<Vec<ExpiredMixPresence>> {
+        let _admission = self.delivery_admission_guard().await;
         Ok(
             db::expire_unrefreshed_mix_presence(&self.pool, cutoff, self)
                 .await?
@@ -927,6 +953,7 @@ impl MixService {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<Option<UpdateSubscriptionsOutcome>> {
         let federated = federated.map(federated_mutation_db);
+        let _admission = self.delivery_admission_guard().await;
         Ok(db::update_mix_subscriptions(
             &self.pool,
             channel_id,
@@ -955,6 +982,7 @@ impl MixService {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<std::result::Result<MixParticipant, SetNickError>> {
         let federated = federated.map(federated_mutation_db);
+        let _admission = self.delivery_admission_guard().await;
         Ok(
             match db::set_mix_nick(
                 &self.pool,
@@ -980,6 +1008,7 @@ impl MixService {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<Option<LeaveMixOutcome>> {
         let federated = federated.map(federated_mutation_db);
+        let _admission = self.delivery_admission_guard().await;
         Ok(db::leave_mix_channel(
             &self.pool,
             channel_id,
@@ -1003,6 +1032,7 @@ impl MixService {
         payload: &str,
         unavailable: bool,
     ) -> Result<PresenceOutcome> {
+        let _admission = self.delivery_admission_guard().await;
         Ok(presence_outcome(
             db::store_mix_presence(
                 &self.pool,
@@ -1012,6 +1042,21 @@ impl MixService {
                 payload,
                 unavailable,
                 self,
+            )
+            .await?,
+        ))
+    }
+    pub(crate) async fn ensure_mix_presence(
+        &self,
+        channel_id: Uuid,
+        actor_bare: &str,
+        actor_full: &str,
+        payload: &str,
+    ) -> Result<PresenceOutcome> {
+        let _admission = self.delivery_admission_guard().await;
+        Ok(presence_outcome(
+            db::ensure_mix_presence(
+                &self.pool, channel_id, actor_bare, actor_full, payload, self,
             )
             .await?,
         ))
@@ -1051,6 +1096,7 @@ impl MixService {
                         semantic_mac: primary.mac(),
                     }
                 });
+        let _admission = self.delivery_admission_guard().await;
         let admission = db::store_mix_message(
             &self.pool,
             channel_id,
@@ -1182,6 +1228,7 @@ impl MixService {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
         let federated = federated.map(federated_mutation_db);
+        let _admission = self.delivery_admission_guard().await;
         db::publish_mix_avatar(
             &self.pool,
             channel_id,
@@ -1204,6 +1251,7 @@ impl MixService {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
         let federated = federated.map(federated_mutation_db);
+        let _admission = self.delivery_admission_guard().await;
         db::retract_mix_avatar(
             &self.pool,
             channel_id,
@@ -1281,6 +1329,7 @@ impl MixService {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<MixMutationOutcome> {
         let federated = federated.map(federated_mutation_db);
+        let _admission = self.delivery_admission_guard().await;
         Ok(
             match db::update_mix_info(
                 &self.pool,
@@ -1317,6 +1366,7 @@ impl MixService {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<MixMutationOutcome> {
         let federated = federated.map(federated_mutation_db);
+        let _admission = self.delivery_admission_guard().await;
         Ok(
             match db::update_mix_config(
                 &self.pool,
@@ -1371,6 +1421,7 @@ impl MixService {
             MixAccessEntryOperation::Retract => db::MixAccessEntryOperation::Retract,
         };
         let federated = federated.map(federated_mutation_db);
+        let _admission = self.delivery_admission_guard().await;
         Ok(db::set_mix_access_entry(
             &self.pool,
             db::MixAccessEntryUpdate {
@@ -1394,6 +1445,7 @@ impl MixService {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<RegisterMixNickOutcome> {
         let federated = federated.map(federated_mutation_db);
+        let _admission = self.delivery_admission_guard().await;
         Ok(
             match db::register_mix_nick(
                 &self.pool,
@@ -1431,6 +1483,7 @@ impl MixService {
         federated: Option<&FederatedMixMutation>,
     ) -> Result<Option<MixParticipantPreferenceUpdateOutcome>> {
         let federated = federated.map(federated_mutation_db);
+        let _admission = self.delivery_admission_guard().await;
         Ok(db::update_mix_participant_preference(
             &self.pool,
             channel_id,
@@ -1528,6 +1581,7 @@ impl MixService {
                         semantic_mac: primary.mac(),
                     }
                 });
+        let _admission = self.delivery_admission_guard().await;
         let admission = db::retract_mix_message(
             &self.pool,
             channel_id,
@@ -1557,6 +1611,7 @@ impl MixService {
         &self,
         request: BeginRemotePamJoin,
     ) -> Result<PamOperationReplay> {
+        let _admission = self.pam_capacity_admission_guard().await;
         Ok(map_pam_replay(
             db::begin_remote_pam_join(
                 &self.pool,
@@ -1607,6 +1662,7 @@ impl MixService {
         &self,
         request: BeginRemotePamLeave,
     ) -> Result<PamOperationReplay> {
+        let _admission = self.pam_capacity_admission_guard().await;
         Ok(map_pam_replay(
             db::begin_remote_pam_leave(
                 &self.pool,
@@ -1727,7 +1783,10 @@ impl MixService {
     delegate!(acknowledge_pam_result(operation_id: Uuid, lease_token: Uuid) -> bool => db::acknowledge_pam_result;);
     delegate!(defer_pam_result(operation_id: Uuid, lease_token: Uuid, delay_seconds: i64) -> bool => db::defer_pam_result;);
     delegate!(retry_pam_result(operation_id: Uuid, lease_token: Uuid, attempt_count: i32, error: &str) -> bool => db::retry_pam_result;);
-    delegate!(prune_expired_pam_results(limit: i64) -> u64 => db::prune_expired_pam_results;);
+    pub(crate) async fn prune_expired_pam_results(&self, limit: i64) -> Result<u64> {
+        let _admission = self.pam_capacity_admission_guard().await;
+        db::prune_expired_pam_results(&self.pool, limit).await
+    }
 
     pub(crate) async fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>> {
         Ok(db::find_enabled_user(&self.pool, username)
@@ -2028,6 +2087,7 @@ impl MixService {
         &self,
         dead_letter_id: Uuid,
     ) -> Result<bool> {
+        let _admission = self.delivery_admission_guard().await;
         db::requeue_mix_delivery_dead_letter(&self.pool, dead_letter_id).await
     }
 
@@ -2920,6 +2980,89 @@ fn render_access_payload(pattern: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::postgres::PgPoolOptions;
+
+    #[tokio::test]
+    async fn delivery_admission_gate_is_clone_shared_and_fifo() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgresql://localhost/northstar_gate_unit_test")
+            .expect("a lazy test pool does not connect");
+        let service = MixService::new_with_test_keyrings(pool);
+        let first = service.clone();
+        let second = service.clone();
+        assert!(Arc::ptr_eq(
+            &service.delivery_admission,
+            &first.delivery_admission
+        ));
+
+        let held = service.delivery_admission_guard().await;
+        let (ready_tx, mut ready_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
+        let first_ready = ready_tx.clone();
+        let first_order = order_tx.clone();
+        let first_waiter = tokio::spawn(async move {
+            first_ready.send(()).expect("test receiver remains open");
+            let _guard = first.delivery_admission_guard().await;
+            first_order.send(1_u8).expect("test receiver remains open");
+        });
+        ready_rx.recv().await.expect("first waiter started");
+        tokio::task::yield_now().await;
+
+        let second_waiter = tokio::spawn(async move {
+            ready_tx.send(()).expect("test receiver remains open");
+            let _guard = second.delivery_admission_guard().await;
+            order_tx.send(2_u8).expect("test receiver remains open");
+        });
+        ready_rx.recv().await.expect("second waiter started");
+        tokio::task::yield_now().await;
+        drop(held);
+
+        assert_eq!(order_rx.recv().await, Some(1));
+        assert_eq!(order_rx.recv().await, Some(2));
+        first_waiter.await.expect("first waiter completed");
+        second_waiter.await.expect("second waiter completed");
+    }
+
+    #[tokio::test]
+    async fn pam_capacity_admission_gate_is_clone_shared_and_fifo() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgresql://localhost/northstar_pam_gate_unit_test")
+            .expect("a lazy test pool does not connect");
+        let service = MixService::new_with_test_keyrings(pool);
+        let first = service.clone();
+        let second = service.clone();
+        assert!(Arc::ptr_eq(
+            &service.pam_capacity_admission,
+            &first.pam_capacity_admission
+        ));
+
+        let held = service.pam_capacity_admission_guard().await;
+        let (ready_tx, mut ready_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (order_tx, mut order_rx) = tokio::sync::mpsc::unbounded_channel();
+        let first_ready = ready_tx.clone();
+        let first_order = order_tx.clone();
+        let first_waiter = tokio::spawn(async move {
+            first_ready.send(()).expect("test receiver remains open");
+            let _guard = first.pam_capacity_admission_guard().await;
+            first_order.send(1_u8).expect("test receiver remains open");
+        });
+        ready_rx.recv().await.expect("first waiter started");
+        tokio::task::yield_now().await;
+
+        let second_waiter = tokio::spawn(async move {
+            ready_tx.send(()).expect("test receiver remains open");
+            let _guard = second.pam_capacity_admission_guard().await;
+            order_tx.send(2_u8).expect("test receiver remains open");
+        });
+        ready_rx.recv().await.expect("second waiter started");
+        tokio::task::yield_now().await;
+        drop(held);
+
+        assert_eq!(order_rx.recv().await, Some(1));
+        assert_eq!(order_rx.recv().await, Some(2));
+        first_waiter.await.expect("first waiter completed");
+        second_waiter.await.expect("second waiter completed");
+    }
 
     #[test]
     fn mix_muc_repository_outcomes_map_without_collapsing_authority_failures() {

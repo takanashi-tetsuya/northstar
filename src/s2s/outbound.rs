@@ -475,6 +475,7 @@ async fn connect_and_multiplex(
     ))
     .catch_unwind()
     .await;
+    crate::xmpp::protocol::caps::federated_caps_connection_closed(state, connection_id).await;
     let cleanup = AssertUnwindSafe(
         crate::xmpp::protocol::federated_muc::federated_muc_connection_closed(
             state,

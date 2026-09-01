@@ -420,6 +420,27 @@ SELECT pg_catalog.format(
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
   ON TABLE public.users FROM :"runtime_role";
 
+-- Release facts are append-only evidence produced by owner-held delete
+-- triggers. Runtime may inspect them for startup audit and orphan discovery,
+-- but only the reviewed drain capability may consume them.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+  ON TABLE public.mix_delivery_capacity_releases FROM :"runtime_role";
+GRANT SELECT ON TABLE public.mix_delivery_capacity_releases TO :"runtime_role";
+
+-- MIX-PAM capacity is projected only by owner-held triggers/capabilities.
+-- Runtime may update delivery/reconciliation state on an existing operation,
+-- but cannot create or remove a journal row (and therefore cannot bypass exact
+-- global/per-account accounting). Counter authority is exactly read-only.
+REVOKE INSERT, DELETE, TRUNCATE, REFERENCES, TRIGGER
+  ON TABLE public.mix_pam_operations FROM :"runtime_role";
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+  ON TABLE public.mix_pam_operation_capacity,
+           public.mix_pam_operation_user_capacity
+  FROM :"runtime_role";
+GRANT SELECT ON TABLE public.mix_pam_operation_capacity,
+                      public.mix_pam_operation_user_capacity
+  TO :"runtime_role";
+
 -- Upload namespace, slot manifests and recovery queues are database-owned
 -- authorities. Runtime receives only the typed migration-0113 capabilities;
 -- it cannot read bearer hashes/provider locators or bypass lease/accounting
@@ -681,6 +702,12 @@ SELECT pg_catalog.format(
        ('northstar_sm_privacy_list_in_use(uuid,text)'),
        ('northstar_sm_privacy_state(uuid)'),
        ('northstar_session_capability_catalog_healthy(text)'),
+       ('northstar_mix_delivery_capacity_drain()'),
+       ('northstar_mix_delivery_capacity_reconcile()'),
+       ('northstar_mix_pam_account_capacity_lock(uuid,text)'),
+       ('northstar_mix_pam_operation_insert(uuid,uuid,text,text,text,text,text,text,bytea,uuid,bool,text,text,text[],int8,text)'),
+       ('northstar_mix_pam_operation_prune(int8)'),
+       ('northstar_mix_pam_capacity_reconcile()'),
        ('northstar_upload_bootstrap_authority(text,bytea)'),
        ('northstar_upload_bind_capacity_policy(int8,int8,int8)'),
        ('northstar_upload_capacity_lock()'),
@@ -1118,6 +1145,88 @@ SELECT relation.oid IS NOT NULL
   \quit 37
 \endif
 
+SELECT relation.oid IS NOT NULL
+       AND pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'SELECT')
+       AND NOT pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'INSERT')
+       AND NOT pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'UPDATE')
+       AND NOT pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'DELETE')
+       AND NOT pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'TRUNCATE')
+       AND NOT pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'REFERENCES')
+       AND NOT pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'TRIGGER')
+       AND NOT pg_catalog.has_any_column_privilege(:'runtime_role',relation.oid,'INSERT')
+       AND NOT pg_catalog.has_any_column_privilege(:'runtime_role',relation.oid,'UPDATE')
+       AND NOT pg_catalog.has_any_column_privilege(:'runtime_role',relation.oid,'REFERENCES')
+       AS northstar_runtime_mix_release_journal_is_read_only
+  FROM (
+    SELECT pg_catalog.to_regclass(
+      'public.mix_delivery_capacity_releases'
+    ) AS oid
+  ) relation
+\gset
+\if :northstar_runtime_mix_release_journal_is_read_only
+\else
+  \echo 'runtime MIX release-journal privileges must be exactly read-only'
+  \quit 44
+\endif
+
+SELECT NOT EXISTS (
+         SELECT 1
+           FROM (VALUES
+             ('mix_pam_operation_capacity'),
+             ('mix_pam_operation_user_capacity')
+           ) AS authority(name)
+           CROSS JOIN LATERAL (
+             SELECT pg_catalog.to_regclass('public.' || authority.name) AS oid
+           ) AS relation
+          WHERE relation.oid IS NULL
+             OR NOT pg_catalog.has_table_privilege(
+                  :'runtime_role',relation.oid,'SELECT')
+             OR pg_catalog.has_table_privilege(
+                  :'runtime_role',relation.oid,'INSERT')
+             OR pg_catalog.has_table_privilege(
+                  :'runtime_role',relation.oid,'UPDATE')
+             OR pg_catalog.has_table_privilege(
+                  :'runtime_role',relation.oid,'DELETE')
+             OR pg_catalog.has_table_privilege(
+                  :'runtime_role',relation.oid,'TRUNCATE')
+             OR pg_catalog.has_table_privilege(
+                  :'runtime_role',relation.oid,'REFERENCES')
+             OR pg_catalog.has_table_privilege(
+                  :'runtime_role',relation.oid,'TRIGGER')
+             OR pg_catalog.has_any_column_privilege(
+                  :'runtime_role',relation.oid,'INSERT')
+             OR pg_catalog.has_any_column_privilege(
+                  :'runtime_role',relation.oid,'UPDATE')
+             OR pg_catalog.has_any_column_privilege(
+                  :'runtime_role',relation.oid,'REFERENCES')
+       ) AS northstar_runtime_mix_pam_counters_are_read_only \gset
+\if :northstar_runtime_mix_pam_counters_are_read_only
+\else
+  \echo 'runtime MIX-PAM counter privileges must be exactly read-only'
+  \quit 45
+\endif
+
+SELECT relation.oid IS NOT NULL
+       AND pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'SELECT')
+       AND pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'UPDATE')
+       AND NOT pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'INSERT')
+       AND NOT pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'DELETE')
+       AND NOT pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'TRUNCATE')
+       AND NOT pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'REFERENCES')
+       AND NOT pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'TRIGGER')
+       AND NOT pg_catalog.has_any_column_privilege(:'runtime_role',relation.oid,'INSERT')
+       AND NOT pg_catalog.has_any_column_privilege(:'runtime_role',relation.oid,'REFERENCES')
+       AS northstar_runtime_mix_pam_operations_are_capability_owned
+  FROM (
+    SELECT pg_catalog.to_regclass('public.mix_pam_operations') AS oid
+  ) relation
+\gset
+\if :northstar_runtime_mix_pam_operations_are_capability_owned
+\else
+  \echo 'runtime MIX-PAM operation insert/delete privileges must be capability-only'
+  \quit 46
+\endif
+
 SELECT NOT EXISTS (
          SELECT 1
            FROM (VALUES
@@ -1484,6 +1593,12 @@ SELECT NOT EXISTS (
                       ('northstar_sm_privacy_list_in_use(uuid,text)'),
                       ('northstar_sm_privacy_state(uuid)'),
                       ('northstar_session_capability_catalog_healthy(text)'),
+                      ('northstar_mix_delivery_capacity_drain()'),
+                      ('northstar_mix_delivery_capacity_reconcile()'),
+                      ('northstar_mix_pam_account_capacity_lock(uuid,text)'),
+                      ('northstar_mix_pam_operation_insert(uuid,uuid,text,text,text,text,text,text,bytea,uuid,bool,text,text,text[],int8,text)'),
+                      ('northstar_mix_pam_operation_prune(int8)'),
+                      ('northstar_mix_pam_capacity_reconcile()'),
                       ('northstar_upload_bootstrap_authority(text,bytea)'),
                       ('northstar_upload_bind_capacity_policy(int8,int8,int8)'),
                       ('northstar_upload_capacity_lock()'),
@@ -1611,6 +1726,12 @@ SELECT NOT EXISTS (
            ('northstar_sm_privacy_list_in_use(uuid,text)'),
            ('northstar_sm_privacy_state(uuid)'),
            ('northstar_session_capability_catalog_healthy(text)'),
+           ('northstar_mix_delivery_capacity_drain()'),
+           ('northstar_mix_delivery_capacity_reconcile()'),
+           ('northstar_mix_pam_account_capacity_lock(uuid,text)'),
+           ('northstar_mix_pam_operation_insert(uuid,uuid,text,text,text,text,text,text,bytea,uuid,bool,text,text,text[],int8,text)'),
+           ('northstar_mix_pam_operation_prune(int8)'),
+           ('northstar_mix_pam_capacity_reconcile()'),
            ('northstar_upload_bootstrap_authority(text,bytea)'),
            ('northstar_upload_bind_capacity_policy(int8,int8,int8)'),
            ('northstar_upload_capacity_lock()'),

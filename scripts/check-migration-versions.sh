@@ -660,6 +660,253 @@ if [ "$(grep -Ec '^CREATE OR REPLACE FUNCTION northstar_upload_queue_snapshot\(\
 fi
 echo "migration 0115 bounds high-frequency upload health probes and preserves exact low-frequency reconciliation"
 
+# Migration 0126 removes capacity-ledger contention from the post-socket MIX
+# ACK path. Keep the release journal and stopped-writer cut-over explicit: an
+# old trigger body or a direct capacity mutation here would recreate either
+# silent overcommit or the original 55P03 delivery stall.
+mix_delivery_release_migration="migrations/0126_mix_delivery_release_journal.sql"
+[ -f "$mix_delivery_release_migration" ] || {
+    echo "MIX delivery release-journal migration is missing: $mix_delivery_release_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'CREATE TABLE mix_delivery_capacity_releases (' \
+    'release_id UUID PRIMARY KEY DEFAULT pg_catalog.gen_random_uuid()' \
+    'parent_event_id UUID' \
+    'CREATE INDEX mix_delivery_capacity_releases_parent_idx' \
+    'migration 0126 is intentionally a stopped-writer upgrade' \
+    'MIX delivery capacity cut-over audit failed' \
+    'ledger_rows NOT BETWEEN 0 AND 100000' \
+    'ledger_bytes NOT BETWEEN 0 AND 268435456' \
+    'CREATE OR REPLACE FUNCTION northstar_mix_delivery_recipient_capacity_delete()' \
+    'CREATE OR REPLACE FUNCTION northstar_mix_delivery_event_capacity_delete()' \
+    'CREATE FUNCTION northstar_mix_delivery_capacity_drain()' \
+    'SECURITY DEFINER SET search_path TO pg_catalog' \
+    'REVOKE ALL ON TABLE mix_delivery_capacity_releases FROM PUBLIC' \
+    'INSERT INTO mix_delivery_capacity_releases(' \
+    'DELETE FROM mix_delivery_events event'
+do
+    if ! grep -Fq "$required_fragment" "$mix_delivery_release_migration"; then
+        echo "migration 0126 is missing MIX release-journal invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if ! grep -Fq 'UNIQUE (event_id, recipient_jid)' migrations/0120_mix_delivery_normalization.sql; then
+    echo "MIX release drain requires the existing event-leading recipient access path" >&2
+    exit 1
+fi
+if [ "$(grep -Fc 'INSERT INTO mix_delivery_capacity_releases(' "$mix_delivery_release_migration")" -ne 2 ]; then
+    echo "migration 0126 must journal exactly the recipient and event physical-delete credits" >&2
+    exit 1
+fi
+if grep -Fq 'pg_try_advisory_xact_lock' "$mix_delivery_release_migration"; then
+    echo "migration 0126 delete triggers must not acquire the producer capacity fence" >&2
+    exit 1
+fi
+mix_ack_source=$(sed -n '/^async fn remove_mix_delivery_tx(/,/^async fn move_mix_delivery_to_dead_letter_tx(/p' src/db/mix.rs)
+for forbidden_fragment in \
+    'mix_delivery_events' \
+    'mix_delivery_capacity' \
+    'mix_delivery_recipient_sequences' \
+    'pg_try_advisory_xact_lock'
+do
+    if printf '%s\n' "$mix_ack_source" | grep -Fq "$forbidden_fragment"; then
+        echo "MIX completion must not touch shared event/sequence/capacity authority: $forbidden_fragment" >&2
+        exit 1
+    fi
+done
+for required_source_fragment in \
+    "'mix-delivery-capacity-v3:'" \
+    "('mix_delivery_capacity'::regclass)::oid::text" \
+    'SELECT pg_advisory_xact_lock(' \
+    'begin_mix_delivery_admission(pool).await?' \
+    'FOR UPDATE OF event SKIP LOCKED' \
+    'FROM mix_delivery_events WHERE event_id=$1 FOR UPDATE' \
+    'ON CONFLICT(event_id) DO NOTHING' \
+    'RETURNING event_id' \
+    'SELECT jid,2 FROM input ORDER BY jid'
+do
+    if ! grep -Fq "$required_source_fragment" src/db/mix.rs; then
+        echo "MIX capacity implementation is missing concurrency invariant: $required_source_fragment" >&2
+        exit 1
+    fi
+done
+mix_capacity_fence_source=$(sed -n '/^async fn acquire_mix_delivery_admission_fence_tx(/,/^fn mix_delivery_capacity_bucket(/p' src/db/mix.rs)
+if printf '%s\n' "$mix_capacity_fence_source" | grep -Fq 'pg_try_advisory_xact_lock'; then
+    echo "MIX producer authority must block at transaction start, not reject ordinary contention" >&2
+    exit 1
+fi
+if [ "$(grep -Fc 'let _admission = self.delivery_admission_guard().await;' src/services/mix.rs)" -ne 18 ]; then
+    echo "every MIX delivery-producing application-service entry must share the fair pre-pool gate" >&2
+    exit 1
+fi
+echo "migration 0126 journals physical releases, audits a stopped cut-over, keeps ACKs lock-independent, and serializes producer admission before PgPool checkout"
+
+# Migration 0127 turns competing XEP-0198 resume ownership into a committed,
+# versioned event stream.  The event is only a wake hint: every consumer must
+# subscribe and then immediately re-read the authority row, while the database
+# remains the sole source of the retry boundary and claim decision.
+sm_authority_event_migration="migrations/0127_sm_resume_authority_notifications.sql"
+[ -f "$sm_authority_event_migration" ] || {
+    echo "SM resume authority-event migration is missing: $sm_authority_event_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'ADD COLUMN state_version BIGINT NOT NULL DEFAULT 1' \
+    'CREATE FUNCTION northstar_sm_state_version()' \
+    'NEW.state_version := OLD.state_version + 1' \
+    'CREATE FUNCTION northstar_sm_state_notify()' \
+    "'northstar_sm_authority_v1'" \
+    "'schema', TG_TABLE_SCHEMA" \
+    "'session_id', changed_id" \
+    "'state_version', changed_version" \
+    'CREATE TRIGGER sm_resume_sessions_authority_version' \
+    'CREATE TRIGGER sm_resume_sessions_authority_notify' \
+    'old_connection_id UUID,state_version BIGINT,pending_reason TEXT' \
+    'retry_at TIMESTAMPTZ,authority_now TIMESTAMPTZ,claimed_until TIMESTAMPTZ' \
+    "WHEN live_pending AND claim_pending THEN 'live-and-claim-owner'" \
+    "WHEN live_pending THEN 'live-owner'" \
+    "ELSE 'claim-owner'" \
+    'IF stream.expires_at<=authority_now THEN' \
+    'retry_at := pg_catalog.least(' \
+    'stream.expires_at' \
+    'stream.live_lease_until' \
+    'stream.claimed_until' \
+    "'northstar_sm_state_version()','private'" \
+    "'northstar_sm_state_notify()','private'" \
+    "'state_version','SELECT'" \
+    'SM claim event projection ABI is inconsistent'
+do
+    if ! grep -Fq "$required_fragment" "$sm_authority_event_migration"; then
+        echo "migration 0127 is missing SM event-authority invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+sm_notify_body=$(sed -n '/^CREATE FUNCTION northstar_sm_state_notify()/,/^\$\$;/p' "$sm_authority_event_migration")
+if [ "$(printf '%s\n' "$sm_notify_body" | grep -Fc 'pg_catalog.json_build_object(')" -ne 1 ] \
+   || [ "$(printf '%s\n' "$sm_notify_body" | grep -Ec "^[[:space:]]*'(schema|session_id|state_version)',")" -ne 3 ]; then
+    echo "migration 0127 notification payload must contain exactly schema/session_id/state_version" >&2
+    exit 1
+fi
+for forbidden_fragment in \
+    "'full_jid'" \
+    "'old_connection_id'" \
+    "'peer_ip'" \
+    "'token_hash'" \
+    "'claim_token'"
+do
+    if printf '%s\n' "$sm_notify_body" | grep -Fq "$forbidden_fragment"; then
+        echo "migration 0127 notification leaks an authority secret or identity: $forbidden_fragment" >&2
+        exit 1
+    fi
+done
+
+sm_resume_source=$(sed -n '/pub(crate) async fn resume_values_with_fast(/,/let claimed_bytes =/p' src/xmpp/protocol/sm.rs)
+for forbidden_fragment in \
+    'from_millis(10)' \
+    'from_millis(500)' \
+    'tokio::time::interval' \
+    'tokio::time::timeout'
+do
+    if printf '%s\n' "$sm_resume_source" | grep -Fq "$forbidden_fragment"; then
+        echo "SM resume Pending handling reintroduced fixed application polling/timeout: $forbidden_fragment" >&2
+        exit 1
+    fi
+done
+for required_source_fragment in \
+    'try_reserve_claim()' \
+    'drop(claim_capacity);' \
+    '.subscribe_authority(pending.session_id)' \
+    'continue;' \
+    'subscription.acknowledge_probe(' \
+    'wait_for_pending_authority(' \
+    'pending.retry_at.min(ownership_horizon)' \
+    'session.disconnect.cancel();'
+do
+    if ! printf '%s\n' "$sm_resume_source" | grep -Fq "$required_source_fragment"; then
+        echo "SM resume Pending path is missing event-driven ownership invariant: $required_source_fragment" >&2
+        exit 1
+    fi
+done
+for required_broker_fragment in \
+    'SM_AUTHORITY_NOTIFICATION_CHANNEL: &str = "northstar_sm_authority_v1"' \
+    'max_connections(1)' \
+    'PgListener::connect_with(&listener_pool)' \
+    'notification = listener.try_recv()' \
+    'authority.publish_listener_transition();' \
+    'notification_sequence' \
+    'borrow_and_update()' \
+    'participants.fetch_sub(1, Ordering::AcqRel)' \
+    '.participants' \
+    '.fetch_add(1, Ordering::AcqRel)' \
+    'Arc::ptr_eq(entry.get(), slot)' \
+    'WorkerCriticality::Restartable'
+do
+    if ! grep -Fq "$required_broker_fragment" src/services/sm.rs; then
+        echo "SM authority broker/listener is missing lifecycle invariant: $required_broker_fragment" >&2
+        exit 1
+    fi
+done
+echo "migration 0127 provides versioned commit notifications and SM Pending waits use exact event, route, cancellation, and database retry boundaries"
+
+# Migration 0128 removes two false-busy/false-full correctness dependencies.
+# Delivery orphan reclamation commits before producer admission, and MIX-PAM
+# capacity is an exact owner-maintained global/per-account authority rather than
+# COUNT(*) guarded by a non-waiting advisory lock.
+mix_capacity_authority_migration="migrations/0128_mix_capacity_authorities.sql"
+[ -f "$mix_capacity_authority_migration" ] || {
+    echo "MIX capacity-authority migration is missing: $mix_capacity_authority_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'CREATE TABLE mix_pam_operation_capacity (' \
+    'CREATE TABLE mix_pam_operation_user_capacity (' \
+    'operation_count BIGINT NOT NULL CHECK (operation_count BETWEEN 0 AND max_operations)' \
+    'max_operations BIGINT NOT NULL CHECK (max_operations = 10000)' \
+    'max_per_user BIGINT NOT NULL CHECK (max_per_user = 64)' \
+    'CREATE FUNCTION northstar_mix_pam_capacity_lock()' \
+    'CREATE FUNCTION northstar_mix_pam_account_capacity_lock(' \
+    'CREATE FUNCTION northstar_mix_pam_operation_capacity_insert()' \
+    'CREATE FUNCTION northstar_mix_pam_operation_capacity_delete()' \
+    'CREATE FUNCTION northstar_mix_pam_user_predelete_lock()' \
+    'CREATE FUNCTION northstar_mix_pam_operation_insert(' \
+    'expected_username TEXT' \
+    'IF northstar_mix_pam_account_capacity_lock(' \
+    'AND username = expected_username' \
+    'FOR UPDATE;' \
+    'expected_membership_state := CASE requested_operation' \
+    'AND request_id = requested_remote_request_id' \
+    'AND client_request_id = requested_client_request_id' \
+    'AND requester_full_jid = requested_requester_full_jid' \
+    'AND target_domain = requested_remote_domain' \
+    'AND expires_at > clock_timestamp()' \
+    'CREATE FUNCTION northstar_mix_pam_operation_prune(requested_limit BIGINT)' \
+    'CREATE FUNCTION northstar_mix_pam_capacity_reconcile()' \
+    'CREATE FUNCTION northstar_mix_delivery_capacity_reconcile()' \
+    'UPDATE mix_pam_operation_capacity' \
+    'INSERT INTO mix_pam_operation_user_capacity(user_id, operation_count)' \
+    'PERFORM northstar_mix_pam_capacity_lock();' \
+    'DELETE FROM mix_delivery_events event' \
+    'PERFORM northstar_mix_delivery_capacity_drain();' \
+    'SECURITY DEFINER SET search_path TO pg_catalog' \
+    'REVOKE ALL ON TABLE mix_pam_operation_capacity,'
+do
+    if ! grep -Fq "$required_fragment" "$mix_capacity_authority_migration"; then
+        echo "migration 0128 is missing MIX capacity invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if grep -Fq 'pg_try_advisory_xact_lock' "$mix_capacity_authority_migration" \
+   || grep -Fq 'mix-pam-operation-capacity-v1' src/db/mix.rs; then
+    echo "MIX-PAM capacity must wait behind exact authority, not reject ordinary contention" >&2
+    exit 1
+fi
+if [ "$(grep -Fc 'let _admission = self.pam_capacity_admission_guard().await;' src/services/mix.rs)" -ne 3 ]; then
+    echo "MIX-PAM insert/prune entries must share one FIFO gate before PgPool checkout" >&2
+    exit 1
+fi
+echo "migration 0128 commits delivery reclamation independently and gives MIX-PAM exact owner-maintained counters with pre-pool FIFO admission"
+
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an
 # existing database, and this repository-side manifest catches the same mistake

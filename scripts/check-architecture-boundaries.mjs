@@ -135,6 +135,25 @@ function matchingRustBrace(source, opening) {
   return -1;
 }
 
+function asyncFunctionSpans(source, moduleName) {
+  const functions = [];
+  const declaration =
+    /^[\t ]*(?:pub(?:[\t ]*\([^\r\n)]*\))?[\t ]+)?async[\t ]+fn[\t ]+([A-Za-z_][A-Za-z0-9_]*)[\t ]*(?:<[^>{}]*>)?[\t ]*\(/gm;
+  for (let match; (match = declaration.exec(source)) !== null; ) {
+    const opening = source.indexOf('{', declaration.lastIndex);
+    if (opening < 0) {
+      throw new Error(`${moduleName} declares async fn ${match[1]} without a parseable body`);
+    }
+    const closing = matchingRustBrace(source, opening);
+    if (closing < 0) {
+      throw new Error(`${moduleName} has an unterminated async fn ${match[1]}`);
+    }
+    functions.push({ name: match[1], opening, closing });
+    declaration.lastIndex = closing + 1;
+  }
+  return functions;
+}
+
 function classifyDbDependencies(source, moduleName) {
   let authorityReferences = 0;
   let domainReferences = 0;
@@ -391,6 +410,329 @@ const mix = perFile.find(({ name }) => name === 'mix.rs') ?? {
   authorityReferences: 0,
   domainReferences: 0,
 };
+
+// MIX durable fan-out has one application-service admission boundary. Keep
+// the complete producer set explicit: omitting one method would let normal
+// same-process concurrency queue on PostgreSQL only after consuming PgPool
+// connections, while calling the repository directly would bypass FIFO
+// coordination altogether.
+const mixProducerMappings = [
+  ['destroy_mix_channel', 'destroy_mix_channel'],
+  ['join_mix_channel', 'join_mix_channel'],
+  ['expire_unrefreshed_mix_presence', 'expire_unrefreshed_mix_presence'],
+  ['update_mix_subscriptions', 'update_mix_subscriptions'],
+  ['set_mix_nick', 'set_mix_nick'],
+  ['leave_mix_channel', 'leave_mix_channel'],
+  ['store_mix_presence', 'store_mix_presence_with_policy'],
+  ['ensure_mix_presence', 'store_mix_presence_with_policy'],
+  ['store_mix_message', 'store_mix_message'],
+  ['publish_mix_avatar', 'publish_mix_avatar'],
+  ['retract_mix_avatar', 'retract_mix_avatar'],
+  ['update_mix_info', 'update_mix_info'],
+  ['update_mix_config', 'update_mix_config'],
+  ['set_mix_access_entry', 'set_mix_access_entry'],
+  ['register_mix_nick', 'register_mix_nick'],
+  ['update_mix_participant_preference', 'update_mix_participant_preference'],
+  ['retract_mix_message', 'retract_mix_message'],
+  ['requeue_mix_delivery_dead_letter', 'requeue_mix_delivery_dead_letter'],
+];
+const mixProducerMethods = mixProducerMappings.map(([serviceMethod]) => serviceMethod);
+if (new Set(mixProducerMethods).size !== mixProducerMethods.length) {
+  throw new Error('MIX service producer mapping contains duplicate service methods');
+}
+const mixServiceSource = read('src/services/mix.rs');
+for (const [serviceMethod] of mixProducerMappings) {
+  const body = structBody(mixServiceSource, `pub(crate) async fn ${serviceMethod}(`);
+  const gate = body.indexOf('self.delivery_admission_guard().await');
+  const repositoryCall = body.indexOf(`db::${serviceMethod}(`);
+  if (gate < 0 || repositoryCall < 0 || gate > repositoryCall) {
+    throw new Error(
+      `MIX producer ${serviceMethod} must acquire the shared fair gate before its repository call`,
+    );
+  }
+}
+
+const mixDeliveryProducerBypassPattern = new RegExp(
+  `\\bdb::(?:${mixProducerMethods.join('|')})\\s*\\(`,
+);
+const pendingMixDeliveryBoundaryFiles = [path.join(root, 'src')];
+const mixDeliveryProducerBypasses = [];
+while (pendingMixDeliveryBoundaryFiles.length > 0) {
+  const current = pendingMixDeliveryBoundaryFiles.pop();
+  for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+    const full = path.join(current, entry.name);
+    if (entry.isDirectory()) {
+      pendingMixDeliveryBoundaryFiles.push(full);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
+    const relative = path.relative(root, full).replaceAll('\\', '/');
+    if (relative === 'src/services/mix.rs' || relative === 'src/db/mix.rs') continue;
+    const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
+    if (mixDeliveryProducerBypassPattern.test(production)) {
+      mixDeliveryProducerBypasses.push(relative);
+    }
+  }
+}
+if (mixDeliveryProducerBypasses.length > 0) {
+  throw new Error(
+    `MIX delivery producers must enter the clone-shared pre-pool service gate; direct repository callers: ${mixDeliveryProducerBypasses.sort().join(', ')}`,
+  );
+}
+
+const mixRepositoryTransactionEntries = [
+  'requeue_mix_delivery_dead_letter',
+  'destroy_mix_channel',
+  'join_mix_channel',
+  'expire_unrefreshed_mix_presence',
+  'update_mix_subscriptions',
+  'set_mix_nick',
+  'leave_mix_channel',
+  'store_mix_presence_with_policy',
+  'store_mix_message',
+  'publish_mix_avatar',
+  'retract_mix_avatar',
+  'update_mix_info',
+  'update_mix_config',
+  'set_mix_access_entry',
+  'register_mix_nick',
+  'update_mix_participant_preference',
+  'retract_mix_message',
+];
+const mixRepositorySource = read('src/db/mix.rs');
+const mixRepositoryProduction = productionWithoutCfgTestModules(
+  mixRepositorySource,
+  'src/db/mix.rs',
+);
+const mixRepositoryFunctions = asyncFunctionSpans(mixRepositoryProduction, 'src/db/mix.rs');
+const actualMixRepositoryEntries = [];
+const mixAdmissionPattern = /begin_mix_delivery_admission\(pool\)\.await\?/g;
+for (let match; (match = mixAdmissionPattern.exec(mixRepositoryProduction)) !== null; ) {
+  const owner = mixRepositoryFunctions.find(
+    ({ opening, closing }) => opening < match.index && match.index < closing,
+  );
+  if (!owner) {
+    const line = countMatches(mixRepositoryProduction.slice(0, match.index), /\n/g) + 1;
+    throw new Error(
+      `src/db/mix.rs:${line} acquires the MIX delivery fence outside a parseable async function`,
+    );
+  }
+  actualMixRepositoryEntries.push(owner.name);
+}
+
+const explicitMixRepositoryEntrySet = new Set(mixRepositoryTransactionEntries);
+if (explicitMixRepositoryEntrySet.size !== mixRepositoryTransactionEntries.length) {
+  throw new Error('MIX repository producer manifest contains duplicate entries');
+}
+const actualMixRepositoryEntrySet = new Set(actualMixRepositoryEntries);
+const unlistedMixRepositoryEntries = [...actualMixRepositoryEntrySet]
+  .filter((entry) => !explicitMixRepositoryEntrySet.has(entry))
+  .sort();
+const staleMixRepositoryEntries = [...explicitMixRepositoryEntrySet]
+  .filter((entry) => !actualMixRepositoryEntrySet.has(entry))
+  .sort();
+if (unlistedMixRepositoryEntries.length > 0 || staleMixRepositoryEntries.length > 0) {
+  const details = [];
+  if (unlistedMixRepositoryEntries.length > 0) {
+    details.push(`unlisted fenced producers: ${unlistedMixRepositoryEntries.join(', ')}`);
+  }
+  if (staleMixRepositoryEntries.length > 0) {
+    details.push(`manifest entries without a delivery fence: ${staleMixRepositoryEntries.join(', ')}`);
+  }
+  throw new Error(`MIX repository producer manifest mismatch; ${details.join('; ')}`);
+}
+
+const mappedMixRepositoryEntries = new Set(
+  mixProducerMappings.map(([, repositoryEntry]) => repositoryEntry),
+);
+const repositoryEntriesWithoutServiceMapping = [...explicitMixRepositoryEntrySet]
+  .filter((entry) => !mappedMixRepositoryEntries.has(entry))
+  .sort();
+const serviceMappingsWithoutRepositoryEntry = [...mappedMixRepositoryEntries]
+  .filter((entry) => !explicitMixRepositoryEntrySet.has(entry))
+  .sort();
+if (
+  repositoryEntriesWithoutServiceMapping.length > 0 ||
+  serviceMappingsWithoutRepositoryEntry.length > 0
+) {
+  const details = [];
+  if (repositoryEntriesWithoutServiceMapping.length > 0) {
+    details.push(
+      `repository entries without service mapping: ${repositoryEntriesWithoutServiceMapping.join(', ')}`,
+    );
+  }
+  if (serviceMappingsWithoutRepositoryEntry.length > 0) {
+    details.push(
+      `service mappings to unknown repository entries: ${serviceMappingsWithoutRepositoryEntry.join(', ')}`,
+    );
+  }
+  throw new Error(`MIX service/repository producer mapping mismatch; ${details.join('; ')}`);
+}
+
+for (const [serviceMethod, repositoryEntry] of mixProducerMappings) {
+  if (serviceMethod === repositoryEntry) continue;
+  const wrapperBody = structBody(mixRepositorySource, `pub async fn ${serviceMethod}(`);
+  if (!wrapperBody.includes(`${repositoryEntry}(`)) {
+    throw new Error(
+      `MIX repository wrapper ${serviceMethod} must delegate to fenced producer ${repositoryEntry}`,
+    );
+  }
+}
+
+for (const entry of mixRepositoryTransactionEntries) {
+  const visibility = entry === 'store_mix_presence_with_policy' ? 'async fn' : 'pub async fn';
+  const body = structBody(mixRepositorySource, `${visibility} ${entry}(`);
+  const admission = body.indexOf('begin_mix_delivery_admission(pool).await?');
+  const directBegin = body.indexOf('pool.begin().await?');
+  const sql = body.indexOf('sqlx::');
+  if (admission < 0 || directBegin >= 0 || (sql >= 0 && admission > sql)) {
+    throw new Error(
+      `MIX repository producer ${entry} must acquire the blocking DB fence before any SQL/row lock`,
+    );
+  }
+}
+
+const mixCapacityReconciliationBody = structBody(
+  mixRepositorySource,
+  'async fn reconcile_mix_delivery_capacity_committed(',
+);
+const mixAdmissionBody = structBody(
+  mixRepositorySource,
+  'async fn begin_mix_delivery_admission(',
+);
+const mixReserveBody = structBody(
+  mixRepositorySource,
+  'async fn reserve_mix_delivery_capacity_tx(',
+);
+if (
+  !mixCapacityReconciliationBody.includes(
+    'SELECT northstar_mix_delivery_capacity_reconcile()',
+  ) ||
+  !mixCapacityReconciliationBody.includes('transaction.commit().await?') ||
+  !mixAdmissionBody.includes('reconcile_mix_delivery_capacity_committed(pool).await?') ||
+  !mixAdmissionBody.includes('begin_mix_delivery_fenced_transaction(pool).await') ||
+  mixReserveBody.includes('prune_empty_mix_delivery_events')
+) {
+  throw new Error(
+    'MIX delivery admission must consume a separately committed complete reconciliation proof before opening its producer transaction',
+  );
+}
+
+for (const entry of ['begin_remote_pam_join', 'begin_remote_pam_leave']) {
+  const body = structBody(mixRepositorySource, `pub async fn ${entry}(`);
+  const reconciliation = body.indexOf('reconcile_mix_pam_capacity_committed(pool).await?');
+  const transaction = body.indexOf('pool.begin().await?');
+  const accountLock = body.indexOf('remote_pam_account_matches_actor_tx(');
+  const businessLock = body.indexOf('lock_pam_admission_tx(');
+  const capabilityInsert = body.indexOf('insert_pam_operation_and_outbox_tx(');
+  if (
+    reconciliation < 0 ||
+    transaction < 0 ||
+    reconciliation > transaction ||
+    accountLock < 0 ||
+    businessLock < 0 ||
+    capabilityInsert < 0 ||
+    accountLock > businessLock ||
+    businessLock > capabilityInsert
+  ) {
+    throw new Error(
+      `MIX-PAM ${entry} must lock account -> global capacity -> business identity before owner-held insertion`,
+    );
+  }
+}
+const mixPamInsertHelper = structBody(
+  mixRepositorySource,
+  'async fn insert_pam_operation_and_outbox_tx(',
+);
+if (
+  countMatches(
+    mixRepositoryProduction,
+    /SELECT northstar_mix_pam_operation_insert\(/g,
+  ) !== 1 ||
+  !mixPamInsertHelper.includes('MIX-PAM requester requires a localpart') ||
+  !mixPamInsertHelper.includes('enqueue_s2s_outbox_with_id_in_transaction(') ||
+  !mixPamInsertHelper.includes('SELECT northstar_mix_pam_operation_insert(') ||
+  mixPamInsertHelper.indexOf('enqueue_s2s_outbox_with_id_in_transaction(') >
+    mixPamInsertHelper.indexOf('SELECT northstar_mix_pam_operation_insert(')
+) {
+  throw new Error(
+    'MIX-PAM journal insertion must have one production capability caller after its durable outbox projection and pass the canonical account identity',
+  );
+}
+if (
+  mixRepositoryProduction.includes('pg_try_advisory_xact_lock(hashtextextended(\'mix-pam') ||
+  mixRepositoryProduction.includes('INSERT INTO mix_pam_operations') ||
+  mixRepositoryProduction.includes('DELETE FROM mix_pam_operations')
+) {
+  throw new Error(
+    'production MIX-PAM code must use blocking owner-held insert/prune capabilities instead of try-lock, COUNT, or direct journal DML',
+  );
+}
+
+for (const entry of [
+  'begin_remote_pam_join',
+  'begin_remote_pam_leave',
+  'prune_expired_pam_results',
+]) {
+  const body = structBody(mixServiceSource, `pub(crate) async fn ${entry}(`);
+  const gate = body.indexOf('self.pam_capacity_admission_guard().await');
+  const repository = body.indexOf(`db::${entry}(`);
+  if (gate < 0 || repository < 0 || gate > repository) {
+    throw new Error(
+      `MIX service ${entry} must take the clone-shared PAM FIFO gate before repository/PgPool access`,
+    );
+  }
+}
+
+const mixPamCapacityCallPattern = /\bdb::(?:begin_remote_pam_join|begin_remote_pam_leave|prune_expired_pam_results)\s*\(/;
+const pendingPamBoundaryFiles = [path.join(root, 'src')];
+const mixPamCapacityBypasses = [];
+while (pendingPamBoundaryFiles.length > 0) {
+  const current = pendingPamBoundaryFiles.pop();
+  for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+    const full = path.join(current, entry.name);
+    if (entry.isDirectory()) {
+      pendingPamBoundaryFiles.push(full);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
+    const relative = path.relative(root, full).replaceAll('\\', '/');
+    if (relative === 'src/services/mix.rs' || relative === 'src/db/mix.rs') continue;
+    const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
+    if (mixPamCapacityCallPattern.test(production)) mixPamCapacityBypasses.push(relative);
+  }
+}
+if (mixPamCapacityBypasses.length > 0) {
+  throw new Error(
+    `production code bypasses the MIX-PAM pre-pool FIFO gate: ${mixPamCapacityBypasses.join(', ')}`,
+  );
+}
+
+const mixProducerCallPattern = new RegExp(
+  `\\bdb::(?:${mixProducerMethods.join('|')})\\s*\\(`,
+);
+const pendingMixBoundaryFiles = [path.join(root, 'src')];
+const mixProducerBypasses = [];
+while (pendingMixBoundaryFiles.length > 0) {
+  const current = pendingMixBoundaryFiles.pop();
+  for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+    const full = path.join(current, entry.name);
+    if (entry.isDirectory()) {
+      pendingMixBoundaryFiles.push(full);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
+    const relative = path.relative(root, full).replaceAll('\\', '/');
+    if (relative === 'src/services/mix.rs' || relative === 'src/db/mix.rs') continue;
+    const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
+    if (mixProducerCallPattern.test(production)) mixProducerBypasses.push(relative);
+  }
+}
+if (mixProducerBypasses.length > 0) {
+  throw new Error(
+    `production code bypasses MixService producer admission: ${mixProducerBypasses.join(', ')}`,
+  );
+}
 
 // ARCH-SVC PubSub/PEP vertical slice (2026-08-29): the protocol layer now
 // reaches persistence through a private PubSubService capability. Keep the
@@ -1459,6 +1801,109 @@ for (const credentialField of [
 }
 if (/Deliver\s*\(\s*db::User\s*\)/.test(messageServiceSource)) {
   throw new Error('MessageService leaks the persistence User credential model to routing code');
+}
+
+// XEP-0115 federated presence is observed by independent authenticated S2S
+// tasks. Its ordering must come from one exact full-JID lifecycle authority,
+// not TTLs, retries, or a cache-size heuristic. Keep acquisition in the
+// inbound presence scope so ordinary presence routing and Caps/PEP effects
+// commit in the same chosen cross-stream order. Participant RAII makes a
+// waiter cancellation remove the registry entry without a background sweep.
+const capsProtocolSource = read('src/xmpp/protocol/caps.rs');
+const s2sInboundSource = read('src/s2s/inbound.rs');
+const s2sOutboundSource = read('src/s2s/outbound.rs');
+const componentsSource = read('src/components.rs');
+for (const invariant of [
+  'struct FederatedCapsGateSlot',
+  'struct FederatedCapsParticipant',
+  'participants.fetch_sub(1, Ordering::AcqRel)',
+  'Arc::ptr_eq(current, &self.slot)',
+  'let _resource_epoch = state.federated_caps_gates().lock(&resource).await;',
+  'let Some(pending) = state.pending_caps().take(id) else',
+  'observation_id: uuid::Uuid',
+  '.remove_federated_resource_if_connection(&full_jid, connection_id)',
+  '.current_owner(&pending.full_jid, pending.owner)',
+  '.mark_verified(&resource, pending.owner, &pending.key, id, summary)',
+  'pub(crate) async fn federated_caps_connection_closed',
+]) {
+  if (!capsProtocolSource.includes(invariant)) {
+    throw new Error(`federated Caps lifecycle lost cancellation-safe invariant: ${invariant}`);
+  }
+}
+if (!/participants\s*\.\s*fetch_add\(1,\s*Ordering::AcqRel\)/s.test(capsProtocolSource)) {
+  throw new Error('federated Caps admission no longer registers a participant before awaiting');
+}
+for (const invariant of [
+  'let federated_presence_epoch = if matches!(kind, "available" | "unavailable")',
+  'Some(state.federated_caps_gates().lock(&full_jid).await)',
+  'if let Some(resource_epoch) = federated_presence_epoch.as_ref()',
+]) {
+  if (!s2sInboundSource.includes(invariant)) {
+    throw new Error(`S2S presence lost its federated Caps ordering proof: ${invariant}`);
+  }
+}
+if (!/observe_federated_caps\(\s*state,\s*root,\s*from,\s*connection_id,\s*resource_epoch/s.test(s2sInboundSource)) {
+  throw new Error('S2S Caps observation is no longer bound to the authenticated connection UUID');
+}
+for (const [name, source] of [
+  ['inbound S2S', s2sInboundSource],
+  ['outbound S2S', s2sOutboundSource],
+  ['external component', componentsSource],
+]) {
+  if (!source.includes('federated_caps_connection_closed')) {
+    throw new Error(`${name} teardown no longer retires exact connection-owned Caps observations`);
+  }
+}
+if (/observe_federated_caps[\s\S]{0,500}federated_caps_gates\(\)\.lock/.test(capsProtocolSource)) {
+  throw new Error('federated Caps gate must cover final presence routing, not be reacquired inside the observer');
+}
+
+// The observation table, not a periodic poll or bounded hint queue, owns
+// pending work. Saturation requests a no-lost-wakeup reconstruction, while
+// retry and IQ-correlation expiry use the exact earliest deadline.
+for (const invariant of [
+  'rescan_required: bool',
+  'fn request_rescan(&self)',
+  'fn begin_rescan(&self) -> bool',
+  'fn next_retry_deadline(&self, now: Instant)',
+  'fn next_expiration(&self)',
+  'tokio::time::sleep_until(deadline.into())',
+  'MAX_CAPS_CACHE_RAW_BYTES',
+  'MAX_CAPS_CACHE_SUMMARY_BYTES',
+  'MAX_CAPS_OBSERVATION_SUMMARY_BYTES',
+  '.min_by_key(|entry| entry.touched_at)',
+  'notify_storage: String',
+  'notify_ranges: Vec<(u32, u32)>',
+]) {
+  if (!capsProtocolSource.includes(invariant)) {
+    throw new Error(`Caps observation resource/dispatch invariant is missing: ${invariant}`);
+  }
+}
+if (/interval\s*\(\s*CAPS_EFFECT_RETRY_BASE\s*\)/.test(capsProtocolSource)) {
+  throw new Error('Caps retry correctness regressed to fixed periodic reconstruction');
+}
+if (/\.take\(128\)/.test(capsProtocolSource + read('src/xmpp/protocol/pep.rs'))) {
+  throw new Error('Caps/PEP fan-out silently truncates a verified notify summary');
+}
+if (countMatches(capsProtocolSource, /self\.entries\.insert\(\s*full_jid,/g) < 2) {
+  throw new Error('local and federated Caps observations must use atomic single-key replacement');
+}
+const commitCapsObservation = structBody(
+  capsProtocolSource,
+  'pub(crate) fn commit_caps_observation(',
+);
+const localObservationInsert = commitCapsObservation.indexOf('.observe_local(');
+const unavailableLocalRemoval = commitCapsObservation.lastIndexOf(
+  '.remove_local_resource(&full_jid, self.connection_id)',
+  localObservationInsert,
+);
+const unavailableBranch = commitCapsObservation.indexOf('if presence');
+if (
+  localObservationInsert < 0 ||
+  unavailableLocalRemoval < unavailableBranch ||
+  unavailableLocalRemoval > localObservationInsert
+) {
+  throw new Error('local available Caps replacement regained a remove-before-insert visibility gap');
 }
 
 const largestAuthority = [...perFile]

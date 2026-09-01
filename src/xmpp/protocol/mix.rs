@@ -51,7 +51,6 @@ const MIX_IQ_RELAY_TTL: Duration = Duration::from_secs(30);
 // releases claimed leases immediately, leaving one second for the supervisor
 // and registry to record the terminal health transition.
 const MIX_OUTBOX_DRAIN_GRACE: Duration = Duration::from_secs(14);
-
 #[derive(Debug)]
 struct PermanentMixDeliveryError {
     reason: &'static str,
@@ -1460,19 +1459,10 @@ pub(crate) enum MixSessionCapability {
 }
 
 pub(crate) fn session_mix_capability(state: &AppState, full_jid: &str) -> MixSessionCapability {
-    let Some(key) = super::caps::touch_caps_resource(state, full_jid) else {
-        return MixSessionCapability::Unknown;
-    };
-    let node = format!("{}#{}", key.node, key.version);
-    if super::caps::cached_disco_result(state, "mix-capability", full_jid, Some(&node)).is_none() {
-        return MixSessionCapability::Unknown;
-    }
-    if super::caps::cached_caps_has_feature(state, full_jid, CORE_NS)
-        || super::caps::cached_caps_has_feature(state, full_jid, PAM_NS)
-    {
-        MixSessionCapability::Supported
-    } else {
-        MixSessionCapability::Unsupported
+    match super::caps::verified_caps_has_any_feature(state, full_jid, &[CORE_NS, PAM_NS]) {
+        Some(true) => MixSessionCapability::Supported,
+        Some(false) => MixSessionCapability::Unsupported,
+        None => MixSessionCapability::Unknown,
     }
 }
 
@@ -3234,21 +3224,65 @@ impl ProtocolSession {
             ))));
         };
         let actor_bare = format!("{}@{}", user.username, self.state.config.domain);
+        // Directed MIX presence and verified-caps fallback share the exact
+        // resource epoch. Record only a successfully applied transition: an
+        // error response must not suppress later initialisation. The set is
+        // resource-owned and therefore disappears with the session rather
+        // than accumulating in a process-global keyed lock/tombstone map.
+        let mix_presence_epoch = Arc::clone(&self.mix_presence_gate).lock_owned().await;
+        if !mix_presence_route_is_current(
+            &self.state,
+            full_jid,
+            self.connection_id,
+            &self.mix_presence_gate,
+            false,
+        ) {
+            return Ok(Some(Action::None));
+        }
         let result = process_channel_presence(&self.state, &actor_bare, full_jid, raw).await?;
+        if result.is_none() {
+            let target = CanonicalJid::parse_bare(to)?.to_string();
+            match root.attribute("type").unwrap_or("available") {
+                "unavailable" => {
+                    self.mix_presence_fallback_suppressed.insert(target);
+                }
+                "available" => {
+                    self.mix_presence_fallback_suppressed.remove(&target);
+                }
+                _ => {}
+            }
+        }
+        drop(mix_presence_epoch);
         Ok(Some(result.map_or(Action::None, Action::Send)))
     }
 
     /// XEP-0405 participant-server fan-out for a broadcast presence.  Only a
     /// resource whose verified capabilities advertise MIX is represented in
     /// a channel's presence node.
-    pub(crate) async fn forward_presence_to_mix_channels(&self, raw: &str) -> Result<()> {
+    pub(crate) async fn forward_presence_to_mix_channels(
+        &self,
+        kind: &str,
+        advertised_capability: MixSessionCapability,
+        raw: &str,
+    ) -> Result<()> {
         let (Some(user), Some(full_jid)) = (self.authenticated.as_ref(), self.full_jid.as_deref())
         else {
             return Ok(());
         };
-        if session_mix_capability(&self.state, full_jid) != MixSessionCapability::Supported {
+        let action = mix_broadcast_presence_action(kind, advertised_capability);
+        if action == MixBroadcastPresenceAction::Ignore {
             return Ok(());
         }
+        let synthesized_unavailable;
+        let projected = if action == MixBroadcastPresenceAction::Retract && kind != "unavailable" {
+            synthesized_unavailable = XmlElement::namespaced("presence", "jabber:client")
+                .attr("from", full_jid)
+                .attr("type", "unavailable")
+                .finish();
+            synthesized_unavailable.as_str()
+        } else {
+            raw
+        };
         let actor_bare = format!("{}@{}", user.username, self.state.config.domain);
         for membership in self.state.mix_service().pam_memberships(user.id).await? {
             if membership.state != "joined"
@@ -3265,7 +3299,7 @@ impl ProtocolSession {
             };
             let domain = channel.domainpart();
             let directed = crate::xmpp::xml_util::set_to(
-                &crate::xmpp::xml_util::set_from(raw, full_jid),
+                &crate::xmpp::xml_util::set_from(projected, full_jid),
                 &membership.channel_jid,
             );
             if domain == self.mix_domain() {
@@ -3280,6 +3314,24 @@ impl ProtocolSession {
             }
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MixBroadcastPresenceAction {
+    Publish,
+    Retract,
+    Ignore,
+}
+
+fn mix_broadcast_presence_action(
+    kind: &str,
+    capability: MixSessionCapability,
+) -> MixBroadcastPresenceAction {
+    match (kind, capability) {
+        ("available", MixSessionCapability::Supported) => MixBroadcastPresenceAction::Publish,
+        ("available" | "unavailable", _) => MixBroadcastPresenceAction::Retract,
+        _ => MixBroadcastPresenceAction::Ignore,
     }
 }
 
@@ -4820,19 +4872,24 @@ pub(crate) async fn disconnect_mix_presence(
 pub(crate) async fn publish_verified_mix_presence(
     state: &Arc<AppState>,
     actor_full: &str,
+    expected_connection_id: Uuid,
+    expected_caps_generation: u64,
 ) -> Result<()> {
     let actor = crate::jid::CanonicalJid::parse(actor_full)?;
-    let Some(session) = state
+    let actor_full = actor.to_string();
+    // Snapshot only the epoch identity and its shared gate. The authoritative
+    // route is deliberately re-read after the async lock acquisition; using a
+    // cloned pre-lock session here would let a delayed caps job act on a
+    // removed or SM-replaced resource.
+    let Some(mix_presence_gate) = state
         .sessions
-        .get(actor_full)
-        .filter(|entry| entry.routable.load(std::sync::atomic::Ordering::Acquire))
-        .map(|entry| entry.clone())
+        .get(&actor_full)
+        .filter(|entry| entry.connection_id == expected_connection_id)
+        .map(|entry| Arc::clone(&entry.mix_presence_gate))
     else {
         return Ok(());
     };
-    if !session.available.load(std::sync::atomic::Ordering::Relaxed) {
-        return Ok(());
-    }
+    let expected_mix_presence_gate = Arc::clone(&mix_presence_gate);
     let Some(username) = actor.localpart() else {
         return Ok(());
     };
@@ -4841,7 +4898,7 @@ pub(crate) async fn publish_verified_mix_presence(
     };
     let actor_bare = actor.bare();
     let available = XmlElement::namespaced("presence", "jabber:client")
-        .attr("from", actor_full)
+        .attr("from", &actor_full)
         .finish();
     for membership in state.mix_service().pam_memberships(user.id).await? {
         if !pam_membership_receives(&membership, NODE_PRESENCE) {
@@ -4853,16 +4910,106 @@ pub(crate) async fn publish_verified_mix_presence(
         };
         let domain = channel.domainpart();
         let directed = crate::xmpp::xml_util::set_to(&available, &membership.channel_jid);
+        // Hold the epoch for only one durable projection. User/membership
+        // discovery above is intentionally outside it. Explicit presence or
+        // teardown can therefore make progress between channels, and every
+        // iteration revalidates the exact route before applying an effect.
+        let mix_presence_epoch = Arc::clone(&mix_presence_gate).lock_owned().await;
+        let Some((epoch_is_current, fallback_suppressed)) =
+            state.sessions.get(&actor_full).map(|entry| {
+                (
+                    mix_presence_epoch_is_current(
+                        entry.connection_id,
+                        expected_connection_id,
+                        entry
+                            .caps_observation_generation
+                            .load(std::sync::atomic::Ordering::Acquire),
+                        expected_caps_generation,
+                        entry.routable.load(std::sync::atomic::Ordering::Acquire),
+                        entry.available.load(std::sync::atomic::Ordering::Acquire),
+                        Arc::ptr_eq(&entry.mix_presence_gate, &expected_mix_presence_gate),
+                    ),
+                    mix_presence_fallback_is_suppressed(
+                        &entry.mix_presence_fallback_suppressed,
+                        &membership.channel_jid,
+                    ),
+                )
+            })
+        else {
+            break;
+        };
+        if !epoch_is_current {
+            break;
+        }
+        if fallback_suppressed {
+            continue;
+        }
         if domain == local_mix_domain(state) {
-            let _ = process_channel_presence(state, &actor_bare, actor_full, &directed).await?;
+            let Some(channel) = state
+                .mix_service()
+                .mix_channel(
+                    domain,
+                    channel
+                        .localpart()
+                        .expect("joined MIX channel has a localpart"),
+                )
+                .await?
+            else {
+                continue;
+            };
+            let _ = state
+                .mix_service()
+                .ensure_mix_presence(channel.id, &actor_bare, &actor_full, "")
+                .await?;
         } else if state.federation_domain_allowed(domain) {
             let _ = state
                 .federation
                 .send(domain, directed, Some(actor_bare.clone()))
                 .await;
         }
+        drop(mix_presence_epoch);
     }
     Ok(())
+}
+
+fn mix_presence_epoch_is_current(
+    current_connection_id: uuid::Uuid,
+    expected_connection_id: uuid::Uuid,
+    current_caps_generation: u64,
+    expected_caps_generation: u64,
+    routable: bool,
+    available: bool,
+    same_gate: bool,
+) -> bool {
+    current_connection_id == expected_connection_id
+        && current_caps_generation == expected_caps_generation
+        && routable
+        && available
+        && same_gate
+}
+
+pub(crate) fn mix_presence_route_is_current(
+    state: &AppState,
+    full_jid: &str,
+    expected_connection_id: Uuid,
+    expected_gate: &Arc<tokio::sync::Mutex<()>>,
+    require_available: bool,
+) -> bool {
+    state.sessions.get(full_jid).is_some_and(|entry| {
+        entry.connection_id == expected_connection_id
+            && Arc::ptr_eq(&entry.mix_presence_gate, expected_gate)
+            && entry.routable.load(std::sync::atomic::Ordering::Acquire)
+            && (!require_available || entry.available.load(std::sync::atomic::Ordering::Acquire))
+            && !entry.disconnect.is_cancelled()
+            && entry.lifecycle.load(std::sync::atomic::Ordering::Acquire) == 0
+    })
+}
+
+fn mix_presence_fallback_is_suppressed(
+    suppressed: &dashmap::DashSet<String>,
+    channel_jid: &str,
+) -> bool {
+    suppressed.contains("*") || suppressed.contains(channel_jid)
 }
 
 pub(crate) fn start_mix_presence_recovery(
@@ -4893,8 +5040,16 @@ pub(crate) fn start_mix_presence_recovery(
             };
             let domain = participant.domainpart();
             if same_jid_domain(domain, &state.config.domain) {
-                for (full_jid, _) in state.session_entries_for(&probe.participant_jid) {
-                    publish_verified_mix_presence(&state, &full_jid).await?;
+                for (full_jid, session) in state.session_entries_for(&probe.participant_jid) {
+                    publish_verified_mix_presence(
+                        &state,
+                        &full_jid,
+                        session.connection_id,
+                        session
+                            .caps_observation_generation
+                            .load(std::sync::atomic::Ordering::Acquire),
+                    )
+                    .await?;
                 }
                 continue;
             }
@@ -6648,6 +6803,74 @@ pub(crate) async fn federated_mix_presence(
 mod tests {
     use super::*;
     use crate::services::mix::MamRsmPage;
+
+    #[test]
+    fn verified_mix_presence_requires_the_exact_live_resource_epoch() {
+        let expected = Uuid::new_v4();
+        assert!(mix_presence_epoch_is_current(
+            expected, expected, 7, 7, true, true, true
+        ));
+        assert!(!mix_presence_epoch_is_current(
+            Uuid::new_v4(),
+            expected,
+            7,
+            7,
+            true,
+            true,
+            true
+        ));
+        assert!(!mix_presence_epoch_is_current(
+            expected, expected, 8, 7, true, true, true
+        ));
+        assert!(!mix_presence_epoch_is_current(
+            expected, expected, 7, 7, false, true, true
+        ));
+        assert!(!mix_presence_epoch_is_current(
+            expected, expected, 7, 7, true, false, true
+        ));
+        assert!(!mix_presence_epoch_is_current(
+            expected, expected, 7, 7, true, true, false
+        ));
+    }
+
+    #[test]
+    fn directed_mix_unavailable_suppresses_only_its_channel() {
+        let suppressed = dashmap::DashSet::new();
+        suppressed.insert("one@mix.example.test".to_owned());
+        assert!(mix_presence_fallback_is_suppressed(
+            &suppressed,
+            "one@mix.example.test"
+        ));
+        assert!(!mix_presence_fallback_is_suppressed(
+            &suppressed,
+            "two@mix.example.test"
+        ));
+        suppressed.insert("*".to_owned());
+        assert!(mix_presence_fallback_is_suppressed(
+            &suppressed,
+            "two@mix.example.test"
+        ));
+    }
+
+    #[test]
+    fn broadcast_unavailable_never_depends_on_a_remaining_caps_mapping() {
+        assert_eq!(
+            mix_broadcast_presence_action("unavailable", MixSessionCapability::Unknown),
+            MixBroadcastPresenceAction::Retract
+        );
+        assert_eq!(
+            mix_broadcast_presence_action("unavailable", MixSessionCapability::Unsupported),
+            MixBroadcastPresenceAction::Retract
+        );
+        assert_eq!(
+            mix_broadcast_presence_action("available", MixSessionCapability::Unknown),
+            MixBroadcastPresenceAction::Retract
+        );
+        assert_eq!(
+            mix_broadcast_presence_action("available", MixSessionCapability::Supported),
+            MixBroadcastPresenceAction::Publish
+        );
+    }
 
     #[tokio::test]
     async fn graceful_shutdown_drains_the_claimed_mix_batch_before_stopping() {

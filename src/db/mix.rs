@@ -393,20 +393,179 @@ pub(crate) fn mix_delivery_retries_total() -> u64 {
     MIX_DELIVERY_RETRIES_TOTAL.load(Ordering::Relaxed)
 }
 
-async fn acquire_mix_delivery_capacity_fence_tx(
-    transaction: &mut Transaction<'_, Postgres>,
-) -> Result<()> {
-    // Every ledger mutation uses the same non-waiting fence.  It is not
-    // sufficient for admission alone to use `pg_try_advisory_xact_lock`: an
-    // ACK which already held the singleton row could otherwise make a
-    // producer wait while retaining its general-purpose pool connection.
-    let acquired: bool = sqlx::query_scalar(
-        "SELECT pg_try_advisory_xact_lock(hashtextextended('mix-delivery-capacity-v2',0))",
+/// Fail-closed startup proof for the MIX delivery capacity protocol. Pending
+/// release facts are still charged to the ledger until the next admission
+/// folds them, so the invariant is exact without mutating recovery state.
+pub async fn audit_mix_delivery_capacity_ledger(pool: &PgPool) -> Result<()> {
+    let audit = sqlx::query(
+        "WITH recipient_facts AS (
+             SELECT (get_byte(uuid_send(delivery_id),0) % 64)::smallint AS bucket,
+                    COUNT(*)::bigint AS queued_rows,
+                    SUM(octet_length(recipient_jid)+128)::bigint AS queued_bytes
+               FROM mix_delivery_recipients GROUP BY bucket
+         ), event_facts AS (
+             SELECT (get_byte(uuid_send(event_id),0) % 64)::smallint AS bucket,
+                    SUM(octet_length(stanza_template))::bigint AS queued_bytes
+               FROM mix_delivery_events GROUP BY bucket
+         ), release_facts AS (
+             SELECT capacity_bucket AS bucket,
+                    SUM(released_rows)::bigint AS queued_rows,
+                    SUM(released_bytes)::bigint AS queued_bytes
+               FROM mix_delivery_capacity_releases GROUP BY capacity_bucket
+         ), expected AS (
+             SELECT bucket::smallint AS bucket,
+                    COALESCE(recipient.queued_rows,0)
+                      + COALESCE(release.queued_rows,0) AS queued_rows,
+                    COALESCE(recipient.queued_bytes,0)
+                      + COALESCE(event.queued_bytes,0)
+                      + COALESCE(release.queued_bytes,0) AS queued_bytes
+               FROM generate_series(0,63) AS generated(bucket)
+               LEFT JOIN recipient_facts recipient USING(bucket)
+               LEFT JOIN event_facts event USING(bucket)
+               LEFT JOIN release_facts release USING(bucket)
+         )
+         SELECT (SELECT COUNT(*) FROM mix_delivery_capacity)::bigint AS ledger_buckets,
+                (SELECT COALESCE(SUM(queued_rows),0)::bigint
+                   FROM mix_delivery_capacity) AS ledger_rows,
+                (SELECT COALESCE(SUM(queued_bytes),0)::bigint
+                   FROM mix_delivery_capacity) AS ledger_bytes,
+                COUNT(*) FILTER (
+                    WHERE capacity.bucket IS NULL
+                       OR capacity.queued_rows<>expected.queued_rows
+                       OR capacity.queued_bytes<>expected.queued_bytes
+                )::bigint AS mismatch_buckets
+           FROM expected
+           LEFT JOIN mix_delivery_capacity capacity USING(bucket)",
     )
-    .fetch_one(&mut **transaction)
+    .fetch_one(pool)
     .await?;
-    anyhow::ensure!(acquired, "MIX delivery capacity ledger is busy");
+    let ledger_buckets: i64 = audit.get("ledger_buckets");
+    let ledger_rows: i64 = audit.get("ledger_rows");
+    let ledger_bytes: i64 = audit.get("ledger_bytes");
+    let mismatch_buckets: i64 = audit.get("mismatch_buckets");
+    anyhow::ensure!(
+        ledger_buckets == 64
+            && mismatch_buckets == 0
+            && (0..=MIX_DELIVERY_MAX_ROWS).contains(&ledger_rows)
+            && (0..=MIX_DELIVERY_MAX_BYTES).contains(&ledger_bytes),
+        "MIX delivery capacity ledger audit failed: {ledger_buckets} buckets, {mismatch_buckets} mismatches, {ledger_rows} rows, {ledger_bytes} bytes"
+    );
     Ok(())
+}
+
+/// Fail-closed startup proof for the database-maintained MIX-PAM capacity
+/// authority. The counter tables are deliberately read-only to the runtime;
+/// every operation insert/delete is projected by owner-held triggers.
+pub async fn audit_mix_pam_operation_capacity(pool: &PgPool) -> Result<()> {
+    let audit = sqlx::query(
+        "WITH actual_by_user AS (
+             SELECT user_id,COUNT(*)::bigint AS operation_count
+               FROM mix_pam_operations GROUP BY user_id
+         ), user_mismatches AS (
+             SELECT COUNT(*)::bigint AS mismatch_count
+               FROM actual_by_user actual
+               FULL OUTER JOIN mix_pam_operation_user_capacity authority
+                 USING(user_id)
+              WHERE actual.operation_count IS DISTINCT FROM authority.operation_count
+                 OR COALESCE(authority.operation_count,0) NOT BETWEEN 1 AND 64
+         )
+         SELECT (SELECT COUNT(*) FROM mix_pam_operation_capacity)::bigint
+                    AS authority_rows,
+                COALESCE((SELECT operation_count
+                            FROM mix_pam_operation_capacity WHERE singleton),-1)::bigint
+                    AS authority_count,
+                COALESCE((SELECT max_operations
+                            FROM mix_pam_operation_capacity WHERE singleton),-1)::bigint
+                    AS max_operations,
+                COALESCE((SELECT max_per_user
+                            FROM mix_pam_operation_capacity WHERE singleton),-1)::bigint
+                    AS max_per_user,
+                (SELECT COUNT(*) FROM mix_pam_operations)::bigint AS actual_count,
+                (SELECT mismatch_count FROM user_mismatches)::bigint AS user_mismatches",
+    )
+    .fetch_one(pool)
+    .await?;
+    let authority_rows: i64 = audit.get("authority_rows");
+    let authority_count: i64 = audit.get("authority_count");
+    let max_operations: i64 = audit.get("max_operations");
+    let max_per_user: i64 = audit.get("max_per_user");
+    let actual_count: i64 = audit.get("actual_count");
+    let user_mismatches: i64 = audit.get("user_mismatches");
+    anyhow::ensure!(
+        authority_rows == 1
+            && authority_count == actual_count
+            && max_operations == 10_000
+            && max_per_user == 64
+            && (0..=max_operations).contains(&actual_count)
+            && user_mismatches == 0,
+        "MIX-PAM capacity authority audit failed: {authority_rows} global rows, authority={authority_count}, actual={actual_count}, max={max_operations}, per-user max={max_per_user}, user mismatches={user_mismatches}"
+    );
+    Ok(())
+}
+
+/// Proof that this transaction acquired the schema-local delivery admission
+/// authority before taking any MIX business or sequence row lock.
+struct MixDeliveryAdmissionFence(());
+
+/// Proof that orphan reclamation and release-journal folding committed before
+/// the producer transaction began. This phase must never share the producer's
+/// rollback fate: a capacity rejection cannot resurrect the same false-full
+/// ledger state for the next attempt.
+struct MixDeliveryReconciliationCommitted(());
+
+async fn acquire_mix_delivery_admission_fence_tx(
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<MixDeliveryAdmissionFence> {
+    // Only admissions mutate the capacity ledger. Delivery completion emits
+    // immutable release facts and never takes this fence, so a completed
+    // socket delivery cannot fail because an unrelated producer is reserving
+    // capacity. The resolved capacity relation OID gives each installed schema
+    // a distinct fence while PostgreSQL scopes advisory locks to its database.
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(
+                    hashtextextended(
+                        'mix-delivery-capacity-v3:' ||
+                        ('mix_delivery_capacity'::regclass)::oid::text,
+                        0
+                    )
+                )",
+    )
+    .execute(&mut **transaction)
+    .await?;
+    Ok(MixDeliveryAdmissionFence(()))
+}
+
+async fn begin_mix_delivery_fenced_transaction(
+    pool: &PgPool,
+) -> Result<(Transaction<'_, Postgres>, MixDeliveryAdmissionFence)> {
+    let mut transaction = pool.begin().await?;
+    // This is deliberately the first SQL statement in the transaction. A
+    // cross-process waiter therefore owns no channel, participant, event or
+    // sequence lock while it waits, which makes the blocking database fence a
+    // deadlock-safe authority for experimental multi-process deployments.
+    let fence = acquire_mix_delivery_admission_fence_tx(&mut transaction).await?;
+    Ok((transaction, fence))
+}
+
+async fn reconcile_mix_delivery_capacity_committed(
+    pool: &PgPool,
+) -> Result<MixDeliveryReconciliationCommitted> {
+    let mut transaction = pool.begin().await?;
+    // The owner-held function takes the schema-local admission fence as its
+    // first database action, removes every committed orphan (the hard ledger
+    // bounds the set), and folds the resulting immutable release facts.
+    let _: i64 = sqlx::query_scalar("SELECT northstar_mix_delivery_capacity_reconcile()")
+        .fetch_one(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(MixDeliveryReconciliationCommitted(()))
+}
+
+async fn begin_mix_delivery_admission(
+    pool: &PgPool,
+) -> Result<(Transaction<'_, Postgres>, MixDeliveryAdmissionFence)> {
+    let _committed = reconcile_mix_delivery_capacity_committed(pool).await?;
+    begin_mix_delivery_fenced_transaction(pool).await
 }
 
 fn mix_delivery_capacity_bucket(id: Uuid) -> i16 {
@@ -431,36 +590,90 @@ fn add_mix_delivery_capacity_delta(
     Ok(())
 }
 
+/// Merge committed release facts into the admission ledger while the exact
+/// schema-local capacity fence is held. A delete and its release fact commit
+/// atomically; deleting a fact and decrementing the ledger do too, so a crash
+/// can only leave conservative over-accounting, never reusable phantom space.
+async fn drain_mix_delivery_capacity_releases_tx(
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<()> {
+    // The owner-held capability is the only DELETE surface on the write-once
+    // release journal. It consumes the complete bounded fact set, applies all
+    // credits atomically and raises inside PostgreSQL on any ledger underflow,
+    // so a caller cannot commit a forged or partially-applied drain.
+    let _: i64 = sqlx::query_scalar("SELECT northstar_mix_delivery_capacity_drain()")
+        .fetch_one(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
+async fn prune_empty_mix_delivery_events_tx(
+    transaction: &mut Transaction<'_, Postgres>,
+    limit: i64,
+) -> Result<()> {
+    // Recipient release facts are an indexed candidate set: the final physical
+    // recipient delete always leaves one. Avoid scanning/sorting the complete
+    // event table on every worker tick. A skipped locked orphan keeps its
+    // recipient fact during the subsequent drain and is retried later.
+    sqlx::query(
+        "WITH candidates AS (
+             SELECT DISTINCT event.event_id
+               FROM mix_delivery_capacity_releases release
+               JOIN mix_delivery_events event
+                 ON event.event_id=release.parent_event_id
+              WHERE release.release_kind=1
+                AND release.parent_event_id IS NOT NULL
+                AND NOT EXISTS(
+                    SELECT 1 FROM mix_delivery_recipients recipient
+                     WHERE recipient.event_id=event.event_id
+                )
+              ORDER BY event.event_id
+              LIMIT $1
+         ), locked AS (
+             SELECT event.event_id
+               FROM mix_delivery_events event
+               JOIN candidates candidate USING(event_id)
+              WHERE NOT EXISTS(
+                        SELECT 1 FROM mix_delivery_recipients recipient
+                         WHERE recipient.event_id=event.event_id
+                    )
+              ORDER BY event.event_id
+              FOR UPDATE OF event SKIP LOCKED
+         )
+         DELETE FROM mix_delivery_events event USING locked
+          WHERE event.event_id=locked.event_id
+            AND NOT EXISTS(
+                SELECT 1 FROM mix_delivery_recipients recipient
+                 WHERE recipient.event_id=event.event_id
+            )",
+    )
+    .bind(limit.clamp(1, 4_096))
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+async fn prune_empty_mix_delivery_events(pool: &PgPool, limit: i64) -> Result<()> {
+    let mut transaction = pool.begin().await?;
+    prune_empty_mix_delivery_events_tx(&mut transaction, limit).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
 async fn reserve_mix_delivery_capacity_tx(
     transaction: &mut Transaction<'_, Postgres>,
+    _fence: &MixDeliveryAdmissionFence,
     deltas: &BTreeMap<i16, (i64, i64)>,
 ) -> Result<()> {
     if deltas.is_empty() {
         return Ok(());
     }
-    // Exact global accounting needs one serialization point, but waiting for
-    // that point while holding a general PgPool connection recreates a global
-    // denial-of-service primitive. A busy fence rejects immediately and lets
-    // the complete channel mutation roll back.
-    if let Err(error) = acquire_mix_delivery_capacity_fence_tx(transaction).await {
-        MIX_DELIVERY_CAPACITY_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
-        return Err(error.context("MIX delivery capacity admission rejected"));
-    }
+    // Orphan reclamation was committed before this producer transaction began.
+    // The typed fence guarantees the blocking database authority was then
+    // acquired before this transaction took any business lock. ACKs never take
+    // it and continue to append authentic release facts concurrently.
+    drain_mix_delivery_capacity_releases_tx(transaction).await?;
     let buckets = deltas.keys().copied().collect::<Vec<_>>();
-    let locks = sqlx::query_scalar::<_, bool>(
-        "SELECT pg_try_advisory_xact_lock(
-                    hashtextextended('mix-delivery-capacity-v2:' || bucket::text,0)
-                )
-           FROM unnest($1::smallint[]) AS requested(bucket)
-          ORDER BY bucket",
-    )
-    .bind(&buckets)
-    .fetch_all(&mut **transaction)
-    .await?;
-    if locks.iter().any(|acquired| !acquired) {
-        MIX_DELIVERY_CAPACITY_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
-        anyhow::bail!("MIX delivery capacity bucket is busy");
-    }
     let added_rows = deltas.values().try_fold(0_i64, |total, delta| {
         total
             .checked_add(delta.0)
@@ -526,6 +739,7 @@ struct MixDeliveryProjection<'a> {
 
 async fn enqueue_mix_deliveries_tx(
     transaction: &mut Transaction<'_, Postgres>,
+    fence: &MixDeliveryAdmissionFence,
     projection: MixDeliveryProjection<'_>,
 ) -> Result<()> {
     let MixDeliveryProjection {
@@ -552,7 +766,14 @@ async fn enqueue_mix_deliveries_tx(
         !stanza_template.is_empty() && stanza_template.len() <= 2_097_152,
         "invalid MIX delivery template"
     );
-    let recipient_jids = recipients
+    // Canonical JID order is the producer lock order. Two channels may contain
+    // the same recipients under opposite participant-id order; acquiring the
+    // global recipient-sequence authorities in participant order would allow
+    // the classic A->B/B->A deadlock before either producer reaches the
+    // capacity fence.
+    let mut ordered_recipients = recipients.iter().collect::<Vec<_>>();
+    ordered_recipients.sort_unstable_by(|left, right| left.jid.cmp(&right.jid));
+    let recipient_jids = ordered_recipients
         .iter()
         .map(|recipient| recipient.jid.clone())
         .collect::<Vec<_>>();
@@ -560,8 +781,9 @@ async fn enqueue_mix_deliveries_tx(
         recipient_jids.iter().collect::<BTreeSet<_>>().len() == recipients.len(),
         "duplicate MIX delivery recipient"
     );
-    let projected_recipients = recipients
+    let projected_recipients = ordered_recipients
         .iter()
+        .copied()
         .map(|recipient| (Uuid::new_v4(), recipient))
         .collect::<Vec<_>>();
     let mut capacity_deltas = BTreeMap::new();
@@ -583,8 +805,6 @@ async fn enqueue_mix_deliveries_tx(
             recipient_bytes,
         )?;
     }
-    reserve_mix_delivery_capacity_tx(transaction, &capacity_deltas).await?;
-
     sqlx::query(
         "INSERT INTO mix_delivery_events(event_id,channel_id,channel_jid,stanza_template,authoritative_stanza_id,archive,encrypted)
          VALUES($1,$2,$3,$4,$5,$6,$7)",
@@ -604,7 +824,7 @@ async fn enqueue_mix_deliveries_tx(
              SELECT jid FROM unnest($1::text[]) AS supplied(jid)
          )
          INSERT INTO mix_delivery_recipient_sequences(recipient_jid,next_sequence)
-         SELECT jid,2 FROM input
+         SELECT jid,2 FROM input ORDER BY jid
          ON CONFLICT(recipient_jid) DO UPDATE
              SET next_sequence=mix_delivery_recipient_sequences.next_sequence+1
          RETURNING recipient_jid,next_sequence-1 AS delivery_sequence",
@@ -644,6 +864,11 @@ async fn enqueue_mix_deliveries_tx(
         },
     );
     builder.build().execute(&mut **transaction).await?;
+    // Reserve after both projections exist. The admission fence has been held
+    // since transaction start, before any channel/sequence/event lock, so
+    // another process cannot observe an inverted lock order. Failure rolls
+    // every inserted row back with the reservation.
+    reserve_mix_delivery_capacity_tx(transaction, fence, &capacity_deltas).await?;
     Ok(())
 }
 
@@ -652,6 +877,11 @@ async fn remove_mix_delivery_tx(
     delivery_id: Uuid,
     lease_token: Uuid,
 ) -> Result<Option<(Uuid, String)>> {
+    // Completion owns only its exact leased recipient. It never locks the
+    // shared parent event, sequence authority or capacity ledger, so a 5,000
+    // recipient broadcast can acknowledge concurrently. Bounded background
+    // GC removes an empty event and sequence after all recipient deletes have
+    // committed; capacity remains conservatively over-accounted meanwhile.
     let row = sqlx::query(
         "DELETE FROM mix_delivery_recipients
           WHERE delivery_id=$1 AND lease_token=$2
@@ -666,36 +896,6 @@ async fn remove_mix_delivery_tx(
     };
     let event_id: Uuid = row.get("event_id");
     let recipient_jid: String = row.get("recipient_jid");
-    sqlx::query(
-        "DELETE FROM mix_delivery_events event
-          WHERE event.event_id=$1
-            AND NOT EXISTS(
-                SELECT 1 FROM mix_delivery_recipients recipient
-                 WHERE recipient.event_id=event.event_id
-            )
-        ",
-    )
-    .bind(event_id)
-    .execute(&mut **transaction)
-    .await?;
-    // The sequence row is an authority lock, not an ever-growing history
-    // table.  It may be reclaimed only when neither the live queue nor the
-    // operator-recoverable dead-letter set can reintroduce an older sequence.
-    sqlx::query(
-        "DELETE FROM mix_delivery_recipient_sequences authority
-          WHERE authority.recipient_jid=$1
-            AND NOT EXISTS(
-                SELECT 1 FROM mix_delivery_recipients live
-                 WHERE live.recipient_jid=authority.recipient_jid
-            )
-            AND NOT EXISTS(
-                SELECT 1 FROM mix_delivery_dead_letters dead
-                 WHERE dead.recipient_jid=authority.recipient_jid
-            )",
-    )
-    .bind(&recipient_jid)
-    .execute(&mut **transaction)
-    .await?;
     Ok(Some((event_id, recipient_jid)))
 }
 
@@ -839,6 +1039,11 @@ pub async fn claim_mix_deliveries(
     max_bytes: i64,
 ) -> Result<Vec<ClaimedMixDelivery>> {
     dead_letter_expired_mix_deliveries(pool, 256).await?;
+    // Event GC only appends a release fact. It never takes the producer
+    // capacity fence, so ACK/claim maintenance stays independent of the fair
+    // producer queue. The next real producer folds credits through the
+    // owner-held drain capability.
+    prune_empty_mix_delivery_events(pool, 256).await?;
     prune_empty_mix_delivery_sequences(pool, 256).await?;
     let rows = sqlx::query(
         "WITH candidates AS (
@@ -1073,7 +1278,7 @@ pub async fn mix_delivery_dead_letters(
 /// The operator action is all-or-nothing with capacity accounting, so a
 /// recovery cannot silently bypass the same queue limits as normal traffic.
 pub async fn requeue_mix_delivery_dead_letter(pool: &PgPool, dead_letter_id: Uuid) -> Result<bool> {
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     let row = sqlx::query(
         "SELECT * FROM mix_delivery_dead_letters
           WHERE dead_letter_id=$1 FOR UPDATE",
@@ -1095,29 +1300,85 @@ pub async fn requeue_mix_delivery_dead_letter(pool: &PgPool, dead_letter_id: Uui
     let archive: bool = row.get("archive");
     let encrypted: bool = row.get("encrypted");
     let recipient_jid: String = row.get("recipient_jid");
-    let existing = sqlx::query(
+    let matches_event = |existing: &sqlx::postgres::PgRow| {
+        existing.get::<Uuid, _>("channel_id") == channel_id
+            && existing.get::<String, _>("channel_jid") == channel_jid
+            && existing.get::<String, _>("stanza_template") == stanza_template
+            && existing.get::<Option<Uuid>, _>("authoritative_stanza_id") == authoritative_stanza_id
+            && existing.get::<bool, _>("archive") == archive
+            && existing.get::<bool, _>("encrypted") == encrypted
+    };
+    let mut existing = sqlx::query(
         "SELECT channel_id,channel_jid,stanza_template,authoritative_stanza_id,archive,encrypted
-           FROM mix_delivery_events WHERE event_id=$1 FOR SHARE",
+           FROM mix_delivery_events WHERE event_id=$1 FOR UPDATE",
     )
     .bind(event_id)
     .fetch_optional(&mut *transaction)
     .await?;
     if let Some(existing) = existing.as_ref() {
         anyhow::ensure!(
-            existing.get::<Uuid, _>("channel_id") == channel_id
-                && existing.get::<String, _>("channel_jid") == channel_jid
-                && existing.get::<String, _>("stanza_template") == stanza_template
-                && existing.get::<Option<Uuid>, _>("authoritative_stanza_id")
-                    == authoritative_stanza_id
-                && existing.get::<bool, _>("archive") == archive
-                && existing.get::<bool, _>("encrypted") == encrypted,
+            matches_event(existing),
             "MIX dead-letter event identity conflicts with queued event"
         );
     }
-    let template_bytes = if existing.is_some() {
-        0
+    // A missing row has no lockable gap. Exactly one concurrent requeue may
+    // create the shared event; only that INSERT's RETURNING result owns the
+    // template capacity charge. A loser locks and verifies the winning row
+    // before adding its independent recipient, preventing double accounting.
+    let event_created = if existing.is_some() {
+        false
     } else {
+        let inserted = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO mix_delivery_events(
+                 event_id,channel_id,channel_jid,stanza_template,authoritative_stanza_id,
+                 archive,encrypted,created_at,expires_at
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,GREATEST($9,clock_timestamp()+INTERVAL '7 days'))
+             ON CONFLICT(event_id) DO NOTHING
+             RETURNING event_id",
+        )
+        .bind(event_id)
+        .bind(channel_id)
+        .bind(&channel_jid)
+        .bind(&stanza_template)
+        .bind(authoritative_stanza_id)
+        .bind(archive)
+        .bind(encrypted)
+        .bind(row.get::<DateTime<Utc>, _>("original_created_at"))
+        .bind(row.get::<DateTime<Utc>, _>("original_expires_at"))
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if inserted.is_some() {
+            true
+        } else {
+            let winner = sqlx::query(
+                "SELECT channel_id,channel_jid,stanza_template,authoritative_stanza_id,archive,encrypted
+                   FROM mix_delivery_events WHERE event_id=$1 FOR UPDATE",
+            )
+            .bind(event_id)
+            .fetch_one(&mut *transaction)
+            .await?;
+            anyhow::ensure!(
+                matches_event(&winner),
+                "MIX dead-letter event identity conflicts with concurrent requeue"
+            );
+            existing = Some(winner);
+            false
+        }
+    };
+    if existing.is_some() {
+        sqlx::query(
+            "UPDATE mix_delivery_events
+                SET expires_at=GREATEST(expires_at,clock_timestamp()+INTERVAL '7 days')
+              WHERE event_id=$1",
+        )
+        .bind(event_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    let template_bytes = if event_created {
         i64::try_from(stanza_template.len()).context("MIX dead-letter template overflow")?
+    } else {
+        0
     };
     let recipient_bytes = i64::try_from(recipient_jid.len())
         .context("MIX dead-letter recipient overflow")?
@@ -1138,27 +1399,6 @@ pub async fn requeue_mix_delivery_dead_letter(pool: &PgPool, dead_letter_id: Uui
             template_bytes,
         )?;
     }
-    reserve_mix_delivery_capacity_tx(&mut transaction, &capacity_deltas).await?;
-
-    sqlx::query(
-        "INSERT INTO mix_delivery_events(
-             event_id,channel_id,channel_jid,stanza_template,authoritative_stanza_id,
-             archive,encrypted,created_at,expires_at
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,GREATEST($9,clock_timestamp()+INTERVAL '7 days'))
-         ON CONFLICT(event_id) DO UPDATE
-             SET expires_at=GREATEST(mix_delivery_events.expires_at,clock_timestamp()+INTERVAL '7 days')",
-    )
-    .bind(event_id)
-    .bind(channel_id)
-    .bind(&channel_jid)
-    .bind(&stanza_template)
-    .bind(authoritative_stanza_id)
-    .bind(archive)
-    .bind(encrypted)
-    .bind(row.get::<DateTime<Utc>, _>("original_created_at"))
-    .bind(row.get::<DateTime<Utc>, _>("original_expires_at"))
-    .execute(&mut *transaction)
-    .await?;
     let delivery_sequence: i64 = row.get("delivery_sequence");
     sqlx::query(
         "INSERT INTO mix_delivery_recipient_sequences(recipient_jid,next_sequence)
@@ -1184,6 +1424,9 @@ pub async fn requeue_mix_delivery_dead_letter(pool: &PgPool, dead_letter_id: Uui
     .bind(row.get::<DateTime<Utc>, _>("original_created_at"))
     .execute(&mut *transaction)
     .await?;
+    // Capacity is reserved after the complete recoverable projection exists;
+    // a rejection rolls the projection and sequence update back atomically.
+    reserve_mix_delivery_capacity_tx(&mut transaction, &delivery_fence, &capacity_deltas).await?;
     sqlx::query("DELETE FROM mix_delivery_dead_letters WHERE dead_letter_id=$1")
         .bind(dead_letter_id)
         .execute(&mut *transaction)
@@ -2172,7 +2415,7 @@ pub async fn destroy_mix_channel(
     federated: Option<&FederatedMixMutation>,
 ) -> Result<bool> {
     let actor = canonical_user_bare(actor)?;
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     let channel_row = sqlx::query("SELECT * FROM mix_channels WHERE id=$1 FOR UPDATE")
         .bind(channel_id)
@@ -2221,6 +2464,7 @@ pub async fn destroy_mix_channel(
     .unwrap_or_else(|| channel_jid.clone());
     enqueue_mix_node_event_tx(
         &mut transaction,
+        &delivery_fence,
         MixNodeProjection {
             channel: &channel,
             node: NODE_INFO,
@@ -2444,7 +2688,7 @@ pub async fn join_mix_channel(
     let nick = request.nick.map(prepare_mix_nick).transpose()?;
     let mut preference = request.preference.cloned().unwrap_or_default();
     validate_mix_participant_preference(&preference)?;
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("mix-actor:{actor_jid}"))
@@ -2710,6 +2954,7 @@ pub async fn join_mix_channel(
         .context("MIX participant event unexpectedly conflicted")?;
         enqueue_mix_node_event_tx(
             &mut transaction,
+            &delivery_fence,
             MixNodeProjection {
                 channel: &channel,
                 node: NODE_PARTICIPANTS,
@@ -2876,7 +3121,7 @@ pub async fn expire_unrefreshed_mix_presence(
     cutoff: DateTime<Utc>,
     payloads: &dyn MixEventPayloadRenderer,
 ) -> Result<Vec<ExpiredMixPresence>> {
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     let rows = sqlx::query(
         "WITH stale AS (SELECT e.id FROM mix_events e WHERE e.node = $1 AND e.created_at < $2 ORDER BY e.created_at, e.id LIMIT 128 FOR UPDATE SKIP LOCKED), deleted AS (DELETE FROM mix_events e USING stale WHERE e.id = stale.id RETURNING e.channel_id, e.publisher_id, e.item_id, e.payload, e.source_full_jid) SELECT d.channel_id, d.publisher_id AS participant_id, p.jid, p.nick, d.item_id, d.payload, d.source_full_jid FROM deleted d JOIN mix_participants p ON p.channel_id = d.channel_id AND p.participant_id = d.publisher_id ORDER BY d.channel_id, d.publisher_id, d.item_id",
     )
@@ -2926,6 +3171,7 @@ pub async fn expire_unrefreshed_mix_presence(
         };
         enqueue_mix_presence_event_tx(
             &mut transaction,
+            &delivery_fence,
             MixPresenceProjection {
                 channel: &channel,
                 participant: &item.participant,
@@ -2959,7 +3205,7 @@ pub async fn update_mix_subscriptions(
         subscribe.iter().all(|node| !unsubscribe.contains(node)),
         "a MIX node cannot be subscribed and unsubscribed together"
     );
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     // Serialize subscription changes with message/retraction admission. Those
     // paths lock the channel before persisting an event and selecting its
@@ -3054,6 +3300,7 @@ pub async fn update_mix_subscriptions(
     for item in &removed_presence {
         enqueue_mix_presence_event_tx(
             &mut transaction,
+            &delivery_fence,
             MixPresenceProjection {
                 channel: &channel,
                 participant: &participant,
@@ -3094,7 +3341,7 @@ pub async fn set_mix_nick(
 ) -> Result<Result<MixParticipant, SetNickError>> {
     let actor = canonical_user_bare(actor)?;
     let nick = prepare_mix_nick(nick)?;
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("mix-actor:{actor}"))
@@ -3158,6 +3405,7 @@ pub async fn set_mix_nick(
     .context("MIX participant event unexpectedly conflicted")?;
     enqueue_mix_node_event_tx(
         &mut transaction,
+        &delivery_fence,
         MixNodeProjection {
             channel: &channel,
             node: NODE_PARTICIPANTS,
@@ -3204,7 +3452,7 @@ pub async fn leave_mix_channel(
     federated: Option<&FederatedMixMutation>,
 ) -> Result<Option<LeaveMixOutcome>> {
     let actor = canonical_user_bare(actor)?;
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(channel_id.to_string())
@@ -3278,6 +3526,7 @@ pub async fn leave_mix_channel(
     for item in &presence_items {
         enqueue_mix_presence_event_tx(
             &mut transaction,
+            &delivery_fence,
             MixPresenceProjection {
                 channel: &channel,
                 participant: &participant,
@@ -3293,6 +3542,7 @@ pub async fn leave_mix_channel(
     }
     enqueue_mix_node_event_tx(
         &mut transaction,
+        &delivery_fence,
         MixNodeProjection {
             channel: &channel,
             node: NODE_PARTICIPANTS,
@@ -3338,6 +3588,50 @@ pub async fn store_mix_presence(
     unavailable: bool,
     payloads: &dyn MixEventPayloadRenderer,
 ) -> Result<PresenceOutcome> {
+    store_mix_presence_with_policy(
+        pool,
+        channel_id,
+        actor_bare,
+        actor_full,
+        payload,
+        unavailable,
+        false,
+        payloads,
+    )
+    .await
+}
+
+/// Publish a conservative verified-capability presence only when this exact
+/// resource has no newer authoritative channel presence. The channel row lock
+/// makes the absence check linearizable with explicit client updates.
+pub async fn ensure_mix_presence(
+    pool: &PgPool,
+    channel_id: Uuid,
+    actor_bare: &str,
+    actor_full: &str,
+    payload: &str,
+    payloads: &dyn MixEventPayloadRenderer,
+) -> Result<PresenceOutcome> {
+    store_mix_presence_with_policy(
+        pool, channel_id, actor_bare, actor_full, payload, false, true, payloads,
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the MIX presence transaction keeps identity, payload, availability, and replacement policy explicit"
+)]
+async fn store_mix_presence_with_policy(
+    pool: &PgPool,
+    channel_id: Uuid,
+    actor_bare: &str,
+    actor_full: &str,
+    payload: &str,
+    unavailable: bool,
+    only_if_absent: bool,
+    payloads: &dyn MixEventPayloadRenderer,
+) -> Result<PresenceOutcome> {
     let actor_bare = canonical_user_bare(actor_bare)?;
     let actor_full = crate::jid::canonicalize(actor_full)?;
     anyhow::ensure!(
@@ -3345,7 +3639,7 @@ pub async fn store_mix_presence(
         "MIX presence full JID does not belong to participant"
     );
     anyhow::ensure!(payload.len() <= 1_048_576, "MIX presence payload too large");
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     let channel_row = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
         .bind(channel_id)
         .fetch_one(&mut *transaction)
@@ -3388,6 +3682,10 @@ pub async fn store_mix_presence(
     .bind(&actor_full)
     .fetch_optional(&mut *transaction)
     .await?;
+    if only_if_absent && existing_item.is_some() {
+        transaction.commit().await?;
+        return Ok(PresenceOutcome::Unchanged);
+    }
     let actor = crate::jid::CanonicalJid::parse(&actor_full)?;
     let public_resource = if participant_jid_visible(&channel, &preference) {
         actor
@@ -3423,6 +3721,7 @@ pub async fn store_mix_presence(
             };
             enqueue_mix_presence_event_tx(
                 &mut transaction,
+                &delivery_fence,
                 MixPresenceProjection {
                     channel: &channel,
                     participant: &participant,
@@ -3465,6 +3764,7 @@ pub async fn store_mix_presence(
         };
         enqueue_mix_presence_event_tx(
             &mut transaction,
+            &delivery_fence,
             MixPresenceProjection {
                 channel: &channel,
                 participant: &participant,
@@ -3510,7 +3810,7 @@ pub async fn store_mix_message(
         "MIX message item id must be a canonical UUID"
     );
     let actor = canonical_user_bare(actor)?;
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     let channel_row = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
         .bind(channel_id)
         .fetch_one(&mut *transaction)
@@ -3596,6 +3896,7 @@ pub async fn store_mix_message(
                 .unwrap_or_default();
             enqueue_mix_deliveries_tx(
                 &mut transaction,
+                &delivery_fence,
                 MixDeliveryProjection {
                     channel: &channel,
                     event_id: authoritative_id,
@@ -3751,7 +4052,7 @@ pub async fn publish_mix_avatar(
         "invalid MIX avatar node"
     );
     let actor = canonical_user_bare(actor)?;
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     let channel_row = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
         .bind(channel_id)
@@ -3794,6 +4095,7 @@ pub async fn publish_mix_avatar(
     }
     enqueue_mix_node_event_tx(
         &mut transaction,
+        &delivery_fence,
         MixNodeProjection {
             channel: &channel,
             node,
@@ -3834,7 +4136,7 @@ pub async fn retract_mix_avatar(
         "invalid MIX avatar node"
     );
     let actor = canonical_user_bare(actor)?;
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     let channel_row = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
         .bind(channel_id)
@@ -3867,6 +4169,7 @@ pub async fn retract_mix_avatar(
     if deleted == 1 {
         enqueue_mix_node_event_tx(
             &mut transaction,
+            &delivery_fence,
             MixNodeProjection {
                 channel: &channel,
                 node,
@@ -4434,6 +4737,7 @@ struct MixPresenceProjection<'a> {
 
 async fn enqueue_mix_presence_event_tx(
     transaction: &mut Transaction<'_, Postgres>,
+    fence: &MixDeliveryAdmissionFence,
     projection: MixPresenceProjection<'_>,
     payloads: &dyn MixEventPayloadRenderer,
 ) -> Result<Vec<MixParticipant>> {
@@ -4474,6 +4778,7 @@ async fn enqueue_mix_presence_event_tx(
         .unwrap_or_default();
     enqueue_mix_deliveries_tx(
         transaction,
+        fence,
         MixDeliveryProjection {
             channel,
             event_id,
@@ -4490,6 +4795,7 @@ async fn enqueue_mix_presence_event_tx(
 
 async fn reproject_mix_presence_visibility_tx(
     transaction: &mut Transaction<'_, Postgres>,
+    fence: &MixDeliveryAdmissionFence,
     old_channel: &MixChannel,
     new_channel: &MixChannel,
     payloads: &dyn MixEventPayloadRenderer,
@@ -4541,6 +4847,7 @@ async fn reproject_mix_presence_visibility_tx(
             .await?;
         enqueue_mix_presence_event_tx(
             transaction,
+            fence,
             MixPresenceProjection {
                 channel: old_channel,
                 participant: &participant,
@@ -4594,6 +4901,7 @@ async fn reproject_mix_presence_visibility_tx(
         };
         enqueue_mix_presence_event_tx(
             transaction,
+            fence,
             MixPresenceProjection {
                 channel: new_channel,
                 participant: &participant,
@@ -4622,6 +4930,7 @@ struct MixNodeProjection<'a> {
 
 async fn enqueue_mix_node_event_tx(
     transaction: &mut Transaction<'_, Postgres>,
+    fence: &MixDeliveryAdmissionFence,
     projection: MixNodeProjection<'_>,
     payloads: &dyn MixEventPayloadRenderer,
 ) -> Result<Vec<MixParticipant>> {
@@ -4645,6 +4954,7 @@ async fn enqueue_mix_node_event_tx(
         .unwrap_or_default();
     enqueue_mix_deliveries_tx(
         transaction,
+        fence,
         MixDeliveryProjection {
             channel,
             event_id,
@@ -4764,7 +5074,7 @@ pub async fn update_mix_info(
         "MIX contacts contain duplicate canonical JIDs"
     );
     let contacts = serde_json::to_value(contacts)?;
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     let locked = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
         .bind(channel_id)
@@ -4834,6 +5144,7 @@ pub async fn update_mix_info(
         .unwrap_or_default();
     enqueue_mix_deliveries_tx(
         &mut transaction,
+        &delivery_fence,
         MixDeliveryProjection {
             channel: &channel,
             event_id,
@@ -4943,7 +5254,7 @@ pub async fn update_mix_config(
     if let Some(administrators) = &requested_administrators {
         anyhow::ensure!(administrators.len() <= 256, "too many MIX administrators");
     }
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     let locked = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
         .bind(channel_id)
@@ -5062,8 +5373,14 @@ pub async fn update_mix_config(
     .bind(channel_id)
     .execute(&mut *transaction)
     .await?;
-    reproject_mix_presence_visibility_tx(&mut transaction, &old_channel, &channel, payloads)
-        .await?;
+    reproject_mix_presence_visibility_tx(
+        &mut transaction,
+        &delivery_fence,
+        &old_channel,
+        &channel,
+        payloads,
+    )
+    .await?;
     let payload = payloads.config_payload(&channel, &actor, owners, administrators);
     let event_id = store_mix_event_tx(
         &mut transaction,
@@ -5093,6 +5410,7 @@ pub async fn update_mix_config(
         .unwrap_or_default();
     enqueue_mix_deliveries_tx(
         &mut transaction,
+        &delivery_fence,
         MixDeliveryProjection {
             channel: &channel,
             event_id,
@@ -5144,7 +5462,7 @@ pub async fn set_mix_access_entry(
         reason.is_none_or(|value| value.len() <= 1024),
         "ban reason too large"
     );
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     // Serialize against owner/administrator replacement before evaluating the
     // role. Checking first allowed a concurrent config transaction to revoke
@@ -5372,6 +5690,7 @@ pub async fn set_mix_access_entry(
     if let Some(event_id) = access_event_id {
         enqueue_mix_node_event_tx(
             &mut transaction,
+            &delivery_fence,
             MixNodeProjection {
                 channel: &channel,
                 node,
@@ -5389,6 +5708,7 @@ pub async fn set_mix_access_entry(
         for item in presence_items {
             enqueue_mix_presence_event_tx(
                 &mut transaction,
+                &delivery_fence,
                 MixPresenceProjection {
                     channel: &channel,
                     participant,
@@ -5404,6 +5724,7 @@ pub async fn set_mix_access_entry(
         }
         enqueue_mix_node_event_tx(
             &mut transaction,
+            &delivery_fence,
             MixNodeProjection {
                 channel: &channel,
                 node: NODE_PARTICIPANTS,
@@ -5447,7 +5768,7 @@ pub async fn register_mix_nick(
     let service_domain = canonical_service_domain(service_domain)?;
     let actor = canonical_user_bare(actor)?;
     let nick = prepare_mix_nick(nick)?;
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     // Registration is an account-wide projection over every participation.
     // Serialize it with join and per-channel nick changes before taking any
@@ -5576,6 +5897,7 @@ pub async fn register_mix_nick(
         .context("MIX participant event unexpectedly conflicted")?;
         enqueue_mix_node_event_tx(
             &mut transaction,
+            &delivery_fence,
             MixNodeProjection {
                 channel: &channel,
                 node: NODE_PARTICIPANTS,
@@ -5647,7 +5969,7 @@ pub async fn update_mix_participant_preference(
 ) -> Result<Option<MixParticipantPreferenceUpdateOutcome>> {
     let actor = canonical_user_bare(actor)?;
     validate_mix_participant_preference(preference)?;
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     let channel = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
         .bind(channel_id)
@@ -5728,6 +6050,7 @@ pub async fn update_mix_participant_preference(
         for item in old_presence {
             enqueue_mix_presence_event_tx(
                 &mut transaction,
+                &delivery_fence,
                 MixPresenceProjection {
                     channel: &channel,
                     participant: &participant,
@@ -5784,6 +6107,7 @@ pub async fn update_mix_participant_preference(
                 };
                 enqueue_mix_presence_event_tx(
                     &mut transaction,
+                    &delivery_fence,
                     MixPresenceProjection {
                         channel: &channel,
                         participant: &participant,
@@ -5812,6 +6136,7 @@ pub async fn update_mix_participant_preference(
     .context("MIX preference participant event unexpectedly conflicted")?;
     enqueue_mix_node_event_tx(
         &mut transaction,
+        &delivery_fence,
         MixNodeProjection {
             channel: &channel,
             node: NODE_PARTICIPANTS,
@@ -6103,7 +6428,7 @@ pub async fn retract_mix_message(
     payloads: &dyn MixEventPayloadRenderer,
 ) -> Result<RetractMixMessageAdmission> {
     let actor = canonical_user_bare(actor)?;
-    let mut transaction = pool.begin().await?;
+    let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     let channel_row = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
         .bind(channel_id)
         .fetch_optional(&mut *transaction)
@@ -6237,6 +6562,7 @@ pub async fn retract_mix_message(
         .unwrap_or_default();
     enqueue_mix_deliveries_tx(
         &mut transaction,
+        &delivery_fence,
         MixDeliveryProjection {
             channel: &channel,
             event_id: retraction_id,
@@ -6298,10 +6624,25 @@ pub enum RemotePamCompletionOutcome {
     Missing,
 }
 
-const MIX_PAM_MAX_OPERATIONS: i64 = 10_000;
-const MIX_PAM_MAX_OPERATIONS_PER_USER: i64 = 64;
 const MIX_PAM_RESULT_LEASE_SECONDS: i64 = 90;
 const MIX_PAM_RESULT_MAX_ATTEMPTS: i32 = 20;
+
+struct MixPamCapacityReconciliationCommitted(());
+
+async fn reconcile_mix_pam_capacity_committed(
+    pool: &PgPool,
+) -> Result<MixPamCapacityReconciliationCommitted> {
+    let mut transaction = pool.begin().await?;
+    // The owner-held capability takes the global counter as its first lock and
+    // reclaims the complete hard-bounded eligible set. Commit before opening
+    // the producer transaction so a later capacity rejection cannot roll the
+    // same cleanup back and depend on worker cadence for forward progress.
+    let _: i64 = sqlx::query_scalar("SELECT northstar_mix_pam_capacity_reconcile()")
+        .fetch_one(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(MixPamCapacityReconciliationCommitted(()))
+}
 
 fn pam_operation_replay(row: &sqlx::postgres::PgRow, digest: &[u8; 32]) -> PamOperationReplay {
     if row.get::<Vec<u8>, _>("request_digest").as_slice() != digest {
@@ -6360,37 +6701,27 @@ async fn lock_pam_admission_tx(
     Ok(())
 }
 
-async fn enforce_pam_capacity_tx(
+/// Lock the authenticated account against deletion, disable or rename, then
+/// acquire the durable global PAM capacity authority before any membership,
+/// client-id or operation lock. The service's clone-shared FIFO gate is held
+/// before this function may check out its transaction, so each process
+/// contributes at most one database waiter. Database triggers subsequently
+/// lock global -> exact user counter.
+async fn remote_pam_account_matches_actor_tx(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
-) -> Result<()> {
-    let capacity_locked: bool = sqlx::query_scalar(
-        "SELECT pg_try_advisory_xact_lock(hashtextextended('mix-pam-operation-capacity-v1',0))",
-    )
-    .fetch_one(&mut **transaction)
-    .await?;
-    anyhow::ensure!(capacity_locked, "MIX-PAM operation capacity is busy");
-    // Delivered journals are retained for exact replay until expiry, then a
-    // bounded SKIP-LOCKED maintenance pass can remove them. Admission counts
-    // every remaining row, including reconciliation work, so storage is
-    // strictly bounded even when a remote domain never answers.
-    let counts = sqlx::query(
-        "SELECT COUNT(*)::BIGINT AS global_count,
-                COUNT(*) FILTER (WHERE user_id=$1)::BIGINT AS user_count
-           FROM mix_pam_operations",
-    )
-    .bind(user_id)
-    .fetch_one(&mut **transaction)
-    .await?;
-    anyhow::ensure!(
-        counts.get::<i64, _>("global_count") < MIX_PAM_MAX_OPERATIONS,
-        "MIX-PAM operation journal capacity exceeded"
-    );
-    anyhow::ensure!(
-        counts.get::<i64, _>("user_count") < MIX_PAM_MAX_OPERATIONS_PER_USER,
-        "MIX-PAM per-account operation journal capacity exceeded"
-    );
-    Ok(())
+    actor_jid: &str,
+) -> Result<bool> {
+    let actor_username = crate::jid::CanonicalJid::parse_bare(actor_jid)?
+        .localpart()
+        .context("MIX-PAM actor requires a localpart")?
+        .to_owned();
+    sqlx::query_scalar("SELECT northstar_mix_pam_account_capacity_lock($1,$2)")
+        .bind(user_id)
+        .bind(actor_username)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(Into::into)
 }
 
 fn validate_pam_outbound(
@@ -6455,6 +6786,10 @@ async fn insert_pam_operation_and_outbox_tx(
     prior_subscriptions: &[String],
     policy: super::S2sOutboxPolicy,
 ) -> Result<()> {
+    let expected_username = crate::jid::CanonicalJid::parse(requester_full_jid)?
+        .localpart()
+        .context("MIX-PAM requester requires a localpart")?
+        .to_owned();
     let operation_id = Uuid::new_v4();
     let request_outbox_id = Uuid::new_v4();
     super::enqueue_s2s_outbox_with_id_in_transaction(
@@ -6469,15 +6804,9 @@ async fn insert_pam_operation_and_outbox_tx(
     let deadline_seconds = i64::try_from(policy.ttl_seconds.clamp(30, 86_400))
         .context("remote PAM timeout is too large")?;
     sqlx::query(
-        "INSERT INTO mix_pam_operations(
-             operation_id,user_id,channel_jid,remote_domain,operation,
-             remote_request_id,client_request_id,requester_full_jid,
-             request_digest,request_outbox_id,prior_joined,
-             prior_participant_id,prior_nick,prior_subscriptions,
-             deadline_at,expires_at
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
-                  clock_timestamp()+make_interval(secs=>$15),
-                  clock_timestamp()+make_interval(secs=>$15)+INTERVAL '7 days')",
+        "SELECT northstar_mix_pam_operation_insert(
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
+         )",
     )
     .bind(operation_id)
     .bind(user_id)
@@ -6494,6 +6823,7 @@ async fn insert_pam_operation_and_outbox_tx(
     .bind(prior_nick)
     .bind(prior_subscriptions)
     .bind(deadline_seconds)
+    .bind(expected_username)
     .execute(&mut **transaction)
     .await?;
     Ok(())
@@ -6531,9 +6861,10 @@ pub async fn begin_remote_pam_join(
         &actor_jid,
         &channel_jid,
     )?;
+    let _reconciled = reconcile_mix_pam_capacity_committed(pool).await?;
     let mut transaction = pool.begin().await?;
     anyhow::ensure!(
-        pam_account_matches_actor_tx(&mut transaction, request.user_id, &actor_jid).await?,
+        remote_pam_account_matches_actor_tx(&mut transaction, request.user_id, &actor_jid).await?,
         "MIX-PAM account UUID does not belong to authenticated actor"
     );
     lock_pam_admission_tx(
@@ -6556,7 +6887,6 @@ pub async fn begin_remote_pam_join(
         transaction.rollback().await?;
         return Ok(replay);
     }
-    enforce_pam_capacity_tx(&mut transaction, request.user_id).await?;
     let previous =
         locked_pam_membership_tx(&mut transaction, request.user_id, &channel_jid).await?;
     if previous
@@ -6960,11 +7290,6 @@ pub async fn begin_remote_pam_leave(
         !request.client_request_id.is_empty() && request.client_request_id.len() <= 1_024,
         "invalid PAM client request id"
     );
-    let mut transaction = pool.begin().await?;
-    anyhow::ensure!(
-        pam_account_matches_actor_tx(&mut transaction, request.user_id, &actor_jid).await?,
-        "MIX-PAM account UUID does not belong to authenticated actor"
-    );
     anyhow::ensure!(
         crate::jid::CanonicalJid::parse_bare(&channel_jid)?.domainpart() == remote_domain,
         "MIX-PAM remote domain does not own the channel"
@@ -6975,6 +7300,12 @@ pub async fn begin_remote_pam_leave(
         &actor_jid,
         &channel_jid,
     )?;
+    let _reconciled = reconcile_mix_pam_capacity_committed(pool).await?;
+    let mut transaction = pool.begin().await?;
+    anyhow::ensure!(
+        remote_pam_account_matches_actor_tx(&mut transaction, request.user_id, &actor_jid).await?,
+        "MIX-PAM account UUID does not belong to authenticated actor"
+    );
     lock_pam_admission_tx(
         &mut transaction,
         request.user_id,
@@ -6995,7 +7326,6 @@ pub async fn begin_remote_pam_leave(
         transaction.rollback().await?;
         return Ok(replay);
     }
-    enforce_pam_capacity_tx(&mut transaction, request.user_id).await?;
     let updated = sqlx::query(
         "UPDATE mix_pam_memberships SET state = 'pending_leave', request_id = $3, client_request_id = $4, requester_full_jid = $5, updated_at = NOW() WHERE user_id = $1 AND channel_jid = $2 AND state = 'joined'",
     )
@@ -7412,22 +7742,16 @@ pub async fn prune_expired_pam_results(pool: &PgPool, limit: i64) -> Result<u64>
     // late authenticated remote result. It may stop automatic client
     // delivery at its retention deadline, but must not be deleted merely
     // because its timeout response was delivered or dead-lettered.
-    let removed = sqlx::query(
-        "WITH expired AS (
-             SELECT operation_id FROM mix_pam_operations
-              WHERE state='terminal' AND expires_at<=clock_timestamp()
-                AND (delivered_at IS NOT NULL OR dead_lettered_at IS NOT NULL)
-              ORDER BY expires_at,operation_id
-              LIMIT $1 FOR UPDATE SKIP LOCKED
-         )
-         DELETE FROM mix_pam_operations operation USING expired
-          WHERE operation.operation_id=expired.operation_id",
-    )
-    .bind(limit.clamp(1, 2_048))
-    .execute(pool)
-    .await?
-    .rows_affected();
-    Ok(removed)
+    let mut transaction = pool.begin().await?;
+    // The owner-held capability takes the singleton before selecting/deleting
+    // any operation. The service gate is held before PgPool checkout, so one
+    // process contributes at most one database waiter.
+    let removed: i64 = sqlx::query_scalar("SELECT northstar_mix_pam_operation_prune($1)")
+        .bind(limit.clamp(1, 2_048))
+        .fetch_one(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    u64::try_from(removed).context("negative MIX-PAM prune count")
 }
 
 #[cfg(test)]
@@ -7591,6 +7915,204 @@ mod pam_durability_integration_tests {
             .execute(&pool)
             .await
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod delivery_capacity_integration_tests {
+    use super::*;
+    use crate::db;
+
+    #[tokio::test]
+    #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+    async fn delivery_ack_is_independent_of_the_producer_fence_and_release_is_atomic() {
+        let url = std::env::var("TEST_DATABASE_URL")
+            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&url)
+            .await
+            .unwrap();
+        db::migrate(&pool).await.unwrap();
+
+        let event_id = Uuid::new_v4();
+        let delivery_id = Uuid::new_v4();
+        let lease_token = Uuid::new_v4();
+        let recipient_participant_id = Uuid::new_v4();
+        let channel_id = Uuid::new_v4();
+        let recipient = "ack-target@example.test";
+        let stanza = "<message xmlns='jabber:client' type='groupchat'><body>capacity fence regression</body></message>";
+
+        // Use the same typed producer boundary as production so setup does not
+        // bypass either complete reconciliation or exact capacity reservation.
+        let (mut setup, fence) = begin_mix_delivery_admission(&pool).await.unwrap();
+        let baseline: (i64, i64) = sqlx::query_as(
+            "SELECT COALESCE(SUM(queued_rows),0)::bigint,
+                    COALESCE(SUM(queued_bytes),0)::bigint
+               FROM mix_delivery_capacity",
+        )
+        .fetch_one(&mut *setup)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO mix_delivery_events(
+                 event_id,channel_id,channel_jid,stanza_template,
+                 authoritative_stanza_id,archive,encrypted
+             ) VALUES($1,$2,'capacity@mix.example.test',$3,NULL,FALSE,FALSE)",
+        )
+        .bind(event_id)
+        .bind(channel_id)
+        .bind(stanza)
+        .execute(&mut *setup)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO mix_delivery_recipients(
+                 delivery_id,event_id,recipient_participant_id,recipient_jid,
+                 delivery_sequence,lease_token,lease_until
+             ) VALUES($1,$2,$3,$4,1,$5,clock_timestamp()+INTERVAL '90 seconds')",
+        )
+        .bind(delivery_id)
+        .bind(event_id)
+        .bind(recipient_participant_id)
+        .bind(recipient)
+        .bind(lease_token)
+        .execute(&mut *setup)
+        .await
+        .unwrap();
+        let mut deltas = BTreeMap::new();
+        add_mix_delivery_capacity_delta(
+            &mut deltas,
+            mix_delivery_capacity_bucket(event_id),
+            0,
+            i64::try_from(stanza.len()).unwrap(),
+        )
+        .unwrap();
+        add_mix_delivery_capacity_delta(
+            &mut deltas,
+            mix_delivery_capacity_bucket(delivery_id),
+            1,
+            i64::try_from(recipient.len() + 128).unwrap(),
+        )
+        .unwrap();
+        reserve_mix_delivery_capacity_tx(&mut setup, &fence, &deltas)
+            .await
+            .unwrap();
+        setup.commit().await.unwrap();
+        audit_mix_delivery_capacity_ledger(&pool).await.unwrap();
+
+        // Reproduce the old 55P03 window exactly: another transaction owns the
+        // global producer fence while the leased recipient is acknowledged.
+        // Completion must neither wait for that fence nor touch a hot capacity
+        // row; it commits one authentic release fact with the recipient delete.
+        let (producer, _held_fence) = begin_mix_delivery_fenced_transaction(&pool).await.unwrap();
+        let acknowledged = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            acknowledge_mix_delivery(&pool, delivery_id, lease_token),
+        )
+        .await
+        .expect("MIX ACK waited behind the producer capacity fence")
+        .expect("MIX ACK failed while an unrelated producer held the fence");
+        assert!(
+            acknowledged,
+            "the exact leased recipient was not acknowledged"
+        );
+        let release_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM mix_delivery_capacity_releases
+              WHERE release_kind=1 AND object_id=$1 AND parent_event_id=$2",
+        )
+        .bind(delivery_id)
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            release_count, 1,
+            "ACK did not commit one exact release fact"
+        );
+        producer.rollback().await.unwrap();
+        audit_mix_delivery_capacity_ledger(&pool).await.unwrap();
+
+        // A crash-equivalent rollback after reconciliation must restore the
+        // orphan event, release fact and original conservative ledger together.
+        let (mut rollback, _rollback_fence) =
+            begin_mix_delivery_fenced_transaction(&pool).await.unwrap();
+        let _: i64 = sqlx::query_scalar("SELECT northstar_mix_delivery_capacity_reconcile()")
+            .fetch_one(&mut *rollback)
+            .await
+            .unwrap();
+        let staged_event: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM mix_delivery_events WHERE event_id=$1)",
+        )
+        .bind(event_id)
+        .fetch_one(&mut *rollback)
+        .await
+        .unwrap();
+        let staged_releases: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM mix_delivery_capacity_releases
+              WHERE object_id IN ($1,$2)",
+        )
+        .bind(delivery_id)
+        .bind(event_id)
+        .fetch_one(&mut *rollback)
+        .await
+        .unwrap();
+        assert!(!staged_event && staged_releases == 0);
+        rollback.rollback().await.unwrap();
+
+        let restored_event: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM mix_delivery_events WHERE event_id=$1)",
+        )
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let restored_release: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM mix_delivery_capacity_releases
+              WHERE release_kind=1 AND object_id=$1 AND parent_event_id=$2",
+        )
+        .bind(delivery_id)
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(restored_event && restored_release == 1);
+        audit_mix_delivery_capacity_ledger(&pool).await.unwrap();
+
+        // The separately committed production reconciliation now removes the
+        // orphan template, consumes both release facts and returns exactly to
+        // the pre-test capacity totals without worker pages or retry timing.
+        reconcile_mix_delivery_capacity_committed(&pool)
+            .await
+            .unwrap();
+        let final_event: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM mix_delivery_events WHERE event_id=$1)",
+        )
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let final_releases: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM mix_delivery_capacity_releases
+              WHERE object_id IN ($1,$2)",
+        )
+        .bind(delivery_id)
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let final_totals: (i64, i64) = sqlx::query_as(
+            "SELECT COALESCE(SUM(queued_rows),0)::bigint,
+                    COALESCE(SUM(queued_bytes),0)::bigint
+               FROM mix_delivery_capacity",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!final_event);
+        assert_eq!(final_releases, 0);
+        assert_eq!(final_totals, baseline);
+        audit_mix_delivery_capacity_ledger(&pool).await.unwrap();
     }
 }
 

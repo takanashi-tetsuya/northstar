@@ -423,6 +423,24 @@ pub struct ProtocolSession {
     pub(crate) full_jid: Option<String>,
     pub(crate) registered_key: Option<String>,
     pub(crate) available: Option<Arc<AtomicBool>>,
+    /// Exact resource-scoped MIX presence epoch gate. It is copied into the
+    /// published `OnlineSession`, transferred across a live SM replacement,
+    /// and crossed by finalization after route removal before suspension or
+    /// unavailable publication can proceed.
+    pub(crate) mix_presence_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Latest-wins state for explicitly directed MIX presence. A caps job may
+    /// fill an uninitialised presence item, but must not recreate one that the
+    /// same live resource deliberately retracted.
+    pub(crate) mix_presence_fallback_suppressed: Arc<DashSet<String>>,
+    /// Exact generation of the latest local XEP-0115 observation. This is
+    /// separate from availability generation because a client may replace its
+    /// caps advertisement while remaining available.
+    pub(crate) caps_observation_generation: Arc<AtomicU64>,
+    /// Authoritative broadcast presence restored by a successful XEP-0198
+    /// claim. It remains inert while the replacement route is staged and is
+    /// rebound to the new connection epoch only after the transport confirms
+    /// `<resumed/>` and activates that exact route.
+    pub(crate) resumed_caps_presence: Option<String>,
     /// Changes on every unavailable/available transition. Deferred replay
     /// workers use it to stop an older availability epoch without affecting a
     /// later reconnect on the same transport.
@@ -551,6 +569,10 @@ impl ProtocolSession {
             full_jid: None,
             registered_key: None,
             available: None,
+            mix_presence_gate: Arc::new(tokio::sync::Mutex::new(())),
+            mix_presence_fallback_suppressed: Arc::new(DashSet::new()),
+            caps_observation_generation: Arc::new(AtomicU64::new(0)),
+            resumed_caps_presence: None,
             availability_generation: Arc::new(AtomicU64::new(0)),
             carbons: Arc::new(AtomicBool::new(false)),
             priority: Arc::new(AtomicI16::new(0)),
@@ -692,7 +714,7 @@ impl ProtocolSession {
         let Some(key) = self.registered_key.as_deref() else {
             return true;
         };
-        let Some(user) = self.authenticated.as_ref() else {
+        let Some(user) = self.authenticated.clone() else {
             return false;
         };
         let route_is_current = self.state.sessions.get_mut(key).is_some_and(|mut session| {
@@ -713,6 +735,14 @@ impl ProtocolSession {
             self.sm_resume_allowed = false;
             return false;
         }
+
+        // A capability observation belongs to a connection incarnation, not
+        // merely to a full JID. The old route's exact mapping/pending/jobs were
+        // retired by compare-and-remove. Rebuild the observation under the
+        // transferred resource gate now that the replacement is routable, so
+        // live and durable resumes do not depend on the client repeating its
+        // unchanged initial presence.
+        self.rebind_resumed_caps_observation().await;
 
         if let (Some(device_id), Some(epoch)) = (self.user_agent_id, published_epoch) {
             let account = format!("{}@{}", user.username, self.state.config.domain);
@@ -1858,6 +1888,7 @@ impl ProtocolSession {
 
         let plan = crate::services::session_cleanup::SessionCleanupPlan {
             connection_id: self.connection_id,
+            mix_presence_gate: Arc::clone(&self.mix_presence_gate),
             account,
             registered_key: self.registered_key.take(),
             full_jid: self.full_jid.take(),

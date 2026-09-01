@@ -35,6 +35,11 @@ pub struct SmSessionSnapshot {
 pub struct SmResumeClaim {
     pub session_id: Uuid,
     pub claim_token: Uuid,
+    /// Conservative process-clock deadline for the exact database claim. It
+    /// is measured after acquiring the pool connection and immediately before
+    /// invoking the authority function, so local waiters cannot outlive the
+    /// persisted `claimed_until` lease or lose time to pool acquisition.
+    pub claim_deadline: std::time::Instant,
     pub full_jid: String,
     pub resource: String,
     pub resume_timeout_seconds: u64,
@@ -59,8 +64,29 @@ pub enum SmClaimStatus {
     Claimed(Box<SmResumeClaim>),
     /// The bearer, account and binding are valid, but the old connection's
     /// bounded disconnect suspension (or another claim) has not completed.
-    Pending,
+    Pending(SmResumePending),
     Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SmPendingReason {
+    Live,
+    Claim,
+    LiveAndClaim,
+}
+
+#[derive(Clone, Debug)]
+pub struct SmResumePending {
+    pub session_id: Uuid,
+    pub old_connection_id: Uuid,
+    pub full_jid: String,
+    pub state_version: i64,
+    /// Process-clock translation of the database's exact next possible state
+    /// boundary. It is anchored before the authority statement, so query and
+    /// network latency can only make the wake conservative (early), never
+    /// extend the durable lease guessed by the application.
+    pub retry_at: std::time::Instant,
+    pub reason: SmPendingReason,
 }
 
 /// The durable presence/MUC state leased for teardown. The row remains until
@@ -462,7 +488,7 @@ pub async fn claim_sm_session(
         .await?
         {
             SmClaimStatus::Claimed(claim) => Some(*claim),
-            SmClaimStatus::Pending | SmClaimStatus::Rejected => None,
+            SmClaimStatus::Pending(_) | SmClaimStatus::Rejected => None,
         },
     )
 }
@@ -481,6 +507,10 @@ pub async fn claim_sm_session_status(
     let lease = seconds_i64(claim_lease_seconds, "SM claim lease")?;
     let mut transaction = pool.begin().await?;
     let claim_token = Uuid::new_v4();
+    // Anchor database wall-clock durations to a monotonic point captured
+    // before the authority statement. Query/commit latency therefore consumes
+    // the lease instead of accidentally extending it in process time.
+    let authority_probe_started = std::time::Instant::now();
     let row = sqlx::query("SELECT * FROM northstar_sm_claim($1,$2,$3::inet,$4,$5,$6,$7,$8)")
         .bind(token_hash.as_slice())
         .bind(user_id)
@@ -502,8 +532,41 @@ pub async fn claim_sm_session_status(
             return Ok(SmClaimStatus::Rejected);
         }
         "pending" => {
+            let session_id: Uuid = row.try_get("session_id")?;
+            let old_connection_id: Uuid = row.try_get("old_connection_id")?;
+            let full_jid: String = row.try_get("full_jid")?;
+            let state_version: i64 = row.try_get("state_version")?;
+            let authority_now: chrono::DateTime<chrono::Utc> = row.try_get("authority_now")?;
+            let retry_at: chrono::DateTime<chrono::Utc> = row.try_get("retry_at")?;
+            anyhow::ensure!(
+                !session_id.is_nil()
+                    && !old_connection_id.is_nil()
+                    && state_version > 0
+                    && retry_at >= authority_now,
+                "invalid pending SM authority projection"
+            );
+            let retry_after = retry_at
+                .signed_duration_since(authority_now)
+                .to_std()
+                .context("invalid pending SM retry boundary")?;
+            let retry_at = authority_probe_started
+                .checked_add(retry_after)
+                .context("pending SM retry boundary overflow")?;
+            let reason = match row.try_get::<String, _>("pending_reason")?.as_str() {
+                "live-owner" => SmPendingReason::Live,
+                "claim-owner" => SmPendingReason::Claim,
+                "live-and-claim-owner" => SmPendingReason::LiveAndClaim,
+                other => anyhow::bail!("unknown pending SM authority reason: {other}"),
+            };
             transaction.commit().await?;
-            return Ok(SmClaimStatus::Pending);
+            return Ok(SmClaimStatus::Pending(SmResumePending {
+                session_id,
+                old_connection_id,
+                full_jid,
+                state_version,
+                retry_at,
+                reason,
+            }));
         }
         "claimed" => {}
         other => anyhow::bail!("unknown SM claim capability outcome: {other}"),
@@ -519,9 +582,24 @@ pub async fn claim_sm_session_status(
     let directed_presence =
         serde_json::from_value(row.try_get::<serde_json::Value, _>("directed_presence")?)
             .context("invalid durable SM directed-presence JSON")?;
+    let authority_now: chrono::DateTime<chrono::Utc> = row.try_get("authority_now")?;
+    let claimed_until: chrono::DateTime<chrono::Utc> = row.try_get("claimed_until")?;
+    anyhow::ensure!(
+        claimed_until > authority_now,
+        "invalid claimed SM ownership deadline"
+    );
+    let claim_deadline = authority_probe_started
+        .checked_add(
+            claimed_until
+                .signed_duration_since(authority_now)
+                .to_std()
+                .context("invalid claimed SM ownership duration")?,
+        )
+        .context("claimed SM ownership deadline overflow")?;
     let claim = SmResumeClaim {
         session_id,
         claim_token,
+        claim_deadline,
         full_jid: row.try_get("full_jid")?,
         resource: row.try_get("resource")?,
         resume_timeout_seconds: u64::try_from(row.try_get::<i64, _>("resume_timeout_seconds")?)
@@ -2214,7 +2292,7 @@ mod tests {
             )
             .await
             .unwrap(),
-            SmClaimStatus::Pending
+            SmClaimStatus::Pending(_)
         ));
         let suspend_pool = pool.clone();
         let suspend_snapshot = snapshot.clone();
@@ -2247,7 +2325,7 @@ mod tests {
             .unwrap()
             {
                 SmClaimStatus::Claimed(claim) => break *claim,
-                SmClaimStatus::Pending => {
+                SmClaimStatus::Pending(_) => {
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await
                 }
                 SmClaimStatus::Rejected => panic!("valid racing SM token was rejected"),

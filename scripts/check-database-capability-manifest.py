@@ -42,11 +42,25 @@ MIGRATIONS = {
     "0112": ROOT / "migrations/0112_cluster_runtime_capacity_and_authority.sql",
     "0113": ROOT / "migrations/0113_upload_authority_capabilities.sql",
     "0114": ROOT / "migrations/0114_session_authority_capabilities.sql",
+    "0126": ROOT / "migrations/0126_mix_delivery_release_journal.sql",
+    "0127": ROOT / "migrations/0127_sm_resume_authority_notifications.sql",
+    "0128": ROOT / "migrations/0128_mix_capacity_authorities.sql",
+}
+
+# A later migration may replace an existing routine without changing its
+# callable identity.  Its local hardening loop must then re-pin that routine as
+# well as every newly introduced capability, while the canonical manifest keeps
+# ownership attributed to the migration that first introduced the identity.
+RESECURED_BY_MIGRATION = {
+    "0127": {
+        "northstar_sm_claim(bytea,uuid,inet,uuid,text,bool,uuid,int8)",
+        "northstar_session_capability_catalog_healthy(text)",
+    },
 }
 
 ROW = re.compile(
     r"^\s*\('([^']+\([^']*\))','(runtime|command|private)',"
-    r"'(baseline-0111|0112|0113|0114)'\)[,;]\s*$",
+    r"'(baseline-0111|0112|0113|0114|0126|0127|0128)'\)[,;]\s*$",
     re.MULTILINE,
 )
 LEDGER_ROW = re.compile(
@@ -771,6 +785,8 @@ if "ON COMMIT DROP" in generator_text:
     fail("migration ledger temp table would disappear in autocommit audit sessions")
 
 manifest_text = read(MANIFEST)
+if "'baseline-0111','0112','0113','0114','0126','0127','0128'" not in manifest_text:
+    fail("canonical manifest origin constraint omits a reviewed capability migration")
 rows = ROW.findall(manifest_text)
 if not rows:
     fail("canonical manifest contains no capability rows")
@@ -783,7 +799,10 @@ by_workload = {
 }
 by_origin = {
     origin: {signature for signature, _, row_origin in rows if row_origin == origin}
-    for origin in ("baseline-0111", "0112", "0113", "0114")
+    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128")
+}
+manifest_origin_by_signature = {
+    signature: origin for signature, _, origin in rows
 }
 if set().union(*by_workload.values()) != set(manifest_signatures):
     fail("workload partitions do not cover the canonical manifest")
@@ -1074,7 +1093,27 @@ for migration_index, (migration, text) in enumerate(migration_documents):
         # by the schema-local hardening loop later in the same migration.
         # Membership in the canonical manifest identifies those replacements
         # without falling back to a loose function-name allowlist.
-        capability_definition = declared_definer or signature in manifest_signature_set
+        # A historical invoker-rights trigger/routine is not retroactively a
+        # database capability merely because a later stopped-writer migration
+        # replaces and promotes the same callable identity.  Begin enforcing
+        # the capability proof at its canonical manifest origin.  A historical
+        # SECURITY DEFINER is never ignored: it was already privileged at that
+        # point and must remain registered and independently hardened/dropped.
+        definition_version = int(migration.name.split("_", 1)[0])
+        origin = manifest_origin_by_signature.get(signature)
+        origin_version = (
+            111 if origin == "baseline-0111" else int(origin)
+            if origin is not None
+            else None
+        )
+        historical_invoker_definition = (
+            not declared_definer
+            and origin_version is not None
+            and definition_version < origin_version
+        )
+        capability_definition = declared_definer or (
+            signature in manifest_signature_set and not historical_invoker_definition
+        )
         if not capability_definition:
             continue
         security_definition_count += 1
@@ -1143,7 +1182,17 @@ for origin, migration in MIGRATIONS.items():
     if end < 0:
         fail(f"{migration.name} capability security loop is unterminated")
     migration_signatures = QUOTED_SIGNATURE.findall(text[start:end])
-    require_exact(f"{migration.name} security loop", migration_signatures, by_origin[origin])
+    resecured = RESECURED_BY_MIGRATION.get(origin, set())
+    if not resecured <= manifest_signature_set:
+        fail(
+            f"{migration.name} resecures identities outside the canonical manifest: "
+            f"{sorted(resecured-manifest_signature_set)}"
+        )
+    require_exact(
+        f"{migration.name} security loop",
+        migration_signatures,
+        by_origin[origin] | resecured,
+    )
 
     created_names = set(CREATE_ROUTINE.findall(text))
     secured_names = {signature.split("(", 1)[0] for signature in migration_signatures}
@@ -1381,6 +1430,39 @@ for required in (
 ):
     if required not in session_hardening:
         fail(f"session trigger manifest omits exact catalog invariant: {required}")
+
+sm_event_authority = read(
+    ROOT / "migrations/0127_sm_resume_authority_notifications.sql"
+)
+for required in (
+    "ADD COLUMN state_version BIGINT NOT NULL DEFAULT 1",
+    "CREATE TRIGGER sm_resume_sessions_authority_version",
+    "CREATE TRIGGER sm_resume_sessions_authority_notify",
+    "'northstar_sm_authority_v1'",
+    "'schema', TG_TABLE_SCHEMA",
+    "'session_id', changed_id",
+    "'state_version', changed_version",
+    "pending_reason := CASE",
+    "IF stream.expires_at<=authority_now THEN",
+    "retry_at := pg_catalog.least(",
+    "stream.expires_at",
+    "stream.live_lease_until",
+    "stream.claimed_until",
+    "'northstar_sm_state_version()','private'",
+    "'northstar_sm_state_notify()','private'",
+    "'state_version','SELECT'",
+):
+    if required not in sm_event_authority:
+        fail(f"SM event-authority migration omits invariant: {required}")
+if "payload" in sm_event_authority.lower():
+    # The notification JSON is intentionally inspected by exact key literals
+    # below; this branch is only a guard against later prose/code introducing a
+    # misleading generic payload field into the authority function itself.
+    notify_body = sm_event_authority.split(
+        "CREATE FUNCTION northstar_sm_state_notify()", 1
+    )[1].split("$$;", 1)[0]
+    if "'payload'" in notify_body.lower():
+        fail("SM authority notifications must not contain a generic payload field")
 
 upload_bounds = read(ROOT / "migrations/0115_upload_runtime_reconciliation_bounds.sql")
 for required in (

@@ -16,7 +16,10 @@ use hickory_resolver::{
     TokioResolver,
 };
 use sha2::{Digest, Sha256};
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{
+    postgres::{PgConnectOptions, PgPoolOptions},
+    PgPool,
+};
 use std::{
     collections::{HashSet, VecDeque},
     sync::{
@@ -135,28 +138,48 @@ pub struct CapsKey {
     pub version: String,
 }
 
-/// One resource's last verified XEP-0115 advertisement mapping, with the
-/// freshness stamp driving bounded LRU/TTL eviction. Federated resources have
-/// no local session lifecycle, so `caps_by_jid` can never rely on transport
-/// teardown to remove their entries and must police its own size.
-#[derive(Clone, Debug)]
-pub struct CapsResource {
-    pub key: CapsKey,
-    pub touched_at: std::time::Instant,
+/// Exact authority for one local XEP-0115 observation. The connection fence
+/// prevents full-JID ABA after bind/resume, while the generation fence prevents
+/// an older response or running side effect from surviving a newer presence on
+/// the same transport.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocalCapsEpoch {
+    pub connection_id: uuid::Uuid,
+    pub generation: u64,
 }
 
-#[derive(Clone)]
-pub struct CachedCaps {
-    pub query: String,
-    pub expires_at: Instant,
-    pub touched_at: Instant,
+/// Lossless lifecycle signal for one exact local route incarnation.
+///
+/// The sender retains the terminal state, so a waiter which subscribes after
+/// the compare-and-remove has committed still observes `Removed`.  Binding the
+/// signal to the connection UUID prevents a full-JID ABA replacement from
+/// satisfying a waiter for the previous transport.
+#[derive(Debug)]
+pub(crate) struct RouteIncarnationSignal {
+    connection_id: uuid::Uuid,
+    removed: tokio::sync::watch::Sender<bool>,
 }
 
-#[derive(Clone)]
-pub struct PendingCaps {
-    pub full_jid: String,
-    pub key: CapsKey,
-    pub expires_at: Instant,
+impl RouteIncarnationSignal {
+    pub(crate) fn new(connection_id: uuid::Uuid) -> Arc<Self> {
+        let (removed, _) = tokio::sync::watch::channel(false);
+        Arc::new(Self {
+            connection_id,
+            removed,
+        })
+    }
+
+    pub(crate) fn connection_id(&self) -> uuid::Uuid {
+        self.connection_id
+    }
+
+    pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.removed.subscribe()
+    }
+
+    fn publish_removed(&self) {
+        self.removed.send_replace(true);
+    }
 }
 
 #[derive(Clone)]
@@ -169,6 +192,10 @@ pub struct OnlineSession {
     pub auth_generation: i64,
     pub user_agent_epoch: Option<i64>,
     pub connection_id: uuid::Uuid,
+    /// Terminal, exact-incarnation route-removal notification. Every local
+    /// compare-and-remove publishes through `AppState`, including rollback,
+    /// cleanup and synchronous Drop paths.
+    pub(crate) route_incarnation: Arc<RouteIncarnationSignal>,
     /// Shared with the owning protocol session. A successful SM takeover sets
     /// this before removing the old route so the old connection's Drop cannot
     /// suspend/revoke the replacement stream or remove its MUC/caps state.
@@ -182,6 +209,19 @@ pub struct OnlineSession {
     pub routable: Arc<AtomicBool>,
     pub sender: crate::outbound::OutboundSender,
     pub available: Arc<AtomicBool>,
+    /// Per-account/resource linearization boundary for MIX presence. Explicit
+    /// presence, verified-caps fallback, transport cleanup and an exact SM
+    /// replacement all share this gate, so a delayed side effect cannot
+    /// recreate presence after an unavailable/delete epoch. The Arc belongs
+    /// to the session lifecycle; there is no process-global keyed lock table.
+    pub mix_presence_gate: Arc<tokio::sync::Mutex<()>>,
+    /// A successful directed MIX unavailable suppresses the conservative
+    /// verified-caps fallback until a later explicit/broadcast available.
+    /// Keeping this resource-scoped avoids a process-global tombstone map.
+    pub mix_presence_fallback_suppressed: Arc<dashmap::DashSet<String>>,
+    /// Monotonic local XEP-0115 observation epoch shared with the protocol
+    /// actor and transferred only by an exact live SM replacement.
+    pub caps_observation_generation: Arc<AtomicU64>,
     pub carbons: Arc<AtomicBool>,
     pub priority: Arc<AtomicI16>,
     /// Encoded XMPP `<show/>`: 0 unavailable, 1 online, 2 away, 3 chat,
@@ -1066,6 +1106,10 @@ pub struct AppState {
     caps_cache: crate::xmpp::protocol::caps::CapsCacheIndex,
     caps_by_jid: crate::xmpp::protocol::caps::CapsResourceIndex,
     pending_caps: crate::xmpp::protocol::caps::PendingCapsIndex,
+    /// Cross-stream ordering authority for one authenticated federated full
+    /// JID's capability lifecycle. Weak, self-cleaning entries exist only
+    /// while an observer or response owns or waits for the resource.
+    federated_caps_gates: crate::xmpp::protocol::caps::FederatedCapsGateIndex,
     /// Bounded, per-full-JID single-flight boundary for XEP-0115-triggered
     /// PEP last-item delivery and verified MIX presence publication.
     caps_effect_dispatcher: Arc<crate::xmpp::protocol::caps::CapsEffectDispatcher>,
@@ -1388,6 +1432,12 @@ impl AppState {
             process_secret.zeroize();
             keyrings?
         };
+        db::audit_mix_delivery_capacity_ledger(&pool)
+            .await
+            .context("MIX delivery capacity ledger failed startup reconciliation")?;
+        db::audit_mix_pam_operation_capacity(&pool)
+            .await
+            .context("MIX-PAM operation capacity authority failed startup audit")?;
         let upload_safety_gate = UploadSafetyGate::new();
         let upload_namespace = upload_storage_namespace_id(&config)?;
         let namespace_generation = db::validate_upload_storage_backend(
@@ -1901,6 +1951,19 @@ impl AppState {
             .connect(&config.database_url)
             .await
             .context("could not create isolated OMEMO recovery poll database pool")?;
+        let sm_authority_schema: String = sqlx::query_scalar("SELECT current_schema()")
+            .fetch_one(&pool)
+            .await
+            .context("could not determine the SM authority schema")?;
+        let mut sm_authority_connect_options = config
+            .database_url
+            .parse::<PgConnectOptions>()
+            .context("could not parse the SM authority listener database URL")?;
+        if !config.database_allow_unsafe_role_for_development {
+            sm_authority_connect_options =
+                sm_authority_connect_options.options([("search_path", "public")]);
+        }
+        let sm_service = crate::services::sm::SmService::new(pool.clone(), sm_authority_schema)?;
         config.raw.database_url.zeroize();
         config.raw.database_url.clear();
         config.raw.admin_command_database_url.zeroize();
@@ -1921,7 +1984,7 @@ impl AppState {
                 mix_message_content_identity,
                 mix_retraction_content_identity,
             ),
-            sm_service: crate::services::sm::SmService::new(pool.clone()),
+            sm_service,
             blocking_service: crate::services::blocking::BlockingService::new(pool.clone()),
             presence_service: crate::services::presence::PresenceService::new(pool.clone()),
             replay_service,
@@ -1969,6 +2032,7 @@ impl AppState {
             caps_cache: crate::xmpp::protocol::caps::CapsCacheIndex::new(),
             caps_by_jid: crate::xmpp::protocol::caps::CapsResourceIndex::new(),
             pending_caps: crate::xmpp::protocol::caps::PendingCapsIndex::new(),
+            federated_caps_gates: crate::xmpp::protocol::caps::FederatedCapsGateIndex::new(),
             caps_effect_dispatcher: crate::xmpp::protocol::caps::CapsEffectDispatcher::new(),
             dialback_secret,
             fast_token_secret,
@@ -2004,6 +2068,12 @@ impl AppState {
         state.worker_registry().register_observer(
             "session-cleanup",
             crate::workers::WorkerCriticality::Restartable,
+        );
+        crate::services::sm::start_sm_authority_listener(
+            state.sm_service().clone(),
+            sm_authority_connect_options,
+            Arc::clone(state.worker_registry()),
+            worker_cancel.clone(),
         );
         crate::xmpp::protocol::caps::start_caps_effect_dispatcher(
             Arc::clone(&state),
@@ -2083,6 +2153,12 @@ impl AppState {
 
     pub(crate) fn pending_caps(&self) -> &crate::xmpp::protocol::caps::PendingCapsIndex {
         &self.pending_caps
+    }
+
+    pub(crate) fn federated_caps_gates(
+        &self,
+    ) -> &crate::xmpp::protocol::caps::FederatedCapsGateIndex {
+        &self.federated_caps_gates
     }
 
     pub(crate) fn abuse_key_deployment(&self) -> Option<&db::AbuseKeyDeploymentIdentity> {
@@ -2699,9 +2775,17 @@ impl AppState {
         let (_, removed) = self
             .sessions
             .remove_if(key, |_, session| session.connection_id == connection_id)?;
-        self.caps_effect_dispatcher.cancel(key);
-        self.caps_by_jid.remove_resource(key);
-        self.pending_caps.remove_resource(key);
+        debug_assert_eq!(removed.route_incarnation.connection_id(), connection_id);
+        // Publish immediately after the exact compare-and-remove.  Any route
+        // inserted between removal and this notification is a new incarnation;
+        // waiters re-read `sessions` and must not mistake that ABA for vacancy.
+        removed.route_incarnation.publish_removed();
+        self.caps_effect_dispatcher
+            .cancel_local(key, removed.connection_id);
+        self.caps_by_jid
+            .remove_local_resource(key, removed.connection_id);
+        self.pending_caps
+            .remove_local_resource(key, removed.connection_id);
         if removed.metrics_counted.swap(false, Ordering::AcqRel) {
             self.metrics.active_sessions.fetch_sub(1, Ordering::Relaxed);
         }
@@ -5426,9 +5510,9 @@ mod session_key_tests {
         snapshot_suspended_muc_buffer_for_resume, staged_route_activation_allowed,
         suspended_muc_resume_actor_matches, suspended_occupant_is_created,
         transfer_muc_suffix_to_checkpoint, FederationWritePolicy, JoinedMucMembership, MucOccupant,
-        MucOccupantEndpoint, SerializableMucOccupant, SessionLookup, StagedRouteActivationCheck,
-        StagedRouteIdentity, SuspendedMucBuffer, SuspendedMucEndpoint, SuspendedMucPhase,
-        SuspendedMucRoute,
+        MucOccupantEndpoint, RouteIncarnationSignal, SerializableMucOccupant, SessionLookup,
+        StagedRouteActivationCheck, StagedRouteIdentity, SuspendedMucBuffer, SuspendedMucEndpoint,
+        SuspendedMucPhase, SuspendedMucRoute,
     };
     use std::collections::VecDeque;
     use std::sync::{
@@ -5436,6 +5520,20 @@ mod session_key_tests {
         Arc, Mutex,
     };
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn route_removal_signal_retains_the_exact_terminal_state_for_late_subscribers() {
+        let connection_id = uuid::Uuid::new_v4();
+        let signal = RouteIncarnationSignal::new(connection_id);
+        signal.publish_removed();
+
+        let late = signal.subscribe();
+        assert_eq!(signal.connection_id(), connection_id);
+        assert!(
+            *late.borrow(),
+            "subscribing after compare-and-remove must not lose the terminal event"
+        );
+    }
 
     #[tokio::test]
     async fn island_mode_transition_waits_for_and_fences_federation_writes() {

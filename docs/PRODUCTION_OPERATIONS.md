@@ -364,6 +364,55 @@ after a later authenticated client response `ack`; duplicate RID replay returns
 the byte-identical cached body. Disconnect, actor crash and lease expiry release
 unacknowledged ownership for retry instead of deleting the spool row.
 
+Each runtime also reserves one PostgreSQL connection, separate from the
+configured application pool, for the supervised `sm-authority-listener`.
+Migration `0127` publishes only `{schema, session_id, state_version}` on the
+fixed `northstar_sm_authority_v1` channel after a durable SM row transaction
+commits. The notification is a wake hint, never claim authority: after initial
+subscription, reconnect, failover or any matching event, the C2S actor repeats
+`northstar_sm_claim` and uses its exact Pending reason and `retry_at` boundary.
+Each accepted notification advances a one-shot process-local sequence; the
+payload version is used only to avoid an unnecessary second read when it
+exactly matches the just-probed row. A stale or forged high version is consumed
+once and cannot leave a waiter permanently ahead of PostgreSQL or mask a later
+real edge.
+There is no periodic resume-contention query. Size database connection limits
+for this additional connection per Northstar process and treat a repeatedly
+restarting listener as a readiness failure; its supervisor rebuilds the
+dedicated listener without borrowing a request-pool connection.
+
+Entity-capability processing has a separate in-memory authority model. Every
+accepted available full JID owns one exact XEP-0115 observation; verified MIX
+flags and the complete bounded `+notify` node list stay with that observation.
+The raw disco response and cross-resource summary cache are optional
+accelerators, so cache TTL/eviction can cause a new query or proxy miss but
+cannot suppress OMEMO/PEP/MIX interest. Pending effect bits likewise remain on
+the observation. The bounded dispatcher carries deduplicated wake hints only;
+on hint saturation, task failure or worker restart it reconstructs due work
+from those bits, alternating local and federated queues. Saturation and restart
+set an immediate rescan event; failed effects retain an exact exponential
+`retry_at`, and the worker sleeps until the earliest retry or pending-IQ expiry
+instead of polling. These deadlines affect latency, not ownership or the number
+of retained attempts.
+
+Federated observation admission is enforced before routing the remote
+presence: at most 8,192 remote resources globally and 2,048 per domain are
+accepted by one process, with independent byte budgets for current summaries
+and optional cache material. The current code budgets 64 MiB for
+observation-owned summaries, 16 MiB for cached semantic summaries and 16 MiB
+for optional raw disco XML (up to 4,096 cache keys). Over-budget remote
+presence receives `resource-constraint`; summary pressure retains pending
+verification rather
+than recording a negative capability answer. Local observations are bounded by
+the C2S connection admission. Monitor
+`xmpp_caps_effect_queue_saturated_total`,
+`xmpp_caps_effect_failures_total` and
+`xmpp_caps_effect_latency_seconds`; sustained growth indicates scheduler,
+transport, database or peer pressure even though a saturated hint is not a
+lost semantic operation. A full exact local output queue disconnects that
+transport, allowing normal XMPP recovery instead of reporting a successful
+disco or PEP delivery that never entered the socket path.
+
 An explicit XEP-0334 `no-store` message to a local recipient bypasses MAM,
 transient spool and offline storage. Northstar attempts volatile local and
 cross-node online delivery and returns `wait/service-unavailable` only if no
@@ -890,31 +939,95 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 124 files from `0001` through
-`0125`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 127 files from `0001` through
+`0128`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0125`, with the exact SQLx description and SHA-384 checksum, before it
+through `0128`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url` and `command_database_url` secrets; neither identity may
 attempt DDL. Pending, failed, unknown, duplicated, missing or checksum-drifted
 migrations and incomplete identity canonicalization all stop startup before
 listeners open.
 
+Migration `0126` changes the transaction protocol used by MIX outbox writers.
+It is a **stopped-writer migration**, not a rolling-upgrade boundary. Before the
+migrator begins `0126`, stop and verify the absence of every Northstar runtime,
+MIX delivery worker and maintenance process that can write the application
+schema. Do not run a pre-`0126` and post-`0126` binary concurrently. The
+migration takes table locks and fails closed if the old capacity ledger has
+drifted; those locks protect the cut-over transaction, but cannot prevent an old
+process from issuing new transactions after the migration commits. Repository
+ledger attestation prevents that old binary from starting again against the new
+schema. It does not make a still-running old process safe.
+
+Migration `0127` is also a stopped-writer boundary. It replaces the SM claim
+projection, installs the monotonic authority triggers and extends the exact
+session capability manifest in one transaction. Keep every pre-`0127` runtime
+stopped until migration and exact grant reconciliation complete; do not treat
+LISTEN/NOTIFY compatibility as permission for a rolling upgrade. The two new
+trigger routines are owner-only private capabilities, and `state_version`
+remains unreadable to the runtime role except through the existing allowlisted
+SM claim capability.
+
+Migration `0128` completes the stopped-writer sequence by replacing MIX-PAM
+`COUNT(*)`/try-lock admission with exact owner-maintained global and per-account
+counters, and by adding independently committed MIX delivery reclamation.
+Keep every older runtime stopped until `0128` and exact grant reconciliation
+both commit. The runtime role then has read-only counter access, no direct MIX-
+PAM operation INSERT/DELETE authority, and may mutate those rows only through
+the reviewed SECURITY DEFINER capabilities. Startup compares every counter to
+the operation journal and fails closed on drift.
+
+Before each delivery-producing transaction, complete orphan-event reclamation
+and release-journal folding commit in their own authority transaction. Before a
+new remote PAM operation, complete retention-eligible terminal reconciliation
+does the same for its exact counters. Bounded background GC/pruning reduces
+latency and retained rows, but neither worker page size nor cadence is required
+to make a later admission correct. If a completion commits after the
+reconciliation boundary, it is a later state transition and the following
+admission observes it. Do not raise capacity limits to hide a repeatable
+false-full condition: fail startup on counter drift, retain the evidence and
+repair the authority invariant before accepting new writes.
+
+After the cut-over, every delivery-producing MIX application-service operation
+enters one FIFO gate before checking out a PgPool connection. Its database
+transaction then takes the schema-local blocking admission fence as its first
+statement, before any channel, participant, event or sequence lock. This is a
+correctness boundary, not a traffic throttle: same-process producers wait
+fairly without exhausting the connection pool, and experimental multi-process
+writers serialize in PostgreSQL without a reverse lock order. Delivery ACKs do
+not use either producer gate; they delete only the leased recipient and append
+an immutable release fact. The runtime role has SELECT-only access to that
+journal: owner-held trigger functions append facts and the allowlisted drain
+capability atomically applies and deletes them, raising inside PostgreSQL on an
+underflow. The event-leading recipient uniqueness index keeps the drain/GC
+parent probes indexed. The architecture CI gate rejects new production callers
+that bypass `MixService` for any delivery-producing operation.
+
+The delivery limits (`100,000` queued recipients and `256 MiB`) and PAM limits
+(`10,000` global operations and `64` per account) are deliberate hard resource
+ceilings. They may reject genuinely new work after exact reconciliation; they
+do not determine ACK success, release visibility, lock ownership or retry
+completion. Size deployment and alerts around those explicit bounds rather
+than treating timeout, `55P03`, a bounded loop or a cache TTL as overload.
+
 PostgreSQL executes `/docker-entrypoint-initdb.d` only for a new `PGDATA`.
 Existing installations created with the former `POSTGRES_USER=xmpp` superuser
 must not switch Compose files in place. Use this stopped upgrade boundary:
 
 1. create and verify a signed, age-encrypted backup with the existing release;
-2. stop every Northstar, backup, restore, and maintenance client and retain the
-   old superuser secret until rollback is no longer needed;
+2. stop every Northstar runtime, MIX delivery worker, backup, restore, and
+   maintenance client; verify that no application-schema writer remains before
+   migration `0126` and remains stopped through `0128`, and retain the old
+   superuser secret until rollback is no longer needed;
 3. generate the new independent secrets, then run
    `scripts/reconcile-database-roles.sh --audit` with the existing superuser;
 4. review the findings and run the same tool with explicit `--apply`; it creates
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0125` manifest
+5. run the one-shot migration job through the complete `0001`-`0128` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

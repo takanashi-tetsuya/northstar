@@ -3675,6 +3675,55 @@ def run() -> None:
             "self-retract-without-to" not in replay_frame,
             f"exact retraction replay created a second delivery: {replay_frame}",
         )
+
+    # A successful personal retraction has two deliberately distinct history
+    # projections: the original row becomes a content-free tombstone and the
+    # retraction action remains auditable. Assert both shapes directly so the
+    # final archive-count invariant cannot accidentally collapse them into one.
+    alice.send(
+        "<iq xmlns='jabber:client' type='set' id='mam-self-retraction-audit'>"
+        "<query xmlns='urn:xmpp:mam:2' queryid='mam-self-retraction-audit'/></iq>"
+    )
+    _, self_retraction_mam_frames = alice.receive_until("<fin ")
+    self_retraction_tombstones = 0
+    self_retraction_actions = 0
+    for frame in self_retraction_mam_frames:
+        try:
+            mam_root = ET.fromstring(frame)
+        except ET.ParseError:
+            continue
+        result = mam_root.find("{urn:xmpp:mam:2}result")
+        if result is None or result.get("queryid") != "mam-self-retraction-audit":
+            continue
+        forwarded = result.find("{urn:xmpp:forward:0}forwarded")
+        if forwarded is None:
+            continue
+        archived = forwarded.find("{jabber:client}message")
+        if archived is None:
+            continue
+        retracted = archived.find("{urn:xmpp:message-retract:1}retracted")
+        retract = archived.find("{urn:xmpp:message-retract:1}retract")
+        if (
+            archived.get("id") == "encrypted-self-target"
+            and retracted is not None
+            and retracted.get("id") == "self-retract-without-to"
+            and archived.find("{urn:xmpp:omemo:2}encrypted") is None
+            and archived.find("{jabber:client}body") is None
+        ):
+            self_retraction_tombstones += 1
+        if (
+            archived.get("id") == "self-retract-without-to"
+            and retract is not None
+            and retract.get("id") == "encrypted-self-target"
+        ):
+            self_retraction_actions += 1
+    check(
+        self_retraction_tombstones == 1 and self_retraction_actions == 1,
+        "personal retraction history did not contain exactly one content-free "
+        "target tombstone plus one bound action row: "
+        f"tombstones={self_retraction_tombstones} actions={self_retraction_actions} "
+        f"frames={self_retraction_mam_frames}",
+    )
     alice_self_target.close()
 
     # Reject the ambiguous cross-feature mutation before PoW admission, room
@@ -5088,13 +5137,14 @@ def run() -> None:
     )
 
     status, stats = api("GET", "/api/v1/admin/stats", token=admin_token)
-    # The self-target is one deduplicated owner row retained as a tombstone;
-    # encrypted-offline and encrypted-page-two each create sender and recipient
+    # The self-target is one deduplicated owner row retained as a tombstone, its
+    # plaintext retraction action is a separate auditable row, and
+    # encrypted-offline plus encrypted-page-two each create sender and recipient
     # projections. Compare with the pre-flow baseline so unrelated setup rows
-    # cannot make this exact five-row ownership assertion drift.
+    # cannot make this exact six-row ownership assertion drift.
     check(
         status == 200
-        and stats["archived_stanzas"] == archive_count_before_self_retraction + 5,
+        and stats["archived_stanzas"] == archive_count_before_self_retraction + 6,
         f"unexpected archive count: baseline={archive_count_before_self_retraction} stats={stats}",
     )
     check(stats["offline_stanzas"] == 0, "offline queue was not drained")

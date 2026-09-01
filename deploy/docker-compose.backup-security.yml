@@ -7,7 +7,7 @@ services:
       BACKUP_REQUIRE_SIGNATURE: "true"
       BACKUP_SIGNING_KEY_FILE: /run/secrets/backup_signing_key
       BACKUP_SEQUENCE_STATE_FILE: /state/backup-sequence
-      NORTHSTAR_BACKUP_APPLICATION_VERSION: ${NORTHSTAR_BACKUP_VERSION:-1.1.0}
+      NORTHSTAR_BACKUP_APPLICATION_VERSION: ${NORTHSTAR_VERSION:-0.2.0}
     volumes:
       - backup-sequence-state:/state
     secrets:

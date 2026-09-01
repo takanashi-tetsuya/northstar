@@ -42,7 +42,13 @@ def migration_rows() -> list[tuple[int, str, str]]:
         description = match.group("name").replace("_", " ")
         if not description.strip() or "\x00" in description:
             raise SystemExit(f"invalid migration description: {path.name}")
-        checksum = hashlib.sha384(path.read_bytes()).hexdigest()
+        migration_bytes = path.read_bytes()
+        if b"\r" in migration_bytes:
+            raise SystemExit(
+                "migration SQL must use repository-canonical LF line endings: "
+                f"{path.name}"
+            )
+        checksum = hashlib.sha384(migration_bytes).hexdigest()
         rows.append((version, description, checksum))
     if not rows:
         raise SystemExit("no numbered SQL migrations were found")
@@ -102,9 +108,17 @@ def main() -> int:
     output = args.output.resolve()
     if args.check:
         try:
-            actual = output.read_text(encoding="utf-8")
-        except OSError as error:
+            actual_bytes = output.read_bytes()
+            actual = actual_bytes.decode("utf-8")
+        except (OSError, UnicodeDecodeError) as error:
             print(f"migration ledger manifest check failed: {error}", file=sys.stderr)
+            return 1
+        if b"\r" in actual_bytes:
+            print(
+                "migration ledger manifest must use repository-canonical LF "
+                "line endings; run scripts/generate-database-migration-ledger.py --write",
+                file=sys.stderr,
+            )
             return 1
         if actual != generated:
             print(

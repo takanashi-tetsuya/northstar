@@ -798,7 +798,7 @@ moderation, and PEP item activity. Runtime gauges additionally expose:
 
 Start the optional local monitoring stack with:
 
-For a production build, set `NORTHSTAR_VERSION=1.1.0` and set
+For a production build, set `NORTHSTAR_VERSION=0.2.0` and set
 `NORTHSTAR_VCS_REF` to the exact release commit in the ignored `.env` before
 invoking Compose. The build installs OCI source/revision/version/license labels
 and copies `LICENSE` plus `THIRD_PARTY_NOTICES.md` into every Northstar image.
@@ -844,11 +844,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 123 files from `0001` through
-`0124`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 124 files from `0001` through
+`0125`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0124`, with the exact SQLx description and SHA-384 checksum, before it
+through `0125`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url` and `command_database_url` secrets; neither identity may
 attempt DDL. Pending, failed, unknown, duplicated, missing or checksum-drifted
@@ -868,7 +868,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0124` manifest
+5. run the one-shot migration job through the complete `0001`-`0125` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

@@ -84,7 +84,7 @@ not part of an unattended default command.
 ## Release history
 
 - [Project changelog](../CHANGELOG.md)
-- [Northstar 2.0 development changelog](../changelog/v2.0.md)
+- [Northstar 0.2 development changelog](../changelog/v0.2.md)
 - [`archive/`](archive/) contains point-in-time handoff, validation and planning
   reports. These files are historical evidence, not current capability or
   release claims.

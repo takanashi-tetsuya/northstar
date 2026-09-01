@@ -3605,10 +3605,12 @@ mod history_identity_pg_tests {
             "origin-rollback",
             "<message id='rollback'/>",
         );
-        assert!(
+        assert_eq!(
             admit_personal_history(&pool, Some(&rollback_identity), &rollback_writes)
                 .await
-                .is_err()
+                .unwrap(),
+            PersonalHistoryAdmission::AccountUnavailable,
+            "the authorization snapshot must reject a missing projection owner before any admission or archive write",
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM message_archive WHERE id=$1")

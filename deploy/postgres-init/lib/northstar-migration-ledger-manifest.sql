@@ -132,8 +132,9 @@ INSERT INTO pg_temp.northstar_migration_ledger_manifest(
   (119,'personal retraction owner identity',pg_catalog.decode('f8875fa77df28541cb680bd4047839a4993c810f8f89ef8ce2bd3ce5639552ca8e7e1342ae803a2fbe5b0a0cd5bb8609','hex')),
   (120,'mix delivery normalization',pg_catalog.decode('5e5d563e212f637f1742bcf8145ccf698aebc7824d837c731ff42c2f60ad30acf0494f049d7c2210720cb3d493650294','hex')),
   (121,'offline message resource affinity',pg_catalog.decode('04806c71031866c21312ec2769a8d8953e687cbc681db9dec1989db1c6e139b2e65cfef4db80fd7b5993120e37c50aac','hex')),
-  (122,'offline replay resource leases',pg_catalog.decode('e1e5334c69f91b79e192dd318fd9aaf8f69c8c4b5bb483e6e49e73ce52b804eead4b2385f8592d1b47cfa105a4c5a676','hex')),
+  (122,'offline replay resource leases',pg_catalog.decode('6738b6cfcf4f37fac5dfdfd2a7cc7b1806159f0d04ff8ca5e9aa289257713cc136906f90d08a1f9e62e722554d719960','hex')),
   (123,'mix pam durable operations',pg_catalog.decode('6c3600c781feade2bf740c3361aa8ad9d0b5cce60fedf1ad269b8f061cf66743f7e4735a0e2996b629ff5e5e1d5c63ce','hex')),
-  (124,'authentication credential hardening',pg_catalog.decode('26d0e7614a3536a841e34b93ded7badabf3f7b81b4c373c9e5db3a95d1755899d3ad8a7b30ac68fc8259648e0e4e76ce','hex'));
+  (124,'authentication credential hardening',pg_catalog.decode('26d0e7614a3536a841e34b93ded7badabf3f7b81b4c373c9e5db3a95d1755899d3ad8a7b30ac68fc8259648e0e4e76ce','hex')),
+  (125,'registration control fail closed',pg_catalog.decode('82db5852dc2dae1a86b8a3b5e977616218f52d6fcabbc10e3276c0e33143afd031de4541b74baa82aaf3a8e88a61ac39','hex'));
 
 \set northstar_migration_ledger_manifest_is_loaded true

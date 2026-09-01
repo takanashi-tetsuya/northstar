@@ -631,6 +631,9 @@ require_literal "$ci_workflow" 'bash scripts/database-role-boundary-db-ci.sh' \
   'CI does not execute the database-backed role-boundary acceptance script'
 require_literal "$database_acceptance" 'NORTHSTAR_DATABASE_ROLE_CI' \
   'database-backed acceptance test lacks its explicit destructive-test gate'
+require_literal "$database_acceptance" \
+  'python3 scripts/generate-database-migration-ledger.py --check' \
+  'database acceptance does not reject a stale repository migration ledger before mutation'
 require_literal "$database_acceptance" '--demote-legacy-xmpp' \
   'database-backed acceptance test does not exercise the legacy-role cutover'
 require_literal "$database_acceptance" \

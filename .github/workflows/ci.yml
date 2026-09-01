@@ -215,7 +215,7 @@ jobs:
           test "$(docker image inspect --format '{{.Config.User}}' northstar-backup-ci:local)" = '10001:10001'
           test "$(docker image inspect --format '{{.Config.User}}' northstar-database-grants-ci:local)" = '10001:10001'
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.licenses"}}' northstar-ci:local)" = 'AGPL-3.0-only'
-          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' northstar-ci:local)" = '1.1.0'
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' northstar-ci:local)" = '0.2.0'
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' northstar-ci:local)" = 'https://github.com/takanashi-tetsuya/northstar'
           for image in northstar-ci:local northstar-backup-ci:local northstar-database-grants-ci:local; do
             docker run --rm --entrypoint sh "$image" -c '
@@ -306,25 +306,14 @@ jobs:
     name: PostgreSQL protocol integration
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    services:
-      postgres:
-        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
-        env:
-          POSTGRES_DB: xmpp_test
-          POSTGRES_USER: xmpp_test
-          POSTGRES_PASSWORD: xmpp-test-password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U xmpp_test -d xmpp_test"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+
+      - name: Start loopback-only PostgreSQL fixture
+        run: bash scripts/loopback-postgres-ci.sh start
 
       - name: Install pinned Rust 1.97.1
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
@@ -345,30 +334,23 @@ jobs:
           bash scripts/omemo-runtime-wsl.sh
           bash scripts/moderation-runtime-wsl.sh
 
+      - name: Stop loopback-only PostgreSQL fixture
+        if: always()
+        run: bash scripts/loopback-postgres-ci.sh stop
+
   production-envelope:
     name: Scheduled 1,000-session production envelope
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    services:
-      postgres:
-        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
-        env:
-          POSTGRES_DB: xmpp_test
-          POSTGRES_USER: xmpp_test
-          POSTGRES_PASSWORD: xmpp-test-password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U xmpp_test -d xmpp_test"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+
+      - name: Start loopback-only PostgreSQL fixture
+        run: bash scripts/loopback-postgres-ci.sh start
 
       - name: Install pinned Rust 1.97.1
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
@@ -384,30 +366,23 @@ jobs:
           XMPP_TEST_OFFLINE: "false"
         run: bash scripts/load-1000-production-wsl.sh
 
+      - name: Stop loopback-only PostgreSQL fixture
+        if: always()
+        run: bash scripts/loopback-postgres-ci.sh stop
+
   heavy-runtime-envelope:
     name: Scheduled multi-node cluster and raw 1,000-session load
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    services:
-      postgres:
-        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
-        env:
-          POSTGRES_DB: xmpp_test
-          POSTGRES_USER: xmpp_test
-          POSTGRES_PASSWORD: xmpp-test-password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U xmpp_test -d xmpp_test"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+
+      - name: Start loopback-only PostgreSQL fixture
+        run: bash scripts/loopback-postgres-ci.sh start
 
       - name: Install pinned Rust 1.97.1
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
@@ -427,29 +402,22 @@ jobs:
           bash scripts/cluster-wsl.sh
           bash scripts/load-1000-wsl.sh
 
+      - name: Stop loopback-only PostgreSQL fixture
+        if: always()
+        run: bash scripts/loopback-postgres-ci.sh stop
+
   stateful-database-integration:
     name: Isolated PostgreSQL and Redis invariants
     runs-on: ubuntu-latest
     timeout-minutes: 70
-    services:
-      postgres:
-        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
-        env:
-          POSTGRES_DB: xmpp_test
-          POSTGRES_USER: xmpp_test
-          POSTGRES_PASSWORD: xmpp-test-password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U xmpp_test -d xmpp_test"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+
+      - name: Start loopback-only PostgreSQL fixture
+        run: bash scripts/loopback-postgres-ci.sh start
 
       - name: Install pinned Rust 1.97.1
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
@@ -502,29 +470,22 @@ jobs:
           bash scripts/upload-db-wsl.sh
           bash scripts/muc-cluster-wsl.sh
 
+      - name: Stop loopback-only PostgreSQL fixture
+        if: always()
+        run: bash scripts/loopback-postgres-ci.sh stop
+
   mix-integration:
     name: MIX database, wire and federation validation
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    services:
-      postgres:
-        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
-        env:
-          POSTGRES_DB: xmpp_test
-          POSTGRES_USER: xmpp_test
-          POSTGRES_PASSWORD: xmpp-test-password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U xmpp_test -d xmpp_test"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+
+      - name: Start loopback-only PostgreSQL fixture
+        run: bash scripts/loopback-postgres-ci.sh start
 
       - name: Install pinned Rust 1.97.1
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
@@ -553,29 +514,22 @@ jobs:
           bash scripts/mix-runtime-wsl.sh
           bash scripts/mix-federation-runtime-wsl.sh
 
+      - name: Stop loopback-only PostgreSQL fixture
+        if: always()
+        run: bash scripts/loopback-postgres-ci.sh stop
+
   federation-integration:
     name: Two-domain S2S federation
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
-        env:
-          POSTGRES_DB: xmpp_test
-          POSTGRES_USER: xmpp_test
-          POSTGRES_PASSWORD: xmpp-test-password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U xmpp_test -d xmpp_test"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+
+      - name: Start loopback-only PostgreSQL fixture
+        run: bash scripts/loopback-postgres-ci.sh start
 
       - name: Install pinned Rust 1.97.1
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
@@ -604,29 +558,22 @@ jobs:
           XMPP_TEST_OFFLINE: "false"
         run: bash scripts/component-runtime-wsl.sh
 
+      - name: Stop loopback-only PostgreSQL fixture
+        if: always()
+        run: bash scripts/loopback-postgres-ci.sh stop
+
   xep0487-integration:
     name: Privilege-separated XEP-0487 HTTPS discovery
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
-        env:
-          POSTGRES_DB: xmpp_test
-          POSTGRES_USER: xmpp_test
-          POSTGRES_PASSWORD: xmpp-test-password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U xmpp_test -d xmpp_test"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+
+      - name: Start loopback-only PostgreSQL fixture
+        run: bash scripts/loopback-postgres-ci.sh start
 
       - name: Install pinned Rust 1.97.1
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
@@ -648,6 +595,10 @@ jobs:
             XMPP_TEST_SYSTEM_TOOLCHAIN=true \
             XMPP_TEST_OFFLINE=false \
             bash scripts/xep0487-runtime-wsl.sh
+
+      - name: Stop loopback-only PostgreSQL fixture
+        if: always()
+        run: bash scripts/loopback-postgres-ci.sh stop
 
   disaster-recovery:
     name: Isolated disaster-recovery drill

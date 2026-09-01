@@ -1,14 +1,18 @@
-FROM rust:bookworm@sha256:e536cf316987faedfe8ae120f83b70c7df0068fdb4fc9efcce55c71a625001d5 AS builder
+FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS builder
 RUN rustc --version | grep -E '^rustc 1\.97\.1 '
 WORKDIR /app
 COPY Cargo.toml ./
 COPY Cargo.lock ./
 COPY src ./src
 COPY migrations ./migrations
+COPY docs/openapi.yaml ./docs/openapi.yaml
+COPY deploy/postgres-init/lib/northstar-capability-manifest.sql \
+     deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql \
+     ./deploy/postgres-init/lib/
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
-ARG NORTHSTAR_VERSION=1.1.0
+ARG NORTHSTAR_VERSION=0.2.0
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="Northstar XMPP Server" \
       org.opencontainers.image.description="Standards-oriented XMPP server written in Rust" \
@@ -32,6 +36,7 @@ COPY web ./web
 COPY third_party/swagger-ui/dist ./third_party/swagger-ui/dist
 COPY third_party/swagger-ui/LICENSE third_party/swagger-ui/NOTICE ./third_party/swagger-ui/
 COPY --chmod=0444 LICENSE THIRD_PARTY_NOTICES.md /usr/share/licenses/northstar/
+RUN chmod 0755 /usr/share/licenses /usr/share/licenses/northstar
 USER 10001:10001
 EXPOSE 5222 5223 5269 5270 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

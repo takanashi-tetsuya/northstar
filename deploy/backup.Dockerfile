@@ -1,6 +1,6 @@
 FROM postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
 
-ARG NORTHSTAR_VERSION=1.1.0
+ARG NORTHSTAR_VERSION=0.2.0
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="Northstar Backup Utility" \
       org.opencontainers.image.description="Signed and encrypted Northstar backup utility" \
@@ -27,6 +27,7 @@ COPY --chown=10001:10001 --chmod=0444 \
     deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql \
     /opt/deploy/postgres-init/lib/
 COPY --chown=10001:10001 --chmod=0444 LICENSE THIRD_PARTY_NOTICES.md /usr/share/licenses/northstar/
+RUN chmod 0755 /usr/share/licenses /usr/share/licenses/northstar
 
 USER 10001:10001
 ENTRYPOINT ["bash", "/opt/northstar/backup.sh"]

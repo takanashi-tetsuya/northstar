@@ -88,19 +88,19 @@ PGPASSWORD="$bootstrap_password" PGHOST="$socket_dir" PGUSER="$bootstrap_role" \
 \getenv command_password NORTHSTAR_FIXTURE_COMMAND_PASSWORD
 \getenv backup_password NORTHSTAR_FIXTURE_BACKUP_PASSWORD
 SELECT format(
-  'CREATE ROLE northstar_migrator LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4',
+  'CREATE ROLE northstar_migrator LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4 VALID UNTIL ''infinity''',
   :'migrator_password'
 ) \gexec
 SELECT format(
-  'CREATE ROLE northstar_runtime LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 64',
+  'CREATE ROLE northstar_runtime LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 64 VALID UNTIL ''infinity''',
   :'runtime_password'
 ) \gexec
 SELECT format(
-  'CREATE ROLE northstar_commands LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 8',
+  'CREATE ROLE northstar_commands LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 8 VALID UNTIL ''infinity''',
   :'command_password'
 ) \gexec
 SELECT format(
-  'CREATE ROLE northstar_backup LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2',
+  'CREATE ROLE northstar_backup LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2 VALID UNTIL ''infinity''',
   :'backup_password'
 ) \gexec
 CREATE ROLE northstar_fixture_outsider NOLOGIN NOINHERIT NOSUPERUSER
@@ -204,6 +204,23 @@ PSQL
   }
 }
 
+reconcile_repository_grants() {
+  local database_name="$1"
+  [[ "$database_name" =~ ^northstar_[a-z0-9_]+$ ]] || return 2
+  PGPASSWORD="$migrator_password" PGHOST="$socket_dir" PGUSER="$migrator_role" \
+    PGDATABASE="$database_name" "$postgres_bin/psql" \
+    --no-psqlrc --set ON_ERROR_STOP=1 \
+    --set database_name="$database_name" \
+    --set migrator_role="$migrator_role" \
+    --set runtime_role="$runtime_role" \
+    --set command_role="$command_role" \
+    --set backup_role="$backup_role" \
+    --set allow_bootstrap=false \
+    --set grant_phase=exact \
+    --file "$project_dir/deploy/postgres-init/lib/reconcile-northstar-grants.sql" \
+    >/dev/null
+}
+
 apply_repository_migrations northstar_backup_source
 
 encoded_socket="${socket_dir//\//%2F}"
@@ -215,26 +232,19 @@ printf '%s' "$upload_body" > "$source_uploads/$upload_id"
 upload_size="$(stat -c '%s' "$source_uploads/$upload_id")"
 upload_digest="$(sha256sum "$source_uploads/$upload_id" | awk '{print $1}')"
 
+# Migrations intentionally leave deployment-wide upload capacity unbound.
+# Production startup binds it before accepting slots; this offline fixture
+# must establish the same durable authority before seeding its retained object.
 PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
   PGDATABASE=northstar_backup_source "$postgres_bin/psql" \
   --no-psqlrc --set ON_ERROR_STOP=1 \
+  --command='SELECT policy_generation,recovery_draining FROM northstar_upload_bind_capacity_policy(100000,1000000,1099511627776);' \
   --command='CREATE TABLE backup_probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL);' \
   --command="INSERT INTO backup_probe VALUES (1, 'database-restored');" \
   --command="INSERT INTO users(id,username,password_hash,display_name,is_admin) VALUES ('11111111-1111-4111-8111-111111111111','backup-fixture','fixture-password-hash','Backup Fixture',FALSE);" \
   --command="INSERT INTO upload_slots(id,user_id,filename,content_type,size,token_hash,expires_at,uploaded,uploading,content_sha256,completed_at,put_expires_at,storage_backend,storage_state,storage_object_key,storage_sha256,storage_size) VALUES ('$upload_id','11111111-1111-4111-8111-111111111111','fixture.bin','application/octet-stream',$upload_size,decode(repeat('22',32),'hex'),clock_timestamp()+INTERVAL '1 day',TRUE,FALSE,decode('$upload_digest','hex'),clock_timestamp(),clock_timestamp()+INTERVAL '15 minutes','local','committed','$upload_id',decode('$upload_digest','hex'),$upload_size);" >/dev/null
 
-PGPASSWORD="$migrator_password" PGHOST="$socket_dir" PGUSER="$migrator_role" \
-  PGDATABASE=northstar_backup_source "$postgres_bin/psql" \
-  --no-psqlrc --set ON_ERROR_STOP=1 \
-  --set database_name=northstar_backup_source \
-  --set migrator_role="$migrator_role" \
-  --set runtime_role="$runtime_role" \
-  --set command_role="$command_role" \
-  --set backup_role="$backup_role" \
-  --set allow_bootstrap=false \
-  --set grant_phase=exact \
-  --file "$project_dir/deploy/postgres-init/lib/reconcile-northstar-grants.sql" \
-  >/dev/null
+reconcile_repository_grants northstar_backup_source
 
 # First exercise the production path: read-only backup identity, file-backed
 # URL secrets, Ed25519 authentication, age encryption, monotonic state, a
@@ -709,31 +719,44 @@ mark_rollback_root "$rollback_retention"
 rollback_sentinel_id="33333333-3333-4333-8333-333333333333"
 printf '%s' 'rollback upload sentinel' > "$rollback_restore/$rollback_sentinel_id"
 create_restore_database northstar_rollback_target
+apply_repository_migrations northstar_rollback_target
 PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
   PGDATABASE=northstar_rollback_target "$postgres_bin/psql" \
   --no-psqlrc --set ON_ERROR_STOP=1 \
   --command='CREATE TABLE rollback_probe (value TEXT NOT NULL);' \
   --command="INSERT INTO rollback_probe VALUES ('database-rolled-back');" >/dev/null
+reconcile_repository_grants northstar_rollback_target
 rollback_database_url="postgresql://$migrator_role:$migrator_password@/northstar_rollback_target?host=$encoded_socket"
+rollback_fault_log="$work_dir/rollback-fault.log"
 if NORTHSTAR_RESTORE_TEST_FAIL_AFTER_UPLOAD_MOVES=1 DATABASE_URL="$rollback_database_url" \
   bash "$project_dir/scripts/restore-backup.sh" "$backup_dir" \
   --confirm-restore NORTHSTAR-RESTORE --upload-dir "$rollback_restore" \
-  --rollback-dir "$rollback_retention" >/dev/null 2>&1; then
+  --rollback-dir "$rollback_retention" >"$rollback_fault_log" 2>&1; then
   echo "restore fault injection unexpectedly succeeded" >&2
   exit 1
 fi
-rollback_value="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
+if ! rollback_value="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
   PGDATABASE=northstar_rollback_target "$postgres_bin/psql" \
   --no-psqlrc --tuples-only --no-align \
-  --command='SELECT value FROM rollback_probe')"
+  --command='SELECT value FROM rollback_probe')"; then
+  echo 'rollback fault injection left the target database unavailable' >&2
+  tail -n 160 "$rollback_fault_log" >&2 || true
+  exit 1
+fi
 [[ "$rollback_value" == "database-rolled-back" ]] \
   || { echo "database compensation did not restore the pre-cutover data" >&2; exit 1; }
 remaining_new_tables="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
   PGDATABASE=northstar_rollback_target "$postgres_bin/psql" \
   --no-psqlrc --tuples-only --no-align \
-  --command="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('backup_probe','upload_slots')")"
+  --command="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='backup_probe'")"
 [[ "$remaining_new_tables" == "0" ]] \
   || { echo "database compensation retained objects from the rejected backup" >&2; exit 1; }
+rollback_upload_rows="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
+  PGDATABASE=northstar_rollback_target "$postgres_bin/psql" \
+  --no-psqlrc --tuples-only --no-align \
+  --command='SELECT COUNT(*) FROM upload_slots')"
+[[ "$rollback_upload_rows" == "0" ]] \
+  || { echo "database compensation retained upload rows from the rejected backup" >&2; exit 1; }
 [[ "$(<"$rollback_restore/$rollback_sentinel_id")" == "rollback upload sentinel" ]] \
   || { echo "upload compensation did not restore the pre-cutover object" >&2; exit 1; }
 [[ ! -e "$rollback_restore/$upload_id" ]] \
@@ -745,7 +768,7 @@ missing_upload_id="44444444-4444-4444-8444-444444444444"
 PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
   PGDATABASE=northstar_backup_source "$postgres_bin/psql" \
   --no-psqlrc --set ON_ERROR_STOP=1 \
-  --command="INSERT INTO upload_slots VALUES ('$missing_upload_id', 17, TRUE, NOW() + INTERVAL '1 day', NULL);" >/dev/null
+  --command="INSERT INTO upload_slots(id,user_id,filename,content_type,size,token_hash,expires_at,uploaded,uploading,content_sha256,completed_at,put_expires_at,storage_backend,storage_state,storage_object_key,storage_sha256,storage_size) VALUES ('$missing_upload_id','11111111-1111-4111-8111-111111111111','missing.bin','application/octet-stream',17,decode(repeat('44',32),'hex'),clock_timestamp()+INTERVAL '1 day',TRUE,FALSE,decode(repeat('55',32),'hex'),clock_timestamp(),clock_timestamp()+INTERVAL '15 minutes','local','committed','$missing_upload_id',decode(repeat('55',32),'hex'),17);" >/dev/null
 inconsistent_backup_root="$work_dir/inconsistent-backups"
 mkdir "$inconsistent_backup_root"
 if DATABASE_URL="$source_database" bash "$project_dir/scripts/backup.sh" \
@@ -755,10 +778,10 @@ if DATABASE_URL="$source_database" bash "$project_dir/scripts/backup.sh" \
 fi
 [[ -z "$(find "$inconsistent_backup_root" -mindepth 1 -maxdepth 1 -type d -name 'northstar-*' -print -quit)" ]] \
   || { echo "inconsistent backup published a canonical directory" >&2; exit 1; }
-PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_backup_source "$postgres_bin/psql" \
-  --no-psqlrc --set ON_ERROR_STOP=1 \
-  --command="DELETE FROM upload_slots WHERE id = '$missing_upload_id';" >/dev/null
+# Keep the deliberately inconsistent row until the disposable PostgreSQL
+# cluster is removed. Deleting a committed physical projection correctly
+# requires the normal cleanup-debt/outbox workflow; bypassing that authority
+# merely to tidy a short-lived negative fixture would invalidate the test.
 
 restore_scratch="$work_dir/restore-scratch"
 mkdir -m 0700 "$restore_scratch"
@@ -776,11 +799,13 @@ same_uuid_old_body='pre-restore bytes for the same UUID'
 printf '%s' "$same_uuid_old_body" >"$same_uuid_restore/$upload_id"
 chmod 0600 "$same_uuid_restore/$upload_id"
 create_restore_database northstar_same_uuid_target
+apply_repository_migrations northstar_same_uuid_target
 PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
   PGDATABASE=northstar_same_uuid_target "$postgres_bin/psql" \
   --no-psqlrc --set ON_ERROR_STOP=1 \
   --command='CREATE TABLE same_uuid_probe (value TEXT NOT NULL);' \
   --command="INSERT INTO same_uuid_probe VALUES ('same-uuid-database-restored');" >/dev/null
+reconcile_repository_grants northstar_same_uuid_target
 same_uuid_database="postgresql://$migrator_role:$migrator_password@/northstar_same_uuid_target?host=$encoded_socket"
 if NORTHSTAR_RESTORE_TEST_FAIL_POINT=after-first-old \
    RESTORE_PLAINTEXT_STAGING_DIR="$restore_scratch" DATABASE_URL="$same_uuid_database" \
@@ -811,11 +836,13 @@ new_activation_old_body='old bytes before first new activation'
 printf '%s' "$new_activation_old_body" >"$new_activation_restore/$upload_id"
 chmod 0600 "$new_activation_restore/$upload_id"
 create_restore_database northstar_new_activation_target
+apply_repository_migrations northstar_new_activation_target
 PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
   PGDATABASE=northstar_new_activation_target "$postgres_bin/psql" \
   --no-psqlrc --set ON_ERROR_STOP=1 \
   --command='CREATE TABLE new_activation_probe (value TEXT NOT NULL);' \
   --command="INSERT INTO new_activation_probe VALUES ('new-activation-database-restored');" >/dev/null
+reconcile_repository_grants northstar_new_activation_target
 new_activation_database="postgresql://$migrator_role:$migrator_password@/northstar_new_activation_target?host=$encoded_socket"
 if NORTHSTAR_RESTORE_TEST_FAIL_POINT=after-first-new \
    RESTORE_PLAINTEXT_STAGING_DIR="$restore_scratch" DATABASE_URL="$new_activation_database" \
@@ -845,11 +872,13 @@ signal_old_body='old bytes before SIGTERM'
 printf '%s' "$signal_old_body" >"$signal_restore/$upload_id"
 chmod 0600 "$signal_restore/$upload_id"
 create_restore_database northstar_signal_target
+apply_repository_migrations northstar_signal_target
 PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
   PGDATABASE=northstar_signal_target "$postgres_bin/psql" \
   --no-psqlrc --set ON_ERROR_STOP=1 \
   --command='CREATE TABLE signal_probe (value TEXT NOT NULL);' \
   --command="INSERT INTO signal_probe VALUES ('signal-database-restored');" >/dev/null
+reconcile_repository_grants northstar_signal_target
 signal_database="postgresql://$migrator_role:$migrator_password@/northstar_signal_target?host=$encoded_socket"
 signal_status=0
 RESTORE_PLAINTEXT_STAGING_DIR="$restore_scratch" \

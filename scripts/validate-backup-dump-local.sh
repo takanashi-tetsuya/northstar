@@ -23,8 +23,13 @@ done
 
 validation_root="$(mktemp -d "$scratch_root/northstar-backup-pg.XXXXXX")"
 data_dir="$validation_root/data"
-socket_dir="$validation_root/socket"
-mkdir -m 0700 "$socket_dir"
+postgres_log="$validation_root/postgres.log"
+# Restore plaintext staging can be deeply nested. PostgreSQL's Unix socket
+# path is limited to 107 bytes on Linux, so keep the socket in a separate
+# private short-lived directory while all database files remain under the
+# operator-selected scratch root.
+socket_dir="$(mktemp -d /tmp/northstar-backup-pg-socket.XXXXXX)"
+chmod 0700 "$socket_dir"
 server_started=false
 
 cleanup() {
@@ -34,6 +39,15 @@ cleanup() {
   if [[ "$server_started" == true ]]; then
     pg_ctl -D "$data_dir" -m immediate -w stop >/dev/null 2>&1 || status=1
   fi
+  case "$socket_dir" in
+    /tmp/northstar-backup-pg-socket.*)
+      rmdir -- "$socket_dir" 2>/dev/null || status=1
+      ;;
+    *)
+      echo "refusing to remove unexpected local validation socket path" >&2
+      status=1
+      ;;
+  esac
   case "$validation_root" in
     "$scratch_root"/northstar-backup-pg.*)
       rm -rf --one-file-system -- "$validation_root"
@@ -62,7 +76,11 @@ initdb -D "$data_dir" --username=postgres --auth-local=trust --auth-host=reject 
   printf "full_page_writes = off\n"
 } >>"$data_dir/postgresql.conf"
 
-pg_ctl -D "$data_dir" -w start >/dev/null
+if ! pg_ctl -D "$data_dir" -l "$postgres_log" -w start >/dev/null; then
+  echo 'local dump-validation PostgreSQL failed to start' >&2
+  tail -n 80 "$postgres_log" >&2 || true
+  exit 1
+fi
 server_started=true
 createdb -h "$socket_dir" -U postgres northstar_backup_verify
 pg_restore -h "$socket_dir" -U postgres -d northstar_backup_verify \
@@ -77,5 +95,6 @@ psql -h "$socket_dir" -U postgres -d northstar_backup_verify \
 
 pg_ctl -D "$data_dir" -m fast -w stop >/dev/null
 server_started=false
+rmdir -- "$socket_dir"
 rm -rf --one-file-system -- "$validation_root"
 trap - EXIT INT TERM

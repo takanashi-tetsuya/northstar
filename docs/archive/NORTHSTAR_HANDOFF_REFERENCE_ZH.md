@@ -1,6 +1,6 @@
 # Northstar XMPP Server 完整实现、审计与移交手册
 
-> **历史参考（v0.1）**：本文记录 2026-08-21 的旧审计快照，不能作为 v1.1 当前能力清单。后续新增的 Direct TLS、roster version、MUC MAM、local PubSub 与实验性 Redis 路由尚未完整反映在本文；当前事实以根目录 `README.md`、`XEP_MATRIX.md`、`changelog/v1.1.md` 与实际代码/测试为准。
+> **历史参考（v0.1）**：本文记录 2026-08-21 的旧审计快照，不能作为当前能力清单。后续新增的 Direct TLS、roster version、MUC MAM、local PubSub 与实验性 Redis 路由尚未完整反映在本文；当前事实以根目录 `README.md`、`XEP_MATRIX.md`、`changelog/v0.2.md` 与实际代码/测试为准。
 
 最后审计日期：2026-08-21  
 适用代码版本：历史工作区 `rust-xmpp-server 0.1.0`

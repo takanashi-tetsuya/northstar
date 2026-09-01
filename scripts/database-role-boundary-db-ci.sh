@@ -55,7 +55,7 @@ esac
 [[ ${#control_password} -ge 32 ]] \
   || fail 'NORTHSTAR_CI_CONTROL_PASSWORD must contain at least 32 characters'
 
-for command in bash cargo chmod grep install mktemp psql rm sed sha384sum; do
+for command in bash cargo chmod grep install mktemp psql python3 rm sed sha384sum; do
   command -v "$command" >/dev/null || fail "required command is unavailable: $command"
 done
 
@@ -209,6 +209,13 @@ expect_sqlstate() {
 }
 
 cd "$project_dir"
+
+# Refuse the destructive, relatively expensive database fixture before it
+# starts if a migration changed without regenerating the repository authority.
+# Otherwise the eventual exact-grant error misleadingly looks like a database
+# ACL defect even though its expected ledger was stale at checkout time.
+python3 scripts/generate-database-migration-ledger.py --check \
+  || fail 'repository migration ledger is stale'
 
 # The service owns only database postgres. Refuse to reuse any cluster that
 # already has fixture/application identities or the target database.
@@ -1130,10 +1137,12 @@ PSQL
 psql_as "$migrator_role" "$migrator_password" --file "$quoted_migration_driver"
 quoted_schema_chain_ok=$(psql_as "$migrator_role" "$migrator_password" \
   --tuples-only --no-align <<'PSQL'
-SELECT pg_catalog.to_regclass('"northstar ci ""quoted".users') IS NOT NULL
-   AND pg_catalog.to_regclass('"northstar ci ""quoted".users')
-         IS DISTINCT FROM pg_catalog.to_regclass('public.users')
-   AND (
+WITH probes AS (
+  SELECT pg_catalog.to_regclass('"northstar ci ""quoted".users') IS NOT NULL
+           AND pg_catalog.to_regclass('"northstar ci ""quoted".users')
+                 IS DISTINCT FROM pg_catalog.to_regclass('public.users')
+           AS users_isolated,
+    (
      SELECT routine.proconfig=ARRAY[
               'search_path=pg_catalog, "northstar ci ""quoted", pg_temp'
             ]::pg_catalog.text[]
@@ -1141,8 +1150,8 @@ SELECT pg_catalog.to_regclass('"northstar ci ""quoted".users') IS NOT NULL
       WHERE routine.oid=pg_catalog.to_regprocedure(
         '"northstar ci ""quoted".northstar_upload_queue_snapshot()'
       )
-   )
-   AND (
+    ) AS upload_path_isolated,
+    (
      SELECT pg_catalog.count(*)=5 AND pg_catalog.bool_and(
               trigger.tgenabled='O' AND NOT trigger.tgisinternal
               AND function_namespace.nspname='northstar ci "quoted'
@@ -1166,12 +1175,33 @@ SELECT pg_catalog.to_regclass('"northstar ci ""quoted".users') IS NOT NULL
           'sm_resume_sessions_deployment_capacity_insert',
           'sm_resume_sessions_deployment_capacity_delete'
         )
-   )
-   AND public.northstar_session_capability_catalog_healthy('public');
+    ) AS trigger_catalog_isolated
+)
+SELECT CASE
+         WHEN users_isolated AND upload_path_isolated
+              AND trigger_catalog_isolated THEN 't'
+         ELSE pg_catalog.format(
+           'f users=%s upload_path=%s triggers=%s',
+           users_isolated,upload_path_isolated,
+           trigger_catalog_isolated
+         )
+       END
+  FROM probes;
 PSQL
 )
-[[ "$quoted_schema_chain_ok" == 't' ]] \
-  || fail 'real quoted-schema migration chain escaped into the populated public decoy'
+if [[ "$quoted_schema_chain_ok" != 't' ]]; then
+  printf 'quoted-schema migration diagnostics: %s\n' "$quoted_schema_chain_ok" >&2
+  fail 'real quoted-schema migration chain escaped into the populated public decoy'
+fi
+# The catalog health capability deliberately treats an owner session as the
+# single-owner development profile.  Query the production-shaped public decoy
+# through the runtime identity, not the migrator used to inspect the private
+# quoted schema, so its exact runtime grants are evaluated in the right mode.
+public_decoy_healthy=$(psql_as "$runtime_role" "$runtime_password" \
+  --tuples-only --no-align \
+  --command="SELECT public.northstar_session_capability_catalog_healthy('public')")
+[[ "$public_decoy_healthy" == 't' ]] \
+  || fail 'quoted-schema migration changed the production public authority catalog'
 psql_as "$migrator_role" "$migrator_password" <<'PSQL'
 DROP SCHEMA "northstar ci ""quoted" CASCADE;
 PSQL

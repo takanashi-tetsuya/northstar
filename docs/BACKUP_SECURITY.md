@@ -178,7 +178,7 @@ scripts/backup.sh \
   --signing-key-file /run/secrets/backup_signing_key \
   --age-recipient-file /run/secrets/backup_age_recipients \
   --plaintext-staging-dir /secure-ephemeral-scratch \
-  --northstar-version 1.1.0
+  --northstar-version 0.2.0
 ```
 
 Verify and materialize payloads into a pre-created empty directory:

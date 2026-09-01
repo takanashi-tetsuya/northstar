@@ -48,7 +48,7 @@ services:
     build:
       context: .
       args:
-        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-1.1.0}
+        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-0.2.0}
         VCS_REF: ${NORTHSTAR_VCS_REF:-unknown}
     depends_on:
       postgres:
@@ -87,7 +87,7 @@ services:
       context: .
       dockerfile: deploy/database-grants.Dockerfile
       args:
-        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-1.1.0}
+        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-0.2.0}
         VCS_REF: ${NORTHSTAR_VCS_REF:-unknown}
     depends_on:
       migrate:
@@ -115,7 +115,7 @@ services:
     build:
       context: .
       args:
-        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-1.1.0}
+        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-0.2.0}
         VCS_REF: ${NORTHSTAR_VCS_REF:-unknown}
     depends_on:
       database-grants:
@@ -278,7 +278,6 @@ services:
       LOG_FORMAT: ${LOG_FORMAT:-json}
       LOG_RETENTION_FILES: ${LOG_RETENTION_FILES:-30}
       RUST_LOG: ${RUST_LOG:-rust_xmpp_server=info,tower_http=info}
-      ENABLE_DESTRUCTIVE_ADMIN: ${ENABLE_DESTRUCTIVE_ADMIN:-false}
       ENABLE_XMPP_SERVICE_CONTROL: ${ENABLE_XMPP_SERVICE_CONTROL:-false}
       ADMIN_IDLE_SECONDS: ${ADMIN_IDLE_SECONDS:-900}
     ports:
@@ -429,11 +428,12 @@ services:
       context: .
       dockerfile: deploy/backup.Dockerfile
       args:
-        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-1.1.0}
+        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-0.2.0}
         VCS_REF: ${NORTHSTAR_VCS_REF:-unknown}
     profiles: ["backup"]
     environment:
       BACKUP_SECURITY_POLICY: production
+      NORTHSTAR_BACKUP_APPLICATION_VERSION: ${NORTHSTAR_VERSION:-0.2.0}
       BACKUP_SIGNING_KEY_FILE: /run/secrets/backup_signing_key
       BACKUP_AGE_RECIPIENT_FILE: /run/secrets/backup_age_recipients
       BACKUP_SEQUENCE_STATE_FILE: /state/backup-sequence
@@ -475,7 +475,7 @@ services:
       context: .
       dockerfile: deploy/backup.Dockerfile
       args:
-        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-1.1.0}
+        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-0.2.0}
         VCS_REF: ${NORTHSTAR_VCS_REF:-unknown}
     profiles: ["restore"]
     depends_on:

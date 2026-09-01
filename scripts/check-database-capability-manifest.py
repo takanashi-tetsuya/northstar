@@ -601,7 +601,13 @@ def repository_migration_ledger() -> list[tuple[int, str, str]]:
             fail(f"duplicate or invalid migration version: {path.name}")
         seen.add(version)
         description = match.group(2).replace("_", " ")
-        checksum = hashlib.sha384(path.read_bytes()).hexdigest()
+        migration_bytes = path.read_bytes()
+        if b"\r" in migration_bytes:
+            fail(
+                "migration SQL must use repository-canonical LF line endings: "
+                f"{path.name}"
+            )
+        checksum = hashlib.sha384(migration_bytes).hexdigest()
         rows.append((version, description, checksum))
     rows.sort(key=lambda row: row[0])
     if not {113, 114, 115}.issubset(seen):
@@ -751,7 +757,8 @@ if ledger_gaps != {21}:
 
 generator_text = read(MIGRATION_LEDGER_GENERATOR)
 for required in (
-    "hashlib.sha384(path.read_bytes()).hexdigest()",
+    'if b"\\r" in migration_bytes:',
+    "hashlib.sha384(migration_bytes).hexdigest()",
     "migration SQL file does not use the canonical NNNN_name.sql form",
     "ordered = sorted(rows, key=lambda row: row[0])",
     "migration chain is missing the 0113/0114/0115 boundary",

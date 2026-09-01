@@ -1,6 +1,6 @@
 # Northstar v1.1 七项任务实现、审计与生产验证报告
 
-> **Historical snapshot — 不得作为当前 backlog 或能力清单。** 本文只记录 2026-08-25 七项任务完成时的代码与测试证据；此后协议、migration、可靠性与安全边界继续发生变化。当前事实必须以实际代码、根目录 `XEP_MATRIX.md`、`docs/KNOWN_ISSUES.md`、`docs/ARCHITECTURE.md` 和 `docs/PRODUCTION_OPERATIONS.md` 为准。本文中的“仍未实现”或“已完成”都不能脱离对应时间点直接用于当前发布判断。
+> **Historical snapshot — 不得作为当前 backlog 或能力清单。** 标题中的 `v1.1` 是当时使用的旧内部标签，不是现行语义版本；正式版本史现将该基线归为 `v0.1`，当前开发线为 `v0.2.0`。本文只记录 2026-08-25 七项任务完成时的代码与测试证据；此后协议、migration、可靠性与安全边界继续发生变化。当前事实必须以实际代码、根目录 `XEP_MATRIX.md`、`docs/KNOWN_ISSUES.md`、`docs/ARCHITECTURE.md` 和 `docs/PRODUCTION_OPERATIONS.md` 为准。本文中的“仍未实现”或“已完成”都不能脱离对应时间点直接用于当前发布判断。
 
 日期：2026-08-25（Asia/Tokyo）
 代码基线：`rust-xmpp-server` 1.1.0

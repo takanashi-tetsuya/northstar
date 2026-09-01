@@ -14,8 +14,10 @@ logs
 scratch
 backups
 deploy/secrets
+secrets
 target
 target-wsl
+target-*
 *.log
 *.pid
 *.key

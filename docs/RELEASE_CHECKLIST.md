@@ -5,6 +5,11 @@ It does not turn repository-local test coverage into a public production
 guarantee. Record every result against the commit, binary/image digest,
 configuration generation and environment.
 
+The current development line is `0.2.0`. Do not assign `1.0.0` until one exact
+artifact and target environment have completed every applicable checkbox in
+this document, all release-blocking known issues are closed, and the retained
+evidence has been reviewed.
+
 ## 1. Freeze and identify the artifact
 
 - [ ] Working tree changes have been reviewed and intentionally included or
@@ -44,8 +49,8 @@ configuration generation and environment.
 
 - [ ] Restore a recent production-shaped backup into an isolated environment.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 123 migrations from `0001` through the current
-  repository maximum `0124`, with `0021` as the sole intentional gap.
+  identity and verify all 124 migrations from `0001` through the current
+  repository maximum `0125`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Exercise the documented rollback/forward-fix decision; never rewrite a

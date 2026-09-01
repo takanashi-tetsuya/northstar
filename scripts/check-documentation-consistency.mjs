@@ -11,7 +11,7 @@ const currentDocuments = [
   'SECURITY.md',
   'ARCHITECTURE.md',
   'XEP_MATRIX.md',
-  'changelog/v2.0.md',
+  'changelog/v0.2.md',
   'docs/README.md',
   'docs/ARCHITECTURE.md',
   'docs/KNOWN_ISSUES.md',
@@ -77,7 +77,7 @@ for (const relativePath of [
 for (const [relativePath, marker] of [
   ['.env.example', `NORTHSTAR_VERSION=${packageVersion}`],
   ['docker-compose.yml', `NORTHSTAR_VERSION:-${packageVersion}`],
-  ['changelog/v2.0.md', `**Package version:** \`${packageVersion}\``],
+  ['changelog/v0.2.md', `**Package version:** \`${packageVersion}\``],
 ]) {
   if (!read(relativePath).includes(marker)) {
     throw new Error(`${relativePath} does not carry release version ${packageVersion}`);
@@ -90,6 +90,23 @@ if (!pinnedToolchain || !minimumRust || !pinnedToolchain.startsWith(`${minimumRu
 }
 if (!read('.github/workflows/ci.yml').includes(`toolchain: ${pinnedToolchain}`)) {
   throw new Error(`CI does not use the pinned Rust ${pinnedToolchain} release toolchain`);
+}
+const escapedPinnedToolchain = pinnedToolchain.replaceAll('.', '\\.');
+const applicationDockerfile = read('Dockerfile');
+if (
+  !new RegExp(
+    `^FROM rust:${escapedPinnedToolchain}-bookworm@sha256:[0-9a-f]{64} AS builder$`,
+    'm',
+  ).test(applicationDockerfile)
+) {
+  throw new Error(`Docker builder tag does not identify pinned Rust ${pinnedToolchain}`);
+}
+if (
+  !applicationDockerfile.includes(
+    `RUN rustc --version | grep -E '^rustc ${escapedPinnedToolchain} '`,
+  )
+) {
+  throw new Error(`Docker build does not verify pinned Rust ${pinnedToolchain}`);
 }
 
 const staleStatements = new Map([

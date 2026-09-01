@@ -84,6 +84,13 @@ package_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
 [ -n "$package_version" ] || fail "Cargo.toml package version could not be read"
 grep -F "channel = \"1.97.1\"" rust-toolchain.toml >/dev/null \
     || fail "rust-toolchain.toml does not pin the release toolchain"
+release_toolchain=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)
+[ -n "$release_toolchain" ] || fail "rust-toolchain.toml release channel could not be read"
+release_toolchain_regex=$(printf '%s\n' "$release_toolchain" | sed 's/[.]/\\./g')
+grep -E "^FROM rust:${release_toolchain}-bookworm@sha256:[0-9a-f]{64} AS builder$" Dockerfile >/dev/null \
+    || fail "Dockerfile builder tag does not identify the pinned Rust $release_toolchain toolchain"
+grep -F "RUN rustc --version | grep -E '^rustc ${release_toolchain_regex} '" Dockerfile >/dev/null \
+    || fail "Dockerfile does not verify the pinned Rust $release_toolchain compiler"
 for image_file in Dockerfile deploy/backup.Dockerfile deploy/database-grants.Dockerfile; do
     grep -F "ARG NORTHSTAR_VERSION=$package_version" "$image_file" >/dev/null \
         || fail "$image_file OCI version does not match Cargo.toml"

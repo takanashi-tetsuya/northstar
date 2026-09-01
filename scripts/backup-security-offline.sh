@@ -40,6 +40,25 @@ printf '%s\n' NORTHSTAR_OFFLINE_DATABASE_FIXTURE > "$destination"
 EOF
 cat > "$fixture_root/bin/psql" <<'EOF'
 #!/bin/sh
+sql_file=
+expect_sql_file=false
+for argument in "$@"; do
+  if test "$expect_sql_file" = true; then
+    sql_file=$argument
+    expect_sql_file=false
+    continue
+  fi
+  case "$argument" in
+    --file) expect_sql_file=true ;;
+    --file=*) sql_file=${argument#--file=} ;;
+  esac
+done
+if test -n "$sql_file" \
+   && grep -q '^WITH expected(version,description,checksum) AS (VALUES' "$sql_file"; then
+  expected_rows=$(grep -Ec '^\([0-9]+,' "$sql_file")
+  printf 'true|%s\n' "$expected_rows"
+  exit 0
+fi
 case "$*" in
   *'SHOW server_version'*) printf '%s\n' fixture ;;
   *'COUNT(*) FROM _sqlx_migrations'*) printf '%s\n' 0 ;;
@@ -47,7 +66,10 @@ case "$*" in
   *)
     while IFS= read -r line; do
       case "$line" in
-        *pg_try_advisory_lock*) printf '%s\n' __LOCK_OK__ ;;
+        *'pg_try_advisory_lock(735559096281326101)'*)
+          printf '%s\n' __MAINTENANCE_LOCK_OK__
+          ;;
+        *'pg_try_advisory_lock('*) printf '%s\n' __POLICY_LOCK_OK__ ;;
         *"SELECT '__FENCE_ALIVE__'"*) printf '%s\n' __FENCE_ALIVE__ ;;
         '\echo '*) printf '%s\n' "${line#\\echo }" ;;
         '\q') exit 0 ;;

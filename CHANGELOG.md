@@ -69,6 +69,10 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   listener fans these hints into race-safe session watches; subscribe-then-
   recheck closes lost wakeups, while exact route/cancellation/database lease
   boundaries replace the former fixed 10 ms and 500 ms polling loops.
+- Migration `0127` now uses PostgreSQL's unqualified `LEAST`/`GREATEST`
+  special expressions. Schema-qualifying these parser expressions as catalog
+  functions made a fresh migration fail before the server could start; both
+  static SQL guards and the authenticated migration ledger cover the repair.
 - SM notifications now advance a one-shot process-local edge sequence instead
   of trusting the retained payload version for deduplication. A stale or forged
   high `state_version` causes at most one extra authoritative read and cannot

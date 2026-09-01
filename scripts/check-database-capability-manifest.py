@@ -1444,7 +1444,7 @@ for required in (
     "'state_version', changed_version",
     "pending_reason := CASE",
     "IF stream.expires_at<=authority_now THEN",
-    "retry_at := pg_catalog.least(",
+    "retry_at := least(",
     "stream.expires_at",
     "stream.live_lease_until",
     "stream.claimed_until",

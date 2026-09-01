@@ -768,7 +768,7 @@ for required_fragment in \
     "WHEN live_pending THEN 'live-owner'" \
     "ELSE 'claim-owner'" \
     'IF stream.expires_at<=authority_now THEN' \
-    'retry_at := pg_catalog.least(' \
+    'retry_at := least(' \
     'stream.expires_at' \
     'stream.live_lease_until' \
     'stream.claimed_until' \

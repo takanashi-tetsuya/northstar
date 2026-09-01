@@ -154,9 +154,9 @@ BEGIN
         -- Eligibility needs both the live-owner and claim-owner boundaries to
         -- pass. Expiry is an earlier terminal boundary and must also wake the
         -- waiter so it can return a protocol rejection immediately.
-        retry_at := pg_catalog.least(
+        retry_at := least(
             stream.expires_at,
-            pg_catalog.greatest(
+            greatest(
                 CASE WHEN live_pending THEN stream.live_lease_until ELSE authority_now END,
                 CASE WHEN claim_pending THEN stream.claimed_until ELSE authority_now END
             )

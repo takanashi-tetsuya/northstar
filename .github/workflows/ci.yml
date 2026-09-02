@@ -637,4 +637,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y age postgresql postgresql-client
 
       - name: Run backup, verification, and restore
-        run: bash scripts/backup-restore-wsl.sh
+        run: >-
+          bash scripts/github-ci-run.sh "Disaster-recovery drill"
+          bash scripts/backup-restore-wsl.sh

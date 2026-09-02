@@ -20,6 +20,14 @@ SELECT pg_catalog.to_regclass('pg_temp.northstar_capability_manifest') IS NOT NU
   \quit 44
 \endif
 
+SELECT pg_catalog.to_regclass('pg_temp.northstar_runtime_relation_manifest') IS NOT NULL
+  AS northstar_runtime_relation_manifest_is_loaded \gset
+\if :northstar_runtime_relation_manifest_is_loaded
+\else
+  \echo 'canonical Northstar runtime relation manifest was not loaded'
+  \quit 44
+\endif
+
 SELECT pg_catalog.to_regclass('pg_temp.northstar_migration_ledger_manifest') IS NOT NULL
   AS northstar_migration_ledger_manifest_is_loaded \gset
 \if :northstar_migration_ledger_manifest_is_loaded
@@ -245,6 +253,48 @@ SELECT resolved_phase='exact' AS northstar_exact_grant_phase
 
 \if :northstar_exact_grant_phase
 
+-- The manifest is complete, rather than a list of exceptions to a broad DML
+-- grant.  Refuse to reconcile if the migration ledger and the independently
+-- reviewed relation capability set describe different final schemas.
+SELECT NOT EXISTS (
+  (SELECT relation.relname
+     FROM pg_catalog.pg_class AS relation
+     JOIN pg_catalog.pg_namespace AS namespace
+       ON namespace.oid=relation.relnamespace
+    WHERE namespace.nspname='public'
+      AND relation.relkind IN ('r','p')
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_depend AS dependency
+         WHERE dependency.classid='pg_catalog.pg_class'::pg_catalog.regclass
+           AND dependency.objid=relation.oid
+           AND dependency.deptype='e'
+      )
+   EXCEPT
+   SELECT expected.relation_name
+     FROM pg_temp.northstar_runtime_relation_manifest AS expected)
+  UNION ALL
+  (SELECT expected.relation_name
+     FROM pg_temp.northstar_runtime_relation_manifest AS expected
+   EXCEPT
+   SELECT relation.relname
+     FROM pg_catalog.pg_class AS relation
+     JOIN pg_catalog.pg_namespace AS namespace
+       ON namespace.oid=relation.relnamespace
+    WHERE namespace.nspname='public'
+      AND relation.relkind IN ('r','p')
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_depend AS dependency
+         WHERE dependency.classid='pg_catalog.pg_class'::pg_catalog.regclass
+           AND dependency.objid=relation.oid
+           AND dependency.deptype='e'
+      ))
+) AS northstar_runtime_relation_manifest_matches_schema \gset
+\if :northstar_runtime_relation_manifest_matches_schema
+\else
+  \echo 'canonical runtime relation manifest does not match the exact application table set'
+  \quit 44
+\endif
+
 -- Erase arbitrary database/schema grantees before rebuilding the exact
 -- owner-issued CONNECT/USAGE rows.  CASCADE removes grant-option descendants;
 -- the catalog postcondition below also checks grantor and grantability.
@@ -389,92 +439,38 @@ GRANT CONNECT ON DATABASE :"database_name"
 GRANT USAGE ON SCHEMA public
    TO :"runtime_role", :"command_role", :"backup_role";
 
+-- Build runtime table privileges only from the complete positive manifest.
+-- There is intentionally no broad grant followed by an exception list: that
+-- pattern makes every new table writable during the interval before its
+-- special case is noticed.  Rows with all four flags false remain owner-only.
+SELECT pg_catalog.format(
+         'GRANT %s ON TABLE public.%I TO %I',
+         pg_catalog.string_agg(grant_spec.privilege_name,', '
+                               ORDER BY grant_spec.ordinal),
+         expected.relation_name,
+         :'runtime_role'
+       )
+  FROM pg_temp.northstar_runtime_relation_manifest AS expected
+ CROSS JOIN LATERAL (
+   VALUES
+     (1,'SELECT',expected.can_select),
+     (2,'INSERT',expected.can_insert),
+     (3,'UPDATE',expected.can_update),
+     (4,'DELETE',expected.can_delete)
+ ) AS grant_spec(ordinal,privilege_name,enabled)
+ WHERE grant_spec.enabled
+ GROUP BY expected.relation_name
+ ORDER BY expected.relation_name
+\gexec
+
 -- The runtime role deliberately has no database/schema CREATE privilege and
--- cannot alter ownership or disable triggers.  Current mutable application
--- tables retain DML, but immutable governance journals are reduced below to
--- their exact append/transition surface.
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public
-   TO :"runtime_role";
+-- cannot alter ownership, set sequence values, or disable triggers.
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public
    TO :"runtime_role";
 
--- The two ledgers are startup trust roots, never mutable application state.
-SELECT pg_catalog.format(
-         'REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE %I.%I FROM %I',
-         namespace.nspname,
-         relation.relname,
-         :'runtime_role'
-       )
-  FROM pg_catalog.pg_class AS relation
-  JOIN pg_catalog.pg_namespace AS namespace
-    ON namespace.oid = relation.relnamespace
- WHERE namespace.nspname = 'public'
-   AND relation.relname IN ('_sqlx_migrations','jid_identity_migrations')
-   AND relation.relkind IN ('r','p')
-\gexec
-
--- Account authority is mutated only through migration-0108 typed command
--- capabilities.  SELECT remains necessary for authentication/routing, while
--- every direct write privilege (including trigger/reference shortcuts) is
--- removed from the long-lived application identity.
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
-  ON TABLE public.users FROM :"runtime_role";
-
--- Release facts are append-only evidence produced by owner-held delete
--- triggers. Runtime may inspect them for startup audit and orphan discovery,
--- but only the reviewed drain capability may consume them.
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
-  ON TABLE public.mix_delivery_capacity_releases FROM :"runtime_role";
-GRANT SELECT ON TABLE public.mix_delivery_capacity_releases TO :"runtime_role";
-
--- MIX-PAM capacity is projected only by owner-held triggers/capabilities.
--- Runtime may update delivery/reconciliation state on an existing operation,
--- but cannot create or remove a journal row (and therefore cannot bypass exact
--- global/per-account accounting). Counter authority is exactly read-only.
-REVOKE INSERT, DELETE, TRUNCATE, REFERENCES, TRIGGER
-  ON TABLE public.mix_pam_operations FROM :"runtime_role";
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
-  ON TABLE public.mix_pam_operation_capacity,
-           public.mix_pam_operation_user_capacity
-  FROM :"runtime_role";
-GRANT SELECT ON TABLE public.mix_pam_operation_capacity,
-                      public.mix_pam_operation_user_capacity
-  TO :"runtime_role";
-
--- Upload namespace, slot manifests and recovery queues are database-owned
--- authorities. Runtime receives only the typed migration-0113 capabilities;
--- it cannot read bearer hashes/provider locators or bypass lease/accounting
--- transitions with direct table access.
-REVOKE ALL PRIVILEGES
-  ON TABLE public.upload_storage_authority,
-           public.upload_storage_capacity_ledger,
-           public.upload_slots,
-           public.upload_storage_jobs,
-           public.upload_cleanup_queue
-  FROM :"runtime_role", :"command_role";
-
--- Cluster replay admission and exact C2S route ownership are owner-held
--- authorities.  Redis is only a disposable index; allowing the long-lived
--- runtime identity to read or mutate these rows directly would bypass the
--- replay-capacity trigger and the process/connection fencing capabilities.
-REVOKE ALL PRIVILEGES
-  ON TABLE public.cluster_signed_envelope_replays,
-           public.cluster_signed_envelope_replay_capacity,
-           public.cluster_session_routes
-  FROM :"runtime_role", :"command_role";
-
--- Live-route leases, replacement claims and SM resume bearers are owner-held
--- authorities. Runtime can inspect only non-secret reconciliation columns;
--- every transition is one of migration-0114's exact, fenced capabilities.
-REVOKE ALL PRIVILEGES
-  ON TABLE public.deployment_session_leases,
-           public.deployment_session_binding_claims,
-           public.sm_resume_sessions
-  FROM :"runtime_role", :"command_role";
-GRANT SELECT
-  ON TABLE public.deployment_session_leases,
-           public.deployment_session_binding_claims
-  TO :"runtime_role";
+-- sm_resume_sessions is the sole deliberate column-level relation exception.
+-- Its table-level manifest row is all false; runtime may inspect only the
+-- non-secret reconciliation columns below, never bearer hashes or peer_ip.
 GRANT SELECT (
     id,user_id,auth_generation,full_jid,resource,connection_id,
     resume_timeout_seconds,inbound_h,outbound_h,acked_h,available,carbons,
@@ -483,62 +479,6 @@ GRANT SELECT (
     last_presence,resumable,live_lease_until,expires_at,claimed_until,
     created_at,updated_at
   ) ON TABLE public.sm_resume_sessions TO :"runtime_role";
-
--- XEP-0133 control-plane state is readable where routing/workers require it,
--- but every mutation is an owner-held typed capability.  In particular the
--- service-control watcher uses northstar_admin_service_control_poll() rather
--- than retaining enough UPDATE authority to forge an early restart.
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
-  ON TABLE public.admin_service_messages,
-           public.federation_runtime_rules,
-           public.admin_service_control
-  FROM :"runtime_role";
-
--- Neither long-lived login can inspect or forge the XEP-0133 bearer ledger.
--- The command role receives only typed session routines below; the runtime
--- role receives only claim-consuming business routines.
-REVOKE ALL PRIVILEGES
-  ON TABLE public.admin_command_sessions,
-           public.admin_command_capability_authority,
-           public.admin_session_cleanup_effects,
-           public.admin_session_cleanup_capacity
-  FROM :"runtime_role", :"command_role";
-
--- Immutable histories never rely on an application-set GUC as authority.
--- Remove direct mutation after the broad current-table grant; owner-held,
--- allowlisted capabilities below perform the bounded transitions instead.
-SELECT pg_catalog.format(
-         'REVOKE %s ON TABLE %I.%I FROM %I',
-         CASE
-           WHEN relation.relname = 'cluster_muc_delivery_handoffs'
-             THEN 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
-           WHEN relation.relname = 'governance_export_leases'
-             THEN 'DELETE, TRUNCATE, REFERENCES, TRIGGER'
-           ELSE 'UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
-         END,
-         namespace.nspname,
-         relation.relname,
-         :'runtime_role'
-       )
-  FROM pg_catalog.pg_class AS relation
-  JOIN pg_catalog.pg_namespace AS namespace
-    ON namespace.oid = relation.relnamespace
- WHERE namespace.nspname = 'public'
-   AND relation.relname IN (
-         'audit_log',
-         'legal_holds',
-         'legal_hold_personal_archives',
-         'legal_hold_muc_archives',
-         'legal_hold_offline_messages',
-         'legal_hold_report_evidence',
-         'legal_hold_scopes',
-         'legal_hold_offline_snapshots',
-         'governance_export_leases',
-         'cluster_muc_operations',
-         'cluster_muc_delivery_handoffs'
-       )
-   AND relation.relkind IN ('r', 'p')
-\gexec
 
 -- Fail closed for elevated routines. Reconciliation first removes all runtime
 -- and backup routine execution, then restores ordinary SECURITY INVOKER
@@ -1060,6 +1000,35 @@ ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
 
 -- Exact-phase transactional postconditions prove that the elevated
 -- capability and immutable-history boundaries stayed canonical.
+SELECT NOT EXISTS (
+         SELECT 1
+           FROM pg_temp.northstar_runtime_relation_manifest AS expected
+           LEFT JOIN (
+             pg_catalog.pg_class AS relation
+             JOIN pg_catalog.pg_namespace AS namespace
+               ON namespace.oid=relation.relnamespace
+              AND namespace.nspname='public'
+              AND relation.relkind IN ('r','p')
+           ) ON relation.relname=expected.relation_name
+          WHERE relation.oid IS NULL
+             OR pg_catalog.has_table_privilege(
+                  :'runtime_role',relation.oid,'SELECT') IS DISTINCT FROM expected.can_select
+             OR pg_catalog.has_table_privilege(
+                  :'runtime_role',relation.oid,'INSERT') IS DISTINCT FROM expected.can_insert
+             OR pg_catalog.has_table_privilege(
+                  :'runtime_role',relation.oid,'UPDATE') IS DISTINCT FROM expected.can_update
+             OR pg_catalog.has_table_privilege(
+                  :'runtime_role',relation.oid,'DELETE') IS DISTINCT FROM expected.can_delete
+             OR pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'TRUNCATE')
+             OR pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'REFERENCES')
+             OR pg_catalog.has_table_privilege(:'runtime_role',relation.oid,'TRIGGER')
+       ) AS northstar_runtime_relation_capability_manifest_is_exact \gset
+\if :northstar_runtime_relation_capability_manifest_is_exact
+\else
+  \echo 'runtime relation capability set differs from the canonical manifest'
+  \quit 31
+\endif
+
 SELECT NOT EXISTS (
          SELECT 1
            FROM pg_catalog.pg_class AS relation
@@ -1994,9 +1963,20 @@ SELECT NOT EXISTS (
                privilege.grantor=relation.relowner
                AND NOT privilege.is_grantable
                AND (
-                 (relation.relkind IN ('r','p','v','m','f')
+                 (relation.relkind IN ('r','p')
                   AND privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'runtime_role')
-                  AND privilege.privilege_type IN ('SELECT','INSERT','UPDATE','DELETE'))
+                  AND EXISTS (
+                    SELECT 1
+                      FROM pg_temp.northstar_runtime_relation_manifest AS expected
+                     WHERE expected.relation_name=relation.relname
+                       AND CASE privilege.privilege_type
+                             WHEN 'SELECT' THEN expected.can_select
+                             WHEN 'INSERT' THEN expected.can_insert
+                             WHEN 'UPDATE' THEN expected.can_update
+                             WHEN 'DELETE' THEN expected.can_delete
+                             ELSE FALSE
+                           END
+                  ))
                  OR
                  (relation.relkind IN ('r','p','v','m','f')
                   AND privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'backup_role')

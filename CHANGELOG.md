@@ -96,6 +96,12 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   terminal sequence. Live writes remain cancellable, but the already-latched
   cancellation can no longer cancel its own `<close/>` and WebSocket Close
   frames; a one-shot state prevents duplicate shutdown sequences.
+- Explicit terminal protocol actions now own the whole bounded WebSocket
+  sequence: final IQ replies, any terminal stanza, the RFC 7395 `<close/>`, and
+  the WebSocket Close frame. Account deletion and password replacement may
+  revoke every account resource before returning, but that cancellation can no
+  longer overtake the initiating connection's final result; ordinary live and
+  Stream Management writes remain cancellation-aware.
 - Upload capability projections now explicitly convert the historical
   `VARCHAR(255)` content type to their declared PostgreSQL `TEXT` return type,
   preventing first PUT and public-file retrieval failures.
@@ -166,8 +172,18 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   32-byte bearer hash mandatory.
 - The durable MUC-invitation failure fixture now includes the complete
   retention and legal-hold authority relations read by production admission,
-  so it reaches the intended transaction rollback checks instead of failing
-  during PostgreSQL statement planning.
+  and uses fully addressed server-authoritative federation stanzas. It now
+  proves that the injected outbox trigger is the actual failure source before
+  checking transaction rollback, instead of passing because of a missing
+  fixture relation or pre-admission stanza validation.
+- Runtime table privileges now come from one complete positive relation
+  manifest rather than a broad CRUD grant followed by exception revocations.
+  Grant reconciliation, existing-volume audit, Rust startup attestation and
+  static migration-lifecycle checks consume the same per-table SELECT/INSERT/
+  UPDATE/DELETE policy. A new, removed or reclassified table that is not
+  reflected in the manifest fails closed; owner-held tables, immutable
+  journals and MIX capacity authorities retain their exact least-privilege
+  profiles.
 - The MIX runtime fixture now establishes an ordered recipient outbox/capability
   barrier before live group delivery, separates C2S admission from asynchronous
   delivery, keeps the normal delivery deadline so latency regressions remain

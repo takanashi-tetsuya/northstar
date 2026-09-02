@@ -63,6 +63,17 @@ ROW = re.compile(
     r"'(baseline-0111|0112|0113|0114|0126|0127|0128)'\)[,;]\s*$",
     re.MULTILINE,
 )
+RELATION_ROW = re.compile(
+    r"^\s*\('([a-z_][a-z0-9_]*)',(TRUE|FALSE),(TRUE|FALSE),(TRUE|FALSE),"
+    r"(TRUE|FALSE),'(sqlx|[0-9]{4})'\)[,;]\s*$",
+    re.MULTILINE,
+)
+TABLE_LIFECYCLE = re.compile(
+    r"^(?:CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"(?P<create>[a-z_][a-z0-9_]*)\s*\(|DROP\s+TABLE\s+"
+    r"(?:IF\s+EXISTS\s+)?(?P<drop>[a-z_][a-z0-9_]*)\s*;)",
+    re.IGNORECASE | re.MULTILINE,
+)
 LEDGER_ROW = re.compile(
     r"^\s*\(([0-9]+),'((?:[^']|'')*)',"
     r"pg_catalog\.decode\('([0-9a-f]{96})','hex'\)\)[,;]\s*$",
@@ -815,6 +826,65 @@ migration_documents = [
     for migration in sorted((ROOT / "migrations").glob("*.sql"))
 ]
 
+# Runtime relation privileges are a complete positive manifest, not an
+# exception list layered over a broad grant.  Reconstruct the final table set
+# from the ordered migration lifecycle so a new CREATE/DROP cannot silently
+# inherit an accidental runtime capability.
+relation_rows = RELATION_ROW.findall(manifest_text)
+if not relation_rows:
+    fail("canonical manifest contains no runtime relation rows")
+relation_names = [row[0] for row in relation_rows]
+require_exact("canonical runtime relation manifest", relation_names, set(relation_names))
+relation_manifest = {
+    name: (
+        can_select == "TRUE",
+        can_insert == "TRUE",
+        can_update == "TRUE",
+        can_delete == "TRUE",
+        origin,
+    )
+    for name, can_select, can_insert, can_update, can_delete, origin in relation_rows
+}
+
+final_migration_tables: dict[str, str] = {}
+for migration, migration_text in migration_documents:
+    version = migration.name[:4]
+    for event in TABLE_LIFECYCLE.finditer(migration_text):
+        created = event.group("create")
+        dropped = event.group("drop")
+        if created:
+            if created in final_migration_tables:
+                fail(f"{migration.name} recreates already-live table {created}")
+            final_migration_tables[created] = version
+        else:
+            assert dropped is not None
+            if dropped not in final_migration_tables:
+                fail(f"{migration.name} drops unknown table {dropped}")
+            del final_migration_tables[dropped]
+final_relation_origins = {"_sqlx_migrations": "sqlx", **final_migration_tables}
+if {name: row[4] for name, row in relation_manifest.items()} != final_relation_origins:
+    missing = sorted(set(final_relation_origins) - set(relation_manifest))
+    stale = sorted(set(relation_manifest) - set(final_relation_origins))
+    wrong_origin = sorted(
+        name
+        for name in set(relation_manifest) & set(final_relation_origins)
+        if relation_manifest[name][4] != final_relation_origins[name]
+    )
+    fail(
+        "runtime relation manifest drifted from migration table lifecycle "
+        f"(missing={missing} stale={stale} wrong_origin={wrong_origin})"
+    )
+
+for relation_name, expected_acl in {
+    "mix_delivery_capacity_releases": (True, False, False, False),
+    "mix_pam_operation_capacity": (True, False, False, False),
+    "mix_pam_operation_user_capacity": (True, False, False, False),
+    "mix_pam_operations": (True, False, True, False),
+    "sm_resume_sessions": (False, False, False, False),
+}.items():
+    if relation_manifest.get(relation_name, ())[:4] != expected_acl:
+        fail(f"least-privilege runtime ACL drifted for {relation_name}")
+
 # These checks cover the exact SQL surfaces that enforce the database role
 # boundary.  Migration bodies are included because their SECURITY DEFINER
 # catalog health functions execute again at runtime, not only during install.
@@ -1264,11 +1334,18 @@ for required in (
     "FROM (VALUES ('f'::\"char\"),('T'::\"char\"))",
     "WHEN 'n' THEN 'SCHEMAS'",
     "REVOKE ALL PRIVILEGES ON SCHEMAS",
-    'ON TABLE public.users FROM :"runtime_role"',
-    "GRANT SELECT ON ALL TABLES IN SCHEMA public",
+    "pg_temp.northstar_runtime_relation_manifest",
+    "northstar_runtime_relation_manifest_matches_schema",
+    "northstar_runtime_relation_capability_manifest_is_exact",
+    "WHEN 'SELECT' THEN expected.can_select",
+    "WHEN 'INSERT' THEN expected.can_insert",
+    "WHEN 'UPDATE' THEN expected.can_update",
+    "WHEN 'DELETE' THEN expected.can_delete",
 ):
     if required not in grants_text:
         fail(f"grant policy is not bound to the canonical manifest: {required}")
+if "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public" in grants_text:
+    fail("runtime grant policy reverted to broad DML plus an exception list")
 
 wrapper_text = read(GRANT_WRAPPER)
 if "\\ir northstar-capability-manifest.sql" not in wrapper_text:
@@ -1309,7 +1386,9 @@ for required in (
     "repository migration ledger",
     "pg_catalog.encode(checksum,'hex')",
     "embedded migration ledger contains an unreviewed version gap",
-    "pg_catalog.format('%I.users',namespace.nspname)",
+    "RUNTIME_RELATION_MANIFEST_SQL",
+    "parse_runtime_relation_manifest",
+    "attest_runtime_relation_capability_manifest(pool).await?",
 ):
     if required not in attestation_text:
         fail(f"startup role attestation omits exact SECURITY DEFINER ACL invariant: {required}")
@@ -1325,6 +1404,11 @@ for required in (
     "repository migration ledger differs by version, description, success, or SHA-384 checksum",
     "privilege.grantor=relation.relowner",
     "privilege.privilege_type='USAGE'",
+    "pg_temp.northstar_runtime_relation_manifest",
+    "expected.can_select",
+    "expected.can_insert",
+    "expected.can_update",
+    "expected.can_delete",
 ):
     if required not in role_reconciler_text:
         fail(f"existing-volume audit omits canonical manifest invariant: {required}")

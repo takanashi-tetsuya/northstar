@@ -3723,18 +3723,23 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert!(admit_federated_muc_invite(
+        let injected_outbox_error = admit_federated_muc_invite(
             &pool,
             room_id,
             "guest@remote.test",
             "remote.test",
-            "<message id='remote-failure'/>",
+            "<message from='room@conference.local.test' to='guest@remote.test' type='normal' id='remote-failure'/>",
             Some("room@conference.local.test"),
             s2s_policy,
             None,
         )
         .await
-        .is_err());
+        .expect_err("the injected outbox failure must abort the invitation");
+        let injected_outbox_error = format!("{injected_outbox_error:#}");
+        assert!(
+            injected_outbox_error.contains("forced outbox admission failure"),
+            "the fixture must reach the injected database failure instead of failing stanza validation: {injected_outbox_error}"
+        );
         let remote_halves: (i64, i64) = sqlx::query_as(
             "SELECT (SELECT COUNT(*) FROM muc_external_affiliations), (SELECT COUNT(*) FROM s2s_outbox)",
         )
@@ -3751,7 +3756,7 @@ mod tests {
             room_id,
             "guest@remote.test",
             "remote.test",
-            "<message id='remote-success'/>",
+            "<message from='room@conference.local.test' to='guest@remote.test' type='normal' id='remote-success'/>",
             Some("room@conference.local.test"),
             s2s_policy,
             None,
@@ -3773,7 +3778,7 @@ mod tests {
             room_id,
             "banned@remote.test",
             "remote.test",
-            "<message id='remote-blocked'/>",
+            "<message from='room@conference.local.test' to='banned@remote.test' type='normal' id='remote-blocked'/>",
             Some("room@conference.local.test"),
             s2s_policy,
             None,

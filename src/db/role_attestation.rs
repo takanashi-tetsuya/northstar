@@ -5,6 +5,7 @@ use std::net::IpAddr;
 
 const CAPABILITY_MANIFEST_SQL: &str =
     include_str!("../../deploy/postgres-init/lib/northstar-capability-manifest.sql");
+const RUNTIME_RELATION_MANIFEST_SQL: &str = CAPABILITY_MANIFEST_SQL;
 const MIGRATION_LEDGER_MANIFEST_SQL: &str =
     include_str!("../../deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql");
 
@@ -15,10 +16,20 @@ struct MigrationLedgerManifest {
     checksum_hex: Vec<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct RuntimeRelationManifest {
+    relation_names: Vec<String>,
+    can_select: Vec<bool>,
+    can_insert: Vec<bool>,
+    can_update: Vec<bool>,
+    can_delete: Vec<bool>,
+    origins: Vec<String>,
+}
+
 fn parse_sql_string_literal(source: &str) -> Result<(String, &str)> {
     let source = source
         .strip_prefix('\'')
-        .context("migration ledger description is not a SQL string literal")?;
+        .context("manifest value is not a SQL string literal")?;
     let mut value = String::new();
     let mut chars = source.char_indices().peekable();
     while let Some((index, character)) = chars.next() {
@@ -33,7 +44,140 @@ fn parse_sql_string_literal(source: &str) -> Result<(String, &str)> {
         }
         return Ok((value, &source[index + character.len_utf8()..]));
     }
-    anyhow::bail!("migration ledger description has no closing quote")
+    anyhow::bail!("manifest SQL string literal has no closing quote")
+}
+
+fn parse_manifest_boolean(source: &str) -> Result<(bool, &str)> {
+    if let Some(remainder) = source.strip_prefix("TRUE") {
+        Ok((true, remainder))
+    } else if let Some(remainder) = source.strip_prefix("FALSE") {
+        Ok((false, remainder))
+    } else {
+        anyhow::bail!("runtime relation manifest privilege is not TRUE or FALSE")
+    }
+}
+
+fn parse_runtime_relation_manifest(source: &str) -> Result<RuntimeRelationManifest> {
+    const INSERT_MARKER: &str = "INSERT INTO pg_temp.northstar_runtime_relation_manifest";
+    const EXPECTED_COLUMNS: &str =
+        "(relation_name,can_select,can_insert,can_update,can_delete,origin)";
+
+    anyhow::ensure!(
+        source.matches(INSERT_MARKER).count() == 1,
+        "embedded runtime relation manifest has a missing or duplicate INSERT"
+    );
+    let statement = source
+        .split_once(INSERT_MARKER)
+        .map(|(_, statement)| statement)
+        .context("embedded runtime relation manifest INSERT is absent")?;
+    let (columns, values) = statement
+        .split_once("VALUES")
+        .context("embedded runtime relation manifest has no VALUES clause")?;
+    let columns = columns
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect::<String>();
+    anyhow::ensure!(
+        columns == EXPECTED_COLUMNS,
+        "embedded runtime relation manifest columns are malformed or reordered"
+    );
+    let statement_end = values
+        .find(';')
+        .context("embedded runtime relation manifest INSERT is unterminated")?;
+    let rows = &values[..statement_end];
+
+    let mut relation_names = Vec::new();
+    let mut can_select = Vec::new();
+    let mut can_insert = Vec::new();
+    let mut can_update = Vec::new();
+    let mut can_delete = Vec::new();
+    let mut origins = Vec::new();
+    let mut seen = HashSet::new();
+
+    for line in rows.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("--") {
+            continue;
+        }
+        let row = line.trim_end_matches(',');
+        let row = row
+            .strip_prefix('(')
+            .and_then(|row| row.strip_suffix(')'))
+            .context("runtime relation manifest row is not a single SQL tuple")?;
+        let (relation_name, remainder) = parse_sql_string_literal(row)?;
+        let remainder = remainder
+            .strip_prefix(',')
+            .context("runtime relation manifest relation name is not followed by a comma")?;
+        let (select, remainder) = parse_manifest_boolean(remainder)?;
+        let remainder = remainder
+            .strip_prefix(',')
+            .context("runtime relation manifest SELECT flag is not followed by a comma")?;
+        let (insert, remainder) = parse_manifest_boolean(remainder)?;
+        let remainder = remainder
+            .strip_prefix(',')
+            .context("runtime relation manifest INSERT flag is not followed by a comma")?;
+        let (update, remainder) = parse_manifest_boolean(remainder)?;
+        let remainder = remainder
+            .strip_prefix(',')
+            .context("runtime relation manifest UPDATE flag is not followed by a comma")?;
+        let (delete, remainder) = parse_manifest_boolean(remainder)?;
+        let remainder = remainder
+            .strip_prefix(',')
+            .context("runtime relation manifest DELETE flag is not followed by a comma")?;
+        let (origin, remainder) = parse_sql_string_literal(remainder)?;
+        anyhow::ensure!(
+            remainder.is_empty(),
+            "runtime relation manifest row contains trailing SQL"
+        );
+
+        anyhow::ensure!(
+            (1..=63).contains(&relation_name.len())
+                && relation_name.bytes().enumerate().all(|(index, byte)| {
+                    if index == 0 {
+                        byte.is_ascii_lowercase() || byte == b'_'
+                    } else {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
+                    }
+                }),
+            "runtime relation manifest contains an unsafe relation identifier"
+        );
+        anyhow::ensure!(
+            seen.insert(relation_name.clone()),
+            "runtime relation manifest contains a duplicate relation"
+        );
+        anyhow::ensure!(
+            origin == "sqlx"
+                || (origin.len() == 4
+                    && origin.bytes().all(|byte| byte.is_ascii_digit())
+                    && origin != "0000"),
+            "runtime relation manifest contains an invalid origin"
+        );
+
+        relation_names.push(relation_name);
+        can_select.push(select);
+        can_insert.push(insert);
+        can_update.push(update);
+        can_delete.push(delete);
+        origins.push(origin);
+    }
+
+    anyhow::ensure!(
+        !relation_names.is_empty()
+            && relation_names.len() == can_select.len()
+            && relation_names.len() == can_insert.len()
+            && relation_names.len() == can_update.len()
+            && relation_names.len() == can_delete.len()
+            && relation_names.len() == origins.len(),
+        "embedded runtime relation manifest is empty or malformed"
+    );
+    Ok(RuntimeRelationManifest {
+        relation_names,
+        can_select,
+        can_insert,
+        can_update,
+        can_delete,
+        origins,
+    })
 }
 
 fn parse_migration_ledger_manifest(source: &str) -> Result<MigrationLedgerManifest> {
@@ -309,6 +453,150 @@ async fn attest_security_definer_capability_acls(pool: &PgPool) -> Result<()> {
     anyhow::ensure!(
         accepted,
         "PostgreSQL SECURITY DEFINER capability ACL manifest drifted: reconcile grants and remove PUBLIC, unknown, backup, grant-option, command/runtime crossover, or stale helper access"
+    );
+    Ok(())
+}
+
+/// Compare the runtime role's effective table privileges with the same
+/// version-controlled manifest used by grant reconciliation. Column ACLs are
+/// denied everywhere except for the exact non-secret SM resume projection.
+async fn attest_runtime_relation_capability_manifest(pool: &PgPool) -> Result<()> {
+    let expected = parse_runtime_relation_manifest(RUNTIME_RELATION_MANIFEST_SQL)?;
+    debug_assert_eq!(expected.origins.len(), expected.relation_names.len());
+    let accepted: bool = sqlx::query_scalar(
+        r#"WITH relation_name_rows AS (
+             SELECT relation_name,ordinality
+               FROM pg_catalog.unnest($1::pg_catalog.text[])
+                    WITH ORDINALITY AS value(relation_name,ordinality)
+           ), relation_select_rows AS (
+             SELECT can_select,ordinality
+               FROM pg_catalog.unnest($2::pg_catalog.bool[])
+                    WITH ORDINALITY AS value(can_select,ordinality)
+           ), relation_insert_rows AS (
+             SELECT can_insert,ordinality
+               FROM pg_catalog.unnest($3::pg_catalog.bool[])
+                    WITH ORDINALITY AS value(can_insert,ordinality)
+           ), relation_update_rows AS (
+             SELECT can_update,ordinality
+               FROM pg_catalog.unnest($4::pg_catalog.bool[])
+                    WITH ORDINALITY AS value(can_update,ordinality)
+           ), relation_delete_rows AS (
+             SELECT can_delete,ordinality
+               FROM pg_catalog.unnest($5::pg_catalog.bool[])
+                    WITH ORDINALITY AS value(can_delete,ordinality)
+           ), expected_relation AS (
+             SELECT name.relation_name,selected.can_select,inserted.can_insert,
+                    updated.can_update,deleted.can_delete
+               FROM relation_name_rows name
+               JOIN relation_select_rows selected USING(ordinality)
+               JOIN relation_insert_rows inserted USING(ordinality)
+               JOIN relation_update_rows updated USING(ordinality)
+               JOIN relation_delete_rows deleted USING(ordinality)
+           ), namespace AS (
+             SELECT oid FROM pg_catalog.pg_namespace WHERE nspname='public'
+           ), runtime_role AS (
+             SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_runtime'
+           ), actual_relation AS (
+             SELECT relation.oid,relation.relname,relation.relowner
+               FROM namespace
+               JOIN pg_catalog.pg_class relation
+                 ON relation.relnamespace=namespace.oid
+              WHERE relation.relkind IN ('r','p')
+                AND NOT EXISTS (
+                  SELECT 1 FROM pg_catalog.pg_depend dependency
+                   WHERE dependency.classid=
+                           'pg_catalog.pg_class'::pg_catalog.regclass
+                     AND dependency.objid=relation.oid
+                     AND dependency.deptype='e'
+                )
+           ), expected_sm_column(attname) AS (
+             SELECT pg_catalog.unnest(ARRAY[
+               'id','user_id','auth_generation','full_jid','resource','connection_id',
+               'resume_timeout_seconds','inbound_h','outbound_h','acked_h','available','carbons',
+               'priority','blocklist_requested','roster_requested','active_privacy_list',
+               'privacy_requested','user_agent_id','joined_rooms','directed_presence',
+               'last_presence','resumable','live_lease_until','expires_at','claimed_until',
+               'created_at','updated_at'
+             ]::pg_catalog.text[])
+           )
+           SELECT (SELECT pg_catalog.count(*)=1 FROM namespace)
+             AND (SELECT pg_catalog.count(*)=1 FROM runtime_role)
+             AND NOT EXISTS (
+               SELECT 1 FROM expected_relation expected
+               LEFT JOIN actual_relation relation
+                 ON relation.relname=expected.relation_name
+                WHERE relation.oid IS NULL
+                   OR pg_catalog.has_table_privilege(
+                        (SELECT oid FROM runtime_role),relation.oid,'SELECT'
+                      ) IS DISTINCT FROM expected.can_select
+                   OR pg_catalog.has_table_privilege(
+                        (SELECT oid FROM runtime_role),relation.oid,'INSERT'
+                      ) IS DISTINCT FROM expected.can_insert
+                   OR pg_catalog.has_table_privilege(
+                        (SELECT oid FROM runtime_role),relation.oid,'UPDATE'
+                      ) IS DISTINCT FROM expected.can_update
+                   OR pg_catalog.has_table_privilege(
+                        (SELECT oid FROM runtime_role),relation.oid,'DELETE'
+                      ) IS DISTINCT FROM expected.can_delete
+                   OR pg_catalog.has_table_privilege(
+                        (SELECT oid FROM runtime_role),relation.oid,'TRUNCATE')
+                   OR pg_catalog.has_table_privilege(
+                        (SELECT oid FROM runtime_role),relation.oid,'REFERENCES')
+                   OR pg_catalog.has_table_privilege(
+                        (SELECT oid FROM runtime_role),relation.oid,'TRIGGER')
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM actual_relation relation
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM expected_relation expected
+                   WHERE expected.relation_name=relation.relname
+                )
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM actual_relation relation
+               JOIN pg_catalog.pg_attribute attribute
+                 ON attribute.attrelid=relation.oid
+                AND attribute.attnum>0 AND NOT attribute.attisdropped
+               CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) privilege
+                WHERE privilege.grantee<>relation.relowner
+                  AND NOT COALESCE(
+                    relation.relname='sm_resume_sessions'
+                    AND privilege.grantor=relation.relowner
+                    AND privilege.grantee=(SELECT oid FROM runtime_role)
+                    AND privilege.privilege_type='SELECT'
+                    AND NOT privilege.is_grantable
+                    AND attribute.attname IN (SELECT attname FROM expected_sm_column),
+                    FALSE
+                  )
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM expected_sm_column expected
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM actual_relation relation
+                  JOIN pg_catalog.pg_attribute attribute
+                    ON attribute.attrelid=relation.oid
+                   AND attribute.attname=expected.attname
+                   AND attribute.attnum>0 AND NOT attribute.attisdropped
+                  CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) privilege
+                   WHERE relation.relname='sm_resume_sessions'
+                     AND privilege.grantor=relation.relowner
+                     AND privilege.grantee=(SELECT oid FROM runtime_role)
+                     AND privilege.privilege_type='SELECT'
+                     AND NOT privilege.is_grantable
+                )
+             )"#,
+    )
+    .bind(&expected.relation_names)
+    .bind(&expected.can_select)
+    .bind(&expected.can_insert)
+    .bind(&expected.can_update)
+    .bind(&expected.can_delete)
+    .fetch_one(pool)
+    .await
+    .context("could not attest the PostgreSQL runtime relation capability manifest")?;
+    anyhow::ensure!(
+        accepted,
+        "PostgreSQL runtime relation capability manifest drifted: a public relation, effective table privilege, private column ACL, or exact SM resume projection differs"
     );
     Ok(())
 }
@@ -748,6 +1036,7 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
     attest_migration_ledger(pool).await?;
     attest_database_capability_catalog(pool).await?;
     attest_security_definer_capability_acls(pool).await?;
+    attest_runtime_relation_capability_manifest(pool).await?;
     let accepted: bool = sqlx::query_scalar(
         r#"WITH expected_definer(signature) AS (
              VALUES
@@ -872,23 +1161,11 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
                ('northstar_mix_pam_operation_insert(uuid,uuid,text,text,text,text,text,text,bytea,uuid,bool,text,text,text[],int8,text)'),
                ('northstar_mix_pam_operation_prune(int8)'),
                ('northstar_mix_pam_capacity_reconcile()')
-           ), resolved_definer AS (
-             SELECT signature,
-                    pg_catalog.to_regprocedure('public.' || signature) AS oid
-               FROM expected_definer
-           ), immutable(name,deny_insert) AS (
-             VALUES
-               ('audit_log',FALSE),('legal_holds',FALSE),
-               ('legal_hold_personal_archives',FALSE),('legal_hold_muc_archives',FALSE),
-               ('legal_hold_offline_messages',FALSE),('legal_hold_report_evidence',FALSE),
-               ('legal_hold_scopes',FALSE),('legal_hold_offline_snapshots',FALSE),
-               ('cluster_muc_operations',FALSE),('cluster_muc_delivery_handoffs',TRUE),
-               ('mix_delivery_capacity_releases',TRUE),
-               ('mix_pam_operation_capacity',TRUE),
-               ('mix_pam_operation_user_capacity',TRUE)
-           ), migration_ledger(name) AS (
-             VALUES ('_sqlx_migrations'),('jid_identity_migrations')
-           )
+            ), resolved_definer AS (
+              SELECT signature,
+                     pg_catalog.to_regprocedure('public.' || signature) AS oid
+                FROM expected_definer
+            )
            SELECT role.rolname='northstar_runtime'
              AND session_user=current_user
              AND session_user='northstar_runtime'
@@ -902,206 +1179,11 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
              AND role.rolconnlimit=64
              AND current_schema()='public'
              AND current_schemas(FALSE)=ARRAY['public'::pg_catalog.name]
-             AND pg_catalog.pg_get_userbyid(database.datdba)='northstar_migrator'
-             AND pg_catalog.pg_get_userbyid(namespace.nspowner)='northstar_migrator'
-             AND NOT pg_catalog.has_database_privilege(current_user,current_database(),'CREATE')
-             AND NOT pg_catalog.has_database_privilege(current_user,current_database(),'TEMP')
-             AND NOT pg_catalog.has_schema_privilege(current_user,namespace.oid,'CREATE')
-             AND NOT EXISTS (
-                 SELECT 1 FROM immutable
-                 CROSS JOIN LATERAL (
-                   SELECT pg_catalog.to_regclass(
-                     pg_catalog.format('%I.%I',namespace.nspname,immutable.name)
-                   ) AS oid
-                 ) relation
-                 WHERE relation.oid IS NULL
-                    OR (immutable.deny_insert AND pg_catalog.has_table_privilege(
-                          current_user,relation.oid,'INSERT'))
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'DELETE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'TRUNCATE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'REFERENCES')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'TRIGGER')
-                    OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'REFERENCES')
-             )
-             AND NOT EXISTS (
-                 SELECT 1 FROM (SELECT pg_catalog.to_regclass(
-                   pg_catalog.format('%I.governance_export_leases',namespace.nspname)
-                 ) AS oid) relation
-                 WHERE relation.oid IS NULL
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'DELETE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'TRUNCATE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'REFERENCES')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'TRIGGER')
-             )
-             AND NOT EXISTS (
-                 SELECT 1 FROM migration_ledger
-                 CROSS JOIN LATERAL (
-                   SELECT pg_catalog.to_regclass(
-                     pg_catalog.format('%I.%I',namespace.nspname,migration_ledger.name)
-                   ) AS oid
-                 ) relation
-                 WHERE relation.oid IS NULL
-                    OR NOT pg_catalog.has_table_privilege(current_user,relation.oid,'SELECT')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'DELETE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'TRUNCATE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'REFERENCES')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'TRIGGER')
-             )
-             AND NOT EXISTS (
-                 SELECT 1 FROM (SELECT pg_catalog.to_regclass(
-                   pg_catalog.format('%I.users',namespace.nspname)
-                 ) AS oid) relation
-                 WHERE relation.oid IS NULL
-                    OR NOT pg_catalog.has_table_privilege(current_user,relation.oid,'SELECT')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'DELETE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'TRUNCATE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'REFERENCES')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'TRIGGER')
-                    OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'REFERENCES')
-             )
-             AND NOT EXISTS (
-                 SELECT 1 FROM (SELECT pg_catalog.to_regclass(
-                   pg_catalog.format(
-                     '%I.mix_delivery_capacity_releases',namespace.nspname
-                   )
-                 ) AS oid) relation
-                 WHERE relation.oid IS NULL
-                    OR NOT pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'SELECT')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'DELETE')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'TRUNCATE')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'REFERENCES')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'TRIGGER')
-                    OR pg_catalog.has_any_column_privilege(
-                         current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_any_column_privilege(
-                         current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_any_column_privilege(
-                         current_user,relation.oid,'REFERENCES')
-              )
-             AND NOT EXISTS (
-                 SELECT 1 FROM (VALUES
-                   ('mix_pam_operation_capacity'),
-                   ('mix_pam_operation_user_capacity')
-                 ) authority(name)
-                 CROSS JOIN LATERAL (
-                   SELECT pg_catalog.to_regclass(
-                     pg_catalog.format('%I.%I',namespace.nspname,authority.name)
-                   ) AS oid
-                 ) relation
-                 WHERE relation.oid IS NULL
-                    OR NOT pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'SELECT')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'DELETE')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'TRUNCATE')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'REFERENCES')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'TRIGGER')
-                    OR pg_catalog.has_any_column_privilege(
-                         current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_any_column_privilege(
-                         current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_any_column_privilege(
-                         current_user,relation.oid,'REFERENCES')
-             )
-             AND NOT EXISTS (
-                 SELECT 1 FROM (SELECT pg_catalog.to_regclass(
-                   pg_catalog.format(
-                     '%I.mix_pam_operations',namespace.nspname
-                   )
-                 ) AS oid) relation
-                 WHERE relation.oid IS NULL
-                    OR NOT pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'SELECT')
-                    OR NOT pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'DELETE')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'TRUNCATE')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'REFERENCES')
-                    OR pg_catalog.has_table_privilege(
-                         current_user,relation.oid,'TRIGGER')
-                    OR pg_catalog.has_any_column_privilege(
-                         current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_any_column_privilege(
-                         current_user,relation.oid,'REFERENCES')
-             )
-             AND NOT EXISTS (
-                  SELECT 1 FROM (VALUES
-                   ('admin_service_messages'),
-                   ('federation_runtime_rules'),
-                   ('admin_service_control')
-                 ) protected(name)
-                 CROSS JOIN LATERAL (
-                   SELECT pg_catalog.to_regclass(
-                     pg_catalog.format('%I.%I',namespace.nspname,protected.name)
-                   ) AS oid
-                 ) relation
-                 WHERE relation.oid IS NULL
-                    OR NOT pg_catalog.has_table_privilege(current_user,relation.oid,'SELECT')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'DELETE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'TRUNCATE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'REFERENCES')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'TRIGGER')
-                    OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'REFERENCES')
-             )
-             AND NOT EXISTS (
-                 SELECT 1 FROM (VALUES
-                   ('admin_command_sessions'),
-                   ('admin_command_capability_authority'),
-                   ('admin_session_cleanup_effects'),
-                   ('admin_session_cleanup_capacity')
-                 ) protected(name)
-                 CROSS JOIN LATERAL (
-                   SELECT pg_catalog.to_regclass(
-                     pg_catalog.format('%I.%I',namespace.nspname,protected.name)
-                   ) AS oid
-                 ) relation
-                 WHERE relation.oid IS NULL
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'SELECT')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'DELETE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'TRUNCATE')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'REFERENCES')
-                    OR pg_catalog.has_table_privilege(current_user,relation.oid,'TRIGGER')
-                    OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'SELECT')
-                    OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'INSERT')
-                    OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'UPDATE')
-                    OR pg_catalog.has_any_column_privilege(current_user,relation.oid,'REFERENCES')
-             )
+              AND pg_catalog.pg_get_userbyid(database.datdba)='northstar_migrator'
+              AND pg_catalog.pg_get_userbyid(namespace.nspowner)='northstar_migrator'
+              AND NOT pg_catalog.has_database_privilege(current_user,current_database(),'CREATE')
+              AND NOT pg_catalog.has_database_privilege(current_user,current_database(),'TEMP')
+              AND NOT pg_catalog.has_schema_privilege(current_user,namespace.oid,'CREATE')
              AND NOT EXISTS (
                  SELECT 1 FROM (VALUES
                    ('northstar_protect_admin_session_cleanup_identity()'),
@@ -1153,7 +1235,7 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
           FROM pg_catalog.pg_roles role
           JOIN pg_catalog.pg_database database ON database.datname=current_database()
           JOIN pg_catalog.pg_namespace namespace ON namespace.nspname='public'
-         WHERE role.rolname=current_user"#,
+          WHERE role.rolname=current_user"#,
     )
     .fetch_one(pool)
     .await
@@ -1308,6 +1390,15 @@ pub async fn attest_migrator_role(pool: &PgPool) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn runtime_relation_manifest_with_rows(rows: &str) -> String {
+        format!(
+            "INSERT INTO pg_temp.northstar_runtime_relation_manifest(\n\
+             relation_name,can_select,can_insert,can_update,can_delete,origin\n\
+             )\n\
+             VALUES\n{rows};"
+        )
+    }
+
     #[test]
     fn embedded_capability_manifest_is_complete_and_partitioned() {
         let (signatures, workloads) = security_definer_capability_manifest().unwrap();
@@ -1335,6 +1426,89 @@ mod tests {
         let malformed = "INSERT INTO pg_temp.northstar_capability_manifest VALUES\n\
             ('safe();drop_table()','runtime','0114');";
         assert!(parse_security_definer_capability_manifest(malformed).is_err());
+    }
+
+    #[test]
+    fn embedded_runtime_relation_manifest_is_complete_and_exact() {
+        let manifest = parse_runtime_relation_manifest(CAPABILITY_MANIFEST_SQL).unwrap();
+        assert!(manifest.relation_names.len() > 100);
+        assert_eq!(manifest.relation_names.len(), manifest.can_select.len());
+        assert_eq!(manifest.relation_names.len(), manifest.can_insert.len());
+        assert_eq!(manifest.relation_names.len(), manifest.can_update.len());
+        assert_eq!(manifest.relation_names.len(), manifest.can_delete.len());
+        assert_eq!(manifest.relation_names.len(), manifest.origins.len());
+
+        for (relation_name, expected, origin) in [
+            ("_sqlx_migrations", [true, false, false, false], "sqlx"),
+            ("sm_resume_sessions", [false, false, false, false], "0028"),
+            ("mix_pam_operations", [true, false, true, false], "0123"),
+            (
+                "mix_delivery_capacity_releases",
+                [true, false, false, false],
+                "0126",
+            ),
+            (
+                "mix_pam_operation_capacity",
+                [true, false, false, false],
+                "0128",
+            ),
+        ] {
+            let index = manifest
+                .relation_names
+                .iter()
+                .position(|candidate| candidate == relation_name)
+                .unwrap_or_else(|| panic!("runtime relation {relation_name} is absent"));
+            assert_eq!(
+                [
+                    manifest.can_select[index],
+                    manifest.can_insert[index],
+                    manifest.can_update[index],
+                    manifest.can_delete[index],
+                ],
+                expected
+            );
+            assert_eq!(manifest.origins[index], origin);
+        }
+    }
+
+    #[test]
+    fn runtime_relation_manifest_parser_preserves_rows_and_origins() {
+        let source = runtime_relation_manifest_with_rows(
+            "  ('_sqlx_migrations',TRUE,FALSE,FALSE,FALSE,'sqlx'),\n\
+             ('mutable_table',TRUE,TRUE,TRUE,TRUE,'0128')",
+        );
+        let manifest = parse_runtime_relation_manifest(&source).unwrap();
+        assert_eq!(
+            manifest,
+            RuntimeRelationManifest {
+                relation_names: vec!["_sqlx_migrations".into(), "mutable_table".into()],
+                can_select: vec![true, true],
+                can_insert: vec![false, true],
+                can_update: vec![false, true],
+                can_delete: vec![false, true],
+                origins: vec!["sqlx".into(), "0128".into()],
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_relation_manifest_parser_rejects_unsafe_or_ambiguous_rows() {
+        for rows in [
+            "  ('duplicate',TRUE,FALSE,FALSE,FALSE,'0001'),\n\
+             ('duplicate',TRUE,FALSE,FALSE,FALSE,'0002')",
+            "  ('UnsafeName',TRUE,FALSE,FALSE,FALSE,'0001')",
+            "  ('unsafe;drop',TRUE,FALSE,FALSE,FALSE,'0001')",
+            "  ('bad_origin',TRUE,FALSE,FALSE,FALSE,'0000')",
+            "  ('bad_origin',TRUE,FALSE,FALSE,FALSE,'latest')",
+            "  ('bad_boolean',true,FALSE,FALSE,FALSE,'0001')",
+            "  ('trailing_sql',TRUE,FALSE,FALSE,FALSE,'0001') SELECT 1",
+        ] {
+            let source = runtime_relation_manifest_with_rows(rows);
+            assert!(
+                parse_runtime_relation_manifest(&source).is_err(),
+                "malformed relation manifest row was accepted: {rows}"
+            );
+        }
     }
 
     #[test]

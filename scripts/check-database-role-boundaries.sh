@@ -96,10 +96,9 @@ for boundary_probe in \
     "database role acceptance omits administrator cleanup boundary: $boundary_probe"
 done
 for protected_table in admin_session_cleanup_effects admin_session_cleanup_capacity; do
-  require_literal "$grant_apply" "$protected_table" \
-    "runtime administrator cleanup-ledger revocation is missing: $protected_table"
-  require_literal "$role_attestation" "$protected_table" \
-    "runtime role attestation omits private administrator cleanup ledger: $protected_table"
+  require_literal "$capability_manifest" \
+    "('$protected_table',FALSE,FALSE,FALSE,FALSE,'0111')" \
+    "canonical manifest omits private administrator cleanup ledger: $protected_table"
 done
 
 # PostgreSQL rewrites several SQL type and expression aliases only when they are
@@ -277,9 +276,13 @@ require_literal "$role_runner" \
 require_literal "$role_runner" \
   "ORDER BY CASE WHEN relation.relkind = 'S' THEN 1 ELSE 0 END, relation.oid" \
   'existing-volume ownership transfer must move tables before owned sequences'
-require_literal "$role_runner" \
-  "'audit_log','legal_holds','legal_hold_personal_archives'" \
-  'role audit must carry an explicit immutable-history privilege manifest'
+for immutable_relation in \
+  "('audit_log',TRUE,TRUE,FALSE,FALSE,'0001')" \
+  "('legal_holds',TRUE,TRUE,FALSE,FALSE,'0087')" \
+  "('legal_hold_personal_archives',TRUE,TRUE,FALSE,FALSE,'0087')"; do
+  require_literal "$capability_manifest" "$immutable_relation" \
+    'canonical runtime relation manifest must preserve immutable-history privileges'
+done
 require_literal "$role_runner" \
   'runtime role can execute a non-allowlisted SECURITY DEFINER routine' \
   'role audit must reject runtime execution of unreviewed definer routines'
@@ -390,6 +393,21 @@ require_literal "$grant_apply" \
 require_literal "$grant_apply" \
   'northstar_canonical_capability_manifest_is_exact' \
   'grant reconciliation does not compare catalog/runtime/command sets to the canonical manifest'
+require_literal "$capability_manifest" \
+  'CREATE TEMPORARY TABLE northstar_runtime_relation_manifest' \
+  'canonical manifest omits the complete runtime relation policy'
+require_literal "$grant_apply" \
+  'northstar_runtime_relation_capability_manifest_is_exact' \
+  'grant reconciliation does not prove exact runtime table privileges from the canonical manifest'
+require_literal "$role_runner" \
+  'pg_temp.northstar_runtime_relation_manifest expected' \
+  'existing-volume role audit does not consume the canonical runtime relation manifest'
+require_literal "$role_attestation" \
+  'attest_runtime_relation_capability_manifest(pool).await?' \
+  'startup role attestation does not consume the canonical runtime relation manifest'
+if grep -Fq 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public' "$grant_apply"; then
+  fail 'runtime table reconciliation must not use broad DML plus an exception list'
+fi
 require_literal "$grant_apply" \
   'REVOKE ALL PRIVILEGES ON ROUTINE %I.%I(%s) FROM %I' \
   'grant reconciliation does not erase arbitrary stale SECURITY DEFINER grantees'
@@ -420,14 +438,15 @@ require_literal "$grant_apply" \
 require_literal "$grant_apply" \
   'northstar_release_legal_hold(uuid,uuid,text,uuid)' \
   'runtime SECURITY DEFINER allowlist is missing the exact legal-hold release capability'
-require_literal "$grant_apply" \
-  'REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER' \
-  'runtime users-table direct DML revocation is missing'
-for protected_table in admin_service_messages federation_runtime_rules admin_service_control; do
-  require_literal "$grant_apply" "$protected_table" \
-    "runtime XEP-0133 control-state revocation is missing: $protected_table"
-  require_literal "$role_attestation" "$protected_table" \
-    "runtime role attestation omits protected XEP-0133 state: $protected_table"
+require_literal "$capability_manifest" \
+  "('users',TRUE,FALSE,FALSE,FALSE,'0001')" \
+  'runtime users-table capability is not read-only in the canonical manifest'
+for protected_relation in \
+  "('admin_service_messages',TRUE,FALSE,FALSE,FALSE,'0048')" \
+  "('federation_runtime_rules',TRUE,FALSE,FALSE,FALSE,'0048')" \
+  "('admin_service_control',TRUE,FALSE,FALSE,FALSE,'0052')"; do
+  require_literal "$capability_manifest" "$protected_relation" \
+    'canonical runtime relation manifest must preserve read-only XEP-0133 control state'
 done
 require_literal "$grant_apply" \
   'REVOKE ALL PRIVILEGES (%s) ON TABLE %I.%I FROM PUBLIC, %I, %I, %I' \

@@ -493,58 +493,49 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
     FROM pg_catalog.pg_roles runtime_role
    WHERE runtime_role.rolname=:'runtime_role'
      AND EXISTS (
-       SELECT 1
-         FROM pg_catalog.pg_class relation
-         JOIN pg_catalog.pg_namespace namespace ON namespace.oid=relation.relnamespace
-        WHERE namespace.nspname='public'
-          AND relation.relkind IN ('r','p','v','m','f')
-          AND CASE
-            WHEN relation.relname IN (
-              'upload_storage_authority','upload_storage_capacity_ledger',
-              'upload_slots','upload_storage_jobs','upload_cleanup_queue',
-              'cluster_signed_envelope_replays','cluster_signed_envelope_replay_capacity',
-              'cluster_session_routes','admin_command_sessions',
-              'admin_command_capability_authority','admin_session_cleanup_effects',
-              'admin_session_cleanup_capacity','sm_resume_sessions'
-            ) THEN
-              pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'SELECT')
-              OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'INSERT')
-              OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'UPDATE')
-              OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'DELETE')
-              OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'TRUNCATE')
-              OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'REFERENCES')
-              OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'TRIGGER')
-            WHEN relation.relname IN (
-              '_sqlx_migrations','jid_identity_migrations','users',
-              'deployment_session_leases','deployment_session_binding_claims',
-              'admin_service_messages','federation_runtime_rules','admin_service_control',
-              'cluster_muc_delivery_handoffs'
-            ) THEN
-              NOT pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'SELECT')
-              OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'INSERT')
-              OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'UPDATE')
-              OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'DELETE')
-            WHEN relation.relname='governance_export_leases' THEN
-              NOT pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'SELECT')
-              OR NOT pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'INSERT')
-              OR NOT pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'UPDATE')
-              OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'DELETE')
-            WHEN relation.relname IN (
-              'audit_log','legal_holds','legal_hold_personal_archives',
-              'legal_hold_muc_archives','legal_hold_offline_messages',
-              'legal_hold_report_evidence','legal_hold_scopes',
-              'legal_hold_offline_snapshots','cluster_muc_operations'
-            ) THEN
-              NOT pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'SELECT')
-              OR NOT pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'INSERT')
-              OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'UPDATE')
-              OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'DELETE')
-            ELSE
-              NOT pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'SELECT')
-              OR NOT pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'INSERT')
-              OR NOT pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'UPDATE')
-              OR NOT pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'DELETE')
-          END
+       (SELECT relation.relname,
+               pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'SELECT'),
+               pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'INSERT'),
+               pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'UPDATE'),
+               pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'DELETE'),
+               pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'TRUNCATE')
+                 OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'REFERENCES')
+                 OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'TRIGGER')
+          FROM pg_catalog.pg_class relation
+          JOIN pg_catalog.pg_namespace namespace ON namespace.oid=relation.relnamespace
+         WHERE namespace.nspname='public'
+           AND relation.relkind IN ('r','p')
+           AND NOT EXISTS (
+             SELECT 1 FROM pg_catalog.pg_depend dependency
+              WHERE dependency.classid='pg_catalog.pg_class'::pg_catalog.regclass
+                AND dependency.objid=relation.oid AND dependency.deptype='e'
+           )
+        EXCEPT
+        SELECT expected.relation_name,expected.can_select,expected.can_insert,
+               expected.can_update,expected.can_delete,FALSE
+          FROM pg_temp.northstar_runtime_relation_manifest expected)
+       UNION ALL
+       (SELECT expected.relation_name,expected.can_select,expected.can_insert,
+               expected.can_update,expected.can_delete,FALSE
+          FROM pg_temp.northstar_runtime_relation_manifest expected
+        EXCEPT
+        SELECT relation.relname,
+               pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'SELECT'),
+               pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'INSERT'),
+               pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'UPDATE'),
+               pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'DELETE'),
+               pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'TRUNCATE')
+                 OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'REFERENCES')
+                 OR pg_catalog.has_table_privilege(runtime_role.oid,relation.oid,'TRIGGER')
+          FROM pg_catalog.pg_class relation
+          JOIN pg_catalog.pg_namespace namespace ON namespace.oid=relation.relnamespace
+         WHERE namespace.nspname='public'
+           AND relation.relkind IN ('r','p')
+           AND NOT EXISTS (
+             SELECT 1 FROM pg_catalog.pg_depend dependency
+              WHERE dependency.classid='pg_catalog.pg_class'::pg_catalog.regclass
+                AND dependency.objid=relation.oid AND dependency.deptype='e'
+           ))
      )
   UNION ALL
   SELECT 'runtime SM projection column ACL is incomplete'
@@ -937,9 +928,20 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
        privilege.grantor=relation.relowner
        AND NOT privilege.is_grantable
        AND (
-         (relation.relkind IN ('r','p','v','m','f')
+         (relation.relkind IN ('r','p')
           AND privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'runtime_role')
-          AND privilege.privilege_type IN ('SELECT','INSERT','UPDATE','DELETE'))
+          AND EXISTS (
+            SELECT 1
+              FROM pg_temp.northstar_runtime_relation_manifest expected
+             WHERE expected.relation_name=relation.relname
+               AND CASE privilege.privilege_type
+                     WHEN 'SELECT' THEN expected.can_select
+                     WHEN 'INSERT' THEN expected.can_insert
+                     WHEN 'UPDATE' THEN expected.can_update
+                     WHEN 'DELETE' THEN expected.can_delete
+                     ELSE FALSE
+                   END
+          ))
          OR
          (relation.relkind IN ('r','p','v','m','f')
           AND privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'backup_role')

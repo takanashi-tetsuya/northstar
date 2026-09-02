@@ -839,13 +839,39 @@ async fn websocket_orderly_close(
     stream_opened: bool,
     terminal: &mut WebSocketTerminalSequence,
 ) {
+    websocket_send_many_and_close(socket, Vec::new(), stream_opened, terminal).await;
+}
+
+async fn websocket_send_many_and_close(
+    socket: &mut WebSocket,
+    replies: Vec<String>,
+    stream_opened: bool,
+    terminal: &mut WebSocketTerminalSequence,
+) {
     if !terminal.begin() {
         return;
     }
-    if stream_opened {
-        let _ = websocket_send_terminal(socket, Message::Text(websocket_close().into())).await;
+
+    // An explicit terminal action owns its complete ordered output sequence.
+    // Account deletion and password replacement deliberately disconnect every
+    // resource before returning this action, so live-send cancellation must
+    // not overtake the final IQ response. Each write remains independently
+    // bounded by WEBSOCKET_TERMINAL_WRITE_TIMEOUT.
+    for message in websocket_terminal_messages(replies, stream_opened) {
+        if !websocket_send_terminal(socket, message).await {
+            return;
+        }
     }
-    let _ = websocket_send_terminal(socket, Message::Close(None)).await;
+}
+
+fn websocket_terminal_messages(replies: Vec<String>, stream_opened: bool) -> Vec<Message> {
+    let mut messages = Vec::with_capacity(replies.len() + usize::from(stream_opened) + 1);
+    messages.extend(replies.into_iter().map(|reply| Message::Text(reply.into())));
+    if stream_opened {
+        messages.push(Message::Text(websocket_close().into()));
+    }
+    messages.push(Message::Close(None));
+    messages
 }
 
 async fn send<S: AsyncWrite + Unpin>(io: &mut S, stanza: &str) -> Result<()> {
@@ -1300,26 +1326,13 @@ pub async fn websocket_connection(
                             }
                             Ok(Action::SendManyAndClose(replies)) => {
                                 session.sm_resume_allowed = false;
-                                let mut failed = false;
-                                for reply in replies {
-                                    if !websocket_send_live(
-                                        &mut socket,
-                                        Message::Text(reply.into()),
-                                        &send_cancellation,
-                                    )
-                                    .await
-                                    {
-                                        failed = true;
-                                        break;
-                                    }
-                                }
-                                if !failed {
-                                    websocket_orderly_close(
-                                        &mut socket,
-                                        true,
-                                        &mut terminal_sequence,
-                                    ).await;
-                                }
+                                websocket_send_many_and_close(
+                                    &mut socket,
+                                    replies,
+                                    true,
+                                    &mut terminal_sequence,
+                                )
+                                .await;
                                 break;
                             }
                             Ok(Action::Resume(payload)) => {
@@ -1652,6 +1665,24 @@ mod tests {
         assert!(terminal.begin());
         assert!(!needs_shutdown_terminal_sequence(true, true, &terminal));
         assert!(!terminal.begin());
+    }
+
+    #[test]
+    fn websocket_terminal_action_orders_replies_before_both_close_frames() {
+        let messages = websocket_terminal_messages(
+            vec!["<iq id='account-remove' type='result'/>".to_owned()],
+            true,
+        );
+        assert_eq!(messages.len(), 3);
+        assert!(matches!(
+            &messages[0],
+            Message::Text(reply) if reply.contains("account-remove")
+        ));
+        assert!(matches!(
+            &messages[1],
+            Message::Text(close) if close.as_str() == websocket_close()
+        ));
+        assert!(matches!(&messages[2], Message::Close(None)));
     }
 
     #[test]

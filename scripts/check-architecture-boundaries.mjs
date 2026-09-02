@@ -226,6 +226,9 @@ const configSource = read('src/config.rs');
 const appState = structBody(state, 'pub struct AppState');
 const publicFields = countMatches(appState, /^\s*pub\s+[A-Za-z_][A-Za-z0-9_]*\s*:/gm);
 const cratePublicFields = countMatches(appState, /^\s*pub\(crate\)\s+[A-Za-z_][A-Za-z0-9_]*\s*:/gm);
+const publicFieldNames = [
+  ...appState.matchAll(/^\s*pub\s+([A-Za-z_][A-Za-z0-9_]*)\s*:/gm),
+].map((match) => match[1]);
 
 // These ceilings capture the 2026-08-29 debt baseline. They are monotonic
 // budgets, not a claim that the current architecture is sufficiently narrow.
@@ -233,6 +236,17 @@ const cratePublicFields = countMatches(appState, /^\s*pub\(crate\)\s+[A-Za-z_][A
 // number; the ceilings should be lowered as vertical slices are extracted.
 const MAX_APP_STATE_PUBLIC_FIELDS = 9;
 const MAX_APP_STATE_CRATE_PUBLIC_FIELDS = 0;
+const EXPECTED_APP_STATE_PUBLIC_CAPABILITIES = [
+  'abuse',
+  'cluster',
+  'config',
+  'federation',
+  'metrics',
+  'muc_occupants',
+  'pool',
+  'sessions',
+  'tls',
+];
 
 if (publicFields > MAX_APP_STATE_PUBLIC_FIELDS) {
   throw new Error(
@@ -242,6 +256,18 @@ if (publicFields > MAX_APP_STATE_PUBLIC_FIELDS) {
 if (cratePublicFields > MAX_APP_STATE_CRATE_PUBLIC_FIELDS) {
   throw new Error(
     `AppState crate-public-field budget regressed: ${cratePublicFields} > ${MAX_APP_STATE_CRATE_PUBLIC_FIELDS}`,
+  );
+}
+const actualPublicCapabilities = [...publicFieldNames].sort();
+if (
+  actualPublicCapabilities.length !== EXPECTED_APP_STATE_PUBLIC_CAPABILITIES.length ||
+  actualPublicCapabilities.some(
+    (name, index) => name !== EXPECTED_APP_STATE_PUBLIC_CAPABILITIES[index],
+  )
+) {
+  throw new Error(
+    'AppState public capability identity changed; extract a typed port or update the reviewed ' +
+      `responsibility model instead of swapping fields under the count budget: ${actualPublicCapabilities.join(', ')}`,
   );
 }
 

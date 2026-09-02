@@ -193,14 +193,43 @@ SELECT pg_catalog.format('ALTER ROLE %I RESET ALL',role_name)
  ORDER BY role_name
 \gexec
 
-SELECT pg_catalog.format('REVOKE %I FROM %I', granted.rolname, member.rolname)
+SELECT pg_catalog.format('REVOKE %I FROM %I CASCADE', granted.rolname, member.rolname)
   FROM pg_catalog.pg_auth_members AS membership
   JOIN pg_catalog.pg_roles AS granted ON granted.oid = membership.roleid
   JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
- WHERE granted.rolname IN (:'migrator_role', :'runtime_role', :'command_role', :'backup_role')
-    OR member.rolname IN (:'migrator_role', :'runtime_role', :'command_role', :'backup_role')
+ WHERE granted.rolname IN (
+         :'bootstrap_role', :'migrator_role', :'runtime_role',
+         :'command_role', :'backup_role'
+       )
+    OR member.rolname IN (
+         :'bootstrap_role', :'migrator_role', :'runtime_role',
+         :'command_role', :'backup_role'
+       )
  ORDER BY granted.rolname, member.rolname
 \gexec
+
+-- Restore uses one bounded catalog/control session outside the target database.
+-- Converge the dedicated cluster's maintenance database to one owner and one
+-- explicit non-owner CONNECT grant; do not inherit PostgreSQL's PUBLIC default
+-- or preserve arbitrary legacy grantees.
+ALTER DATABASE postgres OWNER TO :"bootstrap_role";
+ALTER DATABASE postgres WITH ALLOW_CONNECTIONS true CONNECTION LIMIT -1 IS_TEMPLATE false;
+REVOKE ALL PRIVILEGES ON DATABASE postgres FROM PUBLIC;
+SELECT pg_catalog.format(
+         'REVOKE ALL PRIVILEGES ON DATABASE postgres FROM %I CASCADE',
+         grantee.rolname
+       )
+  FROM pg_catalog.pg_database AS database
+ CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+   database.datacl,pg_catalog.acldefault('d',database.datdba)
+ )) AS privilege
+  JOIN pg_catalog.pg_roles AS grantee ON grantee.oid=privilege.grantee
+ WHERE database.datname='postgres'
+   AND privilege.grantee<>database.datdba
+ GROUP BY grantee.rolname
+ ORDER BY grantee.rolname
+\gexec
+GRANT CONNECT ON DATABASE postgres TO :"migrator_role";
 
 ALTER DATABASE :"database_name" OWNER TO :"migrator_role";
 ALTER SCHEMA public OWNER TO :"migrator_role";

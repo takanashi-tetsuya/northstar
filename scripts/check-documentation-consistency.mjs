@@ -14,6 +14,7 @@ const currentDocuments = [
   'changelog/v0.2.md',
   'docs/README.md',
   'docs/ARCHITECTURE.md',
+  'docs/PROGRAM_RESPONSIBILITIES.md',
   'docs/KNOWN_ISSUES.md',
   'docs/BACKUP_SECURITY.md',
   'docs/PRODUCTION_OPERATIONS.md',
@@ -196,7 +197,8 @@ for (const [relativePath, statements] of staleStatements) {
 const backupSecurity = read('docs/BACKUP_SECURITY.md');
 const normalizedBackupSecurity = backupSecurity.replace(/\s+/g, ' ');
 for (const marker of [
-  'exactly three',
+  'exactly four',
+  'three recorded target PIDs',
   'transaction-level advisory lock',
   '`northstar.restore_commit`',
   'synchronous',
@@ -218,6 +220,23 @@ for (const phrase of [
 ]) {
   if (!knownIssues.includes(phrase)) {
     throw new Error(`KNOWN_ISSUES.md is missing the current boundary phrase: ${phrase}`);
+  }
+}
+const normalizedKnownIssues = knownIssues.replace(/\s+/g, ' ');
+for (const restoreMarker of [
+  '四个独立注册并预先核验 PID 的数据库 backend',
+  '三个已登记目标 PID',
+]) {
+  if (!normalizedKnownIssues.includes(restoreMarker)) {
+    throw new Error(`KNOWN_ISSUES.md is missing the current four-session restore boundary: ${restoreMarker}`);
+  }
+}
+for (const staleRestoreClaim of [
+  '控制、主替换与补偿使用三个独立',
+  'independently supervised process',
+]) {
+  if (normalizedKnownIssues.includes(staleRestoreClaim)) {
+    throw new Error(`KNOWN_ISSUES.md retains a stale restore responsibility claim: ${staleRestoreClaim}`);
   }
 }
 
@@ -262,13 +281,40 @@ for (const relativePath of [
 
 const architecture = read('docs/ARCHITECTURE.md').replace(/\s+/g, ' ');
 const architectureBudget =
-  '`AppState=9` public fields and, across the protocol tree (including inline protocol tests), ' +
+  '`AppState=9` public fields and, across the production protocol tree (excluding `#[cfg(test)]` code), ' +
   '`0 db authority references / 0 db domain-model references / 0 state.pool / 0 sqlx:: / 0 PgPool`';
 if (!architecture.includes(architectureBudget)) {
   throw new Error('docs/ARCHITECTURE.md does not state the current 9/0/0/0/0/0 architecture budget');
 }
 if (!knownIssues.replace(/\s+/g, ' ').includes('`AppState=9 public fields`')) {
   throw new Error('KNOWN_ISSUES.md does not state the current AppState public-field count');
+}
+const responsibilityModel = read('docs/PROGRAM_RESPONSIBILITIES.md');
+for (const marker of [
+  '## Executable programs and deployment identities',
+  '## Runtime layers',
+  '### Reviewed public `AppState` capabilities',
+  '## Source ownership map',
+  '## End-to-end authority hand-offs',
+  '## Process and operation lifecycles',
+  '## Domain responsibility matrix',
+  '## Database identities',
+  '## Restore child-session responsibilities',
+  '## Placement rules for new work',
+  '## Residual coupling and reduction order',
+  '`config`',
+  '`pool`',
+  '`cluster`',
+  '`sessions`',
+  '`muc_occupants`',
+  '`metrics`',
+  '`federation`',
+  '`abuse`',
+  '`tls`',
+]) {
+  if (!responsibilityModel.includes(marker)) {
+    throw new Error(`PROGRAM_RESPONSIBILITIES.md is missing reviewed boundary: ${marker}`);
+  }
 }
 
 const matrix = read('XEP_MATRIX.md');

@@ -181,6 +181,7 @@ jobs:
           python3 scripts/check-github-ci-summary.py
           bash scripts/check-github-ci-run.sh
           bash scripts/check-database-role-boundaries.sh
+          bash scripts/test-postgres-client-wrapper.sh
 
       - name: Test certificate and secret handling
         run: |

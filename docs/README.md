@@ -16,11 +16,13 @@ Read these in order before deploying or changing protocol behavior:
    backlog and compromise register.
 4. [Internal architecture](ARCHITECTURE.md) — ownership, persistence and
    delivery boundaries.
-5. [Production operations](PRODUCTION_OPERATIONS.md) — deployment, monitoring,
+5. [Program responsibility model](PROGRAM_RESPONSIBILITIES.md) — exact process,
+   task, module, database and restore-session authority boundaries.
+6. [Production operations](PRODUCTION_OPERATIONS.md) — deployment, monitoring,
    backup, recovery, TLS and database-role procedures.
-6. [Release checklist](RELEASE_CHECKLIST.md) — evidence required for one exact
+7. [Release checklist](RELEASE_CHECKLIST.md) — evidence required for one exact
    release artifact and target environment.
-7. [OpenAPI contract](openapi.yaml) — REST wire contract served by the binary.
+8. [OpenAPI contract](openapi.yaml) — REST wire contract served by the binary.
 
 Repository contributions and safe default checks are described in
 [CONTRIBUTING.md](../CONTRIBUTING.md); vulnerability reporting uses

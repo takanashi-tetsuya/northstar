@@ -15,6 +15,7 @@ grant_runner="$project_dir/scripts/reconcile-database-grants.sh"
 grant_image="$project_dir/deploy/database-grants.Dockerfile"
 backup_image="$project_dir/deploy/backup.Dockerfile"
 backup_runner="$project_dir/scripts/backup.sh"
+postgres_runner="$project_dir/scripts/run-postgres.py"
 role_attestation="$project_dir/src/db/role_attestation.rs"
 db_module="$project_dir/src/db/mod.rs"
 main_source="$project_dir/src/main.rs"
@@ -66,10 +67,19 @@ service_block() {
   ' "$compose"
 }
 
+shell_function_block() {
+  local file=$1 function_name=$2
+  awk -v declaration="$function_name() {" '
+    $0 == declaration { inside = 1 }
+    inside { print }
+    inside && $0 == "}" { exit }
+  ' "$file"
+}
+
 for file in "$compose" "$init_script" "$grant_policy" "$grant_boundary" "$grant_apply" \
   "$capability_manifest" "$migration_ledger_manifest" \
   "$migration_ledger_generator" "$capability_manifest_check" \
-  "$grant_runner" "$grant_image" "$backup_image" "$backup_runner" \
+  "$grant_runner" "$grant_image" "$backup_image" "$backup_runner" "$postgres_runner" \
   "$role_attestation" "$db_module" "$main_source" "$state_source" "$pie_source" \
   "$users_source" "$admin_commands_source" "$roster_source" "$mix_source" \
   "$muc_source" "$muc_protocol_source" "$omemo_recovery_source" \
@@ -83,6 +93,19 @@ for file in "$compose" "$init_script" "$grant_policy" "$grant_boundary" "$grant_
   "$ci_workflow"; do
   [[ -f "$file" ]] || fail "required policy file is missing: ${file#$project_dir/}"
 done
+for postgres_runner_contract in \
+  'os.memfd_create("northstar-pgpass", flags=0)' \
+  'os.fchmod(descriptor, 0o600)' \
+  'os.set_inheritable(descriptor, True)' \
+  'environment["PGPASSFILE"] = f"/proc/self/fd/{descriptor}"' \
+  'os.execvpe(command[0], command, environment)'; do
+  require_literal "$postgres_runner" "$postgres_runner_contract" \
+    "PostgreSQL client wrapper lacks exact-process/memory-only credential contract: $postgres_runner_contract"
+done
+if grep -Eq '\b(subprocess\.(run|Popen)|tempfile\.(TemporaryDirectory|NamedTemporaryFile))\b' \
+    "$postgres_runner"; then
+  fail 'PostgreSQL client wrapper must exec the exact client and must not persist a password file'
+fi
 if command -v python3 >/dev/null 2>&1; then
   python3 "$capability_manifest_check"
 elif command -v python >/dev/null 2>&1; then
@@ -272,6 +295,69 @@ require_literal "$init_script" \
 require_literal "$role_runner" \
   'NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS' \
   'existing-volume reconciliation does not remove workload cluster privileges'
+for maintenance_policy in \
+  'ALTER DATABASE postgres OWNER TO :"bootstrap_role";' \
+  'ALTER DATABASE postgres WITH ALLOW_CONNECTIONS true CONNECTION LIMIT -1 IS_TEMPLATE false;' \
+  'REVOKE ALL PRIVILEGES ON DATABASE postgres FROM PUBLIC;' \
+  "'REVOKE ALL PRIVILEGES ON DATABASE postgres FROM %I CASCADE'" \
+  'GRANT CONNECT ON DATABASE postgres TO :"migrator_role";'; do
+  require_literal "$init_script" "$maintenance_policy" \
+    "fresh init is missing maintenance database policy: $maintenance_policy"
+  require_literal "$role_runner" "$maintenance_policy" \
+    "existing-volume reconciliation is missing maintenance database policy: $maintenance_policy"
+done
+require_literal "$role_runner" \
+  'migrator lacks explicit postgres maintenance CONNECT' \
+  'database role audit does not verify the restore maintenance capability'
+require_literal "$role_runner" \
+  'PUBLIC retains postgres maintenance privilege:' \
+  'database role audit does not reject PUBLIC maintenance database access'
+require_literal "$role_runner" \
+  'unexpected postgres maintenance ACL:' \
+  'database role audit does not reject non-migrator maintenance access'
+require_literal "$role_runner" \
+  'postgres maintenance database is missing or has unsafe identity/configuration' \
+  'database role audit does not verify maintenance owner and connection policy'
+require_literal "$role_runner" \
+  "granted.rolname IN (" \
+  'database role reconciliation does not inspect protected role memberships'
+for membership_file in "$init_script" "$role_runner"; do
+  require_literal "$membership_file" \
+    ":'bootstrap_role', :'migrator_role', :'runtime_role'" \
+    'bootstrap role is missing from bidirectional membership convergence'
+  require_literal "$membership_file" \
+    "REVOKE %I FROM %I CASCADE" \
+    'protected role membership convergence does not remove delegated grant chains'
+done
+require_literal "$role_runner" \
+  "rolname NOT IN (:'bootstrap_role','xmpp')" \
+  'role audit does not fail unknown login superusers while allowing explicit legacy migration'
+unexpected_superuser_query=$(sed -n \
+  '/unexpected_superusers=.*<<'"'"'PSQL'"'"'/,/^PSQL$/p' "$role_runner")
+if [[ "$unexpected_superuser_query" == *'rolcanlogin'* \
+   || "$unexpected_superuser_query" != *'WHERE rolsuper'* ]]; then
+  fail 'role audit must detect privileged NOLOGIN superusers as well as login superusers'
+fi
+require_literal "$role_runner" \
+  'warning: legacy database role xmpp retains authority' \
+  'role audit does not surface residual legacy superuser/login/membership authority'
+reconcile_call_count=$(grep -Ec \
+  '^[[:space:]]*bash scripts/reconcile-database-roles\.sh ' "$database_acceptance")
+reconcile_exception_count=$(grep -Fc -- \
+  '--allow-external-superuser "$control_role"' "$database_acceptance")
+[[ "$reconcile_call_count" -gt 0 \
+   && "$reconcile_call_count" -eq "$reconcile_exception_count" ]] \
+  || fail 'every isolated role-CI reconciliation must explicitly name its external control superuser'
+for role_ci_contract in \
+  'the CI PostgreSQL maintenance database is not the disposable canonical service' \
+  'ALTER DATABASE postgres OWNER TO northstar_ci_control;' \
+  'failed to restore the disposable CI maintenance database boundary' \
+  "COMMENT ON ROLE xmpp IS :'database_marker';" \
+  'GRANT northstar_runtime TO northstar_ci_stale_grantee WITH ADMIN OPTION;' \
+  'role reconciliation retained a protected role membership or delegated grant chain'; do
+  require_literal "$database_acceptance" "$role_ci_contract" \
+    "isolated role-CI ownership/membership lifecycle is missing: $role_ci_contract"
+done
 require_literal "$role_runner" '--connection-password-file' \
   'existing-volume reconciliation does not separate connection and bootstrap passwords'
 require_literal "$role_runner" 'export PGPASSWORD="$connection_password"' \
@@ -665,6 +751,7 @@ post_grant_commit_line=$(awk -v start="$grant_apply_line" \
    && "$grant_apply_line" -lt "$post_grant_commit_line" ]] \
   || fail 'restore must load capability manifest, converge ACLs, then commit replacement'
 for restore_session_contract in \
+  '[[ "$1" =~ ^(control|coordinator|primary|compensation)$ ]]' \
   'declare -A psql_session_state=()' \
   'declare -A psql_session_input_anchor_fd_registry=()' \
   'declare -A psql_session_output_anchor_fd_registry=()' \
@@ -674,8 +761,9 @@ for restore_session_contract in \
   'psql_session_input_fd_registry[$label]="$session_input"' \
   'psql_session_output_fd_registry[$label]="$session_output"' \
   'psql_session_state[$label]=open' \
-  'start_psql_session control db_session_pid db_session_in db_session_out' \
-  'start_psql_session primary primary_worker_pid primary_worker_in primary_worker_out' \
+  'start_psql_session control control_session_pid control_session_in control_session_out maintenance' \
+  'start_psql_session coordinator target_coordinator_pid target_coordinator_in' \
+  'start_psql_session primary primary_worker_pid primary_worker_in primary_worker_out target' \
   'start_psql_session compensation compensation_worker_pid' \
   'mkfifo -m 0600 -- "$input_fifo" "$output_fifo"' \
   'exec {input_anchor}<>"$input_fifo"' \
@@ -688,7 +776,10 @@ for restore_session_contract in \
   'forget_psql_session_output_anchor_fd "$label"' \
   '"${psql_session_input_anchor_fd_registry[$anchor_label]:-}"' \
   '"${psql_session_output_anchor_fd_registry[$anchor_label]:-}"' \
-  'exec "${pg_client[@]}" psql --no-psqlrc --quiet --tuples-only --no-align' \
+  'for anchor_label in control coordinator primary compensation; do' \
+  'if [[ "$connection_scope" == maintenance ]]; then' \
+  'psql_connection_arguments=(--dbname=postgres)' \
+  'exec "${pg_client[@]}" psql "${psql_connection_arguments[@]}"' \
   "trap 'deferred_start_signal=INT' INT" \
   "trap 'deferred_start_signal=TERM' TERM" \
   'trap - INT TERM' \
@@ -703,14 +794,30 @@ for restore_session_contract in \
   'forget_psql_session_pid "$label"' \
   'forget_psql_session_output_fd "$label"' \
   'clear_psql_session_registration "$label"' \
+  'for label in primary compensation coordinator control; do' \
   'local input_open=false output_open=false anchors_closed=true cleanup_ok=true' \
   '&& "$anchors_closed" == true ]]; then' \
   'close_db_sessions || cleanup_ok=false' \
   'run_pg_client_without_parent_fds pg_dump' \
   'run_pg_client_without_parent_fds pg_restore "$replacement_dump"' \
   'primary_worker_command "$grant_check_sql" "$grant_check_output"' \
-  'db_session_command "$sql_file" "$output_file"' \
-  'WHERE pid NOT IN (:control_pid, :primary_pid, :compensation_pid)' \
+  'control_session_command "$sql_file" "$output_file"' \
+  'target_coordinator_command "$barrier_sql" "$barrier_output"' \
+  '[[ "$control_database" == postgres && "$control_backend_pid" =~ ^[0-9]+$ ]]' \
+  'discover_target_coordinator_identity || return 1' \
+  'acquire_target_coordination_locks || return 1' \
+  'verify_primary_target_identity || return 1' \
+  'verify_compensation_target_identity || return 1' \
+  '[[ "$worker_database" =~ ^[A-Za-z0-9_.-]{1,63}$' \
+  '&& "$worker_database" != postgres' \
+  '&& "$worker_database" != template0' \
+  '&& "$worker_database" != template1' \
+  '[[ -n "$target_database" && "$worker_database" == "$target_database" ]]' \
+  '[[ "$control_backend_pid" != "$target_coordinator_backend_pid"' \
+  '&& "$target_coordinator_backend_pid" != "$primary_backend_pid" ]]' \
+  '&& "$primary_backend_pid" != "$compensation_backend_pid" ]]' \
+  "WHERE datname = :'target_db'" \
+  'WHERE pid NOT IN (:coordinator_pid, :primary_pid, :compensation_pid)' \
   'allowed_sessions != 3' \
   'restore_transaction_active=true' \
   'settle_active_restore_transaction' \
@@ -720,17 +827,95 @@ for restore_session_contract in \
   'refusing to release the database fence while a replacement transaction is unsettled' \
   'refusing to release the database fence while the restore outcome is unknown' \
   'refusing to release the database fence before retiring the committed restore marker' \
+  '[[ "$database_fence_active" == true ]]' \
   'SET LOCAL synchronous_commit TO on;' \
   "pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(:'restore_barrier_key', 0))" \
-  'read_restore_outcome' \
+  'read_target_restore_outcome' \
   'ALTER DATABASE %%I SET northstar.restore_commit TO %%L' \
   'replace_database_from_dump "$payload_dir/database.dump" restored exact' \
-  'replace_database_from_dump "$rollback_dump" rollback auto'; do
+  'replace_database_from_dump "$rollback_dump" rollback auto' \
+  '"target-database=$target_database"' \
+  '"maintenance-control-pid=$control_backend_pid"' \
+  '"target-coordinator-pid=$target_coordinator_backend_pid"' \
+  '"primary-executor-pid=$primary_backend_pid"' \
+  '"compensation-executor-pid=$compensation_backend_pid"'; do
   require_literal "$restore_runner" "$restore_session_contract" \
     "restore control/worker outcome contract is missing: $restore_session_contract"
 done
+for restore_authority_contract in \
+  'control:control_session_pid:control_session_in:control_session_out:maintenance' \
+  'coordinator:target_coordinator_pid:target_coordinator_in:target_coordinator_out:target' \
+  'primary:primary_worker_pid:primary_worker_in:primary_worker_out:target' \
+  'compensation:compensation_worker_pid:compensation_worker_in:compensation_worker_out:target' \
+  'control_session_command() {' \
+  'target_coordinator_command() {' \
+  'read_target_restore_outcome() {' \
+  'clear_target_restore_outcome() {' \
+  'read_restore_worker_identity() {' \
+  'discover_target_coordinator_identity() {' \
+  'verify_primary_target_identity() {' \
+  'verify_compensation_target_identity() {' \
+  'acquire_target_coordination_locks() {' \
+  'acquire_primary_policy_lock() {' \
+  'release_primary_policy_lock_after_fence() {' \
+  'establish_restore_database_authorities() {' \
+  'set_target_database_connections() {' \
+  'activate_target_database_fence() {' \
+  'release_target_database_fence() {'; do
+  require_literal "$restore_runner" "$restore_authority_contract" \
+    "restore responsibility boundary is missing: $restore_authority_contract"
+done
+for ambiguous_restore_symbol in db_session_command read_restore_outcome \
+  clear_restore_outcome set_database_connections activate_database_fence \
+  release_database_fence initialize_restore_worker; do
+  if grep -Eq "(^|[^A-Za-z0-9_])${ambiguous_restore_symbol}([^A-Za-z0-9_]|$)" \
+      "$restore_runner"; then
+    fail "restore retains ambiguous control/data-plane symbol: $ambiguous_restore_symbol"
+  fi
+done
+
+target_lock_block=$(shell_function_block "$restore_runner" acquire_target_coordination_locks)
+policy_lock_block=$(shell_function_block "$restore_runner" acquire_primary_policy_lock)
+policy_unlock_block=$(shell_function_block "$restore_runner" release_primary_policy_lock_after_fence)
+barrier_block=$(shell_function_block "$restore_runner" wait_for_restore_transaction_barrier)
+connection_fence_block=$(shell_function_block "$restore_runner" set_target_database_connections)
+outcome_read_block=$(shell_function_block "$restore_runner" read_target_restore_outcome)
+outcome_clear_block=$(shell_function_block "$restore_runner" clear_target_restore_outcome)
+identity_read_block=$(shell_function_block "$restore_runner" read_restore_worker_identity)
+target_identity_block=$(shell_function_block "$restore_runner" discover_target_coordinator_identity)
+[[ "$target_lock_block" == *'target_coordinator_command "$lock_sql" "$lock_output"'* \
+   && "$target_lock_block" != *'control_session_command'* \
+   && "$target_lock_block" != *'primary_worker_command'* ]] \
+  || fail 'target-local maintenance lock must be routed only to the target coordinator'
+[[ "$policy_lock_block" == *'primary_worker_command "$lock_sql" "$lock_output"'* \
+   && "$policy_lock_block" != *'target_coordinator_command'* \
+   && "$policy_lock_block" != *'control_session_command'* \
+   && "$policy_unlock_block" == *'primary_worker_command "$unlock_sql" "$unlock_output"'* \
+   && "$policy_unlock_block" == *'[[ "$database_fence_active" == true ]]'* \
+   && "$policy_unlock_block" != *'target_coordinator_command'* \
+   && "$policy_unlock_block" != *'control_session_command'* ]] \
+  || fail 'database policy lock ownership must remain on the primary executor through the hard fence'
+[[ "$barrier_block" == *'target_coordinator_command "$barrier_sql" "$barrier_output"'* \
+   && "$barrier_block" != *'control_session_command'* \
+   && "$connection_fence_block" == *'control_session_command "$sql_file" "$output_file"'* \
+   && "$connection_fence_block" != *'target_coordinator_command'* \
+   && "$outcome_read_block" == *'control_session_command "$outcome_sql" "$outcome_output"'* \
+   && "$outcome_read_block" != *'target_coordinator_command'* \
+   && "$outcome_clear_block" == *'control_session_command "$clear_sql"'* \
+   && "$outcome_clear_block" != *'target_coordinator_command'* ]] \
+  || fail 'restore coordinator/controller command ownership has crossed its database scope'
+[[ "$identity_read_block" == *'local -n pid_result="$5" database_result="$6"'* \
+   && "$identity_read_block" == *'local init_sql="$work_dir/$label-worker-init.sql" parsed_database parsed_pid'* \
+   && "$identity_read_block" == *'pid_result="$parsed_pid"'* \
+   && "$identity_read_block" == *'database_result="$parsed_database"'* \
+   && "$identity_read_block" != *'printf -v'* ]] \
+  || fail 'restore worker identity outputs must use namerefs and non-shadowing parsed locals'
+[[ "$target_identity_block" == *'&& "$worker_database" != postgres'* \
+   && "$target_identity_block" == *'&& "$worker_database" != template0'* \
+   && "$target_identity_block" == *'&& "$worker_database" != template1'* ]] \
+  || fail 'restore target identity must reject every PostgreSQL maintenance/template database'
 if grep -Fq 'coproc ' "$restore_runner"; then
-  fail 'restore must not depend on Bash single-coprocess bookkeeping for its three live PostgreSQL sessions'
+  fail 'restore must not depend on Bash single-coprocess bookkeeping for its four live PostgreSQL sessions'
 fi
 session_prepare_line=$(grep -nF 'psql_session_state[$label]=preparing' \
   "$restore_runner" | head -n 1 | cut -d: -f1)
@@ -785,7 +970,7 @@ session_unlink_line=$(awk -v start="$session_anchor_empty_line" \
   "$restore_runner")
 session_open_line=$(grep -nF 'psql_session_state[$label]=open' \
   "$restore_runner" | head -n 1 | cut -d: -f1)
-first_session_start_call=$(grep -nE '^start_db_sessions$' "$restore_runner" \
+first_session_start_call=$(grep -nE '^establish_restore_database_authorities$' "$restore_runner" \
   | head -n 1 | cut -d: -f1)
 script_int_trap_line=$(awk -v limit="$first_session_start_call" \
   '$0 == "trap '\''exit 130'\'' INT" && NR < limit { line = NR } END { print line }' \
@@ -874,29 +1059,74 @@ normal_clear_line=$(awk -v start="$normal_forget_output_line" \
    && "$normal_close_output_line" -lt "$normal_forget_output_line" \
    && "$normal_forget_output_line" -lt "$normal_clear_line" ]] \
   || fail 'restore must close input, drain stdout, reap the child, then close output and clear exact registrations'
-if grep -Fq 'cat "$grant_apply_sql" >&"$db_session_in"' "$restore_runner" \
-   || grep -Fq 'cat "$capability_manifest_sql" >&"$db_session_in"' "$restore_runner"; then
-  fail 'restore must never stream replacement policy into the persistent control session'
+if grep -Fq 'cat "$grant_apply_sql" >&"$control_session_in"' "$restore_runner" \
+   || grep -Fq 'cat "$capability_manifest_sql" >&"$control_session_in"' "$restore_runner" \
+   || grep -Fq 'cat "$grant_apply_sql" >&"$target_coordinator_in"' "$restore_runner" \
+   || grep -Fq 'cat "$capability_manifest_sql" >&"$target_coordinator_in"' "$restore_runner"; then
+  fail 'restore must never stream replacement policy into the controller or target coordinator'
 fi
-if grep -Fq '"${pg_client[@]}" psql --dbname=postgres' "$restore_runner"; then
-  fail 'restore must not open an unfenced maintenance connection after its bounded workers'
-fi
+[[ "$(grep -Fc 'psql_connection_arguments=(--dbname=postgres)' "$restore_runner")" == 1 ]] \
+  || fail 'restore must have exactly one bounded maintenance-database control connection'
+control_identity_line=$(grep -nF \
+  '[[ "$control_database" == postgres && "$control_backend_pid" =~ ^[0-9]+$ ]]' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+target_discovery_line=$(grep -nF 'discover_target_coordinator_identity || return 1' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+maintenance_lock_line=$(grep -nF 'acquire_target_coordination_locks || return 1' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+primary_identity_line=$(grep -nF 'verify_primary_target_identity || return 1' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+policy_lock_line=$(grep -nF 'acquire_primary_policy_lock || return 1' "$restore_runner" \
+  | head -n 1 | cut -d: -f1)
+initial_outcome_line=$(awk -v start="$policy_lock_line" \
+  'NR > start && /if ! read_target_restore_outcome/ { print NR; exit }' "$restore_runner")
+current_preflight_line=$(grep -nE '^  preflight_current_database_recoverability$' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+[[ -n "$control_identity_line" && -n "$target_discovery_line" \
+   && -n "$maintenance_lock_line" && -n "$primary_identity_line" \
+   && -n "$policy_lock_line" && -n "$initial_outcome_line" \
+   && -n "$current_preflight_line" \
+   && "$control_identity_line" -lt "$target_discovery_line" \
+   && "$target_discovery_line" -lt "$maintenance_lock_line" \
+   && "$maintenance_lock_line" -lt "$primary_identity_line" \
+   && "$primary_identity_line" -lt "$policy_lock_line" \
+   && "$policy_lock_line" -lt "$initial_outcome_line" \
+   && "$initial_outcome_line" -lt "$current_preflight_line" ]] \
+  || fail 'restore authority setup must order controller, coordinator lock, primary policy and preflight exactly'
 rollback_dump_line=$(grep -nF 'run_pg_client_without_parent_fds pg_dump' "$restore_runner" \
   | head -n 1 | cut -d: -f1)
 compensation_worker_line=$(grep -nF 'start_compensation_worker' "$restore_runner" \
   | tail -n 1 | cut -d: -f1)
-fence_activation_line=$(grep -nF 'activate_database_fence' "$restore_runner" \
+fence_activation_line=$(grep -nF 'activate_target_database_fence' "$restore_runner" \
   | tail -n 1 | cut -d: -f1)
+policy_unlock_line=$(grep -nF 'release_primary_policy_lock_after_fence' "$restore_runner" \
+  | tail -n 1 | cut -d: -f1)
+allow_connections_false_line=$(grep -nF 'set_target_database_connections false' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+exact_target_sessions_line=$(grep -nF \
+  'if (( remaining_sessions != 0 || allowed_sessions != 3 )); then' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+hard_fence_state_line=$(grep -nF 'database_fence_active=true' "$restore_runner" \
+  | head -n 1 | cut -d: -f1)
 outcome_marker_line=$(grep -nF \
   'ALTER DATABASE %%I SET northstar.restore_commit TO %%L' "$restore_runner" \
   | head -n 1 | cut -d: -f1)
 synchronous_commit_line=$(grep -nF 'SET LOCAL synchronous_commit TO on;' \
   "$restore_runner" | head -n 1 | cut -d: -f1)
-[[ -n "$rollback_dump_line" && -n "$compensation_worker_line" \
+[[ -n "$policy_lock_line" && -n "$rollback_dump_line" \
+   && "$policy_lock_line" -lt "$rollback_dump_line" \
+   && -n "$compensation_worker_line" \
    && -n "$fence_activation_line" \
    && "$rollback_dump_line" -lt "$compensation_worker_line" \
-   && "$compensation_worker_line" -lt "$fence_activation_line" ]] \
-  || fail 'restore must take the rollback dump before opening compensation, then fence exact workers'
+   && "$compensation_worker_line" -lt "$fence_activation_line" \
+   && -n "$policy_unlock_line" \
+   && "$fence_activation_line" -lt "$policy_unlock_line" ]] \
+  || fail 'restore must hold policy through rollback capture, fence exact workers, then release it'
+[[ -n "$allow_connections_false_line" && -n "$exact_target_sessions_line" \
+   && -n "$hard_fence_state_line" \
+   && "$allow_connections_false_line" -lt "$exact_target_sessions_line" \
+   && "$exact_target_sessions_line" -lt "$hard_fence_state_line" ]] \
+  || fail 'restore hard fence must disable new connections and prove exactly three target sessions before activation'
 [[ -n "$outcome_marker_line" && -n "$post_grant_commit_line" \
    && -n "$synchronous_commit_line" \
    && "$grant_apply_line" -lt "$synchronous_commit_line" \
@@ -914,7 +1144,7 @@ drop_schema_line=$(grep -nF \
 normal_settle_line=$(grep -nF 'settle_active_restore_transaction || return 2' \
   "$restore_runner" | tail -n 1 | cut -d: -f1)
 normal_outcome_line=$(awk -v start="$normal_settle_line" \
-  'NR > start && /if ! read_restore_outcome/ { print NR; exit }' "$restore_runner")
+  'NR > start && /if ! read_target_restore_outcome/ { print NR; exit }' "$restore_runner")
 [[ -n "$active_transaction_line" && -n "$ready_wait_line" \
    && -n "$drop_schema_line" \
    && "$active_transaction_line" -lt "$ready_wait_line" \
@@ -946,7 +1176,7 @@ finish_clear_exit_line=$(awk -v start="$finish_reentry_guard_line" \
 finish_settle_line=$(awk -v start="$finish_restore_line" \
   'NR > start && /settle_active_restore_transaction/ { print NR; exit }' "$restore_runner")
 finish_outcome_line=$(awk -v start="$finish_restore_line" \
-  'NR > start && /read_restore_outcome/ { print NR; exit }' "$restore_runner")
+  'NR > start && /read_target_restore_outcome/ { print NR; exit }' "$restore_runner")
 [[ -n "$finish_settle_line" && -n "$finish_outcome_line" \
    && "$finish_settle_line" -lt "$finish_outcome_line" ]] \
   || fail 'restore cleanup must settle any active replacement transaction before interpreting outcome'
@@ -987,10 +1217,10 @@ committed_finish_line=$(awk -v start="$finish_restore_line" \
 committed_settle_line=$(awk -v start="$committed_finish_line" \
   'NR > start && /settle_active_restore_transaction/ { print NR; exit }' "$restore_runner")
 committed_clear_line=$(awk -v start="$committed_finish_line" \
-  'NR > start && /clear_restore_outcome "\$incoming_outcome_marker"/ { print NR; exit }' \
+  'NR > start && /clear_target_restore_outcome "\$incoming_outcome_marker"/ { print NR; exit }' \
   "$restore_runner")
 finish_release_line=$(awk -v start="$finish_restore_line" \
-  'NR > start && /release_database_fence/ { print NR; exit }' "$restore_runner")
+  'NR > start && /release_target_database_fence/ { print NR; exit }' "$restore_runner")
 [[ -n "$committed_finish_line" && -n "$committed_settle_line" \
    && -n "$committed_clear_line" && -n "$finish_release_line" \
    && "$committed_finish_line" -lt "$committed_settle_line" \

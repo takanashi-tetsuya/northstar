@@ -9,13 +9,15 @@ PostgreSQL superuser nor the database/schema owner.
 | Role | Login | Ownership/capability | Cluster attributes | Intended exposure |
 | --- | --- | --- | --- | --- |
 | `northstar_bootstrap` | yes | Creates/reconciles roles and repairs an existing volume | `SUPERUSER`, `CREATEDB`, `CREATEROLE` | PostgreSQL container and explicit break-glass maintenance only |
-| `northstar_migrator` | yes | Owns the application database/schema; migration DDL only | non-superuser, no role memberships, `CONNECTION LIMIT 4` | One-shot migration job |
+| `northstar_migrator` | yes | Owns the application database/schema; migration, grant reconciliation and stopped restore | non-superuser, no role memberships, `CONNECTION LIMIT 4` | One-shot migration/reconciliation/restore jobs |
 | `northstar_runtime` | yes | Application DML except account authority; `users` is SELECT-only and all account writes use an exact reviewed command-capability allowlist | non-owner/non-superuser, no CREATE/TEMP, `CONNECTION LIMIT 64` | Long-lived server |
 | `northstar_commands` | yes | No relation or sequence access; may only create/claim/finalize bounded XEP-0133 command sessions through eight typed owner-held functions | non-owner/non-superuser, no CREATE/TEMP, `CONNECTION LIMIT 8` | Isolated four-connection command pool in the long-lived server |
 | `northstar_backup` | yes | `SELECT` only, no routine execution or sequence allocation | same non-privileged attributes, `CONNECTION LIMIT 2` | Backup job only |
 
-The four workload roles use `NOINHERIT` and are not allowed to participate in
-any direct role membership, in either direction. The bootstrap role must never
+The four workload roles use `NOINHERIT`. All five protected roles, including
+bootstrap, are forbidden from participating in any direct role membership in
+either direction; reconciliation removes delegated membership chains with
+`CASCADE`. The bootstrap role must never
 be mounted into the Northstar, backup, migration, or restore containers.
 Role reconciliation also fixes `VALID UNTIL 'infinity'` and executes
 `ALTER ROLE ... RESET ALL`; a stale role-level `search_path`, timeout or other
@@ -69,6 +71,9 @@ not the read-only backup URL.
 cannot read or write any table or execute a business mutation capability. The
 runtime role can consume a valid claim only after that isolated pool has minted
 it, but cannot create, inspect, renew, release, or complete a command session.
+The two pools have distinct PostgreSQL credentials but still run in the same
+`xmpp-server` OS process; this is a database capability boundary, not process
+isolation.
 
 ## Fresh volumes
 
@@ -166,6 +171,9 @@ This script has no bootstrap secret. It refuses to continue unless:
 - the current connection is the migrator (or an explicit bootstrap session);
 - all workload roles have the required non-privileged attributes;
 - no workload role membership exists;
+- bootstrap has no inbound or outbound role membership;
+- every unknown superuser is rejected even when it is `NOLOGIN`; an external
+  dedicated-cluster/isolated-CI controller must be named explicitly;
 - connection limits are migrator=4, runtime=64, command=8 and backup=2;
 - the migrator owns the database, schema, application relations, routines, and
   non-extension explicit types/domains; and
@@ -240,7 +248,16 @@ not contain `psql` or the grant wrapper.
 Restore reuses the same checked-in boundary assertions and grant body. Dump
 validation runs in a private temporary PostgreSQL instance rather than asking
 the `NOCREATEDB` migrator to create a database in the target cluster. At
-cutover, `ALLOW_CONNECTIONS=false` prevents new peers; restore refuses to
+cutover, a bounded migrator session connected to the standard `postgres`
+maintenance database changes the target's `ALLOW_CONNECTIONS` setting. The
+migrator receives one explicit database-level `CONNECT` on `postgres` for this
+operation and no database-level `TEMPORARY`. The control connection pins
+`search_path=pg_catalog,pg_temp` and does not rely on maintenance-database user
+objects. Fresh-volume initialization and existing-volume role reconciliation
+fix the maintenance owner/configuration, revoke every arbitrary database-level
+grantee and install only this non-owner capability. This policy assumes a
+dedicated PostgreSQL cluster. `ALLOW_CONNECTIONS=false` then prevents new peers;
+restore refuses to
 proceed while any existing peer remains instead of requiring
 `pg_signal_backend`. The dump, migrator-owned `public` schema, current-object
 ACLs, and default privileges commit in one replacement transaction before the

@@ -235,18 +235,40 @@ the rollback dump or connection fence, a rolled-back application of the same
 canonical grant authority also rejects an unknown, partial or noncanonical
 current target while its live data plane is unchanged.
 
-After preflight and the pre-restore dump, restore keeps exactly three
-pre-opened, identity-checked target backends: a persistent control backend, a
-primary replacement worker and an independent compensation worker. It sets the
-target database to `ALLOW_CONNECTIONS=false`, then verifies that only those
-three recorded PIDs remain; this is a post-fence catalog assertion, not a
-PostgreSQL PID allowlist. It deliberately does not terminate other sessions or require
+After preflight and the pre-restore dump, restore keeps exactly four
+pre-opened, identity-checked backends. The persistent control backend connects
+to the standard `postgres` maintenance database; a coordinator, the primary
+replacement worker and the independent compensation worker connect to the
+target database. The control backend sets the target to
+`ALLOW_CONNECTIONS=false`, then verifies that only those three recorded target
+PIDs remain; this is a
+post-fence catalog assertion, not a PostgreSQL PID allowlist. It deliberately
+does not terminate other sessions or require
 `pg_signal_backend`; if any peer remains, restore rejects cutover, reopens the
 unchanged target and instructs the operator to stop Northstar and every other
 database client before retrying.
 
-Each backend is a separately supervised process connected through its own pair
-of private FIFOs. During startup only, the parent registers one `O_RDWR` anchor
+The restore command router gives each session a narrower responsibility, even
+though all four sessions authenticate as the same migrator role:
+
+| Session/function | Database | Script-routed responsibility | Enforcement level |
+| --- | --- | --- | --- |
+| maintenance controller | `postgres` | set/reset target `ALLOW_CONNECTIONS`; query target catalog state and outcome markers | separate connection and command path, pinned `pg_catalog,pg_temp` search path, static gate; not a separate PostgreSQL role |
+| target coordinator | target | hold the backup/restore maintenance lock and wait on target-local transaction barriers | separate process/FIFO and target-database identity check; same migrator role |
+| primary executor | target | hold the pre-fence policy lock, preflight current state, perform incoming replacement and write its transactional marker | command routing, transaction and static ordering checks; same owner role |
+| compensation executor | target | restore the retained pre-cutover dump only after failure arbitration | command routing and state-machine gate; same owner role |
+| fence auditor | controller query over `pg_stat_activity` | require exactly coordinator, primary and compensation PIDs in the target | PostgreSQL catalog assertion after `ALLOW_CONNECTIONS=false` |
+| outcome arbiter | controller query over `pg_db_role_setting` | resolve the named target OID and interpret only absent/incoming/rollback after the coordinator barrier | catalog marker plus same-database barrier; never worker exit status |
+
+These are program responsibility boundaries, not independent database ACL
+identities. Compromise of the restore parent process or migrator credential can
+bypass them; the security value is deterministic routing, reviewability and
+failure containment inside the trusted restore tool.
+
+Each backend is an independently registered and reaped child session connected
+through its own pair of private FIFOs. The sessions share one parent,
+credential, container and PostgreSQL cluster; they are not independent restart
+or credential domains. During startup only, the parent registers one `O_RDWR` anchor
 per FIFO before spawning the worker. These anchors prevent either directional
 open from blocking forever if the worker exits between redirections. The worker
 closes inherited anchors after redirection; once both real parent endpoints are
@@ -258,16 +280,28 @@ closes inherited session and restore-floor-lock descriptors before executing
 Short-lived dump producers also discard every persistent-session descriptor
 before execution.
 
-The control backend owns the maintenance and connection fences but never runs
-replacement SQL. Each worker first begins a transaction, takes its unique
+The target coordinator owns the database-local backup/restore maintenance lock
+and transaction barriers; the control backend owns only the connection fence
+and shared-catalog reads. Keeping control outside the target is required by PostgreSQL,
+which rejects changing `ALLOW_CONNECTIONS` for the current database. The
+migrator therefore receives one explicit database-level `CONNECT` on
+`postgres`, but no database-level `TEMPORARY`; the control session pins its
+search path to `pg_catalog,pg_temp`. Production requires a dedicated PostgreSQL
+cluster. Role bootstrap and existing-volume reconciliation remove arbitrary
+maintenance-database grantees and converge that database ACL and owner.
+
+The primary executor holds the policy lock from preflight through rollback-dump
+capture. After the hard connection fence proves that only the three registered
+target sessions remain, it releases that session lock; no new policy peer can
+then enter. Each replacement worker begins a transaction, takes its unique
 transaction-level advisory lock, verifies the prior database outcome marker and
 emits READY. Destructive SQL is sent only after READY. The same checked-in grant
 body used by post-migration reconciliation is applied inside the replacement
 transaction, so `public` is owned by the migrator and PUBLIC/runtime/backup ACLs
 and default privileges converge before commit. A unique database-level
 `northstar.restore_commit` outcome marker is written in that transaction
-immediately before a synchronous `COMMIT`. The control backend then takes the
-same transaction lock as a barrier
+immediately before a synchronous `COMMIT`. The target coordinator then takes
+the same target-local transaction lock as a barrier
 before reading the marker, so worker EOF or a missing acknowledgement is never
 interpreted as commit or rollback evidence.
 

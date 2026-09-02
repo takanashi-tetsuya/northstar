@@ -7,9 +7,7 @@ import argparse
 import os
 from pathlib import Path
 import stat
-import subprocess
-import sys
-import tempfile
+from typing import NoReturn
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 
@@ -49,7 +47,7 @@ ENVIRONMENT_BY_PARAMETER = {
 }
 
 
-def fail(message: str) -> "NoReturn":
+def fail(message: str) -> NoReturn:
     raise SystemExit(message)
 
 
@@ -113,7 +111,40 @@ def connection_environment(database_url: str) -> tuple[dict[str, str], str | Non
     return environment, password
 
 
-def main() -> int:
+def install_password_memfd(password: str, environment: dict[str, str]) -> None:
+    """Expose a 0600 libpq passfile without creating a filesystem pathname.
+
+    The wrapper immediately execs the PostgreSQL client, so the registered
+    process ID remains the exact client process.  Keeping this descriptor
+    inheritable is intentional: libpq opens the same anonymous regular file
+    through /proc after exec and the kernel closes it when the client exits.
+    """
+
+    if "\n" in password or "\r" in password:
+        fail("database passwords containing line endings are not supported")
+    if not hasattr(os, "memfd_create") or not Path("/proc/self/fd").is_dir():
+        fail("a Linux memfd and /proc are required for password-safe PostgreSQL execution")
+
+    escaped_password = password.replace("\\", "\\\\").replace(":", "\\:")
+    payload = f"*:*:*:*:{escaped_password}\n".encode("utf-8")
+    descriptor = os.memfd_create("northstar-pgpass", flags=0)
+    try:
+        os.fchmod(descriptor, 0o600)
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                fail("could not write the anonymous PostgreSQL password file")
+            view = view[written:]
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        os.set_inheritable(descriptor, True)
+        environment["PGPASSFILE"] = f"/proc/self/fd/{descriptor}"
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def main() -> NoReturn:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database-url-file")
     parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -125,17 +156,13 @@ def main() -> int:
         fail("a PostgreSQL client command is required after --")
 
     environment, password = connection_environment(load_url(arguments.database_url_file))
-    with tempfile.TemporaryDirectory(prefix="northstar-pgpass-") as temporary_directory:
-        if password is not None:
-            if "\n" in password or "\r" in password:
-                fail("database passwords containing line endings are not supported")
-            escaped_password = password.replace("\\", "\\\\").replace(":", "\\:")
-            passfile = Path(temporary_directory, "pgpass")
-            passfile.write_text(f"*:*:*:*:{escaped_password}\n", encoding="utf-8")
-            passfile.chmod(0o600)
-            environment["PGPASSFILE"] = str(passfile)
-        return subprocess.run(command, env=environment, check=False).returncode
+    if password is not None:
+        install_password_memfd(password, environment)
+    try:
+        os.execvpe(command[0], command, environment)
+    except OSError as error:
+        fail(f"could not execute PostgreSQL client: {error}")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

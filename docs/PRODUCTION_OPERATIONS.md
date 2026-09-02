@@ -1088,8 +1088,10 @@ and on dump-to-archive verification rather than claiming a distributed
 snapshot across PostgreSQL and the filesystem.
 
 `run-postgres.py` parses the URL for each PostgreSQL client, removes the URL
-from the child environment, and places any password in a mode-0600 temporary
-passfile. Production should prefer `--database-url-file`; the direct
+from the child environment, places any password in a mode-0600 anonymous Linux
+memfd exposed only through `/proc/self/fd`, and replaces itself with the client
+using the same PID. No password passfile pathname is written to disk.
+Production should prefer `--database-url-file`; the direct
 `DATABASE_URL` form exists only under the explicit
 `BACKUP_SECURITY_POLICY=development-legacy` compatibility policy and may itself
 be visible in the wrapper process environment on operating systems that expose
@@ -1232,13 +1234,15 @@ an old and new object with the same UUID are not confused. Old objects remain in
 that atomic rollback source until a complete verified and flushed copy exists
 under the dedicated rollback root.
 
-Immediately before database replacement, restore keeps exactly its three
-pre-opened target backends (control, primary replacement and compensation) and
-sets the database to `ALLOW_CONNECTIONS=false`. It does not require
+Immediately before database replacement, restore keeps four pre-opened
+backends: a control backend in the `postgres` maintenance database plus a
+coordinator, primary replacement and compensation backend in the target. The control
+backend sets the target to `ALLOW_CONNECTIONS=false`. It does not require
 `pg_signal_backend` and does not terminate peers: if any other target session
 remains, restore rejects the cutover and reopens the unchanged database. Stop
-Northstar and every other database client before retrying. Once only those
-three verified backend PIDs remain, no new target connection can enter; a crash
+Northstar and every other database client before retrying. Once only the three
+verified target PIDs remain, no new target connection can enter;
+a crash
 therefore fails closed instead of admitting clients to a half-switched data
 plane. The replacement
 transaction recreates `public` as the verified migrator owner and applies the
@@ -1251,14 +1255,28 @@ prepare, or exact-current predecessor can be reconstructed without weakening
 the incoming-payload contract. Exact old/new manifests before and after upload
 activation detect a late filesystem mutation and prevent commit.
 
-Database control and replacement use separate failure domains. The persistent
-control backend alone owns the advisory lock, changes the database connection
-fence and reads the authoritative outcome. The primary replacement backend and
+Database control and replacement use separate session and command lifecycles.
+They share the restore parent, migrator credential, container and PostgreSQL
+cluster, so they are not independent security or restart domains. The persistent
+control backend connects to `postgres`; it changes the target database
+connection fence and reads the authoritative target outcome from shared
+catalogs. A separate target coordinator owns the database-local maintenance
+lock and transaction barriers, preserving mutual exclusion with backup.
+PostgreSQL rejects changing
+`ALLOW_CONNECTIONS` from a session in that same database, so the migrator must
+retain an explicit database-level `CONNECT` on `postgres` but receives no
+database-level `TEMPORARY`; its control session pins `search_path` to
+`pg_catalog,pg_temp`. Role initialization and existing-volume reconciliation
+converge the maintenance database owner/ACL and remove arbitrary grantees. This
+assumes the documented dedicated PostgreSQL cluster.
+The primary replacement backend and
 an independently pre-opened compensation backend execute incoming and rollback
-SQL respectively. Any session beyond those three recorded backends aborts
+SQL respectively. Any target session beyond the coordinator and those two workers aborts
 cutover without being terminated. Each backend runs as an independently
-supervised process over a private FIFO pair whose pathname is removed after
-startup. A registered `O_RDWR` anchor exists for each FIFO only while the child
+registered and reaped child session over a private FIFO pair whose pathname is
+removed after startup. The sessions share one parent, credential and container;
+their split is command/lifecycle containment, not an independent security or
+restart domain. A registered `O_RDWR` anchor exists for each FIFO only while the child
 and parent establish their directional endpoints, preventing a child exit
 between opens from blocking the restore process. Workers close inherited
 anchors after redirection, and the parent closes and unregisters its anchors as
@@ -1268,12 +1286,12 @@ this avoids Bash's single-coprocess bookkeeping while ensuring that normal
 input closure produces EOF for that worker only. Each
 replacement transaction writes a unique database-level
 `northstar.restore_commit` marker before a synchronous `COMMIT`. After new
-connections are disabled, the control backend verifies that these three
-recorded PIDs are the only remaining sessions; PostgreSQL is not configured
+connections are disabled, the control backend verifies that those three target
+PIDs are the only remaining target sessions; PostgreSQL is not configured
 with a PID allowlist. A READY phase
 first proves that the worker owns a unique transaction-level advisory lock and
 that the prior marker still matches. Destructive replacement SQL is not sent
-before READY. The control backend must acquire that same transaction lock before
+before READY. The target coordinator must acquire that same target-local transaction lock before
 it reads the catalog marker, so EOF is never treated as evidence either way. If
 cleanup interrupts an incomplete command stream, it closes and drains the exact
 active worker first: PostgreSQL either finishes an already-buffered commit or

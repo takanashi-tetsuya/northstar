@@ -83,32 +83,109 @@ psql_as() {
 cleanup() {
   local original_status=$?
   local cleanup_status=0
-  local marker_matches='f'
+  local marker_state='f:f'
 
   trap - EXIT
   set +e
   if [[ "$database_is_managed" == true ]]; then
-    marker_matches=$(control_psql --dbname=postgres --tuples-only --no-align \
+    marker_state=$(control_psql --dbname=postgres --tuples-only --no-align \
       --set=expected_marker="$marker" <<'PSQL'
-SELECT COALESCE(
-  (
-    SELECT pg_catalog.shobj_description(database.oid, 'pg_database') = :'expected_marker'
-      FROM pg_catalog.pg_database AS database
-     WHERE database.datname = 'xmpp'
-  ),
-  false
-);
+WITH fixture AS (
+  SELECT
+    EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname='xmpp') AS database_exists,
+    COALESCE((
+      SELECT pg_catalog.shobj_description(database.oid,'pg_database')=:'expected_marker'
+        FROM pg_catalog.pg_database AS database WHERE database.datname='xmpp'
+    ),false) AS database_marked,
+    COALESCE((
+      SELECT owner.rolname='xmpp'
+        FROM pg_catalog.pg_database AS database
+        JOIN pg_catalog.pg_roles AS owner ON owner.oid=database.datdba
+       WHERE database.datname='xmpp'
+    ),false) AS database_owned_by_legacy,
+    EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='xmpp') AS role_exists,
+    COALESCE((
+      SELECT pg_catalog.shobj_description(role.oid,'pg_authid')=:'expected_marker'
+        FROM pg_catalog.pg_roles AS role WHERE role.rolname='xmpp'
+    ),false) AS role_marked
+)
+SELECT (database_exists OR role_exists)::pg_catalog.text || ':' ||
+       (
+         (NOT database_exists AND NOT role_exists)
+         OR (role_exists AND role_marked AND (
+               NOT database_exists OR database_marked OR database_owned_by_legacy
+             ))
+       )::pg_catalog.text
+  FROM fixture;
 PSQL
     )
-    if [[ "$marker_matches" == 't' ]]; then
+    if [[ "$marker_state" == 't:t' ]]; then
       if [[ "$phase_fixture_database_created" == true ]]; then
-        control_psql --dbname=postgres \
-          --command="DROP DATABASE IF EXISTS northstar_ci_grant_phase_fixture WITH (FORCE);" \
-          || cleanup_status=1
-        phase_fixture_database_created=false
+        if control_psql --dbname=postgres \
+          --command="DROP DATABASE IF EXISTS northstar_ci_grant_phase_fixture WITH (FORCE);"; then
+          phase_fixture_database_created=false
+        else
+          cleanup_status=1
+        fi
       fi
-      control_psql --dbname=postgres <<'PSQL'
-DROP DATABASE xmpp WITH (FORCE);
+      control_psql --dbname=postgres <<'PSQL' || cleanup_status=1
+-- The fixture deliberately transfers the maintenance database to bootstrap
+-- and grants migrator its only maintenance capability.  Return those
+-- cluster-global objects to the external CI controller before dropping the
+-- fixture roles; otherwise cleanup either leaks ACLs or fails on ownership.
+ALTER DATABASE postgres OWNER TO northstar_ci_control;
+ALTER DATABASE postgres WITH ALLOW_CONNECTIONS true CONNECTION LIMIT -1 IS_TEMPLATE false;
+REVOKE ALL PRIVILEGES ON DATABASE postgres FROM PUBLIC;
+SELECT pg_catalog.format(
+         'REVOKE ALL PRIVILEGES ON DATABASE postgres FROM %I CASCADE',
+         grantee.rolname
+       )
+  FROM pg_catalog.pg_database AS database
+ CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+   database.datacl,pg_catalog.acldefault('d',database.datdba)
+ )) AS privilege
+  JOIN pg_catalog.pg_roles AS grantee ON grantee.oid=privilege.grantee
+ WHERE database.datname='postgres'
+   AND privilege.grantee<>database.datdba
+ GROUP BY grantee.rolname
+ ORDER BY grantee.rolname
+\gexec
+GRANT CONNECT, TEMPORARY ON DATABASE postgres TO PUBLIC;
+SELECT (
+  database_owner.rolname='northstar_ci_control'
+  AND database.datallowconn
+  AND database.datconnlimit=-1
+  AND NOT database.datistemplate
+  AND pg_catalog.count(*) FILTER (
+        WHERE privilege.grantee=database.datdba
+          AND privilege.grantor=database.datdba
+          AND privilege.privilege_type IN ('CONNECT','CREATE','TEMPORARY')
+          AND NOT privilege.is_grantable
+      )=3
+  AND pg_catalog.count(*) FILTER (
+        WHERE privilege.grantee=0
+          AND privilege.grantor=database.datdba
+          AND privilege.privilege_type IN ('CONNECT','TEMPORARY')
+          AND NOT privilege.is_grantable
+      )=2
+  AND pg_catalog.count(*)=5
+) AS northstar_maintenance_database_restored
+  FROM pg_catalog.pg_database AS database
+  JOIN pg_catalog.pg_roles AS database_owner ON database_owner.oid=database.datdba
+ CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+   database.datacl,pg_catalog.acldefault('d',database.datdba)
+ )) AS privilege
+ WHERE database.datname='postgres'
+ GROUP BY database.oid,database_owner.rolname
+\gset
+\if :northstar_maintenance_database_restored
+\else
+  \echo 'failed to restore the disposable CI maintenance database boundary'
+  \quit 41
+\endif
+-- Preserve the ownership marker until the cluster-global maintenance state
+-- has been restored and verified. A failed cleanup can then be retried safely.
+DROP DATABASE IF EXISTS xmpp WITH (FORCE);
 DROP ROLE IF EXISTS northstar_backup;
 DROP ROLE IF EXISTS northstar_runtime;
 DROP ROLE IF EXISTS northstar_commands;
@@ -118,10 +195,9 @@ DROP ROLE IF EXISTS northstar_ci_stale_grantee;
 DROP ROLE IF EXISTS northstar_ci_delegated_grantee;
 DROP ROLE IF EXISTS xmpp;
 PSQL
-      cleanup_status=$?
-    else
+    elif [[ "$marker_state" != 'f:t' ]]; then
       printf '%s\n' \
-        'refusing database cleanup because the isolated CI ownership marker is absent' >&2
+        'refusing database cleanup because the isolated CI ownership marker is absent or inconsistent' >&2
       cleanup_status=1
     fi
   fi
@@ -238,22 +314,62 @@ PSQL
 [[ "$fixture_conflicts" == '0' ]] \
   || fail 'the CI PostgreSQL service is not empty; refusing role/database collision'
 
+# This fixture rewrites cluster-global owner/config/ACL state on the standard
+# maintenance database. It is safe only on the disposable official-image
+# service whose exact semantic default is restored during cleanup; absence of
+# Northstar role names alone does not make an arbitrary shared cluster safe.
+maintenance_database_is_disposable=$(control_psql --dbname=postgres \
+  --tuples-only --no-align <<'PSQL'
+SELECT (
+  database_owner.rolname='northstar_ci_control'
+  AND database.datallowconn
+  AND database.datconnlimit=-1
+  AND NOT database.datistemplate
+  AND pg_catalog.count(*) FILTER (
+        WHERE privilege.grantee=database.datdba
+          AND privilege.grantor=database.datdba
+          AND privilege.privilege_type IN ('CONNECT','CREATE','TEMPORARY')
+          AND NOT privilege.is_grantable
+      )=3
+  AND pg_catalog.count(*) FILTER (
+        WHERE privilege.grantee=0
+          AND privilege.grantor=database.datdba
+          AND privilege.privilege_type IN ('CONNECT','TEMPORARY')
+          AND NOT privilege.is_grantable
+      )=2
+  AND pg_catalog.count(*)=5
+)
+  FROM pg_catalog.pg_database AS database
+  JOIN pg_catalog.pg_roles AS database_owner ON database_owner.oid=database.datdba
+ CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+   database.datacl,pg_catalog.acldefault('d',database.datdba)
+ )) AS privilege
+ WHERE database.datname='postgres'
+ GROUP BY database.oid,database_owner.rolname;
+PSQL
+)
+[[ "$maintenance_database_is_disposable" == 't' ]] \
+  || fail 'the CI PostgreSQL maintenance database is not the disposable canonical service; refusing cluster-global mutation'
+
 # Build a legacy Compose-like state: xmpp is both login superuser and database
 # owner. Password values enter psql only through environment variables.
 export NORTHSTAR_CI_LEGACY_PASSWORD="$legacy_password"
 export NORTHSTAR_CI_DATABASE_MARKER="$marker"
+database_is_managed=true
 control_psql --dbname=postgres <<'PSQL'
 \getenv legacy_password NORTHSTAR_CI_LEGACY_PASSWORD
 \getenv database_marker NORTHSTAR_CI_DATABASE_MARKER
+BEGIN;
 SELECT pg_catalog.format(
   'CREATE ROLE xmpp LOGIN SUPERUSER CREATEDB CREATEROLE PASSWORD %L',
   :'legacy_password'
 ) \gexec
+COMMENT ON ROLE xmpp IS :'database_marker';
+COMMIT;
 CREATE DATABASE xmpp OWNER xmpp;
 COMMENT ON DATABASE xmpp IS :'database_marker';
 PSQL
 unset NORTHSTAR_CI_LEGACY_PASSWORD NORTHSTAR_CI_DATABASE_MARKER
-database_is_managed=true
 
 # Reconstruct a genuine stopped pre-capability-upgrade database.  The phase
 # gate intentionally rejects an arbitrary populated schema without an sqlx
@@ -326,6 +442,7 @@ write_secret "$migrator_url_file" \
 # Exercise the explicit existing-volume upgrade using the old superuser, then
 # reconnect through the new bootstrap boundary before the guarded legacy cutover.
 bash scripts/reconcile-database-roles.sh --apply \
+  --allow-external-superuser "$control_role" \
   --host "$database_host" --port "$database_port" --connect-as "$legacy_role" \
   --connection-password-file "$legacy_password_file" \
   --bootstrap-password-file "$bootstrap_password_file" \
@@ -335,6 +452,7 @@ bash scripts/reconcile-database-roles.sh --apply \
   --backup-password-file "$backup_password_file"
 
 bash scripts/reconcile-database-roles.sh --apply --demote-legacy-xmpp \
+  --allow-external-superuser "$control_role" \
   --host "$database_host" --port "$database_port" --connect-as "$bootstrap_role" \
   --connection-password-file "$bootstrap_password_file" \
   --bootstrap-password-file "$bootstrap_password_file" \
@@ -388,9 +506,12 @@ PSQL
 # Exercise a genuinely empty bootstrap database, then poison its ledger with a
 # one-sided and a post-boundary-without-boundary state. Both malformed shapes
 # must fail before any grant can be installed.
+# Mark cleanup ownership before issuing CREATE DATABASE.  PostgreSQL can commit
+# the command even if the client loses the acknowledgement; DROP IF EXISTS is
+# therefore the only crash-safe cleanup contract for this fixed fixture name.
+phase_fixture_database_created=true
 control_psql --dbname=postgres \
   --command="CREATE DATABASE northstar_ci_grant_phase_fixture OWNER northstar_migrator;"
-phase_fixture_database_created=true
 PGPASSWORD="$migrator_password" psql --no-psqlrc --no-password --set=ON_ERROR_STOP=1 \
   --host "$database_host" --port "$database_port" --username "$migrator_role" \
   --dbname="$phase_fixture_database" \
@@ -571,8 +692,13 @@ REVOKE ALL PRIVILEGES ON FUNCTION public.northstar_upload_queue_snapshot()
 PSQL
 
 # A dependent grant is the critical CASCADE regression: REVOKE ... RESTRICT
-# would abort the whole transaction rather than converge the catalog.
+# would abort the whole transaction rather than converge the catalog. Cover
+# both object ACL dependencies and PostgreSQL 16+ role-membership grant chains.
 control_psql --dbname="$database_name" <<'PSQL'
+GRANT northstar_runtime TO northstar_ci_stale_grantee WITH ADMIN OPTION;
+SET ROLE northstar_ci_stale_grantee;
+GRANT northstar_runtime TO northstar_ci_delegated_grantee;
+RESET ROLE;
 SET ROLE northstar_ci_stale_grantee;
 GRANT CONNECT ON DATABASE xmpp TO northstar_ci_delegated_grantee;
 GRANT USAGE ON SCHEMA public TO northstar_ci_delegated_grantee;
@@ -592,6 +718,7 @@ PSQL
 pre_reconcile_audit="$runtime_dir/pre-reconcile-audit.log"
 set +e
 bash scripts/reconcile-database-roles.sh --audit \
+  --allow-external-superuser "$control_role" \
   --host "$database_host" --port "$database_port" --connect-as "$bootstrap_role" \
   --connection-password-file "$bootstrap_password_file" \
   >"$pre_reconcile_audit" 2>&1
@@ -615,8 +742,40 @@ if ! grep -Eq 'unexpected explicit (relation|column) ACL grantee' \
   fail 'canonical verifier did not report the seeded stale relation grantee'
 fi
 
+bash scripts/reconcile-database-roles.sh --apply \
+  --allow-external-superuser "$control_role" \
+  --host "$database_host" --port "$database_port" --connect-as "$bootstrap_role" \
+  --connection-password-file "$bootstrap_password_file" \
+  --bootstrap-password-file "$bootstrap_password_file" \
+  --migrator-password-file "$migrator_password_file" \
+  --runtime-password-file "$runtime_password_file" \
+  --command-password-file "$command_password_file" \
+  --backup-password-file "$backup_password_file"
+
+# The ordinary grants job remains independently idempotent after role-policy
+# convergence, while only the role reconciler is allowed to repair membership.
 MIGRATOR_DATABASE_URL_FILE="$migrator_url_file" \
   bash scripts/reconcile-database-grants.sh
+
+protected_membership_removed=$(control_psql --dbname="$database_name" \
+  --tuples-only --no-align <<'PSQL'
+SELECT NOT EXISTS (
+  SELECT 1
+    FROM pg_catalog.pg_auth_members AS membership
+    JOIN pg_catalog.pg_roles AS granted ON granted.oid=membership.roleid
+    JOIN pg_catalog.pg_roles AS member ON member.oid=membership.member
+   WHERE granted.rolname IN (
+     'northstar_bootstrap','northstar_migrator','northstar_runtime',
+     'northstar_commands','northstar_backup'
+   ) OR member.rolname IN (
+     'northstar_bootstrap','northstar_migrator','northstar_runtime',
+     'northstar_commands','northstar_backup'
+   )
+);
+PSQL
+)
+[[ "$protected_membership_removed" == 't' ]] \
+  || fail 'role reconciliation retained a protected role membership or delegated grant chain'
 
 stale_definer_grant_removed=$(control_psql --dbname="$database_name" \
   --tuples-only --no-align <<'PSQL'
@@ -888,6 +1047,7 @@ PSQL
 missing_default_audit="$runtime_dir/missing-default-overrides-audit.log"
 set +e
 bash scripts/reconcile-database-roles.sh --audit \
+  --allow-external-superuser "$control_role" \
   --host "$database_host" --port "$database_port" --connect-as "$bootstrap_role" \
   --connection-password-file "$bootstrap_password_file" \
   >"$missing_default_audit" 2>&1
@@ -926,6 +1086,7 @@ expect_ledger_audit_failure() {
   local label="$1" log="$runtime_dir/ledger-$1-audit.log" status
   set +e
   bash scripts/reconcile-database-roles.sh --audit \
+    --allow-external-superuser "$control_role" \
     --host "$database_host" --port "$database_port" --connect-as "$bootstrap_role" \
     --connection-password-file "$bootstrap_password_file" >"$log" 2>&1
   status=$?
@@ -1217,6 +1378,7 @@ DROP SCHEMA "northstar ci ""quoted" CASCADE;
 PSQL
 
 bash scripts/reconcile-database-roles.sh --audit \
+  --allow-external-superuser "$control_role" \
   --host "$database_host" --port "$database_port" --connect-as "$bootstrap_role" \
   --connection-password-file "$bootstrap_password_file"
 
@@ -1245,16 +1407,23 @@ WITH workload AS (
   SELECT *
     FROM pg_catalog.pg_roles
    WHERE rolname IN ('northstar_migrator', 'northstar_runtime', 'northstar_commands', 'northstar_backup')
+), protected_role AS (
+  SELECT oid,rolname FROM pg_catalog.pg_roles
+   WHERE rolname IN (
+     'northstar_bootstrap','northstar_migrator','northstar_runtime',
+     'northstar_commands','northstar_backup'
+   )
 ), forbidden_membership AS (
   SELECT 1
     FROM pg_catalog.pg_auth_members AS membership
     JOIN pg_catalog.pg_roles AS granted ON granted.oid = membership.roleid
     JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
-   WHERE granted.rolname IN ('northstar_migrator', 'northstar_runtime', 'northstar_commands', 'northstar_backup')
-      OR member.rolname IN ('northstar_migrator', 'northstar_runtime', 'northstar_commands', 'northstar_backup')
+   WHERE granted.oid IN (SELECT oid FROM protected_role)
+      OR member.oid IN (SELECT oid FROM protected_role)
 )
 SELECT
   (SELECT pg_catalog.count(*) = 4 FROM workload)
+  AND (SELECT pg_catalog.count(*) = 5 FROM protected_role)
   AND NOT EXISTS (
     SELECT 1 FROM workload
      WHERE NOT rolcanlogin OR rolsuper OR rolinherit OR rolcreatedb OR rolcreaterole

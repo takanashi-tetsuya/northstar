@@ -30,6 +30,8 @@ migrator_password_file="${NORTHSTAR_MIGRATOR_PASSWORD_FILE:-/run/secrets/northst
 runtime_password_file="${NORTHSTAR_RUNTIME_PASSWORD_FILE:-/run/secrets/northstar_runtime_password}"
 command_password_file="${NORTHSTAR_COMMAND_PASSWORD_FILE:-/run/secrets/northstar_command_password}"
 backup_password_file="${NORTHSTAR_BACKUP_PASSWORD_FILE:-/run/secrets/northstar_backup_password}"
+allowed_external_superusers=()
+allowed_external_superusers_csv=''
 
 connection_password=''
 bootstrap_password=''
@@ -78,6 +80,10 @@ Connection and secret files:
   --runtime-password-file FILE
   --command-password-file FILE
   --backup-password-file FILE
+  --allow-external-superuser ROLE
+                             Repeatable explicit exception for a dedicated-cluster
+                             or isolated-CI control superuser during audit; this
+                             does not make restricted managed PostgreSQL compatible
 
 Secret values are read from files, passed through process environment, and are
 never placed in command arguments or output. On a legacy first pass, explicitly
@@ -122,6 +128,12 @@ while [[ $# -gt 0 ]]; do
     --runtime-password-file) runtime_password_file=${2:?missing file}; shift 2 ;;
     --command-password-file) command_password_file=${2:?missing file}; shift 2 ;;
     --backup-password-file) backup_password_file=${2:?missing file}; shift 2 ;;
+    --allow-external-superuser)
+      [[ "${2:-}" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ ]] \
+        || fail 'allowed external superuser is not a safe PostgreSQL identifier'
+      allowed_external_superusers+=("$2")
+      shift 2
+      ;;
     -h|--help) usage; exit 0 ;;
     *) usage; exit 2 ;;
   esac
@@ -131,6 +143,9 @@ done
   && (( database_port <= 65535 )) || fail 'port must be between 1 and 65535'
 [[ "$connection_user" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ ]] \
   || fail 'connection role is not a safe PostgreSQL identifier'
+if (( ${#allowed_external_superusers[@]} > 0 )); then
+  allowed_external_superusers_csv=$(IFS=,; printf '%s' "${allowed_external_superusers[*]}")
+fi
 [[ -r "$grants_sql" ]] || fail 'the shared grant policy is missing'
 [[ -r "$capability_manifest_sql" ]] || fail 'the canonical capability manifest is missing'
 [[ -r "$migration_ledger_manifest_sql" ]] || fail 'the canonical migration ledger manifest is missing'
@@ -170,6 +185,7 @@ psql_command=(
   --set=runtime_role="$runtime_role"
   --set=command_role="$command_role"
   --set=backup_role="$backup_role"
+  --set=allowed_external_superusers="$allowed_external_superusers_csv"
   --set=allow_bootstrap=true
   --set=grant_phase=auto
   --set=capability_manifest_sql="$capability_manifest_sql"
@@ -190,8 +206,8 @@ PSQL
 
 audit_roles() {
   local findings
-  local legacy_login
-  local unexpected_superusers
+  local legacy_authority
+  local unexpected_superusers audit_failed=false
 
   findings=$("${psql_command[@]}" --quiet --tuples-only --no-align <<'PSQL'
 \i :capability_manifest_sql
@@ -252,18 +268,72 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
          )
        )
   UNION ALL
-  SELECT 'workload role participates in membership: ' ||
+  SELECT 'protected database role participates in membership: ' ||
          granted.rolname || ' -> ' || member.rolname
     FROM pg_catalog.pg_auth_members AS membership
     JOIN pg_catalog.pg_roles AS granted ON granted.oid = membership.roleid
     JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
-   WHERE granted.rolname IN (:'migrator_role', :'runtime_role', :'command_role', :'backup_role')
-      OR member.rolname IN (:'migrator_role', :'runtime_role', :'command_role', :'backup_role')
+   WHERE granted.rolname IN (
+           :'bootstrap_role', :'migrator_role', :'runtime_role',
+           :'command_role', :'backup_role'
+         )
+      OR member.rolname IN (
+           :'bootstrap_role', :'migrator_role', :'runtime_role',
+           :'command_role', :'backup_role'
+         )
   UNION ALL
   SELECT 'database owner is not ' || :'migrator_role'
     FROM pg_catalog.pg_database
    WHERE datname = current_database()
      AND pg_catalog.pg_get_userbyid(datdba) <> :'migrator_role'
+  UNION ALL
+  SELECT 'postgres maintenance database is missing or has unsafe identity/configuration'
+   WHERE NOT EXISTS (
+     SELECT 1
+       FROM pg_catalog.pg_database
+      WHERE datname='postgres'
+        AND pg_catalog.pg_get_userbyid(datdba)=:'bootstrap_role'
+        AND datallowconn AND NOT datistemplate AND datconnlimit=-1
+   )
+  UNION ALL
+  SELECT 'PUBLIC retains postgres maintenance privilege: ' || privilege.privilege_type
+    FROM pg_catalog.pg_database AS database
+   CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+     database.datacl,pg_catalog.acldefault('d',database.datdba)
+   )) AS privilege
+   WHERE database.datname='postgres' AND privilege.grantee=0
+  UNION ALL
+  SELECT 'unexpected postgres maintenance ACL: ' || grantee.rolname || ':' ||
+         privilege.privilege_type
+    FROM pg_catalog.pg_database AS database
+   CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+     database.datacl,pg_catalog.acldefault('d',database.datdba)
+   )) AS privilege
+    JOIN pg_catalog.pg_roles AS grantee ON grantee.oid=privilege.grantee
+   WHERE database.datname='postgres'
+     AND privilege.grantee<>database.datdba
+     AND NOT (
+       grantee.rolname=:'migrator_role'
+       AND privilege.privilege_type='CONNECT'
+       AND privilege.grantor=database.datdba
+       AND NOT privilege.is_grantable
+     )
+  UNION ALL
+  SELECT 'migrator lacks explicit postgres maintenance CONNECT'
+   WHERE NOT EXISTS (
+     SELECT 1
+       FROM pg_catalog.pg_database AS database
+      CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+        database.datacl,pg_catalog.acldefault('d',database.datdba)
+      )) AS privilege
+      WHERE database.datname='postgres'
+        AND privilege.grantee=(
+          SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'migrator_role'
+        )
+        AND privilege.privilege_type='CONNECT'
+        AND privilege.grantor=database.datdba
+        AND NOT privilege.is_grantable
+   )
   UNION ALL
   SELECT 'schema public owner is not ' || :'migrator_role'
     FROM pg_catalog.pg_namespace
@@ -1163,31 +1233,51 @@ PSQL
   unexpected_superusers=$("${psql_command[@]}" --tuples-only --no-align <<'PSQL'
 SELECT rolname
   FROM pg_catalog.pg_roles
- WHERE rolsuper AND rolcanlogin AND rolname <> :'bootstrap_role'
+ WHERE rolsuper
+   AND rolname NOT IN (:'bootstrap_role','xmpp')
+   AND NOT (
+     :'allowed_external_superusers'<>''
+     AND rolname=ANY(pg_catalog.string_to_array(:'allowed_external_superusers',','))
+   )
  ORDER BY rolname;
 PSQL
   )
 
-  legacy_login=$("${psql_command[@]}" --tuples-only --no-align <<'PSQL'
-SELECT EXISTS (
-  SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'xmpp' AND rolcanlogin
-);
+  legacy_authority=$("${psql_command[@]}" --tuples-only --no-align <<'PSQL'
+SELECT pg_catalog.concat(
+         'superuser=',legacy.rolsuper::pg_catalog.text,
+         ',login=',legacy.rolcanlogin::pg_catalog.text,
+         ',membership=',EXISTS (
+           SELECT 1 FROM pg_catalog.pg_auth_members AS membership
+            WHERE membership.roleid=legacy.oid OR membership.member=legacy.oid
+         )::pg_catalog.text
+       )
+  FROM pg_catalog.pg_roles AS legacy
+ WHERE legacy.rolname='xmpp'
+   AND (
+     legacy.rolsuper OR legacy.rolcanlogin OR EXISTS (
+       SELECT 1 FROM pg_catalog.pg_auth_members AS membership
+        WHERE membership.roleid=legacy.oid OR membership.member=legacy.oid
+     )
+   );
 PSQL
   )
 
   if [[ -n "$unexpected_superusers" ]]; then
     unexpected_superusers=${unexpected_superusers//$'\n'/,}
-    printf 'warning: additional login superuser(s) remain: %s\n' \
+    printf 'unsafe additional superuser role(s) remain: %s\n' \
       "$unexpected_superusers" >&2
+    audit_failed=true
   fi
-  if [[ "$legacy_login" == 't' ]]; then
-    printf '%s\n' \
-      'warning: legacy database role xmpp can still log in; use the guarded explicit demotion after credential cutover' >&2
+  if [[ -n "$legacy_authority" ]]; then
+    printf 'warning: legacy database role xmpp retains authority (%s); use the guarded explicit demotion after credential cutover\n' \
+      "$legacy_authority" >&2
   fi
   if [[ -n "$findings" ]]; then
     printf '%s\n' "$findings" >&2
-    return 4
+    audit_failed=true
   fi
+  [[ "$audit_failed" == false ]] || return 4
   printf '%s\n' 'Northstar database role audit passed.'
 }
 
@@ -1289,14 +1379,43 @@ SELECT pg_catalog.format('ALTER ROLE %I RESET ALL',role_name)
  ORDER BY role_name
 \gexec
 
-SELECT pg_catalog.format('REVOKE %I FROM %I', granted.rolname, member.rolname)
+SELECT pg_catalog.format('REVOKE %I FROM %I CASCADE', granted.rolname, member.rolname)
   FROM pg_catalog.pg_auth_members AS membership
   JOIN pg_catalog.pg_roles AS granted ON granted.oid = membership.roleid
   JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
- WHERE granted.rolname IN (:'migrator_role', :'runtime_role', :'command_role', :'backup_role')
-    OR member.rolname IN (:'migrator_role', :'runtime_role', :'command_role', :'backup_role')
+ WHERE granted.rolname IN (
+         :'bootstrap_role', :'migrator_role', :'runtime_role',
+         :'command_role', :'backup_role'
+       )
+    OR member.rolname IN (
+         :'bootstrap_role', :'migrator_role', :'runtime_role',
+         :'command_role', :'backup_role'
+       )
  ORDER BY granted.rolname, member.rolname
 \gexec
+
+-- The restore control backend must fence the target from a separate database.
+-- Converge the dedicated cluster's maintenance database exactly: bootstrap
+-- owns it, PUBLIC and arbitrary legacy grantees have nothing, and the migrator
+-- receives one non-grantable CONNECT capability.
+ALTER DATABASE postgres OWNER TO :"bootstrap_role";
+ALTER DATABASE postgres WITH ALLOW_CONNECTIONS true CONNECTION LIMIT -1 IS_TEMPLATE false;
+REVOKE ALL PRIVILEGES ON DATABASE postgres FROM PUBLIC;
+SELECT pg_catalog.format(
+         'REVOKE ALL PRIVILEGES ON DATABASE postgres FROM %I CASCADE',
+         grantee.rolname
+       )
+  FROM pg_catalog.pg_database AS database
+ CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+   database.datacl,pg_catalog.acldefault('d',database.datdba)
+ )) AS privilege
+  JOIN pg_catalog.pg_roles AS grantee ON grantee.oid=privilege.grantee
+ WHERE database.datname='postgres'
+   AND privilege.grantee<>database.datdba
+ GROUP BY grantee.rolname
+ ORDER BY grantee.rolname
+\gexec
+GRANT CONNECT ON DATABASE postgres TO :"migrator_role";
 
 ALTER DATABASE :"database_name" OWNER TO :"migrator_role";
 ALTER SCHEMA public OWNER TO :"migrator_role";
@@ -1415,7 +1534,7 @@ SELECT EXISTS (
            )
   ) AS northstar_safe_to_demote \gset
   \if :northstar_safe_to_demote
-    SELECT pg_catalog.format('REVOKE %I FROM %I', granted.rolname, member.rolname)
+    SELECT pg_catalog.format('REVOKE %I FROM %I CASCADE', granted.rolname, member.rolname)
       FROM pg_catalog.pg_auth_members AS membership
       JOIN pg_catalog.pg_roles AS granted ON granted.oid = membership.roleid
       JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member

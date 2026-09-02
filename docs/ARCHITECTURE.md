@@ -9,15 +9,23 @@ operational procedures belong in [PRODUCTION_OPERATIONS.md](PRODUCTION_OPERATION
 ```mermaid
 flowchart TB
     Native[Native client] --> TCP[C2S TCP / Direct TLS]
-    Browser[Browser client] --> HTTP[WebSocket / BOSH / REST / static UI]
+    Browser[Browser client] --> WS[WebSocket]
+    Browser --> BOSH[BOSH]
+    Browser --> REST[REST/admin HTTP]
+    Browser --> STATIC[Static UI assets]
     Peer[Remote domain] --> S2SIN[S2S inbound / Direct TLS]
     Component[External component] --> COMP[XEP-0114 / XEP-0225]
 
-    TCP --> FRAME[Incremental framing and limits]
-    HTTP --> FRAME
-    S2SIN --> FRAME
-    COMP --> FRAME
-    FRAME --> SESSION[ProtocolSession]
+    TCP --> CFRAME[Client incremental framing and limits]
+    WS --> CFRAME
+    BOSH --> CFRAME
+    CFRAME --> SESSION[Client ProtocolSession]
+    REST --> API[API middleware / operation runtime]
+    STATIC --> ASSET[Bounded asset response]
+    S2SIN --> S2SFRAME[Shared XML framing primitives]
+    S2SFRAME --> S2SSM[S2S stream state machine]
+    COMP --> COMPFRAME[Shared XML framing primitives]
+    COMPFRAME --> COMPSM[Component state machine / registry]
 
     SESSION --> AUTH[auth + sasl2 + FAST + Bind2]
     SESSION --> MSG[messaging + presence + roster + privacy]
@@ -25,20 +33,27 @@ flowchart TB
     SESSION --> STORE[PEP + PubSub + MAM + vCard + upload]
     SESSION --> EXT[CSI + caps + Jingle + retractions + receipts]
 
-    AUTH --> PG[(PostgreSQL)]
-    MSG --> PG
-    GROUP --> PG
-    STORE --> PG
-    API[REST/admin/operation runtime] --> PG
-    STORE --> FILES[(UploadStore / local immutable files)]
+    AUTH --> SERVICES[Typed application services]
+    MSG --> SERVICES
+    GROUP --> SERVICES
+    STORE --> SERVICES
+    EXT --> SERVICES
+    API --> SERVICES
+    SERVICES --> REPO[Repository responsibility]
+    REPO --> PG[(PostgreSQL)]
+    SERVICES -. embedded repository debt .-> PG
+    API -. tracked direct persistence debt .-> PG
+    SERVICES --> FILES[(UploadStore / local or S3 objects)]
 
-    MSG --> OUTBOX[S2S/component durable outbox]
-    GROUP --> OUTBOX
+    S2SSM --> FED[Federation router / policy]
+    COMPSM --> FED
+    FED --> REPO
+    SERVICES --> OUTBOX[S2S/component durable outbox]
     OUTBOX --> DNS[DNS/SRV/host-meta]
     DNS --> TLS[TLS + identity + optional DANE/CRL]
     TLS --> Peer
 
-    REDIS[(Optional Redis TLS control plane)] <--> SESSION
+    REDIS[(Optional Redis TLS control plane)] <--> SERVICES
 ```
 
 Key ownership:
@@ -65,8 +80,11 @@ Key ownership:
   failure disconnects the resource and forces a full resync. Local and
   cluster removal delivery is fenced by the exact account UUID so a deleted
   localpart cannot redirect an old transition to a recreated account.
-- `src/db/` owns transactional persistence, replay, canonical identity and
-  migration-time invariants.
+- `src/db/` is the primary repository/routine layer for transactional
+  persistence, replay, canonical identity and migration-time invariants.
+  Several application services and API/cluster/federation/worker paths still
+  embed SQL/transaction work; these are tracked extraction debt rather than a
+  claim that the physical repository split is already universal.
 - `src/s2s/` owns discovery, DANE, TLS, EXTERNAL/Dialback and durable delivery.
 - `src/components.rs` isolates component domain authority and outbox handling.
 - `src/bosh.rs` and the WebSocket path adapt HTTP framing to the same
@@ -88,7 +106,7 @@ Key ownership:
 
 The architecture gate measures protocol/database dependency and public state
 capability in monotonic budgets. The current baseline is `AppState=9` public
-fields and, across the protocol tree (including inline protocol tests),
+fields and, across the production protocol tree (excluding `#[cfg(test)]` code),
 `0 db authority references / 0 db domain-model references / 0 state.pool / 0
 sqlx:: / 0 PgPool`. Importing or aliasing database symbols is rejected so an
 import cannot hide authority. These zero protocol/database ceilings must remain
@@ -107,6 +125,55 @@ Background policy, cleanup, digest, Redis and recovery work is registered with
 the worker supervisor: security-critical exits or heartbeat expiry cancel the
 service, restartable exits or heartbeat expiry abort the stuck attempt and use
 bounded backoff, and repeated business-health failures degrade `/readyz`.
+
+## Responsibility and capability layers
+
+The complete component-by-component matrix, including accepted inputs,
+forbidden capabilities, transaction/failure owners, supervisors, enforcement
+levels and residual shared authority, is maintained in
+[Program responsibility and authority model](PROGRAM_RESPONSIBILITIES.md).
+
+Northstar uses module boundaries to narrow ordinary control flow, but not every
+row below is an operating-system or database security boundary. The enforcement
+column records what currently makes the separation real; the final column keeps
+shared-authority exceptions visible.
+
+| Layer | Current responsibility | Enforcement | Residual shared authority / exception |
+| --- | --- | --- | --- |
+| Transport adapters | TCP/TLS, WebSocket/BOSH framing, byte/depth/time limits, connection lifetime | module APIs and parser/transport tests | same process as protocol and runtime services |
+| Protocol sessions | negotiation state, stanza parsing, RFC/XEP error mapping, per-resource ordering | production-tree static gate forbids DB symbols, SQLx and raw pools | inline test code is excluded from that gate; session still calls `AppState` service capabilities |
+| Application services | authorization snapshots, message/roster/replay policy, transaction intent and typed outcomes | Rust visibility, typed ports and targeted semantic gates | several services still embed SQLx/`PgPool`; some operation/background paths also hold broad `Arc<AppState>` |
+| Database repository responsibility | SQL, lock order, transactions, durable identity, outbox/admission invariants | PostgreSQL workload ACLs, reviewed routines and Rust module boundary | primarily `src/db/*`, but some service/API/cluster/federation/worker paths still embed persistence; most share the runtime role |
+| Live routing | exact connection incarnation, bounded backpressure, SM/BOSH/socket transfer fences | bounded queues, disconnect/fallback rules and delivery-fence state | in-memory availability state is process-local by design |
+| Federation/components | remote identity, discovery/TLS/Dialback and durable outbox ownership | authenticated streams, domain checks and durable repositories | S2S/component code remains in the same binary and runtime role |
+| Cluster control plane | signed node envelopes, leases, socket hints and degraded state | envelope verification plus PostgreSQL authority; Redis is non-authoritative | multi-node mode remains experimental and shares the server process |
+| Background workers | registered lifecycle, heartbeat and restart/fail-fast policy | worker registry and readiness/fatal cancellation | several workers still receive broader `AppState` access than the target port design |
+| REST/admin operation runtime | API authentication, idempotency, command authorization and recovery | API middleware, operation journal and isolated command-role pool | REST and XMPP run in one process; operation runtime still has broader state access in places |
+| Browser cryptography | endpoint OMEMO key/session operations | browser code and no server private-key API | same-origin frontend delivery remains in the E2EE trust/supply-chain boundary |
+
+The production database identities are intentionally non-interchangeable:
+
+| Identity | Persistent capability | Explicit exclusions |
+| --- | --- | --- |
+| `northstar_bootstrap` | Fresh-volume and guarded existing-volume role/ACL convergence | never mounted into application, migration, backup or restore jobs |
+| `northstar_migrator` | owns the application database/schema, runs migrations, exact grant reconciliation and stopped restore; has one explicit database-level `CONNECT` on `postgres` | no superuser, role/database creation, replication, bypass-RLS or maintenance-database `TEMPORARY`; restore control pins `pg_catalog,pg_temp` |
+| `northstar_runtime` | executes the runtime capability manifest and accesses only its allowlisted application objects | no DDL ownership, maintenance database access, command-only routines or backup-wide reads |
+| `northstar_commands` | executes the exact administrative command routine manifest | no application relation privileges, migration authority or general runtime capability |
+| `northstar_backup` | read-only backup/ledger-attestation surface | no writes, DDL, restore, maintenance database or application-server capability |
+
+Disaster recovery divides one migrator credential into four program roles: a
+maintenance controller in `postgres`, a target coordinator that owns
+database-local maintenance/barrier locks, a primary replacement executor and a
+compensation executor. Fence audit and outcome arbitration are explicit
+controller functions. These are independently registered and reaped child
+sessions with separate command paths, but they are not separate PostgreSQL ACL
+identities, credentials or restart domains; compromise of the
+restore parent or migrator credential can bypass the division. The controller
+never receives replacement SQL, the coordinator never receives dump replay,
+and the arbiter names the target database explicitly rather than using process
+exit as commit evidence. Static gates reject the former ambiguous generic
+database-session functions; the isolated PostgreSQL suite is required to
+provide behavioral evidence for lock scope and cutover ordering.
 
 ## Connection state machines
 

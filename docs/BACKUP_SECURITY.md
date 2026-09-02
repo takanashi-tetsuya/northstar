@@ -245,6 +245,19 @@ PostgreSQL PID allowlist. It deliberately does not terminate other sessions or r
 unchanged target and instructs the operator to stop Northstar and every other
 database client before retrying.
 
+Each backend is a separately supervised process connected through its own pair
+of private FIFOs. During startup only, the parent registers one `O_RDWR` anchor
+per FIFO before spawning the worker. These anchors prevent either directional
+open from blocking forever if the worker exits between redirections. The worker
+closes inherited anchors after redirection; once both real parent endpoints are
+registered, the parent immediately closes and unregisters the anchors before
+removing the FIFO names. No anchor exists during normal operation, so input
+closure remains an unambiguous EOF for exactly one worker. Each worker also
+closes inherited session and restore-floor-lock descriptors before executing
+`psql`. This avoids Bash's single-coprocess bookkeeping.
+Short-lived dump producers also discard every persistent-session descriptor
+before execution.
+
 The control backend owns the maintenance and connection fences but never runs
 replacement SQL. Each worker first begins a transaction, takes its unique
 transaction-level advisory lock, verifies the prior database outcome marker and

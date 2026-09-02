@@ -178,6 +178,8 @@ jobs:
         run: |
           find scripts -maxdepth 1 -type f -name '*.sh' -exec bash -n {} +
           find scripts -maxdepth 1 -type f -name '*.py' -exec python3 -m py_compile {} +
+          python3 scripts/check-github-ci-summary.py
+          bash scripts/check-github-ci-run.sh
           bash scripts/check-database-role-boundaries.sh
 
       - name: Test certificate and secret handling
@@ -200,6 +202,7 @@ jobs:
 
       - name: Validate Compose and build pinned images
         run: |
+          bash scripts/github-ci-run.sh "Pinned non-root container build" bash -Eeuo pipefail <<'CONTAINER_CI'
           docker compose config --quiet
           docker run --rm --entrypoint /bin/promtool \
             -v "$PWD/monitoring:/etc/northstar-monitoring:ro" \
@@ -276,11 +279,50 @@ jobs:
               test "$(stat -c %a /data/logs/server.log.container)" = 600
               test "$(stat -c %a /data/uploads/private.part)" = 600
             '
-          test "$(docker run --rm --entrypoint id postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73 -u postgres)" = '70'
-          test "$(docker run --rm --entrypoint id grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63 -u grafana)" = '472'
-          test "$(docker run --rm --entrypoint id grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63 -g grafana)" = '0'
-          test "$(docker run --rm --entrypoint id prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac -u)" = '65534'
-          test "$(docker run --rm --entrypoint id prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac -g)" = '65534'
+          assert_image_account_identity() {
+            local label="$1" image="$2" account="$3" expected_uid="$4" expected_gid="$5"
+            local actual_uid actual_gid
+            actual_uid="$(docker run --rm --entrypoint id "$image" -u "$account")"
+            actual_gid="$(docker run --rm --entrypoint id "$image" -g "$account")"
+            if [[ "$actual_uid" != "$expected_uid" || "$actual_gid" != "$expected_gid" ]]; then
+              printf 'ERROR: %s image account %s is %s:%s, expected %s:%s\n' \
+                "$label" "$account" "$actual_uid" "$actual_gid" "$expected_uid" "$expected_gid" >&2
+              return 1
+            fi
+          }
+          assert_effective_container_identity() {
+            local label="$1" image="$2" user_override="$3" expected_uid="$4" expected_gid="$5"
+            local -a command=(docker run --rm)
+            if [[ -n "$user_override" ]]; then
+              command+=(--user "$user_override")
+            fi
+            command+=(--entrypoint id "$image")
+            local actual_uid actual_gid
+            actual_uid="$("${command[@]}" -u)"
+            actual_gid="$("${command[@]}" -g)"
+            if [[ "$actual_uid" != "$expected_uid" || "$actual_gid" != "$expected_gid" ]]; then
+              printf 'ERROR: %s runtime identity is %s:%s, expected %s:%s\n' \
+                "$label" "$actual_uid" "$actual_gid" "$expected_uid" "$expected_gid" >&2
+              return 1
+            fi
+          }
+          # The official PostgreSQL entrypoint intentionally starts as root to
+          # initialize mounted storage, then drops to this image-owned account.
+          # Replacing that entrypoint with `id` would bypass the drop and only
+          # observe 0:0, so validate the account the entrypoint actually uses.
+          assert_image_account_identity PostgreSQL \
+            postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73 \
+            postgres 70 70
+          # Compose deliberately overrides Grafana to the numeric 472:0
+          # capability used by its mode-0600 secret and writable volumes. Test
+          # that deployed identity, not an incidental /etc/passwd group name.
+          assert_effective_container_identity Grafana \
+            grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63 \
+            472:0 472 0
+          assert_effective_container_identity Prometheus \
+            prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac \
+            '' 65534 65534
+          CONTAINER_CI
 
   database-role-boundary:
     name: PostgreSQL workload role boundary

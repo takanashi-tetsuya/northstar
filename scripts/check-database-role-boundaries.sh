@@ -665,9 +665,49 @@ post_grant_commit_line=$(awk -v start="$grant_apply_line" \
    && "$grant_apply_line" -lt "$post_grant_commit_line" ]] \
   || fail 'restore must load capability manifest, converge ACLs, then commit replacement'
 for restore_session_contract in \
-  'coproc RESTORE_DB_SESSION {' \
-  'coproc PRIMARY_RESTORE_WORKER {' \
-  'coproc COMPENSATION_RESTORE_WORKER {' \
+  'declare -A psql_session_state=()' \
+  'declare -A psql_session_input_anchor_fd_registry=()' \
+  'declare -A psql_session_output_anchor_fd_registry=()' \
+  'psql_session_state[$label]=preparing' \
+  'psql_session_pid_registry[$label]="$child_pid"' \
+  'psql_session_state[$label]=starting' \
+  'psql_session_input_fd_registry[$label]="$session_input"' \
+  'psql_session_output_fd_registry[$label]="$session_output"' \
+  'psql_session_state[$label]=open' \
+  'start_psql_session control db_session_pid db_session_in db_session_out' \
+  'start_psql_session primary primary_worker_pid primary_worker_in primary_worker_out' \
+  'start_psql_session compensation compensation_worker_pid' \
+  'mkfifo -m 0600 -- "$input_fifo" "$output_fifo"' \
+  'exec {input_anchor}<>"$input_fifo"' \
+  'psql_session_input_anchor_fd_registry[$label]="$input_anchor"' \
+  'exec {output_anchor}<>"$output_fifo"' \
+  'psql_session_output_anchor_fd_registry[$label]="$output_anchor"' \
+  'close_psql_session_anchors "$label"' \
+  'psql_session_anchors_are_closed "$label"' \
+  'forget_psql_session_input_anchor_fd "$label"' \
+  'forget_psql_session_output_anchor_fd "$label"' \
+  '"${psql_session_input_anchor_fd_registry[$anchor_label]:-}"' \
+  '"${psql_session_output_anchor_fd_registry[$anchor_label]:-}"' \
+  'exec "${pg_client[@]}" psql --no-psqlrc --quiet --tuples-only --no-align' \
+  "trap 'deferred_start_signal=INT' INT" \
+  "trap 'deferred_start_signal=TERM' TERM" \
+  'trap - INT TERM' \
+  "trap 'exit 130' INT" \
+  "trap 'exit 143' TERM" \
+  'kill -s "$deferred_start_signal" "$BASHPID"' \
+  'close_inherited_parent_fds || exit 125' \
+  '[[ -e "/proc/$BASHPID/fd/$fd" ]]' \
+  'exec {fd}>&-' \
+  'dispose_starting_psql_session "$label"' \
+  'forget_psql_session_input_fd "$label"' \
+  'forget_psql_session_pid "$label"' \
+  'forget_psql_session_output_fd "$label"' \
+  'clear_psql_session_registration "$label"' \
+  'local input_open=false output_open=false anchors_closed=true cleanup_ok=true' \
+  '&& "$anchors_closed" == true ]]; then' \
+  'close_db_sessions || cleanup_ok=false' \
+  'run_pg_client_without_parent_fds pg_dump' \
+  'run_pg_client_without_parent_fds pg_restore "$replacement_dump"' \
   'primary_worker_command "$grant_check_sql" "$grant_check_output"' \
   'db_session_command "$sql_file" "$output_file"' \
   'WHERE pid NOT IN (:control_pid, :primary_pid, :compensation_pid)' \
@@ -689,6 +729,151 @@ for restore_session_contract in \
   require_literal "$restore_runner" "$restore_session_contract" \
     "restore control/worker outcome contract is missing: $restore_session_contract"
 done
+if grep -Fq 'coproc ' "$restore_runner"; then
+  fail 'restore must not depend on Bash single-coprocess bookkeeping for its three live PostgreSQL sessions'
+fi
+session_prepare_line=$(grep -nF 'psql_session_state[$label]=preparing' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_namespace_line=$(grep -nF 'mkdir -m 0700 -- "$fifo_dir"' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_fifo_line=$(grep -nF 'mkfifo -m 0600 -- "$input_fifo" "$output_fifo"' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_input_anchor_open_line=$(grep -nF 'exec {input_anchor}<>"$input_fifo"' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_input_anchor_register_line=$(grep -nF \
+  'psql_session_input_anchor_fd_registry[$label]="$input_anchor"' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_output_anchor_open_line=$(grep -nF 'exec {output_anchor}<>"$output_fifo"' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_output_anchor_register_line=$(grep -nF \
+  'psql_session_output_anchor_fd_registry[$label]="$output_anchor"' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_spawn_line=$(grep -nF ') <"$input_fifo" >"$output_fifo" &' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_child_close_inherited_line=$(awk -v start="$session_output_anchor_register_line" \
+  'NR > start && /close_inherited_parent_fds \|\| exit 125/ { print NR; exit }' \
+  "$restore_runner")
+session_child_exec_line=$(awk -v start="$session_child_close_inherited_line" \
+  'NR > start && /exec "\$\{pg_client\[@\]\}" psql/ { print NR; exit }' \
+  "$restore_runner")
+session_pid_line=$(grep -nF 'psql_session_pid_registry[$label]="$child_pid"' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_restore_int_line=$(awk -v start="$session_pid_line" \
+  "NR > start && /trap 'exit 130' INT/ { print NR; exit }" "$restore_runner")
+session_restore_term_line=$(awk -v start="$session_restore_int_line" \
+  "NR > start && /trap 'exit 143' TERM/ { print NR; exit }" "$restore_runner")
+session_replay_signal_line=$(grep -nF 'kill -s "$deferred_start_signal" "$BASHPID"' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_input_open_line=$(grep -nF 'exec {session_input}>"$input_fifo"' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_input_register_line=$(grep -nF \
+  'psql_session_input_fd_registry[$label]="$session_input"' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_output_open_line=$(grep -nF 'exec {session_output}<"$output_fifo"' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_output_register_line=$(grep -nF \
+  'psql_session_output_fd_registry[$label]="$session_output"' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+session_anchor_close_line=$(awk -v start="$session_output_register_line" \
+  'NR > start && /close_psql_session_anchors "\$label"/ { print NR; exit }' \
+  "$restore_runner")
+session_anchor_empty_line=$(awk -v start="$session_anchor_close_line" \
+  'NR > start && /psql_session_anchors_are_closed "\$label"/ { print NR; exit }' \
+  "$restore_runner")
+session_unlink_line=$(awk -v start="$session_anchor_empty_line" \
+  'NR > start && /remove_psql_session_namespace "\$label"/ { print NR; exit }' \
+  "$restore_runner")
+session_open_line=$(grep -nF 'psql_session_state[$label]=open' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+first_session_start_call=$(grep -nE '^start_db_sessions$' "$restore_runner" \
+  | head -n 1 | cut -d: -f1)
+script_int_trap_line=$(awk -v limit="$first_session_start_call" \
+  '$0 == "trap '\''exit 130'\'' INT" && NR < limit { line = NR } END { print line }' \
+  "$restore_runner")
+script_term_trap_line=$(awk -v limit="$first_session_start_call" \
+  '$0 == "trap '\''exit 143'\'' TERM" && NR < limit { line = NR } END { print line }' \
+  "$restore_runner")
+[[ -n "$session_prepare_line" && -n "$session_namespace_line" \
+   && -n "$session_fifo_line" \
+   && -n "$session_input_anchor_open_line" \
+   && -n "$session_input_anchor_register_line" \
+   && -n "$session_output_anchor_open_line" \
+   && -n "$session_output_anchor_register_line" \
+   && -n "$session_child_close_inherited_line" \
+   && -n "$session_child_exec_line" \
+   && -n "$session_spawn_line" && -n "$session_pid_line" \
+   && -n "$session_restore_int_line" && -n "$session_restore_term_line" \
+   && -n "$session_replay_signal_line" \
+   && -n "$session_input_open_line" && -n "$session_input_register_line" \
+   && -n "$session_output_open_line" && -n "$session_output_register_line" \
+   && -n "$session_anchor_close_line" \
+   && -n "$session_anchor_empty_line" \
+   && -n "$session_unlink_line" && -n "$session_open_line" \
+   && -n "$first_session_start_call" && -n "$script_int_trap_line" \
+   && -n "$script_term_trap_line" \
+   && "$script_int_trap_line" -lt "$script_term_trap_line" \
+   && "$script_term_trap_line" -lt "$first_session_start_call" \
+   && "$session_prepare_line" -lt "$session_namespace_line" \
+   && "$session_namespace_line" -lt "$session_fifo_line" \
+   && "$session_fifo_line" -lt "$session_input_anchor_open_line" \
+   && "$session_input_anchor_open_line" -lt "$session_input_anchor_register_line" \
+   && "$session_input_anchor_register_line" -lt "$session_output_anchor_open_line" \
+   && "$session_output_anchor_open_line" -lt "$session_output_anchor_register_line" \
+   && "$session_output_anchor_register_line" -lt "$session_child_close_inherited_line" \
+   && "$session_child_close_inherited_line" -lt "$session_child_exec_line" \
+   && "$session_child_exec_line" -lt "$session_spawn_line" \
+   && "$session_spawn_line" -lt "$session_pid_line" \
+   && "$session_pid_line" -lt "$session_restore_int_line" \
+   && "$session_restore_int_line" -lt "$session_restore_term_line" \
+   && "$session_restore_term_line" -lt "$session_replay_signal_line" \
+   && "$session_replay_signal_line" -lt "$session_input_open_line" \
+   && "$session_input_open_line" -lt "$session_input_register_line" \
+   && "$session_input_register_line" -lt "$session_output_open_line" \
+   && "$session_output_open_line" -lt "$session_output_register_line" \
+   && "$session_output_register_line" -lt "$session_anchor_close_line" \
+   && "$session_anchor_close_line" -lt "$session_anchor_empty_line" \
+   && "$session_anchor_empty_line" -lt "$session_unlink_line" \
+   && "$session_unlink_line" -lt "$session_open_line" ]] \
+  || fail 'restore FIFO sessions must register every startup resource before the next blocking lifecycle step'
+normal_close_line=$(grep -nF 'close_psql_session() {' "$restore_runner" \
+  | head -n 1 | cut -d: -f1)
+normal_close_input_line=$(awk -v start="$normal_close_line" \
+  'NR > start && /close_psql_fd_if_open "\$session_input"/ { print NR; exit }' \
+  "$restore_runner")
+normal_forget_input_line=$(awk -v start="$normal_close_input_line" \
+  'NR > start && /forget_psql_session_input_fd "\$label"/ { print NR; exit }' \
+  "$restore_runner")
+normal_drain_line=$(awk -v start="$normal_forget_input_line" \
+  'NR > start && /drain_psql_output_fd "\$session_output"/ { print NR; exit }' \
+  "$restore_runner")
+normal_wait_line=$(awk -v start="$normal_drain_line" \
+  'NR > start && /wait "\$session_pid"/ { print NR; exit }' "$restore_runner")
+normal_forget_pid_line=$(awk -v start="$normal_wait_line" \
+  'NR > start && /forget_psql_session_pid "\$label"/ { print NR; exit }' \
+  "$restore_runner")
+normal_close_output_line=$(awk -v start="$normal_forget_pid_line" \
+  'NR > start && /close_psql_fd_if_open "\$session_output"/ { print NR; exit }' \
+  "$restore_runner")
+normal_forget_output_line=$(awk -v start="$normal_close_output_line" \
+  'NR > start && /forget_psql_session_output_fd "\$label"/ { print NR; exit }' \
+  "$restore_runner")
+normal_clear_line=$(awk -v start="$normal_forget_output_line" \
+  'NR > start && /clear_psql_session_registration "\$label"/ { print NR; exit }' \
+  "$restore_runner")
+[[ -n "$normal_close_line" && -n "$normal_close_input_line" \
+   && -n "$normal_forget_input_line" && -n "$normal_drain_line" \
+   && -n "$normal_wait_line" && -n "$normal_forget_pid_line" \
+   && -n "$normal_close_output_line" && -n "$normal_forget_output_line" \
+   && -n "$normal_clear_line" \
+   && "$normal_close_line" -lt "$normal_close_input_line" \
+   && "$normal_close_input_line" -lt "$normal_forget_input_line" \
+   && "$normal_forget_input_line" -lt "$normal_drain_line" \
+   && "$normal_drain_line" -lt "$normal_wait_line" \
+   && "$normal_wait_line" -lt "$normal_forget_pid_line" \
+   && "$normal_forget_pid_line" -lt "$normal_close_output_line" \
+   && "$normal_close_output_line" -lt "$normal_forget_output_line" \
+   && "$normal_forget_output_line" -lt "$normal_clear_line" ]] \
+  || fail 'restore must close input, drain stdout, reap the child, then close output and clear exact registrations'
 if grep -Fq 'cat "$grant_apply_sql" >&"$db_session_in"' "$restore_runner" \
    || grep -Fq 'cat "$capability_manifest_sql" >&"$db_session_in"' "$restore_runner"; then
   fail 'restore must never stream replacement policy into the persistent control session'
@@ -696,7 +881,7 @@ fi
 if grep -Fq '"${pg_client[@]}" psql --dbname=postgres' "$restore_runner"; then
   fail 'restore must not open an unfenced maintenance connection after its bounded workers'
 fi
-rollback_dump_line=$(grep -nF '"${pg_client[@]}" pg_dump' "$restore_runner" \
+rollback_dump_line=$(grep -nF 'run_pg_client_without_parent_fds pg_dump' "$restore_runner" \
   | head -n 1 | cut -d: -f1)
 compensation_worker_line=$(grep -nF 'start_compensation_worker' "$restore_runner" \
   | tail -n 1 | cut -d: -f1)
@@ -740,6 +925,24 @@ normal_outcome_line=$(awk -v start="$normal_settle_line" \
   || fail 'restore must require READY before destructive SQL and settle COMMIT before reading its marker'
 finish_restore_line=$(grep -nF 'finish_restore() {' "$restore_runner" \
   | head -n 1 | cut -d: -f1)
+finish_signal_mask_line=$(awk -v start="$finish_restore_line" \
+  "NR > start && /trap '' INT TERM/ { print NR; exit }" "$restore_runner")
+finish_local_state_line=$(awk -v start="$finish_restore_line" \
+  'NR > start && /local status="\$1" compensation_ok=true fence_ok=true cleanup_ok=true/ { print NR; exit }' \
+  "$restore_runner")
+finish_reentry_guard_line=$(awk -v start="$finish_restore_line" \
+  'NR > start && /if \[\[ "\$cleanup_running" == true \]\]/ { print NR; exit }' \
+  "$restore_runner")
+finish_clear_exit_line=$(awk -v start="$finish_reentry_guard_line" \
+  'NR > start && /trap - ERR EXIT/ { print NR; exit }' "$restore_runner")
+[[ -n "$finish_restore_line" && -n "$finish_signal_mask_line" \
+   && -n "$finish_local_state_line" \
+   && -n "$finish_reentry_guard_line" && -n "$finish_clear_exit_line" \
+   && "$finish_restore_line" -lt "$finish_signal_mask_line" \
+   && "$finish_signal_mask_line" -lt "$finish_local_state_line" \
+   && "$finish_local_state_line" -lt "$finish_reentry_guard_line" \
+   && "$finish_reentry_guard_line" -lt "$finish_clear_exit_line" ]] \
+  || fail 'restore cleanup must mask asynchronous termination before its re-entry guard clears EXIT'
 finish_settle_line=$(awk -v start="$finish_restore_line" \
   'NR > start && /settle_active_restore_transaction/ { print NR; exit }' "$restore_runner")
 finish_outcome_line=$(awk -v start="$finish_restore_line" \
@@ -756,11 +959,8 @@ require_literal "$restore_runner" \
   'if [[ "$cleanup_running" == true ]]; then' \
   'restore settle path does not distinguish interrupted cleanup'
 require_literal "$restore_runner" \
-  'abort_psql_session_for_cleanup "$primary_worker_pid"' \
-  'restore cleanup does not close the exact active primary worker before waiting'
-require_literal "$restore_runner" \
-  'abort_psql_session_for_cleanup "$compensation_worker_pid"' \
-  'restore cleanup does not close the exact active compensation worker before waiting'
+  'abort_psql_session_for_cleanup "$active_restore_worker" "$output_file"' \
+  'restore cleanup does not close the exact registered active worker before waiting'
 settle_function_line=$(grep -nF 'settle_active_restore_transaction() {' \
   "$restore_runner" | head -n 1 | cut -d: -f1)
 settle_cleanup_line=$(awk -v start="$settle_function_line" \

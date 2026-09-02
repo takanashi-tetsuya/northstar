@@ -51,11 +51,22 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - CI now hashes canonical LF-only migration bytes, pins the exact Rust 1.97.1
   builder digest, uses a genuinely loopback PostgreSQL runtime fixture, and
   exercises production-shaped upload capacity and disaster-recovery rollback.
-- CI runtime fixtures now emit redacted, fixture-specific failure annotations,
-  so failures remain diagnosable without replaying privileged or adversarial
-  network tests on a developer workstation. The two-domain federation fixture
+- CI runtime fixtures and the pinned container build now use a fail-preserving
+  command wrapper and deterministic, tested failure summarizer. Annotations name
+  the exact fixture, prioritize root errors over cleanup noise, apply
+  defense-in-depth credential redaction, escape UTF-8 workflow commands safely
+  and enforce a strict encoded-size budget. The two-domain federation fixture
   also retries harmless duplicate ephemeral-port selections while keeping
   explicit operator-supplied port collisions fatal.
+- Container identity qualification now distinguishes an image-owned service
+  account from an effective Compose process identity and reports the observed
+  and expected UID:GID on failure. PostgreSQL validates the `postgres` account
+  used after its intentional root bootstrap, while Grafana is tested with its
+  explicit `472:0` runtime override rather than incidental account metadata.
+- Corrected the profile-storage integration oracle to use the RFC 7622 native
+  U-label form for XEP-0292 bare-JID ItemIDs. Punycode A-labels remain confined
+  to DNS and TLS boundaries; publication, notification, retrieval and
+  retraction continue to share one canonical Unicode identity.
 - The quoted-schema database-role fixture now replays each ordinary migration
   in its own transaction while honoring explicit `-- no-transaction`
   migrations, matching SQLx's migration contract. This preserves the atomic
@@ -210,6 +221,15 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   disabled, cutover verifies that exactly those three recorded backend PIDs and
   no peers remain; it stays closed on an unknown or unsettled outcome and cannot
   reopen after replay-floor commit until the incoming marker is cleared.
+- Restore's three live PostgreSQL backends no longer rely on multiple Bash
+  `coproc` instances. Bash only reliably tracks one coprocess, so control,
+  primary and compensation sessions now use separate private FIFO pairs with
+  explicit process IDs and parent-owned descriptors. Registered startup-only
+  `O_RDWR` anchors prevent a child exit between FIFO opens from blocking the
+  parent; both anchors are removed before the session becomes usable. FIFO names
+  are then unlinked, every new worker drops inherited session and replay-floor-
+  lock descriptors, and short-lived `pg_dump`/`pg_restore` children do the same.
+  Closing the selected worker input therefore produces a real EOF.
 - The MUC authorization race fixture now revokes an owner to `none` and proves
   that the mutation returned `Applied` before expecting an unauthorized
   affiliation-list snapshot. Demotion to `member` was not a revocation in a

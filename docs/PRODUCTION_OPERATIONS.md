@@ -1256,7 +1256,16 @@ control backend alone owns the advisory lock, changes the database connection
 fence and reads the authoritative outcome. The primary replacement backend and
 an independently pre-opened compensation backend execute incoming and rollback
 SQL respectively. Any session beyond those three recorded backends aborts
-cutover without being terminated. Each
+cutover without being terminated. Each backend runs as an independently
+supervised process over a private FIFO pair whose pathname is removed after
+startup. A registered `O_RDWR` anchor exists for each FIFO only while the child
+and parent establish their directional endpoints, preventing a child exit
+between opens from blocking the restore process. Workers close inherited
+anchors after redirection, and the parent closes and unregisters its anchors as
+soon as both real endpoints exist. Workers and short-lived dump tools also
+close inherited session and restore-floor-lock descriptors before execution;
+this avoids Bash's single-coprocess bookkeeping while ensuring that normal
+input closure produces EOF for that worker only. Each
 replacement transaction writes a unique database-level
 `northstar.restore_commit` marker before a synchronous `COMMIT`. After new
 connections are disabled, the control backend verifies that these three

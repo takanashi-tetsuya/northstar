@@ -3455,6 +3455,24 @@ mod tests {
     }
 
     #[test]
+    fn contact_notifications_preserve_the_rfc7622_ulabel_identity() {
+        let canonical =
+            PubSubService::canonical_profile_item_id(CONTACTS, "TEMP@xn--bcher-kva.example")
+                .unwrap();
+        assert_eq!(canonical, "temp@bücher.example");
+
+        let stored = normalized_pep_item(
+            "<item id='TEMP@xn--bcher-kva.example'><vcard xmlns='urn:ietf:params:xml:ns:vcard-4.0'><fn><text>Temporary Contact</text></fn></vcard></item>",
+            &canonical,
+            true,
+        );
+        let event = published_event_items(CONTACTS, &[(canonical.clone(), stored)]).unwrap();
+        assert!(event.contains("id='temp@bücher.example'"));
+        assert!(!event.contains("xn--bcher-kva.example"));
+        assert!(!event.contains("TEMP@"));
+    }
+
+    #[test]
     fn omemo_device_list_rejects_duplicate_or_invalid_ids() {
         let valid = Document::parse(
             "<item xmlns='http://jabber.org/protocol/pubsub' id='current'><devices xmlns='urn:xmpp:omemo:2'><device id='1'/><device id='2'/></devices></item>",

@@ -440,7 +440,9 @@ def setup() -> None:
     )
 
     temporary_raw = "TEMP@BÜCHER.example"
-    temporary_canonical = "temp@xn--bcher-kva.example"
+    # RFC 7622 section 3.2.1 requires an XMPP domainpart to use its Unicode
+    # U-label form.  The A-label is only derived at DNS/TLS boundaries.
+    temporary_canonical = "temp@bücher.example"
     temporary_publish = iq(
         alice,
         "contact-canonical-publish",

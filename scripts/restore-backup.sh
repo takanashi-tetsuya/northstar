@@ -165,7 +165,7 @@ done
 [[ -d "$backup_dir" && ! -L "$backup_dir" ]] \
   || { echo "backup path must be a real directory" >&2; exit 2; }
 backup_dir="$(cd "$backup_dir" && pwd -P)"
-for command in awk bash chown chmod cmp cp createdb date du find flock grep id initdb mktemp mv \
+for command in awk bash chown chmod cmp cp createdb date du find flock grep id initdb mkfifo mktemp mv \
   pg_ctl pg_dump pg_restore psql python3 rm sed sha256sum stat tar tr wc; do
   command -v "$command" >/dev/null \
     || { echo "required command is unavailable: $command" >&2; exit 1; }
@@ -346,18 +346,24 @@ new_manifest=""
 rollback_set=""
 previous_uploads=""
 rollback_dump=""
-db_session_started=false
 db_session_pid=""
 db_session_in=""
 db_session_out=""
-primary_worker_started=false
 primary_worker_pid=""
 primary_worker_in=""
 primary_worker_out=""
-compensation_worker_started=false
 compensation_worker_pid=""
 compensation_worker_in=""
 compensation_worker_out=""
+declare -A psql_session_state=()
+declare -A psql_session_pid_registry=()
+declare -A psql_session_input_fd_registry=()
+declare -A psql_session_output_fd_registry=()
+declare -A psql_session_input_anchor_fd_registry=()
+declare -A psql_session_output_anchor_fd_registry=()
+declare -A psql_session_fifo_dir_registry=()
+declare -A psql_session_input_fifo_registry=()
+declare -A psql_session_output_fifo_registry=()
 target_database=""
 target_backend_pid=""
 primary_backend_pid=""
@@ -494,69 +500,510 @@ if actual != expected:
 PY
 }
 
+# Bash deliberately tracks only one active coprocess. A restore needs three
+# independently supervised PostgreSQL sessions at the same time, so each
+# session is represented by an explicit lifecycle record plus two private
+# FIFOs. The record is authoritative from before namespace creation until the
+# child has been reaped and every parent FD has been closed. This lets EXIT
+# cleanup recover a signal at any startup boundary without guessing from a
+# caller-owned "started" flag.
+psql_session_label_is_valid() {
+  [[ "$1" =~ ^(control|primary|compensation)$ ]]
+}
+
+sync_psql_session_scalars() {
+  local label="$1"
+  local session_pid="${psql_session_pid_registry[$label]:-}"
+  local session_input="${psql_session_input_fd_registry[$label]:-}"
+  local session_output="${psql_session_output_fd_registry[$label]:-}"
+  case "$label" in
+    control)
+      db_session_pid="$session_pid"
+      db_session_in="$session_input"
+      db_session_out="$session_output"
+      ;;
+    primary)
+      primary_worker_pid="$session_pid"
+      primary_worker_in="$session_input"
+      primary_worker_out="$session_output"
+      ;;
+    compensation)
+      compensation_worker_pid="$session_pid"
+      compensation_worker_in="$session_input"
+      compensation_worker_out="$session_output"
+      ;;
+    *) return 2 ;;
+  esac
+}
+
+forget_psql_session_pid() {
+  local label="$1"
+  psql_session_label_is_valid "$label" || return 2
+  unset "psql_session_pid_registry[$label]"
+  sync_psql_session_scalars "$label"
+}
+
+forget_psql_session_input_fd() {
+  local label="$1"
+  psql_session_label_is_valid "$label" || return 2
+  unset "psql_session_input_fd_registry[$label]"
+  sync_psql_session_scalars "$label"
+}
+
+forget_psql_session_output_fd() {
+  local label="$1"
+  psql_session_label_is_valid "$label" || return 2
+  unset "psql_session_output_fd_registry[$label]"
+  sync_psql_session_scalars "$label"
+}
+
+forget_psql_session_input_anchor_fd() {
+  local label="$1"
+  psql_session_label_is_valid "$label" || return 2
+  unset "psql_session_input_anchor_fd_registry[$label]"
+}
+
+forget_psql_session_output_anchor_fd() {
+  local label="$1"
+  psql_session_label_is_valid "$label" || return 2
+  unset "psql_session_output_anchor_fd_registry[$label]"
+}
+
+clear_psql_session_registration() {
+  local label="$1"
+  psql_session_label_is_valid "$label" || return 2
+  unset "psql_session_state[$label]"
+  unset "psql_session_pid_registry[$label]"
+  unset "psql_session_input_fd_registry[$label]"
+  unset "psql_session_output_fd_registry[$label]"
+  unset "psql_session_input_anchor_fd_registry[$label]"
+  unset "psql_session_output_anchor_fd_registry[$label]"
+  unset "psql_session_fifo_dir_registry[$label]"
+  unset "psql_session_input_fifo_registry[$label]"
+  unset "psql_session_output_fifo_registry[$label]"
+  sync_psql_session_scalars "$label"
+}
+
+psql_fd_is_open() {
+  local fd="${1:-}"
+  [[ "$fd" =~ ^[0-9]+$ ]] && (( fd >= 3 )) \
+    && [[ -e "/proc/$BASHPID/fd/$fd" ]]
+}
+
+close_psql_fd_if_open() {
+  local fd="${1:-}"
+  if psql_fd_is_open "$fd"; then
+    exec {fd}>&-
+  fi
+}
+
+# Child processes must shed every parent-owned session endpoint. Use BASHPID,
+# not $$, because $$ continues to identify the parent shell inside a subshell.
+# Checking each descriptor first also makes the operation safe when two cleanup
+# phases observe an already-closed FD.
+close_inherited_parent_fds() {
+  local inherited_fd anchor_label close_ok=true
+  for inherited_fd in "$rollback_state_lock_fd" \
+    "$db_session_in" "$db_session_out" \
+    "$primary_worker_in" "$primary_worker_out" \
+    "$compensation_worker_in" "$compensation_worker_out"; do
+    if psql_fd_is_open "$inherited_fd" \
+       && ! close_psql_fd_if_open "$inherited_fd"; then
+      close_ok=false
+    fi
+  done
+  for anchor_label in control primary compensation; do
+    for inherited_fd in \
+      "${psql_session_input_anchor_fd_registry[$anchor_label]:-}" \
+      "${psql_session_output_anchor_fd_registry[$anchor_label]:-}"; do
+      if psql_fd_is_open "$inherited_fd" \
+         && ! close_psql_fd_if_open "$inherited_fd"; then
+        close_ok=false
+      fi
+    done
+  done
+  [[ "$close_ok" == true ]]
+}
+
+close_psql_session_anchors() {
+  local label="$1" input_anchor output_anchor close_ok=true
+  psql_session_label_is_valid "$label" || return 2
+  input_anchor="${psql_session_input_anchor_fd_registry[$label]:-}"
+  output_anchor="${psql_session_output_anchor_fd_registry[$label]:-}"
+  if [[ -n "$input_anchor" ]]; then
+    if close_psql_fd_if_open "$input_anchor"; then
+      forget_psql_session_input_anchor_fd "$label" || close_ok=false
+    else
+      close_ok=false
+    fi
+  fi
+  if [[ -n "$output_anchor" ]]; then
+    if close_psql_fd_if_open "$output_anchor"; then
+      forget_psql_session_output_anchor_fd "$label" || close_ok=false
+    else
+      close_ok=false
+    fi
+  fi
+  [[ "$close_ok" == true ]]
+}
+
+psql_session_anchors_are_closed() {
+  local label="$1"
+  psql_session_label_is_valid "$label" || return 2
+  [[ -z "${psql_session_input_anchor_fd_registry[$label]:-}" \
+     && -z "${psql_session_output_anchor_fd_registry[$label]:-}" ]]
+}
+
+remove_psql_session_namespace() {
+  local label="$1" fifo_path fifo_dir
+  local namespace_ok=true
+  psql_session_label_is_valid "$label" || return 2
+  for fifo_path in "${psql_session_input_fifo_registry[$label]:-}" \
+    "${psql_session_output_fifo_registry[$label]:-}"; do
+    [[ -n "$fifo_path" ]] || continue
+    if [[ -p "$fifo_path" && ! -L "$fifo_path" ]]; then
+      rm -- "$fifo_path" || namespace_ok=false
+    elif [[ -e "$fifo_path" || -L "$fifo_path" ]]; then
+      echo "refusing to remove unexpected psql session endpoint: $fifo_path" >&2
+      namespace_ok=false
+    fi
+  done
+  fifo_dir="${psql_session_fifo_dir_registry[$label]:-}"
+  if [[ -n "$fifo_dir" ]]; then
+    if [[ -d "$fifo_dir" && ! -L "$fifo_dir" ]]; then
+      rmdir -- "$fifo_dir" || namespace_ok=false
+    elif [[ -e "$fifo_dir" || -L "$fifo_dir" ]]; then
+      echo "refusing to remove unexpected psql session namespace: $fifo_dir" >&2
+      namespace_ok=false
+    fi
+  fi
+  if [[ "$namespace_ok" == true ]]; then
+    unset "psql_session_fifo_dir_registry[$label]"
+    unset "psql_session_input_fifo_registry[$label]"
+    unset "psql_session_output_fifo_registry[$label]"
+  fi
+  [[ "$namespace_ok" == true ]]
+}
+
+drain_psql_output_fd() {
+  local output_fd="$1" output_file="${2:-}" line
+  local output_ok=true
+  psql_fd_is_open "$output_fd" || return 1
+  while IFS= read -r line <&"$output_fd"; do
+    if [[ -n "$output_file" ]] \
+       && ! printf '%s\n' "$line" >>"$output_file"; then
+      # Continue draining even if diagnostics cannot be persisted. Otherwise a
+      # full stdout pipe could prevent the exact child from exiting and being
+      # reaped.
+      output_ok=false
+      output_file=""
+    fi
+  done
+  [[ "$output_ok" == true ]]
+}
+
+dispose_starting_psql_session() {
+  local label="$1"
+  local session_pid session_input session_output output_file
+  local input_open=false output_open=false anchors_closed=true cleanup_ok=true
+  psql_session_label_is_valid "$label" || return 2
+  session_pid="${psql_session_pid_registry[$label]:-}"
+  session_input="${psql_session_input_fd_registry[$label]:-}"
+  session_output="${psql_session_output_fd_registry[$label]:-}"
+  output_file="$work_dir/psql-session-$label-startup.out"
+  psql_fd_is_open "$session_input" && input_open=true
+  psql_fd_is_open "$session_output" && output_open=true
+  if ! close_psql_session_anchors "$label"; then
+    anchors_closed=false
+    cleanup_ok=false
+  fi
+
+  if [[ "$input_open" == true && "$output_open" == true \
+     && "$anchors_closed" == true ]]; then
+    # Both real endpoints completed and every startup anchor is gone, so psql
+    # can exit cleanly on stdin EOF. Keep stdout open until EOF and reap the
+    # exact child before releasing that FD.
+    if ! close_psql_fd_if_open "$session_input"; then
+      cleanup_ok=false
+      [[ "$session_pid" =~ ^[0-9]+$ ]] && kill -TERM "$session_pid" 2>/dev/null || true
+    fi
+    forget_psql_session_input_fd "$label" || cleanup_ok=false
+    drain_psql_output_fd "$session_output" "$output_file" || cleanup_ok=false
+    if [[ "$session_pid" =~ ^[0-9]+$ ]]; then
+      wait "$session_pid" 2>/dev/null || true
+      forget_psql_session_pid "$label" || cleanup_ok=false
+    else
+      cleanup_ok=false
+    fi
+    close_psql_fd_if_open "$session_output" || cleanup_ok=false
+    forget_psql_session_output_fd "$label" || cleanup_ok=false
+  else
+    # An incomplete startup (including an anchor-close failure) is never
+    # allowed to drain: an inherited writer could suppress EOF. Terminate the
+    # exact child first, then close every partial endpoint and reap it.
+    if [[ "$session_pid" =~ ^[0-9]+$ ]]; then
+      kill -TERM "$session_pid" 2>/dev/null || true
+    fi
+    close_psql_fd_if_open "$session_input" || cleanup_ok=false
+    forget_psql_session_input_fd "$label" || cleanup_ok=false
+    close_psql_fd_if_open "$session_output" || cleanup_ok=false
+    forget_psql_session_output_fd "$label" || cleanup_ok=false
+    if [[ "$session_pid" =~ ^[0-9]+$ ]]; then
+      wait "$session_pid" 2>/dev/null || true
+      forget_psql_session_pid "$label" || cleanup_ok=false
+    fi
+    close_psql_session_anchors "$label" || cleanup_ok=false
+  fi
+  remove_psql_session_namespace "$label" || cleanup_ok=false
+  clear_psql_session_registration "$label" || cleanup_ok=false
+  [[ "$cleanup_ok" == true ]]
+}
+
+start_psql_session() {
+  local label="$1" pid_variable="$2" input_variable="$3" output_variable="$4"
+  local fifo_dir="$work_dir/psql-session-$label"
+  local input_fifo="$fifo_dir/input" output_fifo="$fifo_dir/output"
+  local input_anchor="" output_anchor=""
+  local session_input="" session_output="" child_pid=""
+  local deferred_start_signal=""
+
+  psql_session_label_is_valid "$label" || return 2
+  case "$label:$pid_variable:$input_variable:$output_variable" in
+    control:db_session_pid:db_session_in:db_session_out|\
+    primary:primary_worker_pid:primary_worker_in:primary_worker_out|\
+    compensation:compensation_worker_pid:compensation_worker_in:compensation_worker_out) ;;
+    *) return 2 ;;
+  esac
+  [[ "${psql_session_state[$label]:-closed}" == closed ]] || return 2
+
+  psql_session_state[$label]=preparing
+  psql_session_fifo_dir_registry[$label]="$fifo_dir"
+  psql_session_input_fifo_registry[$label]="$input_fifo"
+  psql_session_output_fifo_registry[$label]="$output_fifo"
+  if ! mkdir -m 0700 -- "$fifo_dir"; then
+    dispose_starting_psql_session "$label" || true
+    return 1
+  fi
+  if ! mkfifo -m 0600 -- "$input_fifo" "$output_fifo"; then
+    dispose_starting_psql_session "$label" || true
+    return 1
+  fi
+
+  # Temporary O_RDWR anchors make every subsequent single-direction FIFO open
+  # nonblocking even if the child exits between its two redirections. They are
+  # globally registered before spawn so signal cleanup can always find them.
+  if ! exec {input_anchor}<>"$input_fifo"; then
+    dispose_starting_psql_session "$label" || true
+    return 1
+  fi
+  psql_session_input_anchor_fd_registry[$label]="$input_anchor"
+  if ! exec {output_anchor}<>"$output_fifo"; then
+    dispose_starting_psql_session "$label" || true
+    return 1
+  fi
+  psql_session_output_anchor_fd_registry[$label]="$output_anchor"
+
+  # An asynchronous signal may otherwise arrive after Bash has spawned the
+  # child but before $! is copied into the registry. Defer only INT/TERM across
+  # that tiny boundary. Caught traps are reset in the child execution
+  # environment, and the child explicitly restores defaults once its FIFO
+  # redirections have rendezvoused, so it always remains terminable.
+  trap 'deferred_start_signal=INT' INT
+  trap 'deferred_start_signal=TERM' TERM
+  (
+    trap - INT TERM
+    # The redirections have already duplicated this session's FIFOs onto stdin
+    # and stdout. Closing inherited dynamic FDs cannot close those descriptors.
+    close_inherited_parent_fds || exit 125
+    exec "${pg_client[@]}" psql --no-psqlrc --quiet --tuples-only --no-align \
+      --set ON_ERROR_STOP=1
+  ) <"$input_fifo" >"$output_fifo" &
+  child_pid=$!
+  psql_session_pid_registry[$label]="$child_pid"
+  psql_session_state[$label]=starting
+  sync_psql_session_scalars "$label"
+  # start_psql_session is invoked only after the script-level signal handlers
+  # below are installed. Restore those exact handlers without command
+  # substitution: a subshell used for $(trap -p) may observe reset trap state.
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if [[ -n "$deferred_start_signal" ]]; then
+    # Replay the exact signal only after cleanup can see the child PID, FIFO
+    # namespace and lifecycle state. The restored script trap performs the
+    # normal status-preserving EXIT cleanup.
+    kill -s "$deferred_start_signal" "$BASHPID"
+    case "$deferred_start_signal" in
+      INT) return 130 ;;
+      TERM) return 143 ;;
+    esac
+  fi
+
+  # Anchors make these directional opens independent of child scheduling.
+  if ! exec {session_input}>"$input_fifo"; then
+    dispose_starting_psql_session "$label" || true
+    return 1
+  fi
+  psql_session_input_fd_registry[$label]="$session_input"
+  sync_psql_session_scalars "$label"
+  if ! exec {session_output}<"$output_fifo"; then
+    dispose_starting_psql_session "$label" || true
+    return 1
+  fi
+  psql_session_output_fd_registry[$label]="$session_output"
+  sync_psql_session_scalars "$label"
+
+  # Normal operation must retain only the directional endpoints. Closing and
+  # unregistering both anchors restores unambiguous EOF/SIGPIPE semantics.
+  if ! close_psql_session_anchors "$label" \
+     || ! psql_session_anchors_are_closed "$label"; then
+    dispose_starting_psql_session "$label" || true
+    return 1
+  fi
+
+  if ! remove_psql_session_namespace "$label"; then
+    dispose_starting_psql_session "$label" || true
+    return 1
+  fi
+  psql_session_state[$label]=open
+}
+
+# A pg_restore producer retains only stdout already duplicated to its selected
+# worker. Inherited session writers would otherwise suppress EOF and leave
+# cleanup waiting forever for a transaction rollback.
+run_pg_client_without_parent_fds() (
+  close_inherited_parent_fds || exit 125
+  exec "${pg_client[@]}" "$@"
+)
+
 close_psql_session() {
-  local session_pid="$1" session_in="$2" session_out="$3"
-  if [[ -n "$session_in" && -e "/proc/$$/fd/$session_in" ]]; then
-    printf '%s\n' '\q' >&"$session_in" || true
-    exec {session_in}>&- || true
+  local label="$1" output_file="${2:-$work_dir/psql-session-$label-close.out}"
+  local session_pid session_input session_output session_status=0
+  local close_ok=true prior_state
+  psql_session_label_is_valid "$label" || return 2
+  prior_state="${psql_session_state[$label]:-closed}"
+  case "$prior_state" in
+    closed) clear_psql_session_registration "$label"; return 0 ;;
+    preparing|starting) dispose_starting_psql_session "$label"; return ;;
+    open)
+      psql_session_state[$label]=closing
+      : >"$output_file" || { close_ok=false; output_file=""; }
+      ;;
+    closing) ;;
+    *) echo "invalid psql session lifecycle state: $label" >&2; return 2 ;;
+  esac
+  session_pid="${psql_session_pid_registry[$label]:-}"
+  session_input="${psql_session_input_fd_registry[$label]:-}"
+  session_output="${psql_session_output_fd_registry[$label]:-}"
+
+  # EOF is psql's graceful shutdown protocol. Preserve the read endpoint while
+  # draining and waiting; closing it first can SIGPIPE the child and erase the
+  # real exit status.
+  if [[ -n "$session_input" ]]; then
+    if ! psql_fd_is_open "$session_input" \
+       || ! close_psql_fd_if_open "$session_input"; then
+      close_ok=false
+      [[ "$session_pid" =~ ^[0-9]+$ ]] && kill -TERM "$session_pid" 2>/dev/null || true
+    fi
+    forget_psql_session_input_fd "$label" || close_ok=false
+  elif [[ "$prior_state" == open ]]; then
+    close_ok=false
+    [[ "$session_pid" =~ ^[0-9]+$ ]] && kill -TERM "$session_pid" 2>/dev/null || true
   fi
-  if [[ -n "$session_out" && -e "/proc/$$/fd/$session_out" ]]; then
-    exec {session_out}<&- || true
+  if [[ -n "$session_output" ]] \
+     && ! drain_psql_output_fd "$session_output" "$output_file"; then
+    close_ok=false
+  elif [[ -z "$session_output" ]]; then
+    close_ok=false
   fi
-  [[ -z "$session_pid" ]] || wait "$session_pid" 2>/dev/null || true
+  if [[ "$session_pid" =~ ^[0-9]+$ ]]; then
+    if wait "$session_pid" 2>/dev/null; then
+      session_status=0
+    else
+      session_status=$?
+      close_ok=false
+    fi
+    forget_psql_session_pid "$label" || close_ok=false
+  else
+    close_ok=false
+  fi
+  if [[ -n "$session_output" ]]; then
+    close_psql_fd_if_open "$session_output" || close_ok=false
+    forget_psql_session_output_fd "$label" || close_ok=false
+  fi
+  remove_psql_session_namespace "$label" || close_ok=false
+  clear_psql_session_registration "$label" || close_ok=false
+  if [[ "$close_ok" != true ]]; then
+    echo "psql session did not close cleanly: $label (status=$session_status)" >&2
+    return 1
+  fi
 }
 
 close_db_sessions() {
-  if [[ "$primary_worker_started" == true ]]; then
-    close_psql_session "$primary_worker_pid" "$primary_worker_in" "$primary_worker_out"
-    primary_worker_started=false
-  fi
-  if [[ "$compensation_worker_started" == true ]]; then
-    close_psql_session \
-      "$compensation_worker_pid" "$compensation_worker_in" "$compensation_worker_out"
-    compensation_worker_started=false
-  fi
-  if [[ "$db_session_started" == true ]]; then
-    close_psql_session "$db_session_pid" "$db_session_in" "$db_session_out"
-    db_session_started=false
-  fi
+  local label close_ok=true
+  # Close workers first and the advisory-lock owner last. Continue after one
+  # failure so every exact PID/FD registration is consumed and cleared.
+  for label in primary compensation control; do
+    case "${psql_session_state[$label]:-closed}" in
+      closed) ;;
+      preparing|starting|open|closing)
+        if ! close_psql_session "$label"; then
+          close_ok=false
+        fi
+        ;;
+      *)
+        echo "invalid psql session lifecycle state: $label" >&2
+        # Registry corruption must not turn into descriptor erasure without
+        # process cleanup. Dispose every recorded resource fail-closed.
+        dispose_starting_psql_session "$label" || true
+        close_ok=false
+        ;;
+    esac
+  done
+  [[ "$close_ok" == true ]]
 }
 
 abort_psql_session_for_cleanup() {
-  local session_pid="$1" session_in="$2" session_out="$3" output_file="$4" line
-  # Closing stdin is the transaction-safe interrupt.  psql either finishes an
-  # already-buffered COMMIT or reaches EOF and disconnects, which makes
-  # PostgreSQL roll back any still-open transaction.  Draining stdout lets the
-  # child finish without a pipe backpressure deadlock; the catalog barrier then
-  # determines which outcome actually committed.
-  if [[ -n "$session_in" && -e "/proc/$$/fd/$session_in" ]]; then
-    exec {session_in}>&- || return 1
+  local label="$1" output_file="$2"
+  local session_pid session_input session_output cleanup_ok=true
+  psql_session_label_is_valid "$label" || return 2
+  [[ "${psql_session_state[$label]:-closed}" == open ]] || return 1
+  psql_session_state[$label]=closing
+  session_pid="${psql_session_pid_registry[$label]:-}"
+  session_input="${psql_session_input_fd_registry[$label]:-}"
+  session_output="${psql_session_output_fd_registry[$label]:-}"
+  # Closing stdin is the transaction-safe interrupt. psql either finishes an
+  # already-buffered COMMIT or disconnects so PostgreSQL rolls back an open
+  # transaction. Drain stdout, reap the exact PID, then close stdout; the
+  # catalog barrier determines which database outcome actually committed.
+  if ! psql_fd_is_open "$session_input" \
+     || ! close_psql_fd_if_open "$session_input"; then
+    cleanup_ok=false
+    [[ "$session_pid" =~ ^[0-9]+$ ]] && kill -TERM "$session_pid" 2>/dev/null || true
   fi
-  if [[ -n "$session_out" && -e "/proc/$$/fd/$session_out" ]]; then
-    while IFS= read -r line <&"$session_out"; do
-      printf '%s\n' "$line" >>"$output_file" || return 1
-    done
-    exec {session_out}<&- || return 1
+  forget_psql_session_input_fd "$label" || cleanup_ok=false
+  drain_psql_output_fd "$session_output" "$output_file" || cleanup_ok=false
+  if [[ "$session_pid" =~ ^[0-9]+$ ]]; then
+    wait "$session_pid" 2>/dev/null || true
+    forget_psql_session_pid "$label" || cleanup_ok=false
+  else
+    cleanup_ok=false
   fi
-  [[ -z "$session_pid" ]] || wait "$session_pid" 2>/dev/null || true
+  close_psql_fd_if_open "$session_output" || cleanup_ok=false
+  forget_psql_session_output_fd "$label" || cleanup_ok=false
+  remove_psql_session_namespace "$label" || cleanup_ok=false
+  clear_psql_session_registration "$label" || cleanup_ok=false
+  [[ "$cleanup_ok" == true ]]
 }
 
 abort_active_restore_worker_for_cleanup() {
   local output_file="$work_dir/replace-$active_restore_barrier_label.out"
   case "$active_restore_worker" in
-    primary)
-      if [[ "$primary_worker_started" == true ]]; then
-        abort_psql_session_for_cleanup "$primary_worker_pid" \
-          "$primary_worker_in" "$primary_worker_out" "$output_file" || return 1
-        primary_worker_started=false
+    primary|compensation)
+      if [[ "${psql_session_state[$active_restore_worker]:-closed}" != open ]]; then
+        echo "active restore worker is not available for exact cleanup" >&2
+        return 1
       fi
-      ;;
-    compensation)
-      if [[ "$compensation_worker_started" == true ]]; then
-        abort_psql_session_for_cleanup "$compensation_worker_pid" \
-          "$compensation_worker_in" "$compensation_worker_out" "$output_file" || return 1
-        compensation_worker_started=false
-      fi
+      abort_psql_session_for_cleanup "$active_restore_worker" "$output_file"
       ;;
     *)
       echo "active restore transaction has no bounded worker identity" >&2
@@ -782,13 +1229,7 @@ start_db_sessions() {
   local init_sql="$work_dir/db-session-init.sql" init_output="$work_dir/db-session-init.out"
   local grant_check_sql="$work_dir/grant-boundary-check.sql"
   local grant_check_output="$work_dir/grant-boundary-check.out"
-  coproc RESTORE_DB_SESSION {
-    "${pg_client[@]}" psql --no-psqlrc --quiet --tuples-only --no-align --set ON_ERROR_STOP=1
-  }
-  db_session_out="${RESTORE_DB_SESSION[0]}"
-  db_session_in="${RESTORE_DB_SESSION[1]}"
-  db_session_pid="$RESTORE_DB_SESSION_PID"
-  db_session_started=true
+  start_psql_session control db_session_pid db_session_in db_session_out
   cat >"$init_sql" <<SQL
 SET application_name TO 'northstar-restore-$restore_id';
 SELECT CASE WHEN pg_try_advisory_lock($maintenance_lock_key)
@@ -811,13 +1252,7 @@ SQL
   # Policy application and dump replacement deliberately run on disposable
   # workers.  The maintenance session above remains alive solely to own the
   # advisory lock and read the transactionally committed outcome marker.
-  coproc PRIMARY_RESTORE_WORKER {
-    "${pg_client[@]}" psql --no-psqlrc --quiet --tuples-only --no-align --set ON_ERROR_STOP=1
-  }
-  primary_worker_out="${PRIMARY_RESTORE_WORKER[0]}"
-  primary_worker_in="${PRIMARY_RESTORE_WORKER[1]}"
-  primary_worker_pid="$PRIMARY_RESTORE_WORKER_PID"
-  primary_worker_started=true
+  start_psql_session primary primary_worker_pid primary_worker_in primary_worker_out
   initialize_restore_worker primary "$primary_worker_in" "$primary_worker_out" \
     "$work_dir/primary-worker-init.out" primary_backend_pid || return 1
 
@@ -841,13 +1276,8 @@ SQL
 }
 
 start_compensation_worker() {
-  coproc COMPENSATION_RESTORE_WORKER {
-    "${pg_client[@]}" psql --no-psqlrc --quiet --tuples-only --no-align --set ON_ERROR_STOP=1
-  }
-  compensation_worker_out="${COMPENSATION_RESTORE_WORKER[0]}"
-  compensation_worker_in="${COMPENSATION_RESTORE_WORKER[1]}"
-  compensation_worker_pid="$COMPENSATION_RESTORE_WORKER_PID"
-  compensation_worker_started=true
+  start_psql_session compensation compensation_worker_pid \
+    compensation_worker_in compensation_worker_out
   initialize_restore_worker compensation "$compensation_worker_in" "$compensation_worker_out" \
     "$work_dir/compensation-worker-init.out" compensation_backend_pid || return 1
   [[ "$target_backend_pid" != "$compensation_backend_pid" \
@@ -1049,7 +1479,7 @@ $northstar_restore$;
 SQL
   } >&"$worker_in" || stream_ok=false
   if [[ "$stream_ok" == true ]] \
-    && ! "${pg_client[@]}" pg_restore "$replacement_dump" \
+    && ! run_pg_client_without_parent_fds pg_restore "$replacement_dump" \
       --clean --if-exists --no-owner --no-acl --file=- >&"$worker_in"; then
     stream_ok=false
   fi
@@ -1196,11 +1626,17 @@ on_error() {
 }
 
 finish_restore() {
+  # This must be the first cleanup side effect. A second INT/TERM between the
+  # re-entry guard and clearing EXIT would otherwise recursively exit from the
+  # guard, while a signal after clearing EXIT could bypass cleanup entirely.
+  trap '' INT TERM
   local status="$1" compensation_ok=true fence_ok=true cleanup_ok=true
-  [[ "$cleanup_running" == false ]] || exit "$status"
+  if [[ "$cleanup_running" == true ]]; then
+    trap - ERR EXIT
+    exit "$status"
+  fi
   cleanup_running=true
   trap - ERR EXIT
-  trap '' INT TERM
   set +e
 
   if [[ "$restore_committed" == true ]]; then
@@ -1260,14 +1696,19 @@ finish_restore() {
       echo "PostgreSQL remains fail-closed because compensation was incomplete." >&2
     fi
   fi
-  close_db_sessions
+  close_db_sessions || cleanup_ok=false
 
-  if [[ "$compensation_ok" == true && "$fence_ok" == true ]]; then
+  if [[ "$compensation_ok" == true && "$fence_ok" == true \
+     && "$cleanup_ok" == true ]]; then
     if [[ "$restore_committed" != true ]]; then
       remove_cutover_dir || cleanup_ok=false
     fi
-    remove_work_dir || cleanup_ok=false
-  else
+    if [[ "$cleanup_ok" == true ]]; then
+      remove_work_dir || cleanup_ok=false
+    fi
+  fi
+  if [[ "$compensation_ok" != true || "$fence_ok" != true \
+     || "$cleanup_ok" != true ]]; then
     preserve_work=true
     status=1
     echo "RECOVERY REQUIRED: preserved plaintext work directory: $work_dir" >&2
@@ -1509,10 +1950,10 @@ rollback_dump="$rollback_set/database-before.dump"
 # replacement; the advisory fence alone is not represented as an application
 # writer lock.
 start_db_sessions
-"${pg_client[@]}" pg_dump --format=custom --compress=9 --no-owner --no-acl \
+run_pg_client_without_parent_fds pg_dump --format=custom --compress=9 --no-owner --no-acl \
   --file="$rollback_dump"
 chmod 0600 "$rollback_dump"
-"${pg_client[@]}" pg_restore --list "$rollback_dump" >/dev/null
+run_pg_client_without_parent_fds pg_restore --list "$rollback_dump" >/dev/null
 fsync_path "$rollback_dump"
 fsync_path "$rollback_set"
 journal_append rollback-ready "$rollback_set"

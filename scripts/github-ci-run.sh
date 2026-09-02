@@ -9,6 +9,7 @@ fi
 annotation_title="$1"
 shift
 
+script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 temporary_root="${RUNNER_TEMP:-/tmp}"
 log_file="$(mktemp "${temporary_root%/}/northstar-ci-command.XXXXXX.log")"
 
@@ -21,33 +22,13 @@ trap cleanup EXIT
 command_status=${PIPESTATUS[0]}
 
 if (( command_status != 0 )) && [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
-  summary="$({
-    sed -E 's/\x1B\[[0-9;]*[mK]//g' "$log_file" |
-      # Cleanup may print hundreds of structured server events from deliberate
-      # negative-path probes. Keep those in the ordinary job log, but prefer
-      # the fixture's own traceback/assertion when building the 4 KiB check
-      # annotation so the root cause is not displaced by expected JSON errors.
-      grep -v -E '^[[:space:]]*\{' |
-      grep -E -i -B 8 -A 4 \
-        '(^|[^[:alnum:]_])(error|failed|failure|panic|assertion|traceback|timed out|timeout|expected|missing|refused|denied|does not exist|mismatch)([^[:alnum:]_]|$)' |
-      tail -n 60
-  } || true)"
-
-  if [[ -z "$summary" ]]; then
-    summary="$(tail -n 40 "$log_file")"
+  # The complete output is already visible above. Promote only a bounded,
+  # redacted, root-cause-first summary into GitHub's 4 KiB annotation channel.
+  # A fixed fallback deliberately contains no log or caller-controlled text.
+  if ! python3 "$script_directory/github_ci_summary.py" \
+    --title "$annotation_title" "$log_file"; then
+    echo "::error title=Northstar CI command failed::The command failed and its diagnostic summarizer could not run. Inspect the ordinary job log."
   fi
-
-  # GitHub already masks registered secrets. Apply an additional local redaction
-  # before promoting selected log lines into a check-run annotation.
-  summary="$(printf '%s' "$summary" | sed -E \
-    -e 's#(postgres(ql)?://)[^/@[:space:]]+@#\1[REDACTED]@#g' \
-    -e 's#([Aa]uthorization:)[[:space:]]*[^[:space:]]+#\1 [REDACTED]#g' \
-    -e 's#([Pp]assword[=:])[[:space:]]*[^[:space:]]+#\1[REDACTED]#g')"
-
-  summary="${summary//'%'/'%25'}"
-  summary="${summary//$'\r'/'%0D'}"
-  summary="${summary//$'\n'/'%0A'}"
-  echo "::error title=${annotation_title}::${summary}"
 fi
 
 exit "$command_status"

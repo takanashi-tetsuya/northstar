@@ -350,11 +350,31 @@ db_session_started=false
 db_session_pid=""
 db_session_in=""
 db_session_out=""
+primary_worker_started=false
+primary_worker_pid=""
+primary_worker_in=""
+primary_worker_out=""
+compensation_worker_started=false
+compensation_worker_pid=""
+compensation_worker_in=""
+compensation_worker_out=""
 target_database=""
 target_backend_pid=""
+primary_backend_pid=""
+compensation_backend_pid=""
+incoming_outcome_marker="northstar-$restore_id-incoming"
+rollback_outcome_marker="northstar-$restore_id-rollback"
+last_restore_outcome=""
+replacement_committed=false
+database_outcome_unknown=false
+restore_transaction_active=false
+active_restore_barrier_key=""
+active_restore_barrier_label=""
+active_restore_worker=""
+restore_outcome_clear_started=false
+restore_outcome_cleared=false
 fence_attempted=false
 database_fence_active=false
-database_switch_started=false
 database_switched=false
 compensation_required=false
 restore_committed=false
@@ -474,36 +494,92 @@ if actual != expected:
 PY
 }
 
-close_db_session() {
-  if [[ "$db_session_started" != true ]]; then
-    return 0
+close_psql_session() {
+  local session_pid="$1" session_in="$2" session_out="$3"
+  if [[ -n "$session_in" && -e "/proc/$$/fd/$session_in" ]]; then
+    printf '%s\n' '\q' >&"$session_in" || true
+    exec {session_in}>&- || true
   fi
-  if [[ -e "/proc/$$/fd/$db_session_in" ]]; then
-    printf '%s\n' '\q' >&"$db_session_in" || true
-    exec {db_session_in}>&- || true
+  if [[ -n "$session_out" && -e "/proc/$$/fd/$session_out" ]]; then
+    exec {session_out}<&- || true
   fi
-  if [[ -e "/proc/$$/fd/$db_session_out" ]]; then
-    exec {db_session_out}<&- || true
-  fi
-  wait "$db_session_pid" 2>/dev/null || true
-  db_session_started=false
+  [[ -z "$session_pid" ]] || wait "$session_pid" 2>/dev/null || true
 }
 
-db_session_command() {
-  local input_file="$1" output_file="$2"
+close_db_sessions() {
+  if [[ "$primary_worker_started" == true ]]; then
+    close_psql_session "$primary_worker_pid" "$primary_worker_in" "$primary_worker_out"
+    primary_worker_started=false
+  fi
+  if [[ "$compensation_worker_started" == true ]]; then
+    close_psql_session \
+      "$compensation_worker_pid" "$compensation_worker_in" "$compensation_worker_out"
+    compensation_worker_started=false
+  fi
+  if [[ "$db_session_started" == true ]]; then
+    close_psql_session "$db_session_pid" "$db_session_in" "$db_session_out"
+    db_session_started=false
+  fi
+}
+
+abort_psql_session_for_cleanup() {
+  local session_pid="$1" session_in="$2" session_out="$3" output_file="$4" line
+  # Closing stdin is the transaction-safe interrupt.  psql either finishes an
+  # already-buffered COMMIT or reaches EOF and disconnects, which makes
+  # PostgreSQL roll back any still-open transaction.  Draining stdout lets the
+  # child finish without a pipe backpressure deadlock; the catalog barrier then
+  # determines which outcome actually committed.
+  if [[ -n "$session_in" && -e "/proc/$$/fd/$session_in" ]]; then
+    exec {session_in}>&- || return 1
+  fi
+  if [[ -n "$session_out" && -e "/proc/$$/fd/$session_out" ]]; then
+    while IFS= read -r line <&"$session_out"; do
+      printf '%s\n' "$line" >>"$output_file" || return 1
+    done
+    exec {session_out}<&- || return 1
+  fi
+  [[ -z "$session_pid" ]] || wait "$session_pid" 2>/dev/null || true
+}
+
+abort_active_restore_worker_for_cleanup() {
+  local output_file="$work_dir/replace-$active_restore_barrier_label.out"
+  case "$active_restore_worker" in
+    primary)
+      if [[ "$primary_worker_started" == true ]]; then
+        abort_psql_session_for_cleanup "$primary_worker_pid" \
+          "$primary_worker_in" "$primary_worker_out" "$output_file" || return 1
+        primary_worker_started=false
+      fi
+      ;;
+    compensation)
+      if [[ "$compensation_worker_started" == true ]]; then
+        abort_psql_session_for_cleanup "$compensation_worker_pid" \
+          "$compensation_worker_in" "$compensation_worker_out" "$output_file" || return 1
+        compensation_worker_started=false
+      fi
+      ;;
+    *)
+      echo "active restore transaction has no bounded worker identity" >&2
+      return 1
+      ;;
+  esac
+}
+
+psql_session_command() {
+  local session_in="$1" session_out="$2" input_file="$3" output_file="$4"
   local token="__NORTHSTAR_DONE_${restore_id}_$(python3 -c 'import secrets; print(secrets.token_hex(8))')__"
-  [[ -e "/proc/$$/fd/$db_session_in" && -e "/proc/$$/fd/$db_session_out" ]] || return 1
+  [[ -e "/proc/$$/fd/$session_in" && -e "/proc/$$/fd/$session_out" ]] || return 1
   : >"$output_file"
   {
-    cat "$input_file"
+    cat "$input_file" &&
     printf '\n\\echo %s\n' "$token"
-  } >&"$db_session_in" || return 1
-  db_session_wait_token "$token" "$output_file"
+  } >&"$session_in" || return 1
+  psql_session_wait_token "$session_out" "$token" "$output_file"
 }
 
-db_session_wait_token() {
-  local token="$1" output_file="$2" line
-  while IFS= read -r line <&"$db_session_out"; do
+psql_session_wait_token() {
+  local session_out="$1" token="$2" output_file="$3" line
+  while IFS= read -r line <&"$session_out"; do
     if [[ "$line" == "$token" ]]; then
       return 0
     fi
@@ -512,21 +588,197 @@ db_session_wait_token() {
   return 1
 }
 
+db_session_command() {
+  psql_session_command "$db_session_in" "$db_session_out" "$1" "$2"
+}
+
+primary_worker_command() {
+  psql_session_command "$primary_worker_in" "$primary_worker_out" "$1" "$2"
+}
+
 write_grant_policy_variables() {
-  local output_file="$1"
+  local output_file="$1" grant_phase="$2"
   [[ "$target_database" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || return 2
+  case "$grant_phase" in
+    exact|auto) ;;
+    *)
+      echo "invalid restore grant phase: $grant_phase" >&2
+      return 2
+      ;;
+  esac
   {
-    printf '\\set database_name %s\n' "$target_database"
-    printf '\\set migrator_role %s\n' "$database_migrator_role"
-    printf '\\set runtime_role %s\n' "$database_runtime_role"
-    printf '\\set command_role %s\n' "$database_command_role"
-    printf '\\set backup_role %s\n' "$database_backup_role"
-    printf '%s\n' '\set allow_bootstrap false'
-    printf '%s\n' '\set grant_phase exact'
+    printf '\\set database_name %s\n' "$target_database" &&
+    printf '\\set migrator_role %s\n' "$database_migrator_role" &&
+    printf '\\set runtime_role %s\n' "$database_runtime_role" &&
+    printf '\\set command_role %s\n' "$database_command_role" &&
+    printf '\\set backup_role %s\n' "$database_backup_role" &&
+    printf '%s\n' '\set allow_bootstrap false' &&
+    printf '\\set grant_phase %s\n' "$grant_phase"
   } >"$output_file"
 }
 
-start_db_session() {
+preflight_current_database_recoverability() {
+  local preflight_sql="$work_dir/current-database-recoverability.sql"
+  local preflight_output="$work_dir/current-database-recoverability.out"
+
+  # Prove that the current database is a repository-authenticated Northstar
+  # state before taking a rollback dump or entering the cutover.  The canonical
+  # grant application resolves an empty database to bootstrap, migration 0113
+  # to prepare, and the complete current ledger to exact.  Every catalog and
+  # ACL mutation is rolled back; an unknown, partial, or noncanonical schema
+  # therefore fails closed while the original database is still untouched.
+  write_grant_policy_variables "$preflight_sql" auto || return 1
+  {
+    printf '%s\n' 'BEGIN;'
+    cat "$migration_ledger_manifest_sql"
+    cat "$capability_manifest_sql"
+    cat "$grant_apply_sql"
+    printf '%s\n' 'ROLLBACK;'
+  } >>"$preflight_sql"
+  primary_worker_command "$preflight_sql" "$preflight_output" || {
+    echo "restore target is not a recoverable empty, migration-0113, or current Northstar database" >&2
+    return 1
+  }
+}
+
+read_restore_outcome() {
+  local outcome_sql="$work_dir/read-restore-outcome.sql"
+  local outcome_output="$work_dir/read-restore-outcome.out" outcome_line outcome_count
+  if [[ "$restore_transaction_active" == true ]]; then
+    database_outcome_unknown=true
+    last_restore_outcome="__UNSETTLED__"
+    echo "refusing to interpret a restore marker before the replacement transaction settles" >&2
+    return 2
+  fi
+  cat >"$outcome_sql" <<'SQL'
+SELECT '__RESTORE_OUTCOME__' ||
+       CASE count(*)
+         WHEN 0 THEN '__ABSENT__'
+         WHEN 1 THEN max(pg_catalog.substr(setting,
+                            pg_catalog.length('northstar.restore_commit=') + 1))
+         ELSE '__INVALID__'
+       END
+  FROM pg_catalog.pg_db_role_setting AS role_setting
+ CROSS JOIN LATERAL pg_catalog.unnest(role_setting.setconfig) AS option(setting)
+ WHERE role_setting.setdatabase = (
+         SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database()
+       )
+   AND role_setting.setrole = 0
+   AND setting LIKE 'northstar.restore_commit=%';
+SQL
+  if ! db_session_command "$outcome_sql" "$outcome_output"; then
+    database_outcome_unknown=true
+    last_restore_outcome="__UNREADABLE__"
+    echo "cannot determine the transactional database restore outcome" >&2
+    return 2
+  fi
+  outcome_line="$(sed -n 's/^__RESTORE_OUTCOME__//p' "$outcome_output")"
+  outcome_count="$(awk '/^__RESTORE_OUTCOME__/ { count += 1 } END { print count + 0 }' \
+    "$outcome_output")"
+  if [[ -z "$outcome_line" || "$outcome_count" != 1 ]]; then
+    database_outcome_unknown=true
+    last_restore_outcome="__INVALID__"
+    echo "database restore outcome catalog returned an ambiguous result" >&2
+    return 2
+  fi
+  last_restore_outcome="$outcome_line"
+  case "$last_restore_outcome" in
+    __ABSENT__|"$incoming_outcome_marker"|"$rollback_outcome_marker") return 0 ;;
+    *)
+      database_outcome_unknown=true
+      echo "database contains an unrecognized restore outcome marker" >&2
+      return 2
+      ;;
+  esac
+}
+
+clear_restore_outcome() {
+  local expected_marker="$1"
+  local clear_sql="$work_dir/clear-restore-outcome.sql"
+  if ! read_restore_outcome || [[ "$last_restore_outcome" != "$expected_marker" ]]; then
+    database_outcome_unknown=true
+    echo "refusing to clear a restore outcome other than the expected committed marker" >&2
+    return 1
+  fi
+  cat >"$clear_sql" <<SQL
+\\set target_db $target_database
+SET synchronous_commit TO on;
+SELECT format('ALTER DATABASE %I RESET northstar.restore_commit', :'target_db') \gexec
+SQL
+  db_session_command "$clear_sql" "$work_dir/clear-restore-outcome.out" || return 1
+  if ! read_restore_outcome || [[ "$last_restore_outcome" != __ABSENT__ ]]; then
+    database_outcome_unknown=true
+    echo "database restore outcome marker was not cleared exactly" >&2
+    return 1
+  fi
+}
+
+wait_for_restore_transaction_barrier() {
+  local barrier_key="$1" label="$2"
+  local barrier_sql="$work_dir/$label-transaction-barrier.sql"
+  local barrier_output="$work_dir/$label-transaction-barrier.out"
+  [[ "$barrier_key" =~ ^northstar-restore-[0-9a-f]{32}-(incoming|rollback)$ ]] || return 2
+  {
+    printf '\\set restore_barrier_key %s\n' "$barrier_key" &&
+    printf '%s\n' 'BEGIN;' &&
+    printf "%s\n" \
+      "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(:'restore_barrier_key', 0));" &&
+    printf '%s\n' 'COMMIT;'
+  } >"$barrier_sql"
+  db_session_command "$barrier_sql" "$barrier_output" || {
+    database_outcome_unknown=true
+    echo "cannot establish that the $label replacement transaction has ended" >&2
+    return 1
+  }
+}
+
+settle_active_restore_transaction() {
+  if [[ "$restore_transaction_active" != true ]]; then
+    return 0
+  fi
+  if [[ -z "$active_restore_barrier_key" || -z "$active_restore_barrier_label" ]]; then
+    database_outcome_unknown=true
+    echo "active restore transaction has no verifiable barrier identity" >&2
+    return 1
+  fi
+  if [[ "$cleanup_running" == true ]]; then
+    # A signal can interrupt the producer before it has sent ROLLBACK or COMMIT.
+    # End that exact pre-opened worker first, otherwise it may remain idle in a
+    # transaction waiting for stdin while the control connection waits forever
+    # on its transaction lock.
+    if ! abort_active_restore_worker_for_cleanup; then
+      database_outcome_unknown=true
+      return 1
+    fi
+  fi
+  if ! wait_for_restore_transaction_barrier \
+    "$active_restore_barrier_key" "$active_restore_barrier_label"; then
+    database_outcome_unknown=true
+    return 1
+  fi
+  restore_transaction_active=false
+  active_restore_barrier_key=""
+  active_restore_barrier_label=""
+  active_restore_worker=""
+}
+
+initialize_restore_worker() {
+  local label="$1" session_in="$2" session_out="$3" output_file="$4" result_variable="$5"
+  local init_sql="$work_dir/$label-worker-init.sql" worker_database worker_pid
+  cat >"$init_sql" <<SQL
+SET application_name TO 'northstar-restore-$restore_id-$label';
+SELECT '__DATABASE__' || current_database();
+SELECT '__BACKEND_PID__' || pg_backend_pid()::text;
+SQL
+  psql_session_command "$session_in" "$session_out" "$init_sql" "$output_file" || return 1
+  worker_database="$(sed -n 's/^__DATABASE__//p' "$output_file")"
+  worker_pid="$(sed -n 's/^__BACKEND_PID__//p' "$output_file")"
+  [[ "$worker_database" == "$target_database" && "$worker_pid" =~ ^[0-9]+$ ]] \
+    || { echo "$label restore worker has an unsafe database identity" >&2; return 1; }
+  printf -v "$result_variable" '%s' "$worker_pid"
+}
+
+start_db_sessions() {
   local init_sql="$work_dir/db-session-init.sql" init_output="$work_dir/db-session-init.out"
   local grant_check_sql="$work_dir/grant-boundary-check.sql"
   local grant_check_output="$work_dir/grant-boundary-check.out"
@@ -556,52 +808,116 @@ SQL
      && "$target_backend_pid" =~ ^[0-9]+$ ]] \
     || { echo "restore target database name or backend identity is not safely manageable" >&2; return 1; }
 
+  # Policy application and dump replacement deliberately run on disposable
+  # workers.  The maintenance session above remains alive solely to own the
+  # advisory lock and read the transactionally committed outcome marker.
+  coproc PRIMARY_RESTORE_WORKER {
+    "${pg_client[@]}" psql --no-psqlrc --quiet --tuples-only --no-align --set ON_ERROR_STOP=1
+  }
+  primary_worker_out="${PRIMARY_RESTORE_WORKER[0]}"
+  primary_worker_in="${PRIMARY_RESTORE_WORKER[1]}"
+  primary_worker_pid="$PRIMARY_RESTORE_WORKER_PID"
+  primary_worker_started=true
+  initialize_restore_worker primary "$primary_worker_in" "$primary_worker_out" \
+    "$work_dir/primary-worker-init.out" primary_backend_pid || return 1
+
+  [[ "$target_backend_pid" != "$primary_backend_pid" ]] \
+    || { echo "restore database sessions do not have distinct backend identities" >&2; return 1; }
+
+  if ! read_restore_outcome || [[ "$last_restore_outcome" != __ABSENT__ ]]; then
+    echo "restore refused: the target database has an unresolved prior restore outcome" >&2
+    return 1
+  fi
+
   # Fail before taking the hard connection fence if the URL is not the
   # non-superuser migrator owner or the workload-role boundary has drifted.
-  write_grant_policy_variables "$grant_check_sql" || return 1
+  write_grant_policy_variables "$grant_check_sql" exact || return 1
   cat "$grant_boundary_sql" >>"$grant_check_sql"
-  db_session_command "$grant_check_sql" "$grant_check_output" || {
+  primary_worker_command "$grant_check_sql" "$grant_check_output" || {
     echo "restore requires the verified Northstar migrator/role boundary" >&2
     return 1
   }
+  preflight_current_database_recoverability
+}
+
+start_compensation_worker() {
+  coproc COMPENSATION_RESTORE_WORKER {
+    "${pg_client[@]}" psql --no-psqlrc --quiet --tuples-only --no-align --set ON_ERROR_STOP=1
+  }
+  compensation_worker_out="${COMPENSATION_RESTORE_WORKER[0]}"
+  compensation_worker_in="${COMPENSATION_RESTORE_WORKER[1]}"
+  compensation_worker_pid="$COMPENSATION_RESTORE_WORKER_PID"
+  compensation_worker_started=true
+  initialize_restore_worker compensation "$compensation_worker_in" "$compensation_worker_out" \
+    "$work_dir/compensation-worker-init.out" compensation_backend_pid || return 1
+  [[ "$target_backend_pid" != "$compensation_backend_pid" \
+     && "$primary_backend_pid" != "$compensation_backend_pid" ]] \
+    || { echo "restore database sessions do not have distinct backend identities" >&2; return 1; }
 }
 
 set_database_connections() {
   local enabled="$1"
   local sql_file="$work_dir/database-connections-$enabled.sql"
+  local output_file="$work_dir/database-connections-$enabled.out"
   [[ "$enabled" == true || "$enabled" == false ]] || return 2
-  printf "SELECT format('ALTER DATABASE %%I WITH ALLOW_CONNECTIONS %s', :'target_db') \\\\gexec\n" \
-    "$enabled" >"$sql_file"
-  "${pg_client[@]}" psql --dbname=postgres --no-psqlrc --quiet --set ON_ERROR_STOP=1 \
-    --set target_db="$target_database" --file="$sql_file"
+  {
+    printf '\\set target_db %s\n' "$target_database"
+    printf '%s\n' 'SET synchronous_commit TO on;'
+    printf "SELECT format('ALTER DATABASE %%I WITH ALLOW_CONNECTIONS %s', :'target_db') \\\\gexec\n" \
+      "$enabled"
+  } >"$sql_file"
+  db_session_command "$sql_file" "$output_file"
 }
 
 activate_database_fence() {
-  local sql_file="$work_dir/database-fence.sql" remaining_sessions
+  local sql_file="$work_dir/database-fence.sql" session_counts remaining_sessions allowed_sessions
   fence_attempted=true
   set_database_connections false
-  cat >"$sql_file" <<'SQL'
-SELECT COUNT(*)
+  cat >"$sql_file" <<SQL
+\\set target_db $target_database
+\\set control_pid $target_backend_pid
+\\set primary_pid $primary_backend_pid
+\\set compensation_pid $compensation_backend_pid
+SELECT COUNT(*) FILTER (
+         WHERE pid NOT IN (:control_pid, :primary_pid, :compensation_pid)
+       )::text || ':' ||
+       COUNT(*) FILTER (
+         WHERE pid IN (:control_pid, :primary_pid, :compensation_pid)
+       )::text
 FROM pg_stat_activity
-WHERE datname = :'target_db' AND pid <> :restore_pid;
+WHERE datname = :'target_db';
 SQL
-  remaining_sessions="$("${pg_client[@]}" psql --dbname=postgres --no-psqlrc --quiet \
-    --tuples-only --no-align --set ON_ERROR_STOP=1 --set target_db="$target_database" \
-    --set restore_pid="$target_backend_pid" --file="$sql_file")"
-  remaining_sessions="${remaining_sessions//[[:space:]]/}"
-  [[ "$remaining_sessions" =~ ^[0-9]+$ ]] \
-    || { echo "failed to count existing target database sessions" >&2; return 1; }
-  if (( remaining_sessions != 0 )); then
+  db_session_command "$sql_file" "$work_dir/database-fence.out" || return 1
+  session_counts="$(sed -n '/^[0-9][0-9]*:[0-9][0-9]*$/p' "$work_dir/database-fence.out")"
+  [[ "$session_counts" =~ ^[0-9]+:[0-9]+$ ]] \
+    || { echo "failed to identify the exact restore database sessions" >&2; return 1; }
+  IFS=: read -r remaining_sessions allowed_sessions <<<"$session_counts"
+  if (( remaining_sessions != 0 || allowed_sessions != 3 )); then
     echo "restore refused: $remaining_sessions other target database session(s) remain after the connection fence; stop Northstar and all database clients, then retry" >&2
     return 1
   fi
   database_fence_active=true
-  journal_append fence-active "$target_database" "$target_backend_pid"
+  journal_append fence-active "$target_database" "$target_backend_pid" \
+    "$primary_backend_pid" "$compensation_backend_pid"
 }
 
 release_database_fence() {
   if [[ "$fence_attempted" != true ]]; then
     return 0
+  fi
+  if [[ "$restore_transaction_active" == true ]]; then
+    database_outcome_unknown=true
+    echo "refusing to release the database fence while a replacement transaction is unsettled" >&2
+    return 1
+  fi
+  if [[ "$database_outcome_unknown" == true ]]; then
+    echo "refusing to release the database fence while the restore outcome is unknown" >&2
+    return 1
+  fi
+  if [[ "$restore_committed" == true && "$restore_outcome_cleared" != true ]]; then
+    database_outcome_unknown=true
+    echo "refusing to release the database fence before retiring the committed restore marker" >&2
+    return 1
   fi
   set_database_connections true
   database_fence_active=false
@@ -609,16 +925,112 @@ release_database_fence() {
 }
 
 replace_database_from_dump() {
-  local replacement_dump="$1" label="$2"
+  local replacement_dump="$1" label="$2" grant_phase="$3"
+  local worker_in="$4" worker_out="$5" expected_marker="$6" prior_marker="$7"
   local output_file="$work_dir/replace-$label.out"
   local grant_variables="$work_dir/replace-$label-grant-variables.sql"
-  local token="__NORTHSTAR_RESTORE_${label}_${restore_id}_$(python3 -c 'import secrets; print(secrets.token_hex(8))')__"
-  [[ -e "/proc/$$/fd/$db_session_in" && -e "/proc/$$/fd/$db_session_out" ]] || return 1
-  write_grant_policy_variables "$grant_variables" || return 1
-  : >"$output_file"
+  local nonce ready_token token barrier_key worker_kind
+  local header_ok=true ready_ok=false stream_ok=true token_ok=false
+  nonce="$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
+  ready_token="__NORTHSTAR_RESTORE_READY_${label}_${restore_id}_${nonce}__"
+  token="__NORTHSTAR_RESTORE_DONE_${label}_${restore_id}_${nonce}__"
+  replacement_committed=false
+  [[ -e "/proc/$$/fd/$worker_in" && -e "/proc/$$/fd/$worker_out" ]] || return 1
+  [[ "$expected_marker" =~ ^northstar-[0-9a-f]{32}-(incoming|rollback)$ \
+     && "$prior_marker" != "$expected_marker" ]] || return 2
+  [[ "$prior_marker" == __ABSENT__ \
+     || "$prior_marker" =~ ^northstar-[0-9a-f]{32}-(incoming|rollback)$ ]] || return 2
+  case "$expected_marker" in
+    *-incoming)
+      barrier_key="northstar-restore-$restore_id-incoming"
+      worker_kind=primary
+      [[ "$worker_in" == "$primary_worker_in" && "$worker_out" == "$primary_worker_out" ]] \
+        || return 2
+      ;;
+    *-rollback)
+      barrier_key="northstar-restore-$restore_id-rollback"
+      worker_kind=compensation
+      [[ "$worker_in" == "$compensation_worker_in" \
+         && "$worker_out" == "$compensation_worker_out" ]] || return 2
+      ;;
+    *) return 2 ;;
+  esac
+  write_grant_policy_variables "$grant_variables" "$grant_phase" || return 1
   {
-    cat "$grant_variables"
-    printf '%s\n' 'BEGIN;'
+    printf '\\set restore_outcome_marker %s\n' "$expected_marker" &&
+    printf '\\set prior_restore_outcome %s\n' "$prior_marker" &&
+    printf '\\set restore_barrier_key %s\n' "$barrier_key"
+  } >>"$grant_variables"
+  : >"$output_file"
+
+  if [[ "$restore_transaction_active" == true ]]; then
+    database_outcome_unknown=true
+    echo "refusing to overlap database replacement transactions" >&2
+    return 2
+  fi
+  restore_transaction_active=true
+  active_restore_barrier_key="$barrier_key"
+  active_restore_barrier_label="$label"
+  active_restore_worker="$worker_kind"
+
+  # Phase one establishes a transaction boundary before any destructive SQL is
+  # sent.  READY proves that the worker owns the unique transaction-level lock
+  # and that the required prior outcome still matches the catalog.
+  {
+    cat "$grant_variables" &&
+    printf '%s\n' 'BEGIN;' &&
+    printf "%s\n" \
+      "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(:'restore_barrier_key', 0));" &&
+    cat <<'SQL'
+SELECT (
+         CASE count(*)
+           WHEN 0 THEN '__ABSENT__'
+           WHEN 1 THEN max(pg_catalog.substr(setting,
+                              pg_catalog.length('northstar.restore_commit=') + 1))
+           ELSE '__INVALID__'
+         END
+       ) = :'prior_restore_outcome' AS northstar_prior_restore_outcome_matches
+  FROM pg_catalog.pg_db_role_setting AS role_setting
+ CROSS JOIN LATERAL pg_catalog.unnest(role_setting.setconfig) AS option(setting)
+ WHERE role_setting.setdatabase = (
+         SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database()
+       )
+   AND role_setting.setrole = 0
+   AND setting LIKE 'northstar.restore_commit=%' \gset
+\if :northstar_prior_restore_outcome_matches
+\else
+  \echo 'restore outcome changed before the replacement transaction'
+  \quit 44
+\endif
+SQL
+    printf '\\echo %s\n' "$ready_token"
+  } >&"$worker_in" || header_ok=false
+  if [[ "$header_ok" == true ]] \
+    && psql_session_wait_token "$worker_out" "$ready_token" "$output_file"; then
+    ready_ok=true
+  fi
+  if [[ "$ready_ok" != true ]]; then
+    {
+      printf '%s\n' 'ROLLBACK;' &&
+      printf '\\echo %s\n' "$token"
+    } >&"$worker_in" 2>/dev/null || true
+    psql_session_wait_token "$worker_out" "$token" "$output_file" 2>/dev/null || true
+    settle_active_restore_transaction || return 2
+    if ! read_restore_outcome; then
+      return 2
+    fi
+    if [[ "$last_restore_outcome" == "$prior_marker" ]]; then
+      echo "$label database replacement failed before its destructive phase" >&2
+      return 1
+    fi
+    database_outcome_unknown=true
+    echo "$label database replacement failed READY with an unknown outcome" >&2
+    return 2
+  fi
+
+  # Phase two is unreachable until READY.  The advisory transaction lock stays
+  # held through schema replacement, ACL convergence, marker write and COMMIT.
+  {
     cat <<'SQL'
 DO $northstar_restore$
 DECLARE user_schema record;
@@ -635,31 +1047,58 @@ BEGIN
 END
 $northstar_restore$;
 SQL
-  } >&"$db_session_in" || return 1
-  if ! "${pg_client[@]}" pg_restore "$replacement_dump" \
-      --clean --if-exists --no-owner --no-acl --file=- >&"$db_session_in"; then
+  } >&"$worker_in" || stream_ok=false
+  if [[ "$stream_ok" == true ]] \
+    && ! "${pg_client[@]}" pg_restore "$replacement_dump" \
+      --clean --if-exists --no-owner --no-acl --file=- >&"$worker_in"; then
+    stream_ok=false
+  fi
+  if [[ "$stream_ok" == true ]] \
+    && { ! cat "$migration_ledger_manifest_sql" >&"$worker_in" \
+      || ! cat "$capability_manifest_sql" >&"$worker_in" \
+      || ! cat "$grant_apply_sql" >&"$worker_in"; }; then
+    stream_ok=false
+  fi
+  if [[ "$stream_ok" == true ]]; then
+    {
+      printf '%s\n' 'SET LOCAL synchronous_commit TO on;' &&
+      printf "SELECT format('ALTER DATABASE %%I SET northstar.restore_commit TO %%L', :'database_name', :'restore_outcome_marker') \\gexec\n" &&
+      printf '%s\n' 'COMMIT;' &&
+      printf '\\echo %s\n' "$token"
+    } >&"$worker_in" || stream_ok=false
+  fi
+  if [[ "$stream_ok" != true ]]; then
     {
       printf '%s\n' 'ROLLBACK;'
       printf '\\echo %s\n' "$token"
-    } >&"$db_session_in" 2>/dev/null || true
-    db_session_wait_token "$token" "$output_file" 2>/dev/null || true
+    } >&"$worker_in" 2>/dev/null || true
+  fi
+  if psql_session_wait_token "$worker_out" "$token" "$output_file"; then
+    token_ok=true
+  fi
+
+  # EOF does not prove that PostgreSQL has stopped processing already-buffered
+  # COMMIT input.  Acquiring the worker's transaction lock on the control
+  # session is the deterministic end-of-transaction barrier; only after that
+  # may the catalog marker be interpreted.
+  settle_active_restore_transaction || return 2
+  if ! read_restore_outcome; then
+    return 2
+  fi
+  if [[ "$last_restore_outcome" == "$expected_marker" ]]; then
+    replacement_committed=true
+    [[ "$token_ok" == true ]] || {
+      echo "$label database replacement committed, but its worker terminated before acknowledgement" >&2
+      return 1
+    }
+    return 0
+  fi
+  if [[ "$last_restore_outcome" == "$prior_marker" ]]; then
     return 1
   fi
-  if ! cat "$migration_ledger_manifest_sql" >&"$db_session_in" \
-    || ! cat "$capability_manifest_sql" >&"$db_session_in" \
-    || ! cat "$grant_apply_sql" >&"$db_session_in"; then
-    {
-      printf '%s\n' 'ROLLBACK;'
-      printf '\\echo %s\n' "$token"
-    } >&"$db_session_in" 2>/dev/null || true
-    db_session_wait_token "$token" "$output_file" 2>/dev/null || true
-    return 1
-  fi
-  {
-    printf '%s\n' 'COMMIT;'
-    printf '\\echo %s\n' "$token"
-  } >&"$db_session_in" || return 1
-  db_session_wait_token "$token" "$output_file"
+  database_outcome_unknown=true
+  echo "$label database replacement ended with an unknown transactional outcome" >&2
+  return 2
 }
 
 rollback_uploads_from_journal() {
@@ -718,13 +1157,33 @@ rollback_uploads_from_journal() {
 }
 
 compensate_restore() {
-  local upload_ok=true database_ok=true journal_ok=true
+  local upload_ok=true database_ok=true journal_ok=true replacement_ok=true
   echo "restore did not commit; compensating exact journaled changes while PostgreSQL remains fenced" >&2
-  if [[ -n "$cutover_dir" && -d "$cutover_dir" ]]; then
-    rollback_uploads_from_journal || upload_ok=false
+  if [[ "$restore_transaction_active" == true ]]; then
+    database_outcome_unknown=true
+    echo "cannot compensate while a replacement transaction is unsettled" >&2
+    return 1
   fi
-  if [[ "$database_switch_started" == true ]]; then
-    replace_database_from_dump "$rollback_dump" rollback || database_ok=false
+  if [[ "$database_outcome_unknown" == true ]]; then
+    echo "restore outcome is unknown; preserving both planes and the hard database fence" >&2
+    return 1
+  fi
+  if [[ "$database_switched" == true ]]; then
+    replacement_committed=false
+    if ! replace_database_from_dump "$rollback_dump" rollback auto \
+      "$compensation_worker_in" "$compensation_worker_out" \
+      "$rollback_outcome_marker" "$incoming_outcome_marker"; then
+      replacement_ok=false
+    fi
+    if [[ "$replacement_committed" == true ]]; then
+      clear_restore_outcome "$rollback_outcome_marker" || database_ok=false
+    else
+      database_ok=false
+    fi
+    [[ "$replacement_ok" == true || "$replacement_committed" == true ]] || database_ok=false
+  fi
+  if [[ "$database_ok" == true && -n "$cutover_dir" && -d "$cutover_dir" ]]; then
+    rollback_uploads_from_journal || upload_ok=false
   fi
   if [[ "$upload_ok" == true && "$database_ok" == true ]]; then
     journal_append compensated || journal_ok=false
@@ -744,19 +1203,64 @@ finish_restore() {
   trap '' INT TERM
   set +e
 
-  if [[ "$compensation_required" == true && "$restore_committed" != true ]]; then
+  if [[ "$restore_committed" == true ]]; then
+    # The replay floor has made the new data plane authoritative, so cleanup
+    # must never compensate it.  It must still prove that no worker transaction
+    # is active and retire this restore's exact marker before reopening the
+    # database.  An interrupt during marker clearing can observe either the
+    # expected marker or ABSENT only after clear was durably attempted.
+    if ! settle_active_restore_transaction; then
+      database_outcome_unknown=true
+    elif [[ "$database_outcome_unknown" != true ]] && read_restore_outcome; then
+      case "$last_restore_outcome" in
+        "$incoming_outcome_marker")
+          restore_outcome_clear_started=true
+          if clear_restore_outcome "$incoming_outcome_marker"; then
+            restore_outcome_cleared=true
+          else
+            database_outcome_unknown=true
+          fi
+          ;;
+        __ABSENT__)
+          if [[ "$restore_outcome_clear_started" == true ]]; then
+            restore_outcome_cleared=true
+          else
+            database_outcome_unknown=true
+            echo "committed restore outcome disappeared before exact clearing" >&2
+          fi
+          ;;
+        *) database_outcome_unknown=true ;;
+      esac
+    else
+      database_outcome_unknown=true
+    fi
+  elif [[ "$compensation_required" == true ]]; then
+    if ! settle_active_restore_transaction; then
+      database_outcome_unknown=true
+    elif read_restore_outcome; then
+      case "$last_restore_outcome" in
+        "$incoming_outcome_marker") database_switched=true ;;
+        __ABSENT__) database_switched=false ;;
+        *) database_outcome_unknown=true ;;
+      esac
+    else
+      database_outcome_unknown=true
+    fi
     compensate_restore || compensation_ok=false
   fi
 
   if [[ "$fence_attempted" == true ]]; then
-    if [[ "$compensation_ok" == true || "$restore_committed" == true ]]; then
+    if [[ "$database_outcome_unknown" == true ]]; then
+      fence_ok=false
+      echo "PostgreSQL remains fail-closed because the restore outcome is unknown." >&2
+    elif [[ "$compensation_ok" == true || "$restore_committed" == true ]]; then
       release_database_fence || fence_ok=false
     else
       fence_ok=false
       echo "PostgreSQL remains fail-closed because compensation was incomplete." >&2
     fi
   fi
-  close_db_session
+  close_db_sessions
 
   if [[ "$compensation_ok" == true && "$fence_ok" == true ]]; then
     if [[ "$restore_committed" != true ]]; then
@@ -867,7 +1371,7 @@ query_current_upload_rows() {
 SELECT id || E'\t' || size::text || E'\t' || COALESCE(encode(content_sha256,'hex'),'')
 FROM public.upload_slots WHERE uploaded AND expires_at > clock_timestamp() ORDER BY id;
 SQL
-  db_session_command "$sql_file" "$output"
+  primary_worker_command "$sql_file" "$output"
 }
 
 validate_upload_rows_file() {
@@ -1004,7 +1508,7 @@ rollback_dump="$rollback_set/database-before.dump"
 # restore. A hard database connection fence is installed immediately before
 # replacement; the advisory fence alone is not represented as an application
 # writer lock.
-start_db_session
+start_db_sessions
 "${pg_client[@]}" pg_dump --format=custom --compress=9 --no-owner --no-acl \
   --file="$rollback_dump"
 chmod 0600 "$rollback_dump"
@@ -1015,16 +1519,24 @@ journal_append rollback-ready "$rollback_set"
 
 # ALLOW_CONNECTIONS=false is the fail-closed boundary. The restore does not
 # terminate sessions: operators must stop the application and all clients first.
-# A crash leaves the target unavailable rather than exposing a half-switched
-# data plane.
+# The independent compensation worker is opened before the fence, so it remains
+# available even if the primary replacement worker terminates on a SQL error. A
+# crash leaves the target unavailable rather than exposing a half-switched data
+# plane.
+start_compensation_worker
 activate_database_fence
 verify_manifest_objects "$old_manifest" "$resolved_upload" "${cutover_dir##*/}" \
   || { echo "upload root changed while the database fence was being installed" >&2; exit 1; }
 compensation_required=true
 journal_append database-switch-intent
-database_switch_started=true
-replace_database_from_dump "$payload_dir/database.dump" restored
-database_switched=true
+replacement_committed=false
+if ! replace_database_from_dump "$payload_dir/database.dump" restored exact \
+  "$primary_worker_in" "$primary_worker_out" \
+  "$incoming_outcome_marker" __ABSENT__; then
+  database_switched="$replacement_committed"
+  false
+fi
+database_switched="$replacement_committed"
 journal_append database-switch-done
 
 inject_at() {
@@ -1121,8 +1633,14 @@ journal_append committed || preserve_work=true
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# Clearing the catalog marker happens only after the replay floor made the new
+# data plane authoritative.  A failure here is operationally fatal and leaves
+# evidence for the next run, but must never roll back the committed restore.
+restore_outcome_clear_started=true
+clear_restore_outcome "$incoming_outcome_marker"
+restore_outcome_cleared=true
 release_database_fence
-close_db_session
+close_db_sessions
 if [[ "$preserve_work" != true ]]; then
   remove_cutover_dir
   remove_work_dir

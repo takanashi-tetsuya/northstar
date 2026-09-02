@@ -221,16 +221,90 @@ reconcile_repository_grants() {
     >/dev/null
 }
 
+# Durable database probes must use the same closed-world schema that production
+# grant reconciliation attests.  Test-only tables in public would either make
+# exact reconciliation fail or, worse, make a rollback dump impossible to
+# reconcile during compensation.  A user plus its vCard gives each fixture a
+# foreign-key-backed marker without introducing out-of-band schema objects.
+seed_canonical_probe() {
+  local database_name="$1" user_id="$2" username="$3" marker="$4"
+  [[ "$database_name" =~ ^northstar_[a-z0-9_]+$ ]] || return 2
+  [[ "$user_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
+    || return 2
+  [[ "$username" =~ ^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$ ]] || return 2
+  [[ -n "$marker" && ${#marker} -le 128 \
+     && "$marker" != *$'\n'* && "$marker" != *$'\r'* && "$marker" != *'|'* ]] \
+    || return 2
+  PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
+    PGDATABASE="$database_name" "$postgres_bin/psql" --no-psqlrc \
+    --single-transaction --set ON_ERROR_STOP=1 --set=probe_user_id="$user_id" \
+    --set=probe_username="$username" --set=probe_marker="$marker" \
+    >/dev/null <<'PSQL'
+INSERT INTO public.users(id,username,password_hash,display_name,is_admin)
+VALUES (:'probe_user_id'::pg_catalog.uuid,:'probe_username',
+        'fixture-password-hash',:'probe_marker',FALSE);
+INSERT INTO public.vcards(user_id,payload)
+VALUES (:'probe_user_id'::pg_catalog.uuid,:'probe_marker');
+PSQL
+}
+
+read_canonical_probe() {
+  local database_name="$1" user_id="$2"
+  [[ "$database_name" =~ ^northstar_[a-z0-9_]+$ ]] || return 2
+  [[ "$user_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
+    || return 2
+  PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
+    PGDATABASE="$database_name" "$postgres_bin/psql" --no-psqlrc \
+    --tuples-only --no-align --set ON_ERROR_STOP=1 \
+    --set=probe_user_id="$user_id" \
+    --command="SELECT users.display_name || '|' || vcards.payload
+                 FROM public.users
+                 JOIN public.vcards ON vcards.user_id=users.id
+                WHERE users.id=:'probe_user_id'::pg_catalog.uuid"
+}
+
+canonical_probe_presence() {
+  local database_name="$1" user_id="$2"
+  [[ "$database_name" =~ ^northstar_[a-z0-9_]+$ ]] || return 2
+  [[ "$user_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
+    || return 2
+  PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
+    PGDATABASE="$database_name" "$postgres_bin/psql" --no-psqlrc \
+    --tuples-only --no-align --set ON_ERROR_STOP=1 \
+    --set=probe_user_id="$user_id" \
+    --command="SELECT (SELECT count(*) FROM public.users
+                         WHERE id=:'probe_user_id'::pg_catalog.uuid)::text
+                      || '|' ||
+                      (SELECT count(*) FROM public.vcards
+                         WHERE user_id=:'probe_user_id'::pg_catalog.uuid)::text"
+}
+
 apply_repository_migrations northstar_backup_source
+
+# The long-lived restore target represents an already deployed Northstar
+# database.  Keep its pre-cutover sentinel inside the canonical schema so the
+# restore's recoverability preflight proves the same lifecycle that operators
+# use, rather than succeeding or failing on a test-only public table.
+guard_probe_user_id="70000000-0000-4000-8000-000000000001"
+guard_probe_marker="unchanged-before-cutover"
+apply_repository_migrations northstar_restore_target
+seed_canonical_probe northstar_restore_target "$guard_probe_user_id" \
+  restore-guard "$guard_probe_marker"
+reconcile_repository_grants northstar_restore_target
 
 encoded_socket="${socket_dir//\//%2F}"
 source_database="postgresql://$migrator_role:$migrator_password@/northstar_backup_source?host=$encoded_socket"
 target_database="postgresql://$migrator_role:$migrator_password@/northstar_restore_target?host=$encoded_socket"
 upload_id="01234567-89ab-cdef-0123-456789abcdef"
 upload_body="northstar immutable upload restore probe"
+source_probe_user_id="11111111-1111-4111-8111-111111111111"
+source_probe_marker="database-restored"
 printf '%s' "$upload_body" > "$source_uploads/$upload_id"
 upload_size="$(stat -c '%s' "$source_uploads/$upload_id")"
 upload_digest="$(sha256sum "$source_uploads/$upload_id" | awk '{print $1}')"
+
+seed_canonical_probe northstar_backup_source "$source_probe_user_id" \
+  backup-fixture "$source_probe_marker"
 
 # Migrations intentionally leave deployment-wide upload capacity unbound.
 # Production startup binds it before accepting slots; this offline fixture
@@ -239,10 +313,7 @@ PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
   PGDATABASE=northstar_backup_source "$postgres_bin/psql" \
   --no-psqlrc --set ON_ERROR_STOP=1 \
   --command='SELECT policy_generation,recovery_draining FROM northstar_upload_bind_capacity_policy(100000,1000000,1099511627776);' \
-  --command='CREATE TABLE backup_probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL);' \
-  --command="INSERT INTO backup_probe VALUES (1, 'database-restored');" \
-  --command="INSERT INTO users(id,username,password_hash,display_name,is_admin) VALUES ('11111111-1111-4111-8111-111111111111','backup-fixture','fixture-password-hash','Backup Fixture',FALSE);" \
-  --command="INSERT INTO upload_slots(id,user_id,filename,content_type,size,token_hash,expires_at,uploaded,uploading,content_sha256,completed_at,put_expires_at,storage_backend,storage_state,storage_object_key,storage_sha256,storage_size) VALUES ('$upload_id','11111111-1111-4111-8111-111111111111','fixture.bin','application/octet-stream',$upload_size,decode(repeat('22',32),'hex'),clock_timestamp()+INTERVAL '1 day',TRUE,FALSE,decode('$upload_digest','hex'),clock_timestamp(),clock_timestamp()+INTERVAL '15 minutes','local','committed','$upload_id',decode('$upload_digest','hex'),$upload_size);" >/dev/null
+  --command="INSERT INTO upload_slots(id,user_id,filename,content_type,size,token_hash,expires_at,uploaded,uploading,content_sha256,completed_at,put_expires_at,storage_backend,storage_state,storage_object_key,storage_sha256,storage_size) VALUES ('$upload_id','$source_probe_user_id','fixture.bin','application/octet-stream',$upload_size,decode(repeat('22',32),'hex'),clock_timestamp()+INTERVAL '1 day',TRUE,FALSE,decode('$upload_digest','hex'),clock_timestamp(),clock_timestamp()+INTERVAL '15 minutes','local','committed','$upload_id',decode('$upload_digest','hex'),$upload_size);" >/dev/null
 
 reconcile_repository_grants northstar_backup_source
 
@@ -321,15 +392,16 @@ production_acl_ok="$(PGPASSWORD="$migrator_password" PGHOST="$socket_dir" \
   "$postgres_bin/psql" --no-psqlrc --tuples-only --no-align --set ON_ERROR_STOP=1 \
   --command="SELECT pg_get_userbyid(nspowner) = '$migrator_role'
                     AND NOT has_schema_privilege('northstar_fixture_outsider', 'public', 'USAGE')
-                    AND has_table_privilege('$runtime_role', 'public.backup_probe', 'SELECT')
-                    AND has_table_privilege('$backup_role', 'public.backup_probe', 'SELECT')
+                    AND has_table_privilege('$runtime_role', 'public.vcards', 'SELECT')
+                    AND has_table_privilege('$backup_role', 'public.vcards', 'SELECT')
                FROM pg_namespace WHERE nspname = 'public'")"
 [[ "$production_acl_ok" == t && -f "$production_uploads/$upload_id" ]] \
   || { echo "production restore did not converge owner/ACL/upload state" >&2; exit 1; }
 if PGPASSWORD="$backup_password" PGHOST="$socket_dir" PGUSER="$backup_role" \
    PGDATABASE=northstar_production_restore_target "$postgres_bin/psql" \
    --no-psqlrc --set ON_ERROR_STOP=1 \
-   --command="INSERT INTO backup_probe VALUES (2, 'forbidden')" >/dev/null 2>&1; then
+   --command="UPDATE public.vcards SET payload='forbidden'
+               WHERE user_id='$source_probe_user_id'::pg_catalog.uuid" >/dev/null 2>&1; then
   echo "production restore granted write access to the backup identity" >&2
   exit 1
 fi
@@ -385,12 +457,9 @@ if bash "$project_dir/scripts/verify-backup.sh" "$malicious_backup" >/dev/null 2
   exit 1
 fi
 
-# Restore path validation must fail before either data plane is touched.
-PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_restore_target "$postgres_bin/psql" \
-  --no-psqlrc --set ON_ERROR_STOP=1 \
-  --command='CREATE TABLE restore_guard_probe (value TEXT NOT NULL);' \
-  --command="INSERT INTO restore_guard_probe VALUES ('unchanged-before-cutover');" >/dev/null
+# Restore path validation must fail before either data plane is touched.  The
+# canonical guard row was installed before the fault matrix and remains under
+# the exact production grant policy throughout these rejection paths.
 
 # Backup and restore must contend on the same advisory key in their target
 # database. PostgreSQL advisory locks are database-scoped, so exercise each job
@@ -589,10 +658,8 @@ if DATABASE_URL="$target_database" bash "$project_dir/scripts/restore-backup.sh"
   echo "restore accepted a rollback marker with trailing data" >&2
   exit 1
 fi
-guard_value="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_restore_target "$postgres_bin/psql" \
-  --no-psqlrc --tuples-only --no-align --command='SELECT value FROM restore_guard_probe')"
-[[ "$guard_value" == "unchanged-before-cutover" ]] \
+guard_value="$(read_canonical_probe northstar_restore_target "$guard_probe_user_id")"
+[[ "$guard_value" == "$guard_probe_marker|$guard_probe_marker" ]] \
   || { echo "path rejection changed the restore target database" >&2; exit 1; }
 
 stale_upload_id="11111111-1111-4111-8111-111111111111"
@@ -652,11 +719,8 @@ DATABASE_URL="$target_database" bash "$project_dir/scripts/restore-backup.sh" \
   --upload-dir "$restore_uploads" \
   --rollback-dir "$restore_rollback" >/dev/null
 
-restored_value="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_restore_target "$postgres_bin/psql" \
-  --no-psqlrc --tuples-only --no-align \
-  --command='SELECT value FROM backup_probe WHERE id = 1')"
-[[ "$restored_value" == "database-restored" ]] \
+restored_value="$(read_canonical_probe northstar_restore_target "$source_probe_user_id")"
+[[ "$restored_value" == "$source_probe_marker|$source_probe_marker" ]] \
   || { echo "restored database probe did not match" >&2; exit 1; }
 [[ "$(<"$restore_uploads/$upload_id")" == "$upload_body" ]] \
   || { echo "restored upload content did not match" >&2; exit 1; }
@@ -687,11 +751,12 @@ tar --create --gzip --file="$tampered_backup/uploads.tar.gz" \
 tampered_sentinel_id="22222222-2222-4222-8222-222222222222"
 printf '%s' 'tampered restore target must remain' > "$tampered_restore/$tampered_sentinel_id"
 create_restore_database northstar_tampered_target
-PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_tampered_target "$postgres_bin/psql" \
-  --no-psqlrc --set ON_ERROR_STOP=1 \
-  --command='CREATE TABLE untouched_probe (value TEXT NOT NULL);' \
-  --command="INSERT INTO untouched_probe VALUES ('target-unchanged');" >/dev/null
+apply_repository_migrations northstar_tampered_target
+tampered_probe_user_id="60000000-0000-4000-8000-000000000005"
+tampered_probe_marker="target-unchanged"
+seed_canonical_probe northstar_tampered_target "$tampered_probe_user_id" \
+  tampered-probe "$tampered_probe_marker"
+reconcile_repository_grants northstar_tampered_target
 tampered_database="postgresql://$migrator_role:$migrator_password@/northstar_tampered_target?host=$encoded_socket"
 if DATABASE_URL="$tampered_database" bash "$project_dir/scripts/restore-backup.sh" \
   "$tampered_backup" --confirm-restore NORTHSTAR-RESTORE \
@@ -699,11 +764,9 @@ if DATABASE_URL="$tampered_database" bash "$project_dir/scripts/restore-backup.s
   echo "restore accepted a same-size upload with the wrong database digest" >&2
   exit 1
 fi
-untouched_value="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_tampered_target "$postgres_bin/psql" \
-  --no-psqlrc --tuples-only --no-align \
-  --command='SELECT value FROM untouched_probe')"
-[[ "$untouched_value" == "target-unchanged" ]] \
+untouched_value="$(read_canonical_probe northstar_tampered_target \
+  "$tampered_probe_user_id")"
+[[ "$untouched_value" == "$tampered_probe_marker|$tampered_probe_marker" ]] \
   || { echo "failed restore changed the target database before digest validation" >&2; exit 1; }
 [[ "$(<"$tampered_restore/$tampered_sentinel_id")" == "tampered restore target must remain" ]] \
   || { echo "failed restore changed uploads before digest validation" >&2; exit 1; }
@@ -720,11 +783,10 @@ rollback_sentinel_id="33333333-3333-4333-8333-333333333333"
 printf '%s' 'rollback upload sentinel' > "$rollback_restore/$rollback_sentinel_id"
 create_restore_database northstar_rollback_target
 apply_repository_migrations northstar_rollback_target
-PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_rollback_target "$postgres_bin/psql" \
-  --no-psqlrc --set ON_ERROR_STOP=1 \
-  --command='CREATE TABLE rollback_probe (value TEXT NOT NULL);' \
-  --command="INSERT INTO rollback_probe VALUES ('database-rolled-back');" >/dev/null
+rollback_probe_user_id="60000000-0000-4000-8000-000000000001"
+rollback_probe_marker="database-rolled-back"
+seed_canonical_probe northstar_rollback_target "$rollback_probe_user_id" \
+  rollback-probe "$rollback_probe_marker"
 reconcile_repository_grants northstar_rollback_target
 rollback_database_url="postgresql://$migrator_role:$migrator_password@/northstar_rollback_target?host=$encoded_socket"
 rollback_fault_log="$work_dir/rollback-fault.log"
@@ -735,22 +797,18 @@ if NORTHSTAR_RESTORE_TEST_FAIL_AFTER_UPLOAD_MOVES=1 DATABASE_URL="$rollback_data
   echo "restore fault injection unexpectedly succeeded" >&2
   exit 1
 fi
-if ! rollback_value="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_rollback_target "$postgres_bin/psql" \
-  --no-psqlrc --tuples-only --no-align \
-  --command='SELECT value FROM rollback_probe')"; then
+if ! rollback_value="$(read_canonical_probe northstar_rollback_target \
+  "$rollback_probe_user_id")"; then
   echo 'rollback fault injection left the target database unavailable' >&2
   tail -n 160 "$rollback_fault_log" >&2 || true
   exit 1
 fi
-[[ "$rollback_value" == "database-rolled-back" ]] \
+[[ "$rollback_value" == "$rollback_probe_marker|$rollback_probe_marker" ]] \
   || { echo "database compensation did not restore the pre-cutover data" >&2; exit 1; }
-remaining_new_tables="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_rollback_target "$postgres_bin/psql" \
-  --no-psqlrc --tuples-only --no-align \
-  --command="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='backup_probe'")"
-[[ "$remaining_new_tables" == "0" ]] \
-  || { echo "database compensation retained objects from the rejected backup" >&2; exit 1; }
+remaining_source_probe="$(canonical_probe_presence northstar_rollback_target \
+  "$source_probe_user_id")"
+[[ "$remaining_source_probe" == "0|0" ]] \
+  || { echo "database compensation retained rows from the rejected backup" >&2; exit 1; }
 rollback_upload_rows="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
   PGDATABASE=northstar_rollback_target "$postgres_bin/psql" \
   --no-psqlrc --tuples-only --no-align \
@@ -800,11 +858,10 @@ printf '%s' "$same_uuid_old_body" >"$same_uuid_restore/$upload_id"
 chmod 0600 "$same_uuid_restore/$upload_id"
 create_restore_database northstar_same_uuid_target
 apply_repository_migrations northstar_same_uuid_target
-PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_same_uuid_target "$postgres_bin/psql" \
-  --no-psqlrc --set ON_ERROR_STOP=1 \
-  --command='CREATE TABLE same_uuid_probe (value TEXT NOT NULL);' \
-  --command="INSERT INTO same_uuid_probe VALUES ('same-uuid-database-restored');" >/dev/null
+same_uuid_probe_user_id="60000000-0000-4000-8000-000000000002"
+same_uuid_probe_marker="same-uuid-database-restored"
+seed_canonical_probe northstar_same_uuid_target "$same_uuid_probe_user_id" \
+  same-uuid-probe "$same_uuid_probe_marker"
 reconcile_repository_grants northstar_same_uuid_target
 same_uuid_database="postgresql://$migrator_role:$migrator_password@/northstar_same_uuid_target?host=$encoded_socket"
 if NORTHSTAR_RESTORE_TEST_FAIL_POINT=after-first-old \
@@ -817,10 +874,9 @@ if NORTHSTAR_RESTORE_TEST_FAIL_POINT=after-first-old \
 fi
 [[ "$(<"$same_uuid_restore/$upload_id")" == "$same_uuid_old_body" ]] \
   || { echo "exact journal confused old and new objects with the same UUID" >&2; exit 1; }
-same_uuid_value="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_same_uuid_target "$postgres_bin/psql" \
-  --no-psqlrc --tuples-only --no-align --command='SELECT value FROM same_uuid_probe')"
-[[ "$same_uuid_value" == same-uuid-database-restored ]] \
+same_uuid_value="$(read_canonical_probe northstar_same_uuid_target \
+  "$same_uuid_probe_user_id")"
+[[ "$same_uuid_value" == "$same_uuid_probe_marker|$same_uuid_probe_marker" ]] \
   || { echo "same-UUID database compensation failed" >&2; exit 1; }
 [[ -z "$(find "$same_uuid_restore" -mindepth 1 -maxdepth 1 -name '.northstar-restore-cutover-*' -print -quit)" ]] \
   || { echo "successful same-UUID compensation left cutover state" >&2; exit 1; }
@@ -837,11 +893,11 @@ printf '%s' "$new_activation_old_body" >"$new_activation_restore/$upload_id"
 chmod 0600 "$new_activation_restore/$upload_id"
 create_restore_database northstar_new_activation_target
 apply_repository_migrations northstar_new_activation_target
-PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_new_activation_target "$postgres_bin/psql" \
-  --no-psqlrc --set ON_ERROR_STOP=1 \
-  --command='CREATE TABLE new_activation_probe (value TEXT NOT NULL);' \
-  --command="INSERT INTO new_activation_probe VALUES ('new-activation-database-restored');" >/dev/null
+new_activation_probe_user_id="60000000-0000-4000-8000-000000000003"
+new_activation_probe_marker="new-activation-database-restored"
+seed_canonical_probe northstar_new_activation_target \
+  "$new_activation_probe_user_id" new-activation-probe \
+  "$new_activation_probe_marker"
 reconcile_repository_grants northstar_new_activation_target
 new_activation_database="postgresql://$migrator_role:$migrator_password@/northstar_new_activation_target?host=$encoded_socket"
 if NORTHSTAR_RESTORE_TEST_FAIL_POINT=after-first-new \
@@ -854,10 +910,9 @@ if NORTHSTAR_RESTORE_TEST_FAIL_POINT=after-first-new \
 fi
 [[ "$(<"$new_activation_restore/$upload_id")" == "$new_activation_old_body" ]] \
   || { echo "first-new compensation did not restore the previous object" >&2; exit 1; }
-new_activation_value="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_new_activation_target "$postgres_bin/psql" \
-  --no-psqlrc --tuples-only --no-align --command='SELECT value FROM new_activation_probe')"
-[[ "$new_activation_value" == new-activation-database-restored ]] \
+new_activation_value="$(read_canonical_probe northstar_new_activation_target \
+  "$new_activation_probe_user_id")"
+[[ "$new_activation_value" == "$new_activation_probe_marker|$new_activation_probe_marker" ]] \
   || { echo "first-new database compensation failed" >&2; exit 1; }
 
 # SIGTERM uses the same unified EXIT compensation path. A clean retry on the
@@ -873,11 +928,10 @@ printf '%s' "$signal_old_body" >"$signal_restore/$upload_id"
 chmod 0600 "$signal_restore/$upload_id"
 create_restore_database northstar_signal_target
 apply_repository_migrations northstar_signal_target
-PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_signal_target "$postgres_bin/psql" \
-  --no-psqlrc --set ON_ERROR_STOP=1 \
-  --command='CREATE TABLE signal_probe (value TEXT NOT NULL);' \
-  --command="INSERT INTO signal_probe VALUES ('signal-database-restored');" >/dev/null
+signal_probe_user_id="60000000-0000-4000-8000-000000000004"
+signal_probe_marker="signal-database-restored"
+seed_canonical_probe northstar_signal_target "$signal_probe_user_id" \
+  signal-probe "$signal_probe_marker"
 reconcile_repository_grants northstar_signal_target
 signal_database="postgresql://$migrator_role:$migrator_password@/northstar_signal_target?host=$encoded_socket"
 signal_status=0
@@ -890,10 +944,9 @@ NORTHSTAR_RESTORE_TEST_SIGNAL_POINT=after-first-new DATABASE_URL="$signal_databa
   || { echo "SIGTERM restore returned unexpected status: $signal_status" >&2; exit 1; }
 [[ "$(<"$signal_restore/$upload_id")" == "$signal_old_body" ]] \
   || { echo "SIGTERM compensation did not restore the previous object" >&2; exit 1; }
-signal_value="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_signal_target "$postgres_bin/psql" \
-  --no-psqlrc --tuples-only --no-align --command='SELECT value FROM signal_probe')"
-[[ "$signal_value" == signal-database-restored ]] \
+signal_value="$(read_canonical_probe northstar_signal_target \
+  "$signal_probe_user_id")"
+[[ "$signal_value" == "$signal_probe_marker|$signal_probe_marker" ]] \
   || { echo "SIGTERM database compensation failed or remained fenced" >&2; exit 1; }
 RESTORE_PLAINTEXT_STAGING_DIR="$restore_scratch" DATABASE_URL="$signal_database" \
   bash "$project_dir/scripts/restore-backup.sh" "$backup_dir" \
@@ -901,10 +954,9 @@ RESTORE_PLAINTEXT_STAGING_DIR="$restore_scratch" DATABASE_URL="$signal_database"
   --rollback-dir "$signal_rollback" >/dev/null
 [[ "$(<"$signal_restore/$upload_id")" == "$upload_body" ]] \
   || { echo "retry after SIGTERM did not activate the backup object" >&2; exit 1; }
-signal_restored_value="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_signal_target "$postgres_bin/psql" \
-  --no-psqlrc --tuples-only --no-align --command='SELECT value FROM backup_probe WHERE id = 1')"
-[[ "$signal_restored_value" == database-restored ]] \
+signal_restored_value="$(read_canonical_probe northstar_signal_target \
+  "$source_probe_user_id")"
+[[ "$signal_restored_value" == "$source_probe_marker|$source_probe_marker" ]] \
   || { echo "retry after SIGTERM did not activate the backup database" >&2; exit 1; }
 [[ -z "$(find "$restore_scratch" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
   || { echo "successful compensation/retry left plaintext staging" >&2; exit 1; }
@@ -920,11 +972,12 @@ budget_sentinel_id="55555555-5555-4555-8555-555555555555"
 printf '%s' budget-sentinel >"$budget_restore/$budget_sentinel_id"
 chmod 0600 "$budget_restore/$budget_sentinel_id"
 create_restore_database northstar_budget_target
-PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_budget_target "$postgres_bin/psql" \
-  --no-psqlrc --set ON_ERROR_STOP=1 \
-  --command='CREATE TABLE budget_probe (value TEXT NOT NULL);' \
-  --command="INSERT INTO budget_probe VALUES ('budget-target-unchanged');" >/dev/null
+apply_repository_migrations northstar_budget_target
+budget_probe_user_id="60000000-0000-4000-8000-000000000006"
+budget_probe_marker="budget-target-unchanged"
+seed_canonical_probe northstar_budget_target "$budget_probe_user_id" \
+  budget-probe "$budget_probe_marker"
+reconcile_repository_grants northstar_budget_target
 budget_database="postgresql://$migrator_role:$migrator_password@/northstar_budget_target?host=$encoded_socket"
 if RESTORE_PLAINTEXT_STAGING_DIR="$restore_scratch" DATABASE_URL="$budget_database" \
    bash "$project_dir/scripts/restore-backup.sh" "$backup_dir" \
@@ -942,10 +995,9 @@ if RESTORE_PLAINTEXT_STAGING_DIR="$restore_scratch" DATABASE_URL="$budget_databa
   echo "restore accepted an archive above its aggregate expansion limit" >&2
   exit 1
 fi
-budget_value="$(PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
-  PGDATABASE=northstar_budget_target "$postgres_bin/psql" \
-  --no-psqlrc --tuples-only --no-align --command='SELECT value FROM budget_probe')"
-[[ "$budget_value" == budget-target-unchanged && -f "$budget_restore/$budget_sentinel_id" ]] \
+budget_value="$(read_canonical_probe northstar_budget_target "$budget_probe_user_id")"
+[[ "$budget_value" == "$budget_probe_marker|$budget_probe_marker" \
+   && -f "$budget_restore/$budget_sentinel_id" ]] \
   || { echo "archive budget refusal changed a target data plane" >&2; exit 1; }
 
 # Opening a trusted-floor lock must never truncate an existing safe lock file.

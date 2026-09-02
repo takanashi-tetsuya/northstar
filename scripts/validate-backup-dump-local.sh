@@ -7,14 +7,30 @@ umask 077
   exit 2
 }
 
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 database_dump="$1"
 scratch_root="$2"
 upload_rows_output="$3"
+grant_reconcile_sql="$project_dir/deploy/postgres-init/lib/reconcile-northstar-grants.sql"
+grant_boundary_sql="$project_dir/deploy/postgres-init/lib/verify-northstar-grant-boundary.sql"
+grant_apply_sql="$project_dir/deploy/postgres-init/lib/apply-northstar-grants.sql"
+capability_manifest_sql="$project_dir/deploy/postgres-init/lib/northstar-capability-manifest.sql"
+migration_ledger_manifest_sql="$project_dir/deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql"
+readonly validation_database='northstar_backup_verify'
+readonly migrator_role='northstar_migrator'
+readonly runtime_role='northstar_runtime'
+readonly command_role='northstar_commands'
+readonly backup_role='northstar_backup'
 
 [[ -f "$database_dump" && ! -L "$database_dump" ]] \
   || { echo "database dump must be a regular non-symlink file" >&2; exit 2; }
 [[ -d "$scratch_root" && ! -L "$scratch_root" ]] \
   || { echo "local validation scratch root must be a real directory" >&2; exit 2; }
+for grant_policy_file in "$grant_reconcile_sql" "$grant_boundary_sql" \
+  "$grant_apply_sql" "$capability_manifest_sql" "$migration_ledger_manifest_sql"; do
+  [[ -f "$grant_policy_file" && ! -L "$grant_policy_file" && -r "$grant_policy_file" ]] \
+    || { echo "database grant policy is missing or unsafe: $grant_policy_file" >&2; exit 1; }
+done
 
 for command in createdb initdb pg_ctl pg_restore psql; do
   command -v "$command" >/dev/null \
@@ -82,10 +98,43 @@ if ! pg_ctl -D "$data_dir" -l "$postgres_log" -w start >/dev/null; then
   exit 1
 fi
 server_started=true
-createdb -h "$socket_dir" -U postgres northstar_backup_verify
-pg_restore -h "$socket_dir" -U postgres -d northstar_backup_verify \
+
+# Validate the dump under the same privilege boundary used by production.
+# Restoring as the bootstrap superuser would prove only SQL syntax and could
+# hide foreign ownership, an invalid migration ledger, an unregistered table,
+# or a drifted SECURITY DEFINER capability until the real database cutover.
+psql -h "$socket_dir" -U postgres -d postgres --no-psqlrc --quiet \
+  --set ON_ERROR_STOP=1 <<'PSQL'
+CREATE ROLE northstar_migrator LOGIN NOINHERIT NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4
+  VALID UNTIL 'infinity';
+CREATE ROLE northstar_runtime LOGIN NOINHERIT NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 64
+  VALID UNTIL 'infinity';
+CREATE ROLE northstar_commands LOGIN NOINHERIT NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 8
+  VALID UNTIL 'infinity';
+CREATE ROLE northstar_backup LOGIN NOINHERIT NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2
+  VALID UNTIL 'infinity';
+PSQL
+createdb -h "$socket_dir" -U postgres --owner="$migrator_role" \
+  "$validation_database"
+psql -h "$socket_dir" -U postgres -d "$validation_database" --no-psqlrc \
+  --quiet --set ON_ERROR_STOP=1 \
+  --command="ALTER SCHEMA public OWNER TO $migrator_role"
+pg_restore -h "$socket_dir" -U "$migrator_role" -d "$validation_database" \
   --no-owner --no-acl --single-transaction "$database_dump"
-psql -h "$socket_dir" -U postgres -d northstar_backup_verify \
+psql -h "$socket_dir" -U "$migrator_role" -d "$validation_database" \
+  --no-psqlrc --quiet --set ON_ERROR_STOP=1 \
+  --set database_name="$validation_database" \
+  --set migrator_role="$migrator_role" \
+  --set runtime_role="$runtime_role" \
+  --set command_role="$command_role" \
+  --set backup_role="$backup_role" \
+  --set allow_bootstrap=false --set grant_phase=exact \
+  --file "$grant_reconcile_sql"
+psql -h "$socket_dir" -U "$migrator_role" -d "$validation_database" \
   --no-psqlrc --quiet --set ON_ERROR_STOP=1 --tuples-only --no-align \
   --field-separator=$'\t' \
   --command="SELECT id,size,COALESCE(encode(content_sha256,'hex'),'')

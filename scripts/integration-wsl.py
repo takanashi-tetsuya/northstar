@@ -1681,12 +1681,26 @@ class XmppWebSocket:
         masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
         self.sock.sendall(header + mask + masked)
 
-    def send_with_pow(self, text: str, token: str) -> None:
-        check(text.endswith("</message>"), "PoW can only be attached to a complete message")
+    def send_with_pow(self, text: str, token: str) -> dict[str, str]:
         proof = solve_pow(
             token,
             "message",
             pow_intent("XMPP", "/xmpp/message", text),
+        )
+        self.send_with_pow_proof(text, proof)
+        return proof
+
+    def send_with_pow_proof(self, text: str, proof: dict[str, str]) -> None:
+        check(text.endswith("</message>"), "PoW can only be attached to a complete message")
+        check(
+            set(proof) == {"challenge_id", "nonce"}
+            and re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                proof["challenge_id"],
+            )
+            is not None
+            and proof["nonce"].isdigit(),
+            "PoW proof must have one canonical UUID challenge and decimal nonce",
         )
         pow_xml = (
             "<pow xmlns='urn:northstar:pow:1' "

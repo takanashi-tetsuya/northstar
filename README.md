@@ -7,9 +7,10 @@ PostgreSQL. It provides XMPP over TCP, Direct TLS, WebSocket and optional BOSH,
 along with federation, group chat, OMEMO-compatible services, a browser client,
 REST administration, anti-abuse controls, logging and metrics.
 
-The current release is `0.2.0` and remains pre-1.0. It has not received an
-independent security audit. Review the [XEP support matrix](XEP_MATRIX.md) and
-[known limitations](docs/KNOWN_ISSUES.md) before public deployment.
+The current release candidate is `0.2.0` and remains pre-1.0. It has not yet
+been published or received an independent security audit. Review the
+[XEP support matrix](XEP_MATRIX.md), [release checklist](docs/RELEASE_CHECKLIST.md)
+and [known limitations](docs/KNOWN_ISSUES.md) before public deployment.
 
 See the [documentation index](docs/README.md), [security policy](SECURITY.md),
 [production operations guide](docs/PRODUCTION_OPERATIONS.md) and
@@ -19,9 +20,11 @@ See the [documentation index](docs/README.md), [security policy](SECURITY.md),
 
 ### Release packages
 
-Northstar `0.2.0` is distributed through
+After release approval, Northstar `0.2.0` will be distributed through
 [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) with
-the following files:
+the following planned files. Do not treat them as available until the tagged
+workflow has published a draft and its checksums, provenance and image digests
+have been reviewed:
 
 | Asset | Intended use |
 |---|---|

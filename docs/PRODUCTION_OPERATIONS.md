@@ -1140,10 +1140,14 @@ access-controlled off-host system. A verified
 archive is not yet a proven recovery; schedule a restore drill.
 
 Use a restore image containing the same repository migration manifest as the
-backup. Exact cutover reconciliation rejects an older or newer SQLx ledger
-rather than guessing an upgrade/downgrade path. To recover an older backup,
-restore it with that release's signed image first, then run the documented
-one-shot migration and exact grant reconciliation with the newer release.
+backup. Local dump validation creates production-shaped unprivileged workload
+roles, restores as the migrator in a private PostgreSQL instance, executes the
+same exact grant reconciliation, and checks upload metadata against the
+extracted objects. An older or newer SQLx ledger, an unregistered `public`
+relation, or a drifted capability is therefore rejected before the target
+cutover. To recover an older backup, restore it with that release's signed
+image first, then run the documented one-shot migration and exact grant
+reconciliation with the newer release.
 
 ## Restore drill
 
@@ -1201,9 +1205,24 @@ Unix-socket-only temporary PostgreSQL instance under the plaintext scratch
 root; it never creates or drops a validation database in the target cluster.
 It validates the archive and checks every live `uploaded=true` row
 against a regular UUID-named file with the exact size and, for current rows, the
-database-stored SHA-256 digest. Thus even a same-size upload changed together
-with the archive checksum is rejected when it disagrees with authoritative
-database metadata.
+database-stored SHA-256 digest. The disposable instance also recreates the four
+bounded workload roles and applies the repository migration, capability and
+relation manifests as the non-superuser migrator. Thus even a same-size upload
+changed together with the archive checksum is rejected when it disagrees with
+authoritative database metadata, and a structurally restorable but
+noncanonical database never reaches the target cutover.
+
+Before it creates the rollback dump or installs the connection fence, restore
+also proves that the current target can be reconstructed under the canonical
+grant authority. The proof runs transactionally and is rolled back: a genuinely
+empty database resolves to bootstrap, migration `0113` resolves to prepare, and
+the complete current repository ledger resolves to exact. An unknown or partial
+ ledger, or any noncanonical relation in the closed-world `public` schema, stops
+ the restore while the current database and live UUID upload namespace remain
+ unchanged. Incoming objects may already exist only in the private hidden
+ staging directory and are removed by ordinary cleanup. Keep deployment-specific
+ extensions in a separately owned schema with an explicit backup and ACL
+ contract; do not add them to Northstar's `public` schema.
 
 The cutover creates a private directory inside the upload volume, copies and
 verifies incoming objects there, and keeps old objects there while switching
@@ -1213,17 +1232,48 @@ an old and new object with the same UUID are not confused. Old objects remain in
 that atomic rollback source until a complete verified and flushed copy exists
 under the dedicated rollback root.
 
-Immediately before database replacement, restore keeps one target session and
+Immediately before database replacement, restore keeps exactly its three
+pre-opened target backends (control, primary replacement and compensation) and
 sets the database to `ALLOW_CONNECTIONS=false`. It does not require
 `pg_signal_backend` and does not terminate peers: if any other target session
-remains, restore fails clearly and reopens the unchanged database. Stop
-Northstar and every other database client before retrying. Once the count is
-zero, no new target connection can enter; a crash therefore fails closed
-instead of admitting clients to a half-switched data plane. The replacement
+remains, restore rejects the cutover and reopens the unchanged database. Stop
+Northstar and every other database client before retrying. Once only those
+three verified backend PIDs remain, no new target connection can enter; a crash
+therefore fails closed instead of admitting clients to a half-switched data
+plane. The replacement
 transaction recreates `public` as the verified migrator owner and applies the
 same PUBLIC/runtime/backup ACL and default-privilege policy used after
-migrations before committing. Exact old/new manifests before and after upload
+migrations before committing. Incoming data always uses exact reconciliation
+against the current release ledger/schema. If an ordinary post-cutover failure
+requires database compensation, the pre-restore dump instead uses the
+canonical automatic lifecycle resolver so an empty/bootstrap, migration-`0113`
+prepare, or exact-current predecessor can be reconstructed without weakening
+the incoming-payload contract. Exact old/new manifests before and after upload
 activation detect a late filesystem mutation and prevent commit.
+
+Database control and replacement use separate failure domains. The persistent
+control backend alone owns the advisory lock, changes the database connection
+fence and reads the authoritative outcome. The primary replacement backend and
+an independently pre-opened compensation backend execute incoming and rollback
+SQL respectively. Any session beyond those three recorded backends aborts
+cutover without being terminated. Each
+replacement transaction writes a unique database-level
+`northstar.restore_commit` marker before a synchronous `COMMIT`. After new
+connections are disabled, the control backend verifies that these three
+recorded PIDs are the only remaining sessions; PostgreSQL is not configured
+with a PID allowlist. A READY phase
+first proves that the worker owns a unique transaction-level advisory lock and
+that the prior marker still matches. Destructive replacement SQL is not sent
+before READY. The control backend must acquire that same transaction lock before
+it reads the catalog marker, so EOF is never treated as evidence either way. If
+cleanup interrupts an incomplete command stream, it closes and drains the exact
+active worker first: PostgreSQL either finishes an already-buffered commit or
+rolls back on disconnect, after which the barrier and marker give one
+authoritative outcome. A missing marker means the incoming replacement did not
+commit, the incoming marker authorizes exact rollback compensation, and an
+unknown marker keeps PostgreSQL closed for operator recovery. After the restore
+replay floor is durable, the fence still cannot reopen until the exact incoming
+marker is cleared; interruption during marker clearing is reconciled explicitly.
 
 `SIGINT`, `SIGTERM`, shell errors and ordinary exits use one compensation path.
 If pre-commit compensation or connection re-enable is incomplete, the script

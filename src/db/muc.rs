@@ -4372,9 +4372,12 @@ mod tests {
         // request has begun but before the room/actor locks are acquired. A
         // revocation which commits during that pause must win the serial
         // order and leave no archive/admission projection behind.
-        set_muc_affiliation(&pool, room_id, "carol", "owner")
-            .await
-            .unwrap();
+        assert_eq!(
+            set_muc_affiliation(&pool, room_id, "carol", "owner")
+                .await
+                .unwrap(),
+            MucAffiliationOutcome::Applied
+        );
 
         // A local username cannot be re-used under a foreign domain.  Both
         // the service boundary (unit-tested in services::muc) and this locked
@@ -4600,6 +4603,53 @@ mod tests {
             .await
             .unwrap();
 
+        // Exercise the repository's real authorization expression before the
+        // race.  This is the intentional OMEMO recipient-discovery exception:
+        // a member of a members-only, non-anonymous room may read the three
+        // positive affiliation lists, but not the outcast list.
+        assert_eq!(
+            set_muc_affiliation(&pool, room_id, "carol", "member")
+                .await
+                .unwrap(),
+            MucAffiliationOutcome::Applied
+        );
+        for requested in ["owner", "admin", "member"] {
+            assert!(matches!(
+                authorized_muc_admin_affiliation_list(
+                    &pool,
+                    room_id,
+                    room_epoch,
+                    carol_id,
+                    "carol@local.test",
+                    requested,
+                    "local.test",
+                )
+                .await
+                .unwrap(),
+                MucAdminSnapshot::Authorized(_)
+            ));
+        }
+        assert_eq!(
+            authorized_muc_admin_affiliation_list(
+                &pool,
+                room_id,
+                room_epoch,
+                carol_id,
+                "carol@local.test",
+                "outcast",
+                "local.test",
+            )
+            .await
+            .unwrap(),
+            MucAdminSnapshot::Unauthorized
+        );
+        assert_eq!(
+            set_muc_affiliation(&pool, room_id, "carol", "owner")
+                .await
+                .unwrap(),
+            MucAffiliationOutcome::Applied
+        );
+
         let (entered, resume) = install_muc_authorization_test_pause("admin_affiliation");
         let admin_snapshot = {
             let pool = pool.clone();
@@ -4608,8 +4658,8 @@ mod tests {
                     &pool,
                     room_id,
                     room_epoch,
-                    owner_id,
-                    "alice@local.test",
+                    carol_id,
+                    "carol@local.test",
                     "owner",
                     "local.test",
                 )
@@ -4618,15 +4668,23 @@ mod tests {
             })
         };
         entered.notified().await;
-        set_muc_affiliation(&pool, room_id, "alice", "member")
-            .await
-            .unwrap();
+        // In a members-only, non-anonymous room a member intentionally keeps
+        // read access to owner/admin/member lists so an OMEMO client can build
+        // the complete recipient set.  Use `none` here: this race is meant to
+        // prove that a real authorization revocation committed before the
+        // repository locks are acquired wins the serial order.
+        assert_eq!(
+            set_muc_affiliation(&pool, room_id, "carol", "none")
+                .await
+                .unwrap(),
+            MucAffiliationOutcome::Applied
+        );
         resume.notify_one();
         assert_eq!(
             admin_snapshot.await.unwrap(),
             MucAdminSnapshot::Unauthorized
         );
-        set_muc_affiliation(&pool, room_id, "alice", "owner")
+        set_muc_affiliation(&pool, room_id, "carol", "owner")
             .await
             .unwrap();
 

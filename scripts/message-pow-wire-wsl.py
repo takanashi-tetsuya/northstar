@@ -10,6 +10,7 @@ import pathlib
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
@@ -64,16 +65,135 @@ def sql_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def no_matching_frame(client, marker: str, timeout: float = 0.75) -> None:
+def wait_for_sql(
+    sql: str,
+    accepted: Callable[[str], bool],
+    label: str,
+    timeout: float = 10.0,
+) -> str:
     deadline = time.monotonic() + timeout
-    frames: list[str] = []
+    last = ""
     while time.monotonic() < deadline:
-        try:
-            frame = client.receive(max(0.05, deadline - time.monotonic()))
-        except (TimeoutError, OSError):
-            break
-        frames.append(frame)
-        helpers.check(marker not in frame, f"duplicate message escaped replay guard: {frames}")
+        last = psql(sql)
+        if accepted(last):
+            return last
+        time.sleep(0.02)
+    raise AssertionError(f"timed out waiting for {label}; last database value={last!r}")
+
+
+def ordering_barrier(client, barrier_id: str) -> None:
+    client.send(
+        f"<iq xmlns='jabber:client' type='get' id='{barrier_id}'>"
+        "<ping xmlns='urn:xmpp:ping'/></iq>"
+    )
+    result, _ = client.receive_until(barrier_id)
+    helpers.check(
+        "type='result'" in result,
+        f"message ordering barrier failed: {result}",
+    )
+
+
+def wait_for_abuse_admission(
+    username: str, challenge_id: str, expected_state: str
+) -> str:
+    query = (
+        "SELECT encode(admission_key,'hex') || '|' || state || '|' || "
+        "(accepted_at IS NOT NULL)::text FROM abuse_message_admissions "
+        "WHERE actor_id=(SELECT id FROM users WHERE username="
+        + sql_literal(username)
+        + ") AND proof_challenge_id="
+        + sql_literal(challenge_id)
+        + "::pg_catalog.uuid"
+    )
+    expected_suffix = (
+        "|accepted|true" if expected_state == "accepted" else "|pending|false"
+    )
+    value = wait_for_sql(
+        query,
+        lambda result: len(result.splitlines()) == 1
+        and result.endswith(expected_suffix),
+        f"exact {expected_state} abuse admission for challenge {challenge_id}",
+    )
+    key, state, accepted_at = value.split("|")
+    helpers.check(
+        len(key) == 64
+        and state == expected_state
+        and accepted_at == ("true" if expected_state == "accepted" else "false"),
+        f"malformed exact abuse admission: {value}",
+    )
+    return key
+
+
+def wait_for_personal_delivery_projection(
+    actor_jid: str, target_jid: str, origin_id: str
+) -> tuple[str, str]:
+    query = (
+        "SELECT admission.id::text || '|' || delivery.id::text "
+        "FROM personal_message_admissions AS admission "
+        "JOIN offline_messages AS delivery ON delivery.id=admission.offline_message_id "
+        "WHERE admission.identity_kind='local-origin' AND admission.actor_scope="
+        + sql_literal(actor_jid)
+        + " AND admission.target_scope="
+        + sql_literal(target_jid)
+        + " AND admission.identity_value="
+        + sql_literal(origin_id)
+        + " AND admission.sender_archive_id IS NULL "
+        "AND admission.recipient_archive_id IS NULL "
+        "AND admission.s2s_outbox_id IS NULL "
+        "AND admission.delivery_completed_at IS NULL"
+    )
+    value = wait_for_sql(
+        query,
+        lambda result: len(result.splitlines()) == 1 and result.count("|") == 1,
+        f"personal C2S projection for {origin_id}",
+    )
+    return tuple(value.split("|", 1))
+
+
+def wait_for_personal_tombstone(
+    actor_jid: str, target_jid: str, origin_id: str
+) -> tuple[str, str, float]:
+    query = (
+        "SELECT id::text || '|' || delivery_completed_at::text || '|' || "
+        "EXTRACT(EPOCH FROM ((delivery_completed_at + INTERVAL '30 days')"
+        "-clock_timestamp()))::float8::text FROM personal_message_admissions "
+        "WHERE identity_kind='local-origin' AND actor_scope="
+        + sql_literal(actor_jid)
+        + " AND target_scope="
+        + sql_literal(target_jid)
+        + " AND identity_value="
+        + sql_literal(origin_id)
+        + " AND sender_archive_id IS NULL AND recipient_archive_id IS NULL "
+        "AND offline_message_id IS NULL AND s2s_outbox_id IS NULL "
+        "AND delivery_completed_at IS NOT NULL"
+    )
+    value = wait_for_sql(
+        query,
+        lambda result: len(result.splitlines()) == 1 and result.count("|") == 2,
+        f"completed personal-delivery tombstone for {origin_id}",
+    )
+    admission_id, completed_at, grace = value.split("|", 2)
+    return admission_id, completed_at, float(grace)
+
+
+def recipient_ordering_barrier(
+    sender,
+    recipient,
+    recipient_jid: str,
+    barrier_id: str,
+    forbidden_markers: list[str],
+) -> None:
+    marker = f"POW-ROUTE-BARRIER-{barrier_id}"
+    sender.send(
+        f"<presence xmlns='jabber:client' to='{recipient_jid}' id='{barrier_id}'>"
+        f"<status>{marker}</status></presence>"
+    )
+    _, frames = recipient.receive_until(marker)
+    for forbidden in forbidden_markers:
+        helpers.check(
+            all(forbidden not in frame for frame in frames),
+            f"duplicate message preceded the ordered recipient barrier: {frames}",
+        )
 
 
 def login_token(username: str) -> str:
@@ -144,11 +264,17 @@ def prepare() -> None:
         accepted_origin,
         accepted_marker,
     )
-    alice.send_with_pow(accepted, token)
+    accepted_proof = alice.send_with_pow(accepted, token)
     delivered, _ = bob.receive_until(accepted_marker)
     helpers.check(accepted_origin in delivered, f"accepted message lost origin-id: {delivered}")
-    alice.send_with_pow(accepted, token)
-    no_matching_frame(bob, accepted_marker)
+    alice.send_with_pow_proof(accepted, accepted_proof)
+    recipient_ordering_barrier(
+        alice,
+        bob,
+        bob_jid,
+        f"accepted-replay-barrier-{run_id}",
+        [accepted_marker],
+    )
 
     changed = stanza(
         bob_jid,
@@ -162,7 +288,13 @@ def prepare() -> None:
         "type='error'" in conflict and "<conflict" in conflict,
         f"same origin-id with changed payload was not rejected: {conflict}",
     )
-    no_matching_frame(bob, f"{accepted_marker}-CHANGED")
+    recipient_ordering_barrier(
+        alice,
+        bob,
+        bob_jid,
+        f"accepted-conflict-barrier-{run_id}",
+        [f"{accepted_marker}-CHANGED"],
+    )
 
     remote_marker = f"POW-OUTBOX-{run_id}"
     remote_origin = f"pow-outbox-{run_id}"
@@ -172,18 +304,21 @@ def prepare() -> None:
         remote_origin,
         remote_marker,
     )
-    alice.send_with_pow(remote, token)
-    time.sleep(0.25)
+    remote_proof = alice.send_with_pow(remote, token)
+    ordering_barrier(alice, f"remote-store-barrier-{run_id}")
+    wait_for_abuse_admission(alice_name, remote_proof["challenge_id"], "accepted")
     helpers.check(
-        psql(
+        wait_for_sql(
             "SELECT COUNT(*) FROM s2s_outbox WHERE stanza LIKE "
-            + sql_literal(f"%{remote_marker}%")
+            + sql_literal(f"%{remote_marker}%"),
+            lambda result: result == "1",
+            "one durable remote outbox row",
         )
         == "1",
         "remote message did not create exactly one durable outbox row",
     )
-    alice.send_with_pow(remote, token)
-    time.sleep(0.25)
+    alice.send_with_pow_proof(remote, remote_proof)
+    ordering_barrier(alice, f"remote-replay-barrier-{run_id}")
     helpers.check(
         psql(
             "SELECT COUNT(*) FROM s2s_outbox WHERE stanza LIKE "
@@ -223,15 +358,13 @@ def prepare() -> None:
         temporary_marker,
         no_permanent_store=True,
     )
-    alice.send_with_pow(temporary, token)
-    time.sleep(0.25)
-    helpers.check(
-        psql(
-            "SELECT COUNT(*) FROM offline_messages WHERE stanza LIKE "
-            + sql_literal(f"%{temporary_marker}%")
-        )
-        == "1",
-        "no-permanent-store message was not temporarily recoverable",
+    temporary_proof = alice.send_with_pow(temporary, token)
+    ordering_barrier(alice, f"temporary-store-barrier-{run_id}")
+    temporary_admission_key = wait_for_abuse_admission(
+        alice_name, temporary_proof["challenge_id"], "accepted"
+    )
+    temporary_personal_id, temporary_offline_id = wait_for_personal_delivery_projection(
+        alice_jid, bob_jid, temporary_origin
     )
     helpers.check(
         psql(
@@ -243,45 +376,72 @@ def prepare() -> None:
     )
     bob = helpers.XmppWebSocket(bob_name, PASSWORD, "pow-wire-bob-temporary")
     bob.receive_until(temporary_marker)
-    bob.close()
-    time.sleep(0.25)
+    ordering_barrier(bob, f"temporary-delivery-barrier-{run_id}")
+    temporary_tombstone_id, temporary_completed_at, grace = wait_for_personal_tombstone(
+        alice_jid, bob_jid, temporary_origin
+    )
+    helpers.check(
+        temporary_tombstone_id == temporary_personal_id,
+        "acknowledged temporary delivery changed its personal admission identity",
+    )
     helpers.check(
         psql(
-            "SELECT COUNT(*) FROM offline_messages WHERE stanza LIKE "
-            + sql_literal(f"%{temporary_marker}%")
+            "SELECT COUNT(*) FROM offline_messages WHERE id="
+            + sql_literal(temporary_offline_id)
+            + "::pg_catalog.uuid"
         )
         == "0",
         "temporary content row survived acknowledged delivery",
     )
-    grace = float(
-        psql(
-            "SELECT EXTRACT(EPOCH FROM (expires_at-clock_timestamp()))::float8 "
-            "FROM offline_message_admissions WHERE offline_message_id IS NULL "
-            "ORDER BY created_at DESC LIMIT 1"
-        )
-    )
+    bob.close()
+    # Durable local C2S admission owns the origin-id replay identity.  Once the
+    # temporary content row is acknowledged, its trigger detaches the final
+    # projection and starts the fixed personal-delivery retention horizon.
+    # Query that canonical authority by the exact wire identity instead of the
+    # legacy offline-only admission table, which is not populated when the
+    # message entered through the atomic personal C2S admission path.
     helpers.check(
         30 * 86_400 - 30 <= grace <= 30 * 86_400,
         f"delivered tombstone grace was not bounded to 30 days: {grace}",
     )
-    # Remove only the newest accepted anti-abuse marker, then prove the
-    # independent offline tombstone still suppresses an exact late retry.
+    # Remove only this message's accepted anti-abuse marker, then prove the
+    # independent personal-delivery tombstone still suppresses an exact retry.
     psql(
-        "DELETE FROM abuse_message_admissions WHERE admission_key=("
-        "SELECT admission_key FROM abuse_message_admissions "
-        "WHERE actor_id=(SELECT id FROM users WHERE username="
-        + sql_literal(alice_name)
-        + ") AND state='accepted' ORDER BY accepted_at DESC LIMIT 1)"
+        "DELETE FROM abuse_message_admissions WHERE admission_key=decode("
+        + sql_literal(temporary_admission_key)
+        + ",'hex') AND proof_challenge_id="
+        + sql_literal(temporary_proof["challenge_id"])
+        + "::pg_catalog.uuid AND state='accepted'"
     )
-    alice.send_with_pow(temporary, token)
-    time.sleep(0.25)
+    helpers.check(
+        psql(
+            "SELECT COUNT(*) FROM abuse_message_admissions WHERE admission_key=decode("
+            + sql_literal(temporary_admission_key)
+            + ",'hex')"
+        )
+        == "0",
+        "temporary message anti-abuse admission was not removed exactly",
+    )
+    temporary_retry_proof = alice.send_with_pow(temporary, token)
+    ordering_barrier(alice, f"temporary-replay-barrier-{run_id}")
+    wait_for_abuse_admission(
+        alice_name, temporary_retry_proof["challenge_id"], "accepted"
+    )
+    replay_tombstone_id, replay_completed_at, _ = wait_for_personal_tombstone(
+        alice_jid, bob_jid, temporary_origin
+    )
+    helpers.check(
+        (replay_tombstone_id, replay_completed_at)
+        == (temporary_tombstone_id, temporary_completed_at),
+        "late exact retry mutated the completed personal-delivery tombstone",
+    )
     helpers.check(
         psql(
             "SELECT COUNT(*) FROM offline_messages WHERE stanza LIKE "
             + sql_literal(f"%{temporary_marker}%")
         )
         == "0",
-        "late exact retry escaped the delivered offline tombstone",
+        "late exact retry escaped the personal-delivery tombstone",
     )
     helpers.check(
         psql(
@@ -293,8 +453,8 @@ def prepare() -> None:
     )
 
     # Materialize a realistic post-admission/pre-route crash cut without any
-    # client observing the stanza: remove the temporary queue side effect and
-    # restore the newest admission to an expired pending fencing lease.
+    # client observing the stanza: remove the canonical route side effects and
+    # restore this exact admission to an expired pending fencing lease.
     crash_marker = f"POW-CRASH-RESUME-{run_id}"
     crash_origin = f"pow-crash-resume-{run_id}"
     crash = stanza(
@@ -304,39 +464,68 @@ def prepare() -> None:
         crash_marker,
         no_permanent_store=True,
     )
-    alice.send_with_pow(crash, token)
-    time.sleep(0.25)
-    helpers.check(
-        psql(
-            "SELECT COUNT(*) FROM offline_messages WHERE stanza LIKE "
-            + sql_literal(f"%{crash_marker}%")
-        )
-        == "1",
-        "crash fixture did not reach durable temporary storage",
+    crash_proof = alice.send_with_pow(crash, token)
+    ordering_barrier(alice, f"crash-store-barrier-{run_id}")
+    crash_admission_key = wait_for_abuse_admission(
+        alice_name, crash_proof["challenge_id"], "accepted"
     )
+    crash_personal_id, crash_offline_id = wait_for_personal_delivery_projection(
+        alice_jid, bob_jid, crash_origin
+    )
+    # This is one synthetic crash cut, not ordinary retention: roll back every
+    # durable route projection before deleting the content row so its DELETE
+    # trigger cannot create a completed replay tombstone.  Leave only the exact
+    # anti-abuse lease in an expired pending state for restart takeover.
     psql(
-        "DELETE FROM offline_message_admissions WHERE offline_message_id IN ("
-        "SELECT id FROM offline_messages WHERE stanza LIKE "
-        + sql_literal(f"%{crash_marker}%")
-        + "); DELETE FROM offline_messages WHERE stanza LIKE "
-        + sql_literal(f"%{crash_marker}%")
-        + "; UPDATE abuse_message_admissions SET state='pending',accepted_at=NULL,"
+        "BEGIN; DELETE FROM personal_message_admissions WHERE id="
+        + sql_literal(crash_personal_id)
+        + "::pg_catalog.uuid; DELETE FROM offline_messages WHERE id="
+        + sql_literal(crash_offline_id)
+        + "::pg_catalog.uuid; UPDATE abuse_message_admissions "
+        "SET state='pending',accepted_at=NULL,updated_at=clock_timestamp(),"
         "lease_expires_at=GREATEST(created_at,clock_timestamp()-INTERVAL '1 millisecond'),"
-        "expires_at=clock_timestamp()+INTERVAL '20 minutes' WHERE admission_key=("
-        "SELECT admission_key FROM abuse_message_admissions WHERE actor_id=("
-        "SELECT id FROM users WHERE username="
-        + sql_literal(alice_name)
-        + ") AND state='accepted' ORDER BY accepted_at DESC LIMIT 1);"
+        "expires_at=created_at+INTERVAL '30 minutes' "
+        "WHERE admission_key=decode("
+        + sql_literal(crash_admission_key)
+        + ",'hex') AND proof_challenge_id="
+        + sql_literal(crash_proof["challenge_id"])
+        + "::pg_catalog.uuid AND state='accepted'; COMMIT;"
     )
     helpers.check(
         psql(
-            "SELECT COUNT(*) FROM abuse_message_admissions WHERE actor_id=("
-            "SELECT id FROM users WHERE username="
-            + sql_literal(alice_name)
-            + ") AND state='pending' AND lease_expires_at < clock_timestamp()"
+            "SELECT COUNT(*) FROM personal_message_admissions WHERE id="
+            + sql_literal(crash_personal_id)
+            + "::pg_catalog.uuid"
+        )
+        == "0",
+        "crash fixture retained a personal-delivery authority row",
+    )
+    helpers.check(
+        psql(
+            "SELECT COUNT(*) FROM offline_messages WHERE id="
+            + sql_literal(crash_offline_id)
+            + "::pg_catalog.uuid"
+        )
+        == "0",
+        "crash fixture retained a durable delivery projection",
+    )
+    helpers.check(
+        wait_for_abuse_admission(
+            alice_name, crash_proof["challenge_id"], "pending"
+        )
+        == crash_admission_key,
+        "crash fixture did not leave one resumable pending admission",
+    )
+    helpers.check(
+        psql(
+            "SELECT COUNT(*) FROM abuse_message_admissions "
+            "WHERE admission_key=decode("
+            + sql_literal(crash_admission_key)
+            + ",'hex') AND lease_expires_at < clock_timestamp() "
+            "AND expires_at=created_at+INTERVAL '30 minutes'"
         )
         == "1",
-        "crash fixture did not leave one resumable pending admission",
+        "crash fixture lease/retention timestamps do not match production pending state",
     )
 
     alice.close()
@@ -348,9 +537,12 @@ def prepare() -> None:
                 "accepted_marker": accepted_marker,
                 "accepted_origin": accepted_origin,
                 "accepted_stanza": accepted,
+                "accepted_proof": accepted_proof,
                 "remote_marker": remote_marker,
                 "crash_marker": crash_marker,
                 "crash_origin": crash_origin,
+                "crash_admission_key": crash_admission_key,
+                "crash_proof": crash_proof,
                 "crash_stanza": crash,
             }
         ),
@@ -362,29 +554,69 @@ def prepare() -> None:
 def verify() -> None:
     helpers.wait_ready()
     state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    token = login_token(state["alice"])
     alice = helpers.XmppWebSocket(state["alice"], PASSWORD, "pow-wire-alice-restart")
     bob = helpers.XmppWebSocket(state["bob"], PASSWORD, "pow-wire-bob-restart")
 
-    alice.send_with_pow(state["accepted_stanza"], token)
-    no_matching_frame(bob, state["accepted_marker"])
-    alice.send_with_pow(state["crash_stanza"], token)
+    alice.send_with_pow_proof(state["accepted_stanza"], state["accepted_proof"])
+    recipient_ordering_barrier(
+        alice,
+        bob,
+        f"{state['bob']}@{helpers.DOMAIN}",
+        "accepted-restart-replay-barrier",
+        [state["accepted_marker"]],
+    )
+    alice.send_with_pow_proof(state["crash_stanza"], state["crash_proof"])
     resumed, _ = bob.receive_until(state["crash_marker"])
     helpers.check(
         state["crash_origin"] in resumed,
         f"resumed message lost stable origin identity: {resumed}",
     )
-    alice.send_with_pow(state["crash_stanza"], token)
-    no_matching_frame(bob, state["crash_marker"])
+    alice_jid = f"{state['alice']}@{helpers.DOMAIN}"
+    bob_jid = f"{state['bob']}@{helpers.DOMAIN}"
+    wait_for_personal_tombstone(alice_jid, bob_jid, state["crash_origin"])
+    alice.send_with_pow_proof(state["crash_stanza"], state["crash_proof"])
+    recipient_ordering_barrier(
+        alice,
+        bob,
+        bob_jid,
+        "crash-restart-replay-barrier",
+        [state["crash_marker"]],
+    )
     helpers.check(
         psql(
-            "SELECT COUNT(*) FROM abuse_message_admissions WHERE actor_id=("
-            "SELECT id FROM users WHERE username="
-            + sql_literal(state["alice"])
-            + ") AND state='pending'"
+            "SELECT COUNT(*) FROM personal_message_admissions "
+            "WHERE identity_kind='local-origin' AND actor_scope="
+            + sql_literal(alice_jid)
+            + " AND target_scope="
+            + sql_literal(bob_jid)
+            + " AND identity_value="
+            + sql_literal(state["crash_origin"])
+            + " AND sender_archive_id IS NULL AND recipient_archive_id IS NULL "
+            "AND offline_message_id IS NULL AND s2s_outbox_id IS NULL "
+            "AND delivery_completed_at IS NOT NULL"
+        )
+        == "1",
+        "crash-resumed delivery did not converge to one personal tombstone",
+    )
+    helpers.check(
+        psql(
+            "SELECT COUNT(*) FROM offline_messages WHERE stanza LIKE "
+            + sql_literal(f"%{state['crash_marker']}%")
         )
         == "0",
-        "crash-resumed admission did not become terminal",
+        "crash-resumed delivery retained an orphan queue projection",
+    )
+    helpers.check(
+        psql(
+            "SELECT COUNT(*) FROM abuse_message_admissions "
+            "WHERE admission_key=decode("
+            + sql_literal(state["crash_admission_key"])
+            + ",'hex') AND proof_challenge_id="
+            + sql_literal(state["crash_proof"]["challenge_id"])
+            + "::pg_catalog.uuid AND state='accepted' AND accepted_at IS NOT NULL"
+        )
+        == "1",
+        "crash-resumed admission did not converge to the exact accepted row",
     )
     helpers.check(
         psql(

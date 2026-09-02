@@ -24,6 +24,8 @@ users_source="$project_dir/src/db/users.rs"
 admin_commands_source="$project_dir/src/db/admin_commands.rs"
 roster_source="$project_dir/src/db/roster.rs"
 mix_source="$project_dir/src/db/mix.rs"
+muc_source="$project_dir/src/db/muc.rs"
+muc_protocol_source="$project_dir/src/xmpp/protocol/muc.rs"
 omemo_recovery_source="$project_dir/src/db/omemo_recovery.rs"
 user_capability_migration="$project_dir/migrations/0108_user_command_capabilities.sql"
 admin_cleanup_migration="$project_dir/migrations/0111_admin_session_cleanup_effects.sql"
@@ -32,7 +34,10 @@ upload_authority_migration="$project_dir/migrations/0113_upload_authority_capabi
 session_authority_migration="$project_dir/migrations/0114_session_authority_capabilities.sql"
 admin_cleanup_fixture="$project_dir/scripts/admin-session-cleanup-db-wsl.sh"
 restore_runner="$project_dir/scripts/restore-backup.sh"
+dump_validator="$project_dir/scripts/validate-backup-dump-local.sh"
 disaster_fixture="$project_dir/scripts/backup-restore-wsl.sh"
+integration_fixture="$project_dir/scripts/integration-wsl.py"
+message_pow_fixture="$project_dir/scripts/message-pow-wire-wsl.py"
 role_runner="$project_dir/scripts/reconcile-database-roles.sh"
 database_acceptance="$project_dir/scripts/database-role-boundary-db-ci.sh"
 loopback_fixture="$project_dir/scripts/loopback-postgres-ci.sh"
@@ -67,12 +72,13 @@ for file in "$compose" "$init_script" "$grant_policy" "$grant_boundary" "$grant_
   "$grant_runner" "$grant_image" "$backup_image" "$backup_runner" \
   "$role_attestation" "$db_module" "$main_source" "$state_source" "$pie_source" \
   "$users_source" "$admin_commands_source" "$roster_source" "$mix_source" \
-  "$omemo_recovery_source" "$user_capability_migration" "$admin_cleanup_migration" \
+  "$muc_source" "$muc_protocol_source" "$omemo_recovery_source" \
+  "$user_capability_migration" "$admin_cleanup_migration" \
   "$cluster_authority_migration" "$upload_authority_migration" \
   "$session_authority_migration" \
   "$admin_cleanup_fixture" \
-  "$restore_runner" "$role_runner" \
-  "$disaster_fixture" "$database_acceptance" "$loopback_fixture" \
+  "$restore_runner" "$dump_validator" "$role_runner" \
+  "$disaster_fixture" "$message_pow_fixture" "$database_acceptance" "$loopback_fixture" \
   "$secret_generator" "$release_preflight" \
   "$ci_workflow"; do
   [[ -f "$file" ]] || fail "required policy file is missing: ${file#$project_dir/}"
@@ -603,6 +609,30 @@ fi
 require_literal "$restore_runner" \
   'bash "$script_dir/validate-backup-dump-local.sh"' \
   'restore preflight must use an isolated local PostgreSQL instance'
+require_literal "$dump_validator" \
+  "readonly migrator_role='northstar_migrator'" \
+  'isolated dump validation does not define the production migrator identity'
+require_literal "$dump_validator" \
+  'CREATE ROLE northstar_migrator LOGIN NOINHERIT NOSUPERUSER NOCREATEDB' \
+  'isolated dump validation does not recreate the unprivileged role boundary'
+require_literal "$dump_validator" \
+  '--owner="$migrator_role"' \
+  'isolated dump validation database is not owned by the migrator'
+require_literal "$dump_validator" \
+  'pg_restore -h "$socket_dir" -U "$migrator_role" -d "$validation_database"' \
+  'isolated dump validation still restores as a bootstrap superuser'
+require_literal "$dump_validator" \
+  '--no-owner --no-acl --single-transaction' \
+  'isolated dump validation is not an atomic owner-independent restore'
+require_literal "$dump_validator" \
+  '--set allow_bootstrap=false --set grant_phase=exact' \
+  'isolated dump validation does not require the exact current grant lifecycle'
+require_literal "$dump_validator" \
+  '--file "$grant_reconcile_sql"' \
+  'isolated dump validation does not execute the canonical grant authority'
+if grep -Fq 'pg_restore -h "$socket_dir" -U postgres' "$dump_validator"; then
+  fail 'isolated dump validation must not hide authority drift behind superuser restore'
+fi
 if grep -Fq '"${pg_client[@]}" createdb' "$restore_runner" \
    || grep -Fq '"${pg_client[@]}" dropdb' "$restore_runner"; then
   fail 'restore must not create or drop validation databases on the target cluster'
@@ -617,15 +647,15 @@ require_literal "$restore_runner" \
   "EXECUTE format('CREATE SCHEMA public AUTHORIZATION %I', current_user);" \
   'restore does not recreate schema public as the verified migrator owner'
 require_literal "$restore_runner" \
-  'cat "$grant_apply_sql" >&"$db_session_in"' \
-  'restore does not apply the shared ACL policy inside replacement'
+  'cat "$grant_apply_sql" >&"$worker_in"' \
+  'restore does not apply the shared ACL policy inside the isolated replacement worker'
 require_literal "$restore_runner" \
-  'cat "$capability_manifest_sql" >&"$db_session_in"' \
-  'restore does not load the canonical capability manifest inside replacement'
-grant_apply_line=$(grep -nF 'cat "$grant_apply_sql" >&"$db_session_in"' "$restore_runner" \
+  'cat "$capability_manifest_sql" >&"$worker_in"' \
+  'restore does not load the canonical capability manifest inside the isolated replacement worker'
+grant_apply_line=$(grep -nF 'cat "$grant_apply_sql" >&"$worker_in"' "$restore_runner" \
   | head -n 1 | cut -d: -f1)
 capability_manifest_line=$(grep -nF \
-  'cat "$capability_manifest_sql" >&"$db_session_in"' "$restore_runner" \
+  'cat "$capability_manifest_sql" >&"$worker_in"' "$restore_runner" \
   | head -n 1 | cut -d: -f1)
 post_grant_commit_line=$(awk -v start="$grant_apply_line" \
   'NR > start && /printf .*COMMIT;/ { print NR; exit }' "$restore_runner")
@@ -634,6 +664,139 @@ post_grant_commit_line=$(awk -v start="$grant_apply_line" \
    && -n "$post_grant_commit_line" \
    && "$grant_apply_line" -lt "$post_grant_commit_line" ]] \
   || fail 'restore must load capability manifest, converge ACLs, then commit replacement'
+for restore_session_contract in \
+  'coproc RESTORE_DB_SESSION {' \
+  'coproc PRIMARY_RESTORE_WORKER {' \
+  'coproc COMPENSATION_RESTORE_WORKER {' \
+  'primary_worker_command "$grant_check_sql" "$grant_check_output"' \
+  'db_session_command "$sql_file" "$output_file"' \
+  'WHERE pid NOT IN (:control_pid, :primary_pid, :compensation_pid)' \
+  'allowed_sessions != 3' \
+  'restore_transaction_active=true' \
+  'settle_active_restore_transaction' \
+  'abort_active_restore_worker_for_cleanup' \
+  'Closing stdin is the transaction-safe interrupt.' \
+  'refusing to interpret a restore marker before the replacement transaction settles' \
+  'refusing to release the database fence while a replacement transaction is unsettled' \
+  'refusing to release the database fence while the restore outcome is unknown' \
+  'refusing to release the database fence before retiring the committed restore marker' \
+  'SET LOCAL synchronous_commit TO on;' \
+  "pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(:'restore_barrier_key', 0))" \
+  'read_restore_outcome' \
+  'ALTER DATABASE %%I SET northstar.restore_commit TO %%L' \
+  'replace_database_from_dump "$payload_dir/database.dump" restored exact' \
+  'replace_database_from_dump "$rollback_dump" rollback auto'; do
+  require_literal "$restore_runner" "$restore_session_contract" \
+    "restore control/worker outcome contract is missing: $restore_session_contract"
+done
+if grep -Fq 'cat "$grant_apply_sql" >&"$db_session_in"' "$restore_runner" \
+   || grep -Fq 'cat "$capability_manifest_sql" >&"$db_session_in"' "$restore_runner"; then
+  fail 'restore must never stream replacement policy into the persistent control session'
+fi
+if grep -Fq '"${pg_client[@]}" psql --dbname=postgres' "$restore_runner"; then
+  fail 'restore must not open an unfenced maintenance connection after its bounded workers'
+fi
+rollback_dump_line=$(grep -nF '"${pg_client[@]}" pg_dump' "$restore_runner" \
+  | head -n 1 | cut -d: -f1)
+compensation_worker_line=$(grep -nF 'start_compensation_worker' "$restore_runner" \
+  | tail -n 1 | cut -d: -f1)
+fence_activation_line=$(grep -nF 'activate_database_fence' "$restore_runner" \
+  | tail -n 1 | cut -d: -f1)
+outcome_marker_line=$(grep -nF \
+  'ALTER DATABASE %%I SET northstar.restore_commit TO %%L' "$restore_runner" \
+  | head -n 1 | cut -d: -f1)
+synchronous_commit_line=$(grep -nF 'SET LOCAL synchronous_commit TO on;' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+[[ -n "$rollback_dump_line" && -n "$compensation_worker_line" \
+   && -n "$fence_activation_line" \
+   && "$rollback_dump_line" -lt "$compensation_worker_line" \
+   && "$compensation_worker_line" -lt "$fence_activation_line" ]] \
+  || fail 'restore must take the rollback dump before opening compensation, then fence exact workers'
+[[ -n "$outcome_marker_line" && -n "$post_grant_commit_line" \
+   && -n "$synchronous_commit_line" \
+   && "$grant_apply_line" -lt "$synchronous_commit_line" \
+   && "$synchronous_commit_line" -lt "$outcome_marker_line" \
+   && "$outcome_marker_line" -lt "$post_grant_commit_line" ]] \
+  || fail 'restore must force durable commit and write its transactional catalog outcome before replacement COMMIT'
+ready_wait_line=$(grep -nF \
+  'psql_session_wait_token "$worker_out" "$ready_token" "$output_file"' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+active_transaction_line=$(grep -nF 'restore_transaction_active=true' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+drop_schema_line=$(grep -nF \
+  "EXECUTE format('DROP SCHEMA %I CASCADE', user_schema.nspname);" \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+normal_settle_line=$(grep -nF 'settle_active_restore_transaction || return 2' \
+  "$restore_runner" | tail -n 1 | cut -d: -f1)
+normal_outcome_line=$(awk -v start="$normal_settle_line" \
+  'NR > start && /if ! read_restore_outcome/ { print NR; exit }' "$restore_runner")
+[[ -n "$active_transaction_line" && -n "$ready_wait_line" \
+   && -n "$drop_schema_line" \
+   && "$active_transaction_line" -lt "$ready_wait_line" \
+   && "$ready_wait_line" -lt "$drop_schema_line" \
+   && -n "$normal_settle_line" && -n "$normal_outcome_line" \
+   && "$post_grant_commit_line" -lt "$normal_settle_line" \
+   && "$normal_settle_line" -lt "$normal_outcome_line" ]] \
+  || fail 'restore must require READY before destructive SQL and settle COMMIT before reading its marker'
+finish_restore_line=$(grep -nF 'finish_restore() {' "$restore_runner" \
+  | head -n 1 | cut -d: -f1)
+finish_settle_line=$(awk -v start="$finish_restore_line" \
+  'NR > start && /settle_active_restore_transaction/ { print NR; exit }' "$restore_runner")
+finish_outcome_line=$(awk -v start="$finish_restore_line" \
+  'NR > start && /read_restore_outcome/ { print NR; exit }' "$restore_runner")
+[[ -n "$finish_settle_line" && -n "$finish_outcome_line" \
+   && "$finish_settle_line" -lt "$finish_outcome_line" ]] \
+  || fail 'restore cleanup must settle any active replacement transaction before interpreting outcome'
+finish_abort_line=$(awk -v start="$finish_restore_line" \
+  'NR > start && /abort_active_restore_worker_for_cleanup/ { print NR; exit }' "$restore_runner")
+if [[ -n "$finish_abort_line" ]]; then
+  fail 'restore cleanup must terminate an interrupted worker through the settle helper, not bypass its barrier state'
+fi
+require_literal "$restore_runner" \
+  'if [[ "$cleanup_running" == true ]]; then' \
+  'restore settle path does not distinguish interrupted cleanup'
+require_literal "$restore_runner" \
+  'abort_psql_session_for_cleanup "$primary_worker_pid"' \
+  'restore cleanup does not close the exact active primary worker before waiting'
+require_literal "$restore_runner" \
+  'abort_psql_session_for_cleanup "$compensation_worker_pid"' \
+  'restore cleanup does not close the exact active compensation worker before waiting'
+settle_function_line=$(grep -nF 'settle_active_restore_transaction() {' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+settle_cleanup_line=$(awk -v start="$settle_function_line" \
+  'NR > start && /if \[\[ "\$cleanup_running" == true \]\]/ { print NR; exit }' \
+  "$restore_runner")
+settle_abort_line=$(awk -v start="$settle_cleanup_line" \
+  'NR > start && /abort_active_restore_worker_for_cleanup/ { print NR; exit }' \
+  "$restore_runner")
+settle_barrier_line=$(awk -v start="$settle_abort_line" \
+  'NR > start && /wait_for_restore_transaction_barrier/ { print NR; exit }' \
+  "$restore_runner")
+[[ -n "$settle_function_line" && -n "$settle_cleanup_line" \
+   && -n "$settle_abort_line" && -n "$settle_barrier_line" \
+   && "$settle_function_line" -lt "$settle_cleanup_line" \
+   && "$settle_cleanup_line" -lt "$settle_abort_line" \
+   && "$settle_abort_line" -lt "$settle_barrier_line" ]] \
+  || fail 'interrupted restore cleanup must end the exact worker before waiting on its transaction barrier'
+require_literal "$restore_runner" \
+  'restore_outcome_clear_started=true' \
+  'committed restore cleanup cannot reconcile an interrupted marker clear'
+committed_finish_line=$(awk -v start="$finish_restore_line" \
+  'NR > start && /if \[\[ "\$restore_committed" == true \]\]/ { print NR; exit }' \
+  "$restore_runner")
+committed_settle_line=$(awk -v start="$committed_finish_line" \
+  'NR > start && /settle_active_restore_transaction/ { print NR; exit }' "$restore_runner")
+committed_clear_line=$(awk -v start="$committed_finish_line" \
+  'NR > start && /clear_restore_outcome "\$incoming_outcome_marker"/ { print NR; exit }' \
+  "$restore_runner")
+finish_release_line=$(awk -v start="$finish_restore_line" \
+  'NR > start && /release_database_fence/ { print NR; exit }' "$restore_runner")
+[[ -n "$committed_finish_line" && -n "$committed_settle_line" \
+   && -n "$committed_clear_line" && -n "$finish_release_line" \
+   && "$committed_finish_line" -lt "$committed_settle_line" \
+   && "$committed_settle_line" -lt "$committed_clear_line" \
+   && "$committed_clear_line" -lt "$finish_release_line" ]] \
+  || fail 'committed restore cleanup must settle, verify, and clear its exact marker before releasing the fence'
 require_literal "$disaster_fixture" \
   'BACKUP_SECURITY_POLICY=production bash "$project_dir/scripts/backup.sh"' \
   'disaster-recovery fixture does not exercise the production backup policy'
@@ -645,6 +808,116 @@ require_literal "$disaster_fixture" \
   'disaster-recovery fixture does not exercise the production restore policy'
 require_literal "$disaster_fixture" '__RESTORE_PEER_SURVIVED__' \
   'disaster-recovery fixture does not prove restore leaves an existing peer alive'
+
+# Recovery and replay fixtures are architecture tests, not arbitrary database
+# mutation scripts. Keep them pinned to the same closed-world authorities used
+# by runtime so a future schema refactor cannot silently turn the tests into
+# assertions over abandoned tables or ambiguous newest-row heuristics.
+for legacy_probe_table in backup_probe restore_guard_probe untouched_probe \
+  rollback_probe same_uuid_probe new_activation_probe signal_probe budget_probe; do
+  if grep -Eq "CREATE[[:space:]]+TABLE[[:space:]]+${legacy_probe_table}([[:space:](]|$)" \
+      "$disaster_fixture"; then
+    fail "disaster recovery must not add test-only public table: $legacy_probe_table"
+  fi
+done
+for canonical_probe_contract in \
+  'seed_canonical_probe() {' \
+  'INSERT INTO public.users' \
+  'INSERT INTO public.vcards' \
+  'apply_repository_migrations northstar_restore_target' \
+  'reconcile_repository_grants northstar_restore_target'; do
+  require_literal "$disaster_fixture" "$canonical_probe_contract" \
+    "disaster recovery canonical probe contract is missing: $canonical_probe_contract"
+done
+
+if grep -Fq 'offline_message_admissions' "$message_pow_fixture"; then
+  fail 'message PoW wire recovery must not inspect or mutate the legacy offline-only admission table'
+fi
+for personal_replay_contract in \
+  'def wait_for_abuse_admission(' \
+  'proof_challenge_id=' \
+  'def ordering_barrier(' \
+  'def recipient_ordering_barrier(' \
+  'def wait_for_personal_delivery_projection(' \
+  'def wait_for_personal_tombstone(' \
+  'personal_message_admissions' \
+  "identity_kind='local-origin'" \
+  'actor_scope=' \
+  'target_scope=' \
+  'identity_value=' \
+  "delivery_completed_at + INTERVAL '30 days'" \
+  'sender_archive_id IS NULL' \
+  'recipient_archive_id IS NULL' \
+  'offline_message_id IS NULL' \
+  's2s_outbox_id IS NULL' \
+  'crash_admission_key' \
+  'BEGIN; DELETE FROM personal_message_admissions ' \
+  '; DELETE FROM offline_messages WHERE id=' \
+  '; UPDATE abuse_message_admissions ' \
+  "SET state='pending'" \
+  "; COMMIT;"; do
+  require_literal "$message_pow_fixture" "$personal_replay_contract" \
+    "message PoW canonical replay contract is missing: $personal_replay_contract"
+done
+require_literal "$integration_fixture" 'def send_with_pow_proof(' \
+  'XMPP wire tests must be able to replay the exact original PoW challenge and nonce'
+for exact_wire_replay in \
+  'alice.send_with_pow_proof(accepted, accepted_proof)' \
+  'alice.send_with_pow_proof(remote, remote_proof)' \
+  'alice.send_with_pow_proof(state["crash_stanza"], state["crash_proof"])' \
+  'recipient_ordering_barrier(' \
+  'WHERE stanza LIKE '; do
+  require_literal "$message_pow_fixture" "$exact_wire_replay" \
+    "message PoW exact wire/replay barrier is missing: $exact_wire_replay"
+done
+pow_crash_personal_line=$(grep -nF 'BEGIN; DELETE FROM personal_message_admissions ' \
+  "$message_pow_fixture" | head -n 1 | cut -d: -f1)
+pow_crash_offline_line=$(grep -nF '; DELETE FROM offline_messages WHERE id=' \
+  "$message_pow_fixture" | head -n 1 | cut -d: -f1)
+pow_crash_pending_line=$(grep -nF '; UPDATE abuse_message_admissions ' \
+  "$message_pow_fixture" | head -n 1 | cut -d: -f1)
+[[ -n "$pow_crash_personal_line" && -n "$pow_crash_offline_line" \
+   && -n "$pow_crash_pending_line" \
+   && "$pow_crash_personal_line" -lt "$pow_crash_offline_line" \
+   && "$pow_crash_offline_line" -lt "$pow_crash_pending_line" ]] \
+  || fail 'message PoW crash cut must remove personal authority before queue content, then reset the exact lease'
+if grep -Fq "ORDER BY accepted_at DESC LIMIT 1" "$message_pow_fixture"; then
+  fail 'message PoW recovery must identify the exact admission instead of selecting a global newest row'
+fi
+if grep -Fq 'except (TimeoutError, OSError)' "$message_pow_fixture"; then
+  fail 'message PoW replay observation must not mistake a reset connection for an empty delivery window'
+fi
+if grep -Fq 'time.sleep(0.25)' "$message_pow_fixture"; then
+  fail 'message PoW persistence synchronization must use exact protocol/database state instead of fixed sleeps'
+fi
+if grep -Fq 'no_matching_frame' "$message_pow_fixture"; then
+  fail 'message PoW duplicate suppression must use an ordered recipient barrier instead of a timed absence window'
+fi
+
+muc_pause_line=$(grep -nF 'install_muc_authorization_test_pause("admin_affiliation")' \
+  "$muc_source" | head -n 1 | cut -d: -f1)
+muc_revoke_line=$(awk -v start="$muc_pause_line" \
+  'NR > start && /set_muc_affiliation\(&pool, room_id, "carol", "none"\)/ { print NR; exit }' \
+  "$muc_source")
+muc_applied_line=$(awk -v start="$muc_revoke_line" \
+  'NR > start && /MucAffiliationOutcome::Applied/ { print NR; exit }' "$muc_source")
+muc_resume_line=$(awk -v start="$muc_applied_line" \
+  'NR > start && /resume\.notify_one\(\)/ { print NR; exit }' "$muc_source")
+[[ -n "$muc_pause_line" && -n "$muc_revoke_line" && -n "$muc_applied_line" \
+   && -n "$muc_resume_line" && "$muc_pause_line" -lt "$muc_revoke_line" \
+   && "$muc_revoke_line" -lt "$muc_applied_line" \
+   && "$muc_applied_line" -lt "$muc_resume_line" ]] \
+  || fail 'MUC affiliation race must prove a real applied owner-to-none revocation before resuming the read'
+require_literal "$muc_protocol_source" \
+  'members_can_retrieve_omemo_recipient_lists_in_private_non_anonymous_rooms' \
+  'MUC member affiliation-list exception must retain a direct OMEMO policy regression test'
+for muc_repository_policy in \
+  'set_muc_affiliation(&pool, room_id, "carol", "member")' \
+  'for requested in ["owner", "admin", "member"]' \
+  '"outcast"'; do
+  require_literal "$muc_source" "$muc_repository_policy" \
+    "MUC PostgreSQL fixture must exercise the real member affiliation-list policy: $muc_repository_policy"
+done
 
 require_literal "$ci_workflow" 'database-role-boundary:' \
   'CI must contain a database-backed role-boundary job'

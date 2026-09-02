@@ -228,18 +228,44 @@ participate in the advisory lock.
 
 Restore has a stronger fail-closed boundary. Dump preflight happens in a
 private, Unix-socket-only temporary PostgreSQL instance and never creates a
-validation database on the target cluster. After preflight and the pre-restore
-dump, restore keeps one already-open target session and sets the target database
-to `ALLOW_CONNECTIONS=false`. It deliberately does not terminate other
-sessions or require `pg_signal_backend`; if any peer remains, restore fails and
-instructs the operator to stop Northstar and every other database client before
-retrying. Once only the restore session remains, replacement runs through that
-session. The same checked-in grant body used by post-migration reconciliation
-is applied inside the replacement transaction, so `public` is owned by the
-migrator and PUBLIC/runtime/backup ACLs and default privileges converge before
-the database can reopen. If the restore process is killed without a catchable
-signal, PostgreSQL remains closed to new connections rather than serving a
-half-switched state.
+validation database on the target cluster. That validator recreates the
+production-shaped workload roles, restores as the unprivileged migrator and
+requires exact migration, capability, relation and grant reconciliation. Before
+the rollback dump or connection fence, a rolled-back application of the same
+canonical grant authority also rejects an unknown, partial or noncanonical
+current target while its live data plane is unchanged.
+
+After preflight and the pre-restore dump, restore keeps exactly three
+pre-opened, identity-checked target backends: a persistent control backend, a
+primary replacement worker and an independent compensation worker. It sets the
+target database to `ALLOW_CONNECTIONS=false`, then verifies that only those
+three recorded PIDs remain; this is a post-fence catalog assertion, not a
+PostgreSQL PID allowlist. It deliberately does not terminate other sessions or require
+`pg_signal_backend`; if any peer remains, restore rejects cutover, reopens the
+unchanged target and instructs the operator to stop Northstar and every other
+database client before retrying.
+
+The control backend owns the maintenance and connection fences but never runs
+replacement SQL. Each worker first begins a transaction, takes its unique
+transaction-level advisory lock, verifies the prior database outcome marker and
+emits READY. Destructive SQL is sent only after READY. The same checked-in grant
+body used by post-migration reconciliation is applied inside the replacement
+transaction, so `public` is owned by the migrator and PUBLIC/runtime/backup ACLs
+and default privileges converge before commit. A unique database-level
+`northstar.restore_commit` outcome marker is written in that transaction
+immediately before a synchronous `COMMIT`. The control backend then takes the
+same transaction lock as a barrier
+before reading the marker, so worker EOF or a missing acknowledgement is never
+interpreted as commit or rollback evidence.
+
+Catchable-error cleanup first closes and drains the exact active worker. An
+incomplete command stream is rolled back by PostgreSQL on disconnect; an
+already-buffered commit remains observable through the barrier and marker.
+Unknown or unsettled outcomes preserve the hard connection fence and recovery
+artifacts. After the restore replay floor commits, the incoming marker must be
+cleared and rechecked before the target can reopen. Abrupt death of the control
+backend, `SIGKILL`, kernel panic and power loss remain manual recovery cases and
+are documented below.
 
 Incoming objects are copied and verified in a private
 `.northstar-restore-cutover-<id>` directory inside the upload volume. The

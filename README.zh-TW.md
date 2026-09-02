@@ -6,9 +6,9 @@ Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 伺服器。它提供 TCP、Direct TLS、WebSocket 與選用 BOSH 連線，以及聯邦、
 群聊、OMEMO 相容服務、網頁用戶端、REST 管理、防濫用、日誌及監控。
 
-目前發行版本為 `0.2.0`，仍屬 1.0 之前的版本，尚未接受獨立安全稽核。
-公開部署前請閱讀 [XEP 支援矩陣](XEP_MATRIX.md)與
-[已知限制](docs/KNOWN_ISSUES.md)。
+目前的發行候選版本為 `0.2.0`，仍屬 1.0 之前的版本，尚未正式發行或接受
+獨立安全稽核。公開部署前請閱讀 [XEP 支援矩陣](XEP_MATRIX.md)、
+[發行檢查表](docs/RELEASE_CHECKLIST.md)與[已知限制](docs/KNOWN_ISSUES.md)。
 
 其他資料請參閱[文件索引](docs/README.md)、[安全政策](SECURITY.md)、
 [正式維運手冊](docs/PRODUCTION_OPERATIONS.md)及
@@ -18,9 +18,10 @@ Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 
 ### 發行套件
 
-Northstar `0.2.0` 透過
+Northstar `0.2.0` 通過發行核准後，將透過
 [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases)
-提供下列檔案：
+提供下列預定檔案。在 tag workflow 建立 draft，且 checksum、provenance 與
+映像 digest 完成審核前，請勿視為已提供：
 
 | 資產 | 用途 |
 |---|---|

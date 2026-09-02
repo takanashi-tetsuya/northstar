@@ -4,7 +4,7 @@ All notable Northstar changes are documented here. Protocol support claims are
 normative only in [XEP_MATRIX.md](XEP_MATRIX.md), and unresolved release
 boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
-## [0.2.0] - 2026-09-01
+## [0.2.0] - Unreleased
 
 - The complete change set from the previous committed `0.1.0` baseline is
   recorded in the [0.2 development changelog](changelog/v0.2.md).
@@ -184,6 +184,50 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   reflected in the manifest fails closed; owner-held tables, immutable
   journals and MIX capacity authorities retain their exact least-privilege
   profiles.
+- Restore now proves the existing target is recoverable under the canonical
+  database grant authority before taking its rollback dump or entering the
+  connection-fenced cutover. The incoming payload must match the exact current
+  migration ledger and closed-world schema: its private validation PostgreSQL
+  now recreates the production-shaped unprivileged roles, restores as the
+  migrator rather than a superuser, and runs the same exact reconciliation
+  before the real target is touched. Rollback compensation uses the
+  same authority's lifecycle resolver for a genuinely empty/bootstrap target,
+  the migration-`0113` prepare state, or the exact current state. Unknown,
+  partial and noncanonical targets fail before cutover. Disaster-recovery
+  fixtures now retain their sentinels as canonical `users` plus `vcards` rows
+  instead of introducing test-only `public` tables outside the relation
+  manifest.
+- Restore cutover no longer multiplexes maintenance control, replacement SQL
+  and compensation through one failure domain. A persistent control session
+  owns the advisory/connection fences and reads a database-catalog outcome;
+  separate pre-opened primary and compensation workers perform incoming and
+  rollback replacement. Each replacement writes its unique database-level
+  outcome marker in the same synchronous commit as the restored schema and
+  grants. A transaction-level advisory barrier proves that PostgreSQL has
+  finished an interrupted worker before the control session interprets that
+  marker; cleanup first closes the exact active worker so an incomplete command
+  stream cannot remain idle inside a transaction. After new connections are
+  disabled, cutover verifies that exactly those three recorded backend PIDs and
+  no peers remain; it stays closed on an unknown or unsettled outcome and cannot
+  reopen after replay-floor commit until the incoming marker is cleared.
+- The MUC authorization race fixture now revokes an owner to `none` and proves
+  that the mutation returned `Applied` before expecting an unauthorized
+  affiliation-list snapshot. Demotion to `member` was not a revocation in a
+  members-only, non-anonymous room: members intentionally retain access to the
+  owner/admin/member lists needed to construct a complete OMEMO recipient set.
+- The message-PoW restart fixture now follows the canonical personal-message
+  admission graph rather than the legacy offline-only admission table. It
+  correlates each anti-abuse admission with the exact PoW challenge UUID,
+  verifies the bounded completed personal-delivery tombstone by actor, target
+  and origin-id, and constructs the pre-route crash cut in one transaction by
+  removing the exact personal authority before its exact queue projection.
+  Same-stream IQ/database-state barriers and ordered recipient-presence
+  barriers replace fixed sleeps; exact replays reuse the original PoW UUID and
+  nonce, and a reset WebSocket is a failure rather than evidence of no
+  duplicate. Restart verification rejects any queue row carrying the unique
+  crash marker rather than rechecking only a pre-restart UUID. The offline-row
+  deletion trigger can therefore no longer turn the synthetic crash into a
+  completed replay that suppresses the intended restart takeover.
 - The MIX runtime fixture now establishes an ordered recipient outbox/capability
   barrier before live group delivery, separates C2S admission from asynchronous
   delivery, keeps the normal delivery deadline so latency regressions remain

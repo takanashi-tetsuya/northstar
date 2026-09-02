@@ -15,6 +15,7 @@ const currentDocuments = [
   'docs/README.md',
   'docs/ARCHITECTURE.md',
   'docs/KNOWN_ISSUES.md',
+  'docs/BACKUP_SECURITY.md',
   'docs/PRODUCTION_OPERATIONS.md',
   'docs/DATABASE_ROLES.md',
   'docs/DEPLOYMENT_CAPACITY.md',
@@ -175,6 +176,13 @@ const staleStatements = new Map([
       'Generic PubSub is local to a Northstar deployment and is not federated by this cluster layer',
     ],
   ],
+  [
+    'docs/BACKUP_SECURITY.md',
+    [
+      'keeps one already-open target session',
+      'Once only the restore session remains',
+    ],
+  ],
 ]);
 for (const [relativePath, statements] of staleStatements) {
   const source = read(relativePath);
@@ -182,6 +190,20 @@ for (const [relativePath, statements] of staleStatements) {
     if (source.includes(statement)) {
       throw new Error(`${relativePath} retains a superseded statement: ${statement}`);
     }
+  }
+}
+
+const backupSecurity = read('docs/BACKUP_SECURITY.md');
+const normalizedBackupSecurity = backupSecurity.replace(/\s+/g, ' ');
+for (const marker of [
+  'exactly three',
+  'transaction-level advisory lock',
+  '`northstar.restore_commit`',
+  'synchronous',
+  'marker must be cleared',
+]) {
+  if (!normalizedBackupSecurity.includes(marker)) {
+    throw new Error(`BACKUP_SECURITY.md is missing the current restore boundary: ${marker}`);
   }
 }
 

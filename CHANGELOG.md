@@ -16,6 +16,26 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   known-issues register, an operations manual, a release checklist and an
   explicitly historical archive; added a loopback-only development profile and
   contributor/security policies.
+- Expanded the program authority model from module-level ownership into exact
+  admission, parsing, authentication, authorization, transaction, external
+  execution, publication, reconciliation and audit responsibilities. It now
+  inventories every top-level service, all 23 supervised workers plus the
+  cleanup observer, service capability, pool/role, private state family,
+  secret/key owner, configuration source, failure owner and verification
+  layer. CI compares unique documented worker/service identities with production
+  source and also locks worker criticality, continuous/one-shot mode,
+  watchdog presence and immediate/draining shutdown semantics rather than
+  enforcing only aggregate field counts. The ledger explicitly records current
+  boundaries that are weaker than the target design, including startup admin
+  bootstrap, taskless health observers, non-attested identity-audit credentials,
+  PIE file/audit ordering and parent-environment secret retention.
+- Closed three supervision gaps exposed by that ledger. Cluster authority loss
+  now returns its exact terminal error to the critical worker guardian before
+  the guardian cancels the process, while operator cancellation remains clean.
+  Administrator session-cleanup lease renewal is structured as a child future
+  of the exact effect instead of a detachable Tokio task. The PostgreSQL SM
+  notification listener emits an independent five-second liveness heartbeat
+  into a fifteen-second watchdog even while LISTEN traffic is quiet.
 - Pinned the release Rust toolchain, added Cargo repository metadata, and added
   OCI source/revision/version/license labels plus project license notices to all
   Northstar images.
@@ -208,22 +228,29 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   fixtures now retain their sentinels as canonical `users` plus `vcards` rows
   instead of introducing test-only `public` tables outside the relation
   manifest.
-- Restore cutover no longer multiplexes maintenance control, replacement SQL
-  and compensation through one failure domain. A persistent control session
-  owns the advisory/connection fences and reads a database-catalog outcome;
-  separate pre-opened primary and compensation workers perform incoming and
-  rollback replacement. Each replacement writes its unique database-level
-  outcome marker in the same synchronous commit as the restored schema and
-  grants. A transaction-level advisory barrier proves that PostgreSQL has
-  finished an interrupted worker before the control session interprets that
-  marker; cleanup first closes the exact active worker so an incomplete command
-  stream cannot remain idle inside a transaction. After new connections are
-  disabled, cutover verifies that exactly those three recorded backend PIDs and
-  no peers remain; it stays closed on an unknown or unsettled outcome and cannot
-  reopen after replay-floor commit until the incoming marker is cleared.
-- Restore's three live PostgreSQL backends no longer rely on multiple Bash
-  `coproc` instances. Bash only reliably tracks one coprocess, so control,
-  primary and compensation sessions now use separate private FIFO pairs with
+- Restore cutover no longer multiplexes maintenance control, transaction
+  arbitration, replacement SQL and compensation through one command path. A
+  persistent maintenance controller owns only the connection fence; a target
+  coordinator owns the database-local maintenance/transaction barriers and
+  post-barrier `pg_xact_status(xid8)` query; separate pre-opened primary and
+  compensation executors perform incoming and rollback replacement. Each
+  executor calls `pg_current_xact_id()` before READY. The parent strictly binds
+  that XID to the exact restore, target, kind, barrier and worker in an fsynced
+  journal before sending destructive SQL, and the replacement commits with
+  synchronous durability. Only PostgreSQL `committed` or `aborted` advances the
+  generation state; READY/DONE, EOF and process exit never do. Cleanup first
+  closes the exact active worker so an incomplete stream rolls back before the
+  coordinator waits. After new connections are disabled, cutover verifies that
+  exactly the three recorded target backend PIDs and no peers remain. Unknown,
+  in-progress or no-longer-retained XID status preserves the hard fence and
+  recovery evidence rather than granting the migrator broader configuration
+  privileges. The journal writer now completes short writes and propagates
+  file/directory fsync failure before any destructive byte is sent. Connection
+  fencing re-reads the exact `pg_database.datallowconn` value after both disable
+  and release, and clears local fence state only after the catalog converges.
+- Restore's four live PostgreSQL backends no longer rely on multiple Bash
+  `coproc` instances. Bash only reliably tracks one coprocess, so maintenance
+  control, target coordinator, primary and compensation sessions now use separate private FIFO pairs with
   explicit process IDs and parent-owned descriptors. Registered startup-only
   `O_RDWR` anchors prevent a child exit between FIFO opens from blocking the
   parent; both anchors are removed before the session becomes usable. FIFO names

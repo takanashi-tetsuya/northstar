@@ -1029,4 +1029,4 @@ fi
 [[ ! -e "$unsafe_floor_state_dir/floor.lock" ]] \
   || { echo "unsafe trusted-floor parent was mutated before rejection" >&2; exit 1; }
 
-echo "backup/restore: production signing+age+role separation, private validation PostgreSQL, non-terminating peer fence, atomic ACL convergence, shared maintenance fence, dump-to-upload validation, strict paths and budgets, same-filesystem journaled cutover, same-UUID/first-old/first-new/SIGTERM compensation, retry recovery, separate rollback retention and durable READY publication passed"
+echo "backup/restore: production signing+age+role separation, private validation PostgreSQL, non-terminating peer fence, atomic ACL convergence, shared maintenance fence, pre-destructive fsynced xid8 intent, post-barrier pg_xact_status arbitration, dump-to-upload validation, strict paths and budgets, same-filesystem journaled cutover, same-UUID/first-old/first-new/SIGTERM compensation, retry recovery, separate rollback retention and durable READY publication passed"

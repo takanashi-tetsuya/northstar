@@ -5229,7 +5229,12 @@ pub async fn run_failure_supervisor(
                             false,
                         ) {
                             state.cluster.require_shutdown();
-                            cancel.cancel();
+                            // The critical-worker supervisor owns process-wide
+                            // cancellation. Return the authority error first so
+                            // it can persist the terminal cause before waking
+                            // the main shutdown path; cancelling this shared
+                            // token here would make the same exit look like an
+                            // operator-requested shutdown.
                             anyhow::bail!(
                                 "PostgreSQL cluster key/instance authority was lost; refusing unfenced degraded operation: {error:#}"
                             );
@@ -5245,7 +5250,9 @@ pub async fn run_failure_supervisor(
                         ?policy,
                         "cluster safety lease expired; requesting supervised shutdown"
                     );
-                    cancel.cancel();
+                    // As above, the retained critical-worker supervisor must
+                    // record this exact terminal cause before it cancels the
+                    // service token.
                     anyhow::bail!("cluster safety lease expired before full reconciliation");
                 }
             }

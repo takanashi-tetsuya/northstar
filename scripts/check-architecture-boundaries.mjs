@@ -1932,6 +1932,280 @@ if (
   throw new Error('local available Caps replacement regained a remove-before-insert visibility gap');
 }
 
+// Responsibility documentation is part of the architecture boundary. Keep
+// the exact long-lived task identities and domain-service accessors synchronized
+// with the composition root so a renamed or newly introduced authority cannot
+// become invisible to review merely because aggregate budgets still pass.
+const responsibilityDocument = read('docs/PROGRAM_RESPONSIBILITIES.md');
+const mainSource = read('src/main.rs');
+function assertExactUniqueInventory(label, actual, expected) {
+  const counts = new Map();
+  for (const item of actual) counts.set(item, (counts.get(item) ?? 0) + 1);
+  const duplicates = [...counts].filter(([, count]) => count !== 1).map(([item]) => item);
+  const missing = expected.filter((item) => !counts.has(item));
+  const unexpected = [...counts.keys()].filter((item) => !expected.includes(item));
+  if (duplicates.length > 0 || missing.length > 0 || unexpected.length > 0) {
+    throw new Error(
+      `${label} inventory mismatch; duplicate=${duplicates.join(',') || '-'} ` +
+        `missing=${missing.join(',') || '-'} unexpected=${unexpected.join(',') || '-'}`,
+    );
+  }
+}
+
+const supervisedWorkerContracts = [
+  { name: 'abuse-key-deployment-authority', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(ABUSE_KEY_AUTHORITY_POLL_INTERVAL.saturating_mul(2))', draining: false },
+  { name: 'deployment-capacity-session-leases', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(capacity_interval.saturating_mul(2))', draining: false },
+  { name: 'background-maintenance', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(180))', draining: false },
+  { name: 'account-deletion-recovery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(1_200))', draining: false },
+  { name: 'upload-storage-reconciliation', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(600))', draining: false },
+  { name: 'archive-retention', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(retention_max_silence)', draining: false },
+  { name: 'admin-session-cleanup', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(90))', draining: false },
+  { name: 'redis-pubsub', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(45))', draining: false },
+  { name: 'cluster-maintenance', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(90))', draining: false },
+  { name: 'cluster-failure-policy', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(15))', draining: false },
+  { name: 'cluster-muc-outbox', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: false },
+  { name: 'locked-muc-expiry', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(20))', draining: false },
+  { name: 'federation-policy-refresh', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(10))', draining: false },
+  { name: 'administration-setting-refresh', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(5))', draining: false },
+  { name: 'service-control-watcher', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(3))', draining: false },
+  { name: 'sm-authority-listener', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(15))', draining: false },
+  { name: 'sm-suspension-recovery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: true },
+  { name: 'caps-side-effects', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(60))', draining: true },
+  { name: 'mix-iq-relay-expiry', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(10))', draining: false },
+  { name: 'mix-delivery-outbox', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: true },
+  { name: 'mix-presence-recovery', criticality: 'Restartable', mode: 'OneShot', watchdog: 'Some(Duration::from_secs(90))', draining: false },
+  { name: 'pubsub-digest-delivery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(5))', draining: false },
+  { name: 'pubsub-event-outbox-delivery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: false },
+];
+const supervisedWorkers = supervisedWorkerContracts.map(({ name }) => name);
+const workerResponsibilityEvidence = {
+  'abuse-key-deployment-authority': ['src/main.rs', '`main`', '2 ×'],
+  'deployment-capacity-session-leases': ['src/main.rs', '`main`', '2 ×'],
+  'background-maintenance': ['src/main.rs', '`main`', '180 s'],
+  'account-deletion-recovery': ['src/main.rs', '`main`', '1,200 s'],
+  'upload-storage-reconciliation': ['src/main.rs', '`main`', '600 s'],
+  'archive-retention': ['src/main.rs', '`main`', 'derived retention'],
+  'admin-session-cleanup': ['src/main.rs', '`main`', '90 s'],
+  'redis-pubsub': ['src/main.rs', '`main`, cluster only', '45 s'],
+  'cluster-maintenance': ['src/main.rs', '`main`, cluster only', '90 s'],
+  'cluster-failure-policy': ['src/main.rs', '`main`, cluster only', '15 s'],
+  'cluster-muc-outbox': ['src/cluster.rs', 'unconditionally registered', '30 s'],
+  'locked-muc-expiry': ['src/state.rs', '`AppState` MUC startup', '20 s'],
+  'federation-policy-refresh': ['src/state.rs', '`AppState` federation startup', '10 s'],
+  'administration-setting-refresh': ['src/state.rs', '`AppState` administration startup', '5 s'],
+  'service-control-watcher': ['src/state.rs', '`AppState` service-control startup', '3 s'],
+  'sm-authority-listener': ['src/services/sm.rs', '`SmService` startup', '15 s'],
+  'sm-suspension-recovery': ['src/services/session_cleanup.rs', 'session-cleanup service startup', '30 s'],
+  'caps-side-effects': ['src/xmpp/protocol/caps.rs', 'Caps subsystem startup', '60 s'],
+  'mix-iq-relay-expiry': ['src/xmpp/protocol/mix.rs', 'MIX protocol capability startup', '10 s'],
+  'mix-delivery-outbox': ['src/xmpp/protocol/mix.rs', 'MIX capability startup', '30 s'],
+  'mix-presence-recovery': ['src/xmpp/protocol/mix.rs', 'MIX capability startup', '90 s'],
+  'pubsub-digest-delivery': ['src/xmpp/protocol/pubsub.rs', 'PubSub capability startup', '5 s'],
+  'pubsub-event-outbox-delivery': ['src/xmpp/protocol/pubsub.rs', 'PubSub capability startup', '30 s'],
+};
+const workerDocumentBehaviorEvidence = {
+  'abuse-key-deployment-authority': ['first returned validation error/timeout'],
+  'upload-storage-reconciliation': ['three consecutive DB/provider/backlog reports'],
+  'cluster-maintenance': ['authentication or user-agent login generation'],
+  'cluster-failure-policy': ['any terminal attempt or silence cancels'],
+  'cluster-muc-outbox': ['in every mode', 'single-node PostgreSQL maintenance'],
+  'sm-authority-listener': ['5 s liveness tick'],
+};
+const productionRustSources = [];
+const pendingResponsibilitySources = [path.join(root, 'src')];
+while (pendingResponsibilitySources.length > 0) {
+  const current = pendingResponsibilitySources.pop();
+  for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+    const full = path.join(current, entry.name);
+    if (entry.isDirectory()) pendingResponsibilitySources.push(full);
+    else if (entry.isFile() && entry.name.endsWith('.rs')) {
+      const relative = path.relative(root, full).replaceAll('\\', '/');
+      productionRustSources.push({
+        relative,
+        source: productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative),
+      });
+    }
+  }
+}
+const productionRustSource = productionRustSources.map(({ source }) => source).join('\n');
+const workerRegistrationMatches = [
+  ...productionRustSource.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g),
+];
+const composedWorkers = workerRegistrationMatches.map((match) => match[2]);
+assertExactUniqueInventory('supervised-worker', composedWorkers, supervisedWorkers);
+for (const contract of supervisedWorkerContracts) {
+  const [expectedSource, documentedOwner, documentedWatchdog] =
+    workerResponsibilityEvidence[contract.name] ?? [];
+  const sourceEntry = productionRustSources.find(({ relative }) => relative === expectedSource);
+  if (!sourceEntry) throw new Error(`missing reviewed worker owner source: ${expectedSource}`);
+  const sourceRegistrations = [
+    ...sourceEntry.source.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g),
+  ].filter((match) => match[2] === contract.name);
+  if (sourceRegistrations.length !== 1) {
+    throw new Error(
+      `worker ${contract.name} must have exactly one registration in ${expectedSource}`,
+    );
+  }
+  const registration = sourceRegistrations[0];
+  const nextRegistration = sourceEntry.source.indexOf('.supervise', registration.index + 1);
+  const registrationEnd =
+    nextRegistration < 0 ? registration.index + 2500 : Math.min(nextRegistration, registration.index + 2500);
+  const tail = sourceEntry.source
+    .slice(registration.index, registrationEnd)
+    .replace(/\s+/g, ' ');
+  const expectedCriticality = `WorkerCriticality::${contract.criticality}`;
+  const expectedMode = `WorkerMode::${contract.mode}`;
+  const expectedWatchdog = contract.watchdog.replace(/\s+/g, ' ');
+  if (
+    !tail.includes(expectedCriticality) ||
+    !tail.includes(expectedMode) ||
+    !tail.includes(expectedWatchdog) ||
+    Boolean(registration[1]) !== contract.draining
+  ) {
+    throw new Error(
+      `supervised-worker contract drift for ${contract.name}: expected ` +
+        `${contract.criticality}/${contract.mode}/${contract.watchdog}/` +
+        `${contract.draining ? 'draining' : 'immediate'}`,
+    );
+  }
+  const documentRow = responsibilityDocument
+    .split(/\r?\n/)
+    .find((line) => line.includes(`| \`${contract.name}\` |`));
+  const documentedMode = contract.mode === 'OneShot' ? 'one-shot' : 'continuous';
+  if (
+    !documentRow ||
+    !documentRow.includes(documentedOwner) ||
+    !documentRow.includes(documentedWatchdog) ||
+    !documentRow.includes(`${contract.criticality.toLowerCase()} / ${documentedMode}`) ||
+    (contract.watchdog === 'None' && !documentRow.includes('**none**')) ||
+    (contract.draining && !documentRow.toLowerCase().includes('drain')) ||
+    (!contract.draining && !documentRow.includes('| immediate |'))
+  ) {
+    throw new Error(`program responsibility model has stale worker semantics: ${contract.name}`);
+  }
+  for (const evidence of workerDocumentBehaviorEvidence[contract.name] ?? []) {
+    if (!documentRow.includes(evidence)) {
+      throw new Error(
+        `program responsibility model omits ${contract.name} behavior evidence: ${evidence}`,
+      );
+    }
+  }
+}
+const healthObservers = [
+  ...productionRustSource.matchAll(/\.register_observer\(\s*"([^"]+)"/g),
+].map((match) => match[1]);
+if (healthObservers.length !== 1 || healthObservers[0] !== 'session-cleanup') {
+  throw new Error(
+    `production health-observer inventory differs from the reviewed responsibility model: ${healthObservers.join(', ')}`,
+  );
+}
+const sessionCleanupRow = responsibilityDocument
+  .split(/\r?\n/)
+  .find((line) => line.includes('| `session-cleanup` |'));
+if (
+  !sessionCleanupRow ||
+  !sessionCleanupRow.includes('**no task/factory**') ||
+  !sessionCleanupRow.includes('| none |')
+) {
+  throw new Error('program responsibility model must identify session-cleanup as a taskless observer');
+}
+if (
+  countMatches(state, /crate::cluster::start_muc_outbox_delivery\(/g) !== 1 ||
+  !read('src/cluster.rs').includes('also runs in supported single-node')
+) {
+  throw new Error('cluster MUC PostgreSQL maintenance must remain unconditionally composed');
+}
+const operationRuntimeOwnershipSource = read('src/operation_runtime.rs');
+if (/tokio::spawn\s*\(\s*admin_session_cleanup_heartbeat/.test(operationRuntimeOwnershipSource)) {
+  throw new Error('administrator cleanup lease renewal must not be a detached Tokio task');
+}
+const structuredCleanupRenewal = structBody(
+  operationRuntimeOwnershipSource,
+  'async fn execute_with_lease_renewal',
+);
+for (const invariant of [
+  'tokio::select!',
+  'renewal_stop.cancel()',
+  'result = &mut renewal',
+]) {
+  if (!structuredCleanupRenewal.includes(invariant)) {
+    throw new Error(`administrator cleanup lost structured lease ownership: ${invariant}`);
+  }
+}
+if (!/renewal\s*\.await/.test(structuredCleanupRenewal)) {
+  throw new Error('administrator cleanup must await its cancelled lease renewal');
+}
+const clusterFailureSupervisor = structBody(
+  read('src/cluster.rs'),
+  'pub async fn run_failure_supervisor(',
+);
+if (clusterFailureSupervisor.includes('cancel.cancel()')) {
+  throw new Error(
+    'cluster failure policy must return its terminal error before WorkerRegistry cancels the service',
+  );
+}
+for (const invariant of ['state.cluster.require_shutdown()', 'anyhow::bail!']) {
+  if (!clusterFailureSupervisor.includes(invariant)) {
+    throw new Error(`cluster failure policy lost fail-closed transition: ${invariant}`);
+  }
+}
+const serviceTaskNames = [
+  'XMPP',
+  'XMPPS',
+  'S2S',
+  'S2S TLS',
+  'external component',
+  'durable operation worker',
+  'HTTP',
+  'metrics',
+];
+const composedServiceTasks = [
+  ...mainSource.matchAll(/spawn_service_task\(\s*&mut service_tasks,\s*"([^"]+)"/g),
+].map((match) => match[1]);
+assertExactUniqueInventory('top-level service task', composedServiceTasks, serviceTaskNames);
+for (const task of serviceTaskNames) {
+  if (!mainSource.includes(`"${task}"`)) {
+    throw new Error(`documented top-level service task is absent from main.rs: ${task}`);
+  }
+  if (!responsibilityDocument.includes(`\`${task}\``)) {
+    throw new Error(`program responsibility model omits top-level service task: ${task}`);
+  }
+}
+const stateServiceAccessors = [
+  'authentication_service',
+  'account_service',
+  'admin_command_service',
+  'message_service',
+  'retraction_service',
+  'replay_service',
+  'sm_service',
+  'roster_service',
+  'presence_service',
+  'privacy_service',
+  'blocking_service',
+  'mam_service',
+  'pubsub_service',
+  'profile_service',
+  'private_storage_service',
+  'muc_service',
+  'mix_service',
+  'push_service',
+  'upload_service',
+  'extdisco_service',
+];
+const composedServiceAccessors = [
+  ...state.matchAll(/pub\(crate\)\s+fn\s+([a-z_]+_service)\s*\(/g),
+].map((match) => match[1]);
+assertExactUniqueInventory('AppState service accessor', composedServiceAccessors, stateServiceAccessors);
+for (const accessor of stateServiceAccessors) {
+  if (!state.includes(`fn ${accessor}(`)) {
+    throw new Error(`documented AppState service accessor is absent: ${accessor}`);
+  }
+  if (!responsibilityDocument.includes(`\`${accessor}()\``)) {
+    throw new Error(`program responsibility model omits service accessor: ${accessor}`);
+  }
+}
+
 const largestAuthority = [...perFile]
   .sort((left, right) => right.authorityReferences - left.authorityReferences)
   .slice(0, 5)

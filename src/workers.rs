@@ -1173,10 +1173,47 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), cancel.cancelled())
             .await
             .expect("critical worker must fail fast");
+        assert_eq!(
+            registry.critical_failure().as_deref(),
+            Some("critical worker test-critical failed: injected exit"),
+            "the terminal cause must be committed before cancellation wakes main"
+        );
         let report = registry
             .shutdown_and_join(&cancel, Duration::from_secs(1))
             .await;
         assert!(report.is_clean(), "unclean worker shutdown: {report:?}");
+    }
+
+    #[tokio::test]
+    async fn operator_cancellation_of_critical_worker_has_no_terminal_failure() {
+        let registry = WorkerRegistry::new();
+        let cancel = CancellationToken::new();
+        let started = Arc::new(AtomicBool::new(false));
+        registry.supervise(
+            "test-critical-operator-cancel",
+            WorkerCriticality::Critical,
+            WorkerMode::Continuous,
+            None,
+            cancel.clone(),
+            {
+                let started = Arc::clone(&started);
+                move |_| {
+                    let started = Arc::clone(&started);
+                    async move {
+                        started.store(true, Ordering::SeqCst);
+                        std::future::pending::<Result<()>>().await
+                    }
+                }
+            },
+        );
+        wait_for(|| started.load(Ordering::SeqCst)).await;
+
+        shutdown(&registry, &cancel).await;
+
+        assert!(
+            registry.critical_failure().is_none(),
+            "operator cancellation must remain a clean shutdown"
+        );
     }
 
     #[tokio::test]

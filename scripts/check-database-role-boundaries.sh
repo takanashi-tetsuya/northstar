@@ -823,15 +823,21 @@ for restore_session_contract in \
   'settle_active_restore_transaction' \
   'abort_active_restore_worker_for_cleanup' \
   'Closing stdin is the transaction-safe interrupt.' \
-  'refusing to interpret a restore marker before the replacement transaction settles' \
   'refusing to release the database fence while a replacement transaction is unsettled' \
   'refusing to release the database fence while the restore outcome is unknown' \
-  'refusing to release the database fence before retiring the committed restore marker' \
+  'refusing to release the database fence without a committed replacement generation' \
+  'refusing to release the database fence before the original generation is restored' \
   '[[ "$database_fence_active" == true ]]' \
   'SET LOCAL synchronous_commit TO on;' \
   "pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(:'restore_barrier_key', 0))" \
-  'read_target_restore_outcome' \
-  'ALTER DATABASE %%I SET northstar.restore_commit TO %%L' \
+  'pg_catalog.pg_current_xact_id()::text' \
+  "pg_catalog.pg_xact_status((:'restore_xid')::pg_catalog.xid8)" \
+  'journal_append database-transaction-intent "$transaction_kind" "$label"' \
+  'journal_append database-transaction-outcome "$settled_kind" "$settled_label"' \
+  'record_restore_transaction_result' \
+  'incoming_restore_xid="$transaction_xid"' \
+  'rollback_restore_xid="$transaction_xid"' \
+  '"$transaction_xid" != "$incoming_restore_xid"' \
   'replace_database_from_dump "$payload_dir/database.dump" restored exact' \
   'replace_database_from_dump "$rollback_dump" rollback auto' \
   '"target-database=$target_database"' \
@@ -849,8 +855,8 @@ for restore_authority_contract in \
   'compensation:compensation_worker_pid:compensation_worker_in:compensation_worker_out:target' \
   'control_session_command() {' \
   'target_coordinator_command() {' \
-  'read_target_restore_outcome() {' \
-  'clear_target_restore_outcome() {' \
+  'wait_for_restore_transaction_barrier() {' \
+  'record_restore_transaction_result() {' \
   'read_restore_worker_identity() {' \
   'discover_target_coordinator_identity() {' \
   'verify_primary_target_identity() {' \
@@ -865,6 +871,24 @@ for restore_authority_contract in \
   require_literal "$restore_runner" "$restore_authority_contract" \
     "restore responsibility boundary is missing: $restore_authority_contract"
 done
+for retired_restore_outcome_contract in \
+  'northstar.restore_commit' \
+  'pg_db_role_setting' \
+  'read_target_restore_outcome' \
+  'clear_target_restore_outcome' \
+  'restore_outcome_clear_started' \
+  'restore_outcome_cleared' \
+  'incoming_outcome_marker' \
+  'rollback_outcome_marker'; do
+  if grep -Fq "$retired_restore_outcome_contract" "$restore_runner"; then
+    fail "restore must use PostgreSQL XID status, not retired outcome-marker state: $retired_restore_outcome_contract"
+  fi
+done
+if grep -Eq \
+    'ALTER[[:space:]]+DATABASE.*(SET|RESET)[[:space:]]+northstar\.|(set_config|current_setting)[[:space:]]*\([^)]*northstar\.restore' \
+    "$restore_runner"; then
+  fail 'restore must not reintroduce a database-level custom GUC as transaction outcome authority'
+fi
 for ambiguous_restore_symbol in db_session_command read_restore_outcome \
   clear_restore_outcome set_database_connections activate_database_fence \
   release_database_fence initialize_restore_worker; do
@@ -879,10 +903,24 @@ policy_lock_block=$(shell_function_block "$restore_runner" acquire_primary_polic
 policy_unlock_block=$(shell_function_block "$restore_runner" release_primary_policy_lock_after_fence)
 barrier_block=$(shell_function_block "$restore_runner" wait_for_restore_transaction_barrier)
 connection_fence_block=$(shell_function_block "$restore_runner" set_target_database_connections)
-outcome_read_block=$(shell_function_block "$restore_runner" read_target_restore_outcome)
-outcome_clear_block=$(shell_function_block "$restore_runner" clear_target_restore_outcome)
+release_fence_block=$(shell_function_block "$restore_runner" release_target_database_fence)
+transaction_result_block=$(shell_function_block "$restore_runner" record_restore_transaction_result)
 identity_read_block=$(shell_function_block "$restore_runner" read_restore_worker_identity)
 target_identity_block=$(shell_function_block "$restore_runner" discover_target_coordinator_identity)
+barrier_function_line=$(grep -nF 'wait_for_restore_transaction_barrier() {' "$restore_runner" \
+  | head -n 1 | cut -d: -f1)
+barrier_begin_line=$(awk -v start="$barrier_function_line" \
+  'NR > start && /^}/ { exit } NR > start && /printf .*BEGIN;/ { print NR; exit }' \
+  "$restore_runner")
+barrier_lock_line=$(awk -v start="$barrier_function_line" \
+  'NR > start && /^}/ { exit } NR > start && /pg_advisory_xact_lock/ { print NR; exit }' \
+  "$restore_runner")
+barrier_status_line=$(awk -v start="$barrier_function_line" \
+  'NR > start && /^}/ { exit } NR > start && /pg_xact_status/ { print NR; exit }' \
+  "$restore_runner")
+barrier_commit_line=$(awk -v start="$barrier_function_line" \
+  'NR > start && /^}/ { exit } NR > start && /printf .*COMMIT;/ { print NR; exit }' \
+  "$restore_runner")
 [[ "$target_lock_block" == *'target_coordinator_command "$lock_sql" "$lock_output"'* \
    && "$target_lock_block" != *'control_session_command'* \
    && "$target_lock_block" != *'primary_worker_command'* ]] \
@@ -897,13 +935,29 @@ target_identity_block=$(shell_function_block "$restore_runner" discover_target_c
   || fail 'database policy lock ownership must remain on the primary executor through the hard fence'
 [[ "$barrier_block" == *'target_coordinator_command "$barrier_sql" "$barrier_output"'* \
    && "$barrier_block" != *'control_session_command'* \
+   && "$barrier_block" == *"pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(:'restore_barrier_key', 0))"* \
+   && "$barrier_block" == *"pg_catalog.pg_xact_status((:'restore_xid')::pg_catalog.xid8)"* \
    && "$connection_fence_block" == *'control_session_command "$sql_file" "$output_file"'* \
-   && "$connection_fence_block" != *'target_coordinator_command'* \
-   && "$outcome_read_block" == *'control_session_command "$outcome_sql" "$outcome_output"'* \
-   && "$outcome_read_block" != *'target_coordinator_command'* \
-   && "$outcome_clear_block" == *'control_session_command "$clear_sql"'* \
-   && "$outcome_clear_block" != *'target_coordinator_command'* ]] \
-  || fail 'restore coordinator/controller command ownership has crossed its database scope'
+   && "$connection_fence_block" != *'target_coordinator_command'* ]] \
+  || fail 'restore transaction status/barrier and connection-fence ownership crossed their database scopes'
+[[ -n "$barrier_function_line" && -n "$barrier_begin_line" \
+   && -n "$barrier_lock_line" && -n "$barrier_status_line" \
+   && -n "$barrier_commit_line" \
+   && "$barrier_function_line" -lt "$barrier_begin_line" \
+   && "$barrier_begin_line" -lt "$barrier_lock_line" \
+   && "$barrier_lock_line" -lt "$barrier_status_line" \
+   && "$barrier_status_line" -lt "$barrier_commit_line" ]] \
+  || fail 'restore must acquire the transaction barrier before querying pg_xact_status in that same transaction'
+[[ "$transaction_result_block" == *'incoming_restore_xid="$transaction_xid"'* \
+   && "$transaction_result_block" == *'rollback_restore_xid="$transaction_xid"'* \
+   && "$transaction_result_block" == *'"$transaction_xid" != "$incoming_restore_xid"'* \
+   && "$transaction_result_block" == *'database_generation_state="replacement"'* \
+   && "$transaction_result_block" == *'database_generation_state="original"'* \
+   && "$release_fence_block" == *'"$incoming_restore_status" != committed'* \
+   && "$release_fence_block" == *'"$database_generation_state" != replacement'* \
+   && "$release_fence_block" == *'"$database_generation_state" != original'* \
+   && "$release_fence_block" == *'"$rollback_restore_status" != committed'* ]] \
+  || fail 'incoming/rollback XIDs, generation state and fence release must remain one explicit state machine'
 [[ "$identity_read_block" == *'local -n pid_result="$5" database_result="$6"'* \
    && "$identity_read_block" == *'local init_sql="$work_dir/$label-worker-init.sql" parsed_database parsed_pid'* \
    && "$identity_read_block" == *'pid_result="$parsed_pid"'* \
@@ -1078,20 +1132,16 @@ primary_identity_line=$(grep -nF 'verify_primary_target_identity || return 1' \
   "$restore_runner" | head -n 1 | cut -d: -f1)
 policy_lock_line=$(grep -nF 'acquire_primary_policy_lock || return 1' "$restore_runner" \
   | head -n 1 | cut -d: -f1)
-initial_outcome_line=$(awk -v start="$policy_lock_line" \
-  'NR > start && /if ! read_target_restore_outcome/ { print NR; exit }' "$restore_runner")
 current_preflight_line=$(grep -nE '^  preflight_current_database_recoverability$' \
   "$restore_runner" | head -n 1 | cut -d: -f1)
 [[ -n "$control_identity_line" && -n "$target_discovery_line" \
    && -n "$maintenance_lock_line" && -n "$primary_identity_line" \
-   && -n "$policy_lock_line" && -n "$initial_outcome_line" \
-   && -n "$current_preflight_line" \
+   && -n "$policy_lock_line" && -n "$current_preflight_line" \
    && "$control_identity_line" -lt "$target_discovery_line" \
    && "$target_discovery_line" -lt "$maintenance_lock_line" \
    && "$maintenance_lock_line" -lt "$primary_identity_line" \
    && "$primary_identity_line" -lt "$policy_lock_line" \
-   && "$policy_lock_line" -lt "$initial_outcome_line" \
-   && "$initial_outcome_line" -lt "$current_preflight_line" ]] \
+   && "$policy_lock_line" -lt "$current_preflight_line" ]] \
   || fail 'restore authority setup must order controller, coordinator lock, primary policy and preflight exactly'
 rollback_dump_line=$(grep -nF 'run_pg_client_without_parent_fds pg_dump' "$restore_runner" \
   | head -n 1 | cut -d: -f1)
@@ -1108,10 +1158,18 @@ exact_target_sessions_line=$(grep -nF \
   "$restore_runner" | head -n 1 | cut -d: -f1)
 hard_fence_state_line=$(grep -nF 'database_fence_active=true' "$restore_runner" \
   | head -n 1 | cut -d: -f1)
-outcome_marker_line=$(grep -nF \
-  'ALTER DATABASE %%I SET northstar.restore_commit TO %%L' "$restore_runner" \
+replace_function_line=$(grep -nF 'replace_database_from_dump() {' "$restore_runner" \
+  | head -n 1 | cut -d: -f1)
+xid_capture_line=$(awk -v start="$replace_function_line" \
+  'NR > start && /pg_catalog\.pg_current_xact_id\(\)::text/ { print NR; exit }' \
+  "$restore_runner")
+xid_intent_line=$(grep -nF \
+  'journal_append database-transaction-intent "$transaction_kind" "$label"' "$restore_runner" \
   | head -n 1 | cut -d: -f1)
 synchronous_commit_line=$(grep -nF 'SET LOCAL synchronous_commit TO on;' \
+  "$restore_runner" | head -n 1 | cut -d: -f1)
+drop_schema_line=$(grep -nF \
+  "EXECUTE format('DROP SCHEMA %I CASCADE', user_schema.nspname);" \
   "$restore_runner" | head -n 1 | cut -d: -f1)
 [[ -n "$policy_lock_line" && -n "$rollback_dump_line" \
    && "$policy_lock_line" -lt "$rollback_dump_line" \
@@ -1127,32 +1185,49 @@ synchronous_commit_line=$(grep -nF 'SET LOCAL synchronous_commit TO on;' \
    && "$allow_connections_false_line" -lt "$exact_target_sessions_line" \
    && "$exact_target_sessions_line" -lt "$hard_fence_state_line" ]] \
   || fail 'restore hard fence must disable new connections and prove exactly three target sessions before activation'
-[[ -n "$outcome_marker_line" && -n "$post_grant_commit_line" \
-   && -n "$synchronous_commit_line" \
+[[ -n "$replace_function_line" && -n "$xid_capture_line" \
+   && -n "$xid_intent_line" && -n "$drop_schema_line" \
+   && "$replace_function_line" -lt "$xid_capture_line" \
+   && "$xid_capture_line" -lt "$xid_intent_line" \
+   && "$xid_intent_line" -lt "$drop_schema_line" ]] \
+  || fail 'restore must obtain and durably journal its xid8 before sending destructive SQL'
+require_literal "$restore_runner" '"target-database=$target_database"' \
+  'restore XID journal intent must bind the target database'
+require_literal "$restore_runner" '"worker-backend-pid=$worker_backend_pid"' \
+  'restore XID journal intent must bind the exact executor backend'
+journal_block=$(shell_function_block "$restore_runner" journal_append)
+[[ "$journal_block" == *'os.fsync(fd)'* \
+   && "$journal_block" == *'while remaining:'* \
+   && "$journal_block" == *'written = os.write(fd, remaining)'* \
+   && "$journal_block" == *'if ! python3 - "$journal_file" "$@"'* \
+   && "$journal_block" == *'fsync_path "$cutover_dir" || return 1'* ]] \
+  || fail 'restore journal must propagate complete-write, file-fsync and directory-fsync failures'
+[[ "$connection_fence_block" == *'control_session_command "$sql_file" "$output_file" || return 1'* \
+   && "$connection_fence_block" == *'__NORTHSTAR_ALLOW_CONNECTIONS__'* \
+   && "$connection_fence_block" == *'"$catalog_count" != 1'* \
+   && "$connection_fence_block" == *'"$catalog_value" != "$expected"'* ]] \
+  || fail 'restore connection fence must verify the exact pg_database catalog state'
+[[ "$release_fence_block" == *'if ! set_target_database_connections true; then'* \
+   && "$release_fence_block" == *'database_outcome_unknown=true'* ]] \
+  || fail 'restore must remain fail-closed when the database connection fence cannot be released'
+[[ -n "$post_grant_commit_line" && -n "$synchronous_commit_line" \
    && "$grant_apply_line" -lt "$synchronous_commit_line" \
-   && "$synchronous_commit_line" -lt "$outcome_marker_line" \
-   && "$outcome_marker_line" -lt "$post_grant_commit_line" ]] \
-  || fail 'restore must force durable commit and write its transactional catalog outcome before replacement COMMIT'
+   && "$synchronous_commit_line" -lt "$post_grant_commit_line" ]] \
+  || fail 'restore must force a synchronous replacement commit after ACL convergence'
 ready_wait_line=$(grep -nF \
   'psql_session_wait_token "$worker_out" "$ready_token" "$output_file"' \
   "$restore_runner" | head -n 1 | cut -d: -f1)
 active_transaction_line=$(grep -nF 'restore_transaction_active=true' \
   "$restore_runner" | head -n 1 | cut -d: -f1)
-drop_schema_line=$(grep -nF \
-  "EXECUTE format('DROP SCHEMA %I CASCADE', user_schema.nspname);" \
-  "$restore_runner" | head -n 1 | cut -d: -f1)
 normal_settle_line=$(grep -nF 'settle_active_restore_transaction || return 2' \
   "$restore_runner" | tail -n 1 | cut -d: -f1)
-normal_outcome_line=$(awk -v start="$normal_settle_line" \
-  'NR > start && /if ! read_target_restore_outcome/ { print NR; exit }' "$restore_runner")
 [[ -n "$active_transaction_line" && -n "$ready_wait_line" \
    && -n "$drop_schema_line" \
    && "$active_transaction_line" -lt "$ready_wait_line" \
    && "$ready_wait_line" -lt "$drop_schema_line" \
-   && -n "$normal_settle_line" && -n "$normal_outcome_line" \
-   && "$post_grant_commit_line" -lt "$normal_settle_line" \
-   && "$normal_settle_line" -lt "$normal_outcome_line" ]] \
-  || fail 'restore must require READY before destructive SQL and settle COMMIT before reading its marker'
+   && -n "$normal_settle_line" \
+   && "$post_grant_commit_line" -lt "$normal_settle_line" ]] \
+  || fail 'restore must require READY before destructive SQL and settle COMMIT before classifying pg_xact_status'
 finish_restore_line=$(grep -nF 'finish_restore() {' "$restore_runner" \
   | head -n 1 | cut -d: -f1)
 finish_signal_mask_line=$(awk -v start="$finish_restore_line" \
@@ -1175,11 +1250,11 @@ finish_clear_exit_line=$(awk -v start="$finish_reentry_guard_line" \
   || fail 'restore cleanup must mask asynchronous termination before its re-entry guard clears EXIT'
 finish_settle_line=$(awk -v start="$finish_restore_line" \
   'NR > start && /settle_active_restore_transaction/ { print NR; exit }' "$restore_runner")
-finish_outcome_line=$(awk -v start="$finish_restore_line" \
-  'NR > start && /read_target_restore_outcome/ { print NR; exit }' "$restore_runner")
-[[ -n "$finish_settle_line" && -n "$finish_outcome_line" \
-   && "$finish_settle_line" -lt "$finish_outcome_line" ]] \
-  || fail 'restore cleanup must settle any active replacement transaction before interpreting outcome'
+finish_generation_line=$(awk -v start="$finish_settle_line" \
+  'NR > start && /incoming_restore_status/ { print NR; exit }' "$restore_runner")
+[[ -n "$finish_settle_line" && -n "$finish_generation_line" \
+   && "$finish_settle_line" -lt "$finish_generation_line" ]] \
+  || fail 'restore cleanup must settle any active replacement transaction before trusting generation state'
 finish_abort_line=$(awk -v start="$finish_restore_line" \
   'NR > start && /abort_active_restore_worker_for_cleanup/ { print NR; exit }' "$restore_runner")
 if [[ -n "$finish_abort_line" ]]; then
@@ -1208,25 +1283,22 @@ settle_barrier_line=$(awk -v start="$settle_abort_line" \
    && "$settle_cleanup_line" -lt "$settle_abort_line" \
    && "$settle_abort_line" -lt "$settle_barrier_line" ]] \
   || fail 'interrupted restore cleanup must end the exact worker before waiting on its transaction barrier'
-require_literal "$restore_runner" \
-  'restore_outcome_clear_started=true' \
-  'committed restore cleanup cannot reconcile an interrupted marker clear'
 committed_finish_line=$(awk -v start="$finish_restore_line" \
   'NR > start && /if \[\[ "\$restore_committed" == true \]\]/ { print NR; exit }' \
   "$restore_runner")
 committed_settle_line=$(awk -v start="$committed_finish_line" \
   'NR > start && /settle_active_restore_transaction/ { print NR; exit }' "$restore_runner")
-committed_clear_line=$(awk -v start="$committed_finish_line" \
-  'NR > start && /clear_target_restore_outcome "\$incoming_outcome_marker"/ { print NR; exit }' \
+committed_generation_line=$(awk -v start="$committed_settle_line" \
+  'NR > start && /incoming_restore_status/ { print NR; exit }' \
   "$restore_runner")
 finish_release_line=$(awk -v start="$finish_restore_line" \
   'NR > start && /release_target_database_fence/ { print NR; exit }' "$restore_runner")
 [[ -n "$committed_finish_line" && -n "$committed_settle_line" \
-   && -n "$committed_clear_line" && -n "$finish_release_line" \
+   && -n "$committed_generation_line" && -n "$finish_release_line" \
    && "$committed_finish_line" -lt "$committed_settle_line" \
-   && "$committed_settle_line" -lt "$committed_clear_line" \
-   && "$committed_clear_line" -lt "$finish_release_line" ]] \
-  || fail 'committed restore cleanup must settle, verify, and clear its exact marker before releasing the fence'
+   && "$committed_settle_line" -lt "$committed_generation_line" \
+   && "$committed_generation_line" -lt "$finish_release_line" ]] \
+  || fail 'committed restore cleanup must settle and verify the committed incoming generation before releasing the fence'
 require_literal "$disaster_fixture" \
   'BACKUP_SECURITY_POLICY=production bash "$project_dir/scripts/backup.sh"' \
   'disaster-recovery fixture does not exercise the production backup policy'

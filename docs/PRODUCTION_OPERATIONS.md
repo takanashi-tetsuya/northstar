@@ -1258,10 +1258,10 @@ activation detect a late filesystem mutation and prevent commit.
 Database control and replacement use separate session and command lifecycles.
 They share the restore parent, migrator credential, container and PostgreSQL
 cluster, so they are not independent security or restart domains. The persistent
-control backend connects to `postgres`; it changes the target database
-connection fence and reads the authoritative target outcome from shared
-catalogs. A separate target coordinator owns the database-local maintenance
-lock and transaction barriers, preserving mutual exclusion with backup.
+control backend connects to `postgres` and changes only the target database
+connection fence. A separate target coordinator owns the database-local
+maintenance lock, transaction barriers and post-barrier transaction-status
+queries, preserving mutual exclusion with backup.
 PostgreSQL rejects changing
 `ALLOW_CONNECTIONS` from a session in that same database, so the migrator must
 retain an explicit database-level `CONNECT` on `postgres` but receives no
@@ -1283,24 +1283,30 @@ anchors after redirection, and the parent closes and unregisters its anchors as
 soon as both real endpoints exist. Workers and short-lived dump tools also
 close inherited session and restore-floor-lock descriptors before execution;
 this avoids Bash's single-coprocess bookkeeping while ensuring that normal
-input closure produces EOF for that worker only. Each
-replacement transaction writes a unique database-level
-`northstar.restore_commit` marker before a synchronous `COMMIT`. After new
-connections are disabled, the control backend verifies that those three target
-PIDs are the only remaining target sessions; PostgreSQL is not configured
-with a PID allowlist. A READY phase
-first proves that the worker owns a unique transaction-level advisory lock and
-that the prior marker still matches. Destructive replacement SQL is not sent
-before READY. The target coordinator must acquire that same target-local transaction lock before
-it reads the catalog marker, so EOF is never treated as evidence either way. If
-cleanup interrupts an incomplete command stream, it closes and drains the exact
-active worker first: PostgreSQL either finishes an already-buffered commit or
-rolls back on disconnect, after which the barrier and marker give one
-authoritative outcome. A missing marker means the incoming replacement did not
-commit, the incoming marker authorizes exact rollback compensation, and an
-unknown marker keeps PostgreSQL closed for operator recovery. After the restore
-replay floor is durable, the fence still cannot reopen until the exact incoming
-marker is cleared; interruption during marker clearing is reconciled explicitly.
+input closure produces EOF for that worker only. After new connections are
+disabled, the control backend verifies that those three target PIDs are the
+only remaining target sessions; PostgreSQL is not configured with a PID
+allowlist.
+
+Each replacement transaction acquires a unique transaction-level advisory lock
+and calls `pg_current_xact_id()` before READY. The parent accepts exactly one
+nonzero `xid8` and fsyncs an intent binding restore ID, target database,
+incoming/rollback kind, barrier and exact executor before sending any schema
+drop or dump bytes. Failure to persist that intent closes the executor input;
+no destructive SQL has been sent. The replacement and checked-in grant policy
+then commit with `synchronous_commit=on`.
+
+The target coordinator acquires the same transaction lock and calls
+`pg_xact_status(xid8)` in that barrier transaction, so EOF, DONE and worker exit
+are never treated as commit evidence. Only `committed` or `aborted` advances the
+state machine. `in progress`, `NULL`, malformed output or query failure keeps
+PostgreSQL closed and preserves recovery evidence. A committed incoming XID
+authorizes exact rollback compensation; compensation publishes and verifies a
+different XID. Once the replay floor is durable, the fence can reopen only
+when the incoming transaction is committed and the replacement generation is
+authoritative. PostgreSQL may discard status for sufficiently old XIDs, so a
+hard-crash journal left unresolved for that long remains a manual fail-closed
+recovery case rather than being guessed.
 
 `SIGINT`, `SIGTERM`, shell errors and ordinary exits use one compensation path.
 If pre-commit compensation or connection re-enable is incomplete, the script

@@ -13,6 +13,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Weak,
     },
+    time::Duration,
 };
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -1146,6 +1147,8 @@ async fn run_sm_authority_listener(
         .context("could not subscribe to SM authority notifications")?;
     authority.publish_listener_transition();
     heartbeat.ok();
+    let mut liveness = tokio::time::interval(Duration::from_secs(5));
+    liveness.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
@@ -1153,6 +1156,13 @@ async fn run_sm_authority_listener(
             _ = cancel.cancelled() => {
                 authority.publish_listener_transition();
                 return Ok(());
+            }
+            _ = liveness.tick() => {
+                // LISTEN is legitimately quiet when no SM authority changes
+                // occur. A periodic supervisor heartbeat proves that this
+                // task is still schedulable without turning notification
+                // silence into a false failure.
+                heartbeat.ok();
             }
             notification = listener.try_recv() => {
                 match notification {
@@ -1205,7 +1215,7 @@ pub(crate) fn start_sm_authority_listener(
         "sm-authority-listener",
         crate::workers::WorkerCriticality::Restartable,
         crate::workers::WorkerMode::Continuous,
-        None,
+        Some(Duration::from_secs(15)),
         cancel.clone(),
         move |heartbeat| {
             let authority = Arc::clone(&authority);

@@ -1,4 +1,5 @@
 use std::{
+    future::Future,
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
@@ -77,18 +78,23 @@ async fn run_one_admin_session_cleanup(state: &Arc<AppState>, worker_id: Uuid) -
     else {
         return Ok(false);
     };
-    let heartbeat_stop = CancellationToken::new();
-    let heartbeat = tokio::spawn(admin_session_cleanup_heartbeat(
-        Arc::clone(state),
-        lease.clone(),
-        worker_id,
-        heartbeat_stop.clone(),
-    ));
-    let effect = execute_admin_session_cleanup(state, &lease, worker_id).await;
-    heartbeat_stop.cancel();
-    heartbeat
-        .await
-        .context("administrator session-cleanup heartbeat panicked")??;
+    // Keep the renewal future in this attempt's structured-concurrency scope.
+    // WorkerRegistry may drop an attempt immediately during shutdown or after
+    // a terminal health transition. A detached Tokio task would survive that
+    // drop and could continue renewing a lease after its effect owner ceased
+    // to exist.
+    let effect = execute_with_lease_renewal(
+        execute_admin_session_cleanup(state, &lease, worker_id),
+        |heartbeat_stop| {
+            admin_session_cleanup_heartbeat(
+                Arc::clone(state),
+                lease.clone(),
+                worker_id,
+                heartbeat_stop,
+            )
+        },
+    )
+    .await;
 
     match effect {
         Ok(true) => {
@@ -124,6 +130,46 @@ async fn run_one_admin_session_cleanup(state: &Arc<AppState>, worker_id: Uuid) -
         }
     }
     Ok(true)
+}
+
+/// Run one effect and its lease renewal in a single cancellation scope.
+///
+/// The renewal is deliberately a child future rather than a spawned task:
+/// dropping this future drops both children synchronously. When the effect
+/// completes (successfully or with an error), renewal is cancelled and then
+/// driven to completion before the effect result is returned. If renewal
+/// fails first, the effect is dropped and must not continue under a lost
+/// fence.
+async fn execute_with_lease_renewal<T, Effect, Renewal, RenewalFactory>(
+    effect: Effect,
+    renewal_factory: RenewalFactory,
+) -> Result<T>
+where
+    Effect: Future<Output = Result<T>>,
+    Renewal: Future<Output = Result<()>>,
+    RenewalFactory: FnOnce(CancellationToken) -> Renewal,
+{
+    let renewal_stop = CancellationToken::new();
+    let effect = effect;
+    let renewal = renewal_factory(renewal_stop.clone());
+    tokio::pin!(effect);
+    tokio::pin!(renewal);
+
+    let effect_result = tokio::select! {
+        biased;
+        result = &mut effect => result,
+        result = &mut renewal => {
+            renewal_stop.cancel();
+            result.context("administrator session-cleanup lease renewal failed")?;
+            anyhow::bail!("administrator session-cleanup lease renewal stopped before its effect completed");
+        }
+    };
+
+    renewal_stop.cancel();
+    renewal
+        .await
+        .context("administrator session-cleanup lease renewal failed")?;
+    effect_result
 }
 
 async fn admin_session_cleanup_heartbeat(
@@ -659,4 +705,116 @@ fn uuid_field(payload: &Value, name: &str) -> Result<Uuid> {
     let id = Uuid::parse_str(value).with_context(|| format!("{name} is invalid"))?;
     anyhow::ensure!(!id.is_nil(), "{name} must not be nil");
     Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Notify;
+
+    struct DropSignal(Arc<AtomicBool>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_effect_success_cancels_and_reaps_renewal() {
+        let renewal_stopped = Arc::new(AtomicBool::new(false));
+        let renewal_stopped_in_task = Arc::clone(&renewal_stopped);
+
+        let value = execute_with_lease_renewal(async { Ok(42_u8) }, move |stop| async move {
+            stop.cancelled().await;
+            renewal_stopped_in_task.store(true, Ordering::Release);
+            Ok(())
+        })
+        .await
+        .expect("the cleanup effect must succeed");
+
+        assert_eq!(value, 42);
+        assert!(
+            renewal_stopped.load(Ordering::Acquire),
+            "the effect result must not escape before renewal observes cancellation"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_effect_error_cancels_and_reaps_renewal() {
+        let renewal_stopped = Arc::new(AtomicBool::new(false));
+        let renewal_stopped_in_task = Arc::clone(&renewal_stopped);
+
+        let error = execute_with_lease_renewal(
+            async { Err::<(), anyhow::Error>(anyhow::anyhow!("injected cleanup effect failure")) },
+            move |stop| async move {
+                stop.cancelled().await;
+                renewal_stopped_in_task.store(true, Ordering::Release);
+                Ok(())
+            },
+        )
+        .await
+        .expect_err("the cleanup effect must preserve its failure");
+
+        assert!(error
+            .to_string()
+            .contains("injected cleanup effect failure"));
+        assert!(
+            renewal_stopped.load(Ordering::Acquire),
+            "the effect result must not escape before renewal observes cancellation"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_attempt_cancellation_cannot_detach_renewal() {
+        let renewal_started = Arc::new(Notify::new());
+        let renewal_started_in_task = Arc::clone(&renewal_started);
+        let renewal_dropped = Arc::new(AtomicBool::new(false));
+        let renewal_dropped_in_task = Arc::clone(&renewal_dropped);
+
+        let attempt = tokio::spawn(execute_with_lease_renewal(
+            std::future::pending::<Result<()>>(),
+            move |_stop| async move {
+                let _drop_signal = DropSignal(renewal_dropped_in_task);
+                renewal_started_in_task.notify_one();
+                std::future::pending::<Result<()>>().await
+            },
+        ));
+        tokio::time::timeout(Duration::from_secs(1), renewal_started.notified())
+            .await
+            .expect("renewal did not enter its structured scope");
+
+        attempt.abort();
+        let join_error = attempt
+            .await
+            .expect_err("the injected attempt cancellation must abort its parent future");
+        assert!(join_error.is_cancelled());
+        assert!(
+            renewal_dropped.load(Ordering::Acquire),
+            "dropping the parent attempt must synchronously drop its renewal child"
+        );
+    }
+
+    #[tokio::test]
+    async fn renewal_failure_stops_the_cleanup_effect() {
+        let effect_dropped = Arc::new(AtomicBool::new(false));
+        let effect_dropped_in_task = Arc::clone(&effect_dropped);
+
+        let error = execute_with_lease_renewal(
+            async move {
+                let _drop_signal = DropSignal(effect_dropped_in_task);
+                std::future::pending::<Result<()>>().await
+            },
+            |_stop| async { anyhow::bail!("injected renewal failure") },
+        )
+        .await
+        .expect_err("renewal failure must fence the cleanup effect");
+
+        assert!(error.to_string().contains("lease renewal failed"));
+        assert!(
+            effect_dropped.load(Ordering::Acquire),
+            "an effect must not outlive its failed renewal fence"
+        );
+    }
 }

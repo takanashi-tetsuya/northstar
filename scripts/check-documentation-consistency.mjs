@@ -200,12 +200,71 @@ for (const marker of [
   'exactly four',
   'three recorded target PIDs',
   'transaction-level advisory lock',
-  '`northstar.restore_commit`',
+  '`pg_current_xact_id()`',
+  '`pg_xact_status()`',
+  '`xid8`',
+  'Destructive SQL is not',
   'synchronous',
-  'marker must be cleared',
+  '`committed` or',
+  '`aborted`',
+  '`in progress`',
+  '`NULL`',
 ]) {
   if (!normalizedBackupSecurity.includes(marker)) {
     throw new Error(`BACKUP_SECURITY.md is missing the current restore boundary: ${marker}`);
+  }
+}
+
+const detailedResponsibilityModel = read('docs/PROGRAM_RESPONSIBILITIES.md');
+for (const section of [
+  '## Responsibility dimensions',
+  '### Binary mode matrix',
+  '## Runtime process topology and failure ownership',
+  '### Asynchronous ownership tree',
+  '## Application-service capability registry',
+  '## State classes and single sources of truth',
+  '## Failure ownership matrix',
+  '### PostgreSQL connection and pool responsibilities',
+  '## Private process-capability inventory',
+  '## Secret and key authority ledger',
+  '## Configuration authority classes',
+  '## Observability and audit responsibilities',
+  '## Verification responsibility matrix',
+]) {
+  if (!detailedResponsibilityModel.includes(section)) {
+    throw new Error(`program responsibility model is missing required section: ${section}`);
+  }
+}
+for (const implementedBoundary of [
+  'optional application bootstrap-admin password',
+  'does **not** globally erase the',
+  'file publication and audit insertion are not one atomic boundary',
+  'does not attest the PostgreSQL role name/capability manifest',
+  'Redis mTLS client private key',
+  'process-local random secret in every environment',
+  'Axum\'s graceful-server',
+]) {
+  if (!detailedResponsibilityModel.includes(implementedBoundary)) {
+    throw new Error(
+      `program responsibility model hides or loses an implemented boundary: ${implementedBoundary}`,
+    );
+  }
+}
+for (const obsoleteRestoreClaim of [
+  'northstar.restore_commit',
+  'marker must be cleared',
+  'database-level outcome marker',
+]) {
+  for (const relativePath of [
+    'docs/BACKUP_SECURITY.md',
+    'docs/PRODUCTION_OPERATIONS.md',
+    'docs/PROGRAM_RESPONSIBILITIES.md',
+    'docs/ARCHITECTURE.md',
+    'docs/KNOWN_ISSUES.md',
+  ]) {
+    if (read(relativePath).includes(obsoleteRestoreClaim)) {
+      throw new Error(`${relativePath} retains obsolete restore claim: ${obsoleteRestoreClaim}`);
+    }
   }
 }
 
@@ -224,8 +283,8 @@ for (const phrase of [
 }
 const normalizedKnownIssues = knownIssues.replace(/\s+/g, ' ');
 for (const restoreMarker of [
-  '四个独立注册并预先核验 PID 的数据库 backend',
-  '三个已登记目标 PID',
+  '四个独立注册并预先核验 PID 的 backend',
+  '三个登记目标 PID',
 ]) {
   if (!normalizedKnownIssues.includes(restoreMarker)) {
     throw new Error(`KNOWN_ISSUES.md is missing the current four-session restore boundary: ${restoreMarker}`);

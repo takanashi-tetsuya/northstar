@@ -253,12 +253,13 @@ though all four sessions authenticate as the same migrator role:
 
 | Session/function | Database | Script-routed responsibility | Enforcement level |
 | --- | --- | --- | --- |
-| maintenance controller | `postgres` | set/reset target `ALLOW_CONNECTIONS`; query target catalog state and outcome markers | separate connection and command path, pinned `pg_catalog,pg_temp` search path, static gate; not a separate PostgreSQL role |
-| target coordinator | target | hold the backup/restore maintenance lock and wait on target-local transaction barriers | separate process/FIFO and target-database identity check; same migrator role |
-| primary executor | target | hold the pre-fence policy lock, preflight current state, perform incoming replacement and write its transactional marker | command routing, transaction and static ordering checks; same owner role |
-| compensation executor | target | restore the retained pre-cutover dump only after failure arbitration | command routing and state-machine gate; same owner role |
+| maintenance controller | `postgres` | set/reset target `ALLOW_CONNECTIONS`, read back the exact catalog value and query the exact target PID census | separate connection and command path, pinned `pg_catalog,pg_temp` search path, static gate; not a separate PostgreSQL role |
+| target coordinator | target | hold the backup/restore maintenance lock; take each replacement barrier and query `pg_xact_status(xid8)` | separate process/FIFO and target-database identity check; same migrator role |
+| primary executor | target | hold the pre-fence policy lock, preflight current state, publish its XID and perform incoming replacement | command routing, transaction and static ordering checks; same owner role; cannot declare its own commit successful |
+| compensation executor | target | publish a distinct XID and restore the retained pre-cutover dump only after failure arbitration | command routing and state-machine gate; same owner role; cannot declare its own commit successful |
 | fence auditor | controller query over `pg_stat_activity` | require exactly coordinator, primary and compensation PIDs in the target | PostgreSQL catalog assertion after `ALLOW_CONNECTIONS=false` |
-| outcome arbiter | controller query over `pg_db_role_setting` | resolve the named target OID and interpret only absent/incoming/rollback after the coordinator barrier | catalog marker plus same-database barrier; never worker exit status |
+| restore journal | parent-owned private filesystem | bind restore ID, target, kind, worker PID, barrier and XID before destructive SQL | append/fsync ordering and retained cutover directory; never decides commit by itself |
+| outcome arbiter | coordinator query after the transaction barrier | accept only PostgreSQL `committed` or `aborted` for the journaled XID | `pg_xact_status()` plus same-database barrier; never READY/DONE, EOF or worker exit status |
 
 These are program responsibility boundaries, not independent database ACL
 identities. Compromise of the restore parent process or migrator credential can
@@ -294,25 +295,35 @@ The primary executor holds the policy lock from preflight through rollback-dump
 capture. After the hard connection fence proves that only the three registered
 target sessions remain, it releases that session lock; no new policy peer can
 then enter. Each replacement worker begins a transaction, takes its unique
-transaction-level advisory lock, verifies the prior database outcome marker and
-emits READY. Destructive SQL is sent only after READY. The same checked-in grant
-body used by post-migration reconciliation is applied inside the replacement
-transaction, so `public` is owned by the migrator and PUBLIC/runtime/backup ACLs
-and default privileges converge before commit. A unique database-level
-`northstar.restore_commit` outcome marker is written in that transaction
-immediately before a synchronous `COMMIT`. The target coordinator then takes
-the same target-local transaction lock as a barrier
-before reading the marker, so worker EOF or a missing acknowledgement is never
-interpreted as commit or rollback evidence.
+transaction-level advisory lock, calls `pg_current_xact_id()` and emits the
+resulting top-level `xid8` before READY. The parent accepts exactly one nonzero
+XID, binds it to restore ID, target database, transaction kind, exact worker and
+barrier, and fsyncs that intent to the cutover journal. Destructive SQL is not
+sent until that durable write succeeds. The same checked-in grant body used by
+post-migration reconciliation is applied inside the replacement transaction,
+so `public` is owned by the migrator and PUBLIC/runtime/backup ACLs and default
+privileges converge before a synchronous commit.
+
+The target coordinator then takes the same target-local transaction lock as a
+barrier and calls `pg_xact_status()` for the journaled XID. Only `committed` or
+`aborted` is an automatic result. `in progress`, `NULL`, missing/duplicate
+output or a query error is unknown and retains the hard fence. PostgreSQL
+documents that status for sufficiently old XIDs can become unavailable; the
+cutover journal is therefore durable identity and recovery evidence, not a
+promise of unlimited automatic outcome retention. READY/DONE, EOF and worker
+exit are communication evidence only.
 
 Catchable-error cleanup first closes and drains the exact active worker. An
 incomplete command stream is rolled back by PostgreSQL on disconnect; an
-already-buffered commit remains observable through the barrier and marker.
-Unknown or unsettled outcomes preserve the hard connection fence and recovery
-artifacts. After the restore replay floor commits, the incoming marker must be
-cleared and rechecked before the target can reopen. Abrupt death of the control
-backend, `SIGKILL`, kernel panic and power loss remain manual recovery cases and
-are documented below.
+already-buffered commit remains observable through the barrier and transaction
+status. The corresponding status is appended and fsynced before the in-memory
+active transaction is retired. Unknown or unsettled outcomes preserve the hard
+connection fence and recovery artifacts. After the restore replay floor
+commits, the fence can reopen only if the incoming XID is committed and the
+replacement generation is authoritative. Compensation uses its own distinct
+XID and must be committed before the original generation is considered
+restored. Abrupt parent death, `SIGKILL`, kernel panic and power loss remain
+manual recovery cases and are documented below.
 
 Incoming objects are copied and verified in a private
 `.northstar-restore-cutover-<id>` directory inside the upload volume. The

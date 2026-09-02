@@ -164,14 +164,17 @@ The production database identities are intentionally non-interchangeable:
 Disaster recovery divides one migrator credential into four program roles: a
 maintenance controller in `postgres`, a target coordinator that owns
 database-local maintenance/barrier locks, a primary replacement executor and a
-compensation executor. Fence audit and outcome arbitration are explicit
-controller functions. These are independently registered and reaped child
+compensation executor. Fence mutation/audit is a controller function;
+transaction outcome arbitration belongs to the target coordinator after its
+database-local barrier. These are independently registered and reaped child
 sessions with separate command paths, but they are not separate PostgreSQL ACL
 identities, credentials or restart domains; compromise of the
 restore parent or migrator credential can bypass the division. The controller
 never receives replacement SQL, the coordinator never receives dump replay,
-and the arbiter names the target database explicitly rather than using process
-exit as commit evidence. Static gates reject the former ambiguous generic
+and the parent fsyncs the executor's `xid8` before destructive SQL while the
+coordinator accepts only `pg_xact_status()` after the matching transaction
+barrier rather than using READY/DONE, EOF or process exit as commit evidence.
+Static gates reject the former custom database-GUC marker and ambiguous generic
 database-session functions; the isolated PostgreSQL suite is required to
 provide behavioral evidence for lock scope and cutover ordering.
 

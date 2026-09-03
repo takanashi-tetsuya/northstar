@@ -67,10 +67,6 @@ impl From<FederationOutboxPolicy> for db::S2sOutboxPolicy {
     }
 }
 
-
-
-
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OutboundProjection<'a> {
     pub(crate) target_domain: &'a str,

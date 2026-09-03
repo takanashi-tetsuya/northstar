@@ -7,10 +7,10 @@
 use crate::services::upload_safety::UploadSafetyGate;
 use crate::{auth, db};
 use anyhow::Result;
+use northstar_upload_application::validate_upload_slot_request;
 pub(crate) use northstar_upload_application::{
     UploadIoClass, UploadSlotAdmission, UploadSlotRequest, UploadSlotRequestCommand,
 };
-use northstar_upload_application::validate_upload_slot_request;
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -18,18 +18,27 @@ use std::sync::Arc;
 pub(crate) struct UploadService {
     pool: PgPool,
     safety_gate: Arc<UploadSafetyGate>,
+    max_upload_bytes: u64,
 }
 
 impl UploadService {
-    pub(crate) fn new(pool: PgPool, safety_gate: Arc<UploadSafetyGate>) -> Self {
-        Self { pool, safety_gate }
+    pub(crate) fn new(
+        pool: PgPool,
+        safety_gate: Arc<UploadSafetyGate>,
+        max_upload_bytes: u64,
+    ) -> Self {
+        Self {
+            pool,
+            safety_gate,
+            max_upload_bytes,
+        }
     }
 
     pub(crate) async fn execute_upload_slot_reservation(
         &self,
         command: UploadSlotRequestCommand<'_>,
     ) -> Result<UploadSlotAdmission> {
-        if let Err(err) = validate_upload_slot_request(&command, u64::MAX) {
+        if let Err(err) = validate_upload_slot_request(&command, self.max_upload_bytes) {
             anyhow::bail!("invalid upload slot request: {:?}", err);
         }
         self.reserve_slot(command).await

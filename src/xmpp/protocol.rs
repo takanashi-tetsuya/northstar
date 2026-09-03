@@ -442,7 +442,7 @@ pub struct ProtocolSession {
     pub(crate) show: Arc<AtomicU8>,
     pub(crate) blocklist_requested: Arc<AtomicBool>,
     pub(crate) roster_requested: Arc<AtomicBool>,
-    pub(crate) roster_sync: Arc<crate::services::roster::RosterSyncGate>,
+    pub(crate) roster_sync: Arc<northstar_roster_application::RosterSyncGate>,
     pub(crate) mix_roster_annotations: Arc<AtomicBool>,
     /// XEP-0016 active list is scoped to this resource/session. `None` means
     /// the account default applies. Sharing it with `OnlineSession` lets
@@ -558,7 +558,7 @@ impl ProtocolSession {
             show: Arc::new(AtomicU8::new(0)),
             blocklist_requested: Arc::new(AtomicBool::new(false)),
             roster_requested: Arc::new(AtomicBool::new(false)),
-            roster_sync: Arc::new(crate::services::roster::RosterSyncGate::default()),
+            roster_sync: Arc::new(northstar_roster_application::RosterSyncGate::default()),
             mix_roster_annotations: Arc::new(AtomicBool::new(false)),
             privacy_active: Arc::new(std::sync::RwLock::new(None)),
             privacy_requested: Arc::new(AtomicBool::new(false)),

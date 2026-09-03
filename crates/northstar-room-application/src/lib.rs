@@ -3,10 +3,10 @@
 #![forbid(unsafe_code)]
 
 use northstar_room_core::{
-    MucActorAuthority, MucAffiliationBatchOutcome, MucAffiliationBatchWrite, MucConfigurationOutcome,
-    MucConfigurationWrite, MucDiscussion, MucDiscussionAdmission, MucRegistrationOutcome,
-    MucRegistrationTarget, MucRegistrationWrite, MucRetractionMutation, MucRetractionOutcome,
-    MucSubjectMutation, MucSubjectOutcome,
+    MucActorAuthority, MucAffiliationBatchOutcome, MucAffiliationBatchWrite,
+    MucConfigurationOutcome, MucConfigurationWrite, MucDiscussion, MucDiscussionAdmission,
+    MucRegistrationOutcome, MucRegistrationTarget, MucRegistrationWrite, MucRetractionMutation,
+    MucRetractionOutcome, MucSubjectMutation, MucSubjectOutcome,
 };
 use std::{collections::VecDeque, future::Future, pin::Pin};
 
@@ -30,7 +30,9 @@ pub enum MucSubjectValidationError {
     EmptyStanza,
 }
 
-pub fn validate_muc_subject_command(cmd: &MucSubjectCommand<'_>) -> Result<(), MucSubjectValidationError> {
+pub fn validate_muc_subject_command(
+    cmd: &MucSubjectCommand<'_>,
+) -> Result<(), MucSubjectValidationError> {
     if cmd.mutation.sender_jid.trim().is_empty() {
         return Err(MucSubjectValidationError::EmptySenderJid);
     }
@@ -64,7 +66,9 @@ pub enum MucRetractionValidationError {
     EmptyActionStanza,
 }
 
-pub fn validate_muc_retraction_command(cmd: &MucRetractionCommand<'_>) -> Result<(), MucRetractionValidationError> {
+pub fn validate_muc_retraction_command(
+    cmd: &MucRetractionCommand<'_>,
+) -> Result<(), MucRetractionValidationError> {
     if cmd.mutation.sender_jid.trim().is_empty() {
         return Err(MucRetractionValidationError::EmptySenderJid);
     }
@@ -102,7 +106,9 @@ pub enum MucAffiliationBatchValidationError {
     TooManyChanges,
 }
 
-pub fn validate_muc_affiliation_batch_command(cmd: &MucAffiliationBatchCommand<'_>) -> Result<(), MucAffiliationBatchValidationError> {
+pub fn validate_muc_affiliation_batch_command(
+    cmd: &MucAffiliationBatchCommand<'_>,
+) -> Result<(), MucAffiliationBatchValidationError> {
     if cmd.write.changes.is_empty() {
         return Err(MucAffiliationBatchValidationError::EmptyChanges);
     }
@@ -136,7 +142,9 @@ pub enum MucConfigurationValidationError {
     InvalidMaxOccupants,
 }
 
-pub fn validate_muc_configuration_command(cmd: &MucConfigurationCommand<'_>) -> Result<(), MucConfigurationValidationError> {
+pub fn validate_muc_configuration_command(
+    cmd: &MucConfigurationCommand<'_>,
+) -> Result<(), MucConfigurationValidationError> {
     if cmd.write.actor_full_jid.trim().is_empty() {
         return Err(MucConfigurationValidationError::EmptyActorJid);
     }
@@ -179,7 +187,9 @@ pub enum MucRegistrationValidationError {
     EmptyBareJid,
 }
 
-pub fn validate_muc_registration_command(cmd: &MucRegistrationCommand<'_>) -> Result<(), MucRegistrationValidationError> {
+pub fn validate_muc_registration_command(
+    cmd: &MucRegistrationCommand<'_>,
+) -> Result<(), MucRegistrationValidationError> {
     if cmd.write.nick.trim().is_empty() {
         return Err(MucRegistrationValidationError::EmptyNick);
     }
@@ -193,7 +203,6 @@ pub fn validate_muc_registration_command(cmd: &MucRegistrationCommand<'_>) -> Re
     }
     Ok(())
 }
-
 
 /// Request-owned ordered side effects produced only after a room transaction
 /// commits. Admission is bounded before execution and sealing prevents a late
@@ -524,14 +533,18 @@ mod tests {
 
         let reg_cmd = MucRegistrationCommand::from(MucRegistrationWrite {
             room_id: Uuid::new_v4(),
-            target: MucRegistrationTarget::Local { user_id: Uuid::new_v4() },
+            target: MucRegistrationTarget::Local {
+                user_id: Uuid::new_v4(),
+            },
             nick: "RegisteredNick",
         });
         assert!(validate_muc_registration_command(&reg_cmd).is_ok());
 
         let empty_nick_cmd = MucRegistrationCommand::from(MucRegistrationWrite {
             room_id: Uuid::new_v4(),
-            target: MucRegistrationTarget::Local { user_id: Uuid::new_v4() },
+            target: MucRegistrationTarget::Local {
+                user_id: Uuid::new_v4(),
+            },
             nick: "   ",
         });
         assert_eq!(

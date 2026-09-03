@@ -50,6 +50,7 @@ members = [
     "crates/northstar-session-application",
     "crates/northstar-federation-core",
     "crates/northstar-federation-application",
+    "crates/northstar-protocol-runtime",
 ]
 resolver = "2"
 
@@ -156,6 +157,7 @@ northstar-upload-application = { path = "crates/northstar-upload-application" }
 northstar-session-application = { path = "crates/northstar-session-application" }
 northstar-federation-core = { path = "crates/northstar-federation-core" }
 northstar-federation-application = { path = "crates/northstar-federation-application" }
+northstar-protocol-runtime = { path = "crates/northstar-protocol-runtime" }
 
 [profile.release]
 lto = "thin"

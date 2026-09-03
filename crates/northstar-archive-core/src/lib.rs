@@ -125,10 +125,7 @@ pub enum MamDbRoomReadOutcome<T> {
 /// Service-level read outcome exposing authorized room access (without room UUID).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MamRoomReadOutcome<T> {
-    Allowed {
-        access: MamRoomAccess,
-        value: T,
-    },
+    Allowed { access: MamRoomAccess, value: T },
     Missing,
     Forbidden,
 }
@@ -261,10 +258,7 @@ pub enum FederatedMamAdmissionOutcome {
 }
 
 /// Pure helper to check if a query's time range is logically valid (`start <= end`).
-pub fn validate_query_time_range(
-    start: Option<DateTime<Utc>>,
-    end: Option<DateTime<Utc>>,
-) -> bool {
+pub fn validate_query_time_range(start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> bool {
     match (start, end) {
         (Some(start), Some(end)) => start <= end,
         _ => true,

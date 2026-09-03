@@ -131,12 +131,8 @@ fn upload_storage_namespace_id(config: &Config) -> anyhow::Result<[u8; 32]> {
     Ok(digest.finalize().into())
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct CapsKey {
-    pub algorithm: String,
-    pub node: String,
-    pub version: String,
-}
+#[allow(unused_imports)]
+pub use northstar_protocol_runtime::caps::CapsKey;
 
 pub use northstar_session_application::RouteIncarnationSignal;
 pub use northstar_session_core::LocalCapsEpoch;
@@ -193,7 +189,7 @@ pub struct OnlineSession {
     pub roster_requested: Arc<AtomicBool>,
     /// Per-resource initial roster synchronization fence. Committed pushes
     /// are version-buffered until the initial IQ result owns the transport.
-    pub roster_sync: Arc<crate::services::roster::RosterSyncGate>,
+    pub roster_sync: Arc<northstar_roster_application::RosterSyncGate>,
     /// Per-resource XEP-0405 roster annotation preference. It is deliberately
     /// not an account-wide flag: a roster get without `<annotate/>` resets it
     /// only for the requesting client.
@@ -325,35 +321,7 @@ pub(crate) fn muc_suspended_teardown_identity_matches(
         )
 }
 
-#[derive(Clone)]
-pub enum MixIqRelayStage {
-    /// A local client sent an IQ through a remote channel.  The remote MIX
-    /// service must return exactly the encoded participant and requester that
-    /// were registered here before the client id is restored.
-    Participant {
-        requester_full_jid: String,
-        original_id: String,
-        expected_from: String,
-        channel_jid: String,
-    },
-    /// A locally hosted channel relayed a whitelisted read to a remote
-    /// participant.  Responses are accepted only from the exact real target
-    /// and are rewritten back to the encoded channel identity.
-    Channel {
-        requester_full_jid: String,
-        requester_encoded_jid: String,
-        original_id: String,
-        target_real_jid: String,
-        target_encoded_jid: String,
-        channel_jid: String,
-    },
-}
-
-#[derive(Clone)]
-pub struct PendingMixIqRelay {
-    pub stage: MixIqRelayStage,
-    pub expires_at: Instant,
-}
+pub use northstar_protocol_runtime::mix::{MixIqRelayStage, PendingMixIqRelay};
 
 #[derive(Clone)]
 pub enum MucOccupantEndpoint {
@@ -1088,20 +1056,20 @@ pub struct AppState {
     s2s_dnssec_resolver: Option<TokioResolver>,
     /// XEP-0403 IQ relay correlations. Keys are server-generated opaque IQ
     /// ids, never client-controlled ids; entries are bounded and short-lived.
-    pending_mix_iq: crate::xmpp::protocol::mix::MixIqRelayIndex,
+    pending_mix_iq: northstar_protocol_runtime::mix::MixIqRelayIndex,
     /// XEP-0115 entries are inserted only after the advertised verification
     /// string has been recomputed successfully. Unverified payloads never
     /// enter this shared cache.
-    caps_cache: crate::xmpp::protocol::caps::CapsCacheIndex,
-    caps_by_jid: crate::xmpp::protocol::caps::CapsResourceIndex,
-    pending_caps: crate::xmpp::protocol::caps::PendingCapsIndex,
+    caps_cache: northstar_protocol_runtime::caps::CapsCacheIndex,
+    caps_by_jid: northstar_protocol_runtime::caps::CapsResourceIndex,
+    pending_caps: northstar_protocol_runtime::caps::PendingCapsIndex,
     /// Cross-stream ordering authority for one authenticated federated full
     /// JID's capability lifecycle. Weak, self-cleaning entries exist only
     /// while an observer or response owns or waits for the resource.
-    federated_caps_gates: crate::xmpp::protocol::caps::FederatedCapsGateIndex,
+    federated_caps_gates: northstar_protocol_runtime::caps::FederatedCapsGateIndex,
     /// Bounded, per-full-JID single-flight boundary for XEP-0115-triggered
     /// PEP last-item delivery and verified MIX presence publication.
-    caps_effect_dispatcher: Arc<crate::xmpp::protocol::caps::CapsEffectDispatcher>,
+    caps_effect_dispatcher: Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>,
     dialback_secret: Zeroizing<Vec<u8>>,
     /// XEP-0484 token derivation key. PostgreSQL contains only derived token
     /// hashes and public diversification data.
@@ -1976,6 +1944,7 @@ impl AppState {
             crate::services::upload::UploadService::new(
                 pool.clone(),
                 Arc::clone(&upload_safety_gate),
+                config.upload_max_bytes,
             )
         });
         let privacy_service = crate::services::privacy::PrivacyService::new(pool.clone());
@@ -2099,12 +2068,12 @@ impl AppState {
             s2s_connection_registry: crate::s2s::S2sConnectionRegistry::default(),
             s2s_dns_resolver,
             s2s_dnssec_resolver,
-            pending_mix_iq: crate::xmpp::protocol::mix::MixIqRelayIndex::new(),
-            caps_cache: crate::xmpp::protocol::caps::CapsCacheIndex::new(),
-            caps_by_jid: crate::xmpp::protocol::caps::CapsResourceIndex::new(),
-            pending_caps: crate::xmpp::protocol::caps::PendingCapsIndex::new(),
-            federated_caps_gates: crate::xmpp::protocol::caps::FederatedCapsGateIndex::new(),
-            caps_effect_dispatcher: crate::xmpp::protocol::caps::CapsEffectDispatcher::new(),
+            pending_mix_iq: northstar_protocol_runtime::mix::MixIqRelayIndex::new(),
+            caps_cache: northstar_protocol_runtime::caps::CapsCacheIndex::new(),
+            caps_by_jid: northstar_protocol_runtime::caps::CapsResourceIndex::new(),
+            pending_caps: northstar_protocol_runtime::caps::PendingCapsIndex::new(),
+            federated_caps_gates: northstar_protocol_runtime::caps::FederatedCapsGateIndex::new(),
+            caps_effect_dispatcher: northstar_protocol_runtime::caps::CapsEffectDispatcher::new(),
             dialback_secret,
             fast_token_secret,
             dialback_verifications: Arc::new(Semaphore::new(64)),
@@ -2209,29 +2178,29 @@ impl AppState {
 
     pub(crate) fn caps_effect_dispatcher(
         &self,
-    ) -> &Arc<crate::xmpp::protocol::caps::CapsEffectDispatcher> {
+    ) -> &Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher> {
         &self.caps_effect_dispatcher
     }
 
-    pub(crate) fn pending_mix_iq(&self) -> &crate::xmpp::protocol::mix::MixIqRelayIndex {
+    pub(crate) fn pending_mix_iq(&self) -> &northstar_protocol_runtime::mix::MixIqRelayIndex {
         &self.pending_mix_iq
     }
 
-    pub(crate) fn caps_cache(&self) -> &crate::xmpp::protocol::caps::CapsCacheIndex {
+    pub(crate) fn caps_cache(&self) -> &northstar_protocol_runtime::caps::CapsCacheIndex {
         &self.caps_cache
     }
 
-    pub(crate) fn caps_by_jid(&self) -> &crate::xmpp::protocol::caps::CapsResourceIndex {
+    pub(crate) fn caps_by_jid(&self) -> &northstar_protocol_runtime::caps::CapsResourceIndex {
         &self.caps_by_jid
     }
 
-    pub(crate) fn pending_caps(&self) -> &crate::xmpp::protocol::caps::PendingCapsIndex {
+    pub(crate) fn pending_caps(&self) -> &northstar_protocol_runtime::caps::PendingCapsIndex {
         &self.pending_caps
     }
 
     pub(crate) fn federated_caps_gates(
         &self,
-    ) -> &crate::xmpp::protocol::caps::FederatedCapsGateIndex {
+    ) -> &northstar_protocol_runtime::caps::FederatedCapsGateIndex {
         &self.federated_caps_gates
     }
 

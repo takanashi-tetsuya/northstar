@@ -1,13 +1,14 @@
 use super::{Action, ProtocolSession};
 use crate::services::privacy::PrivacyStanzaKind;
-use crate::services::roster::{
-    BeginRosterSyncError, RemoteRemovalPolicy, RosterAuthorization, RosterChange, RosterFlushBatch,
-    RosterGetCommand, RosterPushDisposition, RosterReadSnapshot, RosterRemovalRoute,
-    RosterRemoveCommand, RosterSyncGate, RosterSyncPermit, RosterUpsertCommand,
-};
-use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::Result;
+use northstar_roster_application::{
+    BeginRosterSyncError, RemoteRemovalPolicy, RosterFlushBatch, RosterGetCommand,
+    RosterPushDisposition, RosterRemovalRoute, RosterRemoveCommand, RosterSyncGate,
+    RosterSyncPermit, RosterUpsertCommand,
+};
+use northstar_roster_core::{RosterAuthorization, RosterChange, RosterReadSnapshot};
+use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;

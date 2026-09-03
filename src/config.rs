@@ -1398,6 +1398,9 @@ fn validate_web_admin_exposure(enabled: bool, bind: SocketAddr) -> Result<()> {
 }
 
 fn listener_addresses_overlap(left: SocketAddr, right: SocketAddr) -> bool {
+    if left.port() == 0 || right.port() == 0 {
+        return false;
+    }
     if left.port() != right.port() {
         return false;
     }
@@ -3061,10 +3064,10 @@ fn domain_pattern_matches(pattern: &str, domain: &str) -> bool {
 mod tests {
     use super::{
         authentication_master_secrets_are_independent, domain_list, domain_pattern_matches,
-        ephemeral_development_secret_allowed, load_component_credentials, parse_external_service,
-        parse_pow_v1_compatibility_until, parse_xep_0487_ips, read_secret_file,
-        redis_endpoint_is_local, resolve_web_capability_plan, valid_http_bearer_secret,
-        validate_cluster_dialback_secret, validate_cluster_fast_secret,
+        ephemeral_development_secret_allowed, listener_addresses_overlap,
+        load_component_credentials, parse_external_service, parse_pow_v1_compatibility_until,
+        parse_xep_0487_ips, read_secret_file, redis_endpoint_is_local, resolve_web_capability_plan,
+        valid_http_bearer_secret, validate_cluster_dialback_secret, validate_cluster_fast_secret,
         validate_component_capacity, validate_component_transport, validate_redis_transport,
         validate_shared_runtime_secret, validate_web_admin_exposure, ComponentConnectionMode,
         ComponentCredential,
@@ -3617,5 +3620,19 @@ mod tests {
         std::fs::remove_file(target).unwrap();
         assert!(error.contains("non-symlink regular file"));
         assert!(!error.contains("never-include-this-secret"));
+    }
+
+    #[test]
+    fn test_listener_addresses_overlap_port_zero() {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let a = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let b = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        assert!(!listener_addresses_overlap(a, b));
+
+        let c = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5222);
+        assert!(!listener_addresses_overlap(a, c));
+
+        let d = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5222);
+        assert!(listener_addresses_overlap(c, d));
     }
 }

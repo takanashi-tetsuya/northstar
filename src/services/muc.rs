@@ -128,8 +128,6 @@ impl From<OfflineStorePolicy> for db::OfflineStorePolicy {
     }
 }
 
-
-
 impl From<&ClusterMucPrincipal> for db::ClusterMucPrincipal {
     fn from(principal: &ClusterMucPrincipal) -> Self {
         match principal {
@@ -580,7 +578,6 @@ impl From<db::ClusterMucJoinOutcome> for ClusterMucJoinOutcome {
     }
 }
 
-
 impl MucService {
     pub(crate) fn new(pool: PgPool, configured_domain: impl AsRef<str>) -> Self {
         let configured_domain: Arc<str> = Arc::from(configured_domain.as_ref());
@@ -722,12 +719,8 @@ impl MucService {
                     .await?
             }
             MucRegistrationTarget::Federated { bare_jid } => {
-                self.register_federated_member(
-                    command.write.room_id,
-                    bare_jid,
-                    command.write.nick,
-                )
-                .await?
+                self.register_federated_member(command.write.room_id, bare_jid, command.write.nick)
+                    .await?
             }
         };
         Ok(MucRegistrationResult { outcome })
@@ -1125,16 +1118,14 @@ impl MucService {
             return Ok(MucSubjectOutcome::Unauthorized);
         }
         let authority = actor_authority_to_db(&authority);
-        Ok(
-            db::set_local_muc_subject(
-                &self.pool,
-                subject_mutation_into_db(mutation),
-                archive,
-                authority,
-            )
-            .await?
-            .into(),
+        Ok(db::set_local_muc_subject(
+            &self.pool,
+            subject_mutation_into_db(mutation),
+            archive,
+            authority,
         )
+        .await?
+        .into())
     }
 
     pub(crate) async fn set_local_cluster_subject(
@@ -1170,14 +1161,12 @@ impl MucService {
         {
             return Ok(MucRetractionOutcome::Unauthorized);
         }
-        Ok(
-            db::retract_muc_message_and_archive_action(
-                &self.pool,
-                retraction_mutation_as_db(&mutation),
-            )
-            .await?
-            .into(),
+        Ok(db::retract_muc_message_and_archive_action(
+            &self.pool,
+            retraction_mutation_as_db(&mutation),
         )
+        .await?
+        .into())
     }
 
     pub(crate) async fn update_local_legacy_config(
@@ -1186,16 +1175,14 @@ impl MucService {
         actor_full_jid: &str,
         config: MucConfigUpdate<'_>,
     ) -> Result<MucConfigurationOutcome> {
-        Ok(
-            db::update_muc_config(
-                &self.pool,
-                room_id,
-                actor_full_jid,
-                config_update_into_db(config),
-            )
-            .await?
-            .into(),
+        Ok(db::update_muc_config(
+            &self.pool,
+            room_id,
+            actor_full_jid,
+            config_update_into_db(config),
         )
+        .await?
+        .into())
     }
 
     pub(crate) async fn cancel_locked_room(
@@ -1757,7 +1744,7 @@ mod tests {
             max_bytes: 1_048_576,
             max_per_domain: 10,
         };
-        let repository: db::S2sOutboxPolicy = policy.into();
+        let repository: db::S2sOutboxPolicy = policy;
         assert_eq!(repository.ttl_seconds, 3600);
         assert_eq!(repository.max_rows, 100);
         assert_eq!(repository.max_bytes, 1_048_576);

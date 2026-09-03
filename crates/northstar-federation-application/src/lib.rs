@@ -3,6 +3,8 @@
 #![forbid(unsafe_code)]
 
 pub use northstar_federation_core::*;
+pub mod repository;
+pub use repository::*;
 use uuid::Uuid;
 
 /// In-flight federation transport envelope.

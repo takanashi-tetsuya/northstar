@@ -744,5 +744,3 @@ pub struct PepSetAffiliationsWrite<'a> {
     pub expected: &'a PepNodeConfig,
     pub changes: &'a [(String, String)],
 }
-
-

@@ -385,7 +385,7 @@ impl ProtocolSession {
             .await?
         {
             MamQueryResult::Page { room, page } => (room, page),
-            MamQueryResult::ItemNotFound => {
+            MamQueryResult::ItemNotFound | MamQueryResult::ValidationFailed(_) => {
                 return Ok(Action::Send(iq_error(id, "item-not-found")));
             }
             MamQueryResult::Forbidden => {

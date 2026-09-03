@@ -18,6 +18,8 @@ use northstar_pubsub_core::{
     PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, SetAffiliationsOutcome,
     SetSubscriptionsOutcome,
 };
+pub mod repository;
+pub use repository::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -473,7 +475,6 @@ impl From<PepOwnerMutationOutcome> for PepSetAffiliationsResult {
     }
 }
 
-
 #[derive(Debug)]
 pub enum PepSubscriptionCommandValidationError {
     EmptyOwner,
@@ -727,7 +728,9 @@ pub fn validate_pubsub_purge_node_command(command: &PubSubPurgeNodeCommand<'_>) 
     Ok(())
 }
 
-pub fn validate_pubsub_configure_node_command(command: &PubSubConfigureNodeCommand<'_>) -> Result<()> {
+pub fn validate_pubsub_configure_node_command(
+    command: &PubSubConfigureNodeCommand<'_>,
+) -> Result<()> {
     if command.write.requester.trim().is_empty() {
         return Err(anyhow::anyhow!("requester must not be empty"));
     }
@@ -737,7 +740,9 @@ pub fn validate_pubsub_configure_node_command(command: &PubSubConfigureNodeComma
     Ok(())
 }
 
-pub fn validate_pubsub_set_subscriptions_command(command: &PubSubSetSubscriptionsCommand<'_>) -> Result<()> {
+pub fn validate_pubsub_set_subscriptions_command(
+    command: &PubSubSetSubscriptionsCommand<'_>,
+) -> Result<()> {
     if command.write.requester.trim().is_empty() {
         return Err(anyhow::anyhow!("requester must not be empty"));
     }
@@ -747,7 +752,9 @@ pub fn validate_pubsub_set_subscriptions_command(command: &PubSubSetSubscription
     Ok(())
 }
 
-pub fn validate_pubsub_set_affiliations_command(command: &PubSubSetAffiliationsCommand<'_>) -> Result<()> {
+pub fn validate_pubsub_set_affiliations_command(
+    command: &PubSubSetAffiliationsCommand<'_>,
+) -> Result<()> {
     if command.write.requester.trim().is_empty() {
         return Err(anyhow::anyhow!("requester must not be empty"));
     }
@@ -800,7 +807,9 @@ pub fn validate_pep_configure_node_command(command: &PepConfigureNodeCommand<'_>
     Ok(())
 }
 
-pub fn validate_pep_set_affiliations_command(command: &PepSetAffiliationsCommand<'_>) -> Result<()> {
+pub fn validate_pep_set_affiliations_command(
+    command: &PepSetAffiliationsCommand<'_>,
+) -> Result<()> {
     if command.write.owner.id == Uuid::nil() || command.write.owner.username.is_empty() {
         return Err(anyhow::anyhow!("invalid PEP affiliations owner"));
     }
@@ -809,7 +818,6 @@ pub fn validate_pep_set_affiliations_command(command: &PepSetAffiliationsCommand
     }
     Ok(())
 }
-
 
 struct PubSubAdmissionWaiter;
 
@@ -935,9 +943,7 @@ impl PubSubMutationAdmission {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use northstar_pubsub_core::{
-        PubSubAccount, PubSubPublishWrite, PubSubSubscribeWrite,
-    };
+    use northstar_pubsub_core::{PubSubAccount, PubSubPublishWrite, PubSubSubscribeWrite};
 
     #[test]
     fn pubsub_publish_validation() {
@@ -960,7 +966,9 @@ mod tests {
             max_storage_bytes_per_owner: 1024,
             max_nodes_per_owner: 10,
         };
-        assert!(validate_pubsub_publish_command(&PubSubPublishCommand::from(invalid_write)).is_err());
+        assert!(
+            validate_pubsub_publish_command(&PubSubPublishCommand::from(invalid_write)).is_err()
+        );
     }
 
     #[test]
@@ -1019,4 +1027,3 @@ mod tests {
         assert!(validate_pep_delete_node_command(&PepDeleteNodeCommand::from(delete)).is_ok());
     }
 }
-

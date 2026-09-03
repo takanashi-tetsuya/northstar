@@ -1835,7 +1835,9 @@ if (/Deliver\s*\(\s*db::User\s*\)/.test(messageServiceSource)) {
 // inbound presence scope so ordinary presence routing and Caps/PEP effects
 // commit in the same chosen cross-stream order. Participant RAII makes a
 // waiter cancellation remove the registry entry without a background sweep.
-const capsProtocolSource = read('src/xmpp/protocol/caps.rs');
+const capsProtocolSource =
+  read('crates/northstar-protocol-runtime/src/caps.rs') +
+  read('src/xmpp/protocol/caps.rs');
 const s2sInboundSource = read('src/s2s/inbound.rs');
 const s2sOutboundSource = read('src/s2s/outbound.rs');
 const componentsSource = read('src/components.rs');

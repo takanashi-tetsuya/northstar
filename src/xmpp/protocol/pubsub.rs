@@ -1164,7 +1164,12 @@ async fn handle_entity_set(
                 config: &config,
                 max_nodes_per_owner: state.config.pubsub_max_nodes_per_owner,
             });
-            match state.pubsub_service().execute_pubsub_create_node(cmd).await?.outcome {
+            match state
+                .pubsub_service()
+                .execute_pubsub_create_node(cmd)
+                .await?
+                .outcome
+            {
                 CreateNodeOutcome::Created => {}
                 CreateNodeOutcome::Conflict => {
                     return Ok(PubSubReply::Error("conflict"));
@@ -1285,7 +1290,9 @@ async fn handle_entity_set(
                     return Ok(PubSubReply::Error("resource-constraint"));
                 }
                 PubSubPublishOutcome::Forbidden => return Ok(PubSubReply::Error("forbidden")),
-                PubSubPublishOutcome::MissingNode => return Ok(PubSubReply::Error("item-not-found")),
+                PubSubPublishOutcome::MissingNode => {
+                    return Ok(PubSubReply::Error("item-not-found"))
+                }
                 PubSubPublishOutcome::PreconditionNotMet => {
                     return Ok(PubSubReply::ExtendedError(PubSubError::new(
                         "conflict",
@@ -1293,7 +1300,9 @@ async fn handle_entity_set(
                     )));
                 }
                 PubSubPublishOutcome::NotLeafNode => {
-                    return Ok(PubSubReply::ExtendedError(PubSubError::unsupported("publish")));
+                    return Ok(PubSubReply::ExtendedError(PubSubError::unsupported(
+                        "publish",
+                    )));
                 }
                 PubSubPublishOutcome::MaxItemsExceeded => {
                     return Ok(PubSubReply::ExtendedError(PubSubError::new(
@@ -1432,26 +1441,17 @@ async fn handle_entity_set(
                         existing.expire.as_ref(),
                     )))
                 }
-                PubSubSubscribeOutcome::PendingSubscription => {
-                    Ok(PubSubReply::ExtendedError(PubSubError::new(
-                        "not-authorized",
-                        "pending-subscription",
-                    )))
-                }
-                PubSubSubscribeOutcome::LimitExceeded => {
-                    Ok(PubSubReply::ExtendedError(PubSubError::new(
-                        "policy-violation",
-                        "too-many-subscriptions",
-                    )))
-                }
+                PubSubSubscribeOutcome::PendingSubscription => Ok(PubSubReply::ExtendedError(
+                    PubSubError::new("not-authorized", "pending-subscription"),
+                )),
+                PubSubSubscribeOutcome::LimitExceeded => Ok(PubSubReply::ExtendedError(
+                    PubSubError::new("policy-violation", "too-many-subscriptions"),
+                )),
                 PubSubSubscribeOutcome::NotFound => missing_node_reply(state, node_name).await,
                 PubSubSubscribeOutcome::Forbidden => Ok(PubSubReply::Error("forbidden")),
-                PubSubSubscribeOutcome::ClosedNode => {
-                    Ok(PubSubReply::ExtendedError(PubSubError::new(
-                        "not-allowed",
-                        "closed-node",
-                    )))
-                }
+                PubSubSubscribeOutcome::ClosedNode => Ok(PubSubReply::ExtendedError(
+                    PubSubError::new("not-allowed", "closed-node"),
+                )),
                 PubSubSubscribeOutcome::PreconditionFailed => Ok(PubSubReply::Error("conflict")),
             }
         }
@@ -1490,30 +1490,21 @@ async fn handle_entity_set(
                 node: node_name,
                 subid: supplied_subid,
             });
-            let result = state.pubsub_service().execute_pubsub_unsubscribe(cmd).await?;
+            let result = state
+                .pubsub_service()
+                .execute_pubsub_unsubscribe(cmd)
+                .await?;
             match result.outcome {
-                PubSubUnsubscribeOutcome::Unsubscribed { subid } => {
-                    Ok(PubSubReply::Result(subscription_payload(
-                        node_name,
-                        &requested_jid,
-                        "none",
-                        subid.as_deref(),
-                        None,
-                    )))
-                }
+                PubSubUnsubscribeOutcome::Unsubscribed { subid } => Ok(PubSubReply::Result(
+                    subscription_payload(node_name, &requested_jid, "none", subid.as_deref(), None),
+                )),
                 PubSubUnsubscribeOutcome::NotFound => missing_node_reply(state, node_name).await,
-                PubSubUnsubscribeOutcome::NotSubscribed => {
-                    Ok(PubSubReply::ExtendedError(PubSubError::new(
-                        "unexpected-request",
-                        "not-subscribed",
-                    )))
-                }
-                PubSubUnsubscribeOutcome::InvalidSubid => {
-                    Ok(PubSubReply::ExtendedError(PubSubError::new(
-                        "not-acceptable",
-                        "invalid-subid",
-                    )))
-                }
+                PubSubUnsubscribeOutcome::NotSubscribed => Ok(PubSubReply::ExtendedError(
+                    PubSubError::new("unexpected-request", "not-subscribed"),
+                )),
+                PubSubUnsubscribeOutcome::InvalidSubid => Ok(PubSubReply::ExtendedError(
+                    PubSubError::new("not-acceptable", "invalid-subid"),
+                )),
                 PubSubUnsubscribeOutcome::Forbidden => Ok(PubSubReply::Error("forbidden")),
             }
         }
@@ -1573,7 +1564,9 @@ async fn handle_entity_set(
             let result = state.pubsub_service().execute_pubsub_retract(cmd).await?;
             match result.outcome {
                 PubSubRetractOutcome::Retracted => {}
-                PubSubRetractOutcome::NotFound => return missing_node_reply(state, node_name).await,
+                PubSubRetractOutcome::NotFound => {
+                    return missing_node_reply(state, node_name).await
+                }
                 PubSubRetractOutcome::ItemNotFound => {
                     return Ok(PubSubReply::Error("item-not-found"));
                 }

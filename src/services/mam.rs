@@ -32,8 +32,8 @@ impl MamService {
         &self,
         command: MamQueryCommand,
     ) -> Result<MamQueryResult> {
-        if let Err(_err) = validate_mam_query_command(&command) {
-            return Ok(MamQueryResult::ItemNotFound);
+        if let Err(err) = validate_mam_query_command(&command) {
+            return Ok(MamQueryResult::ValidationFailed(err));
         }
         match command.scope {
             MamQueryScope::Personal { owner_id } => {
@@ -118,7 +118,8 @@ impl MamService {
         if let Err(err) = validate_mam_preferences(&command.preferences) {
             anyhow::bail!("invalid mam preferences: {:?}", err);
         }
-        self.set_preferences(command.owner_id, &command.preferences).await
+        self.set_preferences(command.owner_id, &command.preferences)
+            .await
     }
 
     pub(crate) async fn preferences(&self, owner_id: Uuid) -> Result<MamPreferences> {

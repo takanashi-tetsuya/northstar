@@ -4,6 +4,8 @@
 #![forbid(unsafe_code)]
 
 pub use northstar_upload_core::*;
+pub mod repository;
+pub use repository::*;
 use uuid::Uuid;
 
 /// Typed request for reserving an upload slot.

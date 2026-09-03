@@ -504,7 +504,6 @@ pub struct MucRegistrationWrite<'a> {
     pub nick: &'a str,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

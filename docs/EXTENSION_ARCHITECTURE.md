@@ -50,8 +50,7 @@ fallback and from hard-coded service discovery in the same change.
 
 ## 2. What “pluggable XEP” means
 
-File separation alone is not a plugin boundary. A Northstar XEP is pluggable
-only when all of the following are true:
+In Northstar, XEP extensions are **statically-linked, capability-isolated, configurable built-in modules** rather than dynamically-loaded (dlopen/WASM) external plugins. File separation alone is not an extension boundary. A Northstar XEP extension is modularly isolated because:
 
 1. Its wire behaviour is compiled in a dedicated crate.
 2. Its manifest has a stable extension ID and declares dependencies,

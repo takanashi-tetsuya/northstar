@@ -457,8 +457,6 @@ pub(crate) async fn verify_remote(
     parse_verify_response(&response, &originating_domain, &receiving_domain, stream_id)
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

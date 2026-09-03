@@ -50,8 +50,6 @@ pub async fn muc_archive_boundaries_visible(
     archive_boundaries_for(pool, MamArchiveSource::Muc(room_id), Some(viewer_id)).await
 }
 
-
-
 pub async fn mam_preferences(pool: &PgPool, user_id: Uuid) -> Result<MamPreferences> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")

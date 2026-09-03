@@ -3,6 +3,7 @@ RUN rustc --version | grep -E '^rustc 1\.97\.1 '
 WORKDIR /app
 COPY Cargo.toml ./
 COPY Cargo.lock ./
+COPY crates ./crates
 COPY src ./src
 COPY migrations ./migrations
 COPY docs/openapi.yaml ./docs/openapi.yaml

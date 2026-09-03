@@ -9,7 +9,6 @@ use crate::db;
 use crate::services::profile::{
     ProfileOutboxFactory, ProfilePepWrite, ProfilePublishResult, ProfileService,
 };
-use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
 pub(crate) use northstar_pubsub_application::{
     is_pubsub_mutation_busy as is_pubsub_mutation_busy_core,
@@ -17,27 +16,25 @@ pub(crate) use northstar_pubsub_application::{
     pubsub_mutation_admission_rejections_total as pubsub_mutation_admission_rejections_total_core,
     pubsub_mutation_admission_waiters as pubsub_mutation_admission_waiters_core,
     validate_pep_configure_node_command, validate_pep_delete_node_command,
-    validate_pep_publish_command, validate_pep_purge_node_command,
-    validate_pep_retract_command, validate_pep_set_affiliations_command,
-    validate_pep_subscribe_command, validate_pep_unsubscribe_command,
-    validate_pubsub_configure_node_command, validate_pubsub_create_node_command,
-    validate_pubsub_delete_node_command, validate_pubsub_publish_command,
-    validate_pubsub_purge_node_command, validate_pubsub_retract_command,
-    validate_pubsub_set_affiliations_command, validate_pubsub_set_subscriptions_command,
-    validate_pubsub_subscribe_command, validate_pubsub_unsubscribe_command,
-    PepConfigureNodeCommand, PepConfigureNodeResult, PepDeleteNodeCommand,
-    PepDeleteNodeResult, PepPublishItemsCommand, PepPublishItemsOutcome,
+    validate_pep_publish_command, validate_pep_purge_node_command, validate_pep_retract_command,
+    validate_pep_set_affiliations_command, validate_pep_subscribe_command,
+    validate_pep_unsubscribe_command, validate_pubsub_configure_node_command,
+    validate_pubsub_create_node_command, validate_pubsub_delete_node_command,
+    validate_pubsub_publish_command, validate_pubsub_purge_node_command,
+    validate_pubsub_retract_command, validate_pubsub_set_affiliations_command,
+    validate_pubsub_set_subscriptions_command, validate_pubsub_subscribe_command,
+    validate_pubsub_unsubscribe_command, PepConfigureNodeCommand, PepConfigureNodeResult,
+    PepDeleteNodeCommand, PepDeleteNodeResult, PepPublishItemsCommand, PepPublishItemsOutcome,
     PepPublishItemsResult, PepPurgeNodeCommand, PepPurgeNodeResult, PepRetractCommand,
-    PepRetractResult, PepSetAffiliationsCommand, PepSetAffiliationsResult,
-    PepSubscribeCommand, PepSubscribeResult, PepUnsubscribeCommand, PepUnsubscribeResult,
-    PubSubConfigureNodeCommand, PubSubConfigureNodeResult, PubSubCreateNodeCommand,
-    PubSubCreateNodeResult, PubSubDeleteNodeCommand, PubSubDeleteNodeResult,
+    PepRetractResult, PepSetAffiliationsCommand, PepSetAffiliationsResult, PepSubscribeCommand,
+    PepSubscribeResult, PepUnsubscribeCommand, PepUnsubscribeResult, PubSubConfigureNodeCommand,
+    PubSubConfigureNodeResult, PubSubCreateNodeCommand, PubSubCreateNodeResult,
+    PubSubDeleteNodeCommand, PubSubDeleteNodeResult,
     PubSubMutationPermit as ApplicationPubSubMutationPermit, PubSubPublishCommand,
-    PubSubPublishResult, PubSubPurgeNodeCommand, PubSubPurgeNodeResult,
-    PubSubRetractCommand, PubSubRetractResult, PubSubSetAffiliationsCommand,
-    PubSubSetAffiliationsResult, PubSubSetSubscriptionsCommand,
-    PubSubSetSubscriptionsResult, PubSubSubscribeCommand, PubSubSubscribeResult,
-    PubSubUnsubscribeCommand, PubSubUnsubscribeResult,
+    PubSubPublishResult, PubSubPurgeNodeCommand, PubSubPurgeNodeResult, PubSubRetractCommand,
+    PubSubRetractResult, PubSubSetAffiliationsCommand, PubSubSetAffiliationsResult,
+    PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsResult, PubSubSubscribeCommand,
+    PubSubSubscribeResult, PubSubUnsubscribeCommand, PubSubUnsubscribeResult,
 };
 pub(crate) use northstar_pubsub_core::{
     CollectionUpdateOutcome, CollectionVisibleItem, CreateNodeOutcome, OwnerMutationOutcome,
@@ -46,16 +43,17 @@ pub(crate) use northstar_pubsub_core::{
     PepOwnerMutationOutcome, PepPresenceSubscription, PepProfileWrite, PepPublishOutcome,
     PepPublishWrite, PepPurgeNodeWrite, PepQuotas, PepRetractWrite, PepSetAffiliationsWrite,
     PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscribeWrite, PepSubscription,
-    PepSubscriptionActor, PepUnsubscribeOutcome, PepUnsubscribeWrite, PublishItemsOutcome,
-    PubSubAccount, PubSubAffiliation, PubSubConfigOutcome, PubSubConfigureNodeWrite,
-    PubSubCreateNodeWrite, PubSubDeleteNodeWrite, PubSubDiscoNode, PubSubItem, PubSubNode,
-    PubSubNodeConfig, PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeWrite,
-    PubSubRetractOutcome, PubSubRetractWrite, PubSubSetAffiliationsWrite,
-    PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription,
-    PubSubSubscriptionOptions, PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite,
-    RetractItemsOutcome, SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscribeOutcome,
+    PepSubscriptionActor, PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount,
+    PubSubAffiliation, PubSubConfigOutcome, PubSubConfigureNodeWrite, PubSubCreateNodeWrite,
+    PubSubDeleteNodeWrite, PubSubDiscoNode, PubSubItem, PubSubNode, PubSubNodeConfig,
+    PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeWrite, PubSubRetractOutcome,
+    PubSubRetractWrite, PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite,
+    PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions,
+    PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, PublishItemsOutcome, RetractItemsOutcome,
+    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscribeOutcome,
     SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome, UnsubscribeOutcome,
 };
+use northstar_xml_builder::XmlElement;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -3145,12 +3143,18 @@ impl PubSubService {
                 outcome: PubSubPublishOutcome::ItemRequired,
             });
         }
-        if !effective_config.persist_items && !effective_config.deliver_payloads && !write.items.is_empty() {
+        if !effective_config.persist_items
+            && !effective_config.deliver_payloads
+            && !write.items.is_empty()
+        {
             return Ok(PubSubPublishResult {
                 outcome: PubSubPublishOutcome::ItemForbidden,
             });
         }
-        if !effective_config.persist_items && effective_config.deliver_payloads && write.items.is_empty() {
+        if !effective_config.persist_items
+            && effective_config.deliver_payloads
+            && write.items.is_empty()
+        {
             return Ok(PubSubPublishResult {
                 outcome: PubSubPublishOutcome::ItemRequired,
             });
@@ -3202,10 +3206,9 @@ impl PubSubService {
                 .iter()
                 .any(|(_, item_xml)| item_xml.len() > node.max_payload_size as usize)
             || node.payload_type.as_deref().is_some_and(|expected| {
-                write
-                    .items
-                    .iter()
-                    .any(|(_, item_xml)| !Self::serialized_item_payload_matches_type(item_xml, expected))
+                write.items.iter().any(|(_, item_xml)| {
+                    !Self::serialized_item_payload_matches_type(item_xml, expected)
+                })
             })
         {
             return Ok(PubSubPublishResult {
@@ -3347,8 +3350,7 @@ impl PubSubService {
                 outcome: PubSubUnsubscribeOutcome::NotFound,
             });
         };
-        let Some(subscription) = self.get_subscription(node.id, write.subscriber_jid).await?
-        else {
+        let Some(subscription) = self.get_subscription(node.id, write.subscriber_jid).await? else {
             return Ok(PubSubUnsubscribeResult {
                 outcome: PubSubUnsubscribeOutcome::NotSubscribed,
             });
@@ -3457,11 +3459,7 @@ impl PubSubService {
             });
         };
         let outcome = self
-            .delete_node_as_owner_with_redirect_and_outbox(
-                node.id,
-                write.requester,
-                write.redirect,
-            )
+            .delete_node_as_owner_with_redirect_and_outbox(node.id, write.requester, write.redirect)
             .await?;
         Ok(PubSubDeleteNodeResult { outcome })
     }

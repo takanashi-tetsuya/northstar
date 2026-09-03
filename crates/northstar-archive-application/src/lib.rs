@@ -4,6 +4,8 @@
 #![forbid(unsafe_code)]
 
 pub use northstar_archive_core::*;
+pub mod repository;
+pub use repository::*;
 use uuid::Uuid;
 
 /// Query scope representing the archive target (Personal, local MUC Room, or Federated Room).
@@ -59,6 +61,7 @@ pub enum MamQueryResult {
     },
     ItemNotFound,
     Forbidden,
+    ValidationFailed(MamQueryValidationError),
 }
 
 /// Outcome of executing a MAM metadata command.
@@ -114,9 +117,7 @@ pub enum MamQueryValidationError {
 pub const MAX_MAM_PAGE_SIZE: i64 = 1000;
 
 /// Pure validation of a MAM query command.
-pub fn validate_mam_query_command(
-    cmd: &MamQueryCommand,
-) -> Result<(), MamQueryValidationError> {
+pub fn validate_mam_query_command(cmd: &MamQueryCommand) -> Result<(), MamQueryValidationError> {
     if !validate_query_time_range(cmd.query.start, cmd.query.end) {
         return Err(MamQueryValidationError::InvalidTimeRange);
     }
@@ -135,9 +136,7 @@ pub fn validate_mam_query_command(
 }
 
 /// Pure validation of MAM preferences.
-pub fn validate_mam_preferences(
-    prefs: &MamPreferences,
-) -> Result<(), MamQueryValidationError> {
+pub fn validate_mam_preferences(prefs: &MamPreferences) -> Result<(), MamQueryValidationError> {
     if !matches!(prefs.default_policy.as_str(), "always" | "never" | "roster") {
         return Err(MamQueryValidationError::InvalidPreferenceMode);
     }

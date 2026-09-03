@@ -1136,11 +1136,10 @@ impl SessionCleanupService {
         active_privacy_list: Option<&str>,
         directed_presence: &[String],
     ) -> Result<()> {
-        let presence =
-            crate::xmpp::xml_builder::XmlElement::namespaced("presence", "jabber:client")
-                .attr("from", full_jid)
-                .attr("type", "unavailable")
-                .finish();
+        let presence = northstar_xml_builder::XmlElement::namespaced("presence", "jabber:client")
+            .attr("from", full_jid)
+            .attr("type", "unavailable")
+            .finish();
         for (jid, _, subscription, _) in db::roster(&self.state.pool, account.user_id).await? {
             if matches!(subscription.as_str(), "from" | "both") {
                 self.state

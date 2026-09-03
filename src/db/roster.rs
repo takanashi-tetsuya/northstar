@@ -61,8 +61,6 @@ pub enum RosterRemovalRoute<'a> {
     },
 }
 
-
-
 #[cfg(test)]
 #[derive(Debug)]
 pub struct PendingPresence {

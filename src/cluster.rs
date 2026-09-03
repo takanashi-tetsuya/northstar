@@ -7068,9 +7068,13 @@ async fn listen_once(
                             delivery.clone(),
                             annotated,
                         ) {
-                            crate::services::roster::RosterPushDisposition::NotInterested => false,
-                            crate::services::roster::RosterPushDisposition::Buffered => true,
-                            crate::services::roster::RosterPushDisposition::Deliver(stanza) => {
+                            northstar_roster_application::RosterPushDisposition::NotInterested => {
+                                false
+                            }
+                            northstar_roster_application::RosterPushDisposition::Buffered => true,
+                            northstar_roster_application::RosterPushDisposition::Deliver(
+                                stanza,
+                            ) => {
                                 if session.sender.try_send(stanza).is_ok() {
                                     true
                                 } else {
@@ -7079,7 +7083,7 @@ async fn listen_once(
                                     false
                                 }
                             }
-                            crate::services::roster::RosterPushDisposition::Overflow => {
+                            northstar_roster_application::RosterPushDisposition::Overflow => {
                                 session.sender.disconnect_backpressured_transport();
                                 session.disconnect.cancel();
                                 false

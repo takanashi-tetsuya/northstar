@@ -4,6 +4,8 @@
 #![forbid(unsafe_code)]
 
 pub use northstar_roster_core::*;
+pub mod repository;
+pub use repository::*;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -275,11 +277,7 @@ impl RosterSyncGate {
         }
     }
 
-    pub fn start_flush(
-        &self,
-        permit: RosterSyncPermit,
-        snapshot_version: i64,
-    ) -> RosterFlushBatch {
+    pub fn start_flush(&self, permit: RosterSyncPermit, snapshot_version: i64) -> RosterFlushBatch {
         let mut state = self
             .state
             .lock()

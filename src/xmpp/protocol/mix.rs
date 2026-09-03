@@ -26,12 +26,11 @@ use crate::xmpp::xml_util::{
     add_stanza_id, is_encrypted, mam_extended_form, stanza_error, stanza_error_type,
 };
 use anyhow::{Context, Result};
-use dashmap::DashMap;
 use futures::{stream, StreamExt};
 use roxmltree::{Document, Node};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -45,8 +44,7 @@ const PUBSUB_NS: &str = "http://jabber.org/protocol/pubsub";
 const MAM_NS: &str = "urn:xmpp:mam:2";
 const MAX_CHANNELS_PER_OWNER: i64 = 100;
 const MAX_ITEMS_PAGE: i64 = 200;
-const MIX_IQ_RELAY_LIMIT: usize = 1_024;
-const MIX_IQ_RELAY_TTL: Duration = Duration::from_secs(30);
+
 // Main grants background workers 15 seconds to join. MIX delivery cancellation
 // releases claimed leases immediately, leaving one second for the supervisor
 // and registry to record the terminal health transition.
@@ -98,81 +96,9 @@ fn permanent_mix_delivery_error(reason: &'static str, detail: impl Into<String>)
 /// One linearizable correlation budget for every MIX IQ relay. Expiry is
 /// drained by a single supervised worker; admission never creates one timer
 /// task per untrusted request.
-pub(crate) struct MixIqRelayIndex {
-    entries: DashMap<String, PendingMixIqRelay>,
-    admission: Mutex<()>,
-    max_entries: usize,
-    ttl: Duration,
-}
-
-impl MixIqRelayIndex {
-    pub(crate) fn new() -> Self {
-        Self::with_limits(MIX_IQ_RELAY_LIMIT, MIX_IQ_RELAY_TTL)
-    }
-
-    fn with_limits(max_entries: usize, ttl: Duration) -> Self {
-        assert!(max_entries > 0, "MIX relay capacity must be positive");
-        Self {
-            entries: DashMap::new(),
-            admission: Mutex::new(()),
-            max_entries,
-            ttl,
-        }
-    }
-
-    fn admit(&self, id: String, stage: MixIqRelayStage, now: Instant) -> bool {
-        let _admission = self
-            .admission
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if self.entries.contains_key(&id) || self.entries.len() >= self.max_entries {
-            return false;
-        }
-        self.entries.insert(
-            id,
-            PendingMixIqRelay {
-                stage,
-                expires_at: now + self.ttl,
-            },
-        );
-        debug_assert!(self.entries.len() <= self.max_entries);
-        true
-    }
-
-    fn get(&self, id: &str) -> Option<PendingMixIqRelay> {
-        self.entries.get(id).map(|pending| pending.value().clone())
-    }
-
-    fn remove(&self, id: &str) -> Option<PendingMixIqRelay> {
-        let _admission = self
-            .admission
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.entries.remove(id).map(|(_, pending)| pending)
-    }
-
-    fn take_expired(&self, now: Instant) -> Vec<PendingMixIqRelay> {
-        let _admission = self
-            .admission
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let expired = self
-            .entries
-            .iter()
-            .filter(|pending| pending.expires_at <= now)
-            .map(|pending| pending.key().clone())
-            .collect::<Vec<_>>();
-        expired
-            .into_iter()
-            .filter_map(|id| self.entries.remove(&id).map(|(_, pending)| pending))
-            .collect()
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
-}
+#[allow(unused_imports)]
+pub(crate) use northstar_protocol_runtime::mix::MixIqRelayIndex;
+pub(crate) use northstar_protocol_runtime::mix::MIX_IQ_RELAY_TTL;
 
 fn same_jid_domain(left: &str, right: &str) -> bool {
     matches!(

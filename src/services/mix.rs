@@ -6,9 +6,9 @@
 
 use crate::abuse::{MixMessageContentKeyring, MixRetractionContentKeyring};
 use crate::db;
-use crate::xmpp::xml_builder::XmlElement;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use northstar_xml_builder::XmlElement;
 use sqlx::PgPool;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -341,7 +341,7 @@ pub(crate) enum JoinChannelOutcome {
         newly_joined: bool,
         /// The roster service's own boundary type: MIX-PAM projects channel
         /// participation into the owner's roster through that service.
-        roster_change: Option<Box<crate::services::roster::RosterChange>>,
+        roster_change: Option<Box<northstar_roster_core::RosterChange>>,
     },
     Banned,
     NotAllowed,
@@ -381,7 +381,7 @@ pub(crate) struct MixMutationAdmission {
 pub(crate) struct LeaveMixOutcome {
     pub(crate) participant: MixParticipant,
     pub(crate) presence_items: Vec<MixPresenceItem>,
-    pub(crate) roster_change: Option<crate::services::roster::RosterChange>,
+    pub(crate) roster_change: Option<northstar_roster_core::RosterChange>,
 }
 
 #[derive(Clone, Debug)]
@@ -403,7 +403,7 @@ pub(crate) struct UpdateSubscriptionsOutcome {
 #[derive(Clone, Debug)]
 pub(crate) struct MixParticipantPreferenceUpdateOutcome {
     pub(crate) participant: MixParticipant,
-    pub(crate) roster_changes: Vec<(Uuid, crate::services::roster::RosterChange)>,
+    pub(crate) roster_changes: Vec<(Uuid, northstar_roster_core::RosterChange)>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1837,7 +1837,7 @@ impl MixService {
         &self,
         user_id: Uuid,
         contact_jid: &str,
-    ) -> Result<Option<crate::services::roster::RosterChange>> {
+    ) -> Result<Option<northstar_roster_core::RosterChange>> {
         db::latest_roster_change_for_contact(&self.pool, user_id, contact_jid).await
     }
     pub(crate) async fn mix_muc_mirror_for_mix(

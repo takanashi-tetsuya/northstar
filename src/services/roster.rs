@@ -8,21 +8,12 @@
 
 use crate::db;
 use anyhow::Result;
-#[allow(unused_imports)]
-pub(crate) use northstar_roster_application::{
+use northstar_roster_application::{
     validate_roster_get_command, validate_roster_remove_command, validate_roster_upsert_command,
-    BeginRosterSyncError, RemoteRemovalPolicy, RosterFlushBatch, RosterGetCommand,
-    RosterGetValidationError, RosterPushDisposition, RosterRemovalRoute,
-    RosterRemoveCommand, RosterRemoveValidationError, RosterSyncGate, RosterSyncPermit,
-    RosterSyncState, RosterUpsertCommand, RosterUpsertValidationError,
-    MAX_BUFFERED_ROSTER_CHANGES,
+    RosterGetCommand, RosterRemovalRoute, RosterRemoveCommand, RosterUpsertCommand,
 };
-#[allow(unused_imports)]
-pub(crate) use northstar_roster_core::{
-    AuthorizedLocalPresence, AuthorizedLocalPresenceTransition, AuthorizedRosterRemoval,
-    LocalPresenceEffect, LocalPresenceTransition, LocalRosterContact, PresenceAccount,
-    PresencePolicyDenial, RosterAuthorization, RosterChange, RosterReadSnapshot,
-    RosterRemovalTransition, SubscriptionType,
+use northstar_roster_core::{
+    RosterAuthorization, RosterChange, RosterReadSnapshot, RosterRemovalTransition,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -193,7 +184,7 @@ impl RosterService {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use northstar_roster_application::*;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]

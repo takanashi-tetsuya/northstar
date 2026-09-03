@@ -1724,6 +1724,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-protocol-runtime"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "northstar-session-core",
+ "northstar-xmpp-types",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "northstar-pubsub-application"
 version = "0.1.0"
 dependencies = [
@@ -2785,6 +2796,7 @@ dependencies = [
  "northstar-message-application",
  "northstar-message-core",
  "northstar-presence-core",
+ "northstar-protocol-runtime",
  "northstar-pubsub-application",
  "northstar-pubsub-core",
  "northstar-room-application",

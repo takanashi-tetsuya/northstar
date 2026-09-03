@@ -1,0 +1,246 @@
+# Northstar Protocol Routes Catalog
+# Maps every (namespace, element, stanza, phase) directly to a single semantic owner service.
+# Defined per northstar_microservices_deep_audit_2026-09-03.md (Section 5, 7, 19.5).
+
+version: "2.0.0"
+
+routes:
+  # ----------------------------------------------------
+  # RFC 6120 Core Stream Negotiation Routes
+  # ----------------------------------------------------
+  - namespace: "urn:ietf:params:xml:ns:xmpp-tls"
+    element: "starttls"
+    stanza: "starttls"
+    phase: "pre-auth"
+    owner: xmpp-edge
+
+  - namespace: "urn:ietf:params:xml:ns:xmpp-sasl"
+    element: "auth"
+    stanza: "auth"
+    phase: "authenticating"
+    owner: identity
+
+  - namespace: "urn:ietf:params:xml:ns:xmpp-sasl"
+    element: "response"
+    stanza: "response"
+    phase: "authenticating"
+    owner: identity
+
+  - namespace: "urn:ietf:params:xml:ns:xmpp-bind"
+    element: "bind"
+    stanza: "iq"
+    phase: "binding"
+    owner: session-directory
+
+  # ----------------------------------------------------
+  # RFC 6121 IM and Core Routes
+  # ----------------------------------------------------
+  - namespace: "jabber:iq:roster"
+    element: "query"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: roster-authority
+
+  - namespace: "jabber:client"
+    element: "presence"
+    stanza: "presence"
+    phase: "authenticated"
+    owner: presence-authority
+
+  - namespace: "jabber:client"
+    element: "message"
+    stanza: "message"
+    phase: "authenticated"
+    owner: message-ingress
+
+  # ----------------------------------------------------
+  # XEP Discovery & Administrative Routes
+  # ----------------------------------------------------
+  - namespace: "http://jabber.org/protocol/disco#info"
+    element: "query"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: protocol-registry
+
+  - namespace: "http://jabber.org/protocol/disco#items"
+    element: "query"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: protocol-registry
+
+  - namespace: "http://jabber.org/protocol/commands"
+    element: "command"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0050-ad-hoc-commands
+
+  - namespace: "jabber:iq:version"
+    element: "query"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0092-version
+
+  - namespace: "urn:xmpp:ping"
+    element: "ping"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0199-ping
+
+  - namespace: "urn:xmpp:time"
+    element: "time"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0202-entity-time
+
+  # ----------------------------------------------------
+  # Stateful XEP Routes
+  # ----------------------------------------------------
+  - namespace: "jabber:iq:privacy"
+    element: "query"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0016-privacy
+
+  - namespace: "urn:xmpp:blocking"
+    element: "block"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0191-blocking
+
+  - namespace: "urn:xmpp:blocking"
+    element: "unblock"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0191-blocking
+
+  - namespace: "http://jabber.org/protocol/muc"
+    element: "x"
+    stanza: "presence"
+    phase: "authenticated"
+    owner: xep-0045-muc
+
+  - namespace: "http://jabber.org/protocol/muc#admin"
+    element: "query"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0045-muc
+
+  - namespace: "http://jabber.org/protocol/muc#owner"
+    element: "query"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0045-muc
+
+  - namespace: "jabber:iq:private"
+    element: "query"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0049-private-storage
+
+  - namespace: "vcard-temp"
+    element: "vCard"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0054-vcard-temp
+
+  - namespace: "http://jabber.org/protocol/pubsub"
+    element: "pubsub"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0060-pubsub
+
+  - namespace: "http://jabber.org/protocol/pubsub#owner"
+    element: "pubsub"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0060-pubsub
+
+  - namespace: "urn:xmpp:sm:3"
+    element: "enable"
+    stanza: "enable"
+    phase: "authenticated"
+    owner: xep-0198-sm
+
+  - namespace: "urn:xmpp:sm:3"
+    element: "resume"
+    stanza: "resume"
+    phase: "pre-auth"
+    owner: xep-0198-sm
+
+  - namespace: "urn:xmpp:sm:3"
+    element: "a"
+    stanza: "a"
+    phase: "authenticated"
+    owner: xep-0198-sm
+
+  - namespace: "urn:xmpp:sm:3"
+    element: "r"
+    stanza: "r"
+    phase: "authenticated"
+    owner: xep-0198-sm
+
+  - namespace: "urn:xmpp:extdisco:2"
+    element: "services"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0215-extdisco
+
+  - namespace: "urn:xmpp:carbons:2"
+    element: "enable"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0280-carbons
+
+  - namespace: "urn:xmpp:carbons:2"
+    element: "disable"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0280-carbons
+
+  - namespace: "urn:xmpp:mam:2"
+    element: "query"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0313-mam
+
+  - namespace: "urn:xmpp:csi:0"
+    element: "active"
+    stanza: "active"
+    phase: "authenticated"
+    owner: xep-0352-csi
+
+  - namespace: "urn:xmpp:csi:0"
+    element: "inactive"
+    stanza: "inactive"
+    phase: "authenticated"
+    owner: xep-0352-csi
+
+  - namespace: "urn:xmpp:push:0"
+    element: "enable"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0357-push
+
+  - namespace: "urn:xmpp:push:0"
+    element: "disable"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0357-push
+
+  - namespace: "urn:xmpp:http:upload:0"
+    element: "request"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0363-upload
+
+  - namespace: "urn:xmpp:mix:core:1"
+    element: "join"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0369-mix-core
+
+  - namespace: "urn:xmpp:fast:0"
+    element: "request-token"
+    stanza: "iq"
+    phase: "authenticated"
+    owner: xep-0484-fast

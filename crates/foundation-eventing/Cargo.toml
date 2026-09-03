@@ -1,0 +1,16 @@
+[package]
+name = "foundation-eventing"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Transactional Outbox and Consumer Inbox patterns for Northstar microservices"
+publish = false
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tokio = { version = "1.43", features = ["sync", "macros", "rt"] }

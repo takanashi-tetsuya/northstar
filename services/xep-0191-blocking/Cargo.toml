@@ -1,0 +1,20 @@
+[package]
+name = "service-xep-0191-blocking"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Northstar XEP-0191 Blocking Command Microservice"
+publish = false
+
+[dependencies]
+foundation-contracts = { path = "../../crates/foundation-contracts" }
+foundation-security = { path = "../../crates/foundation-security" }
+foundation-eventing = { path = "../../crates/foundation-eventing" }
+foundation-telemetry = { path = "../../crates/foundation-telemetry" }
+northstar-xep-0191 = { path = "../../crates/northstar-xep-0191" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.43", features = ["sync", "macros", "rt", "rt-multi-thread", "time"] }
+thiserror = "2.0"
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4", "serde"] }

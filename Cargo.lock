@@ -525,6 +525,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "data-split-migrator"
+version = "0.1.0"
+dependencies = [
+ "foundation-security",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -710,6 +723,47 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "foundation-contracts"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "foundation-eventing",
+ "foundation-security",
+ "foundation-telemetry",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "foundation-eventing"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "foundation-security"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "zeroize",
+]
+
+[[package]]
+name = "foundation-telemetry"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tracing",
 ]
 
 [[package]]
@@ -3094,6 +3148,263 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "service-admin-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "foundation-contracts",
+ "foundation-eventing",
+ "foundation-security",
+ "foundation-telemetry",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "service-delivery-router"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "foundation-contracts",
+ "foundation-eventing",
+ "foundation-security",
+ "foundation-telemetry",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "service-federation-outbox"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "foundation-contracts",
+ "foundation-eventing",
+ "foundation-security",
+ "foundation-telemetry",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "service-identity"
+version = "0.1.0"
+dependencies = [
+ "foundation-contracts",
+ "foundation-eventing",
+ "foundation-security",
+ "foundation-telemetry",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "service-message-ingress"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "foundation-contracts",
+ "foundation-eventing",
+ "foundation-security",
+ "foundation-telemetry",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "service-protocol-registry"
+version = "0.1.0"
+dependencies = [
+ "foundation-contracts",
+ "foundation-security",
+ "foundation-telemetry",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "service-roster-authority"
+version = "0.1.0"
+dependencies = [
+ "foundation-contracts",
+ "foundation-eventing",
+ "foundation-security",
+ "foundation-telemetry",
+ "northstar-roster-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "service-s2s-edge"
+version = "0.1.0"
+dependencies = [
+ "foundation-contracts",
+ "foundation-security",
+ "foundation-telemetry",
+ "northstar-federation-core",
+ "northstar-xml-builder",
+ "northstar-xml-framing",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "service-session-directory"
+version = "0.1.0"
+dependencies = [
+ "foundation-contracts",
+ "foundation-eventing",
+ "foundation-security",
+ "foundation-telemetry",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "service-xep-0045-muc"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "foundation-contracts",
+ "foundation-eventing",
+ "foundation-security",
+ "foundation-telemetry",
+ "northstar-room-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "service-xep-0060-pubsub"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "foundation-contracts",
+ "foundation-eventing",
+ "foundation-security",
+ "foundation-telemetry",
+ "northstar-pubsub-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "service-xep-0191-blocking"
+version = "0.1.0"
+dependencies = [
+ "foundation-contracts",
+ "foundation-eventing",
+ "foundation-security",
+ "foundation-telemetry",
+ "northstar-xep-0191",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "service-xep-0313-mam"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "foundation-contracts",
+ "foundation-eventing",
+ "foundation-security",
+ "foundation-telemetry",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "service-xep-0363-upload"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "foundation-contracts",
+ "foundation-eventing",
+ "foundation-security",
+ "foundation-telemetry",
+ "northstar-upload-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "service-xmpp-edge"
+version = "0.1.0"
+dependencies = [
+ "foundation-contracts",
+ "foundation-security",
+ "foundation-telemetry",
+ "northstar-xml-builder",
+ "northstar-xml-framing",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

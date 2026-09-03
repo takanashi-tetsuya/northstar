@@ -1,0 +1,539 @@
+# Northstar Microservices Catalog
+# Source of truth for service identities, ownership, databases, RPC, and events.
+# Defined per northstar_microservices_deep_audit_2026-09-03.md (Sections 5, 6, 7).
+
+version: "2.0.0"
+
+services:
+  # ==========================================
+  # Platform Core Services (平台核心服务)
+  # ==========================================
+  - service_id: xmpp-edge
+    name: "XMPP C2S Edge Connection Gateway"
+    execution_class: transport
+    home_key: connection_id
+    database: none
+    rpc:
+      consumes:
+        - northstar.identity.v1.IdentityService
+        - northstar.session.v1.SessionDirectoryService
+        - northstar.registry.v1.ProtocolRegistryService
+        - northstar.ingress.v1.MessageIngressService
+      provides:
+        - northstar.edge.v1.EdgeDeliveryService
+    events:
+      produces:
+        - edge.connection.v1
+    slo:
+      command_p99_ms: 20
+      availability: 99.99
+
+  - service_id: identity
+    name: "User Identity and Credential Authority"
+    execution_class: stateful-hot
+    home_key: account_id
+    database: northstar_identity
+    rpc:
+      provides:
+        - northstar.identity.v1.IdentityService
+      consumes:
+        - northstar.abuserisk.v1.AbuseRiskService
+    events:
+      produces:
+        - identity.account.v1
+        - identity.credential.v1
+    slo:
+      command_p99_ms: 50
+      availability: 99.99
+
+  - service_id: session-directory
+    name: "Session and Resource Binding Authority"
+    execution_class: stateful-hot
+    home_key: bare_jid
+    database: northstar_session
+    rpc:
+      provides:
+        - northstar.session.v1.SessionDirectoryService
+    events:
+      produces:
+        - session.lifecycle.v1
+    slo:
+      command_p99_ms: 30
+      availability: 99.99
+
+  - service_id: message-ingress
+    name: "Message Admission and Authority Ingress"
+    execution_class: stateful-hot
+    home_key: sender_account_id
+    database: northstar_message_ingress
+    rpc:
+      provides:
+        - northstar.ingress.v1.MessageIngressService
+      consumes:
+        - northstar.policy.v1.PolicyProjectionService
+    events:
+      produces:
+        - message.accepted.v1
+        - message.rejected.v1
+    slo:
+      command_p99_ms: 40
+      availability: 99.99
+
+  - service_id: delivery-router
+    name: "Online Delivery and Offline Spool Router"
+    execution_class: stateful-hot
+    home_key: recipient_bare_jid
+    database: northstar_delivery
+    rpc:
+      provides:
+        - northstar.delivery.v1.DeliveryRouterService
+      consumes:
+        - northstar.edge.v1.EdgeDeliveryService
+        - northstar.session.v1.SessionDirectoryService
+    events:
+      consumes:
+        - message.accepted.v1
+        - session.lifecycle.v1
+      produces:
+        - delivery.status.v1
+    slo:
+      command_p99_ms: 50
+      availability: 99.95
+
+  - service_id: presence-authority
+    name: "Presence State and Subscription Fanout"
+    execution_class: stateful-hot
+    home_key: bare_jid
+    database: northstar_presence
+    rpc:
+      provides:
+        - northstar.presence.v1.PresenceAuthorityService
+    events:
+      produces:
+        - presence.update.v1
+      consumes:
+        - session.lifecycle.v1
+    slo:
+      command_p99_ms: 50
+      availability: 99.95
+
+  - service_id: roster-authority
+    name: "Roster Management and Versioning Authority"
+    execution_class: stateful-hot
+    home_key: owner_bare_jid
+    database: northstar_roster
+    rpc:
+      provides:
+        - northstar.roster.v1.RosterAuthorityService
+    events:
+      produces:
+        - roster.changed.v1
+    slo:
+      command_p99_ms: 60
+      availability: 99.95
+
+  - service_id: communication-policy-projection
+    name: "Compiled Communication Policy Read Projections"
+    execution_class: local-sdk
+    home_key: principal_bare_jid
+    database: northstar_policy_projection
+    rpc:
+      provides:
+        - northstar.policy.v1.PolicyProjectionService
+    events:
+      consumes:
+        - privacy.list.v1
+        - blocking.list.v1
+        - roster.changed.v1
+    slo:
+      command_p99_ms: 10
+      availability: 99.99
+
+  - service_id: federation-outbox
+    name: "Durable S2S Federation Outbox Queue"
+    execution_class: stateful-hot
+    home_key: target_domain
+    database: northstar_federation_outbox
+    rpc:
+      provides:
+        - northstar.federation.v1.FederationOutboxService
+    events:
+      consumes:
+        - message.accepted.v1
+      produces:
+        - federation.status.v1
+    slo:
+      command_p99_ms: 80
+      availability: 99.95
+
+  - service_id: s2s-edge
+    name: "S2S Dialback and Inbound/Outbound Transport Gateway"
+    execution_class: transport
+    home_key: target_domain
+    database: none
+    rpc:
+      consumes:
+        - northstar.federation.v1.FederationOutboxService
+        - northstar.ingress.v1.MessageIngressService
+    events:
+      produces:
+        - s2s.peer.v1
+    slo:
+      command_p99_ms: 100
+      availability: 99.95
+
+  - service_id: protocol-registry
+    name: "Dynamic Protocol and Route Catalog Registry"
+    execution_class: control-plane
+    home_key: singleton
+    database: northstar_registry
+    rpc:
+      provides:
+        - northstar.registry.v1.ProtocolRegistryService
+    events:
+      produces:
+        - registry.snapshot.v1
+    slo:
+      command_p99_ms: 20
+      availability: 99.99
+
+  - service_id: abuse-risk
+    name: "PoW Challenge and Rate-Limit Authority"
+    execution_class: stateful-hot
+    home_key: client_ip
+    database: northstar_abuse_risk
+    rpc:
+      provides:
+        - northstar.abuserisk.v1.AbuseRiskService
+    events:
+      produces:
+        - abuse.throttled.v1
+    slo:
+      command_p99_ms: 20
+      availability: 99.99
+
+  - service_id: admin-api
+    name: "External Admin REST BFF Gateway"
+    execution_class: bff
+    home_key: none
+    database: none
+    rpc:
+      consumes:
+        - northstar.identity.v1.IdentityService
+        - northstar.admin.v1.AdminOrchestratorService
+    slo:
+      command_p99_ms: 100
+      availability: 99.9
+
+  - service_id: admin-orchestrator
+    name: "Cross-Service Admin Saga Orchestration"
+    execution_class: stateful
+    home_key: operation_id
+    database: northstar_admin_operations
+    rpc:
+      provides:
+        - northstar.admin.v1.AdminOrchestratorService
+    events:
+      produces:
+        - admin.operation.v1
+    slo:
+      command_p99_ms: 200
+      availability: 99.9
+
+  # ==========================================
+  # Stateful XEP Services (有状态 XEP 微服务)
+  # ==========================================
+  - service_id: xep-0016-privacy
+    name: "XEP-0016 Privacy Lists"
+    execution_class: stateful-hot
+    home_key: account_id
+    database: northstar_xep_0016
+    events:
+      produces:
+        - privacy.list.v1
+    slo:
+      command_p99_ms: 50
+      availability: 99.95
+
+  - service_id: xep-0045-muc
+    name: "XEP-0045 Multi-User Chat"
+    execution_class: stateful-hot
+    home_key: room_id
+    database: northstar_xep_0045
+    events:
+      produces:
+        - muc.room.v1
+        - muc.message.v1
+        - muc.membership.v1
+    slo:
+      command_p99_ms: 80
+      availability: 99.95
+
+  - service_id: xep-0049-private-storage
+    name: "XEP-0049 Private XML Storage"
+    execution_class: stateful
+    home_key: account_id
+    database: northstar_xep_0049
+    slo:
+      command_p99_ms: 60
+      availability: 99.9
+
+  - service_id: xep-0050-ad-hoc-commands
+    name: "XEP-0050 Ad-Hoc Commands"
+    execution_class: stateful
+    home_key: session_id
+    database: northstar_xep_0050
+    slo:
+      command_p99_ms: 100
+      availability: 99.9
+
+  - service_id: xep-0054-vcard-temp
+    name: "XEP-0054 vCard-temp"
+    execution_class: stateful
+    home_key: account_id
+    database: northstar_xep_0054
+    slo:
+      command_p99_ms: 60
+      availability: 99.9
+
+  - service_id: xep-0060-pubsub
+    name: "XEP-0060 Publish-Subscribe"
+    execution_class: stateful-hot
+    home_key: node_id
+    database: northstar_xep_0060
+    events:
+      produces:
+        - pubsub.event.v1
+    slo:
+      command_p99_ms: 80
+      availability: 99.95
+
+  - service_id: xep-0084-avatar
+    name: "XEP-0084 User Avatar"
+    execution_class: stateful
+    home_key: account_id
+    database: northstar_xep_0084
+    events:
+      produces:
+        - avatar.update.v1
+    slo:
+      command_p99_ms: 100
+      availability: 99.9
+
+  - service_id: xep-0115-caps
+    name: "XEP-0115 Entity Capabilities"
+    execution_class: stateful-hot
+    home_key: verification_hash
+    database: northstar_xep_0115
+    slo:
+      command_p99_ms: 30
+      availability: 99.95
+
+  - service_id: xep-0160-offline-messages
+    name: "XEP-0160 Best Practices for Offline Messages"
+    execution_class: stateful-hot
+    home_key: recipient_bare_jid
+    database: northstar_xep_0160
+    slo:
+      command_p99_ms: 50
+      availability: 99.95
+
+  - service_id: xep-0163-pep
+    name: "XEP-0163 Personal Eventing Protocol"
+    execution_class: stateful-hot
+    home_key: owner_bare_jid
+    database: northstar_xep_0163
+    events:
+      produces:
+        - pep.event.v1
+    slo:
+      command_p99_ms: 60
+      availability: 99.95
+
+  - service_id: xep-0191-blocking
+    name: "XEP-0191 Blocking Command"
+    execution_class: stateful-hot
+    home_key: account_id
+    database: northstar_xep_0191
+    events:
+      produces:
+        - blocking.list.v1
+    slo:
+      command_p99_ms: 40
+      availability: 99.95
+
+  - service_id: xep-0198-sm
+    name: "XEP-0198 Stream Management"
+    execution_class: stateful-hot
+    home_key: session_id
+    database: northstar_xep_0198
+    slo:
+      command_p99_ms: 20
+      availability: 99.99
+
+  - service_id: xep-0215-extdisco
+    name: "XEP-0215 External Service Discovery"
+    execution_class: stateful
+    home_key: singleton
+    database: northstar_xep_0215
+    slo:
+      command_p99_ms: 50
+      availability: 99.9
+
+  - service_id: xep-0280-carbons
+    name: "XEP-0280 Message Carbons"
+    execution_class: stateful-hot
+    home_key: account_id
+    database: northstar_xep_0280
+    events:
+      consumes:
+        - message.accepted.v1
+    slo:
+      command_p99_ms: 40
+      availability: 99.95
+
+  - service_id: xep-0313-mam
+    name: "XEP-0313 Message Archive Management"
+    execution_class: stateful-hot
+    home_key: archive_scope_id
+    database: northstar_xep_0313
+    events:
+      consumes:
+        - message.accepted.v1
+        - muc.message.v1
+    slo:
+      command_p99_ms: 80
+      availability: 99.95
+
+  - service_id: xep-0352-csi
+    name: "XEP-0352 Client State Indication"
+    execution_class: stateful
+    home_key: session_id
+    database: northstar_xep_0352
+    slo:
+      command_p99_ms: 20
+      availability: 99.99
+
+  - service_id: xep-0357-push
+    name: "XEP-0357 Push Notifications"
+    execution_class: stateful
+    home_key: account_id
+    database: northstar_xep_0357
+    events:
+      consumes:
+        - delivery.status.v1
+    slo:
+      command_p99_ms: 120
+      availability: 99.9
+
+  - service_id: xep-0363-upload
+    name: "XEP-0363 HTTP File Upload"
+    execution_class: stateful-hot
+    home_key: slot_id
+    database: northstar_xep_0363
+    events:
+      produces:
+        - upload.slot.v1
+    slo:
+      command_p99_ms: 50
+      availability: 99.95
+
+  - service_id: xep-0369-mix-core
+    name: "XEP-0369 Mediated Information eXchange Core"
+    execution_class: stateful-hot
+    home_key: channel_id
+    database: northstar_xep_0369
+    events:
+      produces:
+        - mix.channel.v1
+        - mix.message.v1
+    slo:
+      command_p99_ms: 80
+      availability: 99.95
+
+  - service_id: xep-0484-fast
+    name: "XEP-0484 Fast Authentication Token Authority"
+    execution_class: stateful-hot
+    home_key: account_id
+    database: northstar_xep_0484
+    slo:
+      command_p99_ms: 30
+      availability: 99.99
+
+  # ==========================================
+  # Grammar & Local SDK Extensions (纯本地规则扩展)
+  # ==========================================
+  - service_id: xep-0004-data-forms
+    name: "XEP-0004 Data Forms Grammar"
+    execution_class: local-sdk
+    database: none
+
+  - service_id: xep-0059-rsm
+    name: "XEP-0059 Result Set Management Grammar"
+    execution_class: local-sdk
+    database: none
+
+  - service_id: xep-0082-datetime
+    name: "XEP-0082 XMPP Date and Time Profiles"
+    execution_class: local-sdk
+    database: none
+
+  - service_id: xep-0085-chat-state
+    name: "XEP-0085 Chat State Notifications"
+    execution_class: pass-through
+    database: none
+
+  - service_id: xep-0092-version
+    name: "XEP-0092 Software Version"
+    execution_class: stateless
+    database: none
+
+  - service_id: xep-0184-receipts
+    name: "XEP-0184 Message Delivery Receipts"
+    execution_class: pass-through
+    database: none
+
+  - service_id: xep-0199-ping
+    name: "XEP-0199 XMPP Ping"
+    execution_class: local-sdk
+    database: none
+
+  - service_id: xep-0202-entity-time
+    name: "XEP-0202 Entity Time"
+    execution_class: stateless
+    database: none
+
+  - service_id: xep-0203-delayed-delivery
+    name: "XEP-0203 Delayed Delivery"
+    execution_class: local-sdk
+    database: none
+
+  - service_id: xep-0333-chat-markers
+    name: "XEP-0333 Chat Markers"
+    execution_class: pass-through
+    database: none
+
+  - service_id: xep-0334-processing-hints
+    name: "XEP-0334 Message Processing Hints"
+    execution_class: local-sdk
+    database: none
+
+  - service_id: xep-0359-stanza-ids
+    name: "XEP-0359 Unique and Stable Stanza IDs"
+    execution_class: local-sdk
+    database: none
+
+  - service_id: xep-0380-eme
+    name: "XEP-0380 Explicit Message Encryption"
+    execution_class: pass-through
+    database: none
+
+  - service_id: xep-0444-reactions
+    name: "XEP-0444 Message Reactions"
+    execution_class: pass-through
+    database: none
+
+  - service_id: xep-0478-stream-limits
+    name: "XEP-0478 Stream Limits"
+    execution_class: local-sdk
+    database: none

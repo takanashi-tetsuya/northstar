@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package northstar.session.v1;
+
+import "northstar/common/v1/common.proto";
+
+service SessionDirectoryService {
+  rpc BindSession (BindSessionRequest) returns (BindSessionResponse);
+  rpc ResumeFence (ResumeFenceRequest) returns (ResumeFenceResponse);
+  rpc ResolveTargets (ResolveTargetsRequest) returns (ResolveTargetsResponse);
+  rpc CloseSession (CloseSessionRequest) returns (CloseSessionResponse);
+}
+
+message BindSessionRequest {
+  northstar.common.v1.AuthContext auth = 1;
+  string desired_resource = 2;
+  string edge_instance_id = 3;
+  string connection_id = 4;
+  northstar.common.v1.TraceContext trace = 5;
+}
+
+message BindSessionResponse {
+  bool success = 1;
+  string full_jid = 2;
+  uint64 session_epoch = 3;
+  optional northstar.common.v1.ErrorDetail error = 4;
+}
+
+message ResumeFenceRequest {
+  string full_jid = 1;
+  uint64 expected_epoch = 2;
+  string new_edge_instance_id = 3;
+  string new_connection_id = 4;
+  northstar.common.v1.TraceContext trace = 5;
+}
+
+message ResumeFenceResponse {
+  bool success = 1;
+  uint64 new_epoch = 2;
+  optional northstar.common.v1.ErrorDetail error = 3;
+}
+
+message ResolveTargetsRequest {
+  string bare_or_full_jid = 1;
+}
+
+message SessionTarget {
+  string full_jid = 1;
+  string edge_instance_id = 2;
+  string connection_id = 3;
+  uint64 session_epoch = 4;
+}
+
+message ResolveTargetsResponse {
+  repeated SessionTarget targets = 1;
+}
+
+message CloseSessionRequest {
+  string full_jid = 1;
+  uint64 session_epoch = 2;
+  string reason = 3;
+  northstar.common.v1.TraceContext trace = 4;
+}
+
+message CloseSessionResponse {
+  bool success = 1;
+}

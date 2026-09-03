@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package northstar.registry.v1;
+
+service ProtocolRegistryService {
+  rpc GetRouteSnapshot (GetRouteSnapshotRequest) returns (GetRouteSnapshotResponse);
+  rpc RegisterInstance (RegisterInstanceRequest) returns (RegisterInstanceResponse);
+}
+
+message GetRouteSnapshotRequest {
+  uint64 since_version = 1;
+}
+
+message RouteEntry {
+  string namespace = 1;
+  string element = 2;
+  string stanza = 3;
+  string phase = 4;
+  string service_id = 5;
+  string endpoint = 6;
+}
+
+message DiscoFeature {
+  string var = 1;
+  string service_id = 2;
+}
+
+message GetRouteSnapshotResponse {
+  uint64 snapshot_version = 1;
+  bytes signature = 2;
+  repeated RouteEntry routes = 3;
+  repeated DiscoFeature disco_features = 4;
+}
+
+message RegisterInstanceRequest {
+  string service_id = 1;
+  string instance_id = 2;
+  string endpoint = 3;
+  uint64 weight = 4;
+}
+
+message RegisterInstanceResponse {
+  bool acknowledged = 1;
+  uint64 current_registry_version = 2;
+}

@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package northstar.common.v1;
+
+import "google/protobuf/duration.proto";
+
+// Unified error response detail per northstar_microservices_deep_audit_2026-09-03.md (Appendix B.5).
+message ErrorDetail {
+  // Stable machine code (e.g. "AUTH_FAILED", "VERSION_CONFLICT", "RESOURCE_CONSTRAINT")
+  string code = 1;
+  // Whether the client/caller is permitted to retry the command
+  bool retryable = 2;
+  // User-facing safe error message with zero internal infrastructure leakage
+  string safe_message = 3;
+  // Authoritative state version at the time of rejection (for version barrier check)
+  optional uint64 current_version = 4;
+  // Detailed field violation list if validation failed
+  repeated FieldViolation violations = 5;
+  // Recommended retry backoff duration
+  optional google.protobuf.Duration retry_after = 6;
+}
+
+message FieldViolation {
+  string field = 1;
+  string description = 2;
+}
+
+// Authenticated principal context passed across internal RPCs.
+message AuthContext {
+  string account_id = 1;
+  string canonical_jid = 2;
+  uint64 credential_generation = 3;
+  repeated string roles = 4;
+  string home_region = 5;
+}
+
+// Distributed tracing context propagating causal relationships across asynchronous boundaries.
+message TraceContext {
+  string traceparent = 1;
+  string tracestate = 2;
+  string correlation_id = 3;
+  string causation_id = 4;
+}

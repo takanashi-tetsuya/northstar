@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package northstar.ingress.v1;
+
+import "northstar/common/v1/common.proto";
+
+service MessageIngressService {
+  rpc SubmitMessage (SubmitMessageRequest) returns (SubmitMessageResponse);
+}
+
+message SubmitMessageRequest {
+  string from_full_jid = 1;
+  string to_jid = 2;
+  string stanza_id = 3;
+  string message_type = 4; // "chat", "groupchat", "normal", "headline"
+  bytes raw_stanza = 5;
+  northstar.common.v1.AuthContext auth = 6;
+  northstar.common.v1.TraceContext trace = 7;
+}
+
+message SubmitMessageResponse {
+  bool accepted = 1;
+  string server_message_id = 2;
+  uint64 admission_timestamp_ms = 3;
+  optional northstar.common.v1.ErrorDetail error = 4;
+}

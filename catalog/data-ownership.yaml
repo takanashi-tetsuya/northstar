@@ -1,0 +1,252 @@
+# Northstar Database Data Ownership Catalog
+# Maps every table and sequence in the schema to its single authoritative service owner.
+# Defined per northstar_microservices_deep_audit_2026-09-03.md (Section 8, 19.4).
+
+version: "2.0.0"
+
+ownership:
+  # ==========================================
+  # Service: identity (northstar_identity)
+  # ==========================================
+  identity:
+    database: northstar_identity
+    tables:
+      - users
+      - scram_credentials
+      - scram_sha1_credentials
+      - user_command_capabilities
+      - account_deletion_audit
+      - authorization_identity
+
+  # ==========================================
+  # Service: session-directory (northstar_session)
+  # ==========================================
+  session-directory:
+    database: northstar_session
+    tables:
+      - active_sessions
+      - session_route_leases
+      - session_authority_capabilities
+      - session_authorization_jid_canonicalization
+      - cluster_replay_fence
+
+  # ==========================================
+  # Service: roster-authority (northstar_roster)
+  # ==========================================
+  roster-authority:
+    database: northstar_roster
+    tables:
+      - roster_items
+      - roster_groups
+      - roster_version
+      - roster_change_log
+      - pending_presence_subscriptions
+
+  # ==========================================
+  # Service: presence-authority (northstar_presence)
+  # ==========================================
+  presence-authority:
+    database: northstar_presence
+    tables:
+      - directed_presence
+      - federated_presence
+      - pending_presence_stanzas
+
+  # ==========================================
+  # Service: message-ingress (northstar_message_ingress)
+  # ==========================================
+  message-ingress:
+    database: northstar_message_ingress
+    tables:
+      - accepted_messages
+      - ingress_outbox
+      - personal_message_admissions
+      - message_pow_admissions
+
+  # ==========================================
+  # Service: delivery-router (northstar_delivery)
+  # ==========================================
+  delivery-router:
+    database: northstar_delivery
+    tables:
+      - offline_messages
+      - offline_replay_leases
+      - offline_replay_resource_leases
+      - durable_c2s_delivery
+      - delivery_inbox
+
+  # ==========================================
+  # Service: federation-outbox (northstar_federation_outbox)
+  # ==========================================
+  federation-outbox:
+    database: northstar_federation_outbox
+    tables:
+      - s2s_outbox
+      - s2s_outbox_sequence
+
+  # ==========================================
+  # Service: xep-0016-privacy (northstar_xep_0016)
+  # ==========================================
+  xep-0016-privacy:
+    database: northstar_xep_0016
+    tables:
+      - privacy_lists
+      - privacy_items
+
+  # ==========================================
+  # Service: xep-0191-blocking (northstar_xep_0191)
+  # ==========================================
+  xep-0191-blocking:
+    database: northstar_xep_0191
+    tables:
+      - blocked_jids
+
+  # ==========================================
+  # Service: xep-0045-muc (northstar_xep_0045)
+  # ==========================================
+  xep-0045-muc:
+    database: northstar_xep_0045
+    tables:
+      - muc_rooms
+      - muc_occupants
+      - muc_affiliations
+      - muc_room_controls
+      - muc_archive_retention
+      - cluster_muc_authority
+      - cluster_muc_delivery_receipts
+
+  # ==========================================
+  # Service: xep-0060-pubsub (northstar_xep_0060)
+  # ==========================================
+  xep-0060-pubsub:
+    database: northstar_xep_0060
+    tables:
+      - pubsub_nodes
+      - pubsub_items
+      - pubsub_subscriptions
+      - pubsub_affiliations
+      - pubsub_event_outbox
+
+  # ==========================================
+  # Service: xep-0163-pep (northstar_xep_0163)
+  # ==========================================
+  xep-0163-pep:
+    database: northstar_xep_0163
+    tables:
+      - pep_nodes
+      - pep_items
+      - pep_subscriptions
+      - pep_outbox_authorization
+
+  # ==========================================
+  # Service: xep-0313-mam (northstar_xep_0313)
+  # ==========================================
+  xep-0313-mam:
+    database: northstar_xep_0313
+    tables:
+      - archive_messages
+      - archive_retention
+      - mam_preferences
+
+  # ==========================================
+  # Service: xep-0363-upload (northstar_xep_0363)
+  # ==========================================
+  xep-0363-upload:
+    database: northstar_xep_0363
+    tables:
+      - uploads
+      - upload_claims
+      - upload_retention
+      - upload_authority_capabilities
+      - upload_lease_fencing
+
+  # ==========================================
+  # Service: xep-0198-sm (northstar_xep_0198)
+  # ==========================================
+  xep-0198-sm:
+    database: northstar_xep_0198
+    tables:
+      - sm_resume_states
+      - sm_durable_delivery_fences
+
+  # ==========================================
+  # Service: xep-0484-fast (northstar_xep_0484)
+  # ==========================================
+  xep-0484-fast:
+    database: northstar_xep_0484
+    tables:
+      - fast_tokens
+
+  # ==========================================
+  # Service: xep-0049-private-storage (northstar_xep_0049)
+  # ==========================================
+  xep-0049-private-storage:
+    database: northstar_xep_0049
+    tables:
+      - private_xml
+
+  # ==========================================
+  # Service: xep-0054-vcard-temp (northstar_xep_0054)
+  # ==========================================
+  xep-0054-vcard-temp:
+    database: northstar_xep_0054
+    tables:
+      - vcards
+
+  # ==========================================
+  # Service: xep-0357-push (northstar_xep_0357)
+  # ==========================================
+  xep-0357-push:
+    database: northstar_xep_0357
+    tables:
+      - push_registrations
+
+  # ==========================================
+  # Service: xep-0280-carbons (northstar_xep_0280)
+  # ==========================================
+  xep-0280-carbons:
+    database: northstar_xep_0280
+    tables:
+      - carbon_subscriptions
+
+  # ==========================================
+  # Service: xep-0369-mix-core (northstar_xep_0369)
+  # ==========================================
+  xep-0369-mix-core:
+    database: northstar_xep_0369
+    tables:
+      - mix_channels
+      - mix_participants
+      - mix_messages
+      - mix_pam_durable_operations
+
+  # ==========================================
+  # Service: abuse-risk & moderation (northstar_abuse_risk / moderation)
+  # ==========================================
+  abuse-risk:
+    database: northstar_abuse_risk
+    tables:
+      - abuse_challenges
+      - abuse_keys
+      - abuse_key_deployment
+
+  moderation-reports:
+    database: northstar_moderation
+    tables:
+      - abuse_reports
+      - abuse_report_evidence
+
+  # ==========================================
+  # Service: admin-orchestrator & retention
+  # ==========================================
+  admin-orchestrator:
+    database: northstar_admin_operations
+    tables:
+      - api_operations
+      - api_operation_runtime
+      - api_keyset_pages
+
+  retention-orchestrator:
+    database: northstar_retention
+    tables:
+      - data_lifecycle_governance

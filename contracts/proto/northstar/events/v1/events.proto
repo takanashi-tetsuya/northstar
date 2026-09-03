@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package northstar.events.v1;
+
+// Standard Transactional Outbox Event format per Appendix B.2
+message OutboxEvent {
+  string event_id = 1; // UUID v4
+  string aggregate_type = 2; // e.g. "account", "room", "message", "session"
+  string aggregate_id = 3;
+  uint64 aggregate_version = 4;
+  string event_type = 5; // e.g. "identity.account.created.v1"
+  uint32 schema_version = 6;
+  bytes payload = 7;
+  string traceparent = 8;
+  int64 created_at_unix_ms = 9;
+  optional int64 published_at_unix_ms = 10;
+}
+
+// Standard Consumer Inbox Entry per Appendix B.3
+message ConsumerInboxEntry {
+  string consumer_name = 1;
+  string event_id = 2;
+  int64 processed_at_unix_ms = 3;
+  bytes result_digest = 4;
+}

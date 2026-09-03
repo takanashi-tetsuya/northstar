@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package northstar.identity.v1;
+
+import "northstar/common/v1/common.proto";
+
+service IdentityService {
+  rpc Authenticate (AuthenticateRequest) returns (AuthenticateResponse);
+  rpc Register (RegisterRequest) returns (RegisterResponse);
+  rpc ChangePassword (ChangePasswordRequest) returns (ChangePasswordResponse);
+  rpc GetIdentity (GetIdentityRequest) returns (GetIdentityResponse);
+  rpc RevokeCredentials (RevokeCredentialsRequest) returns (RevokeCredentialsResponse);
+}
+
+message AuthenticateRequest {
+  string username = 1;
+  string mechanism = 2; // e.g. "SCRAM-SHA-256", "PLAIN"
+  bytes auth_payload = 3;
+  northstar.common.v1.TraceContext trace = 4;
+}
+
+message AuthenticateResponse {
+  bool success = 1;
+  optional northstar.common.v1.AuthContext auth_context = 2;
+  bytes challenge_or_response = 3;
+  optional northstar.common.v1.ErrorDetail error = 4;
+}
+
+message RegisterRequest {
+  string username = 1;
+  string password = 2;
+  optional string invitation_code = 3;
+  northstar.common.v1.TraceContext trace = 4;
+}
+
+message RegisterResponse {
+  bool success = 1;
+  string account_id = 2;
+  string canonical_jid = 3;
+  optional northstar.common.v1.ErrorDetail error = 4;
+}
+
+message ChangePasswordRequest {
+  string account_id = 1;
+  string old_password = 2;
+  string new_password = 3;
+  northstar.common.v1.TraceContext trace = 4;
+}
+
+message ChangePasswordResponse {
+  bool success = 1;
+  uint64 new_credential_generation = 2;
+  optional northstar.common.v1.ErrorDetail error = 3;
+}
+
+message GetIdentityRequest {
+  oneof identifier {
+    string account_id = 1;
+    string username = 2;
+    string canonical_jid = 3;
+  }
+}
+
+message GetIdentityResponse {
+  bool found = 1;
+  optional northstar.common.v1.AuthContext identity = 2;
+  string account_status = 3;
+}
+
+message RevokeCredentialsRequest {
+  string account_id = 1;
+  string reason = 2;
+  northstar.common.v1.TraceContext trace = 3;
+}
+
+message RevokeCredentialsResponse {
+  bool success = 1;
+  uint64 new_credential_generation = 2;
+}

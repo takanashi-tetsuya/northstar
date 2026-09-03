@@ -1,0 +1,21 @@
+[package]
+name = "service-xep-0045-muc"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Northstar XEP-0045 Multi-User Chat Microservice"
+publish = false
+
+[dependencies]
+foundation-contracts = { path = "../../crates/foundation-contracts" }
+foundation-security = { path = "../../crates/foundation-security" }
+foundation-eventing = { path = "../../crates/foundation-eventing" }
+foundation-telemetry = { path = "../../crates/foundation-telemetry" }
+northstar-room-core = { path = "../../crates/northstar-room-core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.43", features = ["sync", "macros", "rt", "rt-multi-thread", "time"] }
+thiserror = "2.0"
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }

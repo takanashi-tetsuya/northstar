@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package northstar.delivery.v1;
+
+import "northstar/common/v1/common.proto";
+
+service DeliveryRouterService {
+  // Edge connects to Delivery Router to establish a long-lived bidirectional delivery stream
+  rpc OpenDeliveryStream (stream DeliveryClientMessage) returns (stream DeliveryServerMessage);
+}
+
+message DeliveryClientMessage {
+  oneof payload {
+    EdgeRegister register = 1;
+    DeliveryAck ack = 2;
+  }
+}
+
+message EdgeRegister {
+  string edge_instance_id = 1;
+}
+
+message DeliveryAck {
+  string delivery_id = 1;
+  bool delivered = 2;
+  optional string error_reason = 3;
+}
+
+message DeliveryServerMessage {
+  string delivery_id = 1;
+  string target_connection_id = 2;
+  string target_full_jid = 3;
+  bytes stanza = 4;
+  northstar.common.v1.TraceContext trace = 5;
+}

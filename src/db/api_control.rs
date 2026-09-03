@@ -2221,7 +2221,7 @@ mod tests {
             .await
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
-        crate::db::initialize_admin_runtime_settings(&pool, false, false)
+        crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
             .await
             .unwrap();
 
@@ -2727,7 +2727,7 @@ mod tests {
             .await
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
-        crate::db::initialize_admin_runtime_settings(&pool, false, false)
+        crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
             .await
             .unwrap();
         // A prior test may deliberately remove this fail-closed row.

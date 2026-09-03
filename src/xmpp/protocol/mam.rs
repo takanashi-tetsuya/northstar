@@ -1,19 +1,21 @@
 use super::{Action, ProtocolSession};
-#[cfg(test)]
-use crate::mam_pubsub_parsing::MAX_MAM_RESULTS;
-use crate::mam_pubsub_parsing::{
-    self, attributes_are, structural_text_is_empty, MamRsmPage as ParsedMamRsmPage, MAM_NS, RSM_NS,
-};
 use crate::services::mam::{
-    ArchiveBoundary, ArchiveRow, MamArchiveQuery, MamPreferences, MamRoomAccess,
-    MamRoomAccessOutcome, MamRoomReadOutcome, MamRsmPage,
+    ArchiveBoundary, ArchiveRow, MamArchiveQuery, MamMetadataCommand, MamMetadataResult,
+    MamPreferences, MamPreferencesGetCommand, MamPreferencesSetCommand, MamQueryCommand,
+    MamQueryResult, MamQueryScope, MamRoomAccess, MamRoomAccessOutcome, MamRsmPage,
 };
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+#[cfg(test)]
+use northstar_xep_0313::MAX_MAM_RESULTS;
+use northstar_xep_0313::{
+    is_empty_mam_command, parse_mam_preferences as parse_xep_mam_preferences,
+    parse_mam_query as parse_xep_mam_query, MamError, MamRsmPage as ParsedMamRsmPage, UtcTimestamp,
+    XMLNS_MAM as MAM_NS, XMLNS_RSM as RSM_NS,
+};
 use roxmltree::Node;
-use std::collections::HashSet;
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -37,41 +39,63 @@ fn personal_mam_stanza(item: &ArchiveRow, account_bare_jid: &str) -> String {
 }
 
 fn empty_mam_command(node: Node<'_, '_>, name: &str) -> bool {
-    node.tag_name().namespace() == Some(MAM_NS)
-        && node.tag_name().name() == name
-        && attributes_are(node, &[])
-        && structural_text_is_empty(node)
-        && !node.children().any(|child| child.is_element())
+    is_empty_mam_command(node, name)
+}
+
+fn mam_error_condition(error: &MamError) -> &'static str {
+    error.as_stanza_error_condition()
+}
+
+fn archive_id_to_uuid(
+    id: &northstar_xep_0313::ArchiveId,
+) -> std::result::Result<Uuid, &'static str> {
+    Uuid::parse_str(id.as_str()).map_err(|_| "item-not-found")
+}
+
+fn mam_timestamp_to_chrono(
+    timestamp: UtcTimestamp,
+) -> std::result::Result<DateTime<Utc>, &'static str> {
+    let seconds = timestamp.epoch_nanos().div_euclid(1_000_000_000);
+    let nanoseconds = timestamp.epoch_nanos().rem_euclid(1_000_000_000) as u32;
+    let seconds = i64::try_from(seconds).map_err(|_| "bad-request")?;
+    DateTime::from_timestamp(seconds, nanoseconds).ok_or("bad-request")
 }
 
 pub(crate) fn parse_mam_query(
     query: Node<'_, '_>,
 ) -> std::result::Result<ParsedMamQuery, &'static str> {
-    let parsed = mam_pubsub_parsing::parse_mam_query(
-        query,
-        |value| crate::jid::canonicalize(value).map_err(|_| "jid-malformed"),
-        |value| {
-            DateTime::parse_from_rfc3339(value)
-                .map(|timestamp| timestamp.with_timezone(&Utc))
-                .map_err(|_| "bad-request")
-        },
-    )?;
+    let parsed = parse_xep_mam_query(query).map_err(|error| mam_error_condition(&error))?;
+    let filter = parsed.filter;
     Ok(ParsedMamQuery {
         query: MamArchiveQuery {
-            with_jid: parsed.with_jid,
-            start: parsed.start,
-            end: parsed.end,
-            before_id: parsed.before_id,
-            after_id: parsed.after_id,
-            ids: parsed.ids,
+            with_jid: filter.with_jid.map(|jid| jid.to_string()),
+            start: filter.start.map(mam_timestamp_to_chrono).transpose()?,
+            end: filter.end.map(mam_timestamp_to_chrono).transpose()?,
+            before_id: filter
+                .before_id
+                .as_ref()
+                .map(archive_id_to_uuid)
+                .transpose()?,
+            after_id: filter
+                .after_id
+                .as_ref()
+                .map(archive_id_to_uuid)
+                .transpose()?,
+            ids: filter
+                .ids
+                .iter()
+                .map(archive_id_to_uuid)
+                .collect::<std::result::Result<Vec<_>, _>>()?,
             page: match parsed.page {
                 ParsedMamRsmPage::First => MamRsmPage::First,
                 ParsedMamRsmPage::Last => MamRsmPage::Last,
-                ParsedMamRsmPage::Before(id) => MamRsmPage::Before(id),
-                ParsedMamRsmPage::After(id) => MamRsmPage::After(id),
-                ParsedMamRsmPage::Index(index) => MamRsmPage::Index(index),
+                ParsedMamRsmPage::Before(id) => MamRsmPage::Before(archive_id_to_uuid(&id)?),
+                ParsedMamRsmPage::After(id) => MamRsmPage::After(archive_id_to_uuid(&id)?),
+                ParsedMamRsmPage::Index(index) => {
+                    MamRsmPage::Index(i64::try_from(index).map_err(|_| "resource-constraint")?)
+                }
             },
-            max: parsed.max,
+            max: i64::from(parsed.max),
         },
         query_id: parsed.query_id,
         flip_page: parsed.flip_page,
@@ -124,7 +148,11 @@ impl ProtocolSession {
         if !empty_mam_command(prefs, "prefs") {
             return Ok(Action::Send(iq_error(id, "bad-request")));
         }
-        let preferences = self.state.mam_service().preferences(user.id).await?;
+        let preferences = self
+            .state
+            .mam_service()
+            .execute_mam_preferences_get(MamPreferencesGetCommand { owner_id: user.id })
+            .await?;
         let payload = mam_preferences_xml(&preferences);
         Ok(Action::Send(
             self.personal_archive_reply_from(to)
@@ -151,7 +179,10 @@ impl ProtocolSession {
         };
         self.state
             .mam_service()
-            .set_preferences(user.id, &preferences)
+            .execute_mam_preferences_set(MamPreferencesSetCommand {
+                owner_id: user.id,
+                preferences: preferences.clone(),
+            })
             .await?;
         let payload = mam_preferences_xml(&preferences);
         Ok(Action::Send(
@@ -261,33 +292,28 @@ impl ProtocolSession {
         let Some(user) = self.authenticated.as_ref() else {
             return Ok(Action::Send(iq_error(id, "not-authorized")));
         };
-        let (room, boundaries) = if let Some(target) = target {
-            match self
-                .state
-                .mam_service()
-                .authorized_room_boundaries(
-                    &target.localpart,
-                    user.id,
-                    self.joined_rooms.contains_key(&target.bare_jid),
-                )
-                .await?
-            {
-                MamRoomReadOutcome::Allowed { access, value } => (Some(access), value),
-                MamRoomReadOutcome::Missing => {
-                    return Ok(Action::Send(iq_error(id, "item-not-found")));
-                }
-                MamRoomReadOutcome::Forbidden => {
-                    return Ok(Action::Send(iq_error(id, "forbidden")));
-                }
+        let scope = if let Some(target) = target {
+            MamQueryScope::Room {
+                localpart: target.localpart,
+                viewer_id: user.id,
+                currently_joined: self.joined_rooms.contains_key(&target.bare_jid),
             }
         } else {
-            (
-                None,
-                self.state
-                    .mam_service()
-                    .personal_boundaries(user.id)
-                    .await?,
-            )
+            MamQueryScope::Personal { owner_id: user.id }
+        };
+        let (room, boundaries) = match self
+            .state
+            .mam_service()
+            .execute_mam_metadata(MamMetadataCommand { scope })
+            .await?
+        {
+            MamMetadataResult::Boundaries { room, start, end } => (room, (start, end)),
+            MamMetadataResult::ItemNotFound => {
+                return Ok(Action::Send(iq_error(id, "item-not-found")));
+            }
+            MamMetadataResult::Forbidden => {
+                return Ok(Action::Send(iq_error(id, "forbidden")));
+            }
         };
         let boundary = |name: &str, value: ArchiveBoundary| {
             let element = match name {
@@ -340,37 +366,31 @@ impl ProtocolSession {
         if target.is_none() && !self.owns_archive_target(to) {
             return Ok(Action::Send(iq_error(id, "forbidden")));
         }
-        let (room, page) = if let Some(target) = target {
-            match self
-                .state
-                .mam_service()
-                .authorized_room_page(
-                    &target.localpart,
-                    user.id,
-                    self.joined_rooms.contains_key(&target.bare_jid),
-                    &parsed.query,
-                )
-                .await?
-            {
-                MamRoomReadOutcome::Allowed { access, value } => (Some(access), value),
-                MamRoomReadOutcome::Missing => {
-                    return Ok(Action::Send(iq_error(id, "item-not-found")));
-                }
-                MamRoomReadOutcome::Forbidden => {
-                    return Ok(Action::Send(iq_error(id, "forbidden")));
-                }
+        let scope = if let Some(target) = target {
+            MamQueryScope::Room {
+                localpart: target.localpart,
+                viewer_id: user.id,
+                currently_joined: self.joined_rooms.contains_key(&target.bare_jid),
             }
         } else {
-            (
-                None,
-                self.state
-                    .mam_service()
-                    .personal_page(user.id, &parsed.query)
-                    .await?,
-            )
+            MamQueryScope::Personal { owner_id: user.id }
         };
-        let Some(page) = page else {
-            return Ok(Action::Send(iq_error(id, "item-not-found")));
+        let (room, page) = match self
+            .state
+            .mam_service()
+            .execute_mam_query(MamQueryCommand {
+                scope,
+                query: parsed.query,
+            })
+            .await?
+        {
+            MamQueryResult::Page { room, page } => (room, page),
+            MamQueryResult::ItemNotFound => {
+                return Ok(Action::Send(iq_error(id, "item-not-found")));
+            }
+            MamQueryResult::Forbidden => {
+                return Ok(Action::Send(iq_error(id, "forbidden")));
+            }
         };
 
         let archive_from = room
@@ -440,59 +460,11 @@ impl ProtocolSession {
 }
 
 fn parse_mam_preferences(prefs: Node<'_, '_>) -> std::result::Result<MamPreferences, &'static str> {
-    if prefs.tag_name().namespace() != Some(MAM_NS)
-        || prefs.tag_name().name() != "prefs"
-        || !attributes_are(prefs, &["default"])
-        || !structural_text_is_empty(prefs)
-    {
-        return Err("bad-request");
-    }
-    let default_policy = prefs.attribute("default").ok_or("bad-request")?;
-    if !matches!(default_policy, "always" | "never" | "roster") {
-        return Err("bad-request");
-    }
-    let mut always = Vec::new();
-    let mut never = Vec::new();
-    let mut all_jids = HashSet::new();
-    let mut containers_seen = HashSet::new();
-    for container in prefs.children().filter(|node| node.is_element()) {
-        let name = container.tag_name().name();
-        if container.tag_name().namespace() != Some(MAM_NS)
-            || !matches!(name, "always" | "never")
-            || !containers_seen.insert(name)
-            || !attributes_are(container, &[])
-            || !structural_text_is_empty(container)
-        {
-            return Err("bad-request");
-        }
-        let destination = if name == "always" {
-            &mut always
-        } else {
-            &mut never
-        };
-        for child in container.children().filter(|node| node.is_element()) {
-            if child.tag_name().namespace() != Some(MAM_NS)
-                || child.tag_name().name() != "jid"
-                || !attributes_are(child, &[])
-                || child.children().any(|nested| nested.is_element())
-            {
-                return Err("bad-request");
-            }
-            let jid = crate::jid::canonicalize(child.text().unwrap_or_default())
-                .map_err(|_| "jid-malformed")?;
-            if !all_jids.insert(jid.clone()) {
-                return Err("bad-request");
-            }
-            destination.push(jid);
-            if all_jids.len() > 500 {
-                return Err("resource-constraint");
-            }
-        }
-    }
+    let parsed = parse_xep_mam_preferences(prefs).map_err(|error| mam_error_condition(&error))?;
     Ok(MamPreferences {
-        default_policy: default_policy.to_owned(),
-        always,
-        never,
+        default_policy: parsed.default_policy.as_str().to_owned(),
+        always: parsed.always,
+        never: parsed.never,
     })
 }
 
@@ -545,7 +517,7 @@ mod tests {
     fn query_without_rsm_starts_at_the_oldest_item() {
         let parsed = parse("<query xmlns='urn:xmpp:mam:2'/>").unwrap();
         assert_eq!(parsed.query.page, MamRsmPage::First);
-        assert_eq!(parsed.query.max, MAX_MAM_RESULTS);
+        assert_eq!(parsed.query.max, i64::from(MAX_MAM_RESULTS));
     }
 
     #[test]

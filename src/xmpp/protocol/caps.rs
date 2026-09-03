@@ -2,11 +2,13 @@ use super::ProtocolSession;
 use crate::state::{AppState, CapsKey, LocalCapsEpoch};
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::{iq_result_from, stream_id};
-use base64::{engine::general_purpose::STANDARD, Engine};
 use dashmap::DashMap;
 use futures::{stream::FuturesUnordered, StreamExt};
+use northstar_xep_0115::{
+    generate_canonical_verification_string, parse_caps_from_presence, parse_disco_info_element,
+    CapsHashAlgorithm,
+};
 use roxmltree::Node;
-use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
@@ -16,8 +18,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-const CAPS_NS: &str = "http://jabber.org/protocol/caps";
-const DISCO_INFO_NS: &str = "http://jabber.org/protocol/disco#info";
+const DISCO_INFO_NS: &str = northstar_xep_0115::DISCO_INFO_NS;
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const PENDING_TTL: Duration = Duration::from_secs(30);
 const MAX_CAPS_CACHE_ENTRIES: usize = 4_096;
@@ -31,8 +32,7 @@ const MAX_CAPS_CACHE_RAW_BYTES: usize = 16 * 1024 * 1024;
 /// into a negative capability answer.
 const MAX_CAPS_CACHE_SUMMARY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CAPS_OBSERVATION_SUMMARY_BYTES: usize = 64 * 1024 * 1024;
-const MAX_DISCO_PAYLOAD_BYTES: usize = 64 * 1024;
-const MAX_DISCO_CHILDREN: usize = 512;
+const MAX_DISCO_PAYLOAD_BYTES: usize = northstar_xep_0115::MAX_DISCO_PAYLOAD_BYTES;
 const MAX_CAPS_EFFECT_CONCURRENCY: usize = 16;
 /// This bounds only duplicate wake hints.  The observation table owns every
 /// effect bit, and the worker reconstructs hints from that table after a drop,
@@ -2011,6 +2011,14 @@ impl ProtocolSession {
         presence: Node<'_, '_>,
         full_jid: &str,
     ) -> super::mix::MixSessionCapability {
+        if !self
+            .state
+            .config
+            .xmpp_extensions
+            .enabled(northstar_xep_0115::XEP_ID)
+        {
+            return super::mix::MixSessionCapability::Unknown;
+        }
         let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else {
             return super::mix::MixSessionCapability::Unknown;
         };
@@ -2038,6 +2046,14 @@ impl ProtocolSession {
     /// handler has durably applied the matching MIX projection and updated
     /// availability while holding `mix_presence_gate`.
     pub(crate) fn commit_caps_observation(&self, presence: Node<'_, '_>, full_jid: &str) {
+        if !self
+            .state
+            .config
+            .xmpp_extensions
+            .enabled(northstar_xep_0115::XEP_ID)
+        {
+            return;
+        }
         let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else {
             return;
         };
@@ -2202,18 +2218,15 @@ impl ProtocolSession {
             );
             return true;
         };
-        if pending.key.algorithm == "sha-1" {
-            let computed = STANDARD.encode(Sha1::digest(verification.as_bytes()));
-            if computed != pending.key.version {
-                tracing::warn!(jid = %pending.full_jid, "discarded entity capabilities whose hash did not verify");
-                self.state.caps_by_jid().mark_invalid(
-                    &pending.full_jid,
-                    pending.owner,
-                    &pending.key,
-                    id,
-                );
-                return true;
-            }
+        if !caps_hash_matches(&pending.key.algorithm, &verification, &pending.key.version) {
+            tracing::warn!(jid = %pending.full_jid, "discarded entity capabilities whose hash did not verify");
+            self.state.caps_by_jid().mark_invalid(
+                &pending.full_jid,
+                pending.owner,
+                &pending.key,
+                id,
+            );
+            return true;
         }
         let Ok(summary) = verified_caps_summary(query, payload) else {
             self.state.caps_by_jid().mark_invalid(
@@ -2261,36 +2274,22 @@ impl ProtocolSession {
 }
 
 fn observed_caps_key(presence: Node<'_, '_>, full_jid: &str) -> Option<CapsKey> {
-    let caps = presence.children().find(|node| {
-        node.is_element()
-            && node.tag_name().name() == "c"
-            && node.tag_name().namespace() == Some(CAPS_NS)
-    })?;
-    let (algorithm, node, version) = (
-        caps.attribute("hash")?,
-        caps.attribute("node")?,
-        caps.attribute("ver")?,
-    );
+    let caps = parse_caps_from_presence(presence).ok()??;
+    let algorithm = caps.hash.as_deref()?;
     // SHA-1 is the mandatory verification algorithm. Unsupported algorithms
     // are namespaced by this exact full JID before entering the bounded cache,
     // so an unverified claim cannot be shared with or collide with another
     // resource's capability mapping.
-    if node.is_empty()
-        || node.len() > 2_048
-        || version.is_empty()
-        || version.len() > 256
-        || algorithm.is_empty()
-        || algorithm.len() > 64
-        || node.chars().any(char::is_control)
-        || version.chars().any(char::is_control)
-        || algorithm.chars().any(char::is_control)
-    {
-        return None;
-    }
+    let parsed_algorithm = CapsHashAlgorithm::parse_name(algorithm);
+    let algorithm = if parsed_algorithm.is_supported() {
+        parsed_algorithm.as_str().to_owned()
+    } else {
+        scoped_algorithm(algorithm, full_jid)
+    };
     Some(CapsKey {
-        algorithm: scoped_algorithm(algorithm, full_jid),
-        node: node.to_owned(),
-        version: version.to_owned(),
+        algorithm,
+        node: caps.node,
+        version: caps.ver,
     })
 }
 
@@ -2331,6 +2330,13 @@ pub(crate) async fn observe_federated_caps(
     connection_id: uuid::Uuid,
     resource_epoch: &FederatedCapsGuard<'_>,
 ) -> FederatedCapsObservationResult {
+    if !state
+        .config
+        .xmpp_extensions
+        .enabled(northstar_xep_0115::XEP_ID)
+    {
+        return FederatedCapsObservationResult::Accepted;
+    }
     let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else {
         return FederatedCapsObservationResult::StaleOwner;
     };
@@ -2504,9 +2510,7 @@ pub(crate) async fn handle_federated_caps_response(
             .mark_invalid(&pending.full_jid, pending.owner, &pending.key, id);
         return true;
     };
-    if pending.key.algorithm == "sha-1"
-        && STANDARD.encode(Sha1::digest(verification.as_bytes())) != pending.key.version
-    {
+    if !caps_hash_matches(&pending.key.algorithm, &verification, &pending.key.version) {
         tracing::warn!(jid = %pending.full_jid, "discarded federated entity capabilities whose hash did not verify");
         state
             .caps_by_jid()
@@ -2632,30 +2636,17 @@ pub(crate) fn interested_resources_for_bare(
 }
 
 fn verified_caps_summary(query: Node<'_, '_>, raw_query: &str) -> Result<VerifiedCapsSummary, ()> {
-    if raw_query.len() > MAX_DISCO_PAYLOAD_BYTES
-        || query.tag_name().name() != "query"
-        || query.tag_name().namespace() != Some(DISCO_INFO_NS)
-    {
+    if raw_query.len() > MAX_DISCO_PAYLOAD_BYTES {
         return Err(());
     }
-    let mut features = HashSet::new();
+    let disco = parse_disco_info_element(query).map_err(|_| ())?;
+    generate_canonical_verification_string(&disco).map_err(|_| ())?;
     let mut mix_core = false;
     let mut mix_pam = false;
     let mut notify_storage = String::new();
     let mut notify_ranges = Vec::new();
-    for (index, child) in query.children().filter(Node::is_element).enumerate() {
-        if index >= MAX_DISCO_CHILDREN {
-            return Err(());
-        }
-        if child.tag_name().name() != "feature"
-            || child.tag_name().namespace() != Some(DISCO_INFO_NS)
-        {
-            continue;
-        }
-        let feature = child.attribute("var").ok_or(())?.to_owned();
-        if !features.insert(feature.clone()) {
-            return Err(());
-        }
+    for feature in disco.features {
+        let feature = feature.var();
         mix_core |= feature == "urn:xmpp:mix:core:1";
         mix_pam |= feature == "urn:xmpp:mix:pam:2";
         if let Some(node) = feature.strip_suffix("+notify") {
@@ -2679,163 +2670,13 @@ fn verified_caps_summary(query: Node<'_, '_>, raw_query: &str) -> Result<Verifie
 }
 
 fn verification_string(query: Node<'_, '_>) -> Result<String, ()> {
-    let mut identities = Vec::new();
-    let mut features = Vec::new();
-    let mut forms = Vec::new();
-    for (index, child) in query.children().filter(Node::is_element).enumerate() {
-        if index >= MAX_DISCO_CHILDREN {
-            return Err(());
-        }
-        match (child.tag_name().name(), child.tag_name().namespace()) {
-            ("identity", Some(DISCO_INFO_NS)) => {
-                let category = child.attribute("category").ok_or(())?;
-                let kind = child.attribute("type").ok_or(())?;
-                identities.push(format!(
-                    "{category}/{kind}/{}/{}",
-                    child
-                        .attribute(("http://www.w3.org/XML/1998/namespace", "lang"))
-                        .unwrap_or_default(),
-                    child.attribute("name").unwrap_or_default()
-                ));
-            }
-            ("feature", Some(DISCO_INFO_NS)) => {
-                features.push(child.attribute("var").ok_or(())?.to_owned());
-            }
-            ("x", Some("jabber:x:data")) if child.attribute("type") == Some("result") => {
-                if let Some(form) = canonical_form(child)? {
-                    forms.push(form);
-                }
-            }
-            _ => {}
-        }
-    }
-    if has_duplicates(&identities)
-        || has_duplicates(&features)
-        || has_duplicates_by(&forms, |form| form.0.as_str())
-    {
-        return Err(());
-    }
-    identities.sort_unstable();
-    features.sort_unstable();
-    forms.sort_unstable();
-    let mut output = String::new();
-    for identity in identities {
-        output.push_str(&identity);
-        output.push('<');
-    }
-    for feature in features {
-        output.push_str(&feature);
-        output.push('<');
-    }
-    for (_, form) in forms {
-        output.push_str(&form);
-    }
-    if output.len() > MAX_DISCO_PAYLOAD_BYTES {
-        return Err(());
-    }
-    Ok(output)
+    let disco = parse_disco_info_element(query).map_err(|_| ())?;
+    generate_canonical_verification_string(&disco).map_err(|_| ())
 }
 
-fn canonical_form(form: Node<'_, '_>) -> Result<Option<(String, String)>, ()> {
-    let form_type_fields = form
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().name() == "field"
-                && node.tag_name().namespace() == Some("jabber:x:data")
-                && node.attribute("var") == Some("FORM_TYPE")
-        })
-        .collect::<Vec<_>>();
-    if form_type_fields.len() > 1 {
-        return Err(());
-    }
-    let Some(form_type_field) = form_type_fields.first().copied() else {
-        return Ok(None);
-    };
-    if form_type_field.attribute("type") != Some("hidden") {
-        return Ok(None);
-    }
-    let form_type_values = form_type_field
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().name() == "value"
-                && node.tag_name().namespace() == Some("jabber:x:data")
-        })
-        .map(|node| node.text().unwrap_or_default().to_owned())
-        .take(MAX_DISCO_CHILDREN + 1)
-        .collect::<Vec<_>>();
-    if form_type_values.is_empty() || form_type_values.len() > MAX_DISCO_CHILDREN {
-        return Ok(None);
-    }
-    if form_type_values
-        .iter()
-        .any(|value| value != &form_type_values[0])
-    {
-        return Err(());
-    }
-
-    let mut form_type = None;
-    let mut fields = Vec::new();
-    let mut seen = HashSet::new();
-    for (index, field) in form
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().name() == "field"
-                && node.tag_name().namespace() == Some("jabber:x:data")
-        })
-        .enumerate()
-    {
-        if index >= MAX_DISCO_CHILDREN {
-            return Err(());
-        }
-        let variable = field.attribute("var").ok_or(())?;
-        if !seen.insert(variable.to_owned()) {
-            return Err(());
-        }
-        let mut values = field
-            .children()
-            .filter(|node| {
-                node.is_element()
-                    && node.tag_name().name() == "value"
-                    && node.tag_name().namespace() == Some("jabber:x:data")
-            })
-            .map(|node| node.text().unwrap_or_default().to_owned())
-            .take(MAX_DISCO_CHILDREN + 1)
-            .collect::<Vec<_>>();
-        if values.len() > MAX_DISCO_CHILDREN {
-            return Err(());
-        }
-        values.sort_unstable();
-        if variable == "FORM_TYPE" {
-            form_type = values.pop();
-        } else {
-            fields.push((variable.to_owned(), values));
-        }
-    }
-    let form_type = form_type.ok_or(())?;
-    fields.sort_by(|left, right| left.0.cmp(&right.0));
-    let mut output = format!("{form_type}<");
-    for (variable, values) in fields {
-        output.push_str(&variable);
-        output.push('<');
-        for value in values {
-            output.push_str(&value);
-            output.push('<');
-        }
-    }
-    Ok(Some((form_type, output)))
-}
-
-fn has_duplicates(values: &[String]) -> bool {
-    let mut seen = HashSet::new();
-    values.iter().any(|value| !seen.insert(value))
-}
-
-fn has_duplicates_by<'a, T>(values: &'a [T], key: impl Fn(&'a T) -> &'a str) -> bool {
-    let mut seen = HashSet::new();
-    values.iter().any(|value| !seen.insert(key(value)))
+fn caps_hash_matches(algorithm: &str, verification: &str, advertised: &str) -> bool {
+    let algorithm = CapsHashAlgorithm::parse_name(algorithm);
+    !algorithm.is_supported() || algorithm.verify(verification, advertised).unwrap_or(false)
 }
 
 #[cfg(test)]

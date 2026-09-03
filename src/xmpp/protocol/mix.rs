@@ -419,6 +419,7 @@ pub(crate) fn mix_channel_disco_info_payload(
     name: &str,
     supports_retraction: bool,
     supports_private_messages: bool,
+    supports_mam: bool,
     mirror: &str,
 ) -> Result<String> {
     let mut query = XmlElement::namespaced("query", "http://jabber.org/protocol/disco#info").child(
@@ -439,11 +440,17 @@ pub(crate) fn mix_channel_disco_info_payload(
         "urn:xmpp:mix:misc:0",
         "urn:xmpp:avatar:data",
         "urn:xmpp:avatar:metadata",
-        "urn:xmpp:mam:2",
-        "urn:xmpp:mam:2#extended",
         "urn:xmpp:sid:0",
     ] {
         query.push_child(XmlElement::new("feature").attr("var", feature));
+    }
+    if supports_mam {
+        query.push_child(
+            XmlElement::new("feature").attr("var", northstar_xep_0313::DISCO_FEATURE_MAM),
+        );
+        query.push_child(
+            XmlElement::new("feature").attr("var", northstar_xep_0313::DISCO_FEATURE_MAM_EXTENDED),
+        );
     }
     if supports_retraction {
         query.push_child(
@@ -723,11 +730,9 @@ fn parse_iq(raw: &str) -> Result<Option<OwnedIq>> {
                     IqOperation::MamError("bad-request")
                 }
             }
-            Some((child, "ping", Some("urn:xmpp:ping"))) => {
-                anyhow::ensure!(
-                    !child.children().any(|node| node.is_element()),
-                    "invalid MIX ping"
-                );
+            Some((child, "ping", Some(northstar_xep_0199::NAMESPACE))) => {
+                northstar_xep_0199::parse_ping_element(child)
+                    .map_err(|error| anyhow::anyhow!("invalid MIX ping: {error}"))?;
                 IqOperation::Ping
             }
             _ => return Ok(None),
@@ -3453,6 +3458,21 @@ async fn handle_channel_iq(
                     ))
                 }
             }
+            IqOperation::Ping
+                if request.kind == "get"
+                    && !state
+                        .config
+                        .xmpp_extensions
+                        .enabled(northstar_xep_0199::XEP_ID) =>
+            {
+                Ok(iq_error_to(
+                    &request.id,
+                    &mix_domain,
+                    reply_to,
+                    "cancel",
+                    "service-unavailable",
+                ))
+            }
             IqOperation::Ping if request.kind == "get" => {
                 Ok(iq_result_to(&request.id, &mix_domain, reply_to, ""))
             }
@@ -3698,6 +3718,21 @@ async fn handle_channel_iq(
                 },
             )
             .await
+        }
+        IqOperation::Ping
+            if request.kind == "get"
+                && !state
+                    .config
+                    .xmpp_extensions
+                    .enabled(northstar_xep_0199::XEP_ID) =>
+        {
+            Ok(iq_error_to(
+                &request.id,
+                &channel.jid(),
+                reply_to,
+                "cancel",
+                "service-unavailable",
+            ))
         }
         IqOperation::Ping if request.kind == "get" => {
             Ok(iq_result_to(&request.id, &channel.jid(), reply_to, ""))
@@ -4522,6 +4557,19 @@ async fn handle_mix_mam_iq(
     addressed: &str,
     reply_to: &str,
 ) -> Result<Vec<String>> {
+    if !state
+        .config
+        .xmpp_extensions
+        .enabled(northstar_xep_0313::XEP_ID)
+    {
+        return Ok(vec![iq_error_to(
+            &request.id,
+            addressed,
+            reply_to,
+            "cancel",
+            "feature-not-implemented",
+        )]);
+    }
     let target = match CanonicalJid::parse_bare(addressed) {
         Ok(target) => target,
         Err(_) => {
@@ -5957,6 +6005,10 @@ async fn federated_mix_disco_info(
             channel.allow_user_message_retraction
                 || channel.administrator_retraction_rights != "nobody",
             channel.allow_private_messages,
+            state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0313::XEP_ID),
             &mirror,
         )?
     } else {
@@ -6560,14 +6612,15 @@ pub(crate) async fn federated_mix_message(
         if root.tag_name().name() != "message" {
             return Ok(false);
         }
-        let validation_error = crate::xmpp::xml_util::validate_routed_message(root)
-            .err()
-            .map(|condition| {
-                (
-                    crate::xmpp::xml_util::stanza_error_type(condition),
-                    condition,
-                )
-            });
+        let validation_error =
+            crate::xmpp::xml_util::validate_routed_message(root, &state.config.xmpp_extensions)
+                .err()
+                .map(|condition| {
+                    (
+                        crate::xmpp::xml_util::stanza_error_type(condition),
+                        condition,
+                    )
+                });
         (
             root.attribute("from").unwrap_or_default().to_owned(),
             root.attribute("to").unwrap_or_default().to_owned(),
@@ -7283,7 +7336,10 @@ mod tests {
 
         let service = mix_service_disco_info_payload("Northstar", "").unwrap();
         assert!(!service.contains("urn:xmpp:mam:2"));
-        let channel = mix_channel_disco_info_payload("Room", false, false, "").unwrap();
+        let channel_without_mam =
+            mix_channel_disco_info_payload("Room", false, false, false, "").unwrap();
+        assert!(!channel_without_mam.contains("urn:xmpp:mam:2"));
+        let channel = mix_channel_disco_info_payload("Room", false, false, true, "").unwrap();
         for feature in [
             "http://jabber.org/protocol/rsm",
             "urn:xmpp:mam:2",

@@ -2749,8 +2749,8 @@ impl ClusterManager {
             return Ok(());
         };
         let owner = crate::jid::canonicalize_bare(owner)?;
-        if targets.len() > crate::xmpp::xml_util::MAX_BLOCKING_ITEMS
-            || patterns.len() > crate::xmpp::xml_util::MAX_BLOCKING_ITEMS
+        if targets.len() > northstar_xep_0191::MAX_ITEMS
+            || patterns.len() > northstar_xep_0191::MAX_ITEMS
         {
             anyhow::bail!("too many blocking presence targets");
         }
@@ -6372,7 +6372,7 @@ async fn listen_once(
             let owner = crate::jid::canonicalize_bare(target).ok();
             let targets = json["blocking_targets"]
                 .as_array()
-                .filter(|items| items.len() <= crate::xmpp::xml_util::MAX_BLOCKING_ITEMS)
+                .filter(|items| items.len() <= northstar_xep_0191::MAX_ITEMS)
                 .and_then(|items| {
                     items
                         .iter()
@@ -6384,7 +6384,7 @@ async fn listen_once(
                 });
             let patterns = json["blocking_patterns"]
                 .as_array()
-                .filter(|items| items.len() <= crate::xmpp::xml_util::MAX_BLOCKING_ITEMS)
+                .filter(|items| items.len() <= northstar_xep_0191::MAX_ITEMS)
                 .and_then(|items| {
                     items
                         .iter()

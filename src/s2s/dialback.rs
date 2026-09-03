@@ -2,33 +2,12 @@ use super::*;
 use crate::jid::prepare_domainpart;
 use crate::state::AppState;
 use anyhow::{Context, Result};
-use hmac::{Hmac, Mac};
 use roxmltree::Document;
-use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
 
-pub(crate) const DIALBACK_NS: &str = "jabber:server:dialback";
-pub(crate) const STREAM_LIMITS_NS: &str = "urn:xmpp:stream-limits:0";
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct AdvertisedStreamLimits {
-    pub max_bytes: Option<usize>,
-    pub idle_seconds: Option<u32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum DialbackOutcome {
-    Valid,
-    Invalid,
-    Error(String),
-}
-
-fn same_dialback_domain(left: &str, right: &str) -> bool {
-    matches!(
-        (prepare_domainpart(left), prepare_domainpart(right)),
-        (Ok(left), Ok(right)) if left == right
-    )
-}
+pub(crate) use northstar_federation_core::{
+    same_dialback_domain, AdvertisedStreamLimits, DialbackOutcome, DIALBACK_NS, STREAM_LIMITS_NS,
+};
 
 pub(crate) fn stream_limits_feature() -> String {
     stream_limits_feature_for_idle(S2S_AUTHENTICATED_IDLE_TIMEOUT)
@@ -217,46 +196,26 @@ pub(crate) fn advertised(feature_xml: &str) -> bool {
     })
 }
 
-/// XEP-0185 generation for XEP-0220: HMAC-SHA256(SHA256(secret),
-/// receiving-domain SP originating-domain SP stream-id).
 pub(crate) fn key(
     secret: &[u8],
     receiving_domain: &str,
     originating_domain: &str,
     stream_id: &str,
 ) -> String {
-    // XEP-0185 deliberately uses the lowercase hexadecimal representation of
-    // SHA256(secret) as the HMAC key, not the 32 raw digest octets.  Using the
-    // raw bytes produces a plausible-looking but non-interoperable key.
-    let derived = hex(&Sha256::digest(secret));
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(derived.as_bytes()).expect("SHA-256 accepts any key length");
-    mac.update(receiving_domain.as_bytes());
-    mac.update(b" ");
-    mac.update(originating_domain.as_bytes());
-    mac.update(b" ");
-    mac.update(stream_id.as_bytes());
-    hex(&mac.finalize().into_bytes())
+    northstar_federation_core::compute_dialback_key(
+        secret,
+        receiving_domain,
+        originating_domain,
+        stream_id,
+    )
 }
 
 pub(crate) fn valid_key(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    northstar_federation_core::is_valid_dialback_key(value)
 }
 
 pub(crate) fn matches_key(expected: &str, supplied: &str) -> bool {
-    let (Some(expected), Some(supplied)) = (decode_hex(expected), decode_hex(supplied)) else {
-        return false;
-    };
-    let Ok(mut supplied_mac) = Hmac::<Sha256>::new_from_slice(b"northstar-dialback-compare") else {
-        return false;
-    };
-    supplied_mac.update(&supplied);
-    let supplied_tag = supplied_mac.finalize().into_bytes();
-    let Ok(mut expected_mac) = Hmac::<Sha256>::new_from_slice(b"northstar-dialback-compare") else {
-        return false;
-    };
-    expected_mac.update(&expected);
-    expected_mac.verify_slice(&supplied_tag).is_ok()
+    northstar_federation_core::matches_dialback_key(expected, supplied)
 }
 
 pub(crate) fn result_request(from: &str, to: &str, value: &str) -> String {
@@ -498,30 +457,7 @@ pub(crate) async fn verify_remote(
     parse_verify_response(&response, &originating_domain, &receiving_domain, stream_id)
 }
 
-fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(DIGITS[(byte >> 4) as usize] as char);
-        output.push(DIGITS[(byte & 0x0f) as usize] as char);
-    }
-    output
-}
 
-fn decode_hex(value: &str) -> Option<Vec<u8>> {
-    if !value.len().is_multiple_of(2) {
-        return None;
-    }
-    value
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            let high = (pair[0] as char).to_digit(16)?;
-            let low = (pair[1] as char).to_digit(16)?;
-            Some(((high << 4) | low) as u8)
-        })
-        .collect()
-}
 
 #[cfg(test)]
 mod tests {

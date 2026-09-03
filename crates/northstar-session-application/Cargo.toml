@@ -1,0 +1,15 @@
+[package]
+name = "northstar-session-application"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Typed commands, lifecycle signals, and application boundaries for XMPP sessions"
+publish = false
+
+[dependencies]
+northstar-session-core = { path = "../northstar-session-core" }
+northstar-xmpp-types = { path = "../northstar-xmpp-types" }
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.43", features = ["sync"] }
+uuid = { version = "1.12", features = ["v4", "serde"] }

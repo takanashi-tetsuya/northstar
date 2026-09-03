@@ -25,12 +25,7 @@ use uuid::Uuid;
 const CLEANUP_TOTAL_BUDGET: Duration = Duration::from_secs(10);
 const CLEANUP_STEP_BUDGET: Duration = Duration::from_secs(2);
 
-#[derive(Clone, Debug)]
-pub(crate) struct SessionCleanupAccount {
-    pub(crate) user_id: Uuid,
-    pub(crate) username: String,
-    pub(crate) auth_generation: i64,
-}
+pub(crate) use northstar_session_application::SessionCleanupAccount;
 
 #[derive(Debug)]
 pub(crate) enum SessionSmCleanup {

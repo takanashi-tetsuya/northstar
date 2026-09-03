@@ -1,5 +1,12 @@
+pub use northstar_delivery_core::{
+    recipient_delivery_identity, DurableDelivery, RecipientDeliveryIdentity, SmUnackedStanza,
+};
+use northstar_delivery_core::{
+    GuardedEnqueue, OrderedOutboundSink, OutboundFuture, OutboundQueueError,
+};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+#[cfg(test)]
 use uuid::Uuid;
 
 /// A database-backed C2S delivery which must not be acknowledged merely
@@ -7,43 +14,6 @@ use uuid::Uuid;
 /// durable row only after the transport's recoverable acknowledgement
 /// boundary (XEP-0198 h, BOSH response ack, or the explicit non-SM socket
 /// write fallback).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DurableDelivery {
-    pub recipient_id: Uuid,
-    pub message_id: Uuid,
-    /// Offline replay enters routing with a fenced claim. Live routing starts
-    /// without one; non-SM TCP/WebSocket takes an exact short claim at the
-    /// write boundary, while SM/BOSH transfers the row to its protocol owner.
-    pub claim_id: Option<Uuid>,
-}
-
-/// One XEP-0198 outbound sequence entry.  A durable delivery fence travels
-/// with the exact stanza until the client advances `h`; persisting only the
-/// XML would recreate the socket-write/database-complete ambiguity after a
-/// stream resume.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SmUnackedStanza {
-    pub stanza: String,
-    pub durable_delivery: Option<DurableDelivery>,
-}
-
-impl SmUnackedStanza {
-    #[cfg(test)]
-    pub fn plain(stanza: String) -> Self {
-        Self {
-            stanza,
-            durable_delivery: None,
-        }
-    }
-
-    pub fn with_delivery(stanza: String, durable_delivery: Option<DurableDelivery>) -> Self {
-        Self {
-            stanza,
-            durable_delivery,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct OutboundItem {
     pub stanza: String,
@@ -107,23 +77,39 @@ impl OutboundItem {
     }
 }
 
-/// Compatibility wrapper around Tokio's bounded sender. Most protocol paths
-/// intentionally enqueue ordinary strings; message delivery paths opt into
-/// `*_durable` and carry their database acknowledgement fence to the socket.
-#[derive(Clone, Debug)]
+/// Session-facing ordered output port. The session and protocol layers do not
+/// own a Tokio channel: the concrete queue is injected behind the
+/// transport-neutral `OrderedOutboundSink` capability.
+#[derive(Clone)]
 pub struct OutboundSender {
-    inner: mpsc::Sender<OutboundItem>,
+    inner: std::sync::Arc<dyn OrderedOutboundSink<OutboundItem>>,
     /// A full durable queue is a transport failure, not an offline-routing
     /// decision.  Every clone shares this latch so the owning transport is
     /// torn down before a later stanza can cross the delivery gap.
     backpressure_disconnect: CancellationToken,
 }
 
+impl std::fmt::Debug for OutboundSender {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OutboundSender")
+            .field(
+                "backpressure_disconnected",
+                &self.backpressure_disconnect.is_cancelled(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 impl OutboundSender {
     pub fn new(inner: mpsc::Sender<OutboundItem>) -> Self {
+        let backpressure_disconnect = CancellationToken::new();
         Self {
-            inner,
-            backpressure_disconnect: CancellationToken::new(),
+            inner: std::sync::Arc::new(TokioOutboundSink {
+                inner,
+                backpressure_disconnect: backpressure_disconnect.clone(),
+            }),
+            backpressure_disconnect,
         }
     }
 
@@ -189,7 +175,7 @@ impl OutboundSender {
         is_current: F,
     ) -> Result<bool, mpsc::error::SendError<String>>
     where
-        F: Fn() -> bool,
+        F: Fn() -> bool + Send + Sync,
     {
         self.send_item_if_current(OutboundItem::durable(stanza, delivery), is_current)
             .await
@@ -227,16 +213,17 @@ impl OutboundSender {
         if self.backpressure_disconnect.is_cancelled() {
             return Err(mpsc::error::TrySendError::Closed(item));
         }
-        self.inner.try_send(item)
+        self.inner.try_enqueue(item).map_err(map_queue_error)
     }
 
     async fn send_item(
         &self,
         item: OutboundItem,
     ) -> Result<(), mpsc::error::SendError<OutboundItem>> {
-        let sent = self.send_item_if_current(item, || true).await?;
-        debug_assert!(sent, "an unconditional outbound send cannot lose its guard");
-        Ok(())
+        self.inner
+            .enqueue(item)
+            .await
+            .map_err(|error| mpsc::error::SendError(error.into_item()))
     }
 
     async fn send_item_if_current<F>(
@@ -245,29 +232,81 @@ impl OutboundSender {
         is_current: F,
     ) -> Result<bool, mpsc::error::SendError<OutboundItem>>
     where
-        F: Fn() -> bool,
+        F: Fn() -> bool + Send + Sync,
     {
-        if !is_current() {
-            return Ok(false);
+        match self.inner.enqueue_if_current(item, &is_current).await {
+            Ok(GuardedEnqueue::Queued) => Ok(true),
+            Ok(GuardedEnqueue::Stale(_)) => Ok(false),
+            Err(error) => Err(mpsc::error::SendError(error.into_item())),
         }
-        let permit = tokio::select! {
-            biased;
-            _ = self.backpressure_disconnect.cancelled() => {
-                return Err(mpsc::error::SendError(item));
-            }
-            result = self.inner.reserve() => match result {
-                Ok(permit) => permit,
-                Err(_) => return Err(mpsc::error::SendError(item)),
-            },
-        };
+    }
+}
+
+struct TokioOutboundSink {
+    inner: mpsc::Sender<OutboundItem>,
+    backpressure_disconnect: CancellationToken,
+}
+
+impl OrderedOutboundSink<OutboundItem> for TokioOutboundSink {
+    fn try_enqueue(&self, item: OutboundItem) -> Result<(), OutboundQueueError<OutboundItem>> {
         if self.backpressure_disconnect.is_cancelled() {
-            return Err(mpsc::error::SendError(item));
+            return Err(OutboundQueueError::Closed(item));
         }
-        if !is_current() {
-            return Ok(false);
-        }
-        permit.send(item);
-        Ok(true)
+        self.inner.try_send(item).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(item) => OutboundQueueError::Backpressured(item),
+            mpsc::error::TrySendError::Closed(item) => OutboundQueueError::Closed(item),
+        })
+    }
+
+    fn enqueue<'a>(&'a self, item: OutboundItem) -> OutboundFuture<'a, OutboundItem, ()> {
+        Box::pin(async move {
+            let always_current = || true;
+            match self.enqueue_if_current(item, &always_current).await? {
+                GuardedEnqueue::Queued => Ok(()),
+                GuardedEnqueue::Stale(_) => {
+                    unreachable!("an unconditional outbound send cannot lose its guard")
+                }
+            }
+        })
+    }
+
+    fn enqueue_if_current<'a>(
+        &'a self,
+        item: OutboundItem,
+        is_current: &'a (dyn Fn() -> bool + Send + Sync),
+    ) -> OutboundFuture<'a, OutboundItem, GuardedEnqueue<OutboundItem>> {
+        Box::pin(async move {
+            if !is_current() {
+                return Ok(GuardedEnqueue::Stale(item));
+            }
+            let permit = tokio::select! {
+                biased;
+                _ = self.backpressure_disconnect.cancelled() => {
+                    return Err(OutboundQueueError::Closed(item));
+                }
+                result = self.inner.reserve() => match result {
+                    Ok(permit) => permit,
+                    Err(_) => return Err(OutboundQueueError::Closed(item)),
+                },
+            };
+            if self.backpressure_disconnect.is_cancelled() {
+                return Err(OutboundQueueError::Closed(item));
+            }
+            if !is_current() {
+                return Ok(GuardedEnqueue::Stale(item));
+            }
+            permit.send(item);
+            Ok(GuardedEnqueue::Queued)
+        })
+    }
+}
+
+fn map_queue_error(
+    error: OutboundQueueError<OutboundItem>,
+) -> mpsc::error::TrySendError<OutboundItem> {
+    match error {
+        OutboundQueueError::Backpressured(item) => mpsc::error::TrySendError::Full(item),
+        OutboundQueueError::Closed(item) => mpsc::error::TrySendError::Closed(item),
     }
 }
 
@@ -278,54 +317,6 @@ fn map_try_send_error(
         mpsc::error::TrySendError::Full(item) => mpsc::error::TrySendError::Full(item.stanza),
         mpsc::error::TrySendError::Closed(item) => mpsc::error::TrySendError::Closed(item.stanza),
     }
-}
-
-/// The recipient-authoritative identity carried by a message stanza.  Cluster
-/// protocol v6 inferred durable delivery from this value; v7 carries the
-/// actual PostgreSQL fence explicitly because not every durable projection
-/// uses the stanza-id as its row key (for example, a durable MUC invitation).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RecipientDeliveryIdentity {
-    Missing,
-    Exact(Uuid),
-    Invalid,
-}
-
-pub fn recipient_delivery_identity(
-    stanza: &str,
-    expected_recipient: &str,
-) -> RecipientDeliveryIdentity {
-    let Ok(recipient) = crate::jid::CanonicalJid::parse(expected_recipient) else {
-        return RecipientDeliveryIdentity::Invalid;
-    };
-    let expected_by = recipient.bare();
-    let Ok(document) = roxmltree::Document::parse(stanza) else {
-        return RecipientDeliveryIdentity::Invalid;
-    };
-    let root = document.root_element();
-    if root.tag_name().name() != "message" {
-        return RecipientDeliveryIdentity::Invalid;
-    }
-    let mut identities = root.children().filter_map(|child| {
-        if !child.is_element()
-            || child.tag_name().name() != "stanza-id"
-            || child.tag_name().namespace() != Some("urn:xmpp:sid:0")
-        {
-            return None;
-        }
-        let by = crate::jid::CanonicalJid::parse(child.attribute("by")?).ok()?;
-        (by.bare() == expected_by).then_some(child.attribute("id"))
-    });
-    let Some(first) = identities.next() else {
-        return RecipientDeliveryIdentity::Missing;
-    };
-    if identities.next().is_some() {
-        return RecipientDeliveryIdentity::Invalid;
-    }
-    first.and_then(|value| Uuid::parse_str(value).ok()).map_or(
-        RecipientDeliveryIdentity::Invalid,
-        RecipientDeliveryIdentity::Exact,
-    )
 }
 
 #[cfg(test)]

@@ -2,7 +2,10 @@ use crate::{
     db,
     jid::{prepare_domainpart, CanonicalJid},
     services::{
-        messaging::{DurableAdmissionOutcome, LocalMessageAdmission, MessageIdentity},
+        messaging::{
+            DurableAdmissionOutcome, IdentityAuthority, LocalDelivery, MessageIdentity,
+            MessagePostCommit, PersonalMessageDestination, ValidatedPersonalMessage,
+        },
         retractions::{
             ArchiveWrite, DeliveryProjection, OwnerProjection, RetractionCommand, RetractionOutcome,
         },
@@ -2371,7 +2374,27 @@ pub(crate) async fn route_inbound_iq(
     }
     let namespace = child.tag_name().namespace().unwrap_or_default();
     match (child.tag_name().name(), namespace, kind) {
-        ("ping", "urn:xmpp:ping", "get") => Ok(Some(s2s_iq_result(id, to, from, ""))),
+        ("ping", northstar_xep_0199::NAMESPACE, "get")
+            if state.config.xmpp_extensions.route_enabled(
+                northstar_xep_core::StanzaKind::IqGet,
+                northstar_xep_0199::NAMESPACE,
+                "ping",
+            ) =>
+        {
+            if northstar_xep_0199::parse_ping_element(child).is_err() {
+                Ok(Some(s2s_iq_error(id, to, from, "bad-request")))
+            } else {
+                Ok(Some(s2s_iq_result(
+                    id,
+                    to,
+                    from,
+                    northstar_xep_0199::build_response(),
+                )))
+            }
+        }
+        ("ping", northstar_xep_0199::NAMESPACE, "get") => {
+            Ok(Some(s2s_iq_error(id, to, from, "service-unavailable")))
+        }
         ("vCard", "vcard-temp", "get") => {
             let Some(owner_name) = recipient_name else {
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
@@ -2518,17 +2541,19 @@ pub(crate) async fn route_inbound_iq(
                 let outcome = match state
                     .pubsub_service()
                     .subscribe_pep_node(
-                        crate::services::pubsub::PepSubscribeWrite {
-                            owner: &owner,
-                            actor: crate::services::pubsub::PepSubscriptionActor {
-                                jid: from,
-                                local_account: None,
+                        northstar_pubsub_application::PepSubscribeCommand::from(
+                            crate::services::pubsub::PepSubscribeWrite {
+                                owner: &owner,
+                                actor: crate::services::pubsub::PepSubscriptionActor {
+                                    jid: from,
+                                    local_account: None,
+                                },
+                                node,
+                                subscriber_jid: &requested,
+                                max_subscriptions: 1_000,
+                                requested_subid: &requested_subid,
                             },
-                            node,
-                            subscriber_jid: &requested,
-                            max_subscriptions: 1_000,
-                            requested_subid: &requested_subid,
-                        },
+                        ),
                         &crate::xmpp::protocol::pep::prepare_pep_last_item_outbox,
                     )
                     .await
@@ -2546,7 +2571,7 @@ pub(crate) async fn route_inbound_iq(
                     }
                     Err(error) => return Err(error),
                 };
-                let subscription = match outcome {
+                let subscription = match outcome.outcome {
                     crate::services::pubsub::PepSubscribeOutcome::Subscribed(subscription) => {
                         subscription
                     }
@@ -2577,16 +2602,20 @@ pub(crate) async fn route_inbound_iq(
             } else {
                 let outcome = match state
                     .pubsub_service()
-                    .unsubscribe_pep_node(crate::services::pubsub::PepUnsubscribeWrite {
-                        owner: &owner,
-                        actor: crate::services::pubsub::PepSubscriptionActor {
-                            jid: from,
-                            local_account: None,
-                        },
-                        node,
-                        subscriber_jid: &requested,
-                        subid: operation.attribute("subid"),
-                    })
+                    .unsubscribe_pep_node(
+                        northstar_pubsub_application::PepUnsubscribeCommand::from(
+                            crate::services::pubsub::PepUnsubscribeWrite {
+                                owner: &owner,
+                                actor: crate::services::pubsub::PepSubscriptionActor {
+                                    jid: from,
+                                    local_account: None,
+                                },
+                                node,
+                                subscriber_jid: &requested,
+                                subid: operation.attribute("subid"),
+                            },
+                        ),
+                    )
                     .await
                 {
                     Ok(outcome) => outcome,
@@ -2602,7 +2631,7 @@ pub(crate) async fn route_inbound_iq(
                     }
                     Err(error) => return Err(error),
                 };
-                match outcome {
+                match outcome.outcome {
                     crate::services::pubsub::PepUnsubscribeOutcome::Unsubscribed(_) => {}
                     crate::services::pubsub::PepUnsubscribeOutcome::NotFound => {
                         return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
@@ -2666,12 +2695,20 @@ pub(crate) async fn route_inbound_iq(
                 );
             for feature in [
                 "http://jabber.org/protocol/disco#info",
-                "urn:xmpp:ping",
                 "vcard-temp",
                 "urn:xmpp:push:0",
                 "urn:xmpp:sid:0",
             ] {
                 payload.push_child(XmlElement::new("feature").attr("var", feature));
+            }
+            if state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0199::XEP_ID)
+            {
+                payload.push_child(
+                    XmlElement::new("feature").attr("var", northstar_xep_0199::NAMESPACE),
+                );
             }
             Ok(Some(s2s_iq_result(id, to, from, &payload.finish())))
         }
@@ -2799,7 +2836,7 @@ pub(crate) async fn route_inbound_message(
     to: &str,
     authenticated_domain: &str,
 ) -> Result<Option<String>> {
-    if let Err(condition) = validate_routed_message(root) {
+    if let Err(condition) = validate_routed_message(root, &state.config.xmpp_extensions) {
         return Ok(inbound_message_error(
             root,
             stanza_error_type(condition),
@@ -2973,6 +3010,7 @@ pub(crate) async fn route_inbound_message(
                 .as_ref()
                 .map(
                     |(actor_scope_raw, actor_scope, identity_value)| MessageIdentity {
+                        authority: IdentityAuthority::AuthenticatedRemoteStanza,
                         actor_scope_raw,
                         actor_scope,
                         target_scope: &recipient_bare,
@@ -2981,26 +3019,31 @@ pub(crate) async fn route_inbound_message(
                     },
                 );
         let delayed = add_delay_from(&annotated, chrono::Utc::now(), Some(&state.config.domain));
-        let delivery = LocalMessageAdmission {
+        let delivery = ValidatedPersonalMessage {
             local_actor_id: None,
             identity,
             archives: &writes,
-            delivery_id: stable_id,
-            recipient_id: recipient.id,
-            recipient_bare_jid: &recipient_bare,
-            sender_jid: &canonical_from,
-            stanza: &delayed,
-            encrypted,
-            mam_backed: archive_allowed,
+            destination: PersonalMessageDestination::Local(LocalDelivery {
+                delivery_id: stable_id,
+                recipient_id: recipient.id,
+                recipient_bare_jid: &recipient_bare,
+                sender_jid: &canonical_from,
+                stanza: &delayed,
+                encrypted,
+                mam_backed: archive_allowed,
+            }),
         };
         match state
             .message_service()
-            .admit_inbound_federated_message(&delivery)
+            .admit_personal_message(&delivery)
             .await
         {
-            Ok(DurableAdmissionOutcome::Stored { .. }) => {
+            Ok(DurableAdmissionOutcome::Stored { post_commit, .. }) => {
                 history_committed = archive_allowed;
-                durable_c2s_delivery = Some(stable_id);
+                let MessagePostCommit::RouteLocalDelivery { delivery_id, .. } = post_commit else {
+                    anyhow::bail!("local federation ingress returned a non-local commit plan");
+                };
+                durable_c2s_delivery = Some(delivery_id);
             }
             Ok(DurableAdmissionOutcome::Replay) => return Ok(None),
             Ok(DurableAdmissionOutcome::AccountUnavailable) => return Ok(None),

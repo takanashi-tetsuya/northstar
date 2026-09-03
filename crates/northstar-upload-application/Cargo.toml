@@ -1,0 +1,13 @@
+[package]
+name = "northstar-upload-application"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Typed commands, validation rules, and application boundaries for HTTP file upload"
+publish = false
+
+[dependencies]
+northstar-upload-core = { path = "../northstar-upload-core" }
+northstar-xmpp-types = { path = "../northstar-xmpp-types" }
+uuid = { version = "1.12", features = ["v4"] }

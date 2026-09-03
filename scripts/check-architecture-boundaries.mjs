@@ -1118,10 +1118,10 @@ const registrationAccountBody = structBody(
 if (/(?:\bpassword_hash\b|\bscram_[A-Za-z0-9_]*|\bauth_generation\b|\bis_admin\b)/.test(registrationAccountBody)) {
   throw new Error('AccountService RegistrationAccount regained credential or authority fields');
 }
-const authSource = read('src/auth.rs');
+const authCorePasswordSource = read('crates/northstar-auth-core/src/password.rs');
 const usersSource = read('src/db/users.rs');
 for (const [name, source, typeName] of [
-  ['PasswordCredentials', authSource, 'PasswordCredentials'],
+  ['PasswordCredentials', authCorePasswordSource, 'PasswordCredentials'],
   ['PreparedScramUpgrade', usersSource, 'PreparedScramUpgrade'],
   ['PreparedLogin', usersSource, 'PreparedLogin'],
 ]) {
@@ -1129,7 +1129,7 @@ for (const [name, source, typeName] of [
     throw new Error(`${name} must zeroize reusable credential material on Drop`);
   }
 }
-if (!/impl\s+std::fmt::Debug\s+for\s+PasswordCredentials\b/.test(authSource)
+if (!/impl\s+std::fmt::Debug\s+for\s+PasswordCredentials\b/.test(authCorePasswordSource)
     || !/impl\s+std::fmt::Debug\s+for\s+PreparedLogin\b/.test(usersSource)) {
   throw new Error('credential containers require explicitly redacted Debug implementations');
 }
@@ -2157,6 +2157,7 @@ const serviceTaskNames = [
   'external component',
   'durable operation worker',
   'HTTP',
+  'Web administration',
   'metrics',
 ];
 const composedServiceTasks = [

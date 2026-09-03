@@ -1,3 +1,58 @@
+[workspace]
+members = [
+    ".",
+    "crates/northstar-abuse-policy",
+    "crates/northstar-xep-core",
+    "crates/northstar-xep-0045",
+    "crates/northstar-xep-0016",
+    "crates/northstar-auth-core",
+    "crates/northstar-xmpp-types",
+    "crates/northstar-xml-framing",
+    "crates/northstar-xml-builder",
+    "crates/northstar-xep-0059",
+    "crates/northstar-xep-0060",
+    "crates/northstar-xep-0115",
+    "crates/northstar-xep-0191",
+    "crates/northstar-xep-0198",
+    "crates/northstar-xep-0215",
+    "crates/northstar-xep-0280",
+    "crates/northstar-xep-0313",
+    "crates/northstar-xep-0352",
+    "crates/northstar-xep-0357",
+    "crates/northstar-xep-0359",
+    "crates/northstar-xep-0363",
+    "crates/northstar-xep-0085",
+    "crates/northstar-xep-0184",
+    "crates/northstar-xep-0092",
+    "crates/northstar-xep-0199",
+    "crates/northstar-xep-0202",
+    "crates/northstar-xep-0308",
+    "crates/northstar-xep-0333",
+    "crates/northstar-xep-0380",
+    "crates/northstar-xep-0444",
+    "crates/northstar-xep-0461",
+    "crates/northstar-web-surface",
+    "crates/northstar-message-core",
+    "crates/northstar-message-application",
+    "crates/northstar-session-core",
+    "crates/northstar-delivery-core",
+    "crates/northstar-presence-core",
+    "crates/northstar-room-core",
+    "crates/northstar-room-application",
+    "crates/northstar-pubsub-application",
+    "crates/northstar-pubsub-core",
+    "crates/northstar-roster-core",
+    "crates/northstar-roster-application",
+    "crates/northstar-archive-core",
+    "crates/northstar-archive-application",
+    "crates/northstar-upload-core",
+    "crates/northstar-upload-application",
+    "crates/northstar-session-application",
+    "crates/northstar-federation-core",
+    "crates/northstar-federation-application",
+]
+resolver = "2"
+
 [package]
 name = "rust-xmpp-server"
 version = "0.2.0"
@@ -10,6 +65,7 @@ homepage = "https://github.com/takanashi-tetsuya/northstar"
 readme = "README.md"
 
 [dependencies]
+northstar-abuse-policy = { path = "crates/northstar-abuse-policy" }
 anyhow = "1.0"
 argon2 = "0.5"
 axum = { version = "0.8", features = ["ws", "multipart"] }
@@ -52,6 +108,54 @@ envy = "0.4.2"
 redis = { version = "1.6.0", features = ["tokio-rustls-comp"] }
 bb8 = "0.9.1"
 object_store = { version = "0.14.1", default-features = false, features = ["aws"] }
+northstar-xep-0184 = { path = "crates/northstar-xep-0184" }
+northstar-xep-0085 = { path = "crates/northstar-xep-0085" }
+northstar-xep-0092 = { path = "crates/northstar-xep-0092" }
+northstar-xep-0199 = { path = "crates/northstar-xep-0199" }
+northstar-xep-0202 = { path = "crates/northstar-xep-0202" }
+northstar-xep-0308 = { path = "crates/northstar-xep-0308" }
+northstar-xep-0333 = { path = "crates/northstar-xep-0333" }
+northstar-xep-0380 = { path = "crates/northstar-xep-0380" }
+northstar-xep-0444 = { path = "crates/northstar-xep-0444" }
+northstar-xep-0461 = { path = "crates/northstar-xep-0461" }
+northstar-xep-core = { path = "crates/northstar-xep-core" }
+northstar-xep-0045 = { path = "crates/northstar-xep-0045" }
+northstar-xep-0016 = { path = "crates/northstar-xep-0016" }
+northstar-auth-core = { path = "crates/northstar-auth-core" }
+northstar-xmpp-types = { path = "crates/northstar-xmpp-types" }
+northstar-xml-framing = { path = "crates/northstar-xml-framing" }
+northstar-xml-builder = { path = "crates/northstar-xml-builder" }
+northstar-xep-0059 = { path = "crates/northstar-xep-0059" }
+northstar-xep-0060 = { path = "crates/northstar-xep-0060" }
+northstar-xep-0115 = { path = "crates/northstar-xep-0115" }
+northstar-xep-0191 = { path = "crates/northstar-xep-0191" }
+northstar-xep-0198 = { path = "crates/northstar-xep-0198" }
+northstar-xep-0215 = { path = "crates/northstar-xep-0215" }
+northstar-xep-0280 = { path = "crates/northstar-xep-0280" }
+northstar-xep-0313 = { path = "crates/northstar-xep-0313" }
+northstar-xep-0352 = { path = "crates/northstar-xep-0352" }
+northstar-xep-0357 = { path = "crates/northstar-xep-0357" }
+northstar-xep-0359 = { path = "crates/northstar-xep-0359" }
+northstar-xep-0363 = { path = "crates/northstar-xep-0363" }
+northstar-web-surface = { path = "crates/northstar-web-surface" }
+northstar-message-core = { path = "crates/northstar-message-core" }
+northstar-message-application = { path = "crates/northstar-message-application" }
+northstar-session-core = { path = "crates/northstar-session-core" }
+northstar-delivery-core = { path = "crates/northstar-delivery-core" }
+northstar-presence-core = { path = "crates/northstar-presence-core" }
+northstar-room-core = { path = "crates/northstar-room-core" }
+northstar-room-application = { path = "crates/northstar-room-application" }
+northstar-pubsub-application = { path = "crates/northstar-pubsub-application" }
+northstar-pubsub-core = { path = "crates/northstar-pubsub-core" }
+northstar-roster-core = { path = "crates/northstar-roster-core" }
+northstar-roster-application = { path = "crates/northstar-roster-application" }
+northstar-archive-core = { path = "crates/northstar-archive-core" }
+northstar-archive-application = { path = "crates/northstar-archive-application" }
+northstar-upload-core = { path = "crates/northstar-upload-core" }
+northstar-upload-application = { path = "crates/northstar-upload-application" }
+northstar-session-application = { path = "crates/northstar-session-application" }
+northstar-federation-core = { path = "crates/northstar-federation-core" }
+northstar-federation-application = { path = "crates/northstar-federation-application" }
 
 [profile.release]
 lto = "thin"

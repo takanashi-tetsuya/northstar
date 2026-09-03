@@ -138,49 +138,8 @@ pub struct CapsKey {
     pub version: String,
 }
 
-/// Exact authority for one local XEP-0115 observation. The connection fence
-/// prevents full-JID ABA after bind/resume, while the generation fence prevents
-/// an older response or running side effect from surviving a newer presence on
-/// the same transport.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LocalCapsEpoch {
-    pub connection_id: uuid::Uuid,
-    pub generation: u64,
-}
-
-/// Lossless lifecycle signal for one exact local route incarnation.
-///
-/// The sender retains the terminal state, so a waiter which subscribes after
-/// the compare-and-remove has committed still observes `Removed`.  Binding the
-/// signal to the connection UUID prevents a full-JID ABA replacement from
-/// satisfying a waiter for the previous transport.
-#[derive(Debug)]
-pub(crate) struct RouteIncarnationSignal {
-    connection_id: uuid::Uuid,
-    removed: tokio::sync::watch::Sender<bool>,
-}
-
-impl RouteIncarnationSignal {
-    pub(crate) fn new(connection_id: uuid::Uuid) -> Arc<Self> {
-        let (removed, _) = tokio::sync::watch::channel(false);
-        Arc::new(Self {
-            connection_id,
-            removed,
-        })
-    }
-
-    pub(crate) fn connection_id(&self) -> uuid::Uuid {
-        self.connection_id
-    }
-
-    pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<bool> {
-        self.removed.subscribe()
-    }
-
-    fn publish_removed(&self) {
-        self.removed.send_replace(true);
-    }
-}
+pub use northstar_session_application::RouteIncarnationSignal;
+pub use northstar_session_core::LocalCapsEpoch;
 
 #[derive(Clone)]
 pub struct OnlineSession {
@@ -266,38 +225,10 @@ pub struct OnlineSession {
     pub disconnect: CancellationToken,
 }
 
-#[derive(Clone, Copy)]
-struct StagedRouteIdentity {
-    connection_id: uuid::Uuid,
-    user_id: uuid::Uuid,
-    auth_generation: i64,
-}
-
-#[derive(Clone, Copy)]
-struct StagedRouteActivationCheck {
-    session: StagedRouteIdentity,
-    expected: StagedRouteIdentity,
-    same_lifecycle: bool,
-    lifecycle_state: u8,
-    session_cancelled: bool,
-    owner_cancelled: bool,
-}
-
-fn staged_route_activation_allowed(check: StagedRouteActivationCheck) -> bool {
-    check.session.connection_id == check.expected.connection_id
-        && check.session.user_id == check.expected.user_id
-        && check.session.auth_generation == check.expected.auth_generation
-        && check.same_lifecycle
-        && check.lifecycle_state == 0
-        && !check.session_cancelled
-        && !check.owner_cancelled
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct JoinedMucMembership {
-    pub nick: String,
-    pub cluster_epoch: uuid::Uuid,
-}
+pub use northstar_session_core::{
+    staged_route_activation_allowed, JoinedMucMembership, StagedRouteActivationCheck,
+    StagedRouteIdentity,
+};
 
 pub(crate) fn muc_actor_identity_matches(
     occupant: &MucOccupant,
@@ -1009,6 +940,61 @@ impl FederationWritePolicy {
     }
 }
 
+struct UploadAdmission {
+    semaphore: Arc<Semaphore>,
+    by_ip: Arc<DashMap<std::net::IpAddr, usize>>,
+    max_per_ip: usize,
+}
+
+enum UploadRuntime {
+    Enabled {
+        requests: UploadAdmission,
+        downloads: UploadAdmission,
+    },
+    DrainReadOnly {
+        downloads: UploadAdmission,
+    },
+    Disabled,
+}
+
+impl UploadRuntime {
+    fn from_config(config: &crate::config::Config) -> Self {
+        let downloads = || UploadAdmission {
+            semaphore: Arc::new(Semaphore::new(config.upload_download_max_concurrent)),
+            by_ip: Arc::new(DashMap::new()),
+            max_per_ip: config.upload_download_max_per_ip,
+        };
+        match config.upload_mode {
+            crate::config::UploadMode::Enabled => Self::Enabled {
+                requests: UploadAdmission {
+                    semaphore: Arc::new(Semaphore::new(32)),
+                    by_ip: Arc::new(DashMap::new()),
+                    max_per_ip: 4,
+                },
+                downloads: downloads(),
+            },
+            crate::config::UploadMode::DrainReadOnly => Self::DrainReadOnly {
+                downloads: downloads(),
+            },
+            crate::config::UploadMode::Disabled => Self::Disabled,
+        }
+    }
+
+    fn request_admission(&self) -> Option<&UploadAdmission> {
+        match self {
+            Self::Enabled { requests, .. } => Some(requests),
+            Self::DrainReadOnly { .. } | Self::Disabled => None,
+        }
+    }
+
+    fn download_admission(&self) -> Option<&UploadAdmission> {
+        match self {
+            Self::Enabled { downloads, .. } | Self::DrainReadOnly { downloads } => Some(downloads),
+            Self::Disabled => None,
+        }
+    }
+}
+
 pub struct AppState {
     pub config: Config,
     pub pool: PgPool,
@@ -1050,7 +1036,7 @@ pub struct AppState {
     admin_command_service: crate::services::admin_commands::AdminCommandService,
     push_service: crate::services::push::PushService,
     pub cluster: crate::cluster::ClusterManager,
-    bosh: crate::bosh::BoshManager,
+    bosh: Option<crate::bosh::BoshManager>,
     pub sessions: DashMap<String, OnlineSession>,
     pub muc_occupants: DashMap<String, MucOccupant>,
     /// Exactly one process-local suspension/resume FIFO per durable SM
@@ -1066,6 +1052,9 @@ pub struct AppState {
     /// Optional credential for the dedicated observability listener. Callers
     /// can ask for an authorization decision but cannot read the token.
     metrics_bearer_token: Option<Arc<Zeroizing<String>>>,
+    /// Reverse-proxy credential for the isolated administration origin. The
+    /// API can ask for a constant-time decision but cannot read key bytes.
+    web_admin_gateway_token: Option<Arc<Zeroizing<String>>>,
     /// A fail-closed, read-only-sized pool for the unauthenticated poll
     /// capability. It cannot consume the primary 32-connection application
     /// pool during a capability flood.
@@ -1079,8 +1068,8 @@ pub struct AppState {
     api_cursor: crate::api::cursor::CursorKeyring,
     /// XEP-0363 bearer-token and capacity admission authority. Protocol code
     /// receives typed slot outcomes, never the PostgreSQL pool.
-    upload_service: crate::services::upload::UploadService,
-    upload_store: Arc<dyn UploadStore>,
+    upload_service: Option<crate::services::upload::UploadService>,
+    upload_store: Option<Arc<dyn UploadStore>>,
     upload_storage_namespace_sha256: [u8; 32],
     upload_authority_generation: UploadAuthorityGeneration,
     upload_safety_gate: Arc<UploadSafetyGate>,
@@ -1120,12 +1109,9 @@ pub struct AppState {
     dialback_verifications: Arc<Semaphore>,
     client_connections: Arc<Semaphore>,
     client_connections_by_ip: DashMap<std::net::IpAddr, usize>,
-    /// HTTP upload hashing and local-file I/O are bounded independently from
-    /// sockets so a valid capability cannot monopolize CPU or disk bandwidth.
-    upload_requests: Arc<Semaphore>,
-    upload_requests_by_ip: DashMap<std::net::IpAddr, usize>,
-    upload_downloads: Arc<Semaphore>,
-    upload_downloads_by_ip: DashMap<std::net::IpAddr, usize>,
+    /// Capability-owned upload runtime. Disabled mode contains no store,
+    /// semaphore, per-IP map or upload-specific numeric state.
+    upload_runtime: UploadRuntime,
     /// The unauthenticated OMEMO source completion capability is bounded
     /// independently from the general API and database pool. Keys are trusted-
     /// proxy-resolved IP addresses and expire from the one-minute window.
@@ -1234,7 +1220,9 @@ impl AppState {
     /// Process-local XEP-0124/XEP-0206 session authority. Transport handlers
     /// may submit bounded manager operations but cannot replace the manager.
     pub(crate) fn bosh_manager(&self) -> &crate::bosh::BoshManager {
-        &self.bosh
+        self.bosh
+            .as_ref()
+            .expect("BOSH routes exist only when the capability runtime is enabled")
     }
 
     /// Cached ordinary DNS resolver used only by the federation discovery
@@ -1336,12 +1324,32 @@ impl AppState {
 
     /// Read the public-registration kill switch with acquire ordering.
     pub(crate) fn registration_is_closed(&self) -> bool {
-        self.registration_closed.load(Ordering::Acquire)
+        self.config.registration_dependency_locked()
+            || self.registration_closed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn registration_mode(&self) -> crate::config::RegistrationMode {
+        if self.registration_is_closed() {
+            crate::config::RegistrationMode::Closed
+        } else {
+            self.config.configured_registration_mode()
+        }
+    }
+
+    pub(crate) fn registration_requires_invitation(&self) -> bool {
+        self.registration_mode() == crate::config::RegistrationMode::InvitationOnly
     }
 
     /// Apply the authoritative registration setting with release ordering.
     pub(crate) fn apply_registration_closed(&self, closed: bool) {
-        self.registration_closed.store(closed, Ordering::Release);
+        self.registration_closed.store(
+            closed || self.config.registration_dependency_locked(),
+            Ordering::Release,
+        );
+    }
+
+    pub(crate) fn registration_opening_is_dependency_locked(&self) -> bool {
+        self.config.registration_dependency_locked()
     }
 
     /// Evaluate one resource's session-local XEP-0016 selection (or the
@@ -1384,6 +1392,7 @@ impl AppState {
             password.zeroize();
         }
         let metrics_bearer_token = config.metrics_bearer_token.take();
+        let web_admin_gateway_token = config.web_admin_gateway_token.take();
         let component_credentials: Arc<[crate::config::ComponentCredential]> =
             std::mem::take(&mut config.components).into();
         config.components = component_credentials
@@ -1414,6 +1423,7 @@ impl AppState {
                 config.api_control_allow_ephemeral
                     && config.redis_url.is_none()
                     && config.http_bind.ip().is_loopback()
+                    && (!config.web_admin_enabled || config.web_admin_bind.ip().is_loopback())
                     && (config.domain == "localhost"
                         || config.domain.ends_with(".localhost")
                         || config.domain.ends_with(".test")),
@@ -1438,92 +1448,100 @@ impl AppState {
         db::audit_mix_pam_operation_capacity(&pool)
             .await
             .context("MIX-PAM operation capacity authority failed startup audit")?;
-        let upload_safety_gate = UploadSafetyGate::new();
-        let upload_namespace = upload_storage_namespace_id(&config)?;
-        let namespace_generation = db::validate_upload_storage_backend(
-            &pool,
-            &config.upload_storage_backend,
-            &upload_namespace,
-        )
-        .await
-        .context("upload storage backend does not match durable metadata")?;
-        let (capacity_policy_generation, recovery_draining) = db::validate_upload_capacity_policy(
-            &pool,
-            config.upload_storage_max_pending_jobs,
-            config.upload_storage_max_retained_files,
-            config.upload_storage_max_retained_bytes,
-        )
-        .await
-        .context("upload capacity policy does not match durable deployment authority")?;
-        let upload_authority_generation = UploadAuthorityGeneration {
-            namespace: namespace_generation,
-            capacity_policy: capacity_policy_generation,
-        };
-        let authority_audit = db::audit_upload_capacity_authority(
-            &pool,
-            config.upload_storage_max_pending_jobs,
-            config.upload_storage_max_retained_files,
-            config.upload_storage_max_retained_bytes,
-        )
-        .await
-        .context("could not prove upload authority catalog and ACL invariants")?;
-        if authority_audit.violation_count() != 0 {
-            upload_safety_gate.mark_capacity_authority_unsafe(Arc::<str>::from(format!(
-                "upload authority catalog/ACL audit found {} violations",
-                authority_audit.violation_count()
-            )));
-            anyhow::bail!(
-                "upload authority catalog/ACL audit found {} violations",
-                authority_audit.violation_count()
-            );
-        }
-        let capacity_reconciliation = db::reconcile_upload_capacity_ledger(&pool)
-            .await
-            .context("could not reconcile upload capacity facts before storage startup")?;
-        if capacity_reconciliation.mismatch_count() != 0 {
-            upload_safety_gate.mark_ledger_mismatch(Arc::<str>::from(format!(
-                "upload capacity ledger differs from {} durable facts",
-                capacity_reconciliation.mismatch_count()
-            )));
-            anyhow::bail!(
-                "upload capacity ledger differs from {} durable facts",
-                capacity_reconciliation.mismatch_count()
-            );
-        }
-        upload_safety_gate.establish(upload_authority_generation, recovery_draining);
-        let upload_store: Arc<dyn UploadStore> = match config.upload_storage_backend.as_str() {
-            "local" => {
-                let local = Arc::new(
-                    LocalUploadStore::new(config.upload_dir.clone())
-                        .with_safety_gate(Arc::clone(&upload_safety_gate)),
-                );
-                let guarded = Arc::new(GuardedUploadStore::new(
-                    local.clone(),
-                    Arc::clone(&upload_safety_gate),
-                ));
-                // This bounded local enumeration is retained only for legacy
-                // pre-0091 partials. S3 reconciliation never lists a bucket;
-                // every stage is represented by a PostgreSQL job.
-                let mut abandoned_stages = 0_u64;
-                let startup_stages =
-                    tokio::time::timeout(Duration::from_secs(10), local.staging_attempts())
-                        .await
-                        .context("upload staging scan exceeded its startup time budget")?
-                        .context("failed to enumerate upload staging files")?;
-                // Enumeration is bounded above, but every candidate still
-                // needs an authoritative lease lookup and may need one exact
-                // unlink. Keep the complete reconciliation phase under one
-                // wall-clock budget so thousands of crash remnants cannot
-                // hold readiness indefinitely through sequential queries.
-                let startup_cleanup_deadline =
-                    tokio::time::Instant::now() + Duration::from_secs(30);
-                for (object_id, claim_token) in startup_stages {
-                    let remaining = startup_cleanup_deadline
+        let (upload_safety_gate, upload_namespace, upload_authority_generation, upload_store) =
+            if config.upload_mode.keeps_storage_runtime() {
+                let upload_safety_gate = UploadSafetyGate::new();
+                let upload_namespace = upload_storage_namespace_id(&config)?;
+                let namespace_generation = db::validate_upload_storage_backend(
+                    &pool,
+                    &config.upload_storage_backend,
+                    &upload_namespace,
+                )
+                .await
+                .context("upload storage backend does not match durable metadata")?;
+                let (capacity_policy_generation, recovery_draining) =
+                    db::validate_upload_capacity_policy(
+                        &pool,
+                        config.upload_storage_max_pending_jobs,
+                        config.upload_storage_max_retained_files,
+                        config.upload_storage_max_retained_bytes,
+                    )
+                    .await
+                    .context(
+                        "upload capacity policy does not match durable deployment authority",
+                    )?;
+                let upload_authority_generation = UploadAuthorityGeneration {
+                    namespace: namespace_generation,
+                    capacity_policy: capacity_policy_generation,
+                };
+                let authority_audit = db::audit_upload_capacity_authority(
+                    &pool,
+                    config.upload_storage_max_pending_jobs,
+                    config.upload_storage_max_retained_files,
+                    config.upload_storage_max_retained_bytes,
+                )
+                .await
+                .context("could not prove upload authority catalog and ACL invariants")?;
+                if authority_audit.violation_count() != 0 {
+                    upload_safety_gate.mark_capacity_authority_unsafe(Arc::<str>::from(format!(
+                        "upload authority catalog/ACL audit found {} violations",
+                        authority_audit.violation_count()
+                    )));
+                    anyhow::bail!(
+                        "upload authority catalog/ACL audit found {} violations",
+                        authority_audit.violation_count()
+                    );
+                }
+                let capacity_reconciliation = db::reconcile_upload_capacity_ledger(&pool)
+                    .await
+                    .context("could not reconcile upload capacity facts before storage startup")?;
+                if capacity_reconciliation.mismatch_count() != 0 {
+                    upload_safety_gate.mark_ledger_mismatch(Arc::<str>::from(format!(
+                        "upload capacity ledger differs from {} durable facts",
+                        capacity_reconciliation.mismatch_count()
+                    )));
+                    anyhow::bail!(
+                        "upload capacity ledger differs from {} durable facts",
+                        capacity_reconciliation.mismatch_count()
+                    );
+                }
+                upload_safety_gate.establish(upload_authority_generation, recovery_draining);
+                let upload_store: Arc<dyn UploadStore> = match config
+                    .upload_storage_backend
+                    .as_str()
+                {
+                    "local" => {
+                        let local = Arc::new(
+                            LocalUploadStore::new(config.upload_dir.clone())
+                                .with_safety_gate(Arc::clone(&upload_safety_gate)),
+                        );
+                        let guarded = Arc::new(GuardedUploadStore::new(
+                            local.clone(),
+                            Arc::clone(&upload_safety_gate),
+                        ));
+                        // This bounded local enumeration is retained only for legacy
+                        // pre-0091 partials. S3 reconciliation never lists a bucket;
+                        // every stage is represented by a PostgreSQL job.
+                        let mut abandoned_stages = 0_u64;
+                        let startup_stages =
+                            tokio::time::timeout(Duration::from_secs(10), local.staging_attempts())
+                                .await
+                                .context("upload staging scan exceeded its startup time budget")?
+                                .context("failed to enumerate upload staging files")?;
+                        // Enumeration is bounded above, but every candidate still
+                        // needs an authoritative lease lookup and may need one exact
+                        // unlink. Keep the complete reconciliation phase under one
+                        // wall-clock budget so thousands of crash remnants cannot
+                        // hold readiness indefinitely through sequential queries.
+                        let startup_cleanup_deadline =
+                            tokio::time::Instant::now() + Duration::from_secs(30);
+                        for (object_id, claim_token) in startup_stages {
+                            let remaining = startup_cleanup_deadline
                         .checked_duration_since(tokio::time::Instant::now())
                         .context(
                             "upload staging reconciliation exceeded its startup time budget",
                         )?;
-                    if tokio::time::timeout(
+                            if tokio::time::timeout(
                         remaining,
                         db::upload_claim_is_live(&pool, object_id, claim_token),
                     )
@@ -1533,58 +1551,98 @@ impl AppState {
                     {
                         continue;
                     }
-                    let remaining = startup_cleanup_deadline
+                            let remaining = startup_cleanup_deadline
                         .checked_duration_since(tokio::time::Instant::now())
                         .context(
                             "upload staging reconciliation exceeded its startup time budget",
                         )?;
-                    if tokio::time::timeout(
-                        remaining,
-                        guarded.abort(&object_id.to_string(), &claim_token.to_string(), None),
-                    )
-                    .await
-                    .context("upload staging deletion exceeded its startup time budget")?
-                    .context("failed to remove an abandoned upload stage")?
-                    {
-                        abandoned_stages = abandoned_stages.saturating_add(1);
+                            if tokio::time::timeout(
+                                remaining,
+                                guarded.abort(
+                                    &object_id.to_string(),
+                                    &claim_token.to_string(),
+                                    None,
+                                ),
+                            )
+                            .await
+                            .context("upload staging deletion exceeded its startup time budget")?
+                            .context("failed to remove an abandoned upload stage")?
+                            {
+                                abandoned_stages = abandoned_stages.saturating_add(1);
+                            }
+                        }
+                        if abandoned_stages > 0 {
+                            tracing::warn!(
+                                abandoned_stages,
+                                "removed upload stages left by a previous process"
+                            );
+                        }
+                        guarded
                     }
-                }
-                if abandoned_stages > 0 {
-                    tracing::warn!(
-                        abandoned_stages,
-                        "removed upload stages left by a previous process"
-                    );
-                }
-                guarded
-            }
-            "s3" => {
-                let inner: Arc<dyn UploadStore> = Arc::new(
-                    S3UploadStore::new(S3UploadSettings {
-                        endpoint: config.upload_s3_endpoint.clone(),
-                        region: config.upload_s3_region.clone(),
-                        bucket: config
-                            .upload_s3_bucket
-                            .clone()
-                            .context("S3 upload bucket is missing after validation")?,
-                        prefix: config.upload_s3_prefix.clone(),
-                        path_style: config.upload_s3_path_style,
-                        allow_http: config.upload_s3_allow_http,
-                        ambient_credentials: config.upload_s3_credential_mode == "ambient",
-                        credential_bundle_file: config.upload_s3_credential_bundle_file.clone(),
-                        access_key_id_file: config.upload_s3_access_key_id_file.clone(),
-                        secret_access_key_file: config.upload_s3_secret_access_key_file.clone(),
-                        session_token_file: config.upload_s3_session_token_file.clone(),
-                        sse_kms_key_id_file: config.upload_s3_sse_kms_key_id_file.clone(),
-                    })?
-                    .with_safety_gate(Arc::clone(&upload_safety_gate)),
+                    "s3" => {
+                        let inner: Arc<dyn UploadStore> = Arc::new(
+                            S3UploadStore::new(S3UploadSettings {
+                                endpoint: config.upload_s3_endpoint.clone(),
+                                region: config.upload_s3_region.clone(),
+                                bucket: config
+                                    .upload_s3_bucket
+                                    .clone()
+                                    .context("S3 upload bucket is missing after validation")?,
+                                prefix: config.upload_s3_prefix.clone(),
+                                path_style: config.upload_s3_path_style,
+                                allow_http: config.upload_s3_allow_http,
+                                ambient_credentials: config.upload_s3_credential_mode == "ambient",
+                                credential_bundle_file: config
+                                    .upload_s3_credential_bundle_file
+                                    .clone(),
+                                access_key_id_file: config.upload_s3_access_key_id_file.clone(),
+                                secret_access_key_file: config
+                                    .upload_s3_secret_access_key_file
+                                    .clone(),
+                                session_token_file: config.upload_s3_session_token_file.clone(),
+                                sse_kms_key_id_file: config.upload_s3_sse_kms_key_id_file.clone(),
+                            })?
+                            .with_safety_gate(Arc::clone(&upload_safety_gate)),
+                        );
+                        Arc::new(GuardedUploadStore::new(
+                            inner,
+                            Arc::clone(&upload_safety_gate),
+                        ))
+                    }
+                    _ => unreachable!("upload backend was validated by Config"),
+                };
+                (
+                    upload_safety_gate,
+                    upload_namespace,
+                    upload_authority_generation,
+                    Some(upload_store),
+                )
+            } else {
+                let durable_upload_state_exists: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM upload_slots LIMIT 1)
+                         OR EXISTS(SELECT 1 FROM upload_storage_jobs LIMIT 1)
+                         OR EXISTS(SELECT 1 FROM upload_cleanup_queue LIMIT 1)",
+                )
+                .fetch_one(&pool)
+                .await
+                .context("could not verify that disabled upload storage is empty")?;
+                anyhow::ensure!(
+                    !durable_upload_state_exists,
+                    "UPLOAD_MODE=disabled requires empty durable upload state; use drain_read_only until historical downloads and cleanup jobs have drained"
                 );
-                Arc::new(GuardedUploadStore::new(
-                    inner,
-                    Arc::clone(&upload_safety_gate),
-                ))
-            }
-            _ => unreachable!("upload backend was validated by Config"),
-        };
+                tracing::info!(
+                    "upload capability disabled; skipping storage authority, object-store and reconciliation initialization"
+                );
+                (
+                    UploadSafetyGate::disabled(),
+                    [0_u8; 32],
+                    UploadAuthorityGeneration {
+                        namespace: 0,
+                        capacity_policy: 0,
+                    },
+                    None,
+                )
+            };
         let extdisco_service = crate::services::extdisco::ExtDiscoService::new(
             config.raw.turn_shared_secret.take(),
             config.turn_credentials_ttl_seconds,
@@ -1607,7 +1665,8 @@ impl AppState {
                 config.component_bind,
             ]
             .iter()
-            .all(|address| address.ip().is_loopback());
+            .all(|address| address.ip().is_loopback())
+                && (!config.web_admin_enabled || config.web_admin_bind.ip().is_loopback());
             anyhow::ensure!(
                 config.abuse_state_allow_ephemeral
                     && config.redis_url.is_none()
@@ -1823,7 +1882,13 @@ impl AppState {
             .activate()
             .await
             .context("failed to publish the initial signed cluster node lease")?;
-        db::initialize_admin_runtime_settings(&pool, false, !open_registration).await?;
+        db::initialize_admin_runtime_settings(
+            &pool,
+            false,
+            !open_registration,
+            config.registration_dependency_locked(),
+        )
+        .await?;
         let (island_mode, registration_closed) = db::admin_runtime_settings(&pool).await?;
         let process_started_at: chrono::DateTime<chrono::Utc> =
             sqlx::query_scalar("SELECT clock_timestamp()")
@@ -1851,11 +1916,13 @@ impl AppState {
                 .context("anti-abuse HMAC deployment consistency check failed")?;
         }
 
-        let bosh = crate::bosh::BoshManager::new(
-            config.bosh_max_sessions,
-            config.bosh_max_concurrent_body_reads,
-        );
-        let upload_download_max_concurrent = config.upload_download_max_concurrent;
+        let bosh = config.bosh_enabled.then(|| {
+            crate::bosh::BoshManager::new(
+                config.bosh_max_sessions,
+                config.bosh_max_concurrent_body_reads,
+            )
+        });
+        let upload_runtime = UploadRuntime::from_config(&config);
         let sm_recovery_max_jobs = config.sm_recovery_max_jobs;
         let sm_recovery_max_bytes = config.sm_recovery_max_bytes;
         let message_content_identity = abuse.personal_message_content_keyring();
@@ -1879,7 +1946,8 @@ impl AppState {
         let account_service = crate::services::account::AccountService::new(
             pool.clone(),
             config.domain.clone(),
-            config.invitation_required,
+            config.configured_registration_mode()
+                == crate::config::RegistrationMode::InvitationOnly,
             config.registration_rate_per_hour,
             config.scram_iterations,
             config.scram_sha1_enabled,
@@ -1904,10 +1972,12 @@ impl AppState {
             pubsub_service.mutation_admission(),
         );
         let mam_service = crate::services::mam::MamService::new(pool.clone());
-        let upload_service = crate::services::upload::UploadService::new(
-            pool.clone(),
-            Arc::clone(&upload_safety_gate),
-        );
+        let upload_service = config.upload_mode.admits_new_uploads().then(|| {
+            crate::services::upload::UploadService::new(
+                pool.clone(),
+                Arc::clone(&upload_safety_gate),
+            )
+        });
         let privacy_service = crate::services::privacy::PrivacyService::new(pool.clone());
         let replay_service = crate::services::replay::ReplayService::new(
             pool.clone(),
@@ -2014,6 +2084,7 @@ impl AppState {
             sm_memory_governor,
             metrics: Metrics::default(),
             metrics_bearer_token,
+            web_admin_gateway_token,
             omemo_recovery_poll_pool,
             api_control,
             api_cursor,
@@ -2039,10 +2110,7 @@ impl AppState {
             dialback_verifications: Arc::new(Semaphore::new(64)),
             client_connections,
             client_connections_by_ip: DashMap::new(),
-            upload_requests: Arc::new(Semaphore::new(32)),
-            upload_requests_by_ip: DashMap::new(),
-            upload_downloads: Arc::new(Semaphore::new(upload_download_max_concurrent)),
-            upload_downloads_by_ip: DashMap::new(),
+            upload_runtime,
             omemo_recovery_poll_requests: Arc::new(Semaphore::new(OMEMO_POLL_CONCURRENCY)),
             omemo_recovery_poll_requests_by_ip: DashMap::new(),
             omemo_recovery_poll_ip_admission: std::sync::Mutex::new(()),
@@ -2075,10 +2143,16 @@ impl AppState {
             Arc::clone(state.worker_registry()),
             worker_cancel.clone(),
         );
-        crate::xmpp::protocol::caps::start_caps_effect_dispatcher(
-            Arc::clone(&state),
-            worker_cancel.clone(),
-        );
+        if state
+            .config
+            .xmpp_extensions
+            .enabled(northstar_xep_0115::XEP_ID)
+        {
+            crate::xmpp::protocol::caps::start_caps_effect_dispatcher(
+                Arc::clone(&state),
+                worker_cancel.clone(),
+            );
+        }
         crate::services::session_cleanup::start_sm_suspension_recovery(
             Arc::clone(&state),
             Arc::clone(&state.sm_suspension_recovery),
@@ -2174,7 +2248,9 @@ impl AppState {
     }
 
     pub(crate) fn upload_store(&self) -> &dyn UploadStore {
-        self.upload_store.as_ref()
+        self.upload_store
+            .as_deref()
+            .expect("upload routes and workers require an enabled or draining runtime")
     }
 
     pub(crate) fn metrics_request_authorized(
@@ -2184,6 +2260,20 @@ impl AppState {
     ) -> bool {
         let Some(expected) = self.metrics_bearer_token.as_deref() else {
             return peer.is_loopback();
+        };
+        candidate.is_some_and(|candidate| {
+            candidate.len() == expected.len()
+                && bool::from(candidate.as_bytes().ct_eq(expected.as_bytes()))
+        })
+    }
+
+    pub(crate) fn admin_gateway_authentication_enabled(&self) -> bool {
+        self.web_admin_gateway_token.is_some()
+    }
+
+    pub(crate) fn admin_gateway_request_authorized(&self, candidate: Option<&str>) -> bool {
+        let Some(expected) = self.web_admin_gateway_token.as_deref() else {
+            return true;
         };
         candidate.is_some_and(|candidate| {
             candidate.len() == expected.len()
@@ -2258,7 +2348,9 @@ impl AppState {
     }
 
     pub(crate) fn upload_service(&self) -> &crate::services::upload::UploadService {
-        &self.upload_service
+        self.upload_service
+            .as_ref()
+            .expect("upload slot admission requires UploadMode::Enabled")
     }
 
     pub(crate) fn pubsub_service(&self) -> &crate::services::pubsub::PubSubService {
@@ -3384,21 +3476,22 @@ impl AppState {
         self: &Arc<Self>,
         ip: std::net::IpAddr,
     ) -> Option<UploadRequestGuard> {
-        let permit = Arc::clone(&self.upload_requests).try_acquire_owned().ok()?;
+        let admission = self.upload_runtime.request_admission()?;
+        let permit = Arc::clone(&admission.semaphore).try_acquire_owned().ok()?;
         {
-            let mut count = self.upload_requests_by_ip.entry(ip).or_insert(0);
-            if *count >= 4 {
+            let mut count = admission.by_ip.entry(ip).or_insert(0);
+            if *count >= admission.max_per_ip {
                 let remove_zero = *count == 0;
                 drop(count);
                 if remove_zero {
-                    self.upload_requests_by_ip.remove(&ip);
+                    admission.by_ip.remove(&ip);
                 }
                 return None;
             }
             *count += 1;
         }
         Some(UploadRequestGuard {
-            state: Arc::clone(self),
+            counts: Arc::clone(&admission.by_ip),
             ip,
             _permit: permit,
         })
@@ -3408,22 +3501,21 @@ impl AppState {
         self: &Arc<Self>,
         ip: std::net::IpAddr,
     ) -> Option<UploadDownloadGuard> {
-        let permit = Arc::clone(&self.upload_downloads)
-            .try_acquire_owned()
-            .ok()?;
-        let mut count = self.upload_downloads_by_ip.entry(ip).or_insert(0);
-        if *count >= self.config.upload_download_max_per_ip {
+        let admission = self.upload_runtime.download_admission()?;
+        let permit = Arc::clone(&admission.semaphore).try_acquire_owned().ok()?;
+        let mut count = admission.by_ip.entry(ip).or_insert(0);
+        if *count >= admission.max_per_ip {
             let remove_zero = *count == 0;
             drop(count);
             if remove_zero {
-                self.upload_downloads_by_ip.remove(&ip);
+                admission.by_ip.remove(&ip);
             }
             return None;
         }
         *count += 1;
         drop(count);
         Some(UploadDownloadGuard {
-            state: Arc::clone(self),
+            counts: Arc::clone(&admission.by_ip),
             ip,
             _permit: permit,
         })
@@ -5425,37 +5517,33 @@ pub struct ClientConnectionGuard {
 }
 
 pub struct UploadRequestGuard {
-    state: Arc<AppState>,
+    counts: Arc<DashMap<std::net::IpAddr, usize>>,
     ip: std::net::IpAddr,
     _permit: OwnedSemaphorePermit,
 }
 
 pub struct UploadDownloadGuard {
-    state: Arc<AppState>,
+    counts: Arc<DashMap<std::net::IpAddr, usize>>,
     ip: std::net::IpAddr,
     _permit: OwnedSemaphorePermit,
 }
 
 impl Drop for UploadDownloadGuard {
     fn drop(&mut self) {
-        if let Some(mut count) = self.state.upload_downloads_by_ip.get_mut(&self.ip) {
+        if let Some(mut count) = self.counts.get_mut(&self.ip) {
             *count = count.saturating_sub(1);
             drop(count);
-            self.state
-                .upload_downloads_by_ip
-                .remove_if(&self.ip, |_, count| *count == 0);
+            self.counts.remove_if(&self.ip, |_, count| *count == 0);
         }
     }
 }
 
 impl Drop for UploadRequestGuard {
     fn drop(&mut self) {
-        if let Some(mut count) = self.state.upload_requests_by_ip.get_mut(&self.ip) {
+        if let Some(mut count) = self.counts.get_mut(&self.ip) {
             *count = count.saturating_sub(1);
             drop(count);
-            self.state
-                .upload_requests_by_ip
-                .remove_if(&self.ip, |_, count| *count == 0);
+            self.counts.remove_if(&self.ip, |_, count| *count == 0);
         }
     }
 }

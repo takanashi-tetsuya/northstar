@@ -1,0 +1,13 @@
+[package]
+name = "northstar-pubsub-application"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "PubSub mutation admission and backpressure policy for Northstar"
+
+[dependencies]
+anyhow = "1.0"
+northstar-pubsub-core = { path = "../northstar-pubsub-core" }
+tokio = { version = "1.43", features = ["sync", "time"] }
+uuid = { version = "1.12", features = ["v4"] }

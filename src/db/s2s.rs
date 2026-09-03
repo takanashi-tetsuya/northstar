@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use sqlx::{Postgres, Transaction};
@@ -8,39 +8,9 @@ use uuid::Uuid;
 
 const OUTBOX_ADVISORY_LOCK: i64 = 0x4e53_5332_534f_5554;
 static OUTBOX_CAPACITY_REJECTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
-pub const MAX_S2S_STANZA_BYTES: usize = 1024 * 1024;
-
-/// Capacity and lifetime policy applied whenever a stanza crosses the durable
-/// federation-admission boundary.  Keeping this value independent of the
-/// router lets protocol state and its matching outbox row be committed by one
-/// PostgreSQL transaction instead of two crash-sensitive operations.
-#[derive(Clone, Copy, Debug)]
-pub struct S2sOutboxPolicy {
-    pub ttl_seconds: u64,
-    pub max_rows: i64,
-    pub max_bytes: i64,
-    pub max_per_domain: i64,
-}
-
-#[derive(Clone, Debug)]
-pub struct S2sOutboxItem {
-    pub id: Uuid,
-    pub target_domain: String,
-    pub bounce_to: Option<String>,
-    pub stanza: String,
-    pub attempt_count: i32,
-    pub lock_token: Uuid,
-}
-
-#[derive(Clone, Debug)]
-pub struct ExpiredS2sOutboxItem {
-    pub id: Uuid,
-    pub target_domain: String,
-    pub bounce_to: Option<String>,
-    pub stanza: String,
-    pub attempt_count: i32,
-    pub created_at: DateTime<Utc>,
-}
+pub use northstar_federation_core::{
+    ExpiredS2sOutboxItem, S2sOutboxItem, S2sOutboxPolicy, MAX_S2S_STANZA_BYTES,
+};
 
 /// One internally consistent PostgreSQL view of the durable delivery queue.
 ///

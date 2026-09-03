@@ -4,12 +4,14 @@ use crate::services::sm::{
     SmResumeFinalizationRequest, SmSessionCreationOutcome, SmSessionCreationRequest,
     SmSessionSnapshot,
 };
-use crate::xmpp::sm_counter::acknowledgement_delta;
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use dashmap::mapref::entry::Entry;
+use northstar_xep_0198::{
+    acknowledgement_delta, resumability_allowed, resumed_offline_replay_eligible,
+};
 use rand::RngCore;
 use roxmltree::Node;
 use sha2::{Digest, Sha256};
@@ -160,14 +162,6 @@ fn sm_resume_token_hash(emitted_bearer: &str) -> [u8; 32] {
     Sha256::digest(emitted_bearer.as_bytes()).into()
 }
 
-fn resumability_allowed(
-    requested: bool,
-    require_same_device: bool,
-    user_agent_id: Option<uuid::Uuid>,
-) -> bool {
-    requested && (!require_same_device || user_agent_id.is_some())
-}
-
 impl ProtocolSession {
     /// Enables XEP-0198 as an inline Bind 2 feature and returns the exact XML
     /// that belongs inside `<bound/>`. Resume tokens are 256-bit random
@@ -189,7 +183,7 @@ impl ProtocolSession {
         let resume = resumability_allowed(
             resume,
             self.state.config.sm_require_same_device,
-            self.user_agent_id,
+            self.user_agent_id.is_some(),
         );
         self.sm_enabled = true;
         self.sm_resume_allowed = resume;
@@ -286,15 +280,17 @@ impl ProtocolSession {
                     .await;
                 self.sm_resume_timeout_seconds = negotiated_max;
                 if resume {
-                    Ok(XmlElement::namespaced("enabled", "urn:xmpp:sm:3")
-                        .attr("id", resume_id.as_str())
-                        .attr("resume", "true")
-                        .attr("max", negotiated_max)
-                        .finish())
+                    Ok(northstar_xep_0198::build_enabled(
+                        Some(resume_id.as_str()),
+                        true,
+                        Some(
+                            u32::try_from(negotiated_max)
+                                .expect("validated SM timeout fits into u32"),
+                        ),
+                        None,
+                    ))
                 } else {
-                    Ok(XmlElement::namespaced("enabled", "urn:xmpp:sm:3")
-                        .attr("resume", "false")
-                        .finish())
+                    Ok(northstar_xep_0198::build_enabled(None, false, None, None))
                 }
             }
             Ok(SmSessionCreationOutcome::CapacityExhausted) => {
@@ -316,46 +312,28 @@ impl ProtocolSession {
     pub(crate) async fn stream_management(&mut self, root: Node<'_, '_>) -> Result<Action> {
         match root.tag_name().name() {
             "enable" => {
-                if !valid_sm_control(root, &["resume", "max"]) {
-                    return Ok(Action::Send(sm_failed("bad-request")));
-                }
-                let resume = match root.attribute("resume") {
-                    None | Some("false" | "0") => false,
-                    Some("true" | "1") => true,
-                    Some(_) => return Ok(Action::Send(sm_failed("bad-request"))),
-                };
-                let max = match root.attribute("max") {
-                    None => None,
-                    Some(value) => match value.parse::<u64>() {
-                        Ok(value) if value > 0 && resume => Some(value),
-                        _ => return Ok(Action::Send(sm_failed("bad-request"))),
-                    },
+                let request = match northstar_xep_0198::parse_enable(root) {
+                    Ok(request) if request.max.is_none() || request.resume => request,
+                    Ok(_) | Err(_) => return Ok(Action::Send(sm_failed("bad-request"))),
                 };
                 Ok(Action::Send(
-                    self.enable_sm_inline(resume, max)
+                    self.enable_sm_inline(request.resume, request.max.map(u64::from))
                         .await
                         .unwrap_or_else(sm_failed),
                 ))
             }
             "r" if self.sm_enabled => {
-                if !valid_sm_control(root, &[]) {
+                if northstar_xep_0198::parse_r(root).is_err() {
                     return Ok(Action::Send(sm_failed("bad-request")));
                 }
-                Ok(Action::Send(
-                    XmlElement::namespaced("a", "urn:xmpp:sm:3")
-                        .attr("h", self.sm_inbound_h)
-                        .finish(),
-                ))
+                Ok(Action::Send(northstar_xep_0198::build_a(self.sm_inbound_h)))
             }
             "a" if self.sm_enabled => {
-                if !valid_sm_control(root, &["h"]) {
-                    return Ok(Action::Send(sm_failed("bad-request")));
-                }
-                let Some(h) = root
-                    .attribute("h")
-                    .and_then(|value| value.parse::<u32>().ok())
-                else {
-                    return Ok(Action::Send(sm_failed("bad-request")));
+                let h = match northstar_xep_0198::parse_a(root) {
+                    Ok(answer) => answer.h.get(),
+                    Err(_) => {
+                        return Ok(Action::Send(sm_failed("bad-request")));
+                    }
                 };
                 if !self.acknowledge(h).await? {
                     self.sm_resume_allowed = false;
@@ -370,10 +348,12 @@ impl ProtocolSession {
                             .write()
                             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
                     }
-                    return Ok(Action::CloseWith(handled_count_too_high_stream_error(
-                        h,
-                        self.sm_outbound_h,
-                    )));
+                    return Ok(Action::CloseWith(
+                        northstar_xep_0198::build_handled_count_too_high_stream_error(
+                            h,
+                            self.sm_outbound_h,
+                        ),
+                    ));
                 }
                 Ok(Action::None)
             }
@@ -383,23 +363,20 @@ impl ProtocolSession {
     }
 
     pub(crate) async fn resume(&mut self, root: Node<'_, '_>) -> Result<Action> {
-        if !valid_sm_control(root, &["previd", "h"]) {
+        let resume = match northstar_xep_0198::parse_resume(root) {
+            Ok(resume) => resume,
+            Err(_) => {
+                return Ok(Action::Send(sm_failed("bad-request")));
+            }
+        };
+        let previd = resume.previd;
+        if !URL_SAFE_NO_PAD
+            .decode(&previd)
+            .is_ok_and(|decoded| decoded.len() == 32)
+        {
             return Ok(Action::Send(sm_failed("bad-request")));
         }
-        let Some(previd) = root.attribute("previd").filter(|value| {
-            URL_SAFE_NO_PAD
-                .decode(value)
-                .is_ok_and(|decoded| decoded.len() == 32)
-        }) else {
-            return Ok(Action::Send(sm_failed("bad-request")));
-        };
-        let Some(client_h) = root
-            .attribute("h")
-            .and_then(|value| value.parse::<u32>().ok())
-        else {
-            return Ok(Action::Send(sm_failed("bad-request")));
-        };
-        self.resume_values(previd, client_h).await
+        self.resume_values(&previd, resume.h.get()).await
     }
 
     /// Shared resumption engine for ordinary top-level SM and XEP-0388
@@ -1253,10 +1230,8 @@ impl ProtocolSession {
         // FIFO for the transport action. This action can otherwise coexist for
         // every concurrently resuming stream and bypass the live snapshot
         // lease by another full replay copy per connection.
-        let resume_control = XmlElement::namespaced("resumed", "urn:xmpp:sm:3")
-            .attr("h", self.sm_inbound_h)
-            .attr("previd", previd.as_str())
-            .finish();
+        let resume_control =
+            northstar_xep_0198::build_resumed(previd.as_str(), self.sm_inbound_h, None);
         let resume_payload = match super::ResumePayload::from_sm_unacked(
             self.state.sm_memory_governor(),
             resume_control,
@@ -1536,18 +1511,6 @@ impl ProtocolSession {
     }
 }
 
-fn valid_sm_control(root: Node<'_, '_>, allowed_attributes: &[&str]) -> bool {
-    root.attributes().all(|attribute| {
-        attribute.namespace().is_none() && allowed_attributes.contains(&attribute.name())
-    }) && !root
-        .children()
-        .any(|child| child.is_element() || child.text().is_some_and(|text| !text.trim().is_empty()))
-}
-
-fn resumed_offline_replay_eligible(available: bool, priority: i16) -> bool {
-    available && priority >= 0
-}
-
 /// Stage the complete session FIFO without taking ownership from the suspended
 /// endpoint. Capacity and byte accounting include the durable unacked prefix,
 /// so one disconnect cannot obtain an independent per-room overflow budget.
@@ -1598,21 +1561,6 @@ fn muc_resume_failure_stanza(
         .finish()
 }
 
-fn handled_count_too_high_stream_error(received: u32, sent: u32) -> String {
-    XmlElement::new("stream:error")
-        .attr("xmlns:stream", "http://etherx.jabber.org/streams")
-        .child(XmlElement::namespaced(
-            "undefined-condition",
-            "urn:ietf:params:xml:ns:xmpp-streams",
-        ))
-        .child(
-            XmlElement::namespaced("handled-count-too-high", "urn:xmpp:sm:3")
-                .attr("h", received)
-                .attr("send-count", sent),
-        )
-        .finish()
-}
-
 fn validated_sm_session_key(full_jid: &str, resource: &str, account: &str) -> Option<String> {
     let key = crate::jid::canonical_session_key(full_jid).ok()?;
     let jid = crate::jid::CanonicalJid::parse(&key).ok()?;
@@ -1624,11 +1572,11 @@ fn validated_sm_session_key(full_jid: &str, resource: &str, account: &str) -> Op
 #[cfg(test)]
 mod tests {
     use super::{
-        acknowledgement_delta, claim_sm_route_lifecycle, handled_count_too_high_stream_error,
-        lock_mix_presence_gate_for_claim, matching_sm_route, muc_resume_failure_stanza,
-        resumability_allowed, resumed_offline_replay_eligible, sm_resume_token_hash,
-        stage_muc_replay_suffix, valid_sm_control, validated_sm_session_key,
-        wait_for_exact_route_removal, ClaimBoundWaitAbort, RouteRemovalWait, SmRouteTakeover,
+        acknowledgement_delta, claim_sm_route_lifecycle, lock_mix_presence_gate_for_claim,
+        matching_sm_route, muc_resume_failure_stanza, resumability_allowed,
+        resumed_offline_replay_eligible, sm_resume_token_hash, stage_muc_replay_suffix,
+        validated_sm_session_key, wait_for_exact_route_removal, ClaimBoundWaitAbort,
+        RouteRemovalWait, SmRouteTakeover,
     };
     use roxmltree::Document;
 
@@ -1820,16 +1768,15 @@ mod tests {
 
     #[test]
     fn strict_same_device_policy_does_not_issue_unclaimable_legacy_bearers() {
-        let device = uuid::Uuid::new_v4();
-        assert!(resumability_allowed(true, true, Some(device)));
-        assert!(resumability_allowed(true, false, None));
-        assert!(!resumability_allowed(true, true, None));
-        assert!(!resumability_allowed(false, false, Some(device)));
+        assert!(resumability_allowed(true, true, true));
+        assert!(resumability_allowed(true, false, false));
+        assert!(!resumability_allowed(true, true, false));
+        assert!(!resumability_allowed(false, false, true));
     }
 
     #[test]
     fn impossible_ack_uses_the_required_terminal_stream_error() {
-        let xml = handled_count_too_high_stream_error(10, 8);
+        let xml = northstar_xep_0198::build_handled_count_too_high_stream_error(10, 8);
         let document = Document::parse(&xml).unwrap();
         let root = document.root_element();
         assert_eq!(
@@ -1862,36 +1809,6 @@ mod tests {
             validated_sm_session_key("mallory@example.test/Phone", "Phone", "alice@example.test"),
             None
         );
-    }
-
-    #[test]
-    fn stream_management_controls_are_structurally_strict() {
-        for (xml, allowed) in [
-            (
-                "<enable xmlns='urn:xmpp:sm:3' resume='true' max='60'/>",
-                &["resume", "max"][..],
-            ),
-            ("<r xmlns='urn:xmpp:sm:3'/>", &[][..]),
-            ("<a xmlns='urn:xmpp:sm:3' h='1'/>", &["h"][..]),
-            (
-                "<resume xmlns='urn:xmpp:sm:3' previd='token' h='1'/>",
-                &["previd", "h"][..],
-            ),
-        ] {
-            let document = Document::parse(xml).unwrap();
-            assert!(valid_sm_control(document.root_element(), allowed));
-        }
-        for (xml, allowed) in [
-            ("<r xmlns='urn:xmpp:sm:3' h='1'/>", &[][..]),
-            ("<a xmlns='urn:xmpp:sm:3' h='1'><x/></a>", &["h"][..]),
-            (
-                "<resume xmlns='urn:xmpp:sm:3' previd='x' h='1'>junk</resume>",
-                &["previd", "h"][..],
-            ),
-        ] {
-            let document = Document::parse(xml).unwrap();
-            assert!(!valid_sm_control(document.root_element(), allowed));
-        }
     }
 
     #[test]

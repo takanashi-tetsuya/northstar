@@ -78,10 +78,10 @@ impl ProtocolSession {
                 "service-unavailable",
             )));
         }
-        if self.registration_completed {
+        if self.negotiation.registration_completed() {
             return Ok(Action::Send(iq_registration_error(id, "not-acceptable")));
         }
-        let invitation = if self.state.config.invitation_required {
+        let invitation = if self.state.registration_requires_invitation() {
             XmlElement::new("field")
                 .attr("var", "urn:northstar:invite:token")
                 .attr("type", "text-private")
@@ -142,7 +142,7 @@ impl ProtocolSession {
         let mut query = XmlElement::namespaced("query", "jabber:iq:register").child(
             XmlElement::new("instructions").text("Choose a username and a password of at least 10 UTF-8 octets. A normal registration needs no proof of work. If the server returns a body-bound challenge, retry the same values with its challenge ID and the solved nonce."),
         );
-        if !self.state.config.invitation_required {
+        if !self.state.registration_requires_invitation() {
             query.push_child(XmlElement::new("username"));
             query.push_child(XmlElement::new("password"));
         }
@@ -158,7 +158,7 @@ impl ProtocolSession {
         if self.state.registration_is_closed() {
             return Ok(Action::Send(iq_registration_error(id, "not-allowed")));
         }
-        if self.registration_completed {
+        if self.negotiation.registration_completed() {
             return Ok(Action::Send(iq_registration_error(id, "not-acceptable")));
         }
         if query.tag_name().name() != "query"
@@ -274,7 +274,7 @@ impl ProtocolSession {
         };
         match outcome {
             RegistrationOutcome::Created(_) => {
-                self.registration_completed = true;
+                self.negotiation.mark_registration_completed();
                 self.state
                     .metrics
                     .registrations_total
@@ -869,10 +869,11 @@ impl ProtocolSession {
         let own_bare = bare_jid(full_jid);
         let addressed_error =
             |condition| Action::Send(set_to(&iq_error_from(id, own_bare, condition), full_jid));
-        if control.attributes().len() != 0
-            || control.children().any(|child| child.is_element())
-            || control.text().is_some_and(|text| !text.trim().is_empty())
-        {
+        let parsed_control = match northstar_xep_0280::parse_control(control) {
+            Ok(control) => control,
+            Err(_) => return Ok(addressed_error("bad-request")),
+        };
+        if enabled != matches!(parsed_control, northstar_xep_0280::Control::Enable) {
             return Ok(addressed_error("bad-request"));
         }
         let valid_from = iq.attribute("from").is_none_or(|from| {
@@ -927,14 +928,22 @@ impl ProtocolSession {
             return Ok(Action::Send(stanza_error(iq, "auth", "not-authorized")));
         };
         let own_bare = format!("{}@{}", user.username, self.state.config.domain);
-        if !push_iq_targets_account(iq, &own_bare) {
+        if !northstar_xep_0357::iq_targets_own_account(iq, &own_bare) {
             return Ok(Action::Send(stanza_error(iq, "cancel", "not-allowed")));
         }
-        let (service_jid, node, options_node) = match parse_push_enable(enable) {
+        let (request, options_node) = match northstar_xep_0357::parse_enable(enable) {
             Ok(parsed) => parsed,
-            Err(condition) => return Ok(Action::Send(stanza_error(iq, "modify", condition))),
+            Err(error) => {
+                return Ok(Action::Send(stanza_error(
+                    iq,
+                    error.stanza_error_type(),
+                    error.as_stanza_error_condition(),
+                )))
+            }
         };
         let options = options_node.map(|options| &raw[options.range()]);
+        let service_jid = request.service_jid().to_string();
+        let node = request.node_str().to_owned();
         match self
             .state
             .push_service()
@@ -975,13 +984,21 @@ impl ProtocolSession {
             return Ok(Action::Send(stanza_error(iq, "auth", "not-authorized")));
         };
         let own_bare = format!("{}@{}", user.username, self.state.config.domain);
-        if !push_iq_targets_account(iq, &own_bare) {
+        if !northstar_xep_0357::iq_targets_own_account(iq, &own_bare) {
             return Ok(Action::Send(stanza_error(iq, "cancel", "not-allowed")));
         }
-        let (service_jid, node) = match parse_push_disable(disable) {
+        let request = match northstar_xep_0357::parse_disable(disable) {
             Ok(parsed) => parsed,
-            Err(condition) => return Ok(Action::Send(stanza_error(iq, "modify", condition))),
+            Err(error) => {
+                return Ok(Action::Send(stanza_error(
+                    iq,
+                    error.stanza_error_type(),
+                    error.as_stanza_error_condition(),
+                )))
+            }
         };
+        let service_jid = request.service_jid.to_string();
+        let node = request.node.map(northstar_xep_0357::PushNode::into_inner);
         self.state
             .push_service()
             .disable(user.id, &service_jid, node.as_deref())
@@ -1019,47 +1036,27 @@ pub(crate) async fn send_push_notification(
     state: &crate::state::AppState,
     recipient_id: uuid::Uuid,
 ) -> Result<()> {
+    if !state
+        .config
+        .xmpp_extensions
+        .enabled(northstar_xep_0357::XEP_ID)
+    {
+        return Ok(());
+    }
     let batch = state.push_service().claim_batch(recipient_id).await?;
     for subscription in batch.deliveries {
         let request_id = format!("push-{}", subscription.request_id);
-        let summary = XmlElement::namespaced("x", "jabber:x:data")
-            .attr("type", "form")
-            .child(xdata_value_field(
-                "FORM_TYPE",
-                "hidden",
-                "urn:xmpp:push:summary",
-            ))
-            .child(xdata_value_field(
-                "message-count",
-                "text-single",
-                batch.message_count,
-            ))
-            .child(xdata_value_field(
-                "pending-subscription-count",
-                "text-single",
-                batch.pending_subscription_count,
-            ));
-        let publish =
-            XmlElement::new("publish")
-                .optional_attr(
-                    "node",
-                    (!subscription.node.is_empty()).then_some(subscription.node.as_str()),
-                )
-                .child(XmlElement::new("item").child(
-                    XmlElement::namespaced("notification", "urn:xmpp:push:0").child(summary),
-                ));
-        let mut pubsub =
-            XmlElement::namespaced("pubsub", "http://jabber.org/protocol/pubsub").child(publish);
-        if let Some(form) = subscription.options.as_deref() {
-            pubsub.push_child(XmlElement::new("publish-options").validated_fragment(form)?);
-        }
-        let notification = XmlElement::namespaced("iq", "jabber:client")
-            .attr("type", "set")
-            .attr("from", &state.config.domain)
-            .attr("to", &subscription.service_jid)
-            .attr("id", &request_id)
-            .child(pubsub)
-            .finish();
+        let summary = northstar_xep_0357::PushSummary::new()
+            .with_message_count(batch.message_count as u64)
+            .with_pending_subscription_count(batch.pending_subscription_count as u64);
+        let notification = northstar_xep_0357::build_notification_iq(
+            &state.config.domain,
+            &subscription.service_jid,
+            &request_id,
+            (!subscription.node.is_empty()).then_some(subscription.node.as_str()),
+            &summary,
+            subscription.options.as_deref(),
+        )?;
         let mut delivered = false;
         let service = crate::jid::CanonicalJid::parse_bare(&subscription.service_jid).ok();
         if service
@@ -1162,6 +1159,13 @@ pub(crate) async fn handle_push_delivery_response(
     kind: &str,
     from: &str,
 ) -> Result<bool> {
+    if !state
+        .config
+        .xmpp_extensions
+        .enabled(northstar_xep_0357::XEP_ID)
+    {
+        return Ok(false);
+    }
     let Some(request_id) = id
         .strip_prefix("push-")
         .and_then(|id| uuid::Uuid::parse_str(id).ok())
@@ -1202,6 +1206,13 @@ pub(crate) async fn handle_push_disable(
     from: &str,
     to: &str,
 ) -> Result<bool> {
+    if !state
+        .config
+        .xmpp_extensions
+        .enabled(northstar_xep_0357::XEP_ID)
+    {
+        return Ok(false);
+    }
     if !matches!(
         root.attribute("type").unwrap_or("normal"),
         "normal" | "headline"
@@ -1229,7 +1240,7 @@ pub(crate) async fn handle_push_disable(
     }
     let Some(node) = pubsub
         .attribute("node")
-        .filter(|node| valid_push_node(node))
+        .filter(|node| northstar_xep_0357::PushNode::new((*node).to_owned()).is_ok())
     else {
         return Ok(false);
     };
@@ -1280,142 +1291,6 @@ pub(crate) async fn handle_push_disable(
     }
     tracing::info!(%service, user = %target, %node, "push subscription disabled by service");
     Ok(true)
-}
-
-fn push_iq_targets_account(iq: Node<'_, '_>, own_bare: &str) -> bool {
-    iq.attribute("to").is_none_or(|to| {
-        crate::jid::CanonicalJid::parse_bare(to).is_ok_and(|target| target.to_string() == own_bare)
-    })
-}
-
-fn valid_push_node(node: &str) -> bool {
-    !node.is_empty() && node.len() <= 1_024 && !node.chars().any(char::is_control)
-}
-
-fn parse_push_enable<'a, 'input>(
-    enable: Node<'a, 'input>,
-) -> std::result::Result<(String, String, Option<Node<'a, 'input>>), &'static str> {
-    if enable.attributes().any(|attribute| {
-        attribute.namespace().is_some() || !matches!(attribute.name(), "jid" | "node")
-    }) || enable.children().any(|child| {
-        !child.is_element() && child.text().is_some_and(|text| !text.trim().is_empty())
-    }) {
-        return Err("bad-request");
-    }
-    let service = enable.attribute("jid").ok_or("bad-request")?;
-    let service = crate::jid::canonicalize_bare(service).map_err(|_| "jid-malformed")?;
-    let node = match enable.attribute("node") {
-        None => String::new(),
-        Some(node) if valid_push_node(node) => node.to_owned(),
-        Some(_) => return Err("bad-request"),
-    };
-    let children = enable
-        .children()
-        .filter(|child| child.is_element())
-        .collect::<Vec<_>>();
-    if children.len() > 1 {
-        return Err("bad-request");
-    }
-    let options = children.first().copied();
-    if options.is_some_and(|form| form.range().len() > 16 * 1_024) {
-        return Err("resource-constraint");
-    }
-    if options.is_some_and(|form| !valid_push_options(form)) {
-        return Err("bad-request");
-    }
-    Ok((service, node, options))
-}
-
-fn parse_push_disable(
-    disable: Node<'_, '_>,
-) -> std::result::Result<(String, Option<String>), &'static str> {
-    if disable.attributes().any(|attribute| {
-        attribute.namespace().is_some() || !matches!(attribute.name(), "jid" | "node")
-    }) || disable
-        .children()
-        .any(|child| child.is_element() || child.text().is_some_and(|text| !text.trim().is_empty()))
-    {
-        return Err("bad-request");
-    }
-    let service = disable.attribute("jid").ok_or("bad-request")?;
-    let service = crate::jid::canonicalize_bare(service).map_err(|_| "jid-malformed")?;
-    let node = disable.attribute("node");
-    if node.is_some_and(|node| !valid_push_node(node)) {
-        return Err("bad-request");
-    }
-    Ok((service, node.map(str::to_owned)))
-}
-
-fn valid_push_options(form: Node<'_, '_>) -> bool {
-    if form.tag_name().name() != "x"
-        || form.tag_name().namespace() != Some("jabber:x:data")
-        || form.attribute("type") != Some("submit")
-        || form
-            .attributes()
-            .any(|attribute| attribute.namespace().is_some() || attribute.name() != "type")
-        || form.children().any(|child| {
-            !child.is_element() && child.text().is_some_and(|text| !text.trim().is_empty())
-        })
-    {
-        return false;
-    }
-    let fields = form
-        .children()
-        .filter(|child| child.is_element())
-        .collect::<Vec<_>>();
-    if fields.is_empty() || fields.len() > 64 {
-        return false;
-    }
-    let mut seen = std::collections::HashSet::new();
-    let mut form_type = false;
-    for field in fields {
-        if field.tag_name().name() != "field"
-            || field.tag_name().namespace() != Some("jabber:x:data")
-            || field.attributes().any(|attribute| {
-                attribute.namespace().is_some()
-                    || !matches!(attribute.name(), "var" | "type" | "label")
-            })
-            || field.children().any(|child| {
-                !child.is_element() && child.text().is_some_and(|text| !text.trim().is_empty())
-            })
-        {
-            return false;
-        }
-        let Some(var) = field.attribute("var").filter(|var| {
-            !var.is_empty() && var.len() <= 256 && !var.chars().any(char::is_control)
-        }) else {
-            return false;
-        };
-        if !seen.insert(var) {
-            return false;
-        }
-        let values = field
-            .children()
-            .filter(|child| child.is_element())
-            .collect::<Vec<_>>();
-        if values.is_empty()
-            || values.len() > 16
-            || values.iter().any(|value| {
-                value.tag_name().name() != "value"
-                    || value.tag_name().namespace() != Some("jabber:x:data")
-                    || value.attributes().len() != 0
-                    || value.children().any(|child| child.is_element())
-                    || value.text().is_some_and(|text| text.len() > 4_096)
-            })
-        {
-            return false;
-        }
-        if var == "FORM_TYPE" {
-            if values.len() != 1
-                || values[0].text().map(str::trim)
-                    != Some("http://jabber.org/protocol/pubsub#publish-options")
-            {
-                return false;
-            }
-            form_type = true;
-        }
-    }
-    form_type
 }
 
 fn valid_empty_register_query(query: Node<'_, '_>) -> bool {
@@ -1842,102 +1717,5 @@ mod legacy_tests {
         assert!(pow
             .attribute("intent-body-sha256")
             .is_some_and(|digest| !digest.is_empty()));
-    }
-}
-
-#[cfg(test)]
-mod push_tests {
-    use super::*;
-    use roxmltree::Document;
-
-    #[test]
-    fn enable_requires_bare_service_and_unambiguous_optional_node_and_options() {
-        let valid = Document::parse(
-            "<enable xmlns='urn:xmpp:push:0' jid='Push.Example.test' node='device-1'>\
-               <x xmlns='jabber:x:data' type='submit'>\
-                 <field var='FORM_TYPE'><value>http://jabber.org/protocol/pubsub#publish-options</value></field>\
-                 <field var='secret'><value>opaque</value></field>\
-               </x>\
-             </enable>",
-        )
-        .unwrap();
-        let (service, node, options) = parse_push_enable(valid.root_element()).unwrap();
-        assert_eq!(service, "push.example.test");
-        assert_eq!(node, "device-1");
-        assert!(options.is_some());
-
-        let omitted =
-            Document::parse("<enable xmlns='urn:xmpp:push:0' jid='push.example.test'/>").unwrap();
-        let (_, omitted_node, options) = parse_push_enable(omitted.root_element()).unwrap();
-        assert!(omitted_node.is_empty());
-        assert!(options.is_none());
-        assert_eq!(
-            XmlElement::new("publish")
-                .optional_attr(
-                    "node",
-                    (!omitted_node.is_empty()).then_some(omitted_node.as_str()),
-                )
-                .finish(),
-            "<publish/>"
-        );
-        assert_eq!(
-            XmlElement::new("publish")
-                .optional_attr("node", Some("device&amp;1"))
-                .finish(),
-            "<publish node='device&amp;amp;1'/>"
-        );
-
-        for xml in [
-            "<enable xmlns='urn:xmpp:push:0' jid='push.example.test/Resource' node='device'/>",
-            "<enable xmlns='urn:xmpp:push:0' jid='push.example.test' node=''/>",
-            "<enable xmlns='urn:xmpp:push:0' jid='push.example.test' node='device'><unknown/></enable>",
-            "<enable xmlns='urn:xmpp:push:0' jid='push.example.test' node='device'><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE'><value>wrong</value></field></x></enable>",
-            "<enable xmlns='urn:xmpp:push:0' jid='push.example.test' node='device'><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE'><value>http://jabber.org/protocol/pubsub#publish-options</value></field><field var='FORM_TYPE'><value>http://jabber.org/protocol/pubsub#publish-options</value></field></x></enable>",
-        ] {
-            let document = Document::parse(xml).unwrap();
-            assert!(parse_push_enable(document.root_element()).is_err(), "{xml}");
-        }
-    }
-
-    #[test]
-    fn disable_is_strict_but_allows_service_wide_removal() {
-        let all =
-            Document::parse("<disable xmlns='urn:xmpp:push:0' jid='push.example.test'/>").unwrap();
-        assert_eq!(
-            parse_push_disable(all.root_element()),
-            Ok(("push.example.test".to_owned(), None))
-        );
-        let one = Document::parse(
-            "<disable xmlns='urn:xmpp:push:0' jid='push.example.test' node='device'/>",
-        )
-        .unwrap();
-        assert_eq!(
-            parse_push_disable(one.root_element()),
-            Ok(("push.example.test".to_owned(), Some("device".to_owned())))
-        );
-        let malformed = Document::parse(
-            "<disable xmlns='urn:xmpp:push:0' jid='push.example.test'><x/></disable>",
-        )
-        .unwrap();
-        assert!(parse_push_disable(malformed.root_element()).is_err());
-    }
-
-    #[test]
-    fn explicit_push_target_must_be_the_owners_bare_jid() {
-        let omitted = Document::parse("<iq type='set' id='1'/>").unwrap();
-        assert!(push_iq_targets_account(
-            omitted.root_element(),
-            "alice@example.test"
-        ));
-        let own = Document::parse("<iq type='set' id='1' to='Alice@Example.test'/>").unwrap();
-        assert!(push_iq_targets_account(
-            own.root_element(),
-            "alice@example.test"
-        ));
-        let other = Document::parse("<iq type='set' id='1' to='bob@example.test'/>").unwrap();
-        assert!(!push_iq_targets_account(
-            other.root_element(),
-            "alice@example.test"
-        ));
     }
 }

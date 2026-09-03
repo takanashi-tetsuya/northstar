@@ -228,6 +228,12 @@ async fn main() -> Result<()> {
     }
     let config = Config::from_env()?;
     let _log_guard = init_logging(&config)?;
+    if config.invitation_policy_disabled_with_web_client {
+        tracing::warn!(
+            open_registration = config.open_registration,
+            "invitation-only registration was resolved fail-closed because WEB_CLIENT_ENABLED=false; effective registration mode is closed"
+        );
+    }
     if arguments.first().map(String::as_str) == Some("pie") {
         return pie::run(&config, &arguments[1..]).await;
     }
@@ -535,27 +541,29 @@ async fn main() -> Result<()> {
         },
     );
 
-    let upload_state = Arc::clone(&state);
-    let upload_cancel = cancel.clone();
-    worker_registry.supervise(
-        "upload-storage-reconciliation",
-        // Namespace drift can make a node write or delete objects in the
-        // wrong bucket/prefix. The worker treats a proven authority mismatch
-        // as fatal; transient inability to query PostgreSQL skips object I/O
-        // and reports an unhealthy heartbeat without returning.
-        WorkerCriticality::Critical,
-        WorkerMode::Continuous,
-        // One provider operation may legitimately occupy 180 seconds. Silence
-        // detection therefore includes a margin and cannot kill a healthy
-        // critical worker mid-operation.
-        Some(std::time::Duration::from_secs(600)),
-        cancel.clone(),
-        move |heartbeat| {
-            let upload_state = Arc::clone(&upload_state);
-            let upload_cancel = upload_cancel.clone();
-            async move { upload_worker::serve(upload_state, upload_cancel, heartbeat).await }
-        },
-    );
+    if state.config.upload_mode.keeps_storage_runtime() {
+        let upload_state = Arc::clone(&state);
+        let upload_cancel = cancel.clone();
+        worker_registry.supervise(
+            "upload-storage-reconciliation",
+            // Namespace drift can make a node write or delete objects in the
+            // wrong bucket/prefix. The worker treats a proven authority mismatch
+            // as fatal; transient inability to query PostgreSQL skips object I/O
+            // and reports an unhealthy heartbeat without returning.
+            WorkerCriticality::Critical,
+            WorkerMode::Continuous,
+            // One provider operation may legitimately occupy 180 seconds. Silence
+            // detection therefore includes a margin and cannot kill a healthy
+            // critical worker mid-operation.
+            Some(std::time::Duration::from_secs(600)),
+            cancel.clone(),
+            move |heartbeat| {
+                let upload_state = Arc::clone(&upload_state);
+                let upload_cancel = upload_cancel.clone();
+                async move { upload_worker::serve(upload_state, upload_cancel, heartbeat).await }
+            },
+        );
+    }
 
     let retention_state = Arc::clone(&state);
     let retention_cancel = cancel.clone();
@@ -695,8 +703,15 @@ async fn main() -> Result<()> {
     spawn_service_task(
         &mut service_tasks,
         "HTTP",
-        api::serve(state, cancel.clone()),
+        api::serve(state.clone(), cancel.clone()),
     );
+    if state.config.web_admin_enabled {
+        spawn_service_task(
+            &mut service_tasks,
+            "Web administration",
+            api::serve_administration(state, cancel.clone()),
+        );
+    }
 
     let mut shutdown_error = None;
     tokio::select! {

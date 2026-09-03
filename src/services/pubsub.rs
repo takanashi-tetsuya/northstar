@@ -11,40 +11,77 @@ use crate::services::profile::{
 };
 use crate::xmpp::xml_builder::XmlElement;
 use anyhow::{Context, Result};
+pub(crate) use northstar_pubsub_application::{
+    is_pubsub_mutation_busy as is_pubsub_mutation_busy_core,
+    pubsub_mutation_admission_active as pubsub_mutation_admission_active_core,
+    pubsub_mutation_admission_rejections_total as pubsub_mutation_admission_rejections_total_core,
+    pubsub_mutation_admission_waiters as pubsub_mutation_admission_waiters_core,
+    validate_pep_configure_node_command, validate_pep_delete_node_command,
+    validate_pep_publish_command, validate_pep_purge_node_command,
+    validate_pep_retract_command, validate_pep_set_affiliations_command,
+    validate_pep_subscribe_command, validate_pep_unsubscribe_command,
+    validate_pubsub_configure_node_command, validate_pubsub_create_node_command,
+    validate_pubsub_delete_node_command, validate_pubsub_publish_command,
+    validate_pubsub_purge_node_command, validate_pubsub_retract_command,
+    validate_pubsub_set_affiliations_command, validate_pubsub_set_subscriptions_command,
+    validate_pubsub_subscribe_command, validate_pubsub_unsubscribe_command,
+    PepConfigureNodeCommand, PepConfigureNodeResult, PepDeleteNodeCommand,
+    PepDeleteNodeResult, PepPublishItemsCommand, PepPublishItemsOutcome,
+    PepPublishItemsResult, PepPurgeNodeCommand, PepPurgeNodeResult, PepRetractCommand,
+    PepRetractResult, PepSetAffiliationsCommand, PepSetAffiliationsResult,
+    PepSubscribeCommand, PepSubscribeResult, PepUnsubscribeCommand, PepUnsubscribeResult,
+    PubSubConfigureNodeCommand, PubSubConfigureNodeResult, PubSubCreateNodeCommand,
+    PubSubCreateNodeResult, PubSubDeleteNodeCommand, PubSubDeleteNodeResult,
+    PubSubMutationPermit as ApplicationPubSubMutationPermit, PubSubPublishCommand,
+    PubSubPublishResult, PubSubPurgeNodeCommand, PubSubPurgeNodeResult,
+    PubSubRetractCommand, PubSubRetractResult, PubSubSetAffiliationsCommand,
+    PubSubSetAffiliationsResult, PubSubSetSubscriptionsCommand,
+    PubSubSetSubscriptionsResult, PubSubSubscribeCommand, PubSubSubscribeResult,
+    PubSubUnsubscribeCommand, PubSubUnsubscribeResult,
+};
+pub(crate) use northstar_pubsub_core::{
+    CollectionUpdateOutcome, CollectionVisibleItem, CreateNodeOutcome, OwnerMutationOutcome,
+    PepAudienceSnapshot, PepBookmarkMutationOutcome, PepConfigureNodeWrite, PepCreateOutcome,
+    PepDeleteNodeWrite, PepDirectStateSnapshot, PepDirectStateTransition, PepItem, PepNodeConfig,
+    PepOwnerMutationOutcome, PepPresenceSubscription, PepProfileWrite, PepPublishOutcome,
+    PepPublishWrite, PepPurgeNodeWrite, PepQuotas, PepRetractWrite, PepSetAffiliationsWrite,
+    PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscribeWrite, PepSubscription,
+    PepSubscriptionActor, PepUnsubscribeOutcome, PepUnsubscribeWrite, PublishItemsOutcome,
+    PubSubAccount, PubSubAffiliation, PubSubConfigOutcome, PubSubConfigureNodeWrite,
+    PubSubCreateNodeWrite, PubSubDeleteNodeWrite, PubSubDiscoNode, PubSubItem, PubSubNode,
+    PubSubNodeConfig, PubSubPublishOutcome, PubSubPublishWrite, PubSubPurgeNodeWrite,
+    PubSubRetractOutcome, PubSubRetractWrite, PubSubSetAffiliationsWrite,
+    PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription,
+    PubSubSubscriptionOptions, PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite,
+    RetractItemsOutcome, SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscribeOutcome,
+    SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome, UnsubscribeOutcome,
+};
 use sqlx::{PgPool, Postgres, Row, Transaction};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio::time::Instant;
 use uuid::Uuid;
 
-const PUBSUB_MUTATION_ADMISSION_TIMEOUT: Duration = Duration::from_secs(2);
-const PUBSUB_MUTATION_OWNER_STRIPES: usize = 64;
-const PUBSUB_MUTATION_MAX_TRANSACTIONS: usize = 8;
-
-static PUBSUB_MUTATION_ADMISSION_REJECTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
-static PUBSUB_MUTATION_ADMISSION_WAITERS: AtomicU64 = AtomicU64::new(0);
-static PUBSUB_MUTATION_ADMISSION_ACTIVE: AtomicU64 = AtomicU64::new(0);
+pub(crate) type PubSubMutationAdmission = northstar_pubsub_application::PubSubMutationAdmission;
+pub(crate) type PubSubMutationPermit = ApplicationPubSubMutationPermit;
 
 pub(crate) fn pubsub_mutation_admission_rejections_total() -> u64 {
-    PUBSUB_MUTATION_ADMISSION_REJECTIONS_TOTAL.load(Ordering::Relaxed)
+    pubsub_mutation_admission_rejections_total_core()
 }
 
 pub(crate) fn pubsub_mutation_admission_waiters() -> u64 {
-    PUBSUB_MUTATION_ADMISSION_WAITERS.load(Ordering::Relaxed)
+    pubsub_mutation_admission_waiters_core()
 }
 
 pub(crate) fn pubsub_mutation_admission_active() -> u64 {
-    PUBSUB_MUTATION_ADMISSION_ACTIVE.load(Ordering::Relaxed)
+    pubsub_mutation_admission_active_core()
 }
 
 /// True only for retryable PubSub capacity/lock pressure.  Authentication,
 /// policy and data-integrity errors must keep their existing stanza mapping.
 pub(crate) fn is_pubsub_mutation_busy(error: &anyhow::Error) -> bool {
+    if is_pubsub_mutation_busy_core(error) {
+        return true;
+    }
     error.chain().any(|cause| {
         if cause
             .downcast_ref::<db::pubsub::PubSubMutationBusy>()
@@ -64,228 +101,12 @@ pub(crate) fn is_pubsub_mutation_busy(error: &anyhow::Error) -> bool {
     })
 }
 
-struct PubSubAdmissionWaiter;
-
-impl PubSubAdmissionWaiter {
-    fn enter() -> Self {
-        PUBSUB_MUTATION_ADMISSION_WAITERS.fetch_add(1, Ordering::Relaxed);
-        Self
-    }
-}
-
-impl Drop for PubSubAdmissionWaiter {
-    fn drop(&mut self) {
-        PUBSUB_MUTATION_ADMISSION_WAITERS.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct PubSubMutationPermit {
-    _owner_permits: Vec<OwnedSemaphorePermit>,
-    _graph_permit: Option<OwnedSemaphorePermit>,
-    _transaction_permit: OwnedSemaphorePermit,
-}
-
-impl Drop for PubSubMutationPermit {
-    fn drop(&mut self) {
-        PUBSUB_MUTATION_ADMISSION_ACTIVE.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
-pub(crate) struct PubSubMutationAdmission {
-    owner_stripes: Box<[Arc<Semaphore>]>,
-    graph: Arc<Semaphore>,
-    transactions: Arc<Semaphore>,
-}
-
-impl PubSubMutationAdmission {
-    pub(crate) fn new(pool: &PgPool) -> Self {
-        let pool_max = pool.options().get_max_connections() as usize;
-        // Always leave at least one configured connection for authentication,
-        // routing and administrative health checks when the pool permits it.
-        let transaction_limit = pool_max
-            .saturating_sub(1)
-            .clamp(1, PUBSUB_MUTATION_MAX_TRANSACTIONS);
-        Self {
-            owner_stripes: (0..PUBSUB_MUTATION_OWNER_STRIPES)
-                .map(|_| Arc::new(Semaphore::new(1)))
-                .collect(),
-            graph: Arc::new(Semaphore::new(1)),
-            transactions: Arc::new(Semaphore::new(transaction_limit)),
-        }
-    }
-
-    fn stripe(key: &str) -> usize {
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        hasher.finish() as usize % PUBSUB_MUTATION_OWNER_STRIPES
-    }
-
-    async fn acquire_owned_before(
-        semaphore: Arc<Semaphore>,
-        deadline: Instant,
-    ) -> Result<OwnedSemaphorePermit> {
-        tokio::time::timeout_at(deadline, semaphore.acquire_owned())
-            .await
-            .map_err(|_| db::pubsub::PubSubMutationBusy)?
-            .map_err(|_| db::pubsub::PubSubMutationBusy.into())
-    }
-
-    pub(crate) async fn acquire(&self, keys: &[&str], graph: bool) -> Result<PubSubMutationPermit> {
-        self.acquire_with_timeout(keys, graph, PUBSUB_MUTATION_ADMISSION_TIMEOUT)
-            .await
-    }
-
-    async fn acquire_with_timeout(
-        &self,
-        keys: &[&str],
-        graph: bool,
-        wait: Duration,
-    ) -> Result<PubSubMutationPermit> {
-        let _waiter = PubSubAdmissionWaiter::enter();
-        let deadline = Instant::now() + wait;
-        let mut stripes = keys.iter().map(|key| Self::stripe(key)).collect::<Vec<_>>();
-        stripes.sort_unstable();
-        stripes.dedup();
-
-        let result = async {
-            let mut owner_permits = Vec::with_capacity(stripes.len());
-            for stripe in stripes {
-                owner_permits.push(
-                    Self::acquire_owned_before(Arc::clone(&self.owner_stripes[stripe]), deadline)
-                        .await?,
-                );
-            }
-            let graph_permit = if graph {
-                Some(Self::acquire_owned_before(Arc::clone(&self.graph), deadline).await?)
-            } else {
-                None
-            };
-            let transaction_permit =
-                Self::acquire_owned_before(Arc::clone(&self.transactions), deadline).await?;
-            Ok(PubSubMutationPermit {
-                _owner_permits: owner_permits,
-                _graph_permit: graph_permit,
-                _transaction_permit: transaction_permit,
-            })
-        }
-        .await;
-        match result {
-            Ok(permit) => {
-                PUBSUB_MUTATION_ADMISSION_ACTIVE.fetch_add(1, Ordering::Relaxed);
-                Ok(permit)
-            }
-            Err(error) => {
-                PUBSUB_MUTATION_ADMISSION_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
-                Err(error)
-            }
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct PubSubService {
     pool: PgPool,
     domain: String,
     service_jid: String,
     mutation_admission: Arc<PubSubMutationAdmission>,
-}
-
-/// Verifier-free enabled account identity exposed to PEP stanza handling.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PubSubAccount {
-    pub(crate) id: Uuid,
-    pub(crate) username: String,
-    pub(crate) auth_generation: i64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PepNodeConfig {
-    pub(crate) access_model: String,
-    pub(crate) max_items: i32,
-    pub(crate) persist_items: bool,
-    pub(crate) send_last_published_item: String,
-    pub(crate) deliver_notifications: bool,
-    pub(crate) roster_groups_allowed: Vec<String>,
-    pub(crate) access_whitelist: Vec<String>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct PepQuotas {
-    pub(crate) max_nodes: i64,
-    pub(crate) max_storage_bytes: i64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PepCreateOutcome {
-    Created,
-    Conflict,
-    QuotaExceeded,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PepPublishOutcome {
-    Published,
-    Unauthorized,
-    PreconditionFailed,
-    MaxItemsExceeded,
-    QuotaExceeded,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PepSubscription {
-    pub(crate) jid: String,
-    pub(crate) subid: String,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PepPresenceSubscription {
-    pub(crate) owner_id: Uuid,
-    pub(crate) owner_username: String,
-    pub(crate) node: String,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PepItem {
-    pub(crate) item_id: String,
-    pub(crate) payload: String,
-    pub(crate) updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Authenticated principal and addressed PEP subscription identity.  A local
-/// principal carries its exact account incarnation; an S2S principal does not
-/// because its domain was authenticated by the federation stream.
-pub(crate) struct PepSubscriptionActor<'a> {
-    pub(crate) jid: &'a str,
-    pub(crate) local_account: Option<&'a PubSubAccount>,
-}
-
-pub(crate) struct PepSubscribeWrite<'a> {
-    pub(crate) owner: &'a PubSubAccount,
-    pub(crate) actor: PepSubscriptionActor<'a>,
-    pub(crate) node: &'a str,
-    pub(crate) subscriber_jid: &'a str,
-    pub(crate) max_subscriptions: i64,
-    pub(crate) requested_subid: &'a str,
-}
-
-pub(crate) struct PepUnsubscribeWrite<'a> {
-    pub(crate) owner: &'a PubSubAccount,
-    pub(crate) actor: PepSubscriptionActor<'a>,
-    pub(crate) node: &'a str,
-    pub(crate) subscriber_jid: &'a str,
-    pub(crate) subid: Option<&'a str>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PepSubscribeSnapshot {
-    pub(crate) owner_id: Uuid,
-    pub(crate) owner_bare_jid: String,
-    pub(crate) node: String,
-    pub(crate) subscriber_jid: String,
-    pub(crate) subscriber_account_id: Option<Uuid>,
-    pub(crate) local_domain: String,
-    pub(crate) last_item: Option<PepItem>,
 }
 
 /// Pure renderer invoked while the authoritative subscription transaction is
@@ -304,119 +125,11 @@ where
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PepSubscribeOutcome {
-    Subscribed(PepSubscription),
-    NotFound,
-    Forbidden,
-    NotAuthorized(String),
-    LimitExceeded,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PepUnsubscribeOutcome {
-    /// `None` is an idempotent retry after the exact subscription disappeared.
-    Unsubscribed(Option<String>),
-    NotFound,
-    Forbidden,
-    InvalidSubid,
-}
-
-/// Profile-node publication command expressed entirely in application terms.
-/// The profile repository still consumes its legacy database DTO internally;
-/// the conversion is deliberately confined to this service boundary.
-pub(crate) struct PepProfileWrite<'a> {
-    pub(crate) user_id: Uuid,
-    pub(crate) auth_generation: i64,
-    pub(crate) connection_id: Uuid,
-    pub(crate) node: &'a str,
-    pub(crate) requested: &'a PepNodeConfig,
-    pub(crate) enforce_preconditions: bool,
-    pub(crate) items: &'a [(&'a str, &'a str)],
-    pub(crate) max_nodes: i64,
-    pub(crate) max_storage_bytes: i64,
-}
-
-/// Generic PEP publication intent. Durable authorization is intentionally not
-/// part of this command: the service derives it from the locked node, roster,
-/// block policy and explicit subscriptions in the write transaction.
-pub(crate) struct PepPublishWrite<'a> {
-    pub(crate) user_id: Uuid,
-    pub(crate) username: &'a str,
-    pub(crate) auth_generation: i64,
-    pub(crate) connection_id: Uuid,
-    pub(crate) node: &'a str,
-    pub(crate) requested: &'a PepNodeConfig,
-    pub(crate) enforce_preconditions: bool,
-    pub(crate) items: &'a [(&'a str, &'a str)],
-    pub(crate) quotas: PepQuotas,
-}
-
-/// Exact durable PEP audience captured while every policy input is locked.
-/// Runtime resource/caps state may only narrow this set.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PepAudienceSnapshot {
-    pub(crate) owner_bare_jid: String,
-    pub(crate) roster_jids: Vec<String>,
-    pub(crate) explicit_jids: Vec<String>,
-}
-
-impl PepAudienceSnapshot {
-    fn authorizes_routed_jid(&self, recipient: &str) -> bool {
-        let Ok(recipient) = crate::jid::CanonicalJid::parse(recipient) else {
-            return false;
-        };
-        let full = recipient.to_string();
-        let bare = recipient.bare();
-        bare == self.owner_bare_jid
-            || self.roster_jids.iter().any(|jid| jid == &bare)
-            || self.explicit_jids.iter().any(|jid| {
-                crate::jid::CanonicalJid::parse(jid).is_ok_and(|explicit| {
-                    if explicit.resourcepart().is_some() {
-                        explicit.to_string() == full
-                    } else {
-                        explicit.bare() == bare
-                    }
-                })
-            })
-    }
-}
-
 /// Synchronous payload factory used under the publication transaction. It may
 /// consult in-memory caps/resources, but cannot perform I/O or introduce a
 /// principal absent from `PepAudienceSnapshot`.
 pub(crate) trait PepOutboxFactory: Send + Sync {
     fn build(&self, audience: &PepAudienceSnapshot) -> Result<Vec<(String, String)>>;
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PepDirectStateTransition {
-    Subscription {
-        recipient_jid: String,
-        subid: String,
-        state: String,
-    },
-    Affiliation {
-        recipient_jid: String,
-        affiliation: String,
-    },
-}
-
-impl PepDirectStateTransition {
-    fn recipient_jid(&self) -> &str {
-        match self {
-            Self::Subscription { recipient_jid, .. } | Self::Affiliation { recipient_jid, .. } => {
-                recipient_jid
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PepDirectStateSnapshot {
-    pub(crate) owner_bare_jid: String,
-    pub(crate) node: String,
-    pub(crate) transitions: Vec<PepDirectStateTransition>,
 }
 
 pub(crate) trait PepDirectOutboxFactory: Send + Sync {
@@ -430,23 +143,6 @@ where
     fn build(&self, snapshot: &PepDirectStateSnapshot) -> Result<Vec<(String, String)>> {
         self(snapshot)
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PepOwnerMutationOutcome {
-    Applied(u64),
-    NotFound,
-    Forbidden,
-    Stale,
-    NotSubscribed,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PepBookmarkMutationOutcome {
-    Stored,
-    ConcurrentChange,
-    ResourceConstraint,
-    Forbidden,
 }
 
 impl<F> PepOutboxFactory for F
@@ -491,216 +187,6 @@ struct LockedPepSubscriptionPrincipal {
     subscriber_bare: String,
     owner_bare: String,
     local_subscriber_id: Option<Uuid>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PubSubNode {
-    pub(crate) id: Uuid,
-    pub(crate) node: String,
-    pub(crate) creator_jid: String,
-    pub(crate) access_model: String,
-    pub(crate) publish_model: String,
-    pub(crate) max_items: i32,
-    pub(crate) title: Option<String>,
-    pub(crate) description: Option<String>,
-    pub(crate) deliver_payloads: bool,
-    pub(crate) notify_delete: bool,
-    pub(crate) notify_retract: bool,
-    pub(crate) persist_items: bool,
-    pub(crate) send_last_published_item: String,
-    pub(crate) node_type: String,
-    pub(crate) deliver_notifications: bool,
-    pub(crate) notify_config: bool,
-    pub(crate) notify_sub: bool,
-    pub(crate) language: Option<String>,
-    pub(crate) payload_type: Option<String>,
-    pub(crate) max_payload_size: i32,
-    pub(crate) children_max: i32,
-    pub(crate) children_association_policy: String,
-    pub(crate) children_association_whitelist: Vec<String>,
-    pub(crate) created_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl PubSubNode {
-    pub(crate) fn config(&self) -> PubSubNodeConfig {
-        PubSubNodeConfig {
-            access_model: self.access_model.clone(),
-            publish_model: self.publish_model.clone(),
-            max_items: self.max_items,
-            title: self.title.clone(),
-            description: self.description.clone(),
-            deliver_payloads: self.deliver_payloads,
-            notify_delete: self.notify_delete,
-            notify_retract: self.notify_retract,
-            persist_items: self.persist_items,
-            send_last_published_item: self.send_last_published_item.clone(),
-            node_type: self.node_type.clone(),
-            deliver_notifications: self.deliver_notifications,
-            notify_config: self.notify_config,
-            notify_sub: self.notify_sub,
-            language: self.language.clone(),
-            payload_type: self.payload_type.clone(),
-            max_payload_size: self.max_payload_size,
-            children_max: self.children_max,
-            children_association_policy: self.children_association_policy.clone(),
-            children_association_whitelist: self.children_association_whitelist.clone(),
-            collections: Vec::new(),
-            children: Vec::new(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PubSubNodeConfig {
-    pub(crate) access_model: String,
-    pub(crate) publish_model: String,
-    pub(crate) max_items: i32,
-    pub(crate) title: Option<String>,
-    pub(crate) description: Option<String>,
-    pub(crate) deliver_payloads: bool,
-    pub(crate) notify_delete: bool,
-    pub(crate) notify_retract: bool,
-    pub(crate) persist_items: bool,
-    pub(crate) send_last_published_item: String,
-    pub(crate) node_type: String,
-    pub(crate) deliver_notifications: bool,
-    pub(crate) notify_config: bool,
-    pub(crate) notify_sub: bool,
-    pub(crate) language: Option<String>,
-    pub(crate) payload_type: Option<String>,
-    pub(crate) max_payload_size: i32,
-    pub(crate) children_max: i32,
-    pub(crate) children_association_policy: String,
-    pub(crate) children_association_whitelist: Vec<String>,
-    pub(crate) collections: Vec<String>,
-    pub(crate) children: Vec<String>,
-}
-
-impl Default for PubSubNodeConfig {
-    fn default() -> Self {
-        Self {
-            access_model: "open".to_owned(),
-            publish_model: "publishers".to_owned(),
-            max_items: 100,
-            title: None,
-            description: None,
-            deliver_payloads: true,
-            notify_delete: true,
-            notify_retract: true,
-            persist_items: true,
-            send_last_published_item: "on_sub_and_presence".to_owned(),
-            node_type: "leaf".to_owned(),
-            deliver_notifications: true,
-            notify_config: true,
-            notify_sub: true,
-            language: None,
-            payload_type: None,
-            max_payload_size: 1_048_576,
-            children_max: 1_000,
-            children_association_policy: "owner".to_owned(),
-            children_association_whitelist: Vec::new(),
-            collections: Vec::new(),
-            children: Vec::new(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PubSubItem {
-    pub(crate) item_id: String,
-    pub(crate) xml_payload: String,
-    pub(crate) created_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct CollectionVisibleItem {
-    pub(crate) node: String,
-    pub(crate) xml_payload: String,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PubSubSubscription {
-    pub(crate) node: String,
-    pub(crate) jid: String,
-    pub(crate) state: String,
-    pub(crate) subid: String,
-    pub(crate) deliver: bool,
-    pub(crate) digest: bool,
-    pub(crate) digest_frequency: i32,
-    pub(crate) expire: Option<chrono::DateTime<chrono::Utc>>,
-    pub(crate) include_body: bool,
-    pub(crate) show_values: Vec<String>,
-    pub(crate) subscription_type: String,
-    pub(crate) subscription_depth: Option<i32>,
-}
-
-impl PubSubSubscription {
-    pub(crate) fn is_active(&self) -> bool {
-        self.state == "subscribed" && self.expire.is_none_or(|expire| expire > chrono::Utc::now())
-    }
-
-    pub(crate) fn is_expired(&self) -> bool {
-        self.expire
-            .is_some_and(|expire| expire <= chrono::Utc::now())
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PubSubSubscriptionOptions {
-    pub(crate) deliver: bool,
-    pub(crate) digest: bool,
-    pub(crate) digest_frequency: i32,
-    pub(crate) expire: Option<chrono::DateTime<chrono::Utc>>,
-    pub(crate) include_body: bool,
-    pub(crate) show_values: Vec<String>,
-    pub(crate) subscription_type: String,
-    pub(crate) subscription_depth: Option<i32>,
-}
-
-impl PubSubSubscriptionOptions {
-    pub(crate) fn for_node_type(node_type: &str) -> Self {
-        Self {
-            deliver: true,
-            digest: false,
-            digest_frequency: 86_400_000,
-            expire: None,
-            include_body: false,
-            show_values: vec![
-                "away".to_owned(),
-                "chat".to_owned(),
-                "dnd".to_owned(),
-                "online".to_owned(),
-                "xa".to_owned(),
-            ],
-            subscription_type: if node_type == "collection" {
-                "nodes".to_owned()
-            } else {
-                "items".to_owned()
-            },
-            subscription_depth: Some(1),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PubSubAffiliation {
-    pub(crate) node: String,
-    pub(crate) jid: String,
-    pub(crate) affiliation: String,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PubSubDiscoNode {
-    pub(crate) node: String,
-    pub(crate) title: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SubscriptionAuthorizationOutcome {
-    Applied,
-    NotFound,
-    Forbidden,
-    Stale,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -830,110 +316,6 @@ pub(crate) struct DuePubSubDigest {
     pub(crate) subscriber_jid: String,
     pub(crate) event_xml: Vec<String>,
     pub(crate) show_values: Option<Vec<String>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CreateNodeOutcome {
-    Created,
-    Conflict,
-    QuotaExceeded,
-    InvalidOptions,
-    Forbidden,
-    CollectionLimitExceeded,
-    Cycle,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PublishItemsOutcome {
-    Published,
-    Conflict,
-    QuotaExceeded,
-    Forbidden,
-    PreconditionFailed,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RetractItemsOutcome {
-    Retracted,
-    NotFound,
-    Forbidden,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CollectionUpdateOutcome {
-    Updated,
-    NotFound,
-    NotAssociated,
-    NotCollection,
-    Forbidden,
-    LimitExceeded,
-    DepthExceeded,
-    Cycle,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PubSubConfigOutcome {
-    Updated,
-    Conflict,
-    NotFound,
-    InvalidOptions,
-    Forbidden,
-    LimitExceeded,
-    Cycle,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum SetSubscriptionsOutcome {
-    Updated(Vec<(String, String, String)>),
-    LimitExceeded,
-    InvalidSubid,
-    NotFound,
-    Forbidden,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum SetAffiliationsOutcome {
-    Updated {
-        revoked_subscriptions: Vec<(String, String)>,
-        approved_subscriptions: Vec<(String, String)>,
-    },
-    LastOwner,
-    NotFound,
-    Forbidden,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OwnerMutationOutcome {
-    Applied,
-    NotFound,
-    Forbidden,
-    Invalid,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum SubscribeOutcome {
-    Subscribed(PubSubSubscription),
-    LimitExceeded,
-    NotFound,
-    Forbidden,
-    ClosedNode,
-    PreconditionFailed,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum UnsubscribeOutcome {
-    Unsubscribed,
-    NotFound,
-    InvalidSubid,
-    Forbidden,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SubscriptionOptionsOutcome {
-    Updated,
-    NotFound,
-    InvalidSubid,
-    Forbidden,
 }
 
 impl From<db::CreateNodeOutcome> for CreateNodeOutcome {
@@ -1501,7 +883,9 @@ fn db_outbox(entries: &[PubSubOutboxInsert]) -> Vec<db::PubSubOutboxInsert> {
 
 impl PubSubService {
     pub(crate) fn new(pool: PgPool, domain: &str) -> Self {
-        let mutation_admission = Arc::new(PubSubMutationAdmission::new(&pool));
+        let mutation_admission = Arc::new(PubSubMutationAdmission::new(
+            pool.options().get_max_connections() as usize,
+        ));
         Self {
             pool,
             domain: domain.to_owned(),
@@ -1524,6 +908,7 @@ impl PubSubService {
         self.mutation_admission
             .acquire(keys, collection_graph)
             .await
+            .map_err(|_| db::pubsub::PubSubMutationBusy.into())
     }
 
     async fn begin_mutation(&self) -> Result<Transaction<'_, Postgres>> {
@@ -1682,9 +1067,11 @@ impl PubSubService {
     /// row and the optional last-item outbox projection are linearized here.
     pub(crate) async fn subscribe_pep_node(
         &self,
-        write: PepSubscribeWrite<'_>,
+        command: PepSubscribeCommand<'_>,
         factory: &dyn PepSubscribeOutboxFactory,
-    ) -> Result<PepSubscribeOutcome> {
+    ) -> Result<PepSubscribeResult> {
+        validate_pep_subscribe_command(&command)?;
+        let write = command.write;
         let owner_key = write.owner.id.to_string();
         let _permit = self
             .admit_mutation(&[&owner_key, write.subscriber_jid, write.node], false)
@@ -1700,7 +1087,7 @@ impl PubSubService {
             .await?
         else {
             transaction.rollback().await?;
-            return Ok(PepSubscribeOutcome::Forbidden);
+            return Ok(PepSubscribeResult::from(PepSubscribeOutcome::Forbidden));
         };
 
         // Per-bare-JID quota first, then per-node serialization. All callers
@@ -1725,7 +1112,7 @@ impl PubSubService {
         .await?;
         let Some(policy) = policy else {
             transaction.rollback().await?;
-            return Ok(PepSubscribeOutcome::NotFound);
+            return Ok(PepSubscribeResult::from(PepSubscribeOutcome::NotFound));
         };
 
         let mut block_owners = vec![write.owner.id];
@@ -1809,7 +1196,9 @@ impl PubSubService {
         };
         if !authorized {
             transaction.rollback().await?;
-            return Ok(PepSubscribeOutcome::NotAuthorized(access_model));
+            return Ok(PepSubscribeResult::from(
+                PepSubscribeOutcome::NotAuthorized(access_model),
+            ));
         }
 
         let existing = sqlx::query_scalar::<_, String>(
@@ -1824,10 +1213,12 @@ impl PubSubService {
         .await?;
         if let Some(subid) = existing {
             transaction.commit().await?;
-            return Ok(PepSubscribeOutcome::Subscribed(PepSubscription {
-                jid: principal.subscriber_jid,
-                subid,
-            }));
+            return Ok(PepSubscribeResult::from(PepSubscribeOutcome::Subscribed(
+                PepSubscription {
+                    jid: principal.subscriber_jid,
+                    subid,
+                },
+            )));
         }
 
         let subscriber_count: i64 = sqlx::query_scalar(
@@ -1849,7 +1240,7 @@ impl PubSubService {
             || node_count >= db::PEP_MAX_SUBSCRIBERS_PER_NODE
         {
             transaction.rollback().await?;
-            return Ok(PepSubscribeOutcome::LimitExceeded);
+            return Ok(PepSubscribeResult::from(PepSubscribeOutcome::LimitExceeded));
         }
 
         let last_item = if policy.try_get::<bool, _>("deliver_notifications")?
@@ -1907,10 +1298,12 @@ impl PubSubService {
         );
         db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
         transaction.commit().await?;
-        Ok(PepSubscribeOutcome::Subscribed(PepSubscription {
-            jid: principal.subscriber_jid,
-            subid: write.requested_subid.to_owned(),
-        }))
+        Ok(PepSubscribeResult::from(PepSubscribeOutcome::Subscribed(
+            PepSubscription {
+                jid: principal.subscriber_jid,
+                subid: write.requested_subid.to_owned(),
+            },
+        )))
     }
 
     /// Idempotently removes only the subscription identity controlled by the
@@ -1918,8 +1311,10 @@ impl PubSubService {
     /// bare row, but cannot name a sibling resource's full-JID subscription.
     pub(crate) async fn unsubscribe_pep_node(
         &self,
-        write: PepUnsubscribeWrite<'_>,
-    ) -> Result<PepUnsubscribeOutcome> {
+        command: PepUnsubscribeCommand<'_>,
+    ) -> Result<PepUnsubscribeResult> {
+        validate_pep_unsubscribe_command(&command)?;
+        let write = command.write;
         let owner_key = write.owner.id.to_string();
         let _permit = self
             .admit_mutation(&[&owner_key, write.subscriber_jid, write.node], false)
@@ -1935,7 +1330,7 @@ impl PubSubService {
             .await?
         else {
             transaction.rollback().await?;
-            return Ok(PepUnsubscribeOutcome::Forbidden);
+            return Ok(PepUnsubscribeResult::from(PepUnsubscribeOutcome::Forbidden));
         };
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 4))")
             .bind(&principal.subscriber_bare)
@@ -1951,7 +1346,7 @@ impl PubSubService {
         .await?;
         if exists.is_none() {
             transaction.rollback().await?;
-            return Ok(PepUnsubscribeOutcome::NotFound);
+            return Ok(PepUnsubscribeResult::from(PepUnsubscribeOutcome::NotFound));
         }
         let existing = sqlx::query_scalar::<_, String>(
             "SELECT subid FROM pep_subscriptions
@@ -1965,11 +1360,15 @@ impl PubSubService {
         .await?;
         let Some(existing) = existing else {
             transaction.commit().await?;
-            return Ok(PepUnsubscribeOutcome::Unsubscribed(None));
+            return Ok(PepUnsubscribeResult::from(
+                PepUnsubscribeOutcome::Unsubscribed(None),
+            ));
         };
         if write.subid.is_some_and(|subid| subid != existing.as_str()) {
             transaction.rollback().await?;
-            return Ok(PepUnsubscribeOutcome::InvalidSubid);
+            return Ok(PepUnsubscribeResult::from(
+                PepUnsubscribeOutcome::InvalidSubid,
+            ));
         }
         sqlx::query(
             "DELETE FROM pep_subscriptions
@@ -1982,7 +1381,9 @@ impl PubSubService {
         .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
-        Ok(PepUnsubscribeOutcome::Unsubscribed(Some(existing)))
+        Ok(PepUnsubscribeResult::from(
+            PepUnsubscribeOutcome::Unsubscribed(Some(existing)),
+        ))
     }
 
     async fn lock_pep_subscription_principal(
@@ -2658,10 +2059,11 @@ impl PubSubService {
     /// refresh event for an idempotent publication as before.
     pub(crate) async fn publish_pep_items(
         &self,
-        write: PepPublishWrite<'_>,
+        command: PepPublishItemsCommand<'_>,
         factory: &dyn PepOutboxFactory,
-        require_content_change: bool,
-    ) -> Result<(PepPublishOutcome, bool)> {
+    ) -> Result<PepPublishItemsResult> {
+        validate_pep_publish_command(&command)?;
+        let write = command.write;
         let owner_key = write.user_id.to_string();
         let _permit = self
             .admit_mutation(&[&owner_key, write.node], false)
@@ -2683,7 +2085,10 @@ impl PubSubService {
         .await?;
         let Some(owner_username) = owner_username else {
             transaction.rollback().await?;
-            return Ok((PepPublishOutcome::Unauthorized, false));
+            return Ok(PepPublishItemsResult {
+                outcome: PepPublishItemsOutcome::Unauthorized,
+                content_changed: false,
+            });
         };
         lock_pep_audience(&mut transaction, write.user_id, write.node).await?;
 
@@ -2727,9 +2132,12 @@ impl PubSubService {
         .await?;
         if outcome != db::PepPublishOutcome::Published {
             transaction.rollback().await?;
-            return Ok((outcome.into(), false));
+            return Ok(PepPublishItemsResult {
+                outcome: PepPublishItemsOutcome::from(PepPublishOutcome::from(outcome)),
+                content_changed: false,
+            });
         }
-        if changed || !require_content_change {
+        if changed || !command.require_content_change {
             let outbox = self
                 .exact_pep_outbox(
                     &mut transaction,
@@ -2745,7 +2153,10 @@ impl PubSubService {
             db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
         }
         transaction.commit().await?;
-        Ok((PepPublishOutcome::Published, changed))
+        Ok(PepPublishItemsResult {
+            outcome: PepPublishItemsOutcome::Published,
+            content_changed: changed,
+        })
     }
 
     #[expect(
@@ -3318,21 +2729,26 @@ impl PubSubService {
     /// authority that permits a write.
     pub(crate) async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {
         let affiliation = db::get_node_affiliation(&self.pool, node.id, requester).await?;
-        if affiliation.as_deref() == Some("outcast") {
-            return Ok(false);
-        }
-        let privileged = matches!(
-            affiliation.as_deref(),
-            Some("owner" | "publisher" | "publish-only")
-        );
-        Ok(match node.publish_model.as_str() {
-            "open" => true,
-            "publishers" => privileged,
-            "subscribers" => {
-                privileged || db::is_subscribed(&self.pool, node.id, requester).await?
-            }
-            _ => false,
-        })
+        let affiliation = affiliation
+            .as_deref()
+            .map(str::parse::<northstar_xep_0060::Affiliation>)
+            .transpose()
+            .map_err(|error| anyhow::anyhow!("invalid stored PubSub affiliation: {error}"))?;
+        let publish_model = node
+            .publish_model
+            .parse::<northstar_xep_0060::PublishModel>()
+            .map_err(|error| anyhow::anyhow!("invalid stored PubSub publish model: {error}"))?;
+        let access_model = node
+            .access_model
+            .parse::<northstar_xep_0060::AccessModel>()
+            .map_err(|error| anyhow::anyhow!("invalid stored PubSub access model: {error}"))?;
+        let subscribed = db::is_subscribed(&self.pool, node.id, requester).await?;
+        Ok(northstar_xep_0060::can_publish_pure(
+            publish_model,
+            access_model,
+            affiliation,
+            subscribed,
+        ))
     }
 
     /// Preflight only. Every owner mutation rechecks this under its
@@ -3655,6 +3071,564 @@ impl PubSubService {
         )
         .await?
         .into())
+    }
+
+    fn serialized_item_payload_matches_type(item_xml: &str, payload_type: &str) -> bool {
+        roxmltree::Document::parse(item_xml)
+            .ok()
+            .is_some_and(|document| {
+                document
+                    .root_element()
+                    .children()
+                    .find(roxmltree::Node::is_element)
+                    .and_then(|payload| payload.tag_name().namespace())
+                    == Some(payload_type)
+            })
+    }
+
+    fn item_xml_has_payload(item_xml: &str) -> bool {
+        roxmltree::Document::parse(item_xml)
+            .ok()
+            .is_some_and(|document| {
+                document
+                    .root_element()
+                    .children()
+                    .any(|node| node.is_element())
+            })
+    }
+
+    pub(crate) async fn execute_pubsub_publish(
+        &self,
+        command: PubSubPublishCommand<'_>,
+    ) -> Result<PubSubPublishResult> {
+        validate_pubsub_publish_command(&command)?;
+        let write = command.write;
+        if write.node == "serverinfo" {
+            return Ok(PubSubPublishResult {
+                outcome: PubSubPublishOutcome::Forbidden,
+            });
+        }
+        let mut node = self.get_node(write.node).await?;
+        let had_publish_options = write.publish_options.is_some();
+        let effective_config = match (node.as_ref(), write.publish_options) {
+            (Some(node), Some(options)) => {
+                if options != &node.config() {
+                    return Ok(PubSubPublishResult {
+                        outcome: PubSubPublishOutcome::PreconditionNotMet,
+                    });
+                }
+                options.clone()
+            }
+            (Some(node), None) => node.config(),
+            (None, Some(options)) => options.clone(),
+            (None, None) => PubSubNodeConfig::default(),
+        };
+        if effective_config.node_type != "leaf" {
+            return Ok(PubSubPublishResult {
+                outcome: PubSubPublishOutcome::NotLeafNode,
+            });
+        }
+        if let Some(ref node) = node {
+            if !self.can_publish(node, write.publisher_jid).await? {
+                return Ok(PubSubPublishResult {
+                    outcome: PubSubPublishOutcome::Forbidden,
+                });
+            }
+        }
+        if write.items.len() > effective_config.max_items as usize {
+            return Ok(PubSubPublishResult {
+                outcome: PubSubPublishOutcome::MaxItemsExceeded,
+            });
+        }
+        if effective_config.persist_items && write.items.is_empty() {
+            return Ok(PubSubPublishResult {
+                outcome: PubSubPublishOutcome::ItemRequired,
+            });
+        }
+        if !effective_config.persist_items && !effective_config.deliver_payloads && !write.items.is_empty() {
+            return Ok(PubSubPublishResult {
+                outcome: PubSubPublishOutcome::ItemForbidden,
+            });
+        }
+        if !effective_config.persist_items && effective_config.deliver_payloads && write.items.is_empty() {
+            return Ok(PubSubPublishResult {
+                outcome: PubSubPublishOutcome::ItemRequired,
+            });
+        }
+        if node.is_none() {
+            match self
+                .create_node(
+                    write.node,
+                    write.publisher_jid,
+                    &effective_config,
+                    write.max_nodes_per_owner,
+                )
+                .await?
+            {
+                CreateNodeOutcome::Created | CreateNodeOutcome::Conflict => {}
+                CreateNodeOutcome::QuotaExceeded => {
+                    return Ok(PubSubPublishResult {
+                        outcome: PubSubPublishOutcome::QuotaExceeded,
+                    });
+                }
+                CreateNodeOutcome::InvalidOptions
+                | CreateNodeOutcome::Forbidden
+                | CreateNodeOutcome::CollectionLimitExceeded
+                | CreateNodeOutcome::Cycle => {
+                    return Ok(PubSubPublishResult {
+                        outcome: PubSubPublishOutcome::Conflict,
+                    });
+                }
+            }
+            node = self.get_node(write.node).await?;
+        }
+        let Some(node) = node else {
+            return Ok(PubSubPublishResult {
+                outcome: PubSubPublishOutcome::MissingNode,
+            });
+        };
+        if node.node_type != "leaf"
+            || write.items.len() > node.max_items as usize
+            || (node.persist_items && write.items.is_empty())
+            || (!node.persist_items && !node.deliver_payloads && !write.items.is_empty())
+            || (!node.persist_items && node.deliver_payloads && write.items.is_empty())
+            || (node.deliver_payloads
+                && write
+                    .items
+                    .iter()
+                    .any(|(_, item_xml)| !Self::item_xml_has_payload(item_xml)))
+            || write
+                .items
+                .iter()
+                .any(|(_, item_xml)| item_xml.len() > node.max_payload_size as usize)
+            || node.payload_type.as_deref().is_some_and(|expected| {
+                write
+                    .items
+                    .iter()
+                    .any(|(_, item_xml)| !Self::serialized_item_payload_matches_type(item_xml, expected))
+            })
+        {
+            return Ok(PubSubPublishResult {
+                outcome: PubSubPublishOutcome::PreconditionNotMet,
+            });
+        }
+        if had_publish_options && effective_config != node.config() {
+            return Ok(PubSubPublishResult {
+                outcome: PubSubPublishOutcome::PreconditionNotMet,
+            });
+        }
+        if !self.can_publish(&node, write.publisher_jid).await? {
+            return Ok(PubSubPublishResult {
+                outcome: PubSubPublishOutcome::Forbidden,
+            });
+        }
+        let outcome = self
+            .publish_items(
+                &node,
+                write.publisher_jid,
+                write.items,
+                write.max_storage_bytes_per_owner,
+            )
+            .await?;
+        let pubsub_outcome = match outcome {
+            PublishItemsOutcome::Published => PubSubPublishOutcome::Published {
+                item_ids: write.items.iter().map(|(id, _)| id.clone()).collect(),
+            },
+            PublishItemsOutcome::Conflict => PubSubPublishOutcome::Conflict,
+            PublishItemsOutcome::QuotaExceeded => PubSubPublishOutcome::QuotaExceeded,
+            PublishItemsOutcome::Forbidden => PubSubPublishOutcome::Forbidden,
+            PublishItemsOutcome::PreconditionFailed => PubSubPublishOutcome::PreconditionNotMet,
+        };
+        Ok(PubSubPublishResult {
+            outcome: pubsub_outcome,
+        })
+    }
+
+    pub(crate) async fn execute_pubsub_subscribe(
+        &self,
+        command: PubSubSubscribeCommand<'_>,
+    ) -> Result<PubSubSubscribeResult> {
+        validate_pubsub_subscribe_command(&command)?;
+        let write = command.write;
+        let Some(node) = self.get_node(write.node).await? else {
+            return Ok(PubSubSubscribeResult {
+                outcome: PubSubSubscribeOutcome::NotFound,
+            });
+        };
+        let affiliation = self.get_node_affiliation(node.id, write.requester).await?;
+        if affiliation.as_deref() == Some("outcast") {
+            return Ok(PubSubSubscribeResult {
+                outcome: PubSubSubscribeOutcome::Forbidden,
+            });
+        }
+        let existing_subscription = self.get_subscription(node.id, write.subscriber_jid).await?;
+        if let Some(ref existing) = existing_subscription {
+            if existing.state == "pending" {
+                return Ok(PubSubSubscribeResult {
+                    outcome: PubSubSubscribeOutcome::PendingSubscription,
+                });
+            }
+            if existing.is_active() && write.options.is_none() {
+                return Ok(PubSubSubscribeResult {
+                    outcome: PubSubSubscribeOutcome::ExistingActive(existing.clone()),
+                });
+            }
+        }
+        let state_value = match node.access_model.as_str() {
+            "open" => "subscribed",
+            "whitelist"
+                if matches!(
+                    affiliation.as_deref(),
+                    Some("owner" | "publisher" | "member")
+                ) =>
+            {
+                "subscribed"
+            }
+            "authorize"
+                if matches!(
+                    affiliation.as_deref(),
+                    Some("owner" | "publisher" | "member")
+                ) =>
+            {
+                "subscribed"
+            }
+            "authorize" => "pending",
+            "whitelist" => {
+                return Ok(PubSubSubscribeResult {
+                    outcome: PubSubSubscribeOutcome::ClosedNode,
+                });
+            }
+            _ => {
+                return Ok(PubSubSubscribeResult {
+                    outcome: PubSubSubscribeOutcome::Forbidden,
+                });
+            }
+        };
+        let planned_subid = existing_subscription
+            .as_ref()
+            .map(|sub| sub.subid.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let default_options = PubSubSubscriptionOptions::for_node_type(&node.node_type);
+        let effective_options = write.options.unwrap_or(&default_options);
+        let outcome = self
+            .set_subscription_limited_with_options(
+                node.id,
+                write.requester,
+                write.subscriber_jid,
+                state_value,
+                &node.node_type,
+                &node.access_model,
+                write.max_subscriptions,
+                Some(effective_options),
+                &planned_subid,
+            )
+            .await?;
+        let pubsub_outcome = match outcome {
+            SubscribeOutcome::Subscribed(sub) => PubSubSubscribeOutcome::Subscribed(sub),
+            SubscribeOutcome::LimitExceeded => PubSubSubscribeOutcome::LimitExceeded,
+            SubscribeOutcome::NotFound => PubSubSubscribeOutcome::NotFound,
+            SubscribeOutcome::Forbidden => PubSubSubscribeOutcome::Forbidden,
+            SubscribeOutcome::ClosedNode => PubSubSubscribeOutcome::ClosedNode,
+            SubscribeOutcome::PreconditionFailed => PubSubSubscribeOutcome::PreconditionFailed,
+        };
+        Ok(PubSubSubscribeResult {
+            outcome: pubsub_outcome,
+        })
+    }
+
+    pub(crate) async fn execute_pubsub_unsubscribe(
+        &self,
+        command: PubSubUnsubscribeCommand<'_>,
+    ) -> Result<PubSubUnsubscribeResult> {
+        validate_pubsub_unsubscribe_command(&command)?;
+        let write = command.write;
+        let Some(node) = self.get_node(write.node).await? else {
+            return Ok(PubSubUnsubscribeResult {
+                outcome: PubSubUnsubscribeOutcome::NotFound,
+            });
+        };
+        let Some(subscription) = self.get_subscription(node.id, write.subscriber_jid).await?
+        else {
+            return Ok(PubSubUnsubscribeResult {
+                outcome: PubSubUnsubscribeOutcome::NotSubscribed,
+            });
+        };
+        if subscription.is_expired() {
+            return Ok(PubSubUnsubscribeResult {
+                outcome: PubSubUnsubscribeOutcome::NotSubscribed,
+            });
+        }
+        if write.subid.is_some_and(|value| value != subscription.subid) {
+            return Ok(PubSubUnsubscribeResult {
+                outcome: PubSubUnsubscribeOutcome::InvalidSubid,
+            });
+        }
+        let outcome = self
+            .unsubscribe_checked(
+                node.id,
+                write.requester,
+                write.subscriber_jid,
+                &subscription.subid,
+            )
+            .await?;
+        let pubsub_outcome = match outcome {
+            UnsubscribeOutcome::Unsubscribed => PubSubUnsubscribeOutcome::Unsubscribed {
+                subid: Some(subscription.subid),
+            },
+            UnsubscribeOutcome::NotFound => PubSubUnsubscribeOutcome::NotSubscribed,
+            UnsubscribeOutcome::InvalidSubid => PubSubUnsubscribeOutcome::InvalidSubid,
+            UnsubscribeOutcome::Forbidden => PubSubUnsubscribeOutcome::Forbidden,
+        };
+        Ok(PubSubUnsubscribeResult {
+            outcome: pubsub_outcome,
+        })
+    }
+
+    pub(crate) async fn execute_pubsub_retract(
+        &self,
+        command: PubSubRetractCommand<'_>,
+    ) -> Result<PubSubRetractResult> {
+        validate_pubsub_retract_command(&command)?;
+        let write = command.write;
+        let Some(node) = self.get_node(write.node).await? else {
+            return Ok(PubSubRetractResult {
+                outcome: PubSubRetractOutcome::NotFound,
+            });
+        };
+        if node.node_type != "leaf" {
+            return Ok(PubSubRetractResult {
+                outcome: PubSubRetractOutcome::NotLeafNode,
+            });
+        }
+        if !node.persist_items {
+            return Ok(PubSubRetractResult {
+                outcome: PubSubRetractOutcome::NotPersistent,
+            });
+        }
+        if !self.can_publish(&node, write.requester).await? {
+            return Ok(PubSubRetractResult {
+                outcome: PubSubRetractOutcome::Forbidden,
+            });
+        }
+        let outcome = self
+            .retract_items(
+                node.id,
+                write.item_ids,
+                write.requester,
+                write.force_notification,
+            )
+            .await?;
+        let pubsub_outcome = match outcome {
+            RetractItemsOutcome::Retracted => PubSubRetractOutcome::Retracted,
+            RetractItemsOutcome::NotFound => PubSubRetractOutcome::ItemNotFound,
+            RetractItemsOutcome::Forbidden => PubSubRetractOutcome::Forbidden,
+        };
+        Ok(PubSubRetractResult {
+            outcome: pubsub_outcome,
+        })
+    }
+
+    pub(crate) async fn execute_pubsub_create_node(
+        &self,
+        command: PubSubCreateNodeCommand<'_>,
+    ) -> Result<PubSubCreateNodeResult> {
+        validate_pubsub_create_node_command(&command)?;
+        let write = command.write;
+        let outcome = self
+            .create_node(
+                write.node,
+                write.creator_jid,
+                write.config,
+                write.max_nodes_per_owner,
+            )
+            .await?;
+        Ok(PubSubCreateNodeResult { outcome })
+    }
+
+    pub(crate) async fn execute_pubsub_delete_node(
+        &self,
+        command: PubSubDeleteNodeCommand<'_>,
+    ) -> Result<PubSubDeleteNodeResult> {
+        validate_pubsub_delete_node_command(&command)?;
+        let write = command.write;
+        let Some(node) = self.get_node(write.node).await? else {
+            return Ok(PubSubDeleteNodeResult {
+                outcome: OwnerMutationOutcome::NotFound,
+            });
+        };
+        let outcome = self
+            .delete_node_as_owner_with_redirect_and_outbox(
+                node.id,
+                write.requester,
+                write.redirect,
+            )
+            .await?;
+        Ok(PubSubDeleteNodeResult { outcome })
+    }
+
+    pub(crate) async fn execute_pubsub_purge_node(
+        &self,
+        command: PubSubPurgeNodeCommand<'_>,
+    ) -> Result<PubSubPurgeNodeResult> {
+        validate_pubsub_purge_node_command(&command)?;
+        let write = command.write;
+        let Some(node) = self.get_node(write.node).await? else {
+            return Ok(PubSubPurgeNodeResult {
+                outcome: OwnerMutationOutcome::NotFound,
+            });
+        };
+        if node.node_type != "leaf" || !node.persist_items {
+            return Ok(PubSubPurgeNodeResult {
+                outcome: OwnerMutationOutcome::Invalid,
+            });
+        }
+        let outcome = self
+            .purge_node_as_owner_with_outbox(node.id, write.requester)
+            .await?;
+        Ok(PubSubPurgeNodeResult { outcome })
+    }
+
+    pub(crate) async fn execute_pubsub_configure_node(
+        &self,
+        command: PubSubConfigureNodeCommand<'_>,
+    ) -> Result<PubSubConfigureNodeResult> {
+        validate_pubsub_configure_node_command(&command)?;
+        let write = command.write;
+        let Some(node) = self.get_node(write.node).await? else {
+            return Ok(PubSubConfigureNodeResult {
+                outcome: PubSubConfigOutcome::NotFound,
+            });
+        };
+        let outcome = self
+            .update_node_config_and_graph_with_outbox(
+                &node,
+                write.requester,
+                write.expected,
+                write.config,
+            )
+            .await?;
+        Ok(PubSubConfigureNodeResult { outcome })
+    }
+
+    pub(crate) async fn execute_pubsub_set_subscriptions(
+        &self,
+        command: PubSubSetSubscriptionsCommand<'_>,
+    ) -> Result<PubSubSetSubscriptionsResult> {
+        validate_pubsub_set_subscriptions_command(&command)?;
+        let write = command.write;
+        let Some(node) = self.get_node(write.node).await? else {
+            return Ok(PubSubSetSubscriptionsResult {
+                outcome: SetSubscriptionsOutcome::NotFound,
+            });
+        };
+        let outcome = self
+            .set_subscriptions(node.id, write.requester, write.changes)
+            .await?;
+        Ok(PubSubSetSubscriptionsResult { outcome })
+    }
+
+    pub(crate) async fn execute_pubsub_set_affiliations(
+        &self,
+        command: PubSubSetAffiliationsCommand<'_>,
+    ) -> Result<PubSubSetAffiliationsResult> {
+        validate_pubsub_set_affiliations_command(&command)?;
+        let write = command.write;
+        let Some(node) = self.get_node(write.node).await? else {
+            return Ok(PubSubSetAffiliationsResult {
+                outcome: SetAffiliationsOutcome::NotFound,
+            });
+        };
+        let outcome = self
+            .set_affiliations(node.id, write.requester, write.changes)
+            .await?;
+        Ok(PubSubSetAffiliationsResult { outcome })
+    }
+
+    pub(crate) async fn execute_pep_retract(
+        &self,
+        command: PepRetractCommand<'_>,
+        factory: &dyn PepOutboxFactory,
+    ) -> Result<PepRetractResult> {
+        validate_pep_retract_command(&command)?;
+        let write = command.write;
+        let item_ids: Vec<&str> = write.item_ids.iter().map(String::as_str).collect();
+        let outcome = self
+            .retract_pep_items(
+                write.owner,
+                write.connection_id,
+                write.node,
+                &item_ids,
+                write.notify,
+                factory,
+            )
+            .await?;
+        Ok(PepRetractResult { outcome })
+    }
+
+    pub(crate) async fn execute_pep_delete_node(
+        &self,
+        command: PepDeleteNodeCommand<'_>,
+        factory: &dyn PepOutboxFactory,
+    ) -> Result<PepDeleteNodeResult> {
+        validate_pep_delete_node_command(&command)?;
+        let write = command.write;
+        let outcome = self
+            .delete_pep_node(write.owner, write.connection_id, write.node, factory)
+            .await?;
+        Ok(PepDeleteNodeResult { outcome })
+    }
+
+    pub(crate) async fn execute_pep_purge_node(
+        &self,
+        command: PepPurgeNodeCommand<'_>,
+        factory: &dyn PepOutboxFactory,
+    ) -> Result<PepPurgeNodeResult> {
+        validate_pep_purge_node_command(&command)?;
+        let write = command.write;
+        let outcome = self
+            .purge_pep_node(write.owner, write.connection_id, write.node, factory)
+            .await?;
+        Ok(PepPurgeNodeResult { outcome })
+    }
+
+    pub(crate) async fn execute_pep_configure_node(
+        &self,
+        command: PepConfigureNodeCommand<'_>,
+        factory: &dyn PepOutboxFactory,
+    ) -> Result<PepConfigureNodeResult> {
+        validate_pep_configure_node_command(&command)?;
+        let write = command.write;
+        let outcome = self
+            .update_pep_node_config(
+                write.owner,
+                write.connection_id,
+                write.node,
+                write.expected,
+                write.config,
+                factory,
+            )
+            .await?;
+        Ok(PepConfigureNodeResult { outcome })
+    }
+
+    pub(crate) async fn execute_pep_set_affiliations(
+        &self,
+        command: PepSetAffiliationsCommand<'_>,
+        factory: &dyn PepDirectOutboxFactory,
+    ) -> Result<PepSetAffiliationsResult> {
+        validate_pep_set_affiliations_command(&command)?;
+        let write = command.write;
+        let outcome = self
+            .update_pep_affiliations(
+                write.owner,
+                write.connection_id,
+                write.node,
+                write.expected,
+                write.changes,
+                factory,
+            )
+            .await?;
+        Ok(PepSetAffiliationsResult { outcome })
     }
 
     pub(crate) async fn local_account_blocks_pubsub(
@@ -4650,54 +4624,8 @@ fn subscription_event_children(
 }
 
 fn pubsub_event_body(event: &str) -> Result<Option<String>> {
-    let wrapped = XmlElement::new("root").validated_fragment(event)?.finish();
-    let document = roxmltree::Document::parse(&wrapped)?;
-    let Some(entry) = document.descendants().find(|node| {
-        node.is_element()
-            && node.tag_name().name() == "entry"
-            && node.tag_name().namespace() == Some("http://www.w3.org/2005/Atom")
-    }) else {
-        return Ok(None);
-    };
-    let Some(source) = ["summary", "title", "content"]
-        .into_iter()
-        .find_map(|name| {
-            entry.children().find(|node| {
-                node.is_element()
-                    && node.tag_name().name() == name
-                    && node.tag_name().namespace() == Some("http://www.w3.org/2005/Atom")
-            })
-        })
-    else {
-        return Ok(None);
-    };
-    let mut body = String::new();
-    for text in source.descendants().filter_map(|node| node.text()) {
-        let text = text.trim();
-        if text.is_empty() {
-            continue;
-        }
-        if !body.is_empty() {
-            body.push(' ');
-        }
-        body.push_str(text);
-        if body.len() >= 1_024 {
-            truncate_utf8_to_bytes(&mut body, 1_024);
-            break;
-        }
-    }
-    Ok((!body.is_empty()).then_some(body))
-}
-
-pub(crate) fn truncate_utf8_to_bytes(value: &mut String, max_bytes: usize) {
-    if value.len() <= max_bytes {
-        return;
-    }
-    let mut end = max_bytes;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value.truncate(end);
+    northstar_xep_0060::extract_atom_event_body(event)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
 #[cfg(test)]
@@ -4770,10 +4698,10 @@ mod tests {
             .max_connections(4)
             .connect_lazy("postgres://unused:unused@localhost/unused")
             .unwrap();
-        let admission = PubSubMutationAdmission::new(&pool);
+        let admission = PubSubMutationAdmission::new(pool.options().get_max_connections() as usize);
         // One of four configured database connections remains outside the
         // PubSub mutation budget for unrelated authentication/routing work.
-        assert_eq!(admission.transactions.available_permits(), 3);
+        assert_eq!(admission.available_transaction_permits(), 3);
 
         let first = admission
             .acquire_with_timeout(&["alice@example.test"], false, Duration::from_millis(50))
@@ -4785,7 +4713,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error
-            .downcast_ref::<db::pubsub::PubSubMutationBusy>()
+            .downcast_ref::<northstar_pubsub_application::PubSubMutationBusy>()
             .is_some());
         assert!(pubsub_mutation_admission_rejections_total() > rejected_before);
         drop(first);
@@ -4802,7 +4730,7 @@ mod tests {
             .max_connections(8)
             .connect_lazy("postgres://unused:unused@localhost/unused")
             .unwrap();
-        let admission = PubSubMutationAdmission::new(&pool);
+        let admission = PubSubMutationAdmission::new(pool.options().get_max_connections() as usize);
         let first = admission
             .acquire_with_timeout(&["alice@example.test"], true, Duration::from_millis(50))
             .await
@@ -4812,7 +4740,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error
-            .downcast_ref::<db::pubsub::PubSubMutationBusy>()
+            .downcast_ref::<northstar_pubsub_application::PubSubMutationBusy>()
             .is_some());
         drop(first);
         admission
@@ -5359,20 +5287,23 @@ mod tests {
             let items = [("one", payload)];
             publish_service
                 .publish_pep_items(
-                    PepPublishWrite {
-                        user_id: owner_id,
-                        username: &publish_username,
-                        auth_generation,
-                        connection_id: Uuid::new_v4(),
-                        node: &publish_node,
-                        requested: &publish_config,
-                        enforce_preconditions: false,
-                        items: &items,
-                        quotas: PepQuotas {
-                            max_nodes: 10,
-                            max_storage_bytes: 1_000_000,
+                    PepPublishItemsCommand::new(
+                        PepPublishWrite {
+                            user_id: owner_id,
+                            username: &publish_username,
+                            auth_generation,
+                            connection_id: Uuid::new_v4(),
+                            node: &publish_node,
+                            requested: &publish_config,
+                            enforce_preconditions: false,
+                            items: &items,
+                            quotas: PepQuotas {
+                                max_nodes: 10,
+                                max_storage_bytes: 1_000_000,
+                            },
                         },
-                    },
+                        false,
+                    ),
                     &move |audience: &PepAudienceSnapshot| {
                         snapshot_tx
                             .send((audience.roster_jids.clone(), audience.explicit_jids.clone()))
@@ -5384,7 +5315,6 @@ mod tests {
                         }
                         snapshot_deliveries(audience)
                     },
-                    false,
                 )
                 .await
         });
@@ -5462,10 +5392,9 @@ mod tests {
             *released.lock().expect("PEP gate poisoned") = true;
             wake.notify_all();
         }
-        assert_eq!(
-            publish.await.unwrap().unwrap(),
-            (PepPublishOutcome::Published, true)
-        );
+        let publish_result = publish.await.unwrap().unwrap();
+        assert_eq!(publish_result.outcome, PepPublishItemsOutcome::Published);
+        assert!(publish_result.content_changed);
         unsubscribe.await.unwrap().unwrap().unwrap();
         assert!(matches!(
             block.await.unwrap().unwrap(),
@@ -5480,31 +5409,34 @@ mod tests {
         let second_config = PepNodeConfig::from(config);
         let result = service
             .publish_pep_items(
-                PepPublishWrite {
-                    user_id: owner_id,
-                    username: &username,
-                    auth_generation,
-                    connection_id: Uuid::new_v4(),
-                    node: &node,
-                    requested: &second_config,
-                    enforce_preconditions: false,
-                    items: &second_items,
-                    quotas: PepQuotas {
-                        max_nodes: 10,
-                        max_storage_bytes: 1_000_000,
+                PepPublishItemsCommand::new(
+                    PepPublishWrite {
+                        user_id: owner_id,
+                        username: &username,
+                        auth_generation,
+                        connection_id: Uuid::new_v4(),
+                        node: &node,
+                        requested: &second_config,
+                        enforce_preconditions: false,
+                        items: &second_items,
+                        quotas: PepQuotas {
+                            max_nodes: 10,
+                            max_storage_bytes: 1_000_000,
+                        },
                     },
-                },
+                    false,
+                ),
                 &|audience: &PepAudienceSnapshot| {
                     second_tx
                         .send((audience.roster_jids.clone(), audience.explicit_jids.clone()))
                         .map_err(|_| anyhow::anyhow!("second PEP observer closed"))?;
                     snapshot_deliveries(audience)
                 },
-                false,
             )
             .await
             .unwrap();
-        assert_eq!(result, (PepPublishOutcome::Published, true));
+        assert_eq!(result.outcome, PepPublishItemsOutcome::Published);
+        assert!(result.content_changed);
         assert_eq!(second_rx.recv().await.unwrap(), (Vec::new(), Vec::new()));
         let mut expected_recipients = vec![blocked, roster, unsubscribed];
         expected_recipients.sort_unstable();
@@ -5594,7 +5526,7 @@ mod tests {
             let subid = Uuid::new_v4().to_string();
             subscribe_service
                 .subscribe_pep_node(
-                    PepSubscribeWrite {
+                    northstar_pubsub_application::PepSubscribeCommand::from(PepSubscribeWrite {
                         owner: &subscribe_owner,
                         actor: PepSubscriptionActor {
                             jid: &subscribe_jid,
@@ -5604,7 +5536,7 @@ mod tests {
                         subscriber_jid: &subscribe_jid,
                         max_subscriptions: 100,
                         requested_subid: &subid,
-                    },
+                    }),
                     &move |_: &PepSubscribeSnapshot| {
                         entered_tx
                             .send(())
@@ -5688,7 +5620,7 @@ mod tests {
             wake.notify_all();
         }
         assert!(matches!(
-            subscribe.await.unwrap().unwrap(),
+            subscribe.await.unwrap().unwrap().outcome,
             PepSubscribeOutcome::Subscribed(_)
         ));
         assert!(matches!(
@@ -5724,7 +5656,7 @@ mod tests {
         assert!(matches!(
             service
                 .subscribe_pep_node(
-                    PepSubscribeWrite {
+                    northstar_pubsub_application::PepSubscribeCommand::from(PepSubscribeWrite {
                         owner: &owner,
                         actor: PepSubscriptionActor {
                             jid: &subscriber,
@@ -5734,11 +5666,12 @@ mod tests {
                         subscriber_jid: &subscriber,
                         max_subscriptions: 100,
                         requested_subid: &denied_subid,
-                    },
+                    }),
                     &|_: &PepSubscribeSnapshot| Ok(Vec::new()),
                 )
                 .await
-                .unwrap(),
+                .unwrap()
+                .outcome,
             PepSubscribeOutcome::NotAuthorized(_)
         ));
         db::unblock_jids(
@@ -5761,7 +5694,7 @@ mod tests {
         assert!(matches!(
             service
                 .subscribe_pep_node(
-                    PepSubscribeWrite {
+                    northstar_pubsub_application::PepSubscribeCommand::from(PepSubscribeWrite {
                         owner: &owner,
                         actor: PepSubscriptionActor {
                             jid: &subscriber,
@@ -5771,11 +5704,12 @@ mod tests {
                         subscriber_jid: &subscriber,
                         max_subscriptions: 100,
                         requested_subid: &access_denied_subid,
-                    },
+                    }),
                     &|_: &PepSubscribeSnapshot| Ok(Vec::new()),
                 )
                 .await
-                .unwrap(),
+                .unwrap()
+                .outcome,
             PepSubscribeOutcome::NotAuthorized(_)
         ));
 
@@ -5793,7 +5727,7 @@ mod tests {
         assert!(matches!(
             service
                 .subscribe_pep_node(
-                    PepSubscribeWrite {
+                    northstar_pubsub_application::PepSubscribeCommand::from(PepSubscribeWrite {
                         owner: &owner,
                         actor: PepSubscriptionActor {
                             jid: &subscriber,
@@ -5803,11 +5737,12 @@ mod tests {
                         subscriber_jid: &subscriber,
                         max_subscriptions: 100,
                         requested_subid: &roster_denied_subid,
-                    },
+                    }),
                     &|_: &PepSubscribeSnapshot| Ok(Vec::new()),
                 )
                 .await
-                .unwrap(),
+                .unwrap()
+                .outcome,
             PepSubscribeOutcome::NotAuthorized(_)
         ));
 
@@ -5827,7 +5762,7 @@ mod tests {
         assert!(matches!(
             service
                 .subscribe_pep_node(
-                    PepSubscribeWrite {
+                    northstar_pubsub_application::PepSubscribeCommand::from(PepSubscribeWrite {
                         owner: &owner,
                         actor: PepSubscriptionActor {
                             jid: &subscriber,
@@ -5837,11 +5772,12 @@ mod tests {
                         subscriber_jid: &subscriber,
                         max_subscriptions: 100,
                         requested_subid: &presence_denied_subid,
-                    },
+                    }),
                     &|_: &PepSubscribeSnapshot| Ok(Vec::new()),
                 )
                 .await
-                .unwrap(),
+                .unwrap()
+                .outcome,
             PepSubscribeOutcome::NotAuthorized(_)
         ));
 
@@ -5865,7 +5801,7 @@ mod tests {
         assert_eq!(
             service
                 .subscribe_pep_node(
-                    PepSubscribeWrite {
+                    northstar_pubsub_application::PepSubscribeCommand::from(PepSubscribeWrite {
                         owner: &owner,
                         actor: PepSubscriptionActor {
                             jid: &subscriber,
@@ -5875,11 +5811,12 @@ mod tests {
                         subscriber_jid: &subscriber,
                         max_subscriptions: 100,
                         requested_subid: &deleted_subid,
-                    },
+                    }),
                     &|_: &PepSubscribeSnapshot| Ok(Vec::new()),
                 )
                 .await
-                .unwrap(),
+                .unwrap()
+                .outcome,
             PepSubscribeOutcome::NotFound
         );
 
@@ -5904,7 +5841,7 @@ mod tests {
             let subid = Uuid::new_v4().to_string();
             first_service
                 .subscribe_pep_node(
-                    PepSubscribeWrite {
+                    northstar_pubsub_application::PepSubscribeCommand::from(PepSubscribeWrite {
                         owner: &first_owner,
                         actor: PepSubscriptionActor {
                             jid: &first_jid,
@@ -5914,7 +5851,7 @@ mod tests {
                         subscriber_jid: &first_jid,
                         max_subscriptions: 100,
                         requested_subid: &subid,
-                    },
+                    }),
                     &move |_: &PepSubscribeSnapshot| {
                         first_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         Ok(Vec::new())
@@ -5931,7 +5868,7 @@ mod tests {
             let subid = Uuid::new_v4().to_string();
             second_service
                 .subscribe_pep_node(
-                    PepSubscribeWrite {
+                    northstar_pubsub_application::PepSubscribeCommand::from(PepSubscribeWrite {
                         owner: &second_owner,
                         actor: PepSubscriptionActor {
                             jid: &second_jid,
@@ -5941,7 +5878,7 @@ mod tests {
                         subscriber_jid: &second_jid,
                         max_subscriptions: 100,
                         requested_subid: &subid,
-                    },
+                    }),
                     &move |_: &PepSubscribeSnapshot| {
                         second_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         Ok(Vec::new())
@@ -5952,7 +5889,7 @@ mod tests {
         let first = first.await.unwrap().unwrap();
         let second = second.await.unwrap().unwrap();
         let (PepSubscribeOutcome::Subscribed(first), PepSubscribeOutcome::Subscribed(second)) =
-            (first, second)
+            (first.outcome, second.outcome)
         else {
             panic!("duplicate subscriptions were not accepted idempotently");
         };
@@ -5974,50 +5911,59 @@ mod tests {
         let sibling = subscriber.replace("/phone", "/tablet");
         assert_eq!(
             service
-                .unsubscribe_pep_node(PepUnsubscribeWrite {
-                    owner: &owner,
-                    actor: PepSubscriptionActor {
-                        jid: &sibling,
-                        local_account: None,
+                .unsubscribe_pep_node(northstar_pubsub_application::PepUnsubscribeCommand::from(
+                    PepUnsubscribeWrite {
+                        owner: &owner,
+                        actor: PepSubscriptionActor {
+                            jid: &sibling,
+                            local_account: None,
+                        },
+                        node: &duplicate_node,
+                        subscriber_jid: &subscriber,
+                        subid: Some(&first.subid),
                     },
-                    node: &duplicate_node,
-                    subscriber_jid: &subscriber,
-                    subid: Some(&first.subid),
-                })
+                ))
                 .await
-                .unwrap(),
+                .unwrap()
+                .outcome,
             PepUnsubscribeOutcome::Forbidden
         );
         assert_eq!(
             service
-                .unsubscribe_pep_node(PepUnsubscribeWrite {
-                    owner: &owner,
-                    actor: PepSubscriptionActor {
-                        jid: &subscriber,
-                        local_account: None,
+                .unsubscribe_pep_node(northstar_pubsub_application::PepUnsubscribeCommand::from(
+                    PepUnsubscribeWrite {
+                        owner: &owner,
+                        actor: PepSubscriptionActor {
+                            jid: &subscriber,
+                            local_account: None,
+                        },
+                        node: &duplicate_node,
+                        subscriber_jid: &subscriber,
+                        subid: Some(&first.subid),
                     },
-                    node: &duplicate_node,
-                    subscriber_jid: &subscriber,
-                    subid: Some(&first.subid),
-                })
+                ))
                 .await
-                .unwrap(),
+                .unwrap()
+                .outcome,
             PepUnsubscribeOutcome::Unsubscribed(Some(first.subid.clone()))
         );
         assert_eq!(
             service
-                .unsubscribe_pep_node(PepUnsubscribeWrite {
-                    owner: &owner,
-                    actor: PepSubscriptionActor {
-                        jid: &subscriber,
-                        local_account: None,
+                .unsubscribe_pep_node(northstar_pubsub_application::PepUnsubscribeCommand::from(
+                    PepUnsubscribeWrite {
+                        owner: &owner,
+                        actor: PepSubscriptionActor {
+                            jid: &subscriber,
+                            local_account: None,
+                        },
+                        node: &duplicate_node,
+                        subscriber_jid: &subscriber,
+                        subid: Some(&first.subid),
                     },
-                    node: &duplicate_node,
-                    subscriber_jid: &subscriber,
-                    subid: Some(&first.subid),
-                })
+                ))
                 .await
-                .unwrap(),
+                .unwrap()
+                .outcome,
             PepUnsubscribeOutcome::Unsubscribed(None)
         );
 
@@ -6051,7 +5997,7 @@ mod tests {
         assert!(matches!(
             service
                 .subscribe_pep_node(
-                    PepSubscribeWrite {
+                    northstar_pubsub_application::PepSubscribeCommand::from(PepSubscribeWrite {
                         owner: &owner,
                         actor: PepSubscriptionActor {
                             jid: &local_jid,
@@ -6061,11 +6007,12 @@ mod tests {
                         subscriber_jid: &local_jid,
                         max_subscriptions: 100,
                         requested_subid: &reciprocal_subid,
-                    },
+                    }),
                     &|_: &PepSubscribeSnapshot| Ok(Vec::new()),
                 )
                 .await
-                .unwrap(),
+                .unwrap()
+                .outcome,
             PepSubscribeOutcome::NotAuthorized(_)
         ));
 

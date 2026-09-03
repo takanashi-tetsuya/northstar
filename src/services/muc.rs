@@ -9,6 +9,27 @@
 use crate::db;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+pub(crate) use northstar_room_application::{
+    validate_muc_affiliation_batch_command, validate_muc_configuration_command,
+    validate_muc_registration_command, validate_muc_retraction_command,
+    validate_muc_subject_command, MucAffiliationBatchCommand, MucAffiliationBatchResult,
+    MucConfigurationCommand, MucConfigurationResult, MucDiscussionRepository,
+    MucRegistrationCommand, MucRegistrationResult, MucRetractionCommand, MucRetractionResult,
+    MucSubjectCommand, MucSubjectResult, RepositoryFuture, RoomApplication,
+};
+pub(crate) use northstar_room_core::{
+    ClusterMucAffiliationSubject, ClusterMucConfigurationOutcome, ClusterMucInviteAuthority,
+    ClusterMucJoin, ClusterMucJoinOutcome, ClusterMucOccupancy, ClusterMucOccupancyTarget,
+    ClusterMucPrincipal, ClusterMucRegistrationOutcome, ClusterMucTransitionOutcome,
+    DurableMucInviteOutcome, FederatedInvitePolicy, MucActorAuthority, MucActorPrincipal,
+    MucAdminAffiliationEntry, MucAdminRoleEntry, MucAdminRoleList, MucAdminSnapshot,
+    MucAffiliationBatchOutcome, MucAffiliationBatchWrite, MucAffiliationChange,
+    MucAffiliationTarget, MucConfigUpdate, MucConfigurationOutcome, MucConfigurationWrite,
+    MucDiscoPage, MucDiscussion, MucDiscussionAdmission, MucLocalAccount, MucMessage,
+    MucRegistrationOutcome, MucRegistrationTarget, MucRegistrationWrite, MucRetractionKind,
+    MucRetractionMutation, MucRetractionOutcome, MucRoom, MucSubjectMutation, MucSubjectOutcome,
+    OfflineStoreOutcome, OfflineStorePolicy,
+};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::{sync::Arc, time::Duration};
@@ -19,6 +40,7 @@ const LOCAL_JOIN_GATE_SHARDS: usize = 256;
 #[derive(Clone)]
 pub(crate) struct MucService {
     pool: PgPool,
+    discussion_application: RoomApplication<PostgresMucDiscussionRepository>,
     /// Server-owned domain authority.  Protocol commands cannot substitute a
     /// self-reported domain for this value.
     configured_domain: Arc<str>,
@@ -29,58 +51,9 @@ pub(crate) struct MucService {
     local_join_gates: Arc<[Arc<tokio::sync::Mutex<()>>]>,
 }
 
-/// Minimal local-account identity needed by MUC routing. Password verifiers,
-/// administrative status and profile fields never cross this boundary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MucLocalAccount {
-    pub(crate) id: Uuid,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct MucRoom {
-    pub(crate) id: Uuid,
-    pub(crate) room_epoch: Uuid,
-    pub(crate) config_version: i64,
-    pub(crate) localpart: String,
-    pub(crate) title: Option<String>,
-    pub(crate) description: Option<String>,
-    pub(crate) persistent: bool,
-    pub(crate) members_only: bool,
-    pub(crate) public: bool,
-    pub(crate) moderated: bool,
-    pub(crate) non_anonymous: bool,
-    pub(crate) max_occupants: i32,
-    pub(crate) subject: Option<String>,
-    pub(crate) subject_changed_at: Option<DateTime<Utc>>,
-    pub(crate) allow_subject_change: bool,
-    pub(crate) allow_invites: bool,
-    pub(crate) allow_private_messages: bool,
-    pub(crate) logging_enabled: bool,
-    pub(crate) allow_registration: bool,
-    pub(crate) password_hash: Option<String>,
-    pub(crate) occupant_id_secret: Vec<u8>,
-    pub(crate) configuration_owner_jid: Option<String>,
-    pub(crate) configuration_expires_at: Option<DateTime<Utc>>,
-}
-
-impl MucRoom {
-    pub(crate) fn is_locked(&self) -> bool {
-        self.configuration_owner_jid.is_some()
-    }
-
-    pub(crate) fn configuration_is_expired(&self, now: DateTime<Utc>) -> bool {
-        self.configuration_expires_at
-            .is_some_and(|expires_at| expires_at <= now)
-    }
-
-    pub(crate) fn can_configure_locked_room(
-        &self,
-        actor_full_jid: &str,
-        now: DateTime<Utc>,
-    ) -> bool {
-        self.configuration_owner_jid.as_deref() == Some(actor_full_jid)
-            && !self.configuration_is_expired(now)
-    }
+#[derive(Clone)]
+struct PostgresMucDiscussionRepository {
+    pool: PgPool,
 }
 
 impl From<db::MucRoom> for MucRoom {
@@ -113,13 +86,6 @@ impl From<db::MucRoom> for MucRoom {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct MucMessage {
-    pub(crate) sender_jid: String,
-    pub(crate) stanza: String,
-    pub(crate) created_at: DateTime<Utc>,
-}
-
 impl From<db::MucMessage> for MucMessage {
     fn from(message: db::MucMessage) -> Self {
         Self {
@@ -130,13 +96,6 @@ impl From<db::MucMessage> for MucMessage {
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct MucDiscoPage {
-    pub(crate) rooms: Vec<MucRoom>,
-    pub(crate) total: i64,
-    pub(crate) first_index: i64,
-}
-
 impl From<db::MucDiscoPage> for MucDiscoPage {
     fn from(page: db::MucDiscoPage) -> Self {
         Self {
@@ -145,14 +104,6 @@ impl From<db::MucDiscoPage> for MucDiscoPage {
             first_index: page.first_index,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OfflineStoreOutcome {
-    Stored,
-    Replay,
-    QuotaExceeded,
-    RecipientUnavailable,
 }
 
 impl From<db::OfflineStoreOutcome> for OfflineStoreOutcome {
@@ -166,14 +117,6 @@ impl From<db::OfflineStoreOutcome> for OfflineStoreOutcome {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct OfflineStorePolicy {
-    pub(crate) max_messages: i64,
-    pub(crate) max_bytes: i64,
-    pub(crate) ttl_days: i64,
-    pub(crate) mam_backed: bool,
-}
-
 impl From<OfflineStorePolicy> for db::OfflineStorePolicy {
     fn from(policy: OfflineStorePolicy) -> Self {
         Self {
@@ -185,48 +128,7 @@ impl From<OfflineStorePolicy> for db::OfflineStorePolicy {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct FederatedInvitePolicy {
-    pub(crate) ttl_seconds: u64,
-    pub(crate) max_rows: i64,
-    pub(crate) max_bytes: i64,
-    pub(crate) max_per_domain: i64,
-}
 
-impl From<db::S2sOutboxPolicy> for FederatedInvitePolicy {
-    fn from(policy: db::S2sOutboxPolicy) -> Self {
-        Self {
-            ttl_seconds: policy.ttl_seconds,
-            max_rows: policy.max_rows,
-            max_bytes: policy.max_bytes,
-            max_per_domain: policy.max_per_domain,
-        }
-    }
-}
-
-impl From<FederatedInvitePolicy> for db::S2sOutboxPolicy {
-    fn from(policy: FederatedInvitePolicy) -> Self {
-        Self {
-            ttl_seconds: policy.ttl_seconds,
-            max_rows: policy.max_rows,
-            max_bytes: policy.max_bytes,
-            max_per_domain: policy.max_per_domain,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum ClusterMucPrincipal {
-    Local {
-        user_id: Uuid,
-        bare_jid: String,
-    },
-    Federated {
-        bare_jid: String,
-        authenticated_domain: String,
-    },
-}
 
 impl From<&ClusterMucPrincipal> for db::ClusterMucPrincipal {
     fn from(principal: &ClusterMucPrincipal) -> Self {
@@ -246,13 +148,6 @@ impl From<&ClusterMucPrincipal> for db::ClusterMucPrincipal {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum ClusterMucAffiliationSubject {
-    Local { user_id: Uuid, bare_jid: String },
-    Federated { bare_jid: String },
-}
-
 impl From<&ClusterMucAffiliationSubject> for db::ClusterMucAffiliationSubject {
     fn from(subject: &ClusterMucAffiliationSubject) -> Self {
         match subject {
@@ -267,30 +162,16 @@ impl From<&ClusterMucAffiliationSubject> for db::ClusterMucAffiliationSubject {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub(crate) struct ClusterMucOccupancyTarget {
-    pub(crate) room_id: Uuid,
-    pub(crate) room_epoch: Uuid,
-    pub(crate) occupant_incarnation: Uuid,
-    pub(crate) occupancy_epoch: i64,
-    pub(crate) full_jid: String,
-    pub(crate) nick: String,
-    pub(crate) connection_uuid: Uuid,
-    pub(crate) connection_epoch: i64,
-}
-
-impl From<db::ClusterMucOccupancyTarget> for ClusterMucOccupancyTarget {
-    fn from(target: db::ClusterMucOccupancyTarget) -> Self {
-        Self {
-            room_id: target.room_id,
-            room_epoch: target.room_epoch,
-            occupant_incarnation: target.occupant_incarnation,
-            occupancy_epoch: target.occupancy_epoch,
-            full_jid: target.full_jid,
-            nick: target.nick,
-            connection_uuid: target.connection_uuid,
-            connection_epoch: target.connection_epoch,
-        }
+fn occupancy_target_from_db(target: db::ClusterMucOccupancyTarget) -> ClusterMucOccupancyTarget {
+    ClusterMucOccupancyTarget {
+        room_id: target.room_id,
+        room_epoch: target.room_epoch,
+        occupant_incarnation: target.occupant_incarnation,
+        occupancy_epoch: target.occupancy_epoch,
+        full_jid: target.full_jid,
+        nick: target.nick,
+        connection_uuid: target.connection_uuid,
+        connection_epoch: target.connection_epoch,
     }
 }
 
@@ -309,16 +190,77 @@ impl From<&ClusterMucOccupancyTarget> for db::ClusterMucOccupancyTarget {
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct ClusterMucInviteAuthority {
-    pub(crate) operation_id: Uuid,
-    pub(crate) expected_room_epoch: Uuid,
-    pub(crate) expected_config_version: i64,
-    pub(crate) actor: ClusterMucPrincipal,
-    pub(crate) actor_full_jid: String,
-    pub(crate) actor_target: Option<ClusterMucOccupancyTarget>,
-    pub(crate) subject: ClusterMucAffiliationSubject,
-    pub(crate) reason: Option<String>,
+fn actor_principal_to_db(principal: &MucActorPrincipal) -> db::MucActorPrincipal<'_> {
+    match principal {
+        MucActorPrincipal::Local {
+            user_id,
+            local_domain,
+        } => db::MucActorPrincipal::Local {
+            user_id: *user_id,
+            local_domain,
+        },
+        MucActorPrincipal::Federated {
+            bare_jid,
+            authenticated_domain,
+        } => db::MucActorPrincipal::Federated {
+            bare_jid,
+            authenticated_domain,
+        },
+    }
+}
+
+fn actor_authority_to_db(authority: &MucActorAuthority) -> db::MucActorAuthority<'_> {
+    db::MucActorAuthority {
+        clustered: authority.clustered,
+        expected_room_epoch: authority.expected_room_epoch,
+        principal: actor_principal_to_db(&authority.principal),
+        actor_scope: &authority.actor_scope,
+        full_jid: &authority.full_jid,
+        nick: &authority.nick,
+        occupant_incarnation: authority.occupant_incarnation,
+        connection_uuid: authority.connection_uuid,
+        expected_role: &authority.expected_role,
+        expected_affiliation: &authority.expected_affiliation,
+        cluster_target: authority.cluster_target.as_ref().map(Into::into),
+    }
+}
+
+fn discussion_to_db(command: &MucDiscussion) -> db::MucDiscussion<'_> {
+    db::MucDiscussion {
+        id: command.id,
+        room_id: command.room_id,
+        actor_scope: &command.actor_scope,
+        origin_id: command.origin_id.as_deref(),
+        sender_jid: &command.sender_jid,
+        nick: &command.nick,
+        stanza: &command.stanza,
+        encrypted: command.encrypted,
+        archive: command.archive,
+        retention_days: command.retention_days,
+        authority: actor_authority_to_db(&command.authority),
+    }
+}
+
+impl MucDiscussionRepository for PostgresMucDiscussionRepository {
+    type Error = anyhow::Error;
+
+    fn admit_discussion<'a>(
+        &'a self,
+        command: &'a MucDiscussion,
+    ) -> RepositoryFuture<'a, Self::Error> {
+        Box::pin(async move {
+            Ok(
+                match db::admit_muc_discussion(&self.pool, discussion_to_db(command)).await? {
+                    db::MucDiscussionAdmission::Stored(id) => MucDiscussionAdmission::Stored(id),
+                    db::MucDiscussionAdmission::Replay(id) => MucDiscussionAdmission::Replay(id),
+                    db::MucDiscussionAdmission::Unauthorized => {
+                        MucDiscussionAdmission::Unauthorized
+                    }
+                    db::MucDiscussionAdmission::Stale => MucDiscussionAdmission::Stale,
+                },
+            )
+        })
+    }
 }
 
 impl From<&ClusterMucInviteAuthority> for db::ClusterMucInviteAuthority {
@@ -336,13 +278,6 @@ impl From<&ClusterMucInviteAuthority> for db::ClusterMucInviteAuthority {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MucRegistrationOutcome {
-    Registered { affiliation_changed: bool },
-    Conflict,
-    Outcast,
-}
-
 impl From<db::MucRegistrationOutcome> for MucRegistrationOutcome {
     fn from(outcome: db::MucRegistrationOutcome) -> Self {
         match outcome {
@@ -355,17 +290,6 @@ impl From<db::MucRegistrationOutcome> for MucRegistrationOutcome {
             db::MucRegistrationOutcome::Outcast => Self::Outcast,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ClusterMucRegistrationOutcome {
-    Applied { affiliation_changed: bool },
-    Replay { affiliation_changed: bool },
-    Conflict,
-    Outcast,
-    NotAllowed,
-    Stale,
-    Destroyed,
 }
 
 impl From<db::ClusterMucRegistrationOutcome> for ClusterMucRegistrationOutcome {
@@ -390,17 +314,6 @@ impl From<db::ClusterMucRegistrationOutcome> for ClusterMucRegistrationOutcome {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DurableMucInviteOutcome {
-    Stored { id: Uuid, affiliation_changed: bool },
-    Replay { id: Uuid },
-    QuotaExceeded,
-    RecipientUnavailable,
-    Outcast,
-    AuthorityRejected,
-    Stale,
-}
-
 impl From<db::DurableMucInviteOutcome> for DurableMucInviteOutcome {
     fn from(outcome: db::DurableMucInviteOutcome) -> Self {
         match outcome {
@@ -421,16 +334,6 @@ impl From<db::DurableMucInviteOutcome> for DurableMucInviteOutcome {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ClusterMucTransitionOutcome {
-    Applied,
-    Replay,
-    Stale,
-    Destroyed,
-    Conflict,
-    Unauthorized,
-}
-
 impl From<db::ClusterMucTransitionOutcome> for ClusterMucTransitionOutcome {
     fn from(outcome: db::ClusterMucTransitionOutcome) -> Self {
         match outcome {
@@ -444,14 +347,6 @@ impl From<db::ClusterMucTransitionOutcome> for ClusterMucTransitionOutcome {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MucConfigurationOutcome {
-    Applied,
-    LockedByAnother,
-    Expired,
-    Missing,
-}
-
 impl From<db::MucConfigurationOutcome> for MucConfigurationOutcome {
     fn from(outcome: db::MucConfigurationOutcome) -> Self {
         match outcome {
@@ -461,18 +356,6 @@ impl From<db::MucConfigurationOutcome> for MucConfigurationOutcome {
             db::MucConfigurationOutcome::Missing => Self::Missing,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ClusterMucConfigurationOutcome {
-    Applied,
-    Replay,
-    LockedByAnother,
-    Expired,
-    Missing,
-    Stale,
-    Unauthorized,
-    Destroyed,
 }
 
 impl From<db::ClusterMucConfigurationOutcome> for ClusterMucConfigurationOutcome {
@@ -490,17 +373,6 @@ impl From<db::ClusterMucConfigurationOutcome> for ClusterMucConfigurationOutcome
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MucAffiliationBatchOutcome {
-    Applied,
-    DuplicateTarget,
-    LastOwner,
-    MissingTarget,
-    Unauthorized,
-    Stale,
-    Destroyed,
-}
-
 impl From<db::MucAffiliationBatchOutcome> for MucAffiliationBatchOutcome {
     fn from(outcome: db::MucAffiliationBatchOutcome) -> Self {
         match outcome {
@@ -515,12 +387,6 @@ impl From<db::MucAffiliationBatchOutcome> for MucAffiliationBatchOutcome {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub(crate) enum MucAffiliationTarget {
-    LocalUsername(String),
-    FederatedBareJid(String),
-}
-
 impl From<&MucAffiliationTarget> for db::MucAffiliationTarget {
     fn from(target: &MucAffiliationTarget) -> Self {
         match target {
@@ -530,12 +396,6 @@ impl From<&MucAffiliationTarget> for db::MucAffiliationTarget {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub(crate) struct MucAffiliationChange {
-    pub(crate) target: MucAffiliationTarget,
-    pub(crate) affiliation: String,
-}
-
 impl From<&MucAffiliationChange> for db::MucAffiliationChange {
     fn from(change: &MucAffiliationChange) -> Self {
         Self {
@@ -543,32 +403,6 @@ impl From<&MucAffiliationChange> for db::MucAffiliationChange {
             affiliation: change.affiliation.clone(),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MucDiscussionAdmission {
-    Stored(Uuid),
-    Replay(Uuid),
-    Unauthorized,
-    Stale,
-}
-
-impl From<db::MucDiscussionAdmission> for MucDiscussionAdmission {
-    fn from(admission: db::MucDiscussionAdmission) -> Self {
-        match admission {
-            db::MucDiscussionAdmission::Stored(id) => Self::Stored(id),
-            db::MucDiscussionAdmission::Replay(id) => Self::Replay(id),
-            db::MucDiscussionAdmission::Unauthorized => Self::Unauthorized,
-            db::MucDiscussionAdmission::Stale => Self::Stale,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MucSubjectOutcome {
-    Applied,
-    Unauthorized,
-    Stale,
 }
 
 impl From<db::MucSubjectOutcome> for MucSubjectOutcome {
@@ -581,156 +415,17 @@ impl From<db::MucSubjectOutcome> for MucSubjectOutcome {
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum MucActorPrincipal<'a> {
-    Local {
-        user_id: Uuid,
-        local_domain: &'a str,
-    },
-    Federated {
-        bare_jid: &'a str,
-        authenticated_domain: &'a str,
-    },
-}
-
-impl<'a> From<&MucActorPrincipal<'a>> for db::MucActorPrincipal<'a> {
-    fn from(principal: &MucActorPrincipal<'a>) -> Self {
-        match principal {
-            MucActorPrincipal::Local {
-                user_id,
-                local_domain,
-            } => Self::Local {
-                user_id: *user_id,
-                local_domain,
-            },
-            MucActorPrincipal::Federated {
-                bare_jid,
-                authenticated_domain,
-            } => Self::Federated {
-                bare_jid,
-                authenticated_domain,
-            },
-        }
+fn subject_mutation_into_db<'a>(m: MucSubjectMutation<'a>) -> db::MucSubjectMutation<'a> {
+    db::MucSubjectMutation {
+        stanza_id: m.stanza_id,
+        room_id: m.room_id,
+        actor_scope: m.actor_scope,
+        sender_jid: m.sender_jid,
+        nick: m.nick,
+        subject: m.subject,
+        stanza: m.stanza,
+        encrypted: m.encrypted,
     }
-}
-
-impl MucActorAuthority<'_> {
-    /// Reject a forged foreign-domain JID before a local command crosses the
-    /// application-service boundary.  The repository repeats this check under
-    /// its transaction locks so this is defense in depth, not the authority
-    /// decision itself.
-    fn local_scope_matches_configured_domain(&self, configured_domain: &str) -> bool {
-        let MucActorPrincipal::Local { local_domain, .. } = &self.principal else {
-            return true;
-        };
-        let (Ok(local_domain), Ok(configured_domain)) = (
-            crate::jid::prepare_domainpart(local_domain),
-            crate::jid::prepare_domainpart(configured_domain),
-        ) else {
-            return false;
-        };
-        if local_domain != configured_domain {
-            return false;
-        }
-        crate::jid::CanonicalJid::parse_bare(self.actor_scope).is_ok_and(|actor| {
-            actor.resourcepart().is_none()
-                && actor.domainpart() == local_domain
-                && actor.to_string() == self.actor_scope
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct MucActorAuthority<'a> {
-    pub(crate) clustered: bool,
-    pub(crate) expected_room_epoch: Uuid,
-    pub(crate) principal: MucActorPrincipal<'a>,
-    pub(crate) actor_scope: &'a str,
-    pub(crate) full_jid: &'a str,
-    pub(crate) nick: &'a str,
-    pub(crate) occupant_incarnation: Uuid,
-    pub(crate) connection_uuid: Uuid,
-    pub(crate) expected_role: &'a str,
-    pub(crate) expected_affiliation: &'a str,
-    pub(crate) cluster_target: Option<ClusterMucOccupancyTarget>,
-}
-
-pub(crate) struct MucDiscussion<'a> {
-    pub(crate) id: Uuid,
-    pub(crate) room_id: Uuid,
-    pub(crate) actor_scope: &'a str,
-    pub(crate) origin_id: Option<&'a str>,
-    pub(crate) sender_jid: &'a str,
-    pub(crate) nick: &'a str,
-    pub(crate) stanza: &'a str,
-    pub(crate) encrypted: bool,
-    pub(crate) archive: bool,
-    pub(crate) retention_days: i64,
-    pub(crate) authority: MucActorAuthority<'a>,
-}
-
-impl<'a> MucDiscussion<'a> {
-    fn into_db(self) -> db::MucDiscussion<'a> {
-        let cluster_target = self.authority.cluster_target.as_ref().map(Into::into);
-        let authority = db::MucActorAuthority {
-            clustered: self.authority.clustered,
-            expected_room_epoch: self.authority.expected_room_epoch,
-            principal: (&self.authority.principal).into(),
-            actor_scope: self.authority.actor_scope,
-            full_jid: self.authority.full_jid,
-            nick: self.authority.nick,
-            occupant_incarnation: self.authority.occupant_incarnation,
-            connection_uuid: self.authority.connection_uuid,
-            expected_role: self.authority.expected_role,
-            expected_affiliation: self.authority.expected_affiliation,
-            cluster_target,
-        };
-        db::MucDiscussion {
-            id: self.id,
-            room_id: self.room_id,
-            actor_scope: self.actor_scope,
-            origin_id: self.origin_id,
-            sender_jid: self.sender_jid,
-            nick: self.nick,
-            stanza: self.stanza,
-            encrypted: self.encrypted,
-            archive: self.archive,
-            retention_days: self.retention_days,
-            authority,
-        }
-    }
-}
-
-pub(crate) struct MucSubjectMutation<'a> {
-    pub(crate) stanza_id: Uuid,
-    pub(crate) room_id: Uuid,
-    pub(crate) actor_scope: &'a str,
-    pub(crate) sender_jid: &'a str,
-    pub(crate) nick: &'a str,
-    pub(crate) subject: &'a str,
-    pub(crate) stanza: &'a str,
-    pub(crate) encrypted: bool,
-}
-
-impl<'a> MucSubjectMutation<'a> {
-    fn into_db(self) -> db::MucSubjectMutation<'a> {
-        db::MucSubjectMutation {
-            stanza_id: self.stanza_id,
-            room_id: self.room_id,
-            actor_scope: self.actor_scope,
-            sender_jid: self.sender_jid,
-            nick: self.nick,
-            subject: self.subject,
-            stanza: self.stanza,
-            encrypted: self.encrypted,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MucRetractionKind {
-    Author,
-    Moderator,
 }
 
 impl From<MucRetractionKind> for db::MucRetractionKind {
@@ -742,59 +437,23 @@ impl From<MucRetractionKind> for db::MucRetractionKind {
     }
 }
 
-pub(crate) struct MucRetractionMutation<'a> {
-    pub(crate) action_id: Uuid,
-    pub(crate) room_id: Uuid,
-    pub(crate) target_id: Uuid,
-    pub(crate) expected_stanza: &'a str,
-    pub(crate) actor_scope: &'a str,
-    pub(crate) sender_jid: &'a str,
-    pub(crate) nick: &'a str,
-    pub(crate) tombstone: &'a str,
-    pub(crate) action_stanza: &'a str,
-    pub(crate) reason: Option<&'a str>,
-    pub(crate) kind: MucRetractionKind,
-    pub(crate) authority: MucActorAuthority<'a>,
-}
-
-impl<'a> MucRetractionMutation<'a> {
-    fn into_db(self) -> db::MucRetractionMutation<'a> {
-        let cluster_target = self.authority.cluster_target.as_ref().map(Into::into);
-        db::MucRetractionMutation {
-            action_id: self.action_id,
-            room_id: self.room_id,
-            target_id: self.target_id,
-            expected_stanza: self.expected_stanza,
-            actor_scope: self.actor_scope,
-            sender_jid: self.sender_jid,
-            nick: self.nick,
-            tombstone: self.tombstone,
-            action_stanza: self.action_stanza,
-            reason: self.reason,
-            kind: self.kind.into(),
-            authority: db::MucActorAuthority {
-                clustered: self.authority.clustered,
-                expected_room_epoch: self.authority.expected_room_epoch,
-                principal: (&self.authority.principal).into(),
-                actor_scope: self.authority.actor_scope,
-                full_jid: self.authority.full_jid,
-                nick: self.authority.nick,
-                occupant_incarnation: self.authority.occupant_incarnation,
-                connection_uuid: self.authority.connection_uuid,
-                expected_role: self.authority.expected_role,
-                expected_affiliation: self.authority.expected_affiliation,
-                cluster_target,
-            },
-        }
+fn retraction_mutation_as_db<'a>(
+    m: &'a MucRetractionMutation<'a>,
+) -> db::MucRetractionMutation<'a> {
+    db::MucRetractionMutation {
+        action_id: m.action_id,
+        room_id: m.room_id,
+        target_id: m.target_id,
+        expected_stanza: m.expected_stanza,
+        actor_scope: m.actor_scope,
+        sender_jid: m.sender_jid,
+        nick: m.nick,
+        tombstone: m.tombstone,
+        action_stanza: m.action_stanza,
+        reason: m.reason,
+        kind: m.kind.into(),
+        authority: actor_authority_to_db(&m.authority),
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MucRetractionOutcome {
-    Applied,
-    Conflict,
-    Unauthorized,
-    Stale,
 }
 
 impl From<db::MucRetractionOutcome> for MucRetractionOutcome {
@@ -806,33 +465,6 @@ impl From<db::MucRetractionOutcome> for MucRetractionOutcome {
             db::MucRetractionOutcome::Stale => Self::Stale,
         }
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MucAdminRoleEntry {
-    pub(crate) nick: String,
-    pub(crate) role: String,
-    pub(crate) bare_jid: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MucAdminRoleList {
-    pub(crate) requester_role: String,
-    pub(crate) non_anonymous: bool,
-    pub(crate) entries: Vec<MucAdminRoleEntry>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MucAdminAffiliationEntry {
-    pub(crate) bare_jid: String,
-    pub(crate) affiliation: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum MucAdminSnapshot<T> {
-    Authorized(T),
-    Unauthorized,
-    Stale,
 }
 
 impl From<db::MucAdminRoleList> for MucAdminRoleList {
@@ -864,66 +496,23 @@ fn map_admin_snapshot<T, U>(
     }
 }
 
-pub(crate) struct MucConfigUpdate<'a> {
-    pub(crate) title: Option<&'a str>,
-    pub(crate) description: Option<&'a str>,
-    pub(crate) persistent: bool,
-    pub(crate) members_only: bool,
-    pub(crate) public: bool,
-    pub(crate) moderated: bool,
-    pub(crate) non_anonymous: bool,
-    pub(crate) max_occupants: i32,
-    pub(crate) password_hash: Option<&'a str>,
-    pub(crate) allow_subject_change: bool,
-    pub(crate) allow_invites: bool,
-    pub(crate) allow_private_messages: bool,
-    pub(crate) logging_enabled: bool,
-    pub(crate) allow_registration: bool,
-}
-
-impl<'a> MucConfigUpdate<'a> {
-    fn into_db(self) -> db::MucConfigUpdate<'a> {
-        db::MucConfigUpdate {
-            title: self.title,
-            description: self.description,
-            persistent: self.persistent,
-            members_only: self.members_only,
-            public: self.public,
-            moderated: self.moderated,
-            non_anonymous: self.non_anonymous,
-            max_occupants: self.max_occupants,
-            password_hash: self.password_hash,
-            allow_subject_change: self.allow_subject_change,
-            allow_invites: self.allow_invites,
-            allow_private_messages: self.allow_private_messages,
-            logging_enabled: self.logging_enabled,
-            allow_registration: self.allow_registration,
-        }
+fn config_update_into_db<'a>(c: MucConfigUpdate<'a>) -> db::MucConfigUpdate<'a> {
+    db::MucConfigUpdate {
+        title: c.title,
+        description: c.description,
+        persistent: c.persistent,
+        members_only: c.members_only,
+        public: c.public,
+        moderated: c.moderated,
+        non_anonymous: c.non_anonymous,
+        max_occupants: c.max_occupants,
+        password_hash: c.password_hash,
+        allow_subject_change: c.allow_subject_change,
+        allow_invites: c.allow_invites,
+        allow_private_messages: c.allow_private_messages,
+        logging_enabled: c.logging_enabled,
+        allow_registration: c.allow_registration,
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ClusterMucOccupancy {
-    pub(crate) room_id: Uuid,
-    pub(crate) room_epoch: Uuid,
-    pub(crate) occupant_incarnation: Uuid,
-    pub(crate) occupancy_epoch: i64,
-    pub(crate) config_version: i64,
-    pub(crate) identity_kind: String,
-    pub(crate) local_user_id: Option<Uuid>,
-    pub(crate) bare_jid: String,
-    pub(crate) full_jid: String,
-    pub(crate) nick: String,
-    pub(crate) authenticated_domain: Option<String>,
-    pub(crate) owner_node_id: String,
-    pub(crate) connection_uuid: Uuid,
-    pub(crate) connection_epoch: i64,
-    pub(crate) sm_session_id: Option<Uuid>,
-    pub(crate) role: String,
-    pub(crate) affiliation: String,
-    pub(crate) state: String,
-    pub(crate) presence_payload: String,
-    pub(crate) lease_until: DateTime<Utc>,
 }
 
 impl From<db::ClusterMucOccupancy> for ClusterMucOccupancy {
@@ -953,58 +542,23 @@ impl From<db::ClusterMucOccupancy> for ClusterMucOccupancy {
     }
 }
 
-pub(crate) struct ClusterMucJoin<'a> {
-    pub(crate) operation_id: Uuid,
-    pub(crate) room_id: Uuid,
-    pub(crate) expected_room_epoch: Uuid,
-    pub(crate) expected_config_version: i64,
-    pub(crate) principal: ClusterMucPrincipal,
-    pub(crate) full_jid: &'a str,
-    pub(crate) nick: &'a str,
-    pub(crate) owner_node_id: &'a str,
-    pub(crate) connection_uuid: Uuid,
-    pub(crate) connection_epoch: i64,
-    pub(crate) sm_session_id: Option<Uuid>,
-    pub(crate) occupant_incarnation: Uuid,
-    pub(crate) presence_payload: &'a str,
-    pub(crate) lease: Duration,
-}
-
-impl<'a> ClusterMucJoin<'a> {
-    fn into_db(self) -> db::ClusterMucJoin<'a> {
-        db::ClusterMucJoin {
-            operation_id: self.operation_id,
-            room_id: self.room_id,
-            expected_room_epoch: self.expected_room_epoch,
-            expected_config_version: self.expected_config_version,
-            principal: (&self.principal).into(),
-            full_jid: self.full_jid,
-            nick: self.nick,
-            owner_node_id: self.owner_node_id,
-            connection_uuid: self.connection_uuid,
-            connection_epoch: self.connection_epoch,
-            sm_session_id: self.sm_session_id,
-            occupant_incarnation: self.occupant_incarnation,
-            presence_payload: self.presence_payload,
-            lease: self.lease,
-        }
+fn cluster_join_into_db<'a>(j: ClusterMucJoin<'a>) -> db::ClusterMucJoin<'a> {
+    db::ClusterMucJoin {
+        operation_id: j.operation_id,
+        room_id: j.room_id,
+        expected_room_epoch: j.expected_room_epoch,
+        expected_config_version: j.expected_config_version,
+        principal: (&j.principal).into(),
+        full_jid: j.full_jid,
+        nick: j.nick,
+        owner_node_id: j.owner_node_id,
+        connection_uuid: j.connection_uuid,
+        connection_epoch: j.connection_epoch,
+        sm_session_id: j.sm_session_id,
+        occupant_incarnation: j.occupant_incarnation,
+        presence_payload: j.presence_payload,
+        lease: j.lease,
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ClusterMucJoinOutcome {
-    Joined(ClusterMucOccupancy),
-    Replay(ClusterMucOccupancy),
-    RoomMissing,
-    RoomDestroyed,
-    RoomLocked,
-    StaleRoom,
-    Outcast,
-    MembershipRequired,
-    ReservedNickname,
-    NicknameConflict,
-    FullJidConflict,
-    Full,
 }
 
 impl From<db::ClusterMucJoinOutcome> for ClusterMucJoinOutcome {
@@ -1026,15 +580,21 @@ impl From<db::ClusterMucJoinOutcome> for ClusterMucJoinOutcome {
     }
 }
 
+
 impl MucService {
     pub(crate) fn new(pool: PgPool, configured_domain: impl AsRef<str>) -> Self {
+        let configured_domain: Arc<str> = Arc::from(configured_domain.as_ref());
         let local_join_gates: Arc<[Arc<tokio::sync::Mutex<()>>]> = (0..LOCAL_JOIN_GATE_SHARDS)
             .map(|_| Arc::new(tokio::sync::Mutex::new(())))
             .collect::<Vec<_>>()
             .into();
         Self {
+            discussion_application: RoomApplication::new(
+                PostgresMucDiscussionRepository { pool: pool.clone() },
+                configured_domain.to_string(),
+            ),
             pool,
-            configured_domain: Arc::from(configured_domain.as_ref()),
+            configured_domain,
             local_join_gates,
         }
     }
@@ -1074,6 +634,103 @@ impl MucService {
         id[6] = (id[6] & 0x0f) | 0x50;
         id[8] = (id[8] & 0x3f) | 0x80;
         Ok(Uuid::from_bytes(id))
+    }
+
+    pub(crate) async fn execute_muc_discussion(
+        &self,
+        command: &MucDiscussion,
+    ) -> Result<MucDiscussionAdmission> {
+        self.admit_local_discussion(command.clone()).await
+    }
+
+    pub(crate) async fn execute_muc_subject(
+        &self,
+        command: MucSubjectCommand<'_>,
+    ) -> Result<MucSubjectResult> {
+        if let Err(_err) = validate_muc_subject_command(&command) {
+            return Ok(MucSubjectResult {
+                outcome: MucSubjectOutcome::Unauthorized,
+            });
+        }
+        let outcome = self
+            .set_local_subject(command.mutation, command.archive, command.authority)
+            .await?;
+        Ok(MucSubjectResult { outcome })
+    }
+
+    pub(crate) async fn execute_muc_retraction(
+        &self,
+        command: MucRetractionCommand<'_>,
+    ) -> Result<MucRetractionResult> {
+        if let Err(_err) = validate_muc_retraction_command(&command) {
+            return Ok(MucRetractionResult {
+                outcome: MucRetractionOutcome::Unauthorized,
+            });
+        }
+        let outcome = self
+            .retract_local_message_and_archive_action(command.mutation)
+            .await?;
+        Ok(MucRetractionResult { outcome })
+    }
+
+    pub(crate) async fn execute_muc_affiliation_batch(
+        &self,
+        command: MucAffiliationBatchCommand<'_>,
+    ) -> Result<MucAffiliationBatchResult> {
+        if let Err(_err) = validate_muc_affiliation_batch_command(&command) {
+            return Ok(MucAffiliationBatchResult {
+                outcome: MucAffiliationBatchOutcome::DuplicateTarget,
+            });
+        }
+        let outcome = self
+            .set_local_legacy_affiliations_batch(command.write.room_id, command.write.changes)
+            .await?;
+        Ok(MucAffiliationBatchResult { outcome })
+    }
+
+    pub(crate) async fn execute_muc_configuration(
+        &self,
+        command: MucConfigurationCommand<'_>,
+    ) -> Result<MucConfigurationResult> {
+        if let Err(_err) = validate_muc_configuration_command(&command) {
+            return Ok(MucConfigurationResult {
+                outcome: MucConfigurationOutcome::Missing,
+            });
+        }
+        let outcome = self
+            .update_local_legacy_config(
+                command.write.room_id,
+                command.write.actor_full_jid,
+                command.write.config,
+            )
+            .await?;
+        Ok(MucConfigurationResult { outcome })
+    }
+
+    pub(crate) async fn execute_muc_registration(
+        &self,
+        command: MucRegistrationCommand<'_>,
+    ) -> Result<MucRegistrationResult> {
+        if let Err(_err) = validate_muc_registration_command(&command) {
+            return Ok(MucRegistrationResult {
+                outcome: MucRegistrationOutcome::Conflict,
+            });
+        }
+        let outcome = match command.write.target {
+            MucRegistrationTarget::Local { user_id } => {
+                self.register_local_member(command.write.room_id, user_id, command.write.nick)
+                    .await?
+            }
+            MucRegistrationTarget::Federated { bare_jid } => {
+                self.register_federated_member(
+                    command.write.room_id,
+                    bare_jid,
+                    command.write.nick,
+                )
+                .await?
+            }
+        };
+        Ok(MucRegistrationResult { outcome })
     }
 
     pub(crate) fn is_capacity_exhausted(error: &anyhow::Error) -> bool {
@@ -1445,7 +1102,7 @@ impl MucService {
             target_domain,
             stanza,
             bounce_to,
-            policy.into(),
+            policy,
             cluster_authority.as_ref(),
         )
         .await
@@ -1453,46 +1110,30 @@ impl MucService {
 
     pub(crate) async fn admit_local_discussion(
         &self,
-        message: MucDiscussion<'_>,
+        message: MucDiscussion,
     ) -> Result<MucDiscussionAdmission> {
-        if !message
-            .authority
-            .local_scope_matches_configured_domain(&self.configured_domain)
-        {
-            return Ok(MucDiscussionAdmission::Unauthorized);
-        }
-        Ok(db::admit_muc_discussion(&self.pool, message.into_db())
-            .await?
-            .into())
+        self.discussion_application.admit_discussion(&message).await
     }
 
     pub(crate) async fn set_local_subject(
         &self,
         mutation: MucSubjectMutation<'_>,
         archive: bool,
-        authority: MucActorAuthority<'_>,
+        authority: MucActorAuthority,
     ) -> Result<MucSubjectOutcome> {
-        if !authority.local_scope_matches_configured_domain(&self.configured_domain) {
+        if !authority.matches_authenticated_scope(&self.configured_domain) {
             return Ok(MucSubjectOutcome::Unauthorized);
         }
-        let cluster_target = authority.cluster_target.as_ref().map(Into::into);
-        let authority = db::MucActorAuthority {
-            clustered: authority.clustered,
-            expected_room_epoch: authority.expected_room_epoch,
-            principal: (&authority.principal).into(),
-            actor_scope: authority.actor_scope,
-            full_jid: authority.full_jid,
-            nick: authority.nick,
-            occupant_incarnation: authority.occupant_incarnation,
-            connection_uuid: authority.connection_uuid,
-            expected_role: authority.expected_role,
-            expected_affiliation: authority.expected_affiliation,
-            cluster_target,
-        };
+        let authority = actor_authority_to_db(&authority);
         Ok(
-            db::set_local_muc_subject(&self.pool, mutation.into_db(), archive, authority)
-                .await?
-                .into(),
+            db::set_local_muc_subject(
+                &self.pool,
+                subject_mutation_into_db(mutation),
+                archive,
+                authority,
+            )
+            .await?
+            .into(),
         )
     }
 
@@ -1512,7 +1153,7 @@ impl MucService {
             expected_room_epoch,
             expected_config_version,
             &actor,
-            mutation.into_db(),
+            subject_mutation_into_db(mutation),
             archive,
         )
         .await?
@@ -1525,14 +1166,17 @@ impl MucService {
     ) -> Result<MucRetractionOutcome> {
         if !mutation
             .authority
-            .local_scope_matches_configured_domain(&self.configured_domain)
+            .matches_authenticated_scope(&self.configured_domain)
         {
             return Ok(MucRetractionOutcome::Unauthorized);
         }
         Ok(
-            db::retract_muc_message_and_archive_action(&self.pool, mutation.into_db())
-                .await?
-                .into(),
+            db::retract_muc_message_and_archive_action(
+                &self.pool,
+                retraction_mutation_as_db(&mutation),
+            )
+            .await?
+            .into(),
         )
     }
 
@@ -1543,9 +1187,14 @@ impl MucService {
         config: MucConfigUpdate<'_>,
     ) -> Result<MucConfigurationOutcome> {
         Ok(
-            db::update_muc_config(&self.pool, room_id, actor_full_jid, config.into_db())
-                .await?
-                .into(),
+            db::update_muc_config(
+                &self.pool,
+                room_id,
+                actor_full_jid,
+                config_update_into_db(config),
+            )
+            .await?
+            .into(),
         )
     }
 
@@ -1655,7 +1304,7 @@ impl MucService {
         request: ClusterMucJoin<'_>,
     ) -> Result<ClusterMucJoinOutcome> {
         Ok(
-            db::claim_cluster_muc_occupancy(&self.pool, request.into_db())
+            db::claim_cluster_muc_occupancy(&self.pool, cluster_join_into_db(request))
                 .await?
                 .into(),
         )
@@ -1759,7 +1408,7 @@ impl MucService {
             &actor_target,
             &principal,
             actor_full_jid,
-            config.into_db(),
+            config_update_into_db(config),
         )
         .await?
         .into())
@@ -1881,7 +1530,7 @@ impl MucService {
             connection_uuid,
         )
         .await?
-        .map(Into::into))
+        .map(occupancy_target_from_db))
     }
 
     pub(crate) async fn local_cluster_occupancy_target_by_nick(
@@ -1898,7 +1547,7 @@ impl MucService {
                 nick,
             )
             .await?
-            .map(Into::into),
+            .map(occupancy_target_from_db),
         )
     }
 
@@ -2006,11 +1655,11 @@ mod tests {
             .admit_local_discussion(MucDiscussion {
                 id: Uuid::nil(),
                 room_id: Uuid::nil(),
-                actor_scope: "alice@evil.test",
+                actor_scope: "alice@evil.test".to_owned(),
                 origin_id: None,
-                sender_jid: "alice@evil.test/Phone",
-                nick: "Alice",
-                stanza: "<message/>",
+                sender_jid: "alice@evil.test/Phone".to_owned(),
+                nick: "Alice".to_owned(),
+                stanza: "<message/>".to_owned(),
                 encrypted: false,
                 archive: false,
                 retention_days: 0,
@@ -2021,15 +1670,15 @@ mod tests {
                         user_id: Uuid::nil(),
                         // Attacker-controlled command fields agree with each
                         // other, but not with MucService's server-owned domain.
-                        local_domain: "evil.test",
+                        local_domain: "evil.test".to_owned(),
                     },
-                    actor_scope: "alice@evil.test",
-                    full_jid: "alice@evil.test/Phone",
-                    nick: "Alice",
+                    actor_scope: "alice@evil.test".to_owned(),
+                    full_jid: "alice@evil.test/Phone".to_owned(),
+                    nick: "Alice".to_owned(),
                     occupant_incarnation: Uuid::nil(),
                     connection_uuid: Uuid::nil(),
-                    expected_role: "participant",
-                    expected_affiliation: "none",
+                    expected_role: "participant".to_owned(),
+                    expected_affiliation: "none".to_owned(),
                     cluster_target: None,
                 },
             })
@@ -2085,7 +1734,7 @@ mod tests {
             connection_epoch: 19,
         };
         let repository: db::ClusterMucOccupancyTarget = (&target).into();
-        assert_eq!(ClusterMucOccupancyTarget::from(repository), target);
+        assert_eq!(occupancy_target_from_db(repository), target);
     }
 
     #[test]

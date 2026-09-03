@@ -25,7 +25,7 @@ use axum::http::header::{HeaderMap, HeaderName, HeaderValue};
 use axum::routing::{delete, options, patch};
 use std::net::IpAddr;
 use std::ops::Deref;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
@@ -39,6 +39,41 @@ const API_TOKEN_LENGTH: usize = 64;
 const API_IDEMPOTENCY_TTL_SECONDS: i64 = 24 * 60 * 60;
 const API_IDEMPOTENCY_LEASE_SECONDS: i64 = 180;
 const SPA_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+const WEB_CLIENT_STATIC_FILES: &[(&str, &str)] = &[
+    ("/client.css", "web/client.css"),
+    ("/client.js", "web/client.js"),
+    ("/avatar-editor.js", "web/avatar-editor.js"),
+    ("/i18n.css", "web/i18n.css"),
+    ("/i18n.js", "web/i18n.js"),
+    ("/locales.generated.js", "web/locales.generated.js"),
+    ("/xmpp.js", "web/xmpp.js"),
+    ("/storage.js", "web/storage.js"),
+    ("/pow.js", "web/pow.js"),
+    ("/pow-worker.js", "web/pow-worker.js"),
+    ("/outbox-delivery.js", "web/outbox-delivery.js"),
+    ("/omemo.js", "web/omemo.js"),
+    ("/omemo-recovery.mjs", "web/omemo-recovery.mjs"),
+    (
+        "/omemo-recovery-worker-client.mjs",
+        "web/omemo-recovery-worker-client.mjs",
+    ),
+    (
+        "/omemo-recovery-worker.mjs",
+        "web/omemo-recovery-worker.mjs",
+    ),
+    (
+        "/omemo-state-validation.mjs",
+        "web/omemo-state-validation.mjs",
+    ),
+];
+const WEB_ADMIN_STATIC_FILES: &[(&str, &str)] = &[
+    ("/app.js", "web/app.js"),
+    ("/admin.css", "web/admin.css"),
+    ("/styles.css", "web/styles.css"),
+    ("/i18n.css", "web/i18n.css"),
+    ("/i18n.js", "web/i18n.js"),
+    ("/locales.generated.js", "web/locales.generated.js"),
+];
 
 #[derive(Clone, Copy, Debug)]
 pub struct ApiRequestId(pub uuid::Uuid);
@@ -265,20 +300,11 @@ pub use upload::*;
 pub use upload_admin::*;
 pub use users::*;
 
-pub fn router(state: Arc<AppState>) -> Router {
-    let upload_limit = usize::try_from(state.config.upload_max_bytes).unwrap_or(usize::MAX);
-    let bosh_enabled = state.config.bosh_enabled;
-    let readiness = ReadyEndpointState::new(Arc::clone(&state));
-    let router = Router::new()
-        .route("/healthz", get(health))
-        .route("/readyz", get(ready).with_state(readiness))
-        .route("/xmpp-websocket", get(websocket))
-        .route("/.well-known/host-meta", get(host_meta_xml))
-        .route("/.well-known/host-meta.json", get(host_meta_json))
-        // Keep the API namespace out of the static SPA fallback. Without an
-        // explicit root route, `ServeDir` can treat `/api` as a client-side
-        // page and return `index.html` with HTTP 200 instead of the API's JSON
-        // not-found contract.
+fn public_rest_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        // Keep the API namespace out of every static fallback. Without an
+        // explicit root route, a file service can turn a missing API endpoint
+        // into an HTML 200 response.
         .route("/api", get(api_root_not_found))
         .route("/api/openapi.yaml", get(openapi_document))
         .route("/api/docs", get(api_docs))
@@ -326,18 +352,37 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/v1/muc_rooms/{id}/retention",
             get(get_muc_retention).put(update_muc_retention),
         )
-        .route(
+}
+
+fn upload_http_routes(upload_limit: usize, admission_enabled: bool) -> Router<Arc<AppState>> {
+    let router = Router::new().route("/uploads/{id}", get(upload_get));
+    if admission_enabled {
+        router.route(
             "/api/v1/upload/{id}",
-            // The storage reader deliberately consumes one byte beyond the
-            // reserved size to distinguish an oversized stream from an exact
-            // upload without buffering it. Let that sentinel byte reach the
-            // handler instead of converting it into an opaque body-limit I/O
-            // error.
             put(upload_put)
                 .delete(upload_delete)
+                // The storage reader deliberately consumes one byte beyond
+                // the reserved size to distinguish an oversized stream from
+                // an exact upload without buffering it.
                 .layer(DefaultBodyLimit::max(upload_limit.saturating_add(1))),
         )
-        .route("/uploads/{id}", get(upload_get))
+    } else {
+        router.route("/api/v1/upload/{id}", delete(upload_delete))
+    }
+}
+
+fn administrator_api_routes(
+    upload_runtime_enabled: bool,
+    invitation_enabled: bool,
+) -> Router<Arc<AppState>> {
+    // Authentication and public config are duplicated intentionally on the
+    // private administration origin: the admin SPA never needs cross-origin
+    // access to the public REST listener.
+    let router = Router::new()
+        .route("/api", get(api_root_not_found))
+        .route("/api/v1/config", get(public_config))
+        .route("/api/v1/login", post(login))
+        .route("/api/v1/session", delete(logout))
         .route("/api/v1/admin/stats", get(admin_stats))
         .route("/api/v1/admin/nuke", post(admin_nuke))
         .route(
@@ -370,14 +415,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/admin/reports/{id}", patch(admin_update_report))
         .route("/api/v1/admin/appeals/{id}", patch(admin_update_appeal))
         .route("/api/v1/admin/tls/reload", post(admin_tls_reload))
-        .route(
-            "/api/v1/admin/upload-dead-letters",
-            get(admin_upload_dead_letters),
-        )
-        .route(
-            "/api/v1/admin/upload-dead-letters/{kind}/{id}/retry",
-            post(admin_retry_upload_dead_letter),
-        )
         .route("/api/v1/admin/operations", get(list_operations))
         .route("/api/v1/admin/operations/{id}", get(get_operation))
         .route("/api/v1/admin/operations/{id}/targets", get(list_targets))
@@ -409,20 +446,70 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/v1/admin/legal-holds/{id}/export",
             post(export_legal_hold),
         )
-        .route("/api/v1/admin/audit/export", post(export_audit))
-        .route(
-            "/api/v1/admin/invitations",
-            get(admin_invitations).post(admin_create_invitation),
-        )
-        .route(
-            "/api/v1/admin/invitations/{id}",
-            delete(admin_revoke_invitation),
-        )
-        .fallback_service(ServeDir::new("web").append_index_html_on_directories(true))
-        .layer(middleware::from_fn_with_state(
-            Arc::clone(&state),
-            secure_http_transport,
+        .route("/api/v1/admin/audit/export", post(export_audit));
+    let router = if upload_runtime_enabled {
+        router
+            .route(
+                "/api/v1/admin/upload-dead-letters",
+                get(admin_upload_dead_letters),
+            )
+            .route(
+                "/api/v1/admin/upload-dead-letters/{kind}/{id}/retry",
+                post(admin_retry_upload_dead_letter),
+            )
+    } else {
+        router
+    };
+    if invitation_enabled {
+        router
+            .route(
+                "/api/v1/admin/invitations",
+                get(admin_invitations).post(admin_create_invitation),
+            )
+            .route(
+                "/api/v1/admin/invitations/{id}",
+                delete(admin_revoke_invitation),
+            )
+    } else {
+        router
+    }
+}
+
+fn web_client_static_routes() -> Router<Arc<AppState>> {
+    let mut router = Router::new()
+        .route_service("/", ServeFile::new("web/client.html"))
+        .route_service("/client.html", ServeFile::new("web/client.html"))
+        .nest_service("/crypto", ServeDir::new("web/crypto"));
+    for &(route, file) in WEB_CLIENT_STATIC_FILES {
+        router = router.route_service(route, ServeFile::new(file));
+    }
+    router
+}
+
+fn administrator_static_routes() -> Router<Arc<AppState>> {
+    let mut router = Router::new()
+        .route_service("/", ServeFile::new("web/index.html"))
+        .route_service("/index.html", ServeFile::new("web/index.html"));
+    for &(route, file) in WEB_ADMIN_STATIC_FILES {
+        router = router.route_service(route, ServeFile::new(file));
+    }
+    router
+}
+
+fn common_http_layers(
+    router: Router<Arc<AppState>>,
+    state: Arc<AppState>,
+    allow_plaintext_observability: bool,
+) -> Router<Arc<AppState>> {
+    let router = if allow_plaintext_observability {
+        router.layer(middleware::from_fn_with_state(state, secure_http_transport))
+    } else {
+        router.layer(middleware::from_fn_with_state(
+            state,
+            secure_administrator_transport,
         ))
+    };
+    router
         .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("content-security-policy"),
             HeaderValue::from_static(SPA_CONTENT_SECURITY_POLICY),
@@ -461,19 +548,76 @@ pub fn router(state: Arc<AppState>) -> Router {
             }),
         )
         .layer(DefaultBodyLimit::max(API_BODY_LIMIT_BYTES))
-        // This must be the outermost layer so tracing and every rejection can
-        // use the same identifier that is returned to the caller.
-        .layer(middleware::from_fn(api_request_id));
-    let router = if bosh_enabled {
-        router
+        .layer(middleware::from_fn(api_request_id))
+}
+
+fn host_meta_route_contributions(websocket: bool, bosh: bool, xep_0487: bool) -> (bool, bool) {
+    // XML carries the XEP-0156 WebSocket/BOSH links. JSON also carries the
+    // XEP-0487 direct-TLS records and therefore has an independent lifetime.
+    (websocket || bosh, websocket || bosh || xep_0487)
+}
+
+pub fn public_router(state: Arc<AppState>) -> Router {
+    let readiness = ReadyEndpointState::new(Arc::clone(&state));
+    let mut router = Router::new()
+        .route("/healthz", get(health))
+        .route("/readyz", get(ready).with_state(readiness));
+    if state.config.rest_api_enabled {
+        router = router.merge(public_rest_routes());
+    }
+    if state.config.upload_mode.keeps_storage_runtime() {
+        let upload_limit = usize::try_from(state.config.upload_max_bytes).unwrap_or(usize::MAX);
+        router = router.merge(upload_http_routes(
+            upload_limit,
+            state.config.upload_mode.admits_new_uploads(),
+        ));
+    }
+    if state.config.websocket_enabled {
+        router = router.route("/xmpp-websocket", get(websocket));
+    }
+    let (serve_host_meta_xml, serve_host_meta_json) = host_meta_route_contributions(
+        state.config.websocket_enabled,
+        state.config.bosh_enabled,
+        !state.config.xep_0487_ips.is_empty(),
+    );
+    if serve_host_meta_xml {
+        router = router.route("/.well-known/host-meta", get(host_meta_xml));
+    }
+    if serve_host_meta_json {
+        router = router.route("/.well-known/host-meta.json", get(host_meta_json));
+    }
+    if state.config.bosh_enabled {
+        router = router
             .route("/http-bind", post(crate::bosh::http_bind))
             .route("/http-bind", options(crate::bosh::http_bind_options))
             .route("/bosh", post(crate::bosh::http_bind))
-            .route("/bosh", options(crate::bosh::http_bind_options))
-    } else {
-        router
-    };
-    router.with_state(state)
+            .route("/bosh", options(crate::bosh::http_bind_options));
+    }
+    if state.config.web_client_enabled {
+        router = router.merge(web_client_static_routes());
+    }
+    common_http_layers(router, Arc::clone(&state), true).with_state(state)
+}
+
+pub fn administrator_router(state: Arc<AppState>) -> Router {
+    let readiness = ReadyEndpointState::new(Arc::clone(&state));
+    let router = Router::new()
+        .route("/healthz", get(health))
+        .route("/readyz", get(ready).with_state(readiness))
+        .merge(administrator_api_routes(
+            state.config.upload_mode.keeps_storage_runtime(),
+            state.config.web_client_enabled,
+        ))
+        .merge(administrator_static_routes());
+    common_http_layers(
+        router.layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            administrator_gateway_authentication,
+        )),
+        Arc::clone(&state),
+        false,
+    )
+    .with_state(state)
 }
 
 async fn api_request_id(mut request: Request, next: Next) -> Response {
@@ -494,13 +638,32 @@ async fn secure_http_transport(
     request: Request,
     next: Next,
 ) -> Response {
-    if plaintext_observability_path(request.uri().path())
-        || secure_http_request(
-            peer.ip(),
-            request.headers(),
-            &state.config.trusted_proxy_ips,
-        )
-    {
+    secure_http_transport_policy(state, peer, request, next, true).await
+}
+
+async fn secure_administrator_transport(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: Request,
+    next: Next,
+) -> Response {
+    secure_http_transport_policy(state, peer, request, next, false).await
+}
+
+async fn secure_http_transport_policy(
+    state: Arc<AppState>,
+    peer: SocketAddr,
+    request: Request,
+    next: Next,
+    allow_plaintext_observability: bool,
+) -> Response {
+    if secure_transport_allowed(
+        allow_plaintext_observability,
+        request.uri().path(),
+        peer.ip(),
+        request.headers(),
+        &state.config.trusted_proxy_ips,
+    ) {
         return next.run(request).await;
     }
 
@@ -522,6 +685,61 @@ async fn secure_http_transport(
             "error": {
                 "code": "https_required",
                 "message": "HTTPS is required for this resource"
+            }
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    response
+}
+
+fn secure_transport_allowed(
+    allow_plaintext_observability: bool,
+    path: &str,
+    peer_ip: IpAddr,
+    headers: &HeaderMap,
+    trusted: &[IpAddr],
+) -> bool {
+    (allow_plaintext_observability && plaintext_observability_path(path))
+        || secure_http_request(peer_ip, headers, trusted)
+}
+
+async fn administrator_gateway_authentication(
+    State(state): State<Arc<AppState>>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let mut supplied = request
+        .headers()
+        .get_all("x-northstar-admin-gateway-token")
+        .iter();
+    let candidate = match (supplied.next(), supplied.next()) {
+        (Some(value), None) => value.to_str().ok(),
+        (None, None) => None,
+        _ => return administrator_gateway_rejection(),
+    };
+    if state.admin_gateway_request_authorized(candidate) {
+        // The proxy credential authorizes entry to this listener; it must not
+        // become ambient request data visible to downstream REST handlers,
+        // tracing, or future reverse-proxy integrations.
+        request
+            .headers_mut()
+            .remove("x-northstar-admin-gateway-token");
+        return next.run(request).await;
+    }
+    administrator_gateway_rejection()
+}
+
+fn administrator_gateway_rejection() -> Response {
+    let mut response = (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({
+            "error": {
+                "code": "admin_gateway_unauthorized",
+                "message": "administrator gateway authentication is required"
             }
         })),
     )
@@ -867,10 +1085,29 @@ pub async fn serve(
     cancel: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(state.config.http_bind).await?;
-    tracing::info!(address = %state.config.http_bind, "HTTP, WebSocket and administration listener ready");
+    tracing::info!(address = %state.config.http_bind, "public HTTP capability listener ready");
     axum::serve(
         listener,
-        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+        public_router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(cancel.cancelled_owned())
+    .await?;
+    Ok(())
+}
+
+pub async fn serve_administration(
+    state: Arc<AppState>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind(state.config.web_admin_bind).await?;
+    tracing::info!(
+        address = %state.config.web_admin_bind,
+        gateway_authentication = state.admin_gateway_authentication_enabled(),
+        "private Web administration listener ready"
+    );
+    axum::serve(
+        listener,
+        administrator_router(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(cancel.cancelled_owned())
     .await?;
@@ -934,6 +1171,93 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_and_administrator_static_manifests_are_explicitly_isolated() {
+        let client = WEB_CLIENT_STATIC_FILES
+            .iter()
+            .map(|(route, _)| *route)
+            .collect::<std::collections::BTreeSet<_>>();
+        let admin = WEB_ADMIN_STATIC_FILES
+            .iter()
+            .map(|(route, _)| *route)
+            .collect::<std::collections::BTreeSet<_>>();
+        for shared in ["/i18n.css", "/i18n.js", "/locales.generated.js"] {
+            assert!(client.contains(shared));
+            assert!(admin.contains(shared));
+        }
+        for admin_only in ["/app.js", "/admin.css", "/styles.css"] {
+            assert!(admin.contains(admin_only));
+            assert!(!client.contains(admin_only));
+        }
+        for client_only in ["/client.js", "/xmpp.js", "/omemo.js"] {
+            assert!(client.contains(client_only));
+            assert!(!admin.contains(client_only));
+        }
+    }
+
+    #[test]
+    fn public_router_never_merges_administrator_routes() {
+        let source = include_str!("mod.rs");
+        let public = source
+            .split_once("pub fn public_router")
+            .unwrap()
+            .1
+            .split_once("pub fn administrator_router")
+            .unwrap()
+            .0;
+        assert!(public.contains("public_rest_routes"));
+        assert!(public.contains("web_client_static_routes"));
+        assert!(!public.contains("administrator_api_routes"));
+        assert!(!public.contains("administrator_static_routes"));
+    }
+
+    #[test]
+    fn administrator_observability_never_bypasses_transport_security() {
+        let remote: IpAddr = "192.0.2.10".parse().unwrap();
+        let headers = HeaderMap::new();
+        assert!(secure_transport_allowed(
+            true,
+            "/healthz",
+            remote,
+            &headers,
+            &[]
+        ));
+        assert!(!secure_transport_allowed(
+            false,
+            "/healthz",
+            remote,
+            &headers,
+            &[]
+        ));
+        assert!(!secure_transport_allowed(
+            false,
+            "/readyz",
+            remote,
+            &headers,
+            &[]
+        ));
+    }
+
+    #[test]
+    fn xep_0487_keeps_json_host_meta_without_web_transports() {
+        assert_eq!(
+            host_meta_route_contributions(false, false, true),
+            (false, true)
+        );
+        assert_eq!(
+            host_meta_route_contributions(false, false, false),
+            (false, false)
+        );
+        assert_eq!(
+            host_meta_route_contributions(true, false, false),
+            (true, true)
+        );
+        assert_eq!(
+            host_meta_route_contributions(false, true, false),
+            (true, true)
+        );
+    }
 
     #[tokio::test]
     async fn shutdown_signal_registration_error_does_not_request_shutdown() {

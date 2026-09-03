@@ -1,0 +1,14 @@
+[package]
+name = "northstar-xml-framing"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Transport-neutral incremental XML entity framing, depth tracking, and character validation for Northstar"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+thiserror = "2.0"
+
+

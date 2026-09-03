@@ -1,0 +1,13 @@
+[package]
+name = "northstar-roster-application"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Typed commands, validation rules, and in-memory push synchronization for Northstar roster application"
+publish = false
+
+[dependencies]
+northstar-roster-core = { path = "../northstar-roster-core" }
+northstar-xmpp-types = { path = "../northstar-xmpp-types" }
+uuid = { version = "1.12", features = ["v4"] }

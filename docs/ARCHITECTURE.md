@@ -68,6 +68,16 @@ Key ownership:
   cannot directly query users/blocking/privacy or compose MAM, S2S outbox, C2S
   spool and offline writes. Typed decisions keep blocked, privacy-denied,
   missing, stored, replay and quota outcomes explicit at the boundary.
+- `northstar-message-core` and `northstar-message-application` own the
+  capability-free personal-message command/result contract and injected
+  commit repository. Local C2S, authenticated S2S, component ingress and
+  federation egress therefore share one authority check and transaction
+  entry point.
+- `northstar-room-core` and `northstar-room-application` own the first room
+  command boundary: local/federated discussion identity, exact occupancy
+  authority, repository injection and bounded ordered post-commit plans.
+  PostgreSQL remains the final room-policy authority under its existing locks;
+  the remaining room mutations are tracked convergence work.
 - `src/services/replay.rs` owns XEP-0160 account leases, bounded page claims
   and the single-snapshot blocking/privacy decision. Protocol replay code owns
   only ordered transport backpressure. A slow socket never retains a primary
@@ -89,6 +99,9 @@ Key ownership:
 - `src/components.rs` isolates component domain authority and outbox handling.
 - `src/bosh.rs` and the WebSocket path adapt HTTP framing to the same
   `ProtocolSession` state machine.
+- `northstar-delivery-core::OrderedOutboundSink` separates session ordering
+  from the Tokio queue adapter. A rejected or stale item is returned to its
+  durable owner, and only the adapter owns channel/cancellation primitives.
 - `src/abuse.rs` owns PostgreSQL-backed PoW/rate/message-admission policy.
 - `src/cluster.rs` owns optional Redis leases/PubSub, the node/delivery-contract
   protocol v11 and its explicit degraded state machine;
@@ -144,7 +157,7 @@ shared-authority exceptions visible.
 | Protocol sessions | negotiation state, stanza parsing, RFC/XEP error mapping, per-resource ordering | production-tree static gate forbids DB symbols, SQLx and raw pools | inline test code is excluded from that gate; session still calls `AppState` service capabilities |
 | Application services | authorization snapshots, message/roster/replay policy, transaction intent and typed outcomes | Rust visibility, typed ports and targeted semantic gates | several services still embed SQLx/`PgPool`; some operation/background paths also hold broad `Arc<AppState>` |
 | Database repository responsibility | SQL, lock order, transactions, durable identity, outbox/admission invariants | PostgreSQL workload ACLs, reviewed routines and Rust module boundary | primarily `src/db/*`, but some service/API/cluster/federation/worker paths still embed persistence; most share the runtime role |
-| Live routing | exact connection incarnation, bounded backpressure, SM/BOSH/socket transfer fences | bounded queues, disconnect/fallback rules and delivery-fence state | in-memory availability state is process-local by design |
+| Live routing | exact connection incarnation, loss-explicit ordered admission, bounded backpressure, SM/BOSH/socket transfer fences | injected ordered-output port, bounded adapter queues, disconnect/fallback rules and delivery-fence state | in-memory availability state is process-local by design |
 | Federation/components | remote identity, discovery/TLS/Dialback and durable outbox ownership | authenticated streams, domain checks and durable repositories | S2S/component code remains in the same binary and runtime role |
 | Cluster control plane | signed node envelopes, leases, socket hints and degraded state | envelope verification plus PostgreSQL authority; Redis is non-authoritative | multi-node mode remains experimental and shares the server process |
 | Background workers | registered lifecycle, heartbeat and restart/fail-fast policy | worker registry and readiness/fatal cancellation | several workers still receive broader `AppState` access than the target port design |

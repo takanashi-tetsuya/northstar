@@ -35,6 +35,11 @@ jobs:
           grep -F 'license = "AGPL-3.0-only"' Cargo.toml
           grep -F 'GNU AFFERO GENERAL PUBLIC LICENSE' LICENSE
 
+      - name: Validate XEP plugin architecture
+        run: |
+          node scripts/check-plugin-architecture.mjs
+          node scripts/test-plugin-architecture.mjs
+
       - name: Validate unique database migration versions
         run: |
           sh scripts/check-migration-versions.sh

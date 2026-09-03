@@ -2404,7 +2404,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(corrected, vec![("motd".to_owned(), "Corrected".to_owned())]);
 
-        db::initialize_admin_runtime_settings(&pool, false, false)
+        db::initialize_admin_runtime_settings(&pool, false, false, false)
             .await
             .unwrap();
         assert_eq!(

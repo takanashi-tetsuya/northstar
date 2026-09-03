@@ -5,11 +5,7 @@ use uuid::Uuid;
 
 const U32_MODULUS: i64 = 4_294_967_296;
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
-pub struct SmMucMembership {
-    pub room_jid: String,
-    pub nick: String,
-}
+pub use northstar_session_core::SmMucMembership;
 
 #[derive(Clone, Debug)]
 pub struct SmSessionSnapshot {

@@ -25,69 +25,17 @@ async fn begin_authorized_roster_mutation<'a>(
     Ok(Some(transaction))
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RosterChange {
-    pub version: i64,
-    pub contact_jid: String,
-    pub display_name: Option<String>,
-    pub subscription: Option<String>,
-    pub ask: Option<String>,
-    pub groups: Vec<String>,
-    pub approved: bool,
-    pub removed: bool,
-}
+pub use northstar_roster_core::{
+    AuthorizedLocalPresence, AuthorizedLocalPresenceTransition, AuthorizedRosterRemoval,
+    LocalPresenceEffect, LocalPresenceTransition, LocalRosterContact, PresenceAccount,
+    PresencePolicyDenial, RosterChange, RosterReadSnapshot, RosterRemovalTransition,
+};
 
 #[cfg(test)]
 #[derive(Debug)]
 pub struct RosterSnapshot {
     pub version: i64,
     pub items: Vec<RosterChange>,
-}
-
-/// One XEP-0237 response view, including optional XEP-0405 annotations.
-/// Every field is read from one PostgreSQL repeatable-read snapshot so a
-/// response can never combine an older roster version with newer PAM state.
-#[derive(Debug)]
-pub struct RosterReadSnapshot {
-    pub version: i64,
-    pub items: Vec<RosterChange>,
-    /// `Some` is a valid versioned delta (including an empty delta). `None`
-    /// requires a complete roster response.
-    pub changes: Option<Vec<RosterChange>>,
-    pub mix_participants: HashMap<String, String>,
-}
-
-/// The committed effects of removing one RFC 6121 roster item.
-///
-/// `send_unsubscribe` and `send_unsubscribed` describe notifications which
-/// have already crossed the durable acceptance boundary. For a remote
-/// contact, matching S2S outbox rows are inserted in the same transaction as
-/// `owner_change`; for a local contact the caller can deliver them immediately
-/// before either roster push.
-#[derive(Debug, Eq, PartialEq)]
-pub struct RosterRemovalTransition {
-    pub owner_change: RosterChange,
-    pub contact_change: Option<RosterChange>,
-    /// Exact account incarnation resolved and locked by the removal
-    /// transaction. Post-commit delivery must never target a later account
-    /// which reuses the same localpart.
-    pub local_contact: Option<LocalRosterContact>,
-    pub send_unsubscribe: bool,
-    pub send_unsubscribed: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LocalRosterContact {
-    pub id: Uuid,
-    pub username: String,
-    pub auth_generation: i64,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub enum AuthorizedRosterRemoval {
-    Unauthorized,
-    Missing,
-    Removed(Box<RosterRemovalTransition>),
 }
 
 /// Delivery boundary used by roster-item removal transactions.
@@ -113,59 +61,7 @@ pub enum RosterRemovalRoute<'a> {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LocalPresenceEffect {
-    Forward,
-    AutoApproved,
-    Suppressed,
-}
 
-#[derive(Debug, Eq, PartialEq)]
-pub struct LocalPresenceTransition {
-    pub effect: LocalPresenceEffect,
-    pub actor_subscription: String,
-    pub actor_changed: bool,
-    pub target_changed: bool,
-    pub actor_change: Option<RosterChange>,
-    pub target_change: Option<RosterChange>,
-}
-
-/// Exact account incarnation committed by a local presence-subscription
-/// transition.  Protocol delivery must keep this UUID fence instead of
-/// resolving the username again after COMMIT, where delete/recreate could
-/// otherwise redirect a notification to a different account.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PresenceAccount {
-    pub id: Uuid,
-    pub username: String,
-    pub auth_generation: i64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PresencePolicyDenial {
-    Blocking,
-    Privacy,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub enum AuthorizedLocalPresenceTransition {
-    /// The authenticated actor disappeared, was disabled, or its credential
-    /// generation changed before the mutation acquired the account locks.
-    Unauthorized,
-    /// The exact connection's XEP-0016 policy or either account's XEP-0191
-    /// policy denied the transition in the mutation transaction.
-    PolicyDenied(PresencePolicyDenial),
-    /// The addressed local account did not survive identity locking.
-    Missing,
-    Transition(Box<AuthorizedLocalPresence>),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub struct AuthorizedLocalPresence {
-    pub actor: PresenceAccount,
-    pub target: PresenceAccount,
-    pub transition: LocalPresenceTransition,
-}
 
 #[cfg(test)]
 #[derive(Debug)]
@@ -2301,20 +2197,7 @@ fn blocking_match_candidates(candidate: &crate::jid::CanonicalJid) -> Vec<String
 }
 
 pub(crate) fn blocked_jid_matches(pattern: &str, candidate: &str) -> bool {
-    let (Ok(pattern), Ok(candidate)) = (
-        crate::jid::CanonicalJid::parse(pattern),
-        crate::jid::CanonicalJid::parse(candidate),
-    ) else {
-        return false;
-    };
-    if pattern.resourcepart().is_some() {
-        // Resourceparts use PRECIS OpaqueString and are case-sensitive.
-        return pattern == candidate;
-    }
-    if pattern.localpart().is_some() {
-        return pattern.bare() == candidate.bare();
-    }
-    pattern.domainpart() == candidate.domainpart()
+    northstar_xmpp_types::jid_scope_matches(pattern, candidate)
 }
 
 #[cfg(test)]

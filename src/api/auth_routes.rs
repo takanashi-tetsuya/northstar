@@ -222,7 +222,7 @@ pub async fn register(
         guard_verified,
         prepared,
         body.invitation_token.as_deref(),
-        state.config.invitation_required,
+        state.registration_requires_invitation(),
         state.config.registration_rate_per_hour,
         Some(lease.request_id),
     )

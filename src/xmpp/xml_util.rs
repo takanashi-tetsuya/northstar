@@ -172,68 +172,6 @@ pub(crate) fn valid_language_tag(value: &str) -> bool {
     crate::xmpp::stanza_validation::valid_language_tag(value)
 }
 
-/// XEP-0191 leaves the number of `<item/>` children unbounded.  Keep the
-/// wire-level command bounded to the same value as the durable per-account
-/// quota so a tiny IQ cannot turn into unbounded parsing or database work.
-pub(crate) const MAX_BLOCKING_ITEMS: usize = 1024;
-
-pub(crate) fn blocking_command_is_empty(node: Node<'_, '_>) -> bool {
-    node.attributes().len() == 0
-        && !node
-            .children()
-            .any(|child| child.is_element() || !child.text().unwrap_or_default().trim().is_empty())
-}
-
-pub(crate) fn blocking_items(
-    node: Node<'_, '_>,
-    _own_full_jid: Option<&str>,
-) -> Option<Vec<String>> {
-    if node.attributes().len() != 0
-        || node
-            .children()
-            .any(|child| !child.is_element() && !child.text().unwrap_or_default().trim().is_empty())
-    {
-        return None;
-    }
-    let mut items = Vec::new();
-    let mut seen = 0usize;
-    for item in node.children().filter(|child| child.is_element()) {
-        seen = seen.checked_add(1)?;
-        if seen > MAX_BLOCKING_ITEMS {
-            return None;
-        }
-        if item.tag_name().name() != "item"
-            || item.tag_name().namespace() != Some("urn:xmpp:blocking")
-        {
-            return None;
-        }
-        if item.attributes().len() != 1
-            || item
-                .attributes()
-                .any(|attribute| attribute.name() != "jid" || attribute.namespace().is_some())
-        {
-            return None;
-        }
-        let jid = crate::jid::canonicalize(item.attribute("jid")?).ok()?;
-        if !valid_blocking_jid(&jid)
-            || item.children().any(|child| {
-                child.is_element()
-                    || (child.is_text() && !child.text().unwrap_or_default().is_empty())
-            })
-        {
-            return None;
-        }
-        if !items.contains(&jid) {
-            items.push(jid);
-        }
-    }
-    Some(items)
-}
-
-fn valid_blocking_jid(value: &str) -> bool {
-    crate::jid::CanonicalJid::parse(value).is_ok()
-}
-
 pub(crate) fn mam_extended_form() -> &'static str {
     static FORM: LazyLock<String> = LazyLock::new(|| {
         let mut form = XmlElement::namespaced("x", "jabber:x:data").attr("type", "form");
@@ -287,63 +225,47 @@ pub(crate) fn validate_no_client_carbon(root: Node<'_, '_>) -> Result<(), &'stat
 /// routed message. Keeping this ordering in one place prevents C2S, S2S,
 /// federated MUC and federated MIX from accepting different archive/copy
 /// controls merely because they entered through different transports.
-pub(crate) fn validate_routed_message(root: Node<'_, '_>) -> Result<(), &'static str> {
+pub(crate) fn validate_routed_message(
+    root: Node<'_, '_>,
+    extensions: &crate::xmpp::extensions::ExtensionRuntime,
+) -> Result<(), &'static str> {
+    validate_enabled_message_extensions(root, extensions)?;
     validate_delivery_receipts(root)?;
     validate_modern_message_payloads(root)?;
     validate_no_client_carbon(root)
 }
 
-pub(crate) fn should_carbon(root: Node<'_, '_>) -> bool {
-    let kind = root.attribute("type").unwrap_or("normal");
-    if root.children().any(|node| {
-        node.is_element()
-            && ((node.tag_name().namespace() == Some("urn:xmpp:carbons:2")
-                && node.tag_name().name() == "private")
-                // XEP-0334 says processing hints on an error stanza are
-                // ignored. The legacy Carbon-specific private marker is not
-                // a processing hint and therefore still suppresses a copy.
-                || (kind != "error"
-                    && root.attribute("to").is_some_and(|to| {
-                        crate::jid::CanonicalJid::parse(to)
-                            .is_ok_and(|target| target.resourcepart().is_some())
-                    })
-                    && node.tag_name().namespace() == Some("urn:xmpp:hints")
-                    && node.tag_name().name() == "no-copy"))
-    }) {
-        return false;
-    }
-
-    if matches!(kind, "groupchat" | "headline") {
-        return false;
-    }
-    if kind == "chat" {
-        return true;
-    }
-
-    let im_payload = root.children().any(|node| {
-        if !node.is_element() {
-            return false;
+/// Fail closed before interpreting an optional message extension. A disabled
+/// XEP is absent from service discovery and every transport-facing route; an
+/// endpoint cannot bypass that decision by sending the namespace over S2S,
+/// federated MUC or federated MIX instead of C2S.
+fn validate_enabled_message_extensions(
+    root: Node<'_, '_>,
+    extensions: &crate::xmpp::extensions::ExtensionRuntime,
+) -> Result<(), &'static str> {
+    for (id, namespace) in [
+        (northstar_xep_0085::XEP_ID, northstar_xep_0085::NAMESPACE),
+        (northstar_xep_0184::XEP_ID, northstar_xep_0184::NAMESPACE),
+        (northstar_xep_0308::XEP_ID, northstar_xep_0308::NAMESPACE),
+        (northstar_xep_0333::XEP_ID, northstar_xep_0333::NAMESPACE),
+        (northstar_xep_0359::XEP_ID, northstar_xep_0359::NAMESPACE),
+        (northstar_xep_0380::XEP_ID, northstar_xep_0380::NAMESPACE),
+        (northstar_xep_0444::XEP_ID, northstar_xep_0444::NAMESPACE),
+        (northstar_xep_0461::XEP_ID, northstar_xep_0461::NAMESPACE),
+    ] {
+        if !extensions.enabled(id)
+            && root
+                .children()
+                .any(|node| node.is_element() && node.tag_name().namespace() == Some(namespace))
+        {
+            return Err("feature-not-implemented");
         }
-        let namespace = node.tag_name().namespace().unwrap_or_default();
-        let name = node.tag_name().name();
-        (matches!(namespace, "" | "jabber:client") && name == "body")
-            || (namespace == "urn:xmpp:receipts" && matches!(name, "request" | "received"))
-            || (namespace == "http://jabber.org/protocol/chatstates"
-                && matches!(
-                    name,
-                    "active" | "composing" | "paused" | "inactive" | "gone"
-                ))
-            || (namespace == "urn:xmpp:chat-markers:0" && matches!(name, "markable" | "displayed"))
-            || (namespace == "jabber:x:conference" && name == "x")
-            || (namespace == "http://jabber.org/protocol/muc#user"
-                && node.children().any(|child| {
-                    child.is_element()
-                        && child.tag_name().namespace()
-                            == Some("http://jabber.org/protocol/muc#user")
-                        && child.tag_name().name() == "invite"
-                }))
-    });
-    matches!(kind, "normal" | "error") && im_payload
+    }
+    Ok(())
+}
+
+pub(crate) fn should_carbon(root: Node<'_, '_>) -> bool {
+    northstar_xep_0280::should_copy(root)
 }
 
 pub(crate) fn carbon_message(kind: &str, from: &str, to: &str, forwarded: &str) -> Option<String> {
@@ -351,7 +273,13 @@ pub(crate) fn carbon_message(kind: &str, from: &str, to: &str, forwarded: &str) 
     // XML. Keep the legacy string-shaped API temporarily, but collapse it to
     // the only two legal element names before it reaches the serializer. This
     // makes an accidental future call with an untrusted value non-injectable.
-    let sent = kind == "sent";
+    let direction = if kind == "sent" {
+        northstar_xep_0280::Direction::Sent
+    } else if kind == "received" {
+        northstar_xep_0280::Direction::Received
+    } else {
+        return None;
+    };
     // A stanza received on a TCP stream is allowed to inherit
     // `jabber:client` from the stream root, so its standalone serialization
     // does not necessarily contain an xmlns attribute. Once that stanza is
@@ -362,28 +290,7 @@ pub(crate) fn carbon_message(kind: &str, from: &str, to: &str, forwarded: &str) 
     // same conversion also turns an S2S `jabber:server` root into the C2S
     // namespace expected by the receiving resource.
     let forwarded = set_client_namespace(forwarded);
-    let document = Document::parse(&forwarded).ok()?;
-    let message_type = document
-        .root_element()
-        .attribute("type")
-        .map(str::to_owned)
-        .unwrap_or_else(|| "normal".to_owned());
-    let mut forwarded_wrapper = XmlElement::namespaced("forwarded", "urn:xmpp:forward:0");
-    forwarded_wrapper.push_validated_fragment(&forwarded).ok()?;
-    let carbon = if sent {
-        XmlElement::namespaced("sent", "urn:xmpp:carbons:2")
-    } else {
-        XmlElement::namespaced("received", "urn:xmpp:carbons:2")
-    }
-    .child(forwarded_wrapper);
-    Some(
-        XmlElement::namespaced("message", "jabber:client")
-            .attr("from", from)
-            .attr("to", to)
-            .attr("type", message_type)
-            .child(carbon)
-            .finish(),
-    )
+    northstar_xep_0280::build_carbon(direction, from, to, &forwarded).ok()
 }
 
 pub(crate) fn is_counted_stanza(stanza: &str) -> bool {
@@ -392,47 +299,24 @@ pub(crate) fn is_counted_stanza(stanza: &str) -> bool {
 }
 
 pub(crate) fn sm_failed(condition: &str) -> String {
-    let condition = crate::xmpp::xml_builder::XmlElement::dynamic(condition)
-        .unwrap_or_else(|_| crate::xmpp::xml_builder::XmlElement::new("undefined-condition"))
-        .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-stanzas");
-    crate::xmpp::xml_builder::XmlElement::namespaced("failed", "urn:xmpp:sm:3")
-        .child(condition)
-        .finish()
+    northstar_xep_0198::build_failed_str(condition)
 }
 
 pub(crate) fn valid_muc_room(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 255
-        && !value.chars().any(|c| {
-            c.is_whitespace() || matches!(c, '"' | '&' | '\'' | '/' | ':' | '<' | '>' | '@' | '\0')
-        })
+    northstar_xep_0045::is_valid_room_name(value)
 }
 
 pub(crate) fn valid_muc_nick(value: &str) -> bool {
-    crate::jid::prepare_resourcepart(value).is_ok()
+    northstar_xep_0045::is_valid_occupant_nick(value)
 }
 
 /// MUC occupants use the room JID resourcepart as their nickname. RFC 7622
 /// therefore requires the case-preserving PRECIS OpaqueString profile; a
 /// nickname must never pass through UsernameCaseMapped or ASCII lowercase.
 pub(crate) fn prepare_muc_nick(value: &str) -> anyhow::Result<String> {
-    crate::jid::prepare_resourcepart(value)
-}
-
-pub(crate) fn valid_upload_filename(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 255
-        && !value
-            .chars()
-            .any(|c| c.is_control() || matches!(c, '/' | '\\'))
-}
-
-pub(crate) fn valid_content_type(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 255
-        && value.is_ascii()
-        && value.contains('/')
-        && !value.chars().any(|c| c.is_control() || c.is_whitespace())
+    northstar_xep_0045::OccupantNick::parse(value)
+        .map(|nick| nick.to_string())
+        .map_err(anyhow::Error::from)
 }
 
 /// Validate and prepare an RFC 7622 bare JID.
@@ -441,9 +325,12 @@ pub(crate) fn valid_bare_jid(value: &str) -> bool {
 }
 
 pub(crate) fn muc_occupant_key(room_jid: &str, nick: &str) -> String {
-    let room_jid = crate::jid::canonicalize_bare(room_jid).unwrap_or_else(|_| room_jid.to_owned());
-    let nick = prepare_muc_nick(nick).unwrap_or_else(|_| nick.to_owned());
-    format!("{}/{}", room_jid, nick,)
+    northstar_xep_0045::occupant_key(room_jid, nick).unwrap_or_else(|_| {
+        let room_jid =
+            crate::jid::canonicalize_bare(room_jid).unwrap_or_else(|_| room_jid.to_owned());
+        let nick = prepare_muc_nick(nick).unwrap_or_else(|_| nick.to_owned());
+        format!("{room_jid}/{nick}")
+    })
 }
 
 pub(crate) fn muc_presence_stanza(
@@ -1222,7 +1109,9 @@ pub(crate) fn add_stanza_id(stanza: &str, by: &str, id: uuid::Uuid) -> String {
     let Ok(document) = Document::parse(stanza) else {
         return stanza.to_owned();
     };
-    let canonical_by = crate::jid::canonicalize(by).ok();
+    let Ok(canonical_by) = crate::jid::CanonicalJid::parse(by) else {
+        return stanza.to_owned();
+    };
     let mut ranges = document
         .root_element()
         .children()
@@ -1230,11 +1119,8 @@ pub(crate) fn add_stanza_id(stanza: &str, by: &str, id: uuid::Uuid) -> String {
             node.is_element()
                 && node.tag_name().name() == "stanza-id"
                 && node.tag_name().namespace() == Some("urn:xmpp:sid:0")
-                && node.attribute("by").is_some_and(|value| {
-                    canonical_by.as_deref().is_some_and(|by| {
-                        crate::jid::canonicalize(value).is_ok_and(|value| value == by)
-                    })
-                })
+                && northstar_xep_0359::parse_stanza_id(*node)
+                    .is_ok_and(|existing| existing.by == canonical_by)
         })
         .map(|node| node.range())
         .collect::<Vec<_>>();
@@ -1243,11 +1129,9 @@ pub(crate) fn add_stanza_id(stanza: &str, by: &str, id: uuid::Uuid) -> String {
     for range in ranges {
         annotated.replace_range(range, "");
     }
-    let extension = crate::xmpp::xml_builder::XmlElement::new("stanza-id")
-        .attr("xmlns", "urn:xmpp:sid:0")
-        .attr("id", id)
-        .attr("by", by)
-        .finish();
+    let Ok(extension) = northstar_xep_0359::build_stanza_id(&id.to_string(), &canonical_by) else {
+        return annotated;
+    };
     append_root_validated_fragment(&annotated, &extension).unwrap_or(annotated)
 }
 
@@ -1268,11 +1152,9 @@ pub(crate) fn strip_stanza_ids_by_domain(stanza: &str, domain: &str) -> String {
         .filter(|node| {
             node.is_element()
                 && node.tag_name().name() == "stanza-id"
-                && node.tag_name().namespace() == Some("urn:xmpp:sid:0")
-                && node.attribute("by").is_some_and(|value| {
-                    crate::jid::CanonicalJid::parse(value)
-                        .is_ok_and(|issuer| issuer.domainpart() == domain)
-                })
+                && node.tag_name().namespace() == Some(northstar_xep_0359::NAMESPACE)
+                && northstar_xep_0359::parse_stanza_id(*node)
+                    .is_ok_and(|stanza_id| stanza_id.by.domainpart() == domain)
         })
         .map(|node| node.range())
         .collect::<Vec<_>>();
@@ -1311,59 +1193,9 @@ pub(crate) fn is_abuse_rated_message(root: Node<'_, '_>) -> bool {
 /// a client. A receipt is an end-to-end client assertion; the server only
 /// validates and routes it.
 pub(crate) fn validate_delivery_receipts(root: Node<'_, '_>) -> Result<(), &'static str> {
-    let receipts = root
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().namespace() == Some("urn:xmpp:receipts")
-                && matches!(node.tag_name().name(), "request" | "received")
-        })
-        .collect::<Vec<_>>();
-    let requests = receipts
-        .iter()
-        .filter(|node| node.tag_name().name() == "request")
-        .count();
-    let received = receipts
-        .iter()
-        .filter(|node| node.tag_name().name() == "received")
-        .count();
-    if requests > 1 || received > 1 || (requests == 1 && received == 1) {
-        return Err("bad-request");
-    }
-    for receipt in receipts {
-        if receipt.children().any(|node| node.is_element())
-            || receipt.text().is_some_and(|text| !text.trim().is_empty())
-        {
-            return Err("bad-request");
-        }
-        match receipt.tag_name().name() {
-            "request" => {
-                if receipt.attributes().len() != 0
-                    || root.attribute("id").is_none_or(|id| {
-                        id.is_empty() || id.len() > 1_024 || id.chars().any(char::is_control)
-                    })
-                {
-                    return Err("bad-request");
-                }
-            }
-            "received" => {
-                let Some(id) = receipt.attribute("id") else {
-                    return Err("bad-request");
-                };
-                if id.is_empty()
-                    || id.len() > 1_024
-                    || id.chars().any(char::is_control)
-                    || receipt.attributes().any(|attribute| {
-                        attribute.namespace().is_some() || attribute.name() != "id"
-                    })
-                {
-                    return Err("bad-request");
-                }
-            }
-            _ => unreachable!(),
-        }
-    }
-    Ok(())
+    northstar_xep_0184::parse_message(root)
+        .map(|_| ())
+        .map_err(|_| "bad-request")
 }
 
 /// Validate bounded, unambiguous wire shapes for server-visible modern
@@ -1823,66 +1655,12 @@ fn valid_omemo_base64(value: &str, max_decoded: usize) -> bool {
 }
 
 fn validate_stanza_ids(root: Node<'_, '_>) -> Result<(), &'static str> {
-    let mut issuers = HashSet::new();
-    let mut origin_id_seen = false;
-    for element in root.children().filter(|element| {
-        element.is_element() && element.tag_name().namespace() == Some("urn:xmpp:sid:0")
-    }) {
-        let name = element.tag_name().name();
-        if !matches!(name, "origin-id" | "stanza-id" | "referenced-stanza") {
-            // Preserve forward-compatible SID namespace extensions while
-            // validating every element defined by XEP-0359.
-            continue;
-        }
-        if element.children().any(|child| child.is_element())
-            || element.text().is_some_and(|text| !text.trim().is_empty())
-            || !valid_message_reference(element.attribute("id"))
-        {
-            return Err("bad-request");
-        }
-        match name {
-            "origin-id" => {
-                if origin_id_seen {
-                    return Err("bad-request");
-                }
-                origin_id_seen = true;
-                if element
-                    .attributes()
-                    .any(|attribute| attribute.namespace().is_some() || attribute.name() != "id")
-                {
-                    return Err("bad-request");
-                }
-            }
-            "stanza-id" => {
-                if element.attributes().any(|attribute| {
-                    attribute.namespace().is_some() || !matches!(attribute.name(), "id" | "by")
-                }) {
-                    return Err("bad-request");
-                }
-                let issuer = element
-                    .attribute("by")
-                    .ok_or("bad-request")
-                    .and_then(|issuer| {
-                        crate::jid::canonicalize(issuer).map_err(|_| "jid-malformed")
-                    })?;
-                if !issuers.insert(issuer) {
-                    return Err("bad-request");
-                }
-            }
-            "referenced-stanza" => {
-                if element.attributes().any(|attribute| {
-                    attribute.namespace().is_some() || !matches!(attribute.name(), "id" | "by")
-                }) || element
-                    .attribute("by")
-                    .is_some_and(|issuer| crate::jid::canonicalize(issuer).is_err())
-                {
-                    return Err("bad-request");
-                }
-            }
-            _ => unreachable!(),
-        }
-    }
-    Ok(())
+    northstar_xep_0359::parse_message(root)
+        .map(|_| ())
+        .map_err(|error| match error {
+            northstar_xep_0359::SidError::InvalidIssuer(_) => "jid-malformed",
+            _ => "bad-request",
+        })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2052,65 +1830,15 @@ fn valid_message_reference(value: Option<&str>) -> bool {
 }
 
 fn validate_chat_states(root: Node<'_, '_>) -> Result<(), &'static str> {
-    let states = root
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().namespace() == Some("http://jabber.org/protocol/chatstates")
-        })
-        .collect::<Vec<_>>();
-    if states.len() > 1 {
-        return Err("bad-request");
-    }
-    let Some(state) = states.first() else {
-        return Ok(());
-    };
-    if !matches!(
-        state.tag_name().name(),
-        "active" | "composing" | "paused" | "inactive" | "gone"
-    ) || state.attributes().len() != 0
-        || state.children().any(|child| child.is_element())
-        || state.text().is_some_and(|text| !text.trim().is_empty())
-    {
-        return Err("bad-request");
-    }
-    Ok(())
+    northstar_xep_0085::parse_message(root)
+        .map(|_| ())
+        .map_err(|_| "bad-request")
 }
 
 fn validate_explicit_encryption(root: Node<'_, '_>) -> Result<(), &'static str> {
-    let markers = root
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().name() == "encryption"
-                && node.tag_name().namespace() == Some("urn:xmpp:eme:0")
-        })
-        .collect::<Vec<_>>();
-    if markers.len() > 1 {
-        return Err("bad-request");
-    }
-    let Some(marker) = markers.first() else {
-        return Ok(());
-    };
-    if marker.children().any(|child| child.is_element())
-        || marker.text().is_some_and(|text| !text.trim().is_empty())
-        || marker.attributes().any(|attribute| {
-            attribute.namespace().is_some() || !matches!(attribute.name(), "namespace" | "name")
-        })
-    {
-        return Err("bad-request");
-    }
-    let namespace = marker.attribute("namespace").ok_or("bad-request")?;
-    if namespace.is_empty()
-        || namespace.len() > 1_024
-        || namespace.chars().any(char::is_control)
-        || marker.attribute("name").is_some_and(|name| {
-            name.is_empty() || name.len() > 1_024 || name.chars().any(char::is_control)
-        })
-    {
-        return Err("bad-request");
-    }
-    Ok(())
+    northstar_xep_0380::parse_message(root)
+        .map(|_| ())
+        .map_err(|_| "bad-request")
 }
 
 fn validate_fallbacks(root: Node<'_, '_>) -> Result<(), &'static str> {
@@ -2179,31 +1907,9 @@ fn validate_fallbacks(root: Node<'_, '_>) -> Result<(), &'static str> {
 }
 
 fn validate_correction(root: Node<'_, '_>) -> Result<(), &'static str> {
-    let corrections = root
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().name() == "replace"
-                && node.tag_name().namespace() == Some("urn:xmpp:message-correct:0")
-        })
-        .collect::<Vec<_>>();
-    if corrections.len() > 1 {
-        return Err("bad-request");
-    }
-    let Some(correction) = corrections.first() else {
+    let Some(_) = northstar_xep_0308::parse_message(root).map_err(|_| "bad-request")? else {
         return Ok(());
     };
-    if !valid_message_reference(correction.attribute("id"))
-        || correction
-            .attributes()
-            .any(|attribute| attribute.namespace().is_some() || attribute.name() != "id")
-        || correction.children().any(|child| child.is_element())
-        || correction
-            .text()
-            .is_some_and(|text| text.len() > 1_024 || text.chars().any(char::is_control))
-    {
-        return Err("bad-request");
-    }
     // A correction resends the complete logical content. A naked control is
     // ambiguous archive spam; encrypted replacements remain inside E2EE.
     if !root.children().any(|node| {
@@ -2238,39 +1944,11 @@ fn is_non_messaging_correction_payload(node: Node<'_, '_>) -> bool {
 }
 
 fn validate_displayed_marker(root: Node<'_, '_>) -> Result<(), &'static str> {
-    let markers = root
-        .children()
-        .filter(|node| {
-            node.is_element() && node.tag_name().namespace() == Some("urn:xmpp:chat-markers:0")
-        })
-        .collect::<Vec<_>>();
-    if markers.len() > 1 {
-        return Err("bad-request");
-    }
-    let Some(marker) = markers.first() else {
-        return Ok(());
-    };
-    if marker.children().any(|child| child.is_element())
-        || marker.text().is_some_and(|text| !text.trim().is_empty())
+    let marker = northstar_xep_0333::parse_message(root).map_err(|_| "bad-request")?;
+    if matches!(marker, Some(northstar_xep_0333::ChatMarker::Markable))
+        && !valid_message_reference(root.attribute("id"))
     {
         return Err("bad-request");
-    }
-    match marker.tag_name().name() {
-        "markable" => {
-            if marker.attributes().len() != 0 || !valid_message_reference(root.attribute("id")) {
-                return Err("bad-request");
-            }
-        }
-        "displayed" => {
-            if !valid_message_reference(marker.attribute("id"))
-                || marker
-                    .attributes()
-                    .any(|attribute| attribute.namespace().is_some() || attribute.name() != "id")
-            {
-                return Err("bad-request");
-            }
-        }
-        _ => return Err("bad-request"),
     }
     Ok(())
 }
@@ -2289,75 +1967,18 @@ fn validate_no_client_tombstone(root: Node<'_, '_>) -> Result<(), &'static str> 
 }
 
 fn validate_reactions(root: Node<'_, '_>) -> Result<(), &'static str> {
-    let containers = root
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().name() == "reactions"
-                && node.tag_name().namespace() == Some("urn:xmpp:reactions:0")
-        })
-        .collect::<Vec<_>>();
-    if containers.len() > 1 {
-        return Err("not-acceptable");
-    }
-    let Some(container) = containers.first() else {
-        return Ok(());
-    };
-    if !valid_message_reference(container.attribute("id"))
-        || container
-            .attributes()
-            .any(|attribute| attribute.namespace().is_some() || attribute.name() != "id")
-    {
-        return Err("not-acceptable");
-    }
-    let mut count = 0usize;
-    for child in container.children().filter(|child| child.is_element()) {
-        if child.tag_name().name() != "reaction"
-            || child.tag_name().namespace() != Some("urn:xmpp:reactions:0")
-            || child.attributes().len() != 0
-            || child.children().any(|nested| nested.is_element())
-        {
-            return Err("not-acceptable");
-        }
-        let reaction = child.text().unwrap_or_default();
-        count += 1;
-        if count > 1_024
-            || reaction.is_empty()
-            || reaction.len() > 4_096
-            || reaction.chars().any(char::is_control)
-        {
-            return Err("not-acceptable");
-        }
-    }
-    Ok(())
+    northstar_xep_0444::parse_message(root)
+        .map(|_| ())
+        .map_err(|_| "not-acceptable")
 }
 
 fn validate_reply(root: Node<'_, '_>) -> Result<(), &'static str> {
-    let replies = root
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().name() == "reply"
-                && node.tag_name().namespace() == Some("urn:xmpp:reply:0")
-        })
-        .collect::<Vec<_>>();
-    if replies.len() > 1 {
-        return Err("bad-request");
-    }
-    let Some(reply) = replies.first() else {
-        return Ok(());
-    };
-    if !valid_message_reference(reply.attribute("id"))
-        || reply.attributes().any(|attribute| {
-            attribute.namespace().is_some() || !matches!(attribute.name(), "id" | "to")
-        })
-        || reply.children().any(|child| child.is_element())
-        || reply.text().is_some_and(|text| !text.trim().is_empty())
-        || reply
-            .attribute("to")
-            .is_some_and(|jid| crate::jid::CanonicalJid::parse(jid).is_err())
-    {
-        return Err("bad-request");
+    if let Some(reply) = northstar_xep_0461::parse_message(root).map_err(|_| "bad-request")? {
+        // Canonical JID parsing is a server identity policy, deliberately kept
+        // outside the capability-free wire crate.
+        if crate::jid::CanonicalJid::parse(reply.to()).is_err() {
+            return Err("bad-request");
+        }
     }
     Ok(())
 }
@@ -2966,16 +2587,16 @@ pub(crate) fn mam_storage_eligible(root: Node<'_, '_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        add_delay_from, add_muc_user_status, add_stanza_id, blocked_stanza_error,
-        blocking_command_is_empty, blocking_items, carbon_message, child_text, failure,
-        has_no_store_hint, iq_error, iq_result, is_abuse_rated_message, mam_muc_stanza,
-        mam_storage_eligible, message_storage_policy, muc_occupant_id, muc_occupant_key,
-        muc_presence_stanza_with_status, offline_storage_permitted, prepare_muc_nick,
-        reflect_iq_error_response, set_from, set_muc_occupant_id, set_to, should_carbon,
-        stanza_error, stanza_error_type, stream_error, stream_id, strip_stanza_ids_by_domain,
-        strip_untrusted_direct_delays, valid_bare_jid, valid_blocking_jid, valid_language_tag,
-        valid_muc_nick, validate_delivery_receipts, validate_modern_message_payloads,
-        validate_no_client_carbon, BASE64, MAX_OMEMO2_PAYLOAD_BYTES,
+        add_delay_from, add_muc_user_status, add_stanza_id, blocked_stanza_error, carbon_message,
+        child_text, failure, has_no_store_hint, iq_error, iq_result, is_abuse_rated_message,
+        mam_muc_stanza, mam_storage_eligible, message_storage_policy, muc_occupant_id,
+        muc_occupant_key, muc_presence_stanza_with_status, offline_storage_permitted,
+        prepare_muc_nick, reflect_iq_error_response, set_from, set_muc_occupant_id, set_to,
+        should_carbon, stanza_error, stanza_error_type, stream_error, stream_id,
+        strip_stanza_ids_by_domain, strip_untrusted_direct_delays, valid_bare_jid,
+        valid_language_tag, valid_muc_nick, validate_delivery_receipts,
+        validate_modern_message_payloads, validate_no_client_carbon, validate_routed_message,
+        BASE64, MAX_OMEMO2_PAYLOAD_BYTES,
     };
     use base64::Engine;
     use roxmltree::Document;
@@ -2983,6 +2604,70 @@ mod tests {
     fn transient(xml: &str) -> bool {
         let document = Document::parse(xml).expect("test message must be valid XML");
         has_no_store_hint(document.root_element())
+    }
+
+    #[test]
+    fn disabled_message_extensions_fail_closed_at_the_shared_ingress_boundary() {
+        let disabled = crate::xmpp::extensions::ExtensionRuntime::resolve(
+            crate::xmpp::extensions::ExtensionSwitches {
+                xep_0016: true,
+                xep_0045: true,
+                xep_0059: true,
+                xep_0060: true,
+                xep_0085: false,
+                xep_0092: true,
+                xep_0115: true,
+                xep_0184: false,
+                xep_0191: true,
+                xep_0198: true,
+                xep_0199: true,
+                xep_0202: true,
+                xep_0215: true,
+                xep_0280: true,
+                xep_0313: true,
+                xep_0352: true,
+                xep_0357: true,
+                xep_0359: false,
+                xep_0363: true,
+                xep_0308: false,
+                xep_0333: false,
+                xep_0380: false,
+                xep_0444: false,
+                xep_0461: false,
+            },
+        );
+        for xml in [
+            "<message><active xmlns='http://jabber.org/protocol/chatstates'/></message>",
+            "<message id='m1'><request xmlns='urn:xmpp:receipts'/></message>",
+            "<message><body>updated</body><replace xmlns='urn:xmpp:message-correct:0' id='m1'/></message>",
+            "<message id='m2'><markable xmlns='urn:xmpp:chat-markers:0'/></message>",
+            "<message><encryption xmlns='urn:xmpp:eme:0' namespace='urn:xmpp:omemo:2'/></message>",
+            "<message><reactions xmlns='urn:xmpp:reactions:0' id='m1'><reaction>yes</reaction></reactions></message>",
+            "<message><origin-id xmlns='urn:xmpp:sid:0' id='m1'/></message>",
+            "<message><reply xmlns='urn:xmpp:reply:0' to='alice@example.test' id='m1'/></message>",
+        ] {
+            let document = Document::parse(xml).unwrap();
+            assert_eq!(
+                validate_routed_message(document.root_element(), &disabled),
+                Err("feature-not-implemented"),
+                "{xml}"
+            );
+        }
+    }
+
+    #[test]
+    fn enabled_message_extensions_delegate_wire_validation_to_their_crates() {
+        let enabled = crate::xmpp::extensions::ExtensionRuntime::resolve(
+            crate::xmpp::extensions::ExtensionSwitches::default(),
+        );
+        let malformed = Document::parse(
+            "<message><reply xmlns='urn:xmpp:reply:0' to='not a jid' id='m1'/></message>",
+        )
+        .unwrap();
+        assert_eq!(
+            validate_routed_message(malformed.root_element(), &enabled),
+            Err("bad-request")
+        );
     }
 
     #[test]
@@ -3585,26 +3270,13 @@ mod tests {
 
     #[test]
     fn carbon_wrapper_rejects_dynamic_element_name_injection() {
-        let wrapped = carbon_message(
+        assert!(carbon_message(
             "received></received><injected",
             "alice@example.test",
             "alice@example.test/tablet",
             "<message xmlns='jabber:client' type='chat'><body>hi</body></message>",
         )
-        .unwrap();
-        let document = Document::parse(&wrapped).unwrap();
-        assert!(!wrapped.contains("injected"));
-        assert_eq!(
-            document
-                .descendants()
-                .filter(|node| {
-                    node.is_element()
-                        && node.tag_name().name() == "received"
-                        && node.tag_name().namespace() == Some("urn:xmpp:carbons:2")
-                })
-                .count(),
-            1
-        );
+        .is_none());
     }
 
     #[test]
@@ -3799,7 +3471,9 @@ mod tests {
             "<message type='chat'><composing xmlns='http://jabber.org/protocol/chatstates'/></message>",
             "<message id='m2'><body>fixed</body><replace xmlns='urn:xmpp:message-correct:0' id='m1'/></message>",
             "<message id='m1'><markable xmlns='urn:xmpp:chat-markers:0'/></message>",
+            "<message><received xmlns='urn:xmpp:chat-markers:0' id='m1'/></message>",
             "<message><displayed xmlns='urn:xmpp:chat-markers:0' id='m1'/></message>",
+            "<message><acknowledged xmlns='urn:xmpp:chat-markers:0' id='m1'/></message>",
             "<message><openpgp xmlns='urn:xmpp:openpgp:0'/><encryption xmlns='urn:xmpp:eme:0' namespace='urn:xmpp:openpgp:0'/></message>",
             "<message><body>🧛🏾 &amp; ok</body><fallback xmlns='urn:xmpp:fallback:0' for='urn:xmpp:reply:0'><body start='0' end='7'/></fallback></message>",
             "<message><reactions xmlns='urn:xmpp:reactions:0' id='m1'><reaction>👍</reaction></reactions></message>",
@@ -3944,8 +3618,6 @@ mod tests {
             "<message><body>not a correction</body><received xmlns='urn:xmpp:receipts' id='delivery'/><replace xmlns='urn:xmpp:message-correct:0' id='m1'/></message>",
             "<message><body>not a correction</body><propose xmlns='urn:xmpp:jingle-message:0' id='call'><description xmlns='urn:xmpp:jingle:apps:rtp:1' media='audio'/></propose><replace xmlns='urn:xmpp:message-correct:0' id='m1'/></message>",
             "<message id='m1'><markable xmlns='urn:xmpp:chat-markers:0'/><displayed xmlns='urn:xmpp:chat-markers:0' id='m0'/></message>",
-            "<message><received xmlns='urn:xmpp:chat-markers:0' id='m1'/></message>",
-            "<message><acknowledged xmlns='urn:xmpp:chat-markers:0' id='m1'/></message>",
             "<message><retracted xmlns='urn:xmpp:message-retract:1' id='server-only'/></message>",
             "<message><reply xmlns='urn:xmpp:reply:0' id='m1' evil:to='alice@example.test' xmlns:evil='urn:evil'/></message>",
             "<message><reply xmlns='urn:xmpp:reply:0' id='m1' to='bad@@example.test'/></message>",
@@ -3969,67 +3641,6 @@ mod tests {
         assert!(!valid_bare_jid("alice@example.test/resource"));
         assert!(!valid_bare_jid("alice@@example.test"));
         assert!(!valid_bare_jid("ali ce@example.test"));
-    }
-
-    #[test]
-    fn blocking_jids_cover_all_four_matching_shapes() {
-        for jid in [
-            "alice@example.test/phone",
-            "alice@example.test",
-            "example.test/gateway",
-            "example.test",
-        ] {
-            assert!(valid_blocking_jid(jid), "{jid}");
-        }
-        for jid in [
-            "alice@@example.test",
-            "@example.test",
-            "example.test/",
-            ".example.test",
-        ] {
-            assert!(!valid_blocking_jid(jid), "{jid}");
-        }
-    }
-
-    #[test]
-    fn blocking_commands_follow_the_xep_schema_strictly() {
-        let valid = Document::parse(
-            "<block xmlns='urn:xmpp:blocking'><item jid='Alice@Example.test/Phone'/><item jid='example.test'/></block>",
-        )
-        .unwrap();
-        assert_eq!(
-            blocking_items(valid.root_element(), None).unwrap(),
-            ["alice@example.test/Phone", "example.test"]
-        );
-        for invalid in [
-            "<block xmlns='urn:xmpp:blocking' extra='1'><item jid='a@example.test'/></block>",
-            "<block xmlns='urn:xmpp:blocking'>text<item jid='a@example.test'/></block>",
-            "<block xmlns='urn:xmpp:blocking'><item jid='a@example.test' extra='1'/></block>",
-            "<block xmlns='urn:xmpp:blocking'><item jid=' a@example.test '/></block>",
-            "<block xmlns='urn:xmpp:blocking'><item jid='a@example.test'> </item></block>",
-            "<block xmlns='urn:xmpp:blocking'><item jid='a@example.test'><x/></item></block>",
-            "<block xmlns='urn:xmpp:blocking'><item xmlns='wrong' jid='a@example.test'/></block>",
-        ] {
-            let document = Document::parse(invalid).unwrap();
-            assert!(
-                blocking_items(document.root_element(), None).is_none(),
-                "{invalid}"
-            );
-        }
-        let empty = Document::parse("<blocklist xmlns='urn:xmpp:blocking'/>").unwrap();
-        assert!(blocking_command_is_empty(empty.root_element()));
-        let nonempty = Document::parse(
-            "<blocklist xmlns='urn:xmpp:blocking'><item jid='a@example.test'/></blocklist>",
-        )
-        .unwrap();
-        assert!(!blocking_command_is_empty(nonempty.root_element()));
-
-        let oversized = format!(
-            "<block xmlns='urn:xmpp:blocking'>{}</block>",
-            "<item jid='a@example.test'/>".repeat(super::MAX_BLOCKING_ITEMS + 1)
-        );
-        let oversized = Document::parse(&oversized).unwrap();
-        assert!(blocking_items(oversized.root_element(), None).is_none());
     }
 
     #[test]

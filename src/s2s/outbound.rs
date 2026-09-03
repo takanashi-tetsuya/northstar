@@ -1259,17 +1259,15 @@ pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
             queued_at = %expired.created_at,
             "federation stanza expired before delivery"
         );
-        let envelope = FederationEnvelope {
-            outbox_id: expired.id,
-            lock_token: uuid::Uuid::nil(),
-            attempt_count: expired.attempt_count,
-            target_domain: expired.target_domain,
-            bounce_to: expired.bounce_to,
-            stanza: expired.stanza,
-            delivery_mode: FederationDeliveryMode::DurableOutbox,
-            volatile_completion: None,
-            volatile_deadline: None,
-        };
+        let envelope = FederationEnvelope::new(
+            expired.id,
+            uuid::Uuid::nil(),
+            expired.attempt_count,
+            expired.target_domain,
+            expired.bounce_to,
+            expired.stanza,
+            FederationDeliveryMode::DurableOutbox,
+        );
         bounce_delivery_failure(state, &envelope);
     }
 

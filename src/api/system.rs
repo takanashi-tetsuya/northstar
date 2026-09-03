@@ -212,7 +212,8 @@ fn readiness_response(snapshot: ReadinessSnapshot) -> Result<&'static str, AppEr
 fn upload_storage_ready(state: crate::services::upload_safety::UploadSafetyState) -> bool {
     matches!(
         state,
-        crate::services::upload_safety::UploadSafetyState::Healthy
+        crate::services::upload_safety::UploadSafetyState::Disabled
+            | crate::services::upload_safety::UploadSafetyState::Healthy
             | crate::services::upload_safety::UploadSafetyState::RecoveryDraining
     )
 }
@@ -985,21 +986,46 @@ fn offers_xmpp_subprotocol(headers: &HeaderMap) -> bool {
 }
 
 pub async fn public_config(State(state): State<Arc<AppState>>) -> Json<Value> {
-    let open_registration = !state.registration_is_closed();
+    let registration_mode = state.registration_mode();
+    let open_registration = registration_mode != crate::config::RegistrationMode::Closed;
+    let registration_mode = match registration_mode {
+        crate::config::RegistrationMode::Closed => "closed",
+        crate::config::RegistrationMode::Open => "open",
+        crate::config::RegistrationMode::InvitationOnly => "invitation",
+    };
     let federation_enabled = state.config.federation_enabled && !state.island_mode_enabled();
     Json(json!({
         "domain":state.config.domain,
+        "public_url":state.config.public_url,
         "open_registration":open_registration,
-        "invitation_required":state.config.invitation_required,
+        "invitation_required":state.registration_requires_invitation(),
+        "registration_mode":registration_mode,
+        "registration_dependency_locked":state.registration_opening_is_dependency_locked(),
         "archive_policy":if state.config.require_encrypted_archive {"encrypted_only"} else {"all"},
-        "websocket_path":"/xmpp-websocket"
+        "websocket_path":state.config.websocket_enabled.then_some("/xmpp-websocket")
         ,"bosh_path":(state.config.bosh_enabled && state.config.public_url.starts_with("https://")).then_some("/http-bind")
-        ,"upload_max_bytes":state.config.upload_max_bytes
-        ,"upload_service":format!("upload.{}",state.config.domain)
+        ,"upload_max_bytes":state.config.upload_mode.admits_new_uploads().then_some(state.config.upload_max_bytes)
+        ,"upload_download_max_bytes":state.config.upload_mode.keeps_storage_runtime().then_some(state.config.upload_download_max_bytes)
+        ,"upload_service":state.config.upload_mode.admits_new_uploads().then(||format!("upload.{}",state.config.domain))
         ,"muc_service":format!("conference.{}",state.config.domain)
         ,"federation_enabled":federation_enabled
         ,"pow_max_work_factor":state.config.pow_max_work_factor
         ,"pow_approximate_max_device_seconds":state.config.pow_max_device_seconds
+        ,"capabilities":{
+            "rest_api":state.config.rest_api_enabled,
+            "websocket":state.config.websocket_enabled,
+            "bosh":state.config.bosh_enabled,
+            "web_client":state.config.web_client_enabled,
+            "web_administration":state.config.web_admin_enabled,
+            "invitation_registration":state.config.web_client_enabled,
+            "upload_admission":state.config.upload_mode.admits_new_uploads(),
+            "upload_download":state.config.upload_mode.keeps_storage_runtime(),
+            "upload_mode":match state.config.upload_mode {
+                crate::config::UploadMode::Enabled => "enabled",
+                crate::config::UploadMode::DrainReadOnly => "drain_read_only",
+                crate::config::UploadMode::Disabled => "disabled",
+            }
+        }
     }))
 }
 
@@ -1015,7 +1041,10 @@ pub async fn host_meta_xml(
         &state.config.domain,
         &state.config.public_url,
     );
-    let ws_href = secure_websocket_url(&origin);
+    let ws_href = state
+        .config
+        .websocket_enabled
+        .then(|| secure_websocket_url(&origin));
     let bosh_href = advertised_bosh_url(state.config.bosh_enabled, &state.config.public_url);
 
     let bosh_link = bosh_href.as_deref().map_or_else(String::new, |href| {
@@ -1024,14 +1053,18 @@ pub async fn host_meta_xml(
             crate::state::attr_escape(href)
         )
     });
+    let websocket_link = ws_href.as_deref().map_or_else(String::new, |href| {
+        format!(
+            "\x20\x20<Link rel=\"urn:xmpp:alt-connections:websocket\" href=\"{}\" />\n",
+            crate::state::attr_escape(href)
+        )
+    });
     let xml = format!(
         "<?xml version='1.0' encoding='utf-8'?>\n\
          <XRD xmlns='http://docs.oasis-open.org/ns/xri/xrd-1.0'>\n\
-         \x20\x20<Link rel=\"urn:xmpp:alt-connections:websocket\" href=\"{}\" />\n\
-         {}\
+         {}{}\
          </XRD>",
-        crate::state::attr_escape(&ws_href),
-        bosh_link,
+        websocket_link, bosh_link,
     );
 
     (
@@ -1056,11 +1089,14 @@ pub async fn host_meta_json(
         &state.config.domain,
         &state.config.public_url,
     );
-    let ws_href = secure_websocket_url(&origin);
+    let ws_href = state
+        .config
+        .websocket_enabled
+        .then(|| secure_websocket_url(&origin));
     let bosh_href = advertised_bosh_url(state.config.bosh_enabled, &state.config.public_url);
     let federation_enabled = state.config.federation_enabled && !state.island_mode_enabled();
     let json_body = host_meta_json_document(
-        &ws_href,
+        ws_href.as_deref(),
         bosh_href.as_deref(),
         &state.config.domain,
         &state.config.xep_0487_ips,
@@ -1098,7 +1134,7 @@ pub async fn host_meta_json(
 
 #[allow(clippy::too_many_arguments)]
 fn host_meta_json_document(
-    ws_href: &str,
+    ws_href: Option<&str>,
     bosh_href: Option<&str>,
     domain: &str,
     ips: &[IpAddr],
@@ -1109,10 +1145,13 @@ fn host_meta_json_document(
     s2s_tls_port: Option<u16>,
 ) -> Value {
     if ips.is_empty() {
-        let mut links = vec![json!({
-            "rel": "urn:xmpp:alt-connections:websocket",
-            "href": ws_href
-        })];
+        let mut links = Vec::new();
+        if let Some(ws_href) = ws_href {
+            links.push(json!({
+                "rel": "urn:xmpp:alt-connections:websocket",
+                "href": ws_href
+            }));
+        }
         if let Some(bosh_href) = bosh_href {
             links.push(json!({
                 "rel": "urn:xmpp:alt-connections:xbosh",
@@ -1123,14 +1162,17 @@ fn host_meta_json_document(
     }
 
     let ips = ips.iter().map(ToString::to_string).collect::<Vec<_>>();
-    let mut links = vec![json!({
-        "rel": "urn:xmpp:alt-connections:websocket",
-        "href": ws_href,
-        "ips": &ips,
-        "priority": priority,
-        "weight": weight,
-        "sni": domain
-    })];
+    let mut links = Vec::new();
+    if let Some(ws_href) = ws_href {
+        links.push(json!({
+            "rel": "urn:xmpp:alt-connections:websocket",
+            "href": ws_href,
+            "ips": &ips,
+            "priority": priority,
+            "weight": weight,
+            "sni": domain
+        }));
+    }
     if let Some(bosh_href) = bosh_href {
         links.push(json!({
             "rel": "urn:xmpp:alt-connections:xbosh",
@@ -1292,6 +1334,7 @@ mod tests {
     fn upload_readiness_is_fail_closed_but_allows_bounded_recovery_drain() {
         use crate::services::upload_safety::UploadSafetyState;
 
+        assert!(upload_storage_ready(UploadSafetyState::Disabled));
         assert!(upload_storage_ready(UploadSafetyState::Healthy));
         assert!(upload_storage_ready(UploadSafetyState::RecoveryDraining));
         for unsafe_state in [
@@ -1698,7 +1741,7 @@ mod tests {
     #[test]
     fn xep_0487_is_only_asserted_with_explicit_public_ips() {
         let legacy = host_meta_json_document(
-            "wss://example.org/xmpp-websocket",
+            Some("wss://example.org/xmpp-websocket"),
             None,
             "example.org",
             &[],
@@ -1712,7 +1755,7 @@ mod tests {
         assert_eq!(legacy["links"].as_array().unwrap().len(), 1);
 
         let with_bosh = host_meta_json_document(
-            "wss://example.org/xmpp-websocket",
+            Some("wss://example.org/xmpp-websocket"),
             Some("https://example.org/http-bind"),
             "example.org",
             &[],
@@ -1728,8 +1771,25 @@ mod tests {
             "urn:xmpp:alt-connections:xbosh"
         );
 
+        let direct_tls_only = host_meta_json_document(
+            None,
+            None,
+            "example.org",
+            &["192.0.2.10".parse().unwrap()],
+            300,
+            10,
+            50,
+            5223,
+            Some(5270),
+        );
+        assert_eq!(direct_tls_only["links"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            direct_tls_only["links"][0]["rel"],
+            "urn:xmpp:alt-connections:tls"
+        );
+
         let modern = host_meta_json_document(
-            "wss://example.org/xmpp-websocket",
+            Some("wss://example.org/xmpp-websocket"),
             None,
             "example.org",
             &[
@@ -1943,18 +2003,45 @@ mod tests {
 
         let router_source = include_str!("mod.rs");
         let mut router_contract = BTreeSet::new();
-        let mut cursor = router_source;
-        while let Some(route_offset) = cursor.find(".route(") {
-            let after_marker = &cursor[route_offset + ".route(".len()..];
-            let quote = after_marker.find('"').expect("route path opening quote");
-            let path_tail = &after_marker[quote + 1..];
+        let mut search_from = 0;
+        while let Some(relative) = router_source[search_from..].find(".route(") {
+            let route_offset = search_from + relative;
+            let opening = route_offset + ".route".len();
+            let mut depth = 0_u32;
+            let mut quoted = false;
+            let mut escaped = false;
+            let mut closing = None;
+            for (offset, character) in router_source[opening..].char_indices() {
+                if quoted {
+                    if escaped {
+                        escaped = false;
+                    } else if character == '\\' {
+                        escaped = true;
+                    } else if character == '"' {
+                        quoted = false;
+                    }
+                    continue;
+                }
+                match character {
+                    '"' => quoted = true,
+                    '(' => depth = depth.saturating_add(1),
+                    ')' => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            closing = Some(opening + offset);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let closing = closing.expect("balanced route call");
+            let call = &router_source[opening + 1..closing];
+            let quote = call.find('"').expect("route path opening quote");
+            let path_tail = &call[quote + 1..];
             let path_end = path_tail.find('"').expect("route path closing quote");
             let path = &path_tail[..path_end];
-            let next_route = after_marker.find(".route(").unwrap_or(after_marker.len());
-            // A route expression is deliberately small. Capping the slice
-            // prevents the final route in the file from matching unrelated
-            // handler functions which appear later in the source module.
-            let handler = &after_marker[..next_route.min(512)];
+            let handler = &path_tail[path_end + 1..];
             for (method, needles) in [
                 ("GET", [" get(", ".get("]),
                 ("POST", [" post(", ".post("]),
@@ -1967,11 +2054,7 @@ mod tests {
                     router_contract.insert(format!("{method} {path}"));
                 }
             }
-            cursor = if next_route == after_marker.len() {
-                ""
-            } else {
-                &after_marker[next_route..]
-            };
+            search_from = closing + 1;
         }
         assert!(!router_contract.is_empty(), "router parser found no routes");
         assert_eq!(documented, router_contract);

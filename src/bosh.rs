@@ -842,7 +842,9 @@ impl BoshActor {
                 .await;
             return false;
         }
-        if let Some(condition) = bosh_request_shape_error(request, self.protocol.stream_opened) {
+        if let Some(condition) =
+            bosh_request_shape_error(request, self.protocol.negotiation.is_open())
+        {
             let _ = self.finish_pending(pending, Some(condition), false).await;
             return false;
         }

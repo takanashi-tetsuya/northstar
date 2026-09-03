@@ -22,11 +22,7 @@ const SM_AUTHORITY_NOTIFICATION_CHANNEL: &str = "northstar_sm_authority_v1";
 
 /// Application-layer proof that one already-authorized C2S lifecycle may
 /// claim a cluster route. Protocol code never receives a database DTO.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SessionRouteClaimProof {
-    Binding,
-    SmResume { session_id: Uuid, claim_token: Uuid },
-}
+pub(crate) use northstar_session_core::{SessionRouteClaimProof, SmMucMembership};
 
 impl From<SessionRouteClaimProof> for db::ClusterSessionRouteClaimProof {
     fn from(value: SessionRouteClaimProof) -> Self {
@@ -39,30 +35,6 @@ impl From<SessionRouteClaimProof> for db::ClusterSessionRouteClaimProof {
                 session_id,
                 claim_token,
             },
-        }
-    }
-}
-
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
-pub(crate) struct SmMucMembership {
-    pub(crate) room_jid: String,
-    pub(crate) nick: String,
-}
-
-impl From<db::SmMucMembership> for SmMucMembership {
-    fn from(value: db::SmMucMembership) -> Self {
-        Self {
-            room_jid: value.room_jid,
-            nick: value.nick,
-        }
-    }
-}
-
-impl From<&SmMucMembership> for db::SmMucMembership {
-    fn from(value: &SmMucMembership) -> Self {
-        Self {
-            room_jid: value.room_jid.clone(),
-            nick: value.nick.clone(),
         }
     }
 }
@@ -144,7 +116,7 @@ impl From<&db::SmSessionSnapshot> for SmSessionSnapshot {
             privacy_requested: value.privacy_requested,
             peer_ip: value.peer_ip,
             user_agent_id: value.user_agent_id,
-            joined_rooms: value.joined_rooms.iter().cloned().map(Into::into).collect(),
+            joined_rooms: value.joined_rooms.clone(),
             directed_presence: value.directed_presence.clone(),
             last_presence: value.last_presence.clone(),
             unacked: value.unacked.clone(),
@@ -167,7 +139,7 @@ impl From<&SmSessionSnapshot> for db::SmSessionSnapshot {
             privacy_requested: value.privacy_requested,
             peer_ip: value.peer_ip,
             user_agent_id: value.user_agent_id,
-            joined_rooms: value.joined_rooms.iter().map(Into::into).collect(),
+            joined_rooms: value.joined_rooms.clone(),
             directed_presence: value.directed_presence.clone(),
             last_presence: value.last_presence.clone(),
             unacked: value.unacked.clone(),
@@ -262,7 +234,7 @@ impl From<db::SmResumeClaim> for SmResumeClaim {
             active_privacy_list: value.active_privacy_list,
             privacy_requested: value.privacy_requested,
             user_agent_id: value.user_agent_id,
-            joined_rooms: value.joined_rooms.into_iter().map(Into::into).collect(),
+            joined_rooms: value.joined_rooms,
             directed_presence: value.directed_presence,
             last_presence: value.last_presence,
             unacked: value.unacked,
@@ -811,12 +783,7 @@ impl SmService {
         connection_id: Uuid,
         memberships: &[SmMucMembership],
     ) -> Result<bool> {
-        let memberships = memberships
-            .iter()
-            .map(db::SmMucMembership::from)
-            .collect::<Vec<_>>();
-        db::remove_live_sm_muc_memberships(&self.pool, session_id, connection_id, &memberships)
-            .await
+        db::remove_live_sm_muc_memberships(&self.pool, session_id, connection_id, memberships).await
     }
 
     #[allow(clippy::too_many_arguments)]

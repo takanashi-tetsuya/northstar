@@ -184,14 +184,6 @@ fn observe_post_action_join(
     }
 }
 
-fn reserve_sasl_attempt(attempts: &mut u8) -> bool {
-    if *attempts >= MAX_SASL_ATTEMPTS_PER_STREAM {
-        return false;
-    }
-    *attempts += 1;
-    true
-}
-
 pub enum Action {
     Send(String),
     SendMany(Vec<String>),
@@ -417,7 +409,7 @@ pub struct ProtocolSession {
     /// Whether this transport has a currently open XML stream. STARTTLS and
     /// legacy SASL both invalidate it and require a fresh opening tag before
     /// any further negotiation or application stanza is accepted.
-    pub(crate) stream_opened: bool,
+    pub(crate) negotiation: northstar_session_core::StreamNegotiation,
     pub(crate) authenticated: Option<crate::services::authentication::AuthenticatedAccount>,
     pub(crate) authenticated_at: Option<std::time::Instant>,
     pub(crate) full_jid: Option<String>,
@@ -460,9 +452,8 @@ pub struct ProtocolSession {
     pub(crate) directed_presence: Arc<DashSet<String>>,
     pub(crate) last_presence: Arc<std::sync::RwLock<Option<String>>>,
     pub(crate) joined_rooms: Arc<dashmap::DashMap<String, crate::state::JoinedMucMembership>>,
-    pub(crate) csi_active: bool,
-    pub(crate) csi_deferred: VecDeque<csi::DeferredStanza>,
-    pub(crate) csi_deferred_bytes: usize,
+    pub(crate) csi_state: northstar_xep_0352::CsiStateMachine,
+    pub(crate) csi_deferred: northstar_xep_0352::DeferredQueue<crate::outbound::OutboundItem>,
     /// Bind 2 clients catch up through MAM metadata and must never receive the
     /// legacy offline queue again on their initial presence.
     pub(crate) bind2_mam_catchup: bool,
@@ -487,23 +478,11 @@ pub struct ProtocolSession {
         Option<Option<crate::services::authentication::AuthenticationFence>>,
     pub(crate) legacy_sasl_awaiting_initial_response: bool,
     pub(crate) sasl2_state: Option<sasl2::Sasl2Context>,
-    /// Number of SASL exchanges initiated on the current XML stream. RFC
-    /// 6120 requires a finite retry ceiling; the sixth attempt is rejected by
-    /// closing the stream with policy-violation.
-    pub(crate) sasl_attempts: u8,
     /// Active XEP-0389 challenge transport. A response is accepted only after
     /// this connection selected an advertised flow and received a challenge.
     pub(crate) ibr_flow: Option<ibr::IbrFlowTransport>,
     /// One unauthenticated transport may bootstrap at most one account. After
     /// a successful XEP-0077/XEP-0389 registration only SASL is expected.
-    pub(crate) registration_completed: bool,
-    /// Canonical localpart from the client's stream `from`. FAST requires it
-    /// and all SASL2 mechanisms cross-check it when supplied.
-    pub(crate) stream_from: Option<String>,
-    /// RFC 6120 default language selected by the current XML stream.  It is
-    /// copied onto inbound stanzas which omit their own `xml:lang` before the
-    /// stanza crosses the C2S routing boundary.
-    pub(crate) stream_language: Option<String>,
     pub(crate) user_agent_id: Option<uuid::Uuid>,
     pub(crate) user_agent_epoch: Option<i64>,
     /// Proof that credential-side effects already committed. It is retained
@@ -563,7 +542,7 @@ impl ProtocolSession {
             peer_ip,
             connected_at: std::time::Instant::now(),
             last_activity: Arc::new(std::sync::RwLock::new(std::time::Instant::now())),
-            stream_opened: false,
+            negotiation: northstar_session_core::StreamNegotiation::default(),
             authenticated: None,
             authenticated_at: None,
             full_jid: None,
@@ -586,9 +565,8 @@ impl ProtocolSession {
             directed_presence: Arc::new(DashSet::new()),
             last_presence: Arc::new(std::sync::RwLock::new(None)),
             joined_rooms: Arc::new(dashmap::DashMap::new()),
-            csi_active: true,
-            csi_deferred: VecDeque::new(),
-            csi_deferred_bytes: 0,
+            csi_state: northstar_xep_0352::CsiStateMachine::new(),
+            csi_deferred: csi::default_queue(),
             bind2_mam_catchup: false,
             sm_enabled: false,
             sm_db_id: None,
@@ -604,11 +582,7 @@ impl ProtocolSession {
             sasl_scram_fence: None,
             legacy_sasl_awaiting_initial_response: false,
             sasl2_state: None,
-            sasl_attempts: 0,
             ibr_flow: None,
-            registration_completed: false,
-            stream_from: None,
-            stream_language: None,
             user_agent_id: None,
             user_agent_epoch: None,
             pending_credential_commit: None,
@@ -801,7 +775,10 @@ impl ProtocolSession {
     }
 
     pub(crate) fn begin_sasl_attempt(&mut self) -> Option<Action> {
-        if !reserve_sasl_attempt(&mut self.sasl_attempts) {
+        if !self
+            .negotiation
+            .reserve_sasl_attempt(MAX_SASL_ATTEMPTS_PER_STREAM)
+        {
             self.sasl_state = None;
             self.sasl_scram_fence = None;
             self.legacy_sasl_awaiting_initial_response = false;
@@ -1052,8 +1029,8 @@ impl ProtocolSession {
 
     pub(crate) fn open_stream(&self) -> String {
         let to = self
-            .stream_from
-            .as_ref()
+            .negotiation
+            .stream_from()
             .map(|username| format!("{}@{}", username, self.state.config.domain));
         if self.websocket {
             let _ = self.outbound.try_send(self.features());
@@ -1094,10 +1071,23 @@ impl ProtocolSession {
                 );
             }
             features.push_child(XmlElement::namespaced("ver", "urn:xmpp:features:rosterver"));
-            if !self.sm_enabled {
-                features.push_child(XmlElement::namespaced("sm", "urn:xmpp:sm:3"));
+            if !self.sm_enabled
+                && self
+                    .state
+                    .config
+                    .xmpp_extensions
+                    .enabled(northstar_xep_0198::XEP_ID)
+            {
+                features.push_child(XmlElement::namespaced("sm", northstar_xep_0198::NAMESPACE));
             }
-            features.push_child(XmlElement::namespaced("csi", "urn:xmpp:csi:0"));
+            if self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0352::XEP_ID)
+            {
+                features.push_child(XmlElement::namespaced("csi", northstar_xep_0352::NAMESPACE));
+            }
             push_generated_feature(&mut features, &limits, "stream limits");
             return features.finish();
         }
@@ -1419,8 +1409,8 @@ impl ProtocolSession {
                 }
                 let legacy_stream_identity_mismatch = self.sasl2_state.is_none()
                     && self
-                        .stream_from
-                        .as_deref()
+                        .negotiation
+                        .stream_from()
                         .is_some_and(|stream_from| stream_from != username);
                 let user_result = if sasl_mech.name() == "PLAIN" {
                     let password = data_opt.take();
@@ -1522,8 +1512,7 @@ impl ProtocolSession {
                         // and all other post-authentication traffic must wait
                         // for a fresh client stream opening. SASL2 is handled
                         // above and deliberately keeps the stream open.
-                        self.stream_opened = false;
-                        self.stream_language = None;
+                        self.negotiation.require_new_stream();
                         let mut success =
                             XmlElement::namespaced("success", "urn:ietf:params:xml:ns:xmpp-sasl");
                         if sasl_mech.name().starts_with("SCRAM-") {
@@ -2013,8 +2002,8 @@ fn durable_delivery_managed_by_sm(
 mod legacy_sasl_wire_tests {
     use super::{
         client_stream_limits_feature, drop_requires_local_quiesce, durable_delivery_managed_by_sm,
-        legacy_sasl_auth, legacy_sasl_payload, reserve_sasl_attempt, resource_bind_deadline_for,
-        Action, ClientTransport, PostActionSupervisor, ResumePayload,
+        legacy_sasl_auth, legacy_sasl_payload, resource_bind_deadline_for, Action, ClientTransport,
+        PostActionSupervisor, ResumePayload,
     };
     use roxmltree::Document;
 
@@ -2113,16 +2102,6 @@ mod legacy_sasl_wire_tests {
                 "accepted {xml}"
             );
         }
-    }
-
-    #[test]
-    fn caps_each_xml_stream_at_five_sasl_attempts() {
-        let mut attempts = 0;
-        for _ in 0..5 {
-            assert!(reserve_sasl_attempt(&mut attempts));
-        }
-        assert!(!reserve_sasl_attempt(&mut attempts));
-        assert_eq!(attempts, 5);
     }
 
     #[test]

@@ -10,46 +10,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 pub(crate) use crate::db::{
-    PrivacyAction, PrivacyItem, PrivacyList, PrivacyMatchType, MAX_PRIVACY_ITEMS,
+    PrivacyAction, PrivacyItem, PrivacyList, PrivacyMatchType, PrivacyStanzaKind, MAX_PRIVACY_ITEMS,
 };
-
-/// Stanza classification a XEP-0016 rule is evaluated against, as named by
-/// the stanza layer. The storage-level equivalent never leaves this service
-/// and the repository; the two conversions below are the only crossings and
-/// both matches are exhaustive, so a new variant fails to compile until it is
-/// mapped.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PrivacyStanzaKind {
-    Message,
-    Iq,
-    PresenceIn,
-    PresenceOut,
-}
-
-impl From<PrivacyStanzaKind> for db::PrivacyStanzaKind {
-    fn from(kind: PrivacyStanzaKind) -> Self {
-        match kind {
-            PrivacyStanzaKind::Message => Self::Message,
-            PrivacyStanzaKind::Iq => Self::Iq,
-            PrivacyStanzaKind::PresenceIn => Self::PresenceIn,
-            PrivacyStanzaKind::PresenceOut => Self::PresenceOut,
-        }
-    }
-}
-
-/// Federation, cluster-delivery and MUC-occupant-routing paths still hand the
-/// state boundary a storage-level kind. Mapping it here keeps one owner for
-/// the conversion instead of letting those callers import the storage model.
-impl From<db::PrivacyStanzaKind> for PrivacyStanzaKind {
-    fn from(kind: db::PrivacyStanzaKind) -> Self {
-        match kind {
-            db::PrivacyStanzaKind::Message => Self::Message,
-            db::PrivacyStanzaKind::Iq => Self::Iq,
-            db::PrivacyStanzaKind::PresenceIn => Self::PresenceIn,
-            db::PrivacyStanzaKind::PresenceOut => Self::PresenceOut,
-        }
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PrivacyOverview {
@@ -173,7 +135,7 @@ impl PrivacyService {
         local_resource_count: usize,
         remote_resource_exists: bool,
     ) -> bool {
-        local_resource_count > 1 || remote_resource_exists
+        northstar_xep_0016::default_change_conflicts(local_resource_count, remote_resource_exists)
     }
 
     /// Evaluate one connection's XEP-0016 selection (or the account default
@@ -192,10 +154,7 @@ impl PrivacyService {
         if active_privacy_list.is_some() {
             db::refresh_active_privacy_session(&self.pool, owner_id, connection_id).await?;
         }
-        Ok(
-            !db::privacy_denies(&self.pool, owner_id, active_privacy_list, peer, kind.into())
-                .await?,
-        )
+        Ok(!db::privacy_denies(&self.pool, owner_id, active_privacy_list, peer, kind).await?)
     }
 
     /// Forward the repository's account-scoped XEP-0016 evaluation so stanza
@@ -207,14 +166,7 @@ impl PrivacyService {
         candidate: &str,
         kind: PrivacyStanzaKind,
     ) -> Result<bool> {
-        db::privacy_denies(
-            &self.pool,
-            owner_id,
-            active_privacy_list,
-            candidate,
-            kind.into(),
-        )
-        .await
+        db::privacy_denies(&self.pool, owner_id, active_privacy_list, candidate, kind).await
     }
 }
 
@@ -237,8 +189,8 @@ mod tests {
             ),
         ];
         for (kind, storage) in mappings {
-            assert_eq!(db::PrivacyStanzaKind::from(kind), storage);
-            assert_eq!(PrivacyStanzaKind::from(storage), kind);
+            assert_eq!(kind, storage);
+            assert_eq!(storage, kind);
         }
     }
 

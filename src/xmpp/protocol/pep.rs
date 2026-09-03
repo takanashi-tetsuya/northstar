@@ -4,9 +4,12 @@ use crate::services::{
         AvatarPresenceUpdate, ProfileAudienceSnapshot, ProfilePublishResult, ProfilePublishStatus,
     },
     pubsub::{
-        PepAudienceSnapshot, PepCreateOutcome, PepDirectStateSnapshot, PepDirectStateTransition,
+        PepAudienceSnapshot, PepConfigureNodeCommand, PepConfigureNodeWrite, PepCreateOutcome,
+        PepDeleteNodeCommand, PepDeleteNodeWrite, PepDirectStateSnapshot, PepDirectStateTransition,
         PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxEventKind, PepOwnerMutationOutcome,
-        PepProfileWrite, PepPublishOutcome, PepPublishWrite, PepQuotas, PepSubscribeOutcome,
+        PepProfileWrite, PepPublishOutcome, PepPublishWrite, PepPurgeNodeCommand,
+        PepPurgeNodeWrite, PepQuotas, PepRetractCommand, PepRetractWrite,
+        PepSetAffiliationsCommand, PepSetAffiliationsWrite, PepSubscribeOutcome,
         PepSubscribeSnapshot, PepSubscribeWrite, PepSubscriptionActor, PepUnsubscribeOutcome,
         PepUnsubscribeWrite, PubSubAccount, PubSubOutboxInsert, PubSubService,
     },
@@ -15,6 +18,7 @@ use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use northstar_pubsub_application::PepPublishItemsCommand;
 use roxmltree::Node;
 use sha1::{Digest, Sha1};
 use std::{collections::HashSet, sync::Arc};
@@ -441,17 +445,20 @@ impl ProtocolSession {
                 .state
                 .pubsub_service()
                 .publish_pep_items(
-                    PepPublishWrite {
-                        user_id: user.id,
-                        username: &user.username,
-                        auth_generation: user.auth_generation,
-                        connection_id: self.connection_id,
-                        node,
-                        requested: &options.config,
-                        enforce_preconditions: options.explicit,
-                        items: &borrowed,
-                        quotas,
-                    },
+                    PepPublishItemsCommand::new(
+                        PepPublishWrite {
+                            user_id: user.id,
+                            username: &user.username,
+                            auth_generation: user.auth_generation,
+                            connection_id: self.connection_id,
+                            node,
+                            requested: &options.config,
+                            enforce_preconditions: options.explicit,
+                            items: &borrowed,
+                            quotas,
+                        },
+                        node == BOOKMARKS2,
+                    ),
                     &move |audience: &PepAudienceSnapshot| {
                         let Some(event) = event else {
                             return Ok(Vec::new());
@@ -464,10 +471,11 @@ impl ProtocolSession {
                             audience,
                         )
                     },
-                    node == BOOKMARKS2,
                 )
                 .await?;
-            (Some(result.0), result.1)
+            let outcome = result.outcome;
+            let content_changed = result.content_changed;
+            (Some(outcome.into()), content_changed)
         };
         match outcome {
             None | Some(PepPublishOutcome::Published) => {}
@@ -627,7 +635,7 @@ impl ProtocolSession {
             .state
             .pubsub_service()
             .subscribe_pep_node(
-                PepSubscribeWrite {
+                northstar_pubsub_application::PepSubscribeCommand::from(PepSubscribeWrite {
                     owner: &owner,
                     actor: PepSubscriptionActor {
                         jid: &actor_jid,
@@ -637,11 +645,11 @@ impl ProtocolSession {
                     subscriber_jid: &requested_jid,
                     max_subscriptions: 1_000,
                     requested_subid: &requested_subid,
-                },
+                }),
                 &prepare_pep_last_item_outbox,
             )
             .await?;
-        let subscription = match outcome {
+        let subscription = match outcome.outcome {
             PepSubscribeOutcome::Subscribed(subscription) => subscription,
             PepSubscribeOutcome::NotFound => {
                 return Ok(Action::Send(iq_error_from_optional(
@@ -739,18 +747,20 @@ impl ProtocolSession {
         let outcome = self
             .state
             .pubsub_service()
-            .unsubscribe_pep_node(PepUnsubscribeWrite {
-                owner: &owner,
-                actor: PepSubscriptionActor {
-                    jid: &actor_jid,
-                    local_account: Some(&requester_account),
+            .unsubscribe_pep_node(northstar_pubsub_application::PepUnsubscribeCommand::from(
+                PepUnsubscribeWrite {
+                    owner: &owner,
+                    actor: PepSubscriptionActor {
+                        jid: &actor_jid,
+                        local_account: Some(&requester_account),
+                    },
+                    node,
+                    subscriber_jid: &jid,
+                    subid: unsubscribe.attribute("subid"),
                 },
-                node,
-                subscriber_jid: &jid,
-                subid: unsubscribe.attribute("subid"),
-            })
+            ))
             .await?;
-        let subid = match outcome {
+        let subid = match outcome.outcome {
             PepUnsubscribeOutcome::Unsubscribed(subid) => subid,
             PepUnsubscribeOutcome::NotFound => {
                 return Ok(Action::Send(iq_error_from_optional(
@@ -885,26 +895,28 @@ impl ProtocolSession {
             username: user.username.clone(),
             auth_generation: user.auth_generation,
         };
+        let cmd = PepRetractCommand::from(PepRetractWrite {
+            owner: &owner,
+            connection_id: self.connection_id,
+            node,
+            item_ids: &canonical_ids,
+            notify,
+        });
+        let factory = move |audience: &PepAudienceSnapshot| {
+            ProtocolSession::prepare_pep_audience_messages(
+                audience_state.as_ref(),
+                publisher_full_jid.as_deref(),
+                node,
+                &event,
+                audience,
+            )
+        };
         let outcome = self
             .state
             .pubsub_service()
-            .retract_pep_items(
-                &owner,
-                self.connection_id,
-                node,
-                &item_ids,
-                notify,
-                &move |audience: &PepAudienceSnapshot| {
-                    ProtocolSession::prepare_pep_audience_messages(
-                        audience_state.as_ref(),
-                        publisher_full_jid.as_deref(),
-                        node,
-                        &event,
-                        audience,
-                    )
-                },
-            )
-            .await?;
+            .execute_pep_retract(cmd, &factory)
+            .await?
+            .outcome;
         let retracted = match outcome {
             PepOwnerMutationOutcome::Applied(retracted) => retracted,
             PepOwnerMutationOutcome::NotFound => {
@@ -1431,26 +1443,28 @@ impl ProtocolSession {
                 let event = event.finish();
                 let audience_state = std::sync::Arc::clone(&self.state);
                 let publisher_full_jid = self.full_jid.clone();
+                let cmd = PepConfigureNodeCommand::from(PepConfigureNodeWrite {
+                    owner: &owner,
+                    connection_id: self.connection_id,
+                    node,
+                    expected: &current,
+                    config: &config,
+                });
+                let factory = move |audience: &PepAudienceSnapshot| {
+                    ProtocolSession::prepare_pep_audience_messages(
+                        audience_state.as_ref(),
+                        publisher_full_jid.as_deref(),
+                        node,
+                        &event,
+                        audience,
+                    )
+                };
                 let outcome = self
                     .state
                     .pubsub_service()
-                    .update_pep_node_config(
-                        &owner,
-                        self.connection_id,
-                        node,
-                        &current,
-                        &config,
-                        &move |audience: &PepAudienceSnapshot| {
-                            ProtocolSession::prepare_pep_audience_messages(
-                                audience_state.as_ref(),
-                                publisher_full_jid.as_deref(),
-                                node,
-                                &event,
-                                audience,
-                            )
-                        },
-                    )
-                    .await?;
+                    .execute_pep_configure_node(cmd, &factory)
+                    .await?
+                    .outcome;
                 if let Some(error) = pep_owner_mutation_error(id, iq.attribute("to"), outcome) {
                     return Ok(Action::Send(error));
                 }
@@ -1459,24 +1473,26 @@ impl ProtocolSession {
                 let event = XmlElement::new("purge").attr("node", node).finish();
                 let audience_state = std::sync::Arc::clone(&self.state);
                 let publisher_full_jid = self.full_jid.clone();
+                let cmd = PepPurgeNodeCommand::from(PepPurgeNodeWrite {
+                    owner: &owner,
+                    connection_id: self.connection_id,
+                    node,
+                });
+                let factory = move |audience: &PepAudienceSnapshot| {
+                    ProtocolSession::prepare_pep_audience_messages(
+                        audience_state.as_ref(),
+                        publisher_full_jid.as_deref(),
+                        node,
+                        &event,
+                        audience,
+                    )
+                };
                 let outcome = self
                     .state
                     .pubsub_service()
-                    .purge_pep_node(
-                        &owner,
-                        self.connection_id,
-                        node,
-                        &move |audience: &PepAudienceSnapshot| {
-                            ProtocolSession::prepare_pep_audience_messages(
-                                audience_state.as_ref(),
-                                publisher_full_jid.as_deref(),
-                                node,
-                                &event,
-                                audience,
-                            )
-                        },
-                    )
-                    .await?;
+                    .execute_pep_purge_node(cmd, &factory)
+                    .await?
+                    .outcome;
                 if let Some(error) = pep_owner_mutation_error(id, iq.attribute("to"), outcome) {
                     return Ok(Action::Send(error));
                 }
@@ -1485,24 +1501,26 @@ impl ProtocolSession {
                 let event = XmlElement::new("delete").attr("node", node).finish();
                 let audience_state = std::sync::Arc::clone(&self.state);
                 let publisher_full_jid = self.full_jid.clone();
+                let cmd = PepDeleteNodeCommand::from(PepDeleteNodeWrite {
+                    owner: &owner,
+                    connection_id: self.connection_id,
+                    node,
+                });
+                let factory = move |audience: &PepAudienceSnapshot| {
+                    ProtocolSession::prepare_pep_audience_messages(
+                        audience_state.as_ref(),
+                        publisher_full_jid.as_deref(),
+                        node,
+                        &event,
+                        audience,
+                    )
+                };
                 let outcome = self
                     .state
                     .pubsub_service()
-                    .delete_pep_node(
-                        &owner,
-                        self.connection_id,
-                        node,
-                        &move |audience: &PepAudienceSnapshot| {
-                            ProtocolSession::prepare_pep_audience_messages(
-                                audience_state.as_ref(),
-                                publisher_full_jid.as_deref(),
-                                node,
-                                &event,
-                                audience,
-                            )
-                        },
-                    )
-                    .await?;
+                    .execute_pep_delete_node(cmd, &factory)
+                    .await?
+                    .outcome;
                 if let Some(error) = pep_owner_mutation_error(id, iq.attribute("to"), outcome) {
                     return Ok(Action::Send(error));
                 }
@@ -1540,18 +1558,19 @@ impl ProtocolSession {
                         Some("invalid-jid"),
                     )));
                 };
+                let cmd = PepSetAffiliationsCommand::from(PepSetAffiliationsWrite {
+                    owner: &owner,
+                    connection_id: self.connection_id,
+                    node,
+                    expected: &current,
+                    changes: &changes,
+                });
                 let outcome = self
                     .state
                     .pubsub_service()
-                    .update_pep_affiliations(
-                        &owner,
-                        self.connection_id,
-                        node,
-                        &current,
-                        &changes,
-                        &render_pep_direct_state_messages,
-                    )
-                    .await?;
+                    .execute_pep_set_affiliations(cmd, &render_pep_direct_state_messages)
+                    .await?
+                    .outcome;
                 if let Some(error) = pep_owner_mutation_error(id, iq.attribute("to"), outcome) {
                     return Ok(Action::Send(error));
                 }

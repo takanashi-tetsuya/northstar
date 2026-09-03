@@ -3,10 +3,13 @@ use crate::services::muc::{
     ClusterMucAffiliationSubject, ClusterMucConfigurationOutcome, ClusterMucInviteAuthority,
     ClusterMucJoin, ClusterMucJoinOutcome, ClusterMucPrincipal, ClusterMucRegistrationOutcome,
     ClusterMucTransitionOutcome, DurableMucInviteOutcome, MucActorAuthority, MucActorPrincipal,
-    MucAdminSnapshot, MucAffiliationBatchOutcome, MucAffiliationChange, MucAffiliationTarget,
-    MucConfigUpdate, MucConfigurationOutcome, MucDiscussion, MucDiscussionAdmission,
-    MucRegistrationOutcome, MucRetractionKind, MucRetractionMutation, MucRetractionOutcome,
-    MucRoom, MucSubjectMutation, MucSubjectOutcome, OfflineStoreOutcome, OfflineStorePolicy,
+    MucAdminSnapshot, MucAffiliationBatchCommand, MucAffiliationBatchOutcome,
+    MucAffiliationBatchWrite, MucAffiliationChange, MucAffiliationTarget, MucConfigUpdate,
+    MucConfigurationCommand, MucConfigurationOutcome, MucConfigurationWrite, MucDiscussion,
+    MucDiscussionAdmission, MucRegistrationCommand, MucRegistrationOutcome, MucRegistrationTarget,
+    MucRegistrationWrite, MucRetractionCommand, MucRetractionKind, MucRetractionMutation,
+    MucRetractionOutcome, MucRoom, MucSubjectCommand, MucSubjectMutation, MucSubjectOutcome,
+    OfflineStoreOutcome, OfflineStorePolicy,
 };
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
@@ -15,75 +18,16 @@ use crate::{
     state::{bare_jid, localpart},
 };
 use anyhow::Result;
+#[cfg(test)]
+use northstar_room_application::PostCommitAdmissionError as MucPostCommitAdmissionError;
+use northstar_room_application::PostCommitPlan as MucPostCommitPlan;
 use roxmltree::Node;
-use std::{collections::VecDeque, future::Future, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 // Keep the live-session admission bound equal to the durable XEP-0198
 // snapshot bound in the durable SM service. Rejecting the 257th room at join time is safer
 // than discovering at disconnect that the session can no longer be resumed.
 const MAX_JOINED_ROOMS_PER_SESSION: usize = 256;
-
-/// A small, request-owned post-commit plan.
-///
-/// MUC mutations commit before their Redis wake/fan-out side effects run.  A
-/// detached task per mutation is both unbounded and impossible to observe at
-/// shutdown.  Keeping the plan request-owned gives us a hard capacity, strict
-/// ordering and explicit failure accounting without holding a database
-/// transaction across network I/O.
-#[derive(Debug)]
-struct MucPostCommitPlan<T, const CAPACITY: usize> {
-    effects: VecDeque<T>,
-    sealed: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MucPostCommitAdmissionError {
-    Full,
-    Sealed,
-}
-
-impl<T, const CAPACITY: usize> MucPostCommitPlan<T, CAPACITY> {
-    fn new() -> Self {
-        Self {
-            effects: VecDeque::with_capacity(CAPACITY),
-            sealed: false,
-        }
-    }
-
-    fn try_push(&mut self, effect: T) -> std::result::Result<(), MucPostCommitAdmissionError> {
-        if self.sealed {
-            return Err(MucPostCommitAdmissionError::Sealed);
-        }
-        if self.effects.len() >= CAPACITY {
-            return Err(MucPostCommitAdmissionError::Full);
-        }
-        self.effects.push_back(effect);
-        Ok(())
-    }
-
-    fn seal(&mut self) {
-        self.sealed = true;
-    }
-
-    async fn run<E, Execute, ExecuteFuture, OnFailure>(
-        mut self,
-        mut execute: Execute,
-        mut on_failure: OnFailure,
-    ) where
-        Execute: FnMut(T) -> ExecuteFuture,
-        ExecuteFuture: Future<Output = std::result::Result<(), E>>,
-        OnFailure: FnMut(E),
-    {
-        self.seal();
-        while let Some(effect) = self.effects.pop_front() {
-            if let Err(error) = execute(effect).await {
-                // A failed best-effort wake must not reorder or suppress the
-                // remaining committed effects.
-                on_failure(error);
-            }
-        }
-    }
-}
 
 #[derive(Debug)]
 struct MucClusterEffectFailure {
@@ -447,26 +391,18 @@ fn can_retrieve_muc_affiliation_list(
     members_only: bool,
     non_anonymous: bool,
 ) -> bool {
-    if !matches!(
-        requested_affiliation,
-        "owner" | "admin" | "member" | "outcast"
-    ) {
+    let (Some(requester), Some(requested)) = (
+        northstar_xep_0045::Affiliation::from_str_name(requester_affiliation),
+        northstar_xep_0045::Affiliation::from_str_name(requested_affiliation),
+    ) else {
         return false;
-    }
-
-    if matches!(requester_affiliation, "owner" | "admin") {
-        return true;
-    }
-
-    // XEP-0045 recommends making the member list available to members of a
-    // members-only room. OMEMO clients also need the owner and admin lists so
-    // that offline affiliates are included as encryption recipients. Limit
-    // that wider visibility to members-only, non-anonymous rooms where real
-    // JIDs are intentionally visible to every member.
-    requester_affiliation == "member"
-        && members_only
-        && non_anonymous
-        && matches!(requested_affiliation, "owner" | "admin" | "member")
+    };
+    northstar_xep_0045::evaluate_affiliation_list_access(
+        requester,
+        requested,
+        members_only,
+        non_anonymous,
+    ) == northstar_xep_0045::PermissionDecision::Allowed
 }
 
 pub(super) fn should_broadcast_offline_affiliation_change(
@@ -475,11 +411,18 @@ pub(super) fn should_broadcast_offline_affiliation_change(
     previous_affiliation: &str,
     new_affiliation: &str,
 ) -> bool {
-    // XEP-0045 communicates an online affiliate's change with updated
-    // presence. When the affiliate is offline, a room-origin normal message
-    // is the interoperable equivalent consumed by existing clients. Never
-    // expose the target's bare JID to occupants of a semi-anonymous room.
-    non_anonymous && !target_is_occupant && previous_affiliation != new_affiliation
+    let (Some(previous), Some(new)) = (
+        northstar_xep_0045::Affiliation::from_str_name(previous_affiliation),
+        northstar_xep_0045::Affiliation::from_str_name(new_affiliation),
+    ) else {
+        return false;
+    };
+    northstar_xep_0045::should_broadcast_offline_affiliation_change(
+        non_anonymous,
+        target_is_occupant,
+        previous,
+        new,
+    )
 }
 
 pub(crate) fn muc_offline_affiliation_change_notice(
@@ -772,23 +715,15 @@ pub(super) fn current_muc_subject_stanza(
     room_jid: &str,
     recipient: &str,
 ) -> String {
-    let mut message = XmlElement::namespaced("message", "jabber:client")
-        .attr("from", room_jid)
-        .attr("to", recipient)
-        .attr("type", "groupchat");
-    if let Some(changed_at) = room.subject_changed_at {
-        message.push_child(
-            XmlElement::namespaced("delay", "urn:xmpp:delay")
-                .attr("from", room_jid)
-                .attr(
-                    "stamp",
-                    changed_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                ),
-        );
-    }
-    message
-        .child(XmlElement::new("subject").text(room.subject.clone().unwrap_or_default()))
-        .finish()
+    let changed_at = room
+        .subject_changed_at
+        .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    northstar_xep_0045::build_subject_message(
+        room_jid,
+        recipient,
+        room.subject.as_deref().unwrap_or_default(),
+        changed_at.as_deref(),
+    )
 }
 
 fn muc_presence_payload(root: Node<'_, '_>, raw: &str) -> String {
@@ -804,17 +739,7 @@ fn muc_presence_payload(root: Node<'_, '_>, raw: &str) -> String {
 }
 
 pub(super) fn is_allowed_muc_presence_payload_namespace(namespace: &str) -> bool {
-    !matches!(
-        namespace,
-        "http://jabber.org/protocol/muc"
-            | "http://jabber.org/protocol/muc#user"
-            | "http://jabber.org/protocol/muc#admin"
-            | "http://jabber.org/protocol/muc#owner"
-            | "urn:xmpp:occupant-id:0"
-            | "urn:xmpp:sid:0"
-            | "urn:xmpp:delay"
-            | "jabber:x:delay"
-    )
+    northstar_xep_0045::is_allowed_muc_presence_payload_namespace(namespace)
 }
 
 fn has_muc_join_extension(root: Node<'_, '_>) -> bool {
@@ -854,38 +779,7 @@ pub(super) fn parse_muc_origin_id(root: Node<'_, '_>) -> std::result::Result<Opt
 pub(super) fn parse_muc_subject_command(
     root: Node<'_, '_>,
 ) -> std::result::Result<Option<String>, ()> {
-    let has_discussion_content = root.children().any(|node| {
-        node.is_element()
-            && matches!(node.tag_name().name(), "body" | "thread")
-            && node
-                .tag_name()
-                .namespace()
-                .is_none_or(|namespace| namespace == "jabber:client")
-    });
-    if has_discussion_content {
-        return Ok(None);
-    }
-    let subjects = root
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().name() == "subject"
-                && node
-                    .tag_name()
-                    .namespace()
-                    .is_none_or(|namespace| namespace == "jabber:client")
-        })
-        .collect::<Vec<_>>();
-    if subjects.is_empty() {
-        return Ok(None);
-    }
-    if subjects.len() != 1
-        || subjects[0].attributes().len() != 0
-        || subjects[0].children().any(|node| node.is_element())
-    {
-        return Err(());
-    }
-    Ok(Some(subjects[0].text().unwrap_or_default().to_owned()))
+    northstar_xep_0045::parse_subject_command(root).map_err(|_| ())
 }
 
 pub(super) fn parse_muc_author_retraction(
@@ -1518,8 +1412,13 @@ impl ProtocolSession {
         let affiliation_changed = match self
             .state
             .muc_service()
-            .register_local_member(room.id, user.id, &nick)
+            .execute_muc_registration(MucRegistrationCommand::from(MucRegistrationWrite {
+                room_id: room.id,
+                target: MucRegistrationTarget::Local { user_id: user.id },
+                nick: &nick,
+            }))
             .await?
+            .outcome
         {
             MucRegistrationOutcome::Registered {
                 affiliation_changed,
@@ -1595,6 +1494,19 @@ impl ProtocolSession {
         let Some(from) = self.full_jid.as_deref() else {
             return Ok(Action::Send(stanza_error(root, "auth", "not-authorized")));
         };
+        if !self
+            .state
+            .config
+            .xmpp_extensions
+            .enabled(northstar_xep_0045::XEP_ID)
+        {
+            return Ok(Action::Send(muc_stanza_error(
+                root,
+                from,
+                "cancel",
+                "service-unavailable",
+            )));
+        }
         let Some(to) = root.attribute("to") else {
             return Ok(Action::Send(muc_stanza_error(
                 root,
@@ -2856,7 +2768,7 @@ impl ProtocolSession {
                                         invitee_domain,
                                         &forwarded,
                                         Some(&room_jid),
-                                        self.state.federation.outbox_policy().into(),
+                                        self.state.federation.outbox_policy(),
                                         cluster_authority.as_ref(),
                                     )
                                     .await
@@ -3098,15 +3010,15 @@ impl ProtocolSession {
             expected_room_epoch: room.room_epoch,
             principal: MucActorPrincipal::Local {
                 user_id: user.id,
-                local_domain: &self.state.config.domain,
+                local_domain: self.state.config.domain.clone(),
             },
-            actor_scope: &actor_scope,
-            full_jid: from,
-            nick: &own.nick,
+            actor_scope: actor_scope.clone(),
+            full_jid: from.to_owned(),
+            nick: own.nick.clone(),
             occupant_incarnation: own.cluster_epoch,
             connection_uuid: own.connection_id,
-            expected_role: &own.role,
-            expected_affiliation: &current_affiliation,
+            expected_role: own.role.clone(),
+            expected_affiliation: current_affiliation.clone(),
             cluster_target,
         };
         if let Some(target_id) = author_retraction {
@@ -3182,21 +3094,24 @@ impl ProtocolSession {
             match self
                 .state
                 .muc_service()
-                .retract_local_message_and_archive_action(MucRetractionMutation {
-                    action_id: stable_id,
-                    room_id: room.id,
-                    target_id,
-                    expected_stanza: &original.stanza,
-                    actor_scope: &actor_scope,
-                    sender_jid: from,
-                    nick: &own.nick,
-                    tombstone: &tombstone,
-                    action_stanza: &rewritten,
-                    reason: None,
-                    kind: MucRetractionKind::Author,
-                    authority: actor_authority,
+                .execute_muc_retraction(MucRetractionCommand {
+                    mutation: MucRetractionMutation {
+                        action_id: stable_id,
+                        room_id: room.id,
+                        target_id,
+                        expected_stanza: &original.stanza,
+                        actor_scope: &actor_scope,
+                        sender_jid: from,
+                        nick: &own.nick,
+                        tombstone: &tombstone,
+                        action_stanza: &rewritten,
+                        reason: None,
+                        kind: MucRetractionKind::Author,
+                        authority: actor_authority,
+                    },
                 })
                 .await?
+                .outcome
             {
                 MucRetractionOutcome::Applied => {}
                 MucRetractionOutcome::Unauthorized => {
@@ -3289,8 +3204,8 @@ impl ProtocolSession {
                 return Ok(Action::None);
             }
             match service
-                .set_local_subject(
-                    MucSubjectMutation {
+                .execute_muc_subject(MucSubjectCommand {
+                    mutation: MucSubjectMutation {
                         stanza_id: stable_id,
                         room_id: room.id,
                         actor_scope: &actor_scope,
@@ -3300,10 +3215,11 @@ impl ProtocolSession {
                         stanza: &archive,
                         encrypted,
                     },
-                    archive_enabled,
-                    actor_authority,
-                )
+                    archive: archive_enabled,
+                    authority: actor_authority,
+                })
                 .await?
+                .outcome
             {
                 MucSubjectOutcome::Applied => {}
                 MucSubjectOutcome::Unauthorized => {
@@ -3321,22 +3237,23 @@ impl ProtocolSession {
                 }
             }
         } else {
+            let discussion = MucDiscussion {
+                id: stable_id,
+                room_id: room.id,
+                actor_scope: actor_scope.clone(),
+                origin_id,
+                sender_jid: from.to_owned(),
+                nick: own.nick.clone(),
+                stanza: archive.clone(),
+                encrypted,
+                archive: archive_enabled,
+                retention_days: self.state.config.muc_mam_retention_days,
+                authority: actor_authority,
+            };
             let admission = self
                 .state
                 .muc_service()
-                .admit_local_discussion(MucDiscussion {
-                    id: stable_id,
-                    room_id: room.id,
-                    actor_scope: &actor_scope,
-                    origin_id: origin_id.as_deref(),
-                    sender_jid: from,
-                    nick: &own.nick,
-                    stanza: &archive,
-                    encrypted,
-                    archive: archive_enabled,
-                    retention_days: self.state.config.muc_mam_retention_days,
-                    authority: actor_authority,
-                })
+                .execute_muc_discussion(&discussion)
                 .await?;
             match admission {
                 MucDiscussionAdmission::Stored(_) => {}
@@ -3591,36 +3508,39 @@ impl ProtocolSession {
         match self
             .state
             .muc_service()
-            .retract_local_message_and_archive_action(MucRetractionMutation {
-                action_id,
-                room_id: room.id,
-                target_id,
-                expected_stanza: &original.stanza,
-                actor_scope: &actor_scope,
-                sender_jid: full_jid,
-                nick: &moderator.nick,
-                tombstone: &tombstone,
-                action_stanza: &moderation_notice,
-                reason,
-                kind: MucRetractionKind::Moderator,
-                authority: MucActorAuthority {
-                    clustered: self.state.cluster.is_enabled(),
-                    expected_room_epoch: room.room_epoch,
-                    principal: MucActorPrincipal::Local {
-                        user_id: user.id,
-                        local_domain: &self.state.config.domain,
-                    },
+            .execute_muc_retraction(MucRetractionCommand {
+                mutation: MucRetractionMutation {
+                    action_id,
+                    room_id: room.id,
+                    target_id,
+                    expected_stanza: &original.stanza,
                     actor_scope: &actor_scope,
-                    full_jid,
+                    sender_jid: full_jid,
                     nick: &moderator.nick,
-                    occupant_incarnation: moderator.cluster_epoch,
-                    connection_uuid: moderator.connection_id,
-                    expected_role: &moderator.role,
-                    expected_affiliation: &current_affiliation,
-                    cluster_target,
+                    tombstone: &tombstone,
+                    action_stanza: &moderation_notice,
+                    reason,
+                    kind: MucRetractionKind::Moderator,
+                    authority: MucActorAuthority {
+                        clustered: self.state.cluster.is_enabled(),
+                        expected_room_epoch: room.room_epoch,
+                        principal: MucActorPrincipal::Local {
+                            user_id: user.id,
+                            local_domain: self.state.config.domain.clone(),
+                        },
+                        actor_scope: actor_scope.clone(),
+                        full_jid: full_jid.to_owned(),
+                        nick: moderator.nick.clone(),
+                        occupant_incarnation: moderator.cluster_epoch,
+                        connection_uuid: moderator.connection_id,
+                        expected_role: moderator.role.clone(),
+                        expected_affiliation: current_affiliation.clone(),
+                        cluster_target,
+                    },
                 },
             })
             .await?
+            .outcome
         {
             MucRetractionOutcome::Applied => {}
             MucRetractionOutcome::Unauthorized => {
@@ -4155,27 +4075,30 @@ impl ProtocolSession {
             } else {
                 self.state
                     .muc_service()
-                    .update_local_legacy_config(
-                        room.id,
-                        full_jid,
-                        MucConfigUpdate {
-                            title: Some(title),
-                            description,
-                            persistent,
-                            members_only,
-                            public,
-                            moderated,
-                            non_anonymous,
-                            max_occupants,
-                            password_hash: replacement_password_hash.as_deref(),
-                            allow_subject_change,
-                            allow_invites,
-                            allow_private_messages,
-                            logging_enabled,
-                            allow_registration,
+                    .execute_muc_configuration(MucConfigurationCommand::from(
+                        MucConfigurationWrite {
+                            room_id: room.id,
+                            actor_full_jid: full_jid,
+                            config: MucConfigUpdate {
+                                title: Some(title),
+                                description,
+                                persistent,
+                                members_only,
+                                public,
+                                moderated,
+                                non_anonymous,
+                                max_occupants,
+                                password_hash: replacement_password_hash.as_deref(),
+                                allow_subject_change,
+                                allow_invites,
+                                allow_private_messages,
+                                logging_enabled,
+                                allow_registration,
+                            },
                         },
-                    )
+                    ))
                     .await?
+                    .outcome
             };
             match configuration_outcome {
                 MucConfigurationOutcome::Applied => {}
@@ -4401,6 +4324,19 @@ impl ProtocolSession {
         let Some(full_jid) = self.full_jid.clone() else {
             return Ok(Action::Send(stanza_error(root, "auth", "not-authorized")));
         };
+        if !self
+            .state
+            .config
+            .xmpp_extensions
+            .enabled(northstar_xep_0045::XEP_ID)
+        {
+            return Ok(Action::Send(muc_stanza_error(
+                root,
+                &full_jid,
+                "cancel",
+                "service-unavailable",
+            )));
+        }
         let Some(to) = root.attribute("to") else {
             return Ok(Action::Send(muc_stanza_error(
                 root,
@@ -6504,8 +6440,14 @@ impl ProtocolSession {
         } else {
             self.state
                 .muc_service()
-                .set_local_legacy_affiliations_batch(room.id, &durable_changes)
+                .execute_muc_affiliation_batch(MucAffiliationBatchCommand::from(
+                    MucAffiliationBatchWrite {
+                        room_id: room.id,
+                        changes: &durable_changes,
+                    },
+                ))
                 .await?
+                .outcome
         };
         match affiliation_outcome {
             MucAffiliationBatchOutcome::Applied => {}

@@ -1,0 +1,11 @@
+[package]
+name = "northstar-presence-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Capability-free presence-session and directed-visibility policy for Northstar"
+publish = false
+
+[dependencies]
+northstar-xmpp-types = { path = "../northstar-xmpp-types" }

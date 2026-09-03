@@ -1,9 +1,9 @@
 use super::{Action, ProtocolSession};
 use crate::services::privacy::PrivacyStanzaKind;
 use crate::services::roster::{
-    BeginRosterSyncError, RosterAuthorization, RosterChange, RosterFlushBatch,
-    RosterPushDisposition, RosterReadSnapshot, RosterRemovalRoute, RosterSyncGate,
-    RosterSyncPermit,
+    BeginRosterSyncError, RemoteRemovalPolicy, RosterAuthorization, RosterChange, RosterFlushBatch,
+    RosterGetCommand, RosterPushDisposition, RosterReadSnapshot, RosterRemovalRoute,
+    RosterRemoveCommand, RosterSyncGate, RosterSyncPermit, RosterUpsertCommand,
 };
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
@@ -129,12 +129,12 @@ impl ProtocolSession {
         let snapshot = match self
             .state
             .roster_service()
-            .read_snapshot(
-                user.id,
-                user.auth_generation,
+            .execute_roster_get(RosterGetCommand {
+                owner_id: user.id,
+                expected_auth_generation: user.auth_generation,
                 requested_version,
                 annotations_requested,
-            )
+            })
             .await
         {
             Ok(RosterAuthorization::Authorized(snapshot)) => snapshot,
@@ -253,12 +253,18 @@ impl ProtocolSession {
             let unsubscribed = roster_removal_presence(&owner_jid, &parsed.contact, "unsubscribed");
             let remote = contact_jid.domainpart() != self.state.config.domain && !hosted_service;
             let route = if remote {
+                let policy = self.state.federation.outbox_policy();
                 RosterRemovalRoute::Remote {
                     target_domain: contact_jid.domainpart(),
                     unsubscribe_stanza: &unsubscribe,
                     unsubscribed_stanza: &unsubscribed,
                     bounce_to: Some(&owner_jid),
-                    policy: self.state.federation.outbox_policy(),
+                    policy: RemoteRemovalPolicy {
+                        ttl_seconds: policy.ttl_seconds,
+                        max_rows: policy.max_rows,
+                        max_bytes: policy.max_bytes,
+                        max_per_domain: policy.max_per_domain,
+                    },
                 }
             } else {
                 RosterRemovalRoute::Local {
@@ -271,7 +277,12 @@ impl ProtocolSession {
             let removal = match self
                 .state
                 .roster_service()
-                .remove(user.id, user.auth_generation, &parsed.contact, route)
+                .execute_roster_remove(RosterRemoveCommand {
+                    owner_id: user.id,
+                    expected_auth_generation: user.auth_generation,
+                    jid: &parsed.contact,
+                    route,
+                })
                 .await?
             {
                 RosterAuthorization::Authorized(Some(removal)) => removal,
@@ -330,13 +341,13 @@ impl ProtocolSession {
             let change = match self
                 .state
                 .roster_service()
-                .upsert(
-                    user.id,
-                    user.auth_generation,
-                    &parsed.contact,
-                    parsed.name.as_deref(),
-                    &parsed.groups,
-                )
+                .execute_roster_upsert(RosterUpsertCommand {
+                    owner_id: user.id,
+                    expected_auth_generation: user.auth_generation,
+                    jid: parsed.contact,
+                    name: parsed.name,
+                    groups: parsed.groups,
+                })
                 .await?
             {
                 RosterAuthorization::Authorized(change) => change,

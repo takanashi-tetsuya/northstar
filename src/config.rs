@@ -11,6 +11,12 @@ use std::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+use northstar_web_surface::{
+    DownloadCeiling, ListenerConfiguration, RegistrationDependencyLock, RequestedWebCapabilities,
+    ResolvedWebCapabilities, UploadRuntimeFacts,
+};
+pub use northstar_web_surface::{RegistrationMode, UploadMode};
+
 #[derive(Deserialize)]
 pub struct RawConfig {
     #[serde(default = "default_domain")]
@@ -237,6 +243,27 @@ pub struct RawConfig {
     #[serde(default = "default_http_bind")]
     pub http_bind: SocketAddr,
 
+    /// Public HTTP capability switches. Routes for disabled capabilities are
+    /// not installed at all; handlers therefore cannot be reached through an
+    /// alternate path or an accidental static-file fallback.
+    #[serde(default = "default_true")]
+    pub rest_api_enabled: bool,
+    #[serde(default = "default_true")]
+    pub websocket_enabled: bool,
+    #[serde(default = "default_true")]
+    pub web_client_enabled: bool,
+    #[serde(default = "default_upload_mode")]
+    pub upload_mode: UploadMode,
+
+    /// The administration application and its API have a dedicated listener.
+    /// It is loopback-only by default. A non-loopback bind must sit behind a
+    /// trusted HTTPS proxy which injects the mounted gateway credential.
+    #[serde(default = "default_true")]
+    pub web_admin_enabled: bool,
+    #[serde(default = "default_web_admin_bind")]
+    pub web_admin_bind: SocketAddr,
+    pub web_admin_gateway_token_file: Option<PathBuf>,
+
     /// Dedicated observability listener. It is intentionally separate from
     /// the public HTTP/WebSocket listener so database-backed collection cannot
     /// be exposed accidentally by a custom reverse proxy.
@@ -433,6 +460,61 @@ pub struct RawConfig {
     #[serde(default = "default_xep_0487_weight")]
     pub xep_0487_weight: u16,
 
+    /// Independently compiled, runtime-resolved XEP modules. Defaults preserve
+    /// the protocol surface from releases before modularization.
+    #[serde(default = "default_true")]
+    pub xep_0016_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0045_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0059_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0085_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0092_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0115_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0060_enabled: bool,
+    /// XEP-0092 requires an operator choice before disclosing the host OS.
+    /// This defaults to the historical behavior for upgrade compatibility.
+    #[serde(default = "default_true")]
+    pub xep_0092_include_os: bool,
+    #[serde(default = "default_true")]
+    pub xep_0184_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0191_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0198_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0199_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0202_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0215_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0280_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0313_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0352_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0357_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0359_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0363_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0308_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0333_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0380_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0444_enabled: bool,
+    #[serde(default = "default_true")]
+    pub xep_0461_enabled: bool,
+
     #[serde(default = "default_upload_dir")]
     pub upload_dir: PathBuf,
 
@@ -460,6 +542,10 @@ pub struct RawConfig {
 
     #[serde(default = "default_upload_max")]
     pub upload_max_bytes: u64,
+    /// Independent immutable-read ceiling. It may be raised for historical
+    /// objects without reopening slot admission in drain-read-only mode.
+    #[serde(default = "default_upload_download_max_bytes")]
+    pub upload_download_max_bytes: u64,
 
     #[serde(default = "default_upload_max_files_per_user")]
     pub upload_max_files_per_user: i64,
@@ -708,6 +794,9 @@ fn default_xmpps_bind() -> SocketAddr {
 fn default_http_bind() -> SocketAddr {
     "127.0.0.1:8080".parse().unwrap()
 }
+fn default_web_admin_bind() -> SocketAddr {
+    "127.0.0.1:8081".parse().unwrap()
+}
 fn default_metrics_bind() -> SocketAddr {
     "127.0.0.1:9091".parse().unwrap()
 }
@@ -870,6 +959,12 @@ fn default_xep_0487_weight() -> u16 {
 fn default_upload_max() -> u64 {
     26214400
 }
+fn default_upload_download_max_bytes() -> u64 {
+    50 * 1024 * 1024
+}
+fn default_upload_mode() -> UploadMode {
+    UploadMode::Enabled
+}
 fn default_upload_max_files_per_user() -> i64 {
     1_000
 }
@@ -971,6 +1066,7 @@ pub struct Config {
     pub websocket_allowed_origins: Vec<String>,
     pub trusted_proxy_ips: Vec<IpAddr>,
     pub xep_0487_ips: Vec<IpAddr>,
+    pub(crate) xmpp_extensions: Arc<crate::xmpp::extensions::ExtensionRuntime>,
     pub federation_allowlist: Vec<String>,
     pub federation_denylist: Vec<String>,
     /// Test/private-network endpoint overrides. The boolean selects Direct TLS.
@@ -987,6 +1083,13 @@ pub struct Config {
     pub(crate) api_control_secret: Option<String>,
     pub(crate) api_control_previous_secret: Option<String>,
     pub(crate) metrics_bearer_token: Option<Arc<Zeroizing<String>>>,
+    pub(crate) web_admin_gateway_token: Option<Arc<Zeroizing<String>>>,
+    /// Immutable result of the deployment-surface capability resolver.  All
+    /// route, listener and registration decisions derive from this plan.
+    pub web_capabilities: Arc<ResolvedWebCapabilities>,
+    /// Compatibility projection for older call sites.  The authority is the
+    /// registration dependency lock in `web_capabilities`.
+    pub invitation_policy_disabled_with_web_client: bool,
     pub pow_v1_compatibility_until: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -1247,10 +1350,143 @@ fn authentication_master_secrets_are_independent(
     })
 }
 
+fn requested_registration_mode(raw: &RawConfig) -> RegistrationMode {
+    match (raw.open_registration, raw.invitation_required) {
+        (false, _) => RegistrationMode::Closed,
+        (true, true) => RegistrationMode::InvitationOnly,
+        (true, false) => RegistrationMode::Open,
+    }
+}
+
+fn resolve_web_capability_plan(raw: &RawConfig) -> Result<ResolvedWebCapabilities> {
+    let max_concurrent = u32::try_from(raw.upload_download_max_concurrent).ok();
+    let upload_ceiling = DownloadCeiling {
+        max_bytes: raw.upload_download_max_bytes,
+        max_concurrent_streams: max_concurrent,
+    };
+    RequestedWebCapabilities::default()
+        .with_user_rest(raw.rest_api_enabled)
+        .with_websocket(raw.websocket_enabled)
+        .with_bosh(raw.bosh_enabled)
+        .with_web_client(raw.web_client_enabled)
+        .with_web_admin(raw.web_admin_enabled)
+        .with_upload_mode(raw.upload_mode)
+        .with_upload_protocol(raw.xep_0363_enabled)
+        // Durable facts are obtained only after the database authority is
+        // available.  Disabled plans therefore remain explicitly pending
+        // runtime proof and AppState refuses construction unless all facts
+        // are empty.
+        .with_upload_facts(UploadRuntimeFacts::unknown())
+        .with_upload_ceiling(upload_ceiling)
+        .with_registration(requested_registration_mode(raw))
+        .with_observability(true)
+        .with_listeners(
+            ListenerConfiguration::new(raw.http_bind, raw.web_admin_bind)
+                .with_observability_addr(Some(raw.metrics_bind)),
+        )
+        .resolve()
+        .map_err(anyhow::Error::new)
+}
+
+fn validate_web_admin_exposure(enabled: bool, bind: SocketAddr) -> Result<()> {
+    if !enabled || bind.ip().is_loopback() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "WEB_ADMIN_BIND must be loopback-only in this release; use a local reverse proxy, SSH tunnel, or future mTLS/Unix-socket transport"
+    )
+}
+
+fn listener_addresses_overlap(left: SocketAddr, right: SocketAddr) -> bool {
+    if left.port() != right.port() {
+        return false;
+    }
+    if left.ip() == right.ip() {
+        return true;
+    }
+    if !(left.ip().is_unspecified() || right.ip().is_unspecified()) {
+        return false;
+    }
+    match (left.ip(), right.ip()) {
+        (IpAddr::V4(_), IpAddr::V6(_)) | (IpAddr::V6(_), IpAddr::V4(_)) => {
+            (left.ip().is_ipv6() && left.ip().is_unspecified())
+                || (right.ip().is_ipv6() && right.ip().is_unspecified())
+        }
+        _ => true,
+    }
+}
+
+fn validate_listener_plan(raw: &RawConfig, public_http_active: bool) -> Result<()> {
+    let mut listeners = vec![
+        ("XMPP_BIND", raw.xmpp_bind),
+        ("XMPPS_BIND", raw.xmpps_bind),
+        ("METRICS_BIND", raw.metrics_bind),
+    ];
+    if public_http_active {
+        listeners.push(("HTTP_BIND", raw.http_bind));
+    }
+    if raw.web_admin_enabled {
+        listeners.push(("WEB_ADMIN_BIND", raw.web_admin_bind));
+    }
+    if raw.federation_enabled {
+        listeners.push(("S2S_BIND", raw.s2s_bind));
+        listeners.push(("S2S_TLS_BIND", raw.s2s_tls_bind));
+    }
+    if raw.components_enabled {
+        listeners.push(("COMPONENT_BIND", raw.component_bind));
+    }
+    for (index, (left_name, left)) in listeners.iter().enumerate() {
+        for (right_name, right) in listeners.iter().skip(index + 1) {
+            if listener_addresses_overlap(*left, *right) {
+                anyhow::bail!(
+                    "active listener conflict: {left_name}={left} overlaps {right_name}={right}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Config {
     pub fn from_env() -> Result<Self> {
         let mut raw: RawConfig =
             envy::from_env().context("Failed to parse config from environment")?;
+        let xmpp_extensions = Arc::new(crate::xmpp::extensions::ExtensionRuntime::resolve(
+            crate::xmpp::extensions::ExtensionSwitches {
+                xep_0016: raw.xep_0016_enabled,
+                xep_0045: raw.xep_0045_enabled,
+                xep_0059: raw.xep_0059_enabled,
+                xep_0085: raw.xep_0085_enabled,
+                xep_0092: raw.xep_0092_enabled,
+                xep_0115: raw.xep_0115_enabled,
+                xep_0060: raw.xep_0060_enabled,
+                xep_0184: raw.xep_0184_enabled,
+                xep_0191: raw.xep_0191_enabled,
+                xep_0198: raw.xep_0198_enabled,
+                xep_0199: raw.xep_0199_enabled,
+                xep_0202: raw.xep_0202_enabled,
+                xep_0215: raw.xep_0215_enabled,
+                xep_0280: raw.xep_0280_enabled,
+                xep_0313: raw.xep_0313_enabled,
+                xep_0352: raw.xep_0352_enabled,
+                xep_0357: raw.xep_0357_enabled,
+                xep_0359: raw.xep_0359_enabled,
+                xep_0363: raw.xep_0363_enabled,
+                xep_0308: raw.xep_0308_enabled,
+                xep_0333: raw.xep_0333_enabled,
+                xep_0380: raw.xep_0380_enabled,
+                xep_0444: raw.xep_0444_enabled,
+                xep_0461: raw.xep_0461_enabled,
+            },
+        ));
+        let web_capabilities = Arc::new(resolve_web_capability_plan(&raw)?);
+        let invitation_policy_disabled_with_web_client = matches!(
+            web_capabilities.registration.lock,
+            RegistrationDependencyLock::LockedWebClientDisabled
+        );
+        raw.open_registration = !web_capabilities.registration.mode.is_closed();
+        raw.invitation_required = web_capabilities.registration.mode.is_invitation_only();
+        raw.upload_mode = web_capabilities.upload_mode;
         raw.database_url_file = non_empty_path(raw.database_url_file.take());
         if let Some(path) = &raw.database_url_file {
             if !raw.database_url.trim().is_empty() {
@@ -1381,6 +1617,59 @@ impl Config {
         if !raw.metrics_bind.ip().is_loopback() && metrics_bearer_token.is_none() {
             anyhow::bail!("a non-loopback METRICS_BIND requires METRICS_BEARER_TOKEN_FILE");
         }
+        raw.web_admin_gateway_token_file = non_empty_path(raw.web_admin_gateway_token_file.take());
+        let web_admin_gateway_token = if raw.web_admin_enabled {
+            raw.web_admin_gateway_token_file
+                .as_ref()
+                .map(|path| read_secret_file(path, "WEB_ADMIN_GATEWAY_TOKEN_FILE"))
+                .transpose()?
+        } else {
+            // A disabled capability owns no key material and performs no
+            // filesystem I/O.  This also permits staged secret rotation while
+            // the administration surface is intentionally off.
+            None
+        };
+        if web_admin_gateway_token
+            .as_ref()
+            .is_some_and(|token| !valid_http_bearer_secret(token))
+        {
+            anyhow::bail!(
+                "WEB_ADMIN_GATEWAY_TOKEN_FILE must contain 32 to 4096 visible ASCII bytes without whitespace"
+            );
+        }
+        if let Some(gateway) = web_admin_gateway_token.as_deref() {
+            for (name, other) in [
+                ("METRICS_BEARER_TOKEN_FILE", metrics_bearer_token.as_deref()),
+                ("API_CONTROL_SECRET_FILE", api_control_secret.as_deref()),
+                (
+                    "API_CONTROL_PREVIOUS_SECRET_FILE",
+                    api_control_previous_secret.as_deref(),
+                ),
+                ("FAST_TOKEN_SECRET_FILE", raw.fast_token_secret.as_deref()),
+                ("DIALBACK_SECRET_FILE", raw.dialback_secret.as_deref()),
+                ("TURN_SHARED_SECRET_FILE", raw.turn_shared_secret.as_deref()),
+                (
+                    "ABUSE_STATE_HMAC_KEY_FILE",
+                    raw.abuse_state_hmac_key.as_deref(),
+                ),
+                (
+                    "ABUSE_STATE_HMAC_PREVIOUS_KEY_FILE",
+                    raw.abuse_state_hmac_previous_key.as_deref(),
+                ),
+                (
+                    "BOOTSTRAP_ADMIN_PASSWORD_FILE",
+                    raw.bootstrap_admin_password.as_deref(),
+                ),
+            ] {
+                if other.is_some_and(|other| {
+                    crate::auth::constant_time_bytes_eq(gateway.as_bytes(), other.as_bytes())
+                }) {
+                    anyhow::bail!(
+                        "WEB_ADMIN_GATEWAY_TOKEN_FILE must not reuse {name} key material"
+                    );
+                }
+            }
+        }
         raw.public_url = raw
             .public_url
             .take()
@@ -1494,7 +1783,8 @@ impl Config {
             raw.component_bind,
         ]
         .iter()
-        .all(|address| address.ip().is_loopback());
+        .all(|address| address.ip().is_loopback())
+            && (!raw.web_admin_enabled || raw.web_admin_bind.ip().is_loopback());
         let reserved_development_domain =
             domain == "localhost" || domain.ends_with(".localhost") || domain.ends_with(".test");
         let development_redis_is_local = redis_endpoint_is_local(raw.redis_url.as_deref())?;
@@ -1556,164 +1846,168 @@ impl Config {
         raw.upload_s3_credential_mode = raw.upload_s3_credential_mode.trim().to_ascii_lowercase();
         raw.upload_s3_region = raw.upload_s3_region.trim().to_owned();
         raw.upload_s3_prefix = raw.upload_s3_prefix.trim().trim_matches('/').to_owned();
-        if !matches!(raw.upload_storage_backend.as_str(), "local" | "s3") {
-            anyhow::bail!("UPLOAD_STORAGE_BACKEND must be local or s3");
-        }
-        if raw.redis_url.is_some()
-            && raw.upload_storage_backend != "s3"
-            && !(listeners_are_loopback
-                && (domain == "localhost"
-                    || domain.ends_with(".localhost")
-                    || domain.ends_with(".test")))
-        {
-            anyhow::bail!("public Redis cluster mode requires shared UPLOAD_STORAGE_BACKEND=s3");
-        }
-        if raw.upload_storage_backend == "s3" {
-            let bucket = raw
-                .upload_s3_bucket
-                .as_deref()
-                .context("UPLOAD_S3_BUCKET is required for the s3 upload backend")?;
-            if !(3..=63).contains(&bucket.len())
-                || bucket.starts_with('.')
-                || bucket.starts_with('-')
-                || bucket.ends_with('.')
-                || bucket.ends_with('-')
-                || bucket.contains("..")
-                || bucket.bytes().any(|byte| {
-                    !(byte.is_ascii_lowercase()
-                        || byte.is_ascii_digit()
-                        || byte == b'.'
-                        || byte == b'-')
-                })
+        if raw.upload_mode.keeps_storage_runtime() {
+            if !matches!(raw.upload_storage_backend.as_str(), "local" | "s3") {
+                anyhow::bail!("UPLOAD_STORAGE_BACKEND must be local or s3");
+            }
+            if raw.redis_url.is_some()
+                && raw.upload_storage_backend != "s3"
+                && !(listeners_are_loopback
+                    && (domain == "localhost"
+                        || domain.ends_with(".localhost")
+                        || domain.ends_with(".test")))
             {
                 anyhow::bail!(
-                    "UPLOAD_S3_BUCKET must be a canonical lowercase DNS-style bucket name"
+                    "public Redis cluster mode requires shared UPLOAD_STORAGE_BACKEND=s3"
                 );
             }
-            if raw.upload_s3_region.is_empty()
-                || raw.upload_s3_region.len() > 128
-                || raw
-                    .upload_s3_region
-                    .chars()
-                    .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_')))
-            {
-                anyhow::bail!("UPLOAD_S3_REGION is invalid");
-            }
-            if raw.upload_s3_prefix.len() > 512
-                || (!raw.upload_s3_prefix.is_empty()
-                    && raw.upload_s3_prefix.split('/').any(|segment| {
-                        segment.is_empty()
-                            || matches!(segment, "." | "..")
-                            || segment.len() > 128
-                            || segment.chars().any(|c| {
-                                !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-                            })
-                    }))
-            {
-                anyhow::bail!("UPLOAD_S3_PREFIX must be a bounded canonical relative prefix");
-            }
-            let development_storage = listeners_are_loopback
-                && raw.redis_url.is_none()
-                && (domain == "localhost"
-                    || domain.ends_with(".localhost")
-                    || domain.ends_with(".test"));
-            if let Some(endpoint) = raw.upload_s3_endpoint.as_deref() {
-                let uri = endpoint
-                    .parse::<axum::http::Uri>()
-                    .context("UPLOAD_S3_ENDPOINT must be an absolute HTTP(S) URI")?;
-                let scheme = uri
-                    .scheme_str()
-                    .context("UPLOAD_S3_ENDPOINT needs a scheme")?;
-                let authority = uri.authority().context("UPLOAD_S3_ENDPOINT needs a host")?;
-                if authority.as_str().contains('@')
-                    || uri
-                        .path_and_query()
-                        .is_some_and(|value| value.as_str() != "/")
+            if raw.upload_storage_backend == "s3" {
+                let bucket = raw
+                    .upload_s3_bucket
+                    .as_deref()
+                    .context("UPLOAD_S3_BUCKET is required for the s3 upload backend")?;
+                if !(3..=63).contains(&bucket.len())
+                    || bucket.starts_with('.')
+                    || bucket.starts_with('-')
+                    || bucket.ends_with('.')
+                    || bucket.ends_with('-')
+                    || bucket.contains("..")
+                    || bucket.bytes().any(|byte| {
+                        !(byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || byte == b'.'
+                            || byte == b'-')
+                    })
                 {
                     anyhow::bail!(
-                        "UPLOAD_S3_ENDPOINT cannot contain credentials, a path, query, or fragment"
+                        "UPLOAD_S3_BUCKET must be a canonical lowercase DNS-style bucket name"
                     );
                 }
-                match scheme {
+                if raw.upload_s3_region.is_empty()
+                    || raw.upload_s3_region.len() > 128
+                    || raw
+                        .upload_s3_region
+                        .chars()
+                        .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_')))
+                {
+                    anyhow::bail!("UPLOAD_S3_REGION is invalid");
+                }
+                if raw.upload_s3_prefix.len() > 512
+                    || (!raw.upload_s3_prefix.is_empty()
+                        && raw.upload_s3_prefix.split('/').any(|segment| {
+                            segment.is_empty()
+                                || matches!(segment, "." | "..")
+                                || segment.len() > 128
+                                || segment.chars().any(|c| {
+                                    !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                                })
+                        }))
+                {
+                    anyhow::bail!("UPLOAD_S3_PREFIX must be a bounded canonical relative prefix");
+                }
+                let development_storage = listeners_are_loopback
+                    && raw.redis_url.is_none()
+                    && (domain == "localhost"
+                        || domain.ends_with(".localhost")
+                        || domain.ends_with(".test"));
+                if let Some(endpoint) = raw.upload_s3_endpoint.as_deref() {
+                    let uri = endpoint
+                        .parse::<axum::http::Uri>()
+                        .context("UPLOAD_S3_ENDPOINT must be an absolute HTTP(S) URI")?;
+                    let scheme = uri
+                        .scheme_str()
+                        .context("UPLOAD_S3_ENDPOINT needs a scheme")?;
+                    let authority = uri.authority().context("UPLOAD_S3_ENDPOINT needs a host")?;
+                    if authority.as_str().contains('@')
+                        || uri
+                            .path_and_query()
+                            .is_some_and(|value| value.as_str() != "/")
+                    {
+                        anyhow::bail!(
+                        "UPLOAD_S3_ENDPOINT cannot contain credentials, a path, query, or fragment"
+                    );
+                    }
+                    match scheme {
                     "https" if !raw.upload_s3_allow_http => {}
                     "http" if raw.upload_s3_allow_http && development_storage => {}
                     "http" => anyhow::bail!("HTTP object storage is allowed only by explicit opt-in in a loopback test deployment"),
                     "https" => anyhow::bail!("UPLOAD_S3_ALLOW_HTTP must be false for an HTTPS endpoint"),
                     _ => anyhow::bail!("UPLOAD_S3_ENDPOINT must use HTTPS"),
                 }
-            } else if raw.upload_s3_allow_http {
-                anyhow::bail!("UPLOAD_S3_ALLOW_HTTP requires an explicit development endpoint");
-            }
-            if !development_storage
-                && [
-                    "AWS_ACCESS_KEY_ID",
-                    "AWS_SECRET_ACCESS_KEY",
-                    "AWS_SESSION_TOKEN",
-                ]
-                .iter()
-                .any(|name| std::env::var_os(name).is_some())
-            {
-                anyhow::bail!("long-lived inline AWS credential environment variables are forbidden in production; use protected *_FILE mounts or workload credentials");
-            }
-            match raw.upload_s3_credential_mode.as_str() {
-                "files" => {
-                    let bundle = raw.upload_s3_credential_bundle_file.is_some();
-                    let legacy_pair = raw.upload_s3_access_key_id_file.is_some()
-                        && raw.upload_s3_secret_access_key_file.is_some();
-                    let any_legacy = raw.upload_s3_access_key_id_file.is_some()
-                        || raw.upload_s3_secret_access_key_file.is_some()
-                        || raw.upload_s3_session_token_file.is_some();
-                    if bundle == legacy_pair
-                        || (bundle && any_legacy)
-                        || (!bundle && any_legacy && !legacy_pair)
-                    {
-                        anyhow::bail!("file S3 credentials require exactly one atomic UPLOAD_S3_CREDENTIAL_BUNDLE_FILE or the legacy access/secret file pair");
-                    }
-                    if !development_storage && !bundle {
-                        anyhow::bail!("production S3 file credentials require the atomically replaced UPLOAD_S3_CREDENTIAL_BUNDLE_FILE");
-                    }
+                } else if raw.upload_s3_allow_http {
+                    anyhow::bail!("UPLOAD_S3_ALLOW_HTTP requires an explicit development endpoint");
                 }
-                "ambient" => {
-                    if raw.upload_s3_credential_bundle_file.is_some()
-                        || raw.upload_s3_access_key_id_file.is_some()
-                        || raw.upload_s3_secret_access_key_file.is_some()
-                        || raw.upload_s3_session_token_file.is_some()
-                    {
-                        anyhow::bail!("ambient S3 credentials cannot be combined with Northstar credential files");
-                    }
-                    for forbidden in [
-                        "AWS_ENDPOINT",
-                        "AWS_ENDPOINT_URL_S3",
-                        "AWS_ALLOW_HTTP",
-                        "AWS_SKIP_SIGNATURE",
-                        "AWS_METADATA_ENDPOINT",
-                        "AWS_EC2_METADATA_SERVICE_ENDPOINT",
-                        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
-                    ] {
-                        if std::env::var_os(forbidden).is_some() {
-                            anyhow::bail!(
-                                "{forbidden} is not accepted by the constrained S3 provider chain"
-                            );
+                if !development_storage
+                    && [
+                        "AWS_ACCESS_KEY_ID",
+                        "AWS_SECRET_ACCESS_KEY",
+                        "AWS_SESSION_TOKEN",
+                    ]
+                    .iter()
+                    .any(|name| std::env::var_os(name).is_some())
+                {
+                    anyhow::bail!("long-lived inline AWS credential environment variables are forbidden in production; use protected *_FILE mounts or workload credentials");
+                }
+                match raw.upload_s3_credential_mode.as_str() {
+                    "files" => {
+                        let bundle = raw.upload_s3_credential_bundle_file.is_some();
+                        let legacy_pair = raw.upload_s3_access_key_id_file.is_some()
+                            && raw.upload_s3_secret_access_key_file.is_some();
+                        let any_legacy = raw.upload_s3_access_key_id_file.is_some()
+                            || raw.upload_s3_secret_access_key_file.is_some()
+                            || raw.upload_s3_session_token_file.is_some();
+                        if bundle == legacy_pair
+                            || (bundle && any_legacy)
+                            || (!bundle && any_legacy && !legacy_pair)
+                        {
+                            anyhow::bail!("file S3 credentials require exactly one atomic UPLOAD_S3_CREDENTIAL_BUNDLE_FILE or the legacy access/secret file pair");
+                        }
+                        if !development_storage && !bundle {
+                            anyhow::bail!("production S3 file credentials require the atomically replaced UPLOAD_S3_CREDENTIAL_BUNDLE_FILE");
                         }
                     }
+                    "ambient" => {
+                        if raw.upload_s3_credential_bundle_file.is_some()
+                            || raw.upload_s3_access_key_id_file.is_some()
+                            || raw.upload_s3_secret_access_key_file.is_some()
+                            || raw.upload_s3_session_token_file.is_some()
+                        {
+                            anyhow::bail!("ambient S3 credentials cannot be combined with Northstar credential files");
+                        }
+                        for forbidden in [
+                            "AWS_ENDPOINT",
+                            "AWS_ENDPOINT_URL_S3",
+                            "AWS_ALLOW_HTTP",
+                            "AWS_SKIP_SIGNATURE",
+                            "AWS_METADATA_ENDPOINT",
+                            "AWS_EC2_METADATA_SERVICE_ENDPOINT",
+                            "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+                        ] {
+                            if std::env::var_os(forbidden).is_some() {
+                                anyhow::bail!(
+                                "{forbidden} is not accepted by the constrained S3 provider chain"
+                            );
+                            }
+                        }
+                    }
+                    _ => anyhow::bail!("UPLOAD_S3_CREDENTIAL_MODE must be files or ambient"),
                 }
-                _ => anyhow::bail!("UPLOAD_S3_CREDENTIAL_MODE must be files or ambient"),
-            }
-            if raw.upload_s3_session_token_file.is_some()
-                && raw.upload_s3_credential_mode != "files"
+                if raw.upload_s3_session_token_file.is_some()
+                    && raw.upload_s3_credential_mode != "files"
+                {
+                    anyhow::bail!("UPLOAD_S3_SESSION_TOKEN_FILE requires file credential mode");
+                }
+            } else if raw.upload_s3_endpoint.is_some()
+                || raw.upload_s3_bucket.is_some()
+                || raw.upload_s3_access_key_id_file.is_some()
+                || raw.upload_s3_credential_bundle_file.is_some()
+                || raw.upload_s3_secret_access_key_file.is_some()
+                || raw.upload_s3_session_token_file.is_some()
+                || raw.upload_s3_sse_kms_key_id_file.is_some()
+                || raw.upload_s3_allow_http
             {
-                anyhow::bail!("UPLOAD_S3_SESSION_TOKEN_FILE requires file credential mode");
+                anyhow::bail!("UPLOAD_S3_* settings require UPLOAD_STORAGE_BACKEND=s3");
             }
-        } else if raw.upload_s3_endpoint.is_some()
-            || raw.upload_s3_bucket.is_some()
-            || raw.upload_s3_access_key_id_file.is_some()
-            || raw.upload_s3_credential_bundle_file.is_some()
-            || raw.upload_s3_secret_access_key_file.is_some()
-            || raw.upload_s3_session_token_file.is_some()
-            || raw.upload_s3_sse_kms_key_id_file.is_some()
-            || raw.upload_s3_allow_http
-        {
-            anyhow::bail!("UPLOAD_S3_* settings require UPLOAD_STORAGE_BACKEND=s3");
         }
         if !ephemeral_abuse_state_is_allowed && raw.abuse_state_hmac_key_file.is_none() {
             anyhow::bail!(
@@ -1997,36 +2291,51 @@ impl Config {
         {
             anyhow::bail!("PubSub and PEP storage quotas must be between 1 MiB and 100 GiB");
         }
-        if raw.upload_max_bytes == 0 || raw.upload_max_bytes > i64::MAX as u64 {
-            anyhow::bail!("UPLOAD_MAX_BYTES must be between 1 and i64::MAX");
-        }
-        if !(1..=1_000_000).contains(&raw.upload_max_files_per_user) {
-            anyhow::bail!("UPLOAD_MAX_FILES_PER_USER must be between 1 and 1000000");
-        }
-        if raw.upload_max_bytes_per_user < raw.upload_max_bytes as i64
-            || raw.upload_max_bytes_per_user > MAX_ACCOUNT_STORAGE
-        {
-            anyhow::bail!(
+        if raw.upload_mode.admits_new_uploads() {
+            if raw.upload_max_bytes == 0 || raw.upload_max_bytes > i64::MAX as u64 {
+                anyhow::bail!("UPLOAD_MAX_BYTES must be between 1 and i64::MAX");
+            }
+            if !(1..=1_000_000).contains(&raw.upload_max_files_per_user) {
+                anyhow::bail!("UPLOAD_MAX_FILES_PER_USER must be between 1 and 1000000");
+            }
+            if raw.upload_max_bytes_per_user < raw.upload_max_bytes as i64
+                || raw.upload_max_bytes_per_user > MAX_ACCOUNT_STORAGE
+            {
+                anyhow::bail!(
                 "UPLOAD_MAX_BYTES_PER_USER must be at least UPLOAD_MAX_BYTES and at most 100 GiB"
             );
+            }
         }
-        if !(1..=10_000).contains(&raw.upload_download_max_concurrent)
-            || !(1..=256).contains(&raw.upload_download_max_per_ip)
-            || raw.upload_download_max_per_ip > raw.upload_download_max_concurrent
-            || !(5..=300).contains(&raw.upload_download_read_timeout_seconds)
-            || !(30..=3600).contains(&raw.upload_download_max_seconds)
-        {
-            anyhow::bail!("upload download concurrency or read timeout is invalid");
-        }
-        if !(128..=100_000).contains(&raw.upload_storage_max_pending_jobs)
-            || !(1_000..=100_000_000).contains(&raw.upload_storage_max_retained_files)
-            || raw.upload_storage_max_retained_bytes < raw.upload_max_bytes as i64
-            || raw.upload_storage_max_retained_bytes > 1024_i64 * 1024 * 1024 * 1024 * 1024
-        {
-            anyhow::bail!("upload physical-retention or reconciliation bounds are invalid");
-        }
-        if !(60..=10 * 365 * 24 * 60 * 60).contains(&raw.upload_retention_seconds) {
-            anyhow::bail!("UPLOAD_RETENTION_SECONDS must be between 60 seconds and 10 years");
+        if raw.upload_mode.keeps_storage_runtime() {
+            if raw.upload_download_max_bytes == 0
+                || raw.upload_download_max_bytes > i64::MAX as u64
+                || (raw.upload_mode.admits_new_uploads()
+                    && raw.upload_download_max_bytes < raw.upload_max_bytes)
+            {
+                anyhow::bail!(
+                    "UPLOAD_DOWNLOAD_MAX_BYTES must be positive, at most i64::MAX, and no smaller than UPLOAD_MAX_BYTES while admission is enabled"
+                );
+            }
+            if !(1..=10_000).contains(&raw.upload_download_max_concurrent)
+                || !(1..=256).contains(&raw.upload_download_max_per_ip)
+                || raw.upload_download_max_per_ip > raw.upload_download_max_concurrent
+                || !(5..=300).contains(&raw.upload_download_read_timeout_seconds)
+                || !(30..=3600).contains(&raw.upload_download_max_seconds)
+            {
+                anyhow::bail!("upload download concurrency or read timeout is invalid");
+            }
+            if !(128..=100_000).contains(&raw.upload_storage_max_pending_jobs)
+                || !(1_000..=100_000_000).contains(&raw.upload_storage_max_retained_files)
+                || (raw.upload_mode.admits_new_uploads()
+                    && raw.upload_storage_max_retained_bytes < raw.upload_max_bytes as i64)
+                || raw.upload_storage_max_retained_bytes <= 0
+                || raw.upload_storage_max_retained_bytes > 1024_i64 * 1024 * 1024 * 1024 * 1024
+            {
+                anyhow::bail!("upload physical-retention or reconciliation bounds are invalid");
+            }
+            if !(60..=10 * 365 * 24 * 60 * 60).contains(&raw.upload_retention_seconds) {
+                anyhow::bail!("UPLOAD_RETENTION_SECONDS must be between 60 seconds and 10 years");
+            }
         }
         if raw.pow_base_work_factor == 0 || raw.pow_max_work_factor < raw.pow_base_work_factor {
             anyhow::bail!("PoW maximum work factor must be at least the positive base factor");
@@ -2136,10 +2445,14 @@ impl Config {
             .map(|s| s.parse())
             .collect::<Result<Vec<IpAddr>, _>>()
             .context("invalid trusted proxy IPs")?;
+        validate_web_admin_exposure(raw.web_admin_enabled, raw.web_admin_bind)?;
         if raw.bosh_enabled && trusted_proxy_ips.is_empty() {
             anyhow::bail!("BOSH_ENABLED requires at least one TRUSTED_PROXY_IPS entry");
         }
         let xep_0487_ips = parse_xep_0487_ips(&raw.xep_0487_ips)?;
+        let public_http_active =
+            web_capabilities.listeners.public.is_some() || !xep_0487_ips.is_empty();
+        validate_listener_plan(&raw, public_http_active)?;
 
         let federation_allowlist = domain_list(&raw.federation_allowlist)
             .context("federation allowlist contains an invalid domain pattern")?;
@@ -2242,6 +2555,7 @@ impl Config {
             websocket_allowed_origins,
             trusted_proxy_ips,
             xep_0487_ips,
+            xmpp_extensions,
             federation_allowlist,
             federation_denylist,
             federation_dns_overrides,
@@ -2255,8 +2569,20 @@ impl Config {
             api_control_secret,
             api_control_previous_secret,
             metrics_bearer_token: metrics_bearer_token.map(|token| Arc::new(Zeroizing::new(token))),
+            web_admin_gateway_token: web_admin_gateway_token
+                .map(|token| Arc::new(Zeroizing::new(token))),
+            web_capabilities,
+            invitation_policy_disabled_with_web_client,
             pow_v1_compatibility_until,
         })
+    }
+
+    pub fn configured_registration_mode(&self) -> RegistrationMode {
+        self.web_capabilities.registration.mode
+    }
+
+    pub fn registration_dependency_locked(&self) -> bool {
+        self.web_capabilities.registration.lock.is_locked()
     }
 
     pub fn federation_domain_allowed(&self, domain: &str) -> bool {
@@ -2737,11 +3063,61 @@ mod tests {
         authentication_master_secrets_are_independent, domain_list, domain_pattern_matches,
         ephemeral_development_secret_allowed, load_component_credentials, parse_external_service,
         parse_pow_v1_compatibility_until, parse_xep_0487_ips, read_secret_file,
-        redis_endpoint_is_local, valid_http_bearer_secret, validate_cluster_dialback_secret,
-        validate_cluster_fast_secret, validate_component_capacity, validate_component_transport,
-        validate_redis_transport, validate_shared_runtime_secret, ComponentConnectionMode,
+        redis_endpoint_is_local, resolve_web_capability_plan, valid_http_bearer_secret,
+        validate_cluster_dialback_secret, validate_cluster_fast_secret,
+        validate_component_capacity, validate_component_transport, validate_redis_transport,
+        validate_shared_runtime_secret, validate_web_admin_exposure, ComponentConnectionMode,
         ComponentCredential,
     };
+
+    fn web_dependency_fixture() -> super::RawConfig {
+        envy::from_iter::<_, super::RawConfig>(std::iter::empty::<(String, String)>())
+            .expect("RawConfig defaults must deserialize")
+    }
+
+    #[test]
+    fn web_client_requires_its_rest_and_websocket_dependencies() {
+        let mut without_rest = web_dependency_fixture();
+        without_rest.rest_api_enabled = false;
+        assert!(resolve_web_capability_plan(&without_rest).is_err());
+
+        let mut without_websocket = web_dependency_fixture();
+        without_websocket.websocket_enabled = false;
+        assert!(resolve_web_capability_plan(&without_websocket).is_err());
+    }
+
+    #[test]
+    fn disabling_web_client_fails_invitation_registration_closed() {
+        let mut raw = web_dependency_fixture();
+        raw.web_client_enabled = false;
+        raw.invitation_required = true;
+        raw.open_registration = true;
+        let plan = resolve_web_capability_plan(&raw).unwrap();
+        assert!(plan.registration.lock.is_locked());
+        assert_eq!(plan.registration.mode, super::RegistrationMode::Closed);
+    }
+
+    #[test]
+    fn disabling_xep_0363_removes_new_upload_admission_but_keeps_safe_drain() {
+        let mut raw = web_dependency_fixture();
+        raw.xep_0363_enabled = false;
+        let plan = resolve_web_capability_plan(&raw).unwrap();
+        assert_eq!(plan.upload_mode, super::UploadMode::DrainReadOnly);
+        assert!(!plan.upload.slot_admission);
+        assert!(!plan.upload.put);
+        assert!(!plan.upload.xmpp_advertisement);
+        assert!(plan.upload.get);
+        assert!(plan.upload.cleanup_worker);
+    }
+
+    #[test]
+    fn administration_is_strictly_loopback_only() {
+        let public = "0.0.0.0:8081".parse().unwrap();
+        let loopback = "127.0.0.1:8081".parse().unwrap();
+        assert!(validate_web_admin_exposure(true, loopback).is_ok());
+        assert!(validate_web_admin_exposure(false, public).is_ok());
+        assert!(validate_web_admin_exposure(true, public).is_err());
+    }
 
     #[test]
     fn ephemeral_authentication_keys_require_every_development_fence() {

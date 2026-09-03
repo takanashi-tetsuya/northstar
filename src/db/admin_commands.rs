@@ -1596,15 +1596,23 @@ pub async fn initialize_admin_runtime_settings(
     pool: &PgPool,
     island_mode: bool,
     registration_closed: bool,
+    registration_must_remain_closed: bool,
 ) -> Result<()> {
     let mut tx = pool.begin().await?;
     sqlx::query(
         "INSERT INTO admin_runtime_settings(key,enabled)
          VALUES('island_mode',$1),('registration_closed',$2)
-         ON CONFLICT(key) DO NOTHING",
+         ON CONFLICT(key) DO UPDATE
+            SET enabled=TRUE,
+                revision=admin_runtime_settings.revision+1,
+                updated_at=clock_timestamp()
+          WHERE $3
+            AND EXCLUDED.key='registration_closed'
+            AND NOT admin_runtime_settings.enabled",
     )
     .bind(island_mode)
     .bind(registration_closed)
+    .bind(registration_must_remain_closed)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;

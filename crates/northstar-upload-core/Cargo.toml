@@ -1,0 +1,13 @@
+[package]
+name = "northstar-upload-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Capability-free XEP-0363 HTTP File Upload domain models and safety classifications"
+publish = false
+
+[dependencies]
+northstar-xmpp-types = { path = "../northstar-xmpp-types" }
+serde = { version = "1.0", features = ["derive"] }
+uuid = { version = "1.12", features = ["v4", "serde"] }

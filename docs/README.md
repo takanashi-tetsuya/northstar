@@ -18,11 +18,14 @@ Read these in order before deploying or changing protocol behavior:
    delivery boundaries.
 5. [Program responsibility model](PROGRAM_RESPONSIBILITIES.md) — exact process,
    task, module, database and restore-session authority boundaries.
-6. [Production operations](PRODUCTION_OPERATIONS.md) — deployment, monitoring,
+6. [Modularization progress](MODULARIZATION_PROGRESS_REPORT.md) and
+   [execution plan](MODULARIZATION_EXECUTION_PLAN.md) — current library/port
+   boundaries, remaining work packets and completion criteria.
+7. [Production operations](PRODUCTION_OPERATIONS.md) — deployment, monitoring,
    backup, recovery, TLS and database-role procedures.
-7. [Release checklist](RELEASE_CHECKLIST.md) — evidence required for one exact
+8. [Release checklist](RELEASE_CHECKLIST.md) — evidence required for one exact
    release artifact and target environment.
-8. [OpenAPI contract](openapi.yaml) — REST wire contract served by the binary.
+9. [OpenAPI contract](openapi.yaml) — REST wire contract served by the binary.
 
 Repository contributions and safe default checks are described in
 [CONTRIBUTING.md](../CONTRIBUTING.md); vulnerability reporting uses
@@ -69,6 +72,9 @@ not part of an unattended default command.
 
 ## Reliability and deployment design
 
+- [Library split ledger](LIBRARY_SPLIT_LEDGER.md)
+- [Modularization progress and remaining work](MODULARIZATION_PROGRESS_REPORT.md)
+- [Modularization execution plan](MODULARIZATION_EXECUTION_PLAN.md)
 - [Experimental clustering](CLUSTERING.md)
 - [Deployment capacity authority](DEPLOYMENT_CAPACITY.md)
 - [HTTP upload storage and recovery](UPLOAD_STORAGE.md)

@@ -1,0 +1,19 @@
+[package]
+name = "northstar-abuse-policy"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Capability-free anti-abuse policy, PoW escalation, cooldown schedules, and deterministic admission state transitions for Northstar"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["serde"] }
+hmac = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+subtle = "2.6"
+thiserror = "2.0"
+uuid = { version = "1.12", default-features = false, features = ["serde"] }

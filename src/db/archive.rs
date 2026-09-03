@@ -2,7 +2,6 @@ use crate::abuse::ContentIdentityAuthenticators;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rand::RngCore;
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
 use std::collections::HashSet;
@@ -11,11 +10,10 @@ use std::time::Duration;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
-#[derive(Clone, Debug)]
-pub struct ArchiveBoundary {
-    pub id: Uuid,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-}
+pub use northstar_archive_core::{
+    ArchiveBoundary, ArchivePage, ArchiveRow, MamArchiveQuery,
+    MamDbRoomReadOutcome as MamRoomReadOutcome, MamPreferences, MamRoomArchiveAccess, MamRsmPage,
+};
 
 /// Snapshot the oldest and newest viewer-visible MAM ids for XEP-0386 Bind 2
 /// metadata. Visibility, both endpoints and any concurrent writer are held to
@@ -52,85 +50,7 @@ pub async fn muc_archive_boundaries_visible(
     archive_boundaries_for(pool, MamArchiveSource::Muc(room_id), Some(viewer_id)).await
 }
 
-#[derive(Debug, Serialize)]
-pub struct ArchiveRow {
-    pub id: Uuid,
-    pub peer_jid: String,
-    pub stanza: String,
-    pub encrypted: bool,
-    /// The client-provided stanza id, when one was present at admission.
-    /// This is distinct from `id`, which is the immutable MAM archive UID.
-    pub stanza_id: Option<String>,
-    pub created_at: DateTime<Utc>,
-}
 
-#[derive(Debug)]
-pub struct ArchivePage {
-    pub rows: Vec<ArchiveRow>,
-    pub total: i64,
-    pub first_index: i64,
-    pub complete: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct MamRoomArchiveAccess {
-    pub room_id: Uuid,
-    pub localpart: String,
-    pub occupant_id_secret: Vec<u8>,
-    pub reveal_real_jid: bool,
-}
-
-#[derive(Debug)]
-pub enum MamRoomReadOutcome<T> {
-    Allowed {
-        access: MamRoomArchiveAccess,
-        value: T,
-    },
-    Missing,
-    Forbidden,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MamRsmPage {
-    First,
-    Last,
-    Before(Uuid),
-    After(Uuid),
-    /// XEP-0059 section 2.6 page retrieval by zero-based result index.
-    /// The protocol parser applies a production bound before this reaches
-    /// PostgreSQL; keeping it in the shared query type makes personal, MUC,
-    /// federated-MUC and MIX archives use the same semantics.
-    Index(i64),
-}
-
-#[derive(Clone, Debug)]
-pub struct MamArchiveQuery {
-    pub with_jid: Option<String>,
-    pub start: Option<DateTime<Utc>>,
-    pub end: Option<DateTime<Utc>>,
-    pub before_id: Option<Uuid>,
-    pub after_id: Option<Uuid>,
-    pub ids: Vec<Uuid>,
-    pub page: MamRsmPage,
-    pub max: i64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MamPreferences {
-    pub default_policy: String,
-    pub always: Vec<String>,
-    pub never: Vec<String>,
-}
-
-impl Default for MamPreferences {
-    fn default() -> Self {
-        Self {
-            default_policy: "always".to_owned(),
-            always: Vec::new(),
-            never: Vec::new(),
-        }
-    }
-}
 
 pub async fn mam_preferences(pool: &PgPool, user_id: Uuid) -> Result<MamPreferences> {
     let mut transaction = pool.begin().await?;

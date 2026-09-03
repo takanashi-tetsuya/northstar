@@ -1616,6 +1616,475 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-abuse-policy"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-archive-application"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "northstar-archive-core",
+ "northstar-xmpp-types",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-archive-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "northstar-xmpp-types",
+ "serde",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-auth-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "base64",
+ "hmac",
+ "northstar-xmpp-types",
+ "pbkdf2",
+ "rand 0.8.7",
+ "sha1",
+ "sha2",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "northstar-delivery-core"
+version = "0.1.0"
+dependencies = [
+ "northstar-xmpp-types",
+ "roxmltree",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-federation-application"
+version = "0.1.0"
+dependencies = [
+ "northstar-federation-core",
+ "northstar-xmpp-types",
+ "serde",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-federation-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hmac",
+ "northstar-xmpp-types",
+ "serde",
+ "sha2",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-message-application"
+version = "0.1.0"
+dependencies = [
+ "northstar-message-core",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-message-core"
+version = "0.1.0"
+dependencies = [
+ "northstar-federation-core",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-presence-core"
+version = "0.1.0"
+dependencies = [
+ "northstar-xmpp-types",
+]
+
+[[package]]
+name = "northstar-pubsub-application"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "northstar-pubsub-core",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-pubsub-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "northstar-xmpp-types",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-room-application"
+version = "0.1.0"
+dependencies = [
+ "northstar-room-core",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-room-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "northstar-federation-core",
+ "northstar-xmpp-types",
+ "serde",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-roster-application"
+version = "0.1.0"
+dependencies = [
+ "northstar-roster-core",
+ "northstar-xmpp-types",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-roster-core"
+version = "0.1.0"
+dependencies = [
+ "northstar-xmpp-types",
+ "serde",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-session-application"
+version = "0.1.0"
+dependencies = [
+ "northstar-session-core",
+ "northstar-xmpp-types",
+ "serde",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-session-core"
+version = "0.1.0"
+dependencies = [
+ "northstar-xmpp-types",
+ "serde",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-upload-application"
+version = "0.1.0"
+dependencies = [
+ "northstar-upload-core",
+ "northstar-xmpp-types",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-upload-core"
+version = "0.1.0"
+dependencies = [
+ "northstar-xmpp-types",
+ "serde",
+ "uuid",
+]
+
+[[package]]
+name = "northstar-web-surface"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "northstar-xep-0016"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "northstar-xmpp-types",
+]
+
+[[package]]
+name = "northstar-xep-0045"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0059"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0060"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0085"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+]
+
+[[package]]
+name = "northstar-xep-0092"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+]
+
+[[package]]
+name = "northstar-xep-0115"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "northstar-xep-core",
+ "roxmltree",
+ "serde",
+ "sha1",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0184"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+]
+
+[[package]]
+name = "northstar-xep-0191"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0198"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0199"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+]
+
+[[package]]
+name = "northstar-xep-0202"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+]
+
+[[package]]
+name = "northstar-xep-0215"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "northstar-xep-core",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
+name = "northstar-xep-0280"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "northstar-xml-builder",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0308"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+]
+
+[[package]]
+name = "northstar-xep-0313"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-0059",
+ "northstar-xep-core",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0333"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+]
+
+[[package]]
+name = "northstar-xep-0352"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0357"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0359"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0363"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0380"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+]
+
+[[package]]
+name = "northstar-xep-0444"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+]
+
+[[package]]
+name = "northstar-xep-0461"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+]
+
+[[package]]
+name = "northstar-xep-core"
+version = "0.1.0"
+
+[[package]]
+name = "northstar-xml-builder"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "roxmltree",
+]
+
+[[package]]
+name = "northstar-xml-framing"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xmpp-types"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "idna",
+ "precis-profiles",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2306,6 +2775,55 @@ dependencies = [
  "hmac",
  "idna",
  "libc",
+ "northstar-abuse-policy",
+ "northstar-archive-application",
+ "northstar-archive-core",
+ "northstar-auth-core",
+ "northstar-delivery-core",
+ "northstar-federation-application",
+ "northstar-federation-core",
+ "northstar-message-application",
+ "northstar-message-core",
+ "northstar-presence-core",
+ "northstar-pubsub-application",
+ "northstar-pubsub-core",
+ "northstar-room-application",
+ "northstar-room-core",
+ "northstar-roster-application",
+ "northstar-roster-core",
+ "northstar-session-application",
+ "northstar-session-core",
+ "northstar-upload-application",
+ "northstar-upload-core",
+ "northstar-web-surface",
+ "northstar-xep-0016",
+ "northstar-xep-0045",
+ "northstar-xep-0059",
+ "northstar-xep-0060",
+ "northstar-xep-0085",
+ "northstar-xep-0092",
+ "northstar-xep-0115",
+ "northstar-xep-0184",
+ "northstar-xep-0191",
+ "northstar-xep-0198",
+ "northstar-xep-0199",
+ "northstar-xep-0202",
+ "northstar-xep-0215",
+ "northstar-xep-0280",
+ "northstar-xep-0308",
+ "northstar-xep-0313",
+ "northstar-xep-0333",
+ "northstar-xep-0352",
+ "northstar-xep-0357",
+ "northstar-xep-0359",
+ "northstar-xep-0363",
+ "northstar-xep-0380",
+ "northstar-xep-0444",
+ "northstar-xep-0461",
+ "northstar-xep-core",
+ "northstar-xml-builder",
+ "northstar-xml-framing",
+ "northstar-xmpp-types",
  "object_store",
  "pbkdf2",
  "precis-profiles",

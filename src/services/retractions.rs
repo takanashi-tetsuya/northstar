@@ -7,6 +7,8 @@
 
 use crate::{abuse::PersonalRetractionContentKeyring, db, xmpp::xml_builder::XmlElement};
 use anyhow::{Context, Result};
+pub(crate) use northstar_message_core::ArchiveProjection as ArchiveWrite;
+
 use roxmltree::{Document, Node};
 use sha2::{Digest, Sha256, Sha512};
 use sqlx::{PgPool, Row};
@@ -18,16 +20,6 @@ const NS_RETRACT: &str = "urn:xmpp:message-retract:1";
 const NS_STANZA_ID: &str = "urn:xmpp:sid:0";
 const NS_NORTHSTAR_POW: &str = "urn:northstar:pow:1";
 const RETRACTION_LOCK_DOMAIN: &[u8] = b"northstar/retraction-action-lock/v1\0";
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ArchiveWrite<'a> {
-    pub(crate) id: Uuid,
-    pub(crate) owner_id: Uuid,
-    pub(crate) peer_jid: &'a str,
-    pub(crate) stanza: &'a str,
-    pub(crate) encrypted: bool,
-    pub(crate) stanza_id: Option<&'a str>,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OwnerProjection<'a> {
@@ -74,6 +66,10 @@ impl From<FederationOutboxPolicy> for db::S2sOutboxPolicy {
         }
     }
 }
+
+
+
+
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OutboundProjection<'a> {

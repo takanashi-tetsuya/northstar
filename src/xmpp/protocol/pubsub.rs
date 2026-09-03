@@ -1,16 +1,20 @@
 use super::{Action, ProtocolSession};
-use crate::mam_pubsub_parsing::{
-    self, PubSubNamespace, PubSubRsmRequest, PUBSUB_NS, PUBSUB_OWNER_NS,
-};
+use crate::mam_pubsub_parsing::{self, PubSubNamespace, PubSubRsmRequest};
 use crate::services::privacy::PrivacyStanzaKind;
 use crate::services::pubsub::{
-    truncate_utf8_to_bytes, ClaimedPubSubOutboxDelivery, CollectionUpdateOutcome,
-    CreateNodeOutcome, OwnerMutationOutcome, PepOutboxAuthorizationOutcome, PubSubConfigOutcome,
-    PubSubItem, PubSubNode, PubSubNodeConfig, PubSubOutboxDeliveryKind, PubSubSubscription,
-    PubSubSubscriptionOptions, PublishItemsOutcome, RetractItemsOutcome, SetAffiliationsOutcome,
-    SetSubscriptionsOutcome, SubscribeOutcome, SubscriptionOptionsOutcome, UnsubscribeOutcome,
+    ClaimedPubSubOutboxDelivery, CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome,
+    PepOutboxAuthorizationOutcome, PubSubConfigOutcome, PubSubConfigureNodeCommand,
+    PubSubConfigureNodeWrite, PubSubCreateNodeCommand, PubSubCreateNodeWrite,
+    PubSubDeleteNodeCommand, PubSubDeleteNodeWrite, PubSubItem, PubSubNode, PubSubNodeConfig,
+    PubSubOutboxDeliveryKind, PubSubPublishCommand, PubSubPublishOutcome, PubSubPublishWrite,
+    PubSubPurgeNodeCommand, PubSubPurgeNodeWrite, PubSubRetractCommand, PubSubRetractOutcome,
+    PubSubRetractWrite, PubSubSetAffiliationsCommand, PubSubSetAffiliationsWrite,
+    PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsWrite, PubSubSubscribeCommand,
+    PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscription, PubSubSubscriptionOptions,
+    PubSubUnsubscribeCommand, PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite,
+    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
 };
-use crate::state::{attr_escape, AppState};
+use crate::state::AppState;
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::Result;
@@ -28,62 +32,23 @@ struct DiscoItem {
     published_item: bool,
 }
 
-const NS_PUBSUB: &str = PUBSUB_NS;
-const NS_PUBSUB_OWNER: &str = PUBSUB_OWNER_NS;
-const NS_PUBSUB_EVENT: &str = "http://jabber.org/protocol/pubsub#event";
-const NS_PUBSUB_ERRORS: &str = "http://jabber.org/protocol/pubsub#errors";
-const NS_DATA: &str = "jabber:x:data";
-const NS_RSM: &str = "http://jabber.org/protocol/rsm";
-const NODE_CONFIG_FORM: &str = "http://jabber.org/protocol/pubsub#node_config";
-const PUBLISH_OPTIONS_FORM: &str = "http://jabber.org/protocol/pubsub#publish-options";
-const SERVICE_FEATURES: &[&str] = &[
-    "access-authorize",
-    "access-open",
-    "access-whitelist",
-    "auto-create",
-    "collections",
-    "config-node",
-    "create-and-configure",
-    "create-nodes",
-    "delete-items",
-    "delete-nodes",
-    "instant-nodes",
-    "item-ids",
-    "last-published",
-    "leased-subscription",
-    "manage-subscriptions",
-    "member-affiliation",
-    "meta-data",
-    "modify-affiliations",
-    "multi-collections",
-    "multi-items",
-    "outcast-affiliation",
-    "persistent-items",
-    "publish",
-    "publish-only-affiliation",
-    "publish-options",
-    "publisher-affiliation",
-    "purge-nodes",
-    "retract-items",
-    "retrieve-affiliations",
-    "retrieve-default",
-    "retrieve-default-sub",
-    "retrieve-items",
-    "retrieve-subscriptions",
-    "rsm",
-    "subscribe",
-    "subscription-notifications",
-    "subscription-options",
-];
-const SUBSCRIBE_AUTH_FORM: &str = "http://jabber.org/protocol/pubsub#subscribe_authorization";
-const SUBSCRIBE_OPTIONS_FORM: &str = "http://jabber.org/protocol/pubsub#subscribe_options";
-const MAX_NODE_ID_BYTES: usize = 1_024;
-const MAX_PUBLISH_ITEMS: usize = 100;
-const MAX_ITEM_XML_BYTES: usize = 1_048_576;
-const MAX_PUBLISH_XML_BYTES: usize = 4 * 1_048_576;
-const MAX_TITLE_BYTES: usize = 512;
-const MAX_DESCRIPTION_BYTES: usize = 4_096;
-const MAX_SUBSCRIPTION_LEASE_DAYS: i64 = 365;
+const NS_PUBSUB: &str = northstar_xep_0060::NS_PUBSUB;
+const NS_PUBSUB_OWNER: &str = northstar_xep_0060::NS_PUBSUB_OWNER;
+const NS_PUBSUB_EVENT: &str = northstar_xep_0060::NS_PUBSUB_EVENT;
+const NS_PUBSUB_ERRORS: &str = northstar_xep_0060::NS_PUBSUB_ERRORS;
+const NS_DATA: &str = northstar_xep_0060::NS_DATA;
+const NS_RSM: &str = northstar_xep_0060::NS_RSM;
+const NODE_CONFIG_FORM: &str = northstar_xep_0060::NODE_CONFIG_FORM;
+const PUBLISH_OPTIONS_FORM: &str = northstar_xep_0060::PUBLISH_OPTIONS_FORM;
+const SERVICE_FEATURES: &[&str] = northstar_xep_0060::SERVICE_FEATURES;
+const SUBSCRIBE_AUTH_FORM: &str = northstar_xep_0060::SUBSCRIBE_AUTH_FORM;
+const SUBSCRIBE_OPTIONS_FORM: &str = northstar_xep_0060::SUBSCRIBE_OPTIONS_FORM;
+const MAX_PUBLISH_ITEMS: usize = northstar_xep_0060::MAX_PUBLISH_ITEMS;
+const MAX_ITEM_XML_BYTES: usize = northstar_xep_0060::MAX_ITEM_XML_BYTES;
+const MAX_PUBLISH_XML_BYTES: usize = northstar_xep_0060::MAX_PUBLISH_XML_BYTES;
+const MAX_TITLE_BYTES: usize = northstar_xep_0060::MAX_TITLE_BYTES;
+const MAX_DESCRIPTION_BYTES: usize = northstar_xep_0060::MAX_DESCRIPTION_BYTES;
+const MAX_SUBSCRIPTION_LEASE_DAYS: i64 = northstar_xep_0060::MAX_SUBSCRIPTION_LEASE_DAYS;
 
 #[derive(Debug)]
 pub(crate) enum PubSubReply {
@@ -92,42 +57,7 @@ pub(crate) enum PubSubReply {
     ExtendedError(PubSubError),
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct PubSubError {
-    pub condition: &'static str,
-    pub pubsub_condition: Option<&'static str>,
-    pub feature: Option<&'static str>,
-    pub redirect: Option<String>,
-}
-
-impl PubSubError {
-    fn new(condition: &'static str, pubsub_condition: &'static str) -> Self {
-        Self {
-            condition,
-            pubsub_condition: Some(pubsub_condition),
-            feature: None,
-            redirect: None,
-        }
-    }
-
-    fn unsupported(feature: &'static str) -> Self {
-        Self {
-            condition: "feature-not-implemented",
-            pubsub_condition: Some("unsupported"),
-            feature: Some(feature),
-            redirect: None,
-        }
-    }
-
-    fn moved(uri: String) -> Self {
-        Self {
-            condition: "gone",
-            pubsub_condition: None,
-            feature: None,
-            redirect: Some(uri),
-        }
-    }
-}
+pub(crate) type PubSubError = northstar_xep_0060::PubSubError;
 
 pub(crate) fn error_payload(error: &PubSubReply) -> Option<(&'static str, String)> {
     match error {
@@ -171,12 +101,7 @@ fn invalid_subscription_options() -> PubSubReply {
 }
 
 fn stanza_error_type(condition: &str) -> &'static str {
-    match condition {
-        "forbidden" | "not-authorized" | "payment-required" => "auth",
-        "bad-request" | "gone" | "jid-malformed" | "not-acceptable" | "redirect" => "modify",
-        "policy-violation" | "resource-constraint" | "service-unavailable" => "wait",
-        _ => "cancel",
-    }
+    northstar_xep_0060::stanza_error_type_for_condition(condition).as_str()
 }
 
 fn pubsub_iq_error(id: &str, from: &str, reply: &PubSubReply) -> String {
@@ -1233,16 +1158,13 @@ async fn handle_entity_set(
                     Err(condition) => return Ok(node_config_parse_error(condition)),
                 };
             }
-            match state
-                .pubsub_service()
-                .create_node(
-                    node_name,
-                    &requester,
-                    &config,
-                    state.config.pubsub_max_nodes_per_owner,
-                )
-                .await?
-            {
+            let cmd = PubSubCreateNodeCommand::from(PubSubCreateNodeWrite {
+                creator_jid: &requester,
+                node: node_name,
+                config: &config,
+                max_nodes_per_owner: state.config.pubsub_max_nodes_per_owner,
+            });
+            match state.pubsub_service().execute_pubsub_create_node(cmd).await?.outcome {
                 CreateNodeOutcome::Created => {}
                 CreateNodeOutcome::Conflict => {
                     return Ok(PubSubReply::Error("conflict"));
@@ -1294,42 +1216,15 @@ async fn handle_entity_set(
             if node_name == "serverinfo" {
                 return Ok(PubSubReply::Error("forbidden"));
             }
-            let mut node = state.pubsub_service().get_node(node_name).await?;
-            let had_publish_options = operations.get(1).is_some();
-            let effective_config = match (node.as_ref(), operations.get(1)) {
-                (Some(node), Some(options)) => {
-                    let requested = match parse_publish_options(*options, node.config()) {
-                        Ok(config) => config,
-                        Err(condition) => return Ok(node_config_parse_error(condition)),
-                    };
-                    if !config_equivalent(&requested, &node.config()) {
-                        return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                            "conflict",
-                            "precondition-not-met",
-                        )));
-                    }
-                    requested
-                }
-                (Some(node), None) => node.config(),
-                (None, Some(options)) => {
-                    match parse_publish_options(*options, PubSubNodeConfig::default()) {
-                        Ok(config) => config,
-                        Err(condition) => return Ok(node_config_parse_error(condition)),
-                    }
-                }
-                (None, None) => PubSubNodeConfig::default(),
+            let publish_options = if let Some(options) = operations.get(1) {
+                let parsed = match parse_publish_options(*options, PubSubNodeConfig::default()) {
+                    Ok(config) => config,
+                    Err(condition) => return Ok(node_config_parse_error(condition)),
+                };
+                Some(parsed)
+            } else {
+                None
             };
-            if effective_config.node_type != "leaf" {
-                return Ok(PubSubReply::ExtendedError(PubSubError::unsupported(
-                    "publish",
-                )));
-            }
-            if let Some(node) = node.as_ref() {
-                if !can_publish(state, node, &requester).await? {
-                    return Ok(PubSubReply::Error("forbidden"));
-                }
-            }
-
             let item_nodes: Vec<_> = primary
                 .children()
                 .filter(|node| node.is_element())
@@ -1337,47 +1232,9 @@ async fn handle_entity_set(
             if !publish_batch_size_allowed(item_nodes.len()) {
                 return Ok(PubSubReply::Error("bad-request"));
             }
-            // XEP-0060 section 12.11 is stricter for a single batch than the
-            // ordinary full-node FIFO rule: if the batch itself cannot fit
-            // within max_items, the entire request must fail atomically.
-            if item_nodes.len() > effective_config.max_items as usize {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "not-allowed",
-                    "max-items-exceeded",
-                )));
-            }
-            if effective_config.persist_items && item_nodes.is_empty() {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "bad-request",
-                    "item-required",
-                )));
-            }
-            if !effective_config.persist_items
-                && !effective_config.deliver_payloads
-                && !item_nodes.is_empty()
-            {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "bad-request",
-                    "item-forbidden",
-                )));
-            }
-            if !effective_config.persist_items
-                && effective_config.deliver_payloads
-                && item_nodes.is_empty()
-            {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "bad-request",
-                    "item-required",
-                )));
-            }
-            // pubsub#max_items limits the retained node history, not the
-            // number of items in one atomic publish request. The storage
-            // transaction below accepts the batch and deterministically
-            // prunes the oldest rows to this value (XEP-0060 §7.1.5).
             let mut items = Vec::with_capacity(item_nodes.len());
             let mut seen_item_ids = BTreeSet::new();
             let mut total_bytes = 0usize;
-            let mut all_items_have_payload = true;
             for item_node in item_nodes {
                 let payload_count = item_node
                     .children()
@@ -1385,9 +1242,7 @@ async fn handle_entity_set(
                     .count();
                 if item_node.tag_name().name() != "item"
                     || item_node.tag_name().namespace() != Some(NS_PUBSUB)
-                    || item_node.attributes().any(|attribute| {
-                        attribute.namespace().is_some() || attribute.name() != "id"
-                    })
+                    || !has_only_attributes(item_node, &["id"])
                 {
                     return Ok(PubSubReply::Error("bad-request"));
                 }
@@ -1396,24 +1251,6 @@ async fn handle_entity_set(
                         "bad-request",
                         "invalid-payload",
                     )));
-                }
-                if effective_config.deliver_payloads && payload_count == 0 {
-                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                        "bad-request",
-                        "payload-required",
-                    )));
-                }
-                all_items_have_payload &= payload_count == 1;
-                if let (Some(expected_namespace), Some(payload)) = (
-                    effective_config.payload_type.as_deref(),
-                    item_node.children().find(Node::is_element),
-                ) {
-                    if payload.tag_name().namespace() != Some(expected_namespace) {
-                        return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                            "bad-request",
-                            "invalid-payload",
-                        )));
-                    }
                 }
                 let item_id = item_node
                     .attribute("id")
@@ -1427,104 +1264,76 @@ async fn handle_entity_set(
                 }
                 let item_xml = serialize_pubsub_item(item_node, &item_id)?;
                 total_bytes = total_bytes.saturating_add(item_xml.len());
-                if item_xml.len() > effective_config.max_payload_size as usize {
-                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                        "not-acceptable",
-                        "payload-too-big",
-                    )));
-                }
                 if item_xml.len() > MAX_ITEM_XML_BYTES || total_bytes > MAX_PUBLISH_XML_BYTES {
                     return Ok(PubSubReply::Error("policy-violation"));
                 }
                 items.push((item_id, item_xml));
             }
-            if node.is_none() {
-                match state
-                    .pubsub_service()
-                    .create_node(
-                        node_name,
-                        &requester,
-                        &effective_config,
-                        state.config.pubsub_max_nodes_per_owner,
-                    )
-                    .await?
-                {
-                    CreateNodeOutcome::Created | CreateNodeOutcome::Conflict => {}
-                    CreateNodeOutcome::QuotaExceeded => {
-                        return Ok(PubSubReply::Error("resource-constraint"));
-                    }
-                    CreateNodeOutcome::InvalidOptions
-                    | CreateNodeOutcome::Forbidden
-                    | CreateNodeOutcome::CollectionLimitExceeded
-                    | CreateNodeOutcome::Cycle => {
-                        return Ok(PubSubReply::Error("conflict"));
-                    }
-                }
-                node = state.pubsub_service().get_node(node_name).await?;
-            }
-            let node =
-                node.ok_or_else(|| anyhow::anyhow!("auto-created PubSub node disappeared"))?;
-            // A concurrent creator may have won the node-name race.  Re-check
-            // every property that affected request validation against the
-            // committed node before accepting the publication.
-            if node.node_type != "leaf"
-                || items.len() > node.max_items as usize
-                || node.persist_items && items.is_empty()
-                || !node.persist_items && !node.deliver_payloads && !items.is_empty()
-                || !node.persist_items && node.deliver_payloads && items.is_empty()
-                || node.deliver_payloads && !all_items_have_payload
-                || items
-                    .iter()
-                    .any(|(_, payload)| payload.len() > node.max_payload_size as usize)
-                || node.payload_type.as_deref().is_some_and(|payload_type| {
-                    items
-                        .iter()
-                        .any(|(_, item)| !serialized_item_payload_matches_type(item, payload_type))
-                })
-            {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "conflict",
-                    "precondition-not-met",
-                )));
-            }
-            if had_publish_options && !config_equivalent(&effective_config, &node.config()) {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "conflict",
-                    "precondition-not-met",
-                )));
-            }
-            if !can_publish(state, &node, &requester).await? {
-                return Ok(PubSubReply::Error("forbidden"));
-            }
-            match state
-                .pubsub_service()
-                .publish_items(
-                    &node,
-                    &requester,
-                    &items,
-                    state.config.pubsub_max_storage_bytes_per_owner,
-                )
-                .await?
-            {
-                PublishItemsOutcome::Published => {}
-                PublishItemsOutcome::Conflict => {
-                    return Ok(PubSubReply::Error("conflict"));
-                }
-                PublishItemsOutcome::QuotaExceeded => {
+            let cmd = PubSubPublishCommand::from(PubSubPublishWrite {
+                publisher_jid: &requester,
+                node: node_name,
+                items: &items,
+                publish_options: publish_options.as_ref(),
+                max_storage_bytes_per_owner: state.config.pubsub_max_storage_bytes_per_owner,
+                max_nodes_per_owner: state.config.pubsub_max_nodes_per_owner,
+            });
+            let result = state.pubsub_service().execute_pubsub_publish(cmd).await?;
+            let item_ids = match result.outcome {
+                PubSubPublishOutcome::Published { item_ids } => item_ids,
+                PubSubPublishOutcome::Conflict => return Ok(PubSubReply::Error("conflict")),
+                PubSubPublishOutcome::QuotaExceeded => {
                     return Ok(PubSubReply::Error("resource-constraint"));
                 }
-                PublishItemsOutcome::Forbidden => {
-                    return Ok(PubSubReply::Error("forbidden"));
-                }
-                PublishItemsOutcome::PreconditionFailed => {
+                PubSubPublishOutcome::Forbidden => return Ok(PubSubReply::Error("forbidden")),
+                PubSubPublishOutcome::MissingNode => return Ok(PubSubReply::Error("item-not-found")),
+                PubSubPublishOutcome::PreconditionNotMet => {
                     return Ok(PubSubReply::ExtendedError(PubSubError::new(
                         "conflict",
                         "precondition-not-met",
                     )));
                 }
-            }
+                PubSubPublishOutcome::NotLeafNode => {
+                    return Ok(PubSubReply::ExtendedError(PubSubError::unsupported("publish")));
+                }
+                PubSubPublishOutcome::MaxItemsExceeded => {
+                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
+                        "not-allowed",
+                        "max-items-exceeded",
+                    )));
+                }
+                PubSubPublishOutcome::ItemRequired => {
+                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
+                        "bad-request",
+                        "item-required",
+                    )));
+                }
+                PubSubPublishOutcome::ItemForbidden => {
+                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
+                        "bad-request",
+                        "item-forbidden",
+                    )));
+                }
+                PubSubPublishOutcome::PayloadRequired => {
+                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
+                        "bad-request",
+                        "payload-required",
+                    )));
+                }
+                PubSubPublishOutcome::PayloadTooBig => {
+                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
+                        "not-acceptable",
+                        "payload-too-big",
+                    )));
+                }
+                PubSubPublishOutcome::InvalidPayload => {
+                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
+                        "bad-request",
+                        "invalid-payload",
+                    )));
+                }
+            };
             let mut published = XmlElement::new("publish").attr("node", node_name);
-            for (item_id, _) in &items {
+            for item_id in &item_ids {
                 published.push_child(XmlElement::new("item").attr("id", item_id));
             }
             Ok(PubSubReply::Result(
@@ -1574,61 +1383,6 @@ async fn handle_entity_set(
                     "invalid-jid",
                 )));
             }
-            let affiliation = state
-                .pubsub_service()
-                .get_node_affiliation(node.id, &requester)
-                .await?;
-            if affiliation.as_deref() == Some("outcast") {
-                return Ok(PubSubReply::Error("forbidden"));
-            }
-            let existing_subscription = state
-                .pubsub_service()
-                .get_subscription(node.id, &requested_jid)
-                .await?;
-            if let Some(existing) = existing_subscription.as_ref() {
-                if existing.state == "pending" {
-                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                        "not-authorized",
-                        "pending-subscription",
-                    )));
-                }
-                if existing.is_active() && operations.len() == 1 {
-                    return Ok(PubSubReply::Result(subscription_payload(
-                        node_name,
-                        &requested_jid,
-                        "subscribed",
-                        Some(&existing.subid),
-                        existing.expire.as_ref(),
-                    )));
-                }
-            }
-            let state_value = match node.access_model.as_str() {
-                "open" => "subscribed",
-                "whitelist"
-                    if matches!(
-                        affiliation.as_deref(),
-                        Some("owner" | "publisher" | "member")
-                    ) =>
-                {
-                    "subscribed"
-                }
-                "authorize"
-                    if matches!(
-                        affiliation.as_deref(),
-                        Some("owner" | "publisher" | "member")
-                    ) =>
-                {
-                    "subscribed"
-                }
-                "authorize" => "pending",
-                "whitelist" => {
-                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                        "not-allowed",
-                        "closed-node",
-                    )));
-                }
-                _ => return Ok(PubSubReply::Error("forbidden")),
-            };
             let subscription_options = if let Some(options) = operations.get(1) {
                 let form = single_element_child(*options)
                     .expect("subscribe-and-configure structure was validated above");
@@ -1647,63 +1401,59 @@ async fn handle_entity_set(
                 {
                     return Ok(invalid_subscription_options());
                 }
-                parsed
+                Some(parsed)
             } else {
-                // PostgreSQL's legacy column default is the leaf-node value.
-                // Apply the protocol default explicitly so a subscription to
-                // a collection receives node/graph notifications even when
-                // the client omits an options form.
-                PubSubSubscriptionOptions::for_node_type(&node.node_type)
+                None
             };
-            let planned_subid = existing_subscription
-                .as_ref()
-                .map(|subscription| subscription.subid.clone())
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            let subscription = match state
-                .pubsub_service()
-                .set_subscription_limited_with_options(
-                    node.id,
-                    &requester,
-                    &requested_jid,
-                    state_value,
-                    &node.node_type,
-                    &node.access_model,
-                    1_000,
-                    Some(&subscription_options),
-                    &planned_subid,
-                )
-                .await?
-            {
-                SubscribeOutcome::Subscribed(subscription) => subscription,
-                SubscribeOutcome::LimitExceeded => {
-                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
+            let cmd = PubSubSubscribeCommand::from(PubSubSubscribeWrite {
+                requester: &requester,
+                subscriber_jid: &requested_jid,
+                node: node_name,
+                options: subscription_options.as_ref(),
+                max_subscriptions: 1_000,
+            });
+            let result = state.pubsub_service().execute_pubsub_subscribe(cmd).await?;
+            match result.outcome {
+                PubSubSubscribeOutcome::Subscribed(subscription) => {
+                    Ok(PubSubReply::Result(subscription_payload(
+                        node_name,
+                        &requested_jid,
+                        &subscription.state,
+                        Some(&subscription.subid),
+                        subscription.expire.as_ref(),
+                    )))
+                }
+                PubSubSubscribeOutcome::ExistingActive(existing) => {
+                    Ok(PubSubReply::Result(subscription_payload(
+                        node_name,
+                        &requested_jid,
+                        "subscribed",
+                        Some(&existing.subid),
+                        existing.expire.as_ref(),
+                    )))
+                }
+                PubSubSubscribeOutcome::PendingSubscription => {
+                    Ok(PubSubReply::ExtendedError(PubSubError::new(
+                        "not-authorized",
+                        "pending-subscription",
+                    )))
+                }
+                PubSubSubscribeOutcome::LimitExceeded => {
+                    Ok(PubSubReply::ExtendedError(PubSubError::new(
                         "policy-violation",
                         "too-many-subscriptions",
-                    )));
+                    )))
                 }
-                SubscribeOutcome::NotFound => {
-                    return missing_node_reply(state, node_name).await;
-                }
-                SubscribeOutcome::Forbidden => {
-                    return Ok(PubSubReply::Error("forbidden"));
-                }
-                SubscribeOutcome::ClosedNode => {
-                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
+                PubSubSubscribeOutcome::NotFound => missing_node_reply(state, node_name).await,
+                PubSubSubscribeOutcome::Forbidden => Ok(PubSubReply::Error("forbidden")),
+                PubSubSubscribeOutcome::ClosedNode => {
+                    Ok(PubSubReply::ExtendedError(PubSubError::new(
                         "not-allowed",
                         "closed-node",
-                    )));
+                    )))
                 }
-                SubscribeOutcome::PreconditionFailed => {
-                    return Ok(PubSubReply::Error("conflict"));
-                }
-            };
-            Ok(PubSubReply::Result(subscription_payload(
-                node_name,
-                &requested_jid,
-                state_value,
-                Some(&subscription.subid),
-                subscription.expire.as_ref(),
-            )))
+                PubSubSubscribeOutcome::PreconditionFailed => Ok(PubSubReply::Error("conflict")),
+            }
         }
         "unsubscribe" => {
             if operations.len() != 1 {
@@ -1717,9 +1467,6 @@ async fn handle_entity_set(
             let node_name = match required_node_id(primary.attribute("node")) {
                 Ok(node) => node,
                 Err(reply) => return Ok(reply),
-            };
-            let Some(node) = state.pubsub_service().get_node(node_name).await? else {
-                return missing_node_reply(state, node_name).await;
             };
             let Some(requested_jid) = primary.attribute("jid") else {
                 return Ok(PubSubReply::ExtendedError(PubSubError::new(
@@ -1736,58 +1483,39 @@ async fn handle_entity_set(
             if normalized_bare(&requested_jid)? != requester {
                 return Ok(PubSubReply::Error("forbidden"));
             }
-            let Some(subscription) = state
-                .pubsub_service()
-                .get_subscription(node.id, &requested_jid)
-                .await?
-            else {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "unexpected-request",
-                    "not-subscribed",
-                )));
-            };
-            if subscription.is_expired() {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "unexpected-request",
-                    "not-subscribed",
-                )));
-            }
             let supplied_subid = primary.attribute("subid");
-            if supplied_subid.is_some_and(|value| value != subscription.subid) {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "not-acceptable",
-                    "invalid-subid",
-                )));
-            }
-            match state
-                .pubsub_service()
-                .unsubscribe_checked(node.id, &requester, &requested_jid, &subscription.subid)
-                .await?
-            {
-                UnsubscribeOutcome::Unsubscribed => {}
-                UnsubscribeOutcome::NotFound => {
-                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
+            let cmd = PubSubUnsubscribeCommand::from(PubSubUnsubscribeWrite {
+                requester: &requester,
+                subscriber_jid: &requested_jid,
+                node: node_name,
+                subid: supplied_subid,
+            });
+            let result = state.pubsub_service().execute_pubsub_unsubscribe(cmd).await?;
+            match result.outcome {
+                PubSubUnsubscribeOutcome::Unsubscribed { subid } => {
+                    Ok(PubSubReply::Result(subscription_payload(
+                        node_name,
+                        &requested_jid,
+                        "none",
+                        subid.as_deref(),
+                        None,
+                    )))
+                }
+                PubSubUnsubscribeOutcome::NotFound => missing_node_reply(state, node_name).await,
+                PubSubUnsubscribeOutcome::NotSubscribed => {
+                    Ok(PubSubReply::ExtendedError(PubSubError::new(
                         "unexpected-request",
                         "not-subscribed",
-                    )));
+                    )))
                 }
-                UnsubscribeOutcome::InvalidSubid => {
-                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
+                PubSubUnsubscribeOutcome::InvalidSubid => {
+                    Ok(PubSubReply::ExtendedError(PubSubError::new(
                         "not-acceptable",
                         "invalid-subid",
-                    )));
+                    )))
                 }
-                UnsubscribeOutcome::Forbidden => {
-                    return Ok(PubSubReply::Error("forbidden"));
-                }
+                PubSubUnsubscribeOutcome::Forbidden => Ok(PubSubReply::Error("forbidden")),
             }
-            Ok(PubSubReply::Result(subscription_payload(
-                node_name,
-                &requested_jid,
-                "none",
-                Some(&subscription.subid),
-                None,
-            )))
         }
         "retract" => {
             if operations.len() != 1 {
@@ -1807,22 +1535,6 @@ async fn handle_entity_set(
                 Ok(node) => node,
                 Err(reply) => return Ok(reply),
             };
-            let Some(node) = state.pubsub_service().get_node(node_name).await? else {
-                return missing_node_reply(state, node_name).await;
-            };
-            if node.node_type != "leaf" {
-                return Ok(PubSubReply::ExtendedError(PubSubError::unsupported(
-                    "delete-items",
-                )));
-            }
-            if !node.persist_items {
-                return Ok(PubSubReply::ExtendedError(PubSubError::unsupported(
-                    "persistent-items",
-                )));
-            }
-            if !can_publish(state, &node, &requester).await? {
-                return Ok(PubSubReply::Error("forbidden"));
-            }
             let mut ids = BTreeSet::new();
             for item in primary.children().filter(|node| node.is_element()) {
                 if item.tag_name().name() != "item"
@@ -1852,17 +1564,29 @@ async fn handle_entity_set(
                 )));
             }
             let ids = ids.into_iter().collect::<Vec<_>>();
-            match state
-                .pubsub_service()
-                .retract_items(node.id, &ids, &requester, force_notification)
-                .await?
-            {
-                RetractItemsOutcome::Retracted => {}
-                RetractItemsOutcome::NotFound => {
+            let cmd = PubSubRetractCommand::from(PubSubRetractWrite {
+                requester: &requester,
+                node: node_name,
+                item_ids: &ids,
+                force_notification,
+            });
+            let result = state.pubsub_service().execute_pubsub_retract(cmd).await?;
+            match result.outcome {
+                PubSubRetractOutcome::Retracted => {}
+                PubSubRetractOutcome::NotFound => return missing_node_reply(state, node_name).await,
+                PubSubRetractOutcome::ItemNotFound => {
                     return Ok(PubSubReply::Error("item-not-found"));
                 }
-                RetractItemsOutcome::Forbidden => {
-                    return Ok(PubSubReply::Error("forbidden"));
+                PubSubRetractOutcome::Forbidden => return Ok(PubSubReply::Error("forbidden")),
+                PubSubRetractOutcome::NotLeafNode => {
+                    return Ok(PubSubReply::ExtendedError(PubSubError::unsupported(
+                        "delete-items",
+                    )));
+                }
+                PubSubRetractOutcome::NotPersistent => {
+                    return Ok(PubSubReply::ExtendedError(PubSubError::unsupported(
+                        "persistent-items",
+                    )));
                 }
             }
             Ok(PubSubReply::Result(String::new()))
@@ -2150,10 +1874,17 @@ async fn handle_owner_set(
                 Ok(config) => config,
                 Err(condition) => return Ok(node_config_parse_error(condition)),
             };
+            let cmd = PubSubConfigureNodeCommand::from(PubSubConfigureNodeWrite {
+                requester: &requester,
+                node: node_name,
+                expected: &expected,
+                config: &config,
+            });
             match state
                 .pubsub_service()
-                .update_node_config_and_graph_with_outbox(&node, &requester, &expected, &config)
+                .execute_pubsub_configure_node(cmd)
                 .await?
+                .outcome
             {
                 PubSubConfigOutcome::Updated => {}
                 PubSubConfigOutcome::Conflict => {
@@ -2224,10 +1955,16 @@ async fn handle_owner_set(
             let transitions = if changes.is_empty() {
                 Vec::new()
             } else {
+                let cmd = PubSubSetSubscriptionsCommand::from(PubSubSetSubscriptionsWrite {
+                    requester: &requester,
+                    node: node_name,
+                    changes: &changes,
+                });
                 match state
                     .pubsub_service()
-                    .set_subscriptions(node.id, &requester, &changes)
+                    .execute_pubsub_set_subscriptions(cmd)
                     .await?
+                    .outcome
                 {
                     SetSubscriptionsOutcome::Updated(transitions) => transitions,
                     SetSubscriptionsOutcome::LimitExceeded => {
@@ -2293,10 +2030,16 @@ async fn handle_owner_set(
             let (revoked_subscriptions, approved_subscriptions) = if changes.is_empty() {
                 (Vec::new(), Vec::new())
             } else {
+                let cmd = PubSubSetAffiliationsCommand::from(PubSubSetAffiliationsWrite {
+                    requester: &requester,
+                    node: node_name,
+                    changes: &changes,
+                });
                 match state
                     .pubsub_service()
-                    .set_affiliations(node.id, &requester, &changes)
+                    .execute_pubsub_set_affiliations(cmd)
                     .await?
+                    .outcome
                 {
                     SetAffiliationsOutcome::LastOwner => {
                         return Ok(PubSubReply::Error("not-acceptable"));
@@ -2324,10 +2067,15 @@ async fn handle_owner_set(
                     "persistent-items",
                 )));
             }
+            let cmd = PubSubPurgeNodeCommand::from(PubSubPurgeNodeWrite {
+                requester: &requester,
+                node: node_name,
+            });
             match state
                 .pubsub_service()
-                .purge_node_as_owner_with_outbox(node.id, &requester)
+                .execute_pubsub_purge_node(cmd)
                 .await?
+                .outcome
             {
                 OwnerMutationOutcome::Applied => {}
                 OwnerMutationOutcome::NotFound => {
@@ -2376,10 +2124,16 @@ async fn handle_owner_set(
                 }
                 None => None,
             };
+            let cmd = PubSubDeleteNodeCommand::from(PubSubDeleteNodeWrite {
+                requester: &requester,
+                node: node_name,
+                redirect,
+            });
             match state
                 .pubsub_service()
-                .delete_node_as_owner_with_redirect_and_outbox(node.id, &requester, redirect)
+                .execute_pubsub_delete_node(cmd)
                 .await?
+                .outcome
             {
                 OwnerMutationOutcome::Applied => {}
                 OwnerMutationOutcome::NotFound => {
@@ -2493,16 +2247,21 @@ pub(crate) async fn can_retrieve(state: &AppState, node: &PubSubNode, jid: &str)
         .pubsub_service()
         .get_node_affiliation(node.id, jid)
         .await?;
-    if affiliation.as_deref() == Some("outcast") {
-        return Ok(false);
-    }
-    if node.access_model == "open" {
-        return Ok(true);
-    }
-    Ok(matches!(
-        affiliation.as_deref(),
-        Some("owner" | "publisher" | "member")
-    ) || state.pubsub_service().is_subscribed(node.id, jid).await?)
+    let affiliation = affiliation
+        .as_deref()
+        .map(str::parse::<northstar_xep_0060::Affiliation>)
+        .transpose()
+        .map_err(|error| anyhow::anyhow!("invalid stored PubSub affiliation: {error}"))?;
+    let access_model = node
+        .access_model
+        .parse::<northstar_xep_0060::AccessModel>()
+        .map_err(|error| anyhow::anyhow!("invalid stored PubSub access model: {error}"))?;
+    let subscribed = state.pubsub_service().is_subscribed(node.id, jid).await?;
+    Ok(northstar_xep_0060::can_retrieve_pure(
+        access_model,
+        affiliation,
+        subscribed,
+    ))
 }
 
 /// Apply the XEP-0060 item-retrieval access and SubID rules after the caller
@@ -2514,45 +2273,19 @@ fn item_retrieval_access(
     subscriptions: &[PubSubSubscription],
     supplied_subid: Option<&str>,
 ) -> std::result::Result<(), PubSubReply> {
-    if affiliation == Some("outcast") {
-        return Err(PubSubReply::Error("forbidden"));
-    }
-
-    if let Some(subid) = supplied_subid {
-        if !subscriptions
-            .iter()
-            .any(|subscription| subscription.subid == subid)
-        {
-            return Err(PubSubReply::ExtendedError(PubSubError::new(
-                "not-acceptable",
-                "invalid-subid",
-            )));
-        }
-    } else if subscriptions.len() > 1 {
-        return Err(PubSubReply::ExtendedError(PubSubError::new(
-            "bad-request",
-            "subid-required",
-        )));
-    }
-
-    if matches!(affiliation, Some("owner" | "publisher" | "member"))
-        || access_model == "open"
-        || !subscriptions.is_empty()
-    {
-        return Ok(());
-    }
-
-    Err(match access_model {
-        "whitelist" => PubSubReply::ExtendedError(PubSubError::new("not-allowed", "closed-node")),
-        "authorize" => {
-            PubSubReply::ExtendedError(PubSubError::new("not-authorized", "not-subscribed"))
-        }
-        _ => PubSubReply::Error("forbidden"),
-    })
-}
-
-async fn can_publish(state: &AppState, node: &PubSubNode, jid: &str) -> Result<bool> {
-    state.pubsub_service().can_publish(node, jid).await
+    let access_model = access_model
+        .parse::<northstar_xep_0060::AccessModel>()
+        .map_err(PubSubReply::ExtendedError)?;
+    let affiliation = affiliation
+        .map(str::parse::<northstar_xep_0060::Affiliation>)
+        .transpose()
+        .map_err(PubSubReply::ExtendedError)?;
+    let subids = subscriptions
+        .iter()
+        .map(|subscription| subscription.subid.as_str())
+        .collect::<Vec<_>>();
+    northstar_xep_0060::item_retrieval_access(access_model, affiliation, &subids, supplied_subid)
+        .map_err(PubSubReply::ExtendedError)
 }
 
 fn publish_batch_size_allowed(item_count: usize) -> bool {
@@ -2627,19 +2360,6 @@ fn valid_cancel_form_structure(form: Node<'_, '_>) -> bool {
         && has_no_element_content(form)
 }
 
-fn serialized_item_payload_matches_type(item_xml: &str, payload_type: &str) -> bool {
-    roxmltree::Document::parse(item_xml)
-        .ok()
-        .is_some_and(|document| {
-            document
-                .root_element()
-                .children()
-                .find(Node::is_element)
-                .and_then(|payload| payload.tag_name().namespace())
-                == Some(payload_type)
-        })
-}
-
 async fn is_owner(state: &AppState, node_id: uuid::Uuid, jid: &str) -> Result<bool> {
     state.pubsub_service().is_owner(node_id, jid).await
 }
@@ -2681,43 +2401,8 @@ fn subscription_event_children(
 }
 
 fn event_body(event: &str) -> Result<Option<String>> {
-    let wrapped = XmlElement::new("root").validated_fragment(event)?.finish();
-    let document = roxmltree::Document::parse(&wrapped)?;
-    let Some(entry) = document.descendants().find(|node| {
-        node.is_element()
-            && node.tag_name().name() == "entry"
-            && node.tag_name().namespace() == Some("http://www.w3.org/2005/Atom")
-    }) else {
-        return Ok(None);
-    };
-    let Some(source) = ["summary", "title", "content"]
-        .into_iter()
-        .find_map(|name| {
-            entry.children().find(|node| {
-                node.is_element()
-                    && node.tag_name().name() == name
-                    && node.tag_name().namespace() == Some("http://www.w3.org/2005/Atom")
-            })
-        })
-    else {
-        return Ok(None);
-    };
-    let mut body = String::new();
-    for text in source.descendants().filter_map(|node| node.text()) {
-        let text = text.trim();
-        if text.is_empty() {
-            continue;
-        }
-        if !body.is_empty() {
-            body.push(' ');
-        }
-        body.push_str(text);
-        if body.len() >= 1_024 {
-            truncate_utf8_to_bytes(&mut body, 1_024);
-            break;
-        }
-    }
-    Ok((!body.is_empty()).then_some(body))
+    northstar_xep_0060::extract_atom_event_body(event)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
 async fn route_pubsub_message_children(
@@ -2813,7 +2498,10 @@ fn pubsub_policy_suppression_is_terminal(
     show_eligible_resources: usize,
     policy_eligible_resources: usize,
 ) -> bool {
-    show_eligible_resources > 0 && policy_eligible_resources == 0
+    northstar_xep_0060::pubsub_policy_suppression_is_terminal(
+        show_eligible_resources,
+        policy_eligible_resources,
+    )
 }
 
 pub(crate) async fn deliver_due_pubsub_digests(state: &AppState) -> Result<usize> {
@@ -3869,6 +3557,7 @@ pub(crate) async fn node_metadata_form(state: &AppState, node: &PubSubNode) -> R
     Ok(form.finish())
 }
 
+#[cfg(test)]
 fn config_equivalent(left: &PubSubNodeConfig, right: &PubSubNodeConfig) -> bool {
     left.access_model == right.access_model
         && left.publish_model == right.publish_model
@@ -3907,27 +3596,15 @@ fn normalized_jid(jid: &str) -> Result<String> {
 }
 
 fn parse_bool(value: Option<&str>) -> Option<bool> {
-    match value? {
-        "1" | "true" => Some(true),
-        "0" | "false" => Some(false),
-        _ => None,
-    }
+    northstar_xep_0060::parse_bool(value)
 }
 
 fn bool_text(value: bool) -> &'static str {
-    if value {
-        "true"
-    } else {
-        "false"
-    }
+    northstar_xep_0060::bool_text(value)
 }
 
 fn valid_node_id(node: Option<&str>) -> Option<&str> {
-    node.filter(|value| {
-        !value.is_empty()
-            && value.len() <= MAX_NODE_ID_BYTES
-            && !value.chars().any(char::is_control)
-    })
+    northstar_xep_0060::valid_node_id(node)
 }
 
 fn required_node_id(value: Option<&str>) -> std::result::Result<&str, PubSubReply> {
@@ -3941,21 +3618,11 @@ fn required_node_id(value: Option<&str>) -> std::result::Result<&str, PubSubRepl
 }
 
 fn valid_item_id(item_id: &str) -> bool {
-    mam_pubsub_parsing::valid_pubsub_item_id(item_id)
+    northstar_xep_0060::valid_item_id(item_id)
 }
 
 fn valid_redirect_uri(uri: &str) -> bool {
-    !uri.is_empty()
-        && uri.len() <= 2_048
-        && !uri.chars().any(char::is_control)
-        && uri.split_once(':').is_some_and(|(scheme, rest)| {
-            !scheme.is_empty()
-                && !rest.is_empty()
-                && scheme.chars().enumerate().all(|(index, ch)| {
-                    ch.is_ascii_alphabetic()
-                        || (index > 0 && matches!(ch, '+' | '-' | '.' | '0'..='9'))
-                })
-        })
+    northstar_xep_0060::valid_redirect_uri(uri)
 }
 
 fn parse_pubsub_rsm(set: Node<'_, '_>) -> std::result::Result<PubSubRsmRequest, PubSubReply> {
@@ -4074,112 +3741,8 @@ fn subscription_element(
 }
 
 fn serialize_pubsub_item(node: Node<'_, '_>, item_id: &str) -> Result<String> {
-    fn prefix_for(node: Node<'_, '_>, namespace: &str, attribute: bool) -> Option<String> {
-        if namespace == "http://www.w3.org/XML/1998/namespace" {
-            return Some("xml".to_owned());
-        }
-        if !attribute && node.default_namespace() == Some(namespace) {
-            return Some(String::new());
-        }
-        node.namespaces()
-            .find(|binding| binding.uri() == namespace && binding.name().is_some())
-            .and_then(|binding| binding.name())
-            .map(ToOwned::to_owned)
-    }
-
-    fn write_element(
-        node: Node<'_, '_>,
-        output: &mut String,
-        root_item_id: Option<&str>,
-    ) -> Result<()> {
-        let namespace = node.tag_name().namespace();
-        let prefix = namespace
-            .map(|namespace| {
-                prefix_for(node, namespace, false)
-                    .ok_or_else(|| anyhow::anyhow!("element namespace has no usable prefix"))
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let qualified = if prefix.is_empty() {
-            node.tag_name().name().to_owned()
-        } else {
-            format!("{prefix}:{}", node.tag_name().name())
-        };
-        let _validated_element_name = XmlElement::dynamic(&qualified)
-            .map_err(|error| anyhow::anyhow!("invalid serialized element QName: {error}"))?;
-        output.push('<');
-        output.push_str(&qualified);
-        for binding in node.namespaces() {
-            // Keep the stored `<item/>` namespace-neutral.  The element then
-            // inherits `pubsub` in an IQ retrieval and `pubsub#event` in a
-            // notification, as required by the two different XEP-0060
-            // schemas. Payload namespace declarations remain self-contained.
-            if root_item_id.is_some() && binding.name().is_none() && binding.uri() == NS_PUBSUB {
-                continue;
-            }
-            if let Some(prefix) = binding.name() {
-                let namespace_attribute = format!("xmlns:{prefix}");
-                let _validated_namespace_attribute = XmlElement::dynamic(&namespace_attribute)
-                    .map_err(|error| {
-                        anyhow::anyhow!("invalid serialized namespace attribute QName: {error}")
-                    })?;
-                output.push_str(&format!(
-                    " xmlns:{}='{}'",
-                    prefix,
-                    attr_escape(binding.uri())
-                ));
-            } else {
-                output.push_str(&format!(" xmlns='{}'", attr_escape(binding.uri())));
-            }
-        }
-        let mut has_id = false;
-        for attribute in node.attributes() {
-            let is_id = attribute.namespace().is_none() && attribute.name() == "id";
-            has_id |= is_id;
-            let value = if is_id {
-                root_item_id.unwrap_or(attribute.value())
-            } else {
-                attribute.value()
-            };
-            let name = if let Some(namespace) = attribute.namespace() {
-                let prefix = prefix_for(node, namespace, true)
-                    .ok_or_else(|| anyhow::anyhow!("attribute namespace has no usable prefix"))?;
-                format!("{prefix}:{}", attribute.name())
-            } else {
-                attribute.name().to_owned()
-            };
-            let _validated_attribute_name = XmlElement::dynamic(&name)
-                .map_err(|error| anyhow::anyhow!("invalid serialized attribute QName: {error}"))?;
-            output.push_str(&format!(" {}='{}'", name, attr_escape(value)));
-        }
-        if root_item_id.is_some() && !has_id {
-            output.push_str(&format!(
-                " id='{}'",
-                attr_escape(root_item_id.unwrap_or_default())
-            ));
-        }
-        output.push('>');
-        for child in node.children() {
-            if child.is_element() {
-                write_element(child, output, None)?;
-            } else if child.is_text() {
-                output.push_str(&crate::state::xml_escape(child.text().unwrap_or_default()));
-            }
-        }
-        output.push_str("</");
-        output.push_str(&qualified);
-        output.push('>');
-        Ok(())
-    }
-
-    let mut output = String::new();
-    write_element(node, &mut output, Some(item_id))?;
-    // Preserve the exact canonical bytes assembled above, but cross the same
-    // bounded parse/depth/node/attribute validation boundary used for every
-    // stored outbound fragment before it can enter the durable item table.
-    Ok(XmlElement::new("northstar-item-validation")
-        .validated_fragment(&output)?
-        .finish_children())
+    northstar_xep_0060::serialize_pubsub_item(node, item_id)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
-﻿use std::net::{SocketAddr, TcpStream};
-use std::time::{Duration, Instant};
 use anyhow::{bail, Result};
+use std::net::{SocketAddr, TcpStream};
+use std::time::{Duration, Instant};
 
 /// Check if a local TCP port is accepting connections.
 pub fn is_port_listening(port: u16) -> bool {

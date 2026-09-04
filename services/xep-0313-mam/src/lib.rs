@@ -2,7 +2,7 @@
 //!
 //! Defined per `northstar_microservices_deep_audit_2026-09-03.md` (Sections 6, 7, 8, 19.2, 20.2).
 
-use foundation_contracts::events::MessageAcceptedEventPayload;
+use foundation_contracts::adapters::events::MessageAcceptedEventPayload;
 use foundation_eventing::memory::InMemoryInbox;
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -135,10 +135,7 @@ impl MamService {
         if from_bare != to_bare {
             let mut recipient_item = item;
             recipient_item.scope_jid = to_bare.clone();
-            archives
-                .entry(to_bare)
-                .or_default()
-                .push(recipient_item);
+            archives.entry(to_bare).or_default().push(recipient_item);
         }
 
         self.inbox.record_processed("mam_worker", event_id);
@@ -152,9 +149,10 @@ impl MamService {
         req: MamQueryRequest,
     ) -> Result<MamQueryResponse, MamQueryError> {
         // 1. Authorization check: scope JID must be normalized and principal must be owner or admin
-        let parsed_scope = northstar_xmpp_types::CanonicalJid::parse(&req.scope_jid).map_err(|_| {
-            MamQueryError::UnauthorizedScope(principal.bare_jid.clone(), req.scope_jid.clone())
-        })?;
+        let parsed_scope =
+            northstar_xmpp_types::CanonicalJid::parse(&req.scope_jid).map_err(|_| {
+                MamQueryError::UnauthorizedScope(principal.bare_jid.clone(), req.scope_jid.clone())
+            })?;
 
         if !principal.is_admin && principal.bare_jid != parsed_scope.bare() {
             return Err(MamQueryError::UnauthorizedScope(

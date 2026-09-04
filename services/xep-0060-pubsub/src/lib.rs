@@ -2,7 +2,7 @@
 //!
 //! Defined per `northstar_microservices_deep_audit_2026-09-03.md` (Sections 6, 7, 8, 19.2).
 
-use foundation_contracts::common::ErrorDetail;
+use foundation_contracts::adapters::common::ErrorDetail;
 use foundation_eventing::memory::InMemoryOutbox;
 use foundation_eventing::OutboxEvent;
 use std::collections::{HashMap, HashSet};

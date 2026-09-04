@@ -1,0 +1,56 @@
+name: Contract compatibility
+
+on:
+  push:
+    paths:
+      - "contracts/proto/**"
+      - "crates/foundation-contracts/**"
+      - "tests/contracts/**"
+      - "buf.yaml"
+      - "buf.gen.yaml"
+      - "buf.work.yaml"
+  pull_request:
+    paths:
+      - "contracts/proto/**"
+      - "crates/foundation-contracts/**"
+      - "tests/contracts/**"
+      - "buf.yaml"
+      - "buf.gen.yaml"
+      - "buf.work.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  buf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up pinned Buf
+        uses: bufbuild/buf-setup-action@a40733d7b322880c541c2c31e9c2f6d0f62b8ee3 # v1.50.0
+        with:
+          version: "1.50.0"
+      - name: Format and lint contracts
+        run: |
+          buf format --diff --exit-code
+          buf lint
+      - name: Check wire compatibility
+        run: |
+          base_ref="${GITHUB_BASE_REF:-${GITHUB_REF_NAME:-main}}"
+          if git show-ref --verify --quiet "refs/remotes/origin/${base_ref}"; then
+            buf breaking --against ".git#branch=origin/${base_ref}"
+          else
+            echo "No remote base ref; compatibility check is intentionally fail-closed in CI."
+            exit 1
+          fi
+      - name: Verify generated Rust output
+        run: |
+          buf generate
+          git diff --exit-code -- crates/foundation-contracts/src/generated
+      - name: Exercise adapter and fixture tests
+        run: cargo test --locked -p foundation-contracts --all-targets

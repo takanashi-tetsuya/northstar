@@ -9,24 +9,82 @@ routes:
   # RFC 6120 Core Stream Negotiation Routes
   # ----------------------------------------------------
   - namespace: "urn:ietf:params:xml:ns:xmpp-tls"
+
     element: "starttls"
     stanza: "starttls"
     phase: "pre-auth"
     owner: xmpp-edge
+    stanza_kind: starttls
+    semantic_owner: xmpp-edge
+    deployment_unit: edge-gateway
+    execution_mode: transport
+    required_principal: none
+    required_scope: xmpp:stream
+    deadline_ms: 20
+    max_payload_bytes: 65536
+    retry_policy: none
+    idempotency: false
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:ietf:params:xml:ns:xmpp-sasl"
+
     element: "auth"
     stanza: "auth"
     phase: "authenticating"
     owner: identity
+    stanza_kind: auth
+    semantic_owner: identity
+    deployment_unit: identity-authority
+    execution_mode: remote-authority
+    required_principal: sasl-peer
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: false
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:ietf:params:xml:ns:xmpp-sasl"
+
     element: "response"
     stanza: "response"
     phase: "authenticating"
     owner: identity
+    stanza_kind: response
+    semantic_owner: identity
+    deployment_unit: identity-authority
+    execution_mode: remote-authority
+    required_principal: sasl-peer
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: false
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:ietf:params:xml:ns:xmpp-bind"
+
     element: "bind"
     stanza: "iq"
     phase: "binding"
@@ -35,19 +93,77 @@ routes:
   # ----------------------------------------------------
   # RFC 6121 IM and Core Routes
   # ----------------------------------------------------
+    stanza_kind: iq
+    semantic_owner: session-directory
+    deployment_unit: session-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
+
   - namespace: "jabber:iq:roster"
+
     element: "query"
     stanza: "iq"
     phase: "authenticated"
     owner: roster-authority
+    stanza_kind: iq
+    semantic_owner: roster-authority
+    deployment_unit: communication-policy-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "jabber:client"
+
     element: "presence"
     stanza: "presence"
     phase: "authenticated"
     owner: presence-authority
+    stanza_kind: presence
+    semantic_owner: presence-authority
+    deployment_unit: communication-policy-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 262144
+    retry_policy: exponential-backoff
+    idempotency: false
+    ordering_key: session_id
+    fanout: true
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "jabber:client"
+
     element: "message"
     stanza: "message"
     phase: "authenticated"
@@ -56,37 +172,152 @@ routes:
   # ----------------------------------------------------
   # XEP Discovery & Administrative Routes
   # ----------------------------------------------------
+    stanza_kind: message
+    semantic_owner: message-ingress
+    deployment_unit: messaging-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 1048576
+    retry_policy: exponential-backoff
+    idempotency: false
+    ordering_key: conversation
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
+
   - namespace: "http://jabber.org/protocol/disco#info"
+
     element: "query"
     stanza: "iq"
     phase: "authenticated"
     owner: protocol-registry
+    stanza_kind: iq
+    semantic_owner: protocol-registry
+    deployment_unit: protocol-registry
+    execution_mode: control-plane
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 100
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "http://jabber.org/protocol/disco#items"
+
     element: "query"
     stanza: "iq"
     phase: "authenticated"
     owner: protocol-registry
+    stanza_kind: iq
+    semantic_owner: protocol-registry
+    deployment_unit: protocol-registry
+    execution_mode: control-plane
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 100
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "http://jabber.org/protocol/commands"
+
     element: "command"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0050-ad-hoc-commands
+    stanza_kind: iq
+    semantic_owner: xep-0050-ad-hoc-commands
+    deployment_unit: admin-control-plane
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: admin:command
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "jabber:iq:version"
+
     element: "query"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0092-version
+    stanza_kind: iq
+    semantic_owner: xep-0092-version
+    deployment_unit: xmpp-edge
+    execution_mode: local-sdk
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:ping"
+
     element: "ping"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0199-ping
+    stanza_kind: iq
+    semantic_owner: xep-0199-ping
+    deployment_unit: xmpp-edge
+    execution_mode: local-sdk
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:time"
+
     element: "time"
     stanza: "iq"
     phase: "authenticated"
@@ -95,152 +326,646 @@ routes:
   # ----------------------------------------------------
   # Stateful XEP Routes
   # ----------------------------------------------------
+    stanza_kind: iq
+    semantic_owner: xep-0202-entity-time
+    deployment_unit: xmpp-edge
+    execution_mode: local-sdk
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
+
   - namespace: "jabber:iq:privacy"
+
     element: "query"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0016-privacy
+    stanza_kind: iq
+    semantic_owner: xep-0016-privacy
+    deployment_unit: communication-policy-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:blocking"
+
     element: "block"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0191-blocking
+    stanza_kind: iq
+    semantic_owner: xep-0191-blocking
+    deployment_unit: communication-policy-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:blocking"
+
     element: "unblock"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0191-blocking
+    stanza_kind: iq
+    semantic_owner: xep-0191-blocking
+    deployment_unit: communication-policy-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "http://jabber.org/protocol/muc"
+
     element: "x"
     stanza: "presence"
     phase: "authenticated"
     owner: xep-0045-muc
+    stanza_kind: presence
+    semantic_owner: xep-0045-muc
+    deployment_unit: muc-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 262144
+    retry_policy: exponential-backoff
+    idempotency: false
+    ordering_key: session_id
+    fanout: true
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "http://jabber.org/protocol/muc#admin"
+
     element: "query"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0045-muc
+    stanza_kind: iq
+    semantic_owner: xep-0045-muc
+    deployment_unit: muc-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "http://jabber.org/protocol/muc#owner"
+
     element: "query"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0045-muc
+    stanza_kind: iq
+    semantic_owner: xep-0045-muc
+    deployment_unit: muc-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "jabber:iq:private"
+
     element: "query"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0049-private-storage
+    stanza_kind: iq
+    semantic_owner: xep-0049-private-storage
+    deployment_unit: profile-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "vcard-temp"
+
     element: "vCard"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0054-vcard-temp
+    stanza_kind: iq
+    semantic_owner: xep-0054-vcard-temp
+    deployment_unit: profile-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "http://jabber.org/protocol/pubsub"
+
     element: "pubsub"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0060-pubsub
+    stanza_kind: iq
+    semantic_owner: xep-0060-pubsub
+    deployment_unit: pubsub-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "http://jabber.org/protocol/pubsub#owner"
+
     element: "pubsub"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0060-pubsub
+    stanza_kind: iq
+    semantic_owner: xep-0060-pubsub
+    deployment_unit: pubsub-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:sm:3"
+
     element: "enable"
     stanza: "enable"
     phase: "authenticated"
     owner: xep-0198-sm
+    stanza_kind: enable
+    semantic_owner: xep-0198-sm
+    deployment_unit: session-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: false
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:sm:3"
+
     element: "resume"
     stanza: "resume"
     phase: "pre-auth"
     owner: xep-0198-sm
+    stanza_kind: resume
+    semantic_owner: xep-0198-sm
+    deployment_unit: session-authority
+    execution_mode: remote-authority
+    required_principal: none
+    required_scope: xmpp:stream
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: false
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:sm:3"
+
     element: "a"
     stanza: "a"
     phase: "authenticated"
     owner: xep-0198-sm
+    stanza_kind: a
+    semantic_owner: xep-0198-sm
+    deployment_unit: session-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:sm:3"
+
     element: "r"
     stanza: "r"
     phase: "authenticated"
     owner: xep-0198-sm
+    stanza_kind: r
+    semantic_owner: xep-0198-sm
+    deployment_unit: session-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:extdisco:2"
+
     element: "services"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0215-extdisco
+    stanza_kind: iq
+    semantic_owner: xep-0215-extdisco
+    deployment_unit: protocol-registry
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:carbons:2"
+
     element: "enable"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0280-carbons
+    stanza_kind: iq
+    semantic_owner: xep-0280-carbons
+    deployment_unit: messaging-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:carbons:2"
+
     element: "disable"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0280-carbons
+    stanza_kind: iq
+    semantic_owner: xep-0280-carbons
+    deployment_unit: messaging-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:mam:2"
+
     element: "query"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0313-mam
+    stanza_kind: iq
+    semantic_owner: xep-0313-mam
+    deployment_unit: mam-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:csi:0"
+
     element: "active"
     stanza: "active"
     phase: "authenticated"
     owner: xep-0352-csi
+    stanza_kind: active
+    semantic_owner: xep-0352-csi
+    deployment_unit: edge-gateway
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:csi:0"
+
     element: "inactive"
     stanza: "inactive"
     phase: "authenticated"
     owner: xep-0352-csi
+    stanza_kind: inactive
+    semantic_owner: xep-0352-csi
+    deployment_unit: edge-gateway
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:push:0"
+
     element: "enable"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0357-push
+    stanza_kind: iq
+    semantic_owner: xep-0357-push
+    deployment_unit: push-worker
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:push:0"
+
     element: "disable"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0357-push
+    stanza_kind: iq
+    semantic_owner: xep-0357-push
+    deployment_unit: push-worker
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:http:upload:0"
+
     element: "request"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0363-upload
+    stanza_kind: iq
+    semantic_owner: xep-0363-upload
+    deployment_unit: upload-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:mix:core:1"
+
     element: "join"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0369-mix-core
+    stanza_kind: iq
+    semantic_owner: xep-0369-mix-core
+    deployment_unit: mix-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind
 
   - namespace: "urn:xmpp:fast:0"
+
     element: "request-token"
     stanza: "iq"
     phase: "authenticated"
     owner: xep-0484-fast
+    stanza_kind: iq
+    semantic_owner: xep-0484-fast
+    deployment_unit: identity-authority
+    execution_mode: remote-authority
+    required_principal: authenticated-user
+    required_scope: xmpp:stanza
+    deadline_ms: 80
+    max_payload_bytes: 65536
+    retry_policy: exponential-backoff
+    idempotency: true
+    ordering_key: session_id
+    fanout: false
+    failure_mode: fail-closed
+    observability:
+      trace_category: xmpp.route
+      required_labels:
+        - route_owner
+        - stanza_kind

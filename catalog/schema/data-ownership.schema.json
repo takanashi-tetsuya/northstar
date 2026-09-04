@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://northstar.invalid/schemas/catalog-data-ownership.schema.json",
+  "title": "Northstar Data Ownership Catalog",
+  "type": "object",
+  "required": ["version", "ownership"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/ownerGroup" }
+    }
+  },
+  "definitions": {
+    "ownerGroup": {
+      "type": "object",
+      "required": [
+        "database", "logical_database", "owner", "deployment_unit", "semantic_owner",
+        "cluster_class", "runtime_role", "migrator_role", "owner_role", "ops_role",
+        "backup_role", "tables"
+      ],
+      "properties": {
+        "database": {
+          "type": "string",
+          "minLength": 1
+        },
+        "logical_database": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "type": "string"
+        },
+        "deployment_unit": {
+          "type": "string"
+        },
+        "semantic_owner": {
+          "type": "string"
+        },
+        "cluster_class": {
+          "type": "string"
+        },
+        "runtime_role": { "type": "string", "minLength": 1 },
+        "migrator_role": { "type": "string", "minLength": 1 },
+        "owner_role": { "type": "string", "minLength": 1 },
+        "ops_role": { "type": "string", "minLength": 1 },
+        "backup_role": { "type": "string", "minLength": 1 },
+        "tables": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              { "$ref": "#/definitions/table" }
+            ]
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "table": {
+      "type": "object",
+      "required": [
+        "name", "data_class", "retention_class", "legal_hold", "delete_owner", "export_owner",
+        "residency", "primary_key", "home_key", "partitioning", "pii", "content", "secret",
+        "encryption_key_class", "backup_rpo_hours", "backup_rto_minutes", "restore_order"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "data_class": { "type": "string" },
+        "retention_class": { "type": "string" },
+        "pii": { "type": "boolean" },
+        "secret": { "type": "boolean" },
+        "legal_hold_owner": { "type": "string" },
+        "legal_hold": { "type": "boolean" },
+        "delete_owner": { "type": "string" },
+        "export_owner": { "type": "string" },
+        "primary_key": { "type": "string" },
+        "home_key": { "type": "string" },
+        "content": { "type": "boolean" },
+        "encryption_key_class": { "type": "string" },
+        "partitioning": { "type": "string" },
+        "residency": { "type": "string" },
+        "rpo_hours": { "type": "number", "minimum": 0 },
+        "rto_minutes": { "type": "number", "minimum": 0 },
+        "backup_rpo_hours": { "type": "number", "minimum": 0 },
+        "backup_rto_minutes": { "type": "number", "minimum": 0 },
+        "restore_order": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

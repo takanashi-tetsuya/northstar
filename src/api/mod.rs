@@ -1083,9 +1083,10 @@ pub async fn admin(state: &AppState, headers: &HeaderMap) -> Result<ApiAdmin, Ap
 pub async fn serve(
     state: Arc<AppState>,
     cancel: tokio_util::sync::CancellationToken,
+    listener: tokio::net::TcpListener,
 ) -> anyhow::Result<()> {
-    let listener = tokio::net::TcpListener::bind(state.config.http_bind).await?;
-    tracing::info!(address = %state.config.http_bind, "public HTTP capability listener ready");
+    let address = listener.local_addr().unwrap_or(state.config.http_bind);
+    tracing::info!(address = %address, "public HTTP capability listener ready");
     axum::serve(
         listener,
         public_router(state).into_make_service_with_connect_info::<SocketAddr>(),
@@ -1098,10 +1099,11 @@ pub async fn serve(
 pub async fn serve_administration(
     state: Arc<AppState>,
     cancel: tokio_util::sync::CancellationToken,
+    listener: tokio::net::TcpListener,
 ) -> anyhow::Result<()> {
-    let listener = tokio::net::TcpListener::bind(state.config.web_admin_bind).await?;
+    let address = listener.local_addr().unwrap_or(state.config.web_admin_bind);
     tracing::info!(
-        address = %state.config.web_admin_bind,
+        address = %address,
         gateway_authentication = state.admin_gateway_authentication_enabled(),
         "private Web administration listener ready"
     );
@@ -1117,10 +1119,11 @@ pub async fn serve_administration(
 pub async fn serve_metrics(
     state: Arc<AppState>,
     cancel: tokio_util::sync::CancellationToken,
+    listener: tokio::net::TcpListener,
 ) -> anyhow::Result<()> {
     let endpoint = MetricsEndpointState::new(Arc::clone(&state));
-    let listener = tokio::net::TcpListener::bind(state.config.metrics_bind).await?;
-    tracing::info!(address = %state.config.metrics_bind, "private metrics listener ready");
+    let address = listener.local_addr().unwrap_or(state.config.metrics_bind);
+    tracing::info!(address = %address, "private metrics listener ready");
     let router = Router::new()
         .route("/metrics", get(metrics))
         .with_state(endpoint);

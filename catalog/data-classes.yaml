@@ -1,0 +1,21 @@
+version: "2.0.0"
+
+data_classes:
+  - class_id: none
+    sensitivity: public
+    encryption_required: false
+  - class_id: operational
+    sensitivity: internal
+    encryption_required: true
+  - class_id: operational-audit
+    sensitivity: confidential
+    encryption_required: true
+  - class_id: jid-pii
+    sensitivity: confidential
+    encryption_required: true
+  - class_id: message-content
+    sensitivity: restricted
+    encryption_required: true
+  - class_id: credential-secret
+    sensitivity: secret
+    encryption_required: true

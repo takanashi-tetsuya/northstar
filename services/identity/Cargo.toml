@@ -7,9 +7,12 @@ description = "Northstar User Identity and Credential Authority Microservice"
 publish = false
 
 [dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
 foundation-contracts = { path = "../../crates/foundation-contracts" }
 foundation-security = { path = "../../crates/foundation-security" }
-foundation-eventing = { path = "../../crates/foundation-eventing" }
+foundation-eventing = { path = "../../crates/foundation-eventing", features = ["test-support"] }
 foundation-telemetry = { path = "../../crates/foundation-telemetry" }
 foundation-service-runtime = { path = "../../crates/foundation-service-runtime" }
 serde = { version = "1.0", features = ["derive"] }
@@ -20,7 +23,11 @@ tracing = "0.1"
 northstar-auth-core = { path = "../../crates/northstar-auth-core" }
 northstar-xmpp-types = { path = "../../crates/northstar-xmpp-types" }
 sha2 = "0.10"
+hmac = "0.12"
 uuid = { version = "1.12", features = ["v4", "serde"] }
+
+[dev-dependencies]
+pbkdf2 = { version = "0.12", features = ["hmac"] }
 
 [[bin]]
 name = "identity"

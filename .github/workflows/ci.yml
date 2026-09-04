@@ -11,14 +11,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  rust-quality:
-    name: Rust quality gates
+  rust-fmt:
+    name: Rust fmt
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 10
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -30,10 +30,130 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
           rustup default 1.97.1
 
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  rust-check:
+    name: Rust compile checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust 1.97.1 tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+
+      - name: Check all targets
+        run: cargo check --workspace --all-targets --all-features --locked
+
+  rust-test:
+    name: Rust test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust 1.97.1 tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+
+      - name: Run tests
+        run: cargo test --workspace --all-targets --all-features --locked
+
+  rust-clippy:
+    name: Rust clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust 1.97.1 tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+
+      - name: Deny Clippy warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  rust-build:
+    name: Rust build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust 1.97.1 tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+
+      - name: Build all workspace binaries
+        run: cargo build --workspace --bins --locked
+
+  rust-quality:
+    name: Rust quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs:
+      - rust-fmt
+      - rust-check
+      - rust-test
+      - rust-clippy
+      - rust-build
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install pinned Rust 1.97.1 tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+
       - name: Verify license metadata
         run: |
           grep -F 'license = "AGPL-3.0-only"' Cargo.toml
           grep -F 'GNU AFFERO GENERAL PUBLIC LICENSE' LICENSE
+
+      - name: Validate structured service catalog
+        run: cargo run --locked -p catalog-validator -- validate --strict
+
+      - name: Validate database bootstrap and recovery policy
+        run: |
+          cargo run --locked -p restore-verifier -- --catalog catalog/restore-order.yaml
+          cargo run --locked -p db-bootstrap -- \
+            --catalog catalog/data-ownership.yaml \
+            --output "$RUNNER_TEMP/northstar-role-bootstrap.sql"
+
+      - name: Validate Kafka topic and ACL policy
+        run: |
+          cargo run --locked -p kafka-policy-generator -- \
+            --catalog catalog/topics.yaml \
+            --output "$RUNNER_TEMP/northstar-kafka-policy.json"
+
+      - name: Validate architecture boundaries and generated graphs
+        run: |
+          node scripts/generate-crate-catalog.mjs
+          git diff --exit-code -- catalog/crates.yaml
+          cargo run --locked -p architecture-validator -- validate --write
+          git diff --exit-code -- docs/architecture/generated
 
       - name: Validate XEP plugin architecture
         run: |
@@ -44,21 +164,6 @@ jobs:
         run: |
           sh scripts/check-migration-versions.sh
           sh scripts/check-compose-config-mapping.sh
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Check all targets
-        run: cargo check --workspace --all-targets --all-features --locked
-
-      - name: Run tests
-        run: cargo test --workspace --all-targets --all-features --locked
-
-      - name: Deny Clippy warnings
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-
-      - name: Build all workspace binaries
-        run: cargo build --workspace --bins --locked
 
       - name: Verify generated TLS identities and fail-closed CRL handling
         run: bash scripts/runtime-tls-test-wsl.sh
@@ -72,6 +177,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Set up Buf
         uses: bufbuild/buf-setup-action@a40733d7b322880c541c2c31e9c2f6d0f62b8ee3 # v1.50.0
@@ -86,9 +192,12 @@ jobs:
 
       - name: Detect breaking wire contract changes
         run: |
-          if git rev-parse --verify origin/main >/dev/null 2>&1; then
-            buf breaking --against ".git#branch=origin/main" || true
+          base_ref="${GITHUB_BASE_REF:-${GITHUB_REF_NAME:-main}}"
+          if ! git show-ref --verify --quiet "refs/remotes/origin/${base_ref}"; then
+            echo "missing origin/${base_ref}; cannot run fail-closed wire contract check" >&2
+            exit 1
           fi
+          buf breaking --against ".git#branch=origin/${base_ref}"
 
       - name: Verify generated contract drift
         run: |

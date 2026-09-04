@@ -3,9 +3,16 @@ syntax = "proto3";
 package northstar.identity.v1;
 
 import "northstar/common/v1/common.proto";
+import "northstar/security/v1/assertions.proto";
 
 service IdentityService {
+  // Legacy one-shot authentication retained only during the v1 migration
+  // window. New callers MUST use the three exchange methods below so a
+  // password is never carried in an internal Authenticate payload.
   rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+  rpc StartAuthentication(StartAuthenticationRequest) returns (StartAuthenticationResponse);
+  rpc ContinueAuthentication(ContinueAuthenticationRequest) returns (ContinueAuthenticationResponse);
+  rpc AbortAuthentication(AbortAuthenticationRequest) returns (AbortAuthenticationResponse);
   rpc Register(RegisterRequest) returns (RegisterResponse);
   rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
   rpc GetIdentity(GetIdentityRequest) returns (GetIdentityResponse);
@@ -19,18 +26,71 @@ message AuthenticateRequest {
   northstar.common.v1.TraceContext trace = 4;
 }
 
+// Starts an RFC 5802 SCRAM exchange. client_first is the decoded UTF-8
+// client-first-message; it contains no password. channel_binding is the
+// negotiated GS2 binding name (for example tls-exporter), while binding_data
+// is the transport-provided binding value and is never logged.
+message StartAuthenticationRequest {
+  string username = 1;
+  string mechanism = 2;
+  bytes client_first = 3;
+  optional string channel_binding = 4;
+  optional bytes channel_binding_data = 5;
+  northstar.common.v1.TraceContext trace = 6;
+}
+
+message StartAuthenticationResponse {
+  bool success = 1;
+  string exchange_id = 2;
+  bytes server_first = 3;
+  uint32 exchange_ttl_seconds = 4;
+  optional northstar.common.v1.ErrorDetail error = 5;
+}
+
+// Completes an exchange identified by the opaque, single-use exchange_id.
+// client_final is the decoded UTF-8 client-final-message and never contains a
+// clear-text password; the proof is verified by northstar-auth-core.
+message ContinueAuthenticationRequest {
+  string exchange_id = 1;
+  bytes client_final = 2;
+  northstar.common.v1.TraceContext trace = 3;
+}
+
+message ContinueAuthenticationResponse {
+  bool success = 1;
+  bytes server_final = 2;
+  optional northstar.security.v1.AuthGrant auth_grant = 3;
+  optional northstar.common.v1.ErrorDetail error = 4;
+}
+
+message AbortAuthenticationRequest {
+  string exchange_id = 1;
+  string reason = 2;
+  northstar.common.v1.TraceContext trace = 3;
+}
+
+message AbortAuthenticationResponse {
+  bool success = 1;
+  optional northstar.common.v1.ErrorDetail error = 2;
+}
+
 message AuthenticateResponse {
   bool success = 1;
   optional northstar.common.v1.AuthContext auth_context = 2;
   bytes challenge_or_response = 3;
   optional northstar.common.v1.ErrorDetail error = 4;
+  // Signed grant replaces auth_context once the SCRAM exchange cutover lands.
+  optional northstar.security.v1.AuthGrant auth_grant = 5;
 }
 
 message RegisterRequest {
   string username = 1;
+  // Legacy field retained for wire compatibility; new transports must use
+  // password_secret, which is handled as SecretBytes by the adapter.
   string password = 2;
   optional string invitation_code = 3;
   northstar.common.v1.TraceContext trace = 4;
+  bytes password_secret = 5;
 }
 
 message RegisterResponse {
@@ -42,9 +102,13 @@ message RegisterResponse {
 
 message ChangePasswordRequest {
   string account_id = 1;
+  // Legacy fields retained for wire compatibility; new transports must use
+  // the SecretBytes fields below.
   string old_password = 2;
   string new_password = 3;
   northstar.common.v1.TraceContext trace = 4;
+  bytes old_password_secret = 5;
+  bytes new_password_secret = 6;
 }
 
 message ChangePasswordResponse {

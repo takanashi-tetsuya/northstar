@@ -116,6 +116,30 @@ pub mod session_directory_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        pub async fn renew_lease(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RenewLeaseRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RenewLeaseResponse>,
+            tonic::Status,
+        > {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::new(
+                    tonic::Code::Unknown,
+                    format!("Service was not ready: {}", e.into()),
+                )
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/northstar.session.v1.SessionDirectoryService/RenewLease",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "northstar.session.v1.SessionDirectoryService",
+                "RenewLease",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
         pub async fn resume_fence(
             &mut self,
             request: impl tonic::IntoRequest<super::ResumeFenceRequest>,
@@ -146,6 +170,54 @@ pub mod session_directory_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        pub async fn prepare_resume(
+            &mut self,
+            request: impl tonic::IntoRequest<super::PrepareResumeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PrepareResumeResponse>,
+            tonic::Status,
+        > {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::new(
+                    tonic::Code::Unknown,
+                    format!("Service was not ready: {}", e.into()),
+                )
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/northstar.session.v1.SessionDirectoryService/PrepareResume",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "northstar.session.v1.SessionDirectoryService",
+                "PrepareResume",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn commit_resume(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CommitResumeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CommitResumeResponse>,
+            tonic::Status,
+        > {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::new(
+                    tonic::Code::Unknown,
+                    format!("Service was not ready: {}", e.into()),
+                )
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/northstar.session.v1.SessionDirectoryService/CommitResume",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "northstar.session.v1.SessionDirectoryService",
+                "CommitResume",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
         pub async fn resolve_targets(
             &mut self,
             request: impl tonic::IntoRequest<super::ResolveTargetsRequest>,
@@ -174,6 +246,54 @@ pub mod session_directory_service_client {
                         "ResolveTargets",
                     ),
                 );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn validate_assertion(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ValidateAssertionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ValidateAssertionResponse>,
+            tonic::Status,
+        > {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::new(
+                    tonic::Code::Unknown,
+                    format!("Service was not ready: {}", e.into()),
+                )
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/northstar.session.v1.SessionDirectoryService/ValidateAssertion",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "northstar.session.v1.SessionDirectoryService",
+                "ValidateAssertion",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn revoke_account_sessions(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RevokeAccountSessionsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RevokeAccountSessionsResponse>,
+            tonic::Status,
+        > {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::new(
+                    tonic::Code::Unknown,
+                    format!("Service was not ready: {}", e.into()),
+                )
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/northstar.session.v1.SessionDirectoryService/RevokeAccountSessions",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "northstar.session.v1.SessionDirectoryService",
+                "RevokeAccountSessions",
+            ));
             self.inner.unary(req, path, codec).await
         }
         pub async fn close_session(
@@ -222,6 +342,13 @@ pub mod session_directory_service_server {
             tonic::Response<super::BindSessionResponse>,
             tonic::Status,
         >;
+        async fn renew_lease(
+            &self,
+            request: tonic::Request<super::RenewLeaseRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RenewLeaseResponse>,
+            tonic::Status,
+        >;
         async fn resume_fence(
             &self,
             request: tonic::Request<super::ResumeFenceRequest>,
@@ -229,11 +356,39 @@ pub mod session_directory_service_server {
             tonic::Response<super::ResumeFenceResponse>,
             tonic::Status,
         >;
+        async fn prepare_resume(
+            &self,
+            request: tonic::Request<super::PrepareResumeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PrepareResumeResponse>,
+            tonic::Status,
+        >;
+        async fn commit_resume(
+            &self,
+            request: tonic::Request<super::CommitResumeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CommitResumeResponse>,
+            tonic::Status,
+        >;
         async fn resolve_targets(
             &self,
             request: tonic::Request<super::ResolveTargetsRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ResolveTargetsResponse>,
+            tonic::Status,
+        >;
+        async fn validate_assertion(
+            &self,
+            request: tonic::Request<super::ValidateAssertionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ValidateAssertionResponse>,
+            tonic::Status,
+        >;
+        async fn revoke_account_sessions(
+            &self,
+            request: tonic::Request<super::RevokeAccountSessionsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RevokeAccountSessionsResponse>,
             tonic::Status,
         >;
         async fn close_session(
@@ -370,6 +525,46 @@ pub mod session_directory_service_server {
                     };
                     Box::pin(fut)
                 }
+                "/northstar.session.v1.SessionDirectoryService/RenewLease" => {
+                    #[allow(non_camel_case_types)]
+                    struct RenewLeaseSvc<T: SessionDirectoryService>(pub Arc<T>);
+                    impl<T: SessionDirectoryService>
+                        tonic::server::UnaryService<super::RenewLeaseRequest>
+                        for RenewLeaseSvc<T>
+                    {
+                        type Response = super::RenewLeaseResponse;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::RenewLeaseRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            Box::pin(async move {
+                                <T as SessionDirectoryService>::renew_lease(&inner, request).await
+                            })
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = RenewLeaseSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        Ok(grpc.unary(method, req).await)
+                    };
+                    Box::pin(fut)
+                }
                 "/northstar.session.v1.SessionDirectoryService/ResumeFence" => {
                     #[allow(non_camel_case_types)]
                     struct ResumeFenceSvc<T: SessionDirectoryService>(pub Arc<T>);
@@ -419,6 +614,88 @@ pub mod session_directory_service_server {
                     };
                     Box::pin(fut)
                 }
+                "/northstar.session.v1.SessionDirectoryService/PrepareResume" => {
+                    #[allow(non_camel_case_types)]
+                    struct PrepareResumeSvc<T: SessionDirectoryService>(pub Arc<T>);
+                    impl<T: SessionDirectoryService>
+                        tonic::server::UnaryService<super::PrepareResumeRequest>
+                        for PrepareResumeSvc<T>
+                    {
+                        type Response = super::PrepareResumeResponse;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::PrepareResumeRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            Box::pin(async move {
+                                <T as SessionDirectoryService>::prepare_resume(&inner, request)
+                                    .await
+                            })
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = PrepareResumeSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        Ok(grpc.unary(method, req).await)
+                    };
+                    Box::pin(fut)
+                }
+                "/northstar.session.v1.SessionDirectoryService/CommitResume" => {
+                    #[allow(non_camel_case_types)]
+                    struct CommitResumeSvc<T: SessionDirectoryService>(pub Arc<T>);
+                    impl<T: SessionDirectoryService>
+                        tonic::server::UnaryService<super::CommitResumeRequest>
+                        for CommitResumeSvc<T>
+                    {
+                        type Response = super::CommitResumeResponse;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CommitResumeRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            Box::pin(async move {
+                                <T as SessionDirectoryService>::commit_resume(&inner, request)
+                                    .await
+                            })
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CommitResumeSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        Ok(grpc.unary(method, req).await)
+                    };
+                    Box::pin(fut)
+                }
                 "/northstar.session.v1.SessionDirectoryService/ResolveTargets" => {
                     #[allow(non_camel_case_types)]
                     struct ResolveTargetsSvc<T: SessionDirectoryService>(pub Arc<T>);
@@ -465,6 +742,90 @@ pub mod session_directory_service_server {
                             );
                         let res = grpc.unary(method, req).await;
                         Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/northstar.session.v1.SessionDirectoryService/ValidateAssertion" => {
+                    #[allow(non_camel_case_types)]
+                    struct ValidateAssertionSvc<T: SessionDirectoryService>(pub Arc<T>);
+                    impl<T: SessionDirectoryService>
+                        tonic::server::UnaryService<super::ValidateAssertionRequest>
+                        for ValidateAssertionSvc<T>
+                    {
+                        type Response = super::ValidateAssertionResponse;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ValidateAssertionRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            Box::pin(async move {
+                                <T as SessionDirectoryService>::validate_assertion(&inner, request)
+                                    .await
+                            })
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ValidateAssertionSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        Ok(grpc.unary(method, req).await)
+                    };
+                    Box::pin(fut)
+                }
+                "/northstar.session.v1.SessionDirectoryService/RevokeAccountSessions" => {
+                    #[allow(non_camel_case_types)]
+                    struct RevokeAccountSessionsSvc<T: SessionDirectoryService>(pub Arc<T>);
+                    impl<T: SessionDirectoryService>
+                        tonic::server::UnaryService<super::RevokeAccountSessionsRequest>
+                        for RevokeAccountSessionsSvc<T>
+                    {
+                        type Response = super::RevokeAccountSessionsResponse;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::RevokeAccountSessionsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            Box::pin(async move {
+                                <T as SessionDirectoryService>::revoke_account_sessions(
+                                    &inner, request,
+                                )
+                                .await
+                            })
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = RevokeAccountSessionsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        Ok(grpc.unary(method, req).await)
                     };
                     Box::pin(fut)
                 }

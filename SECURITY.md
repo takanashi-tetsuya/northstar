@@ -47,3 +47,8 @@ lifecycle, alert delivery, signed/encrypted off-host backups, restore drills and
 client key verification. Web OMEMO also trusts the server/static-resource
 delivery chain; high-risk environments should provide an independently signed
 client.
+
+Operational release trust boundaries and branch protections are documented in:
+
+- `docs/governance/branch-rules.md`
+- `docs/governance/release-roles.md`

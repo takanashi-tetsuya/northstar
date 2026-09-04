@@ -1,0 +1,45 @@
+# Provider-neutral key inventory. Values describe policy, not key material.
+version: "1.0.0"
+classes:
+  - id: assertion
+    owner_service: identity/session-authority
+    algorithm: Ed25519
+    purpose: AuthGrant and SessionAssertion signatures
+    rotation: 30d
+    verification_grace: 15m
+    secret_storage: external-kms-or-hsm
+  - id: registry-snapshot
+    owner_service: protocol-registry
+    algorithm: Ed25519
+    purpose: route and capability snapshot signatures
+    rotation: 90d
+    verification_grace: 15m
+    secret_storage: external-kms-or-hsm
+  - id: audit-checkpoint
+    owner_service: audit-ledger
+    algorithm: HMAC-SHA-256
+    purpose: append-only audit hash-chain checkpoints
+    rotation: 90d
+    verification_grace: 24h
+    secret_storage: external-kms-or-hsm
+  - id: upload-token
+    owner_service: upload-authority
+    algorithm: HMAC-SHA-256
+    purpose: scoped upload slot and object-token proofs
+    rotation: 30d
+    verification_grace: token-ttl
+    secret_storage: external-kms-or-hsm
+  - id: data-envelope
+    owner_service: mam-authority/profile-authority/moderation
+    algorithm: provider-selected-AEAD
+    purpose: encrypted message, profile and evidence envelopes
+    rotation: 180d
+    verification_grace: retention-bound
+    secret_storage: external-kms-or-hsm
+  - id: dialback
+    owner_service: federation-outbox/s2s-edge
+    algorithm: HMAC-SHA-256
+    purpose: scoped XMPP server dialback proofs
+    rotation: 30d
+    verification_grace: 15m
+    secret_storage: external-kms-or-hsm

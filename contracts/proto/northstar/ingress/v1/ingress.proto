@@ -3,6 +3,7 @@ syntax = "proto3";
 package northstar.ingress.v1;
 
 import "northstar/common/v1/common.proto";
+import "northstar/security/v1/assertions.proto";
 
 service MessageIngressService {
   rpc SubmitMessage(SubmitMessageRequest) returns (SubmitMessageResponse);
@@ -16,6 +17,22 @@ message SubmitMessageRequest {
   bytes raw_stanza = 5;
   northstar.common.v1.AuthContext auth = 6;
   northstar.common.v1.TraceContext trace = 7;
+  northstar.common.v1.IdempotencyKey idempotency_key = 8;
+  northstar.security.v1.SessionAssertion session_assertion = 9;
+  CanonicalMessageInput canonical_input = 10;
+}
+
+// Canonical input is the bounded, normalized message representation used by
+// the ingress authority for idempotency and signature verification.  raw_stanza
+// remains a compatibility field and is never trusted as an identity key.
+message CanonicalMessageInput {
+  string from_full_jid = 1;
+  string to_jid = 2;
+  string stanza_id = 3;
+  string message_type = 4;
+  bytes payload = 5;
+  string origin_id = 6;
+  uint32 schema_version = 7;
 }
 
 message SubmitMessageResponse {

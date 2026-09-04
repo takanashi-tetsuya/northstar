@@ -2,11 +2,15 @@
 //!
 //! Defined per `northstar_microservices_deep_audit_2026-09-03.md` (Sections 5.1, 6, 19.1, 19.5).
 
-use foundation_contracts::common::AuthContext;
-use foundation_contracts::delivery::DeliveryServerMessage;
-use foundation_contracts::identity::{AuthenticateRequest, AuthenticateResponse};
-use foundation_contracts::ingress::SubmitMessageRequest;
-use foundation_contracts::session::{BindSessionRequest, BindSessionResponse};
+use foundation_contracts::adapters::assertions::AuthGrant;
+use foundation_contracts::adapters::common::AuthContext;
+use foundation_contracts::adapters::delivery::DeliveryServerMessage;
+use foundation_contracts::adapters::identity::{
+    AuthenticateResponse, ContinueAuthenticationResponse, StartAuthenticationRequest,
+};
+use foundation_contracts::adapters::ingress::SubmitMessageRequest;
+use foundation_contracts::adapters::session::{BindSessionRequest, BindSessionResponse};
+use foundation_security::SecretBytes;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -24,6 +28,7 @@ pub struct EdgeConnectionActor {
     pub edge_instance_id: String,
     pub phase: SessionPhase,
     pub auth: Option<AuthContext>,
+    pub auth_grant: Option<AuthGrant>,
     pub full_jid: Option<String>,
     pub session_epoch: Option<u64>,
     outbound_tx: mpsc::Sender<Vec<u8>>,
@@ -36,6 +41,7 @@ impl EdgeConnectionActor {
             edge_instance_id: edge_instance_id.into(),
             phase: SessionPhase::PreAuth,
             auth: None,
+            auth_grant: None,
             full_jid: None,
             session_epoch: None,
             outbound_tx,
@@ -52,6 +58,30 @@ impl EdgeConnectionActor {
             self.phase = SessionPhase::PreAuth;
             false
         }
+    }
+
+    /// Completes the password-free SCRAM exchange. Binding is allowed only
+    /// after the Identity service returns an assertion for this connection.
+    pub fn handle_continue_authentication_response(
+        &mut self,
+        res: ContinueAuthenticationResponse,
+    ) -> bool {
+        let Some(grant) = res.auth_grant.filter(|_| res.success) else {
+            self.phase = SessionPhase::PreAuth;
+            return false;
+        };
+        self.auth = Some(
+            AuthContext::new(
+                &grant.account_id,
+                &grant.bare_jid,
+                grant.credential_generation,
+                "unknown",
+            )
+            .with_role("user"),
+        );
+        self.auth_grant = Some(grant);
+        self.phase = SessionPhase::Binding;
+        true
     }
 
     /// Handles binding step against Session Directory service.
@@ -74,17 +104,21 @@ impl EdgeConnectionActor {
         self.outbound_tx.send(msg.stanza).await
     }
 
-    /// Builds an authentication request for the Identity microservice.
-    pub fn build_auth_request(
+    /// Builds the first leg of SCRAM without carrying a clear-text password.
+    pub fn build_start_authentication_request(
         &self,
         username: &str,
         mechanism: &str,
-        password_bytes: &[u8],
-    ) -> AuthenticateRequest {
-        AuthenticateRequest {
+        client_first: &[u8],
+        channel_binding: Option<String>,
+        channel_binding_data: Option<&[u8]>,
+    ) -> StartAuthenticationRequest {
+        StartAuthenticationRequest {
             username: username.to_string(),
             mechanism: mechanism.to_string(),
-            auth_payload: password_bytes.to_vec(),
+            client_first: SecretBytes::new(client_first.to_vec()),
+            channel_binding,
+            channel_binding_data: channel_binding_data.map(|data| SecretBytes::new(data.to_vec())),
             trace: None,
         }
     }
@@ -93,6 +127,7 @@ impl EdgeConnectionActor {
     pub fn build_bind_request(&self, desired_resource: &str) -> Option<BindSessionRequest> {
         self.auth.as_ref().map(|auth| BindSessionRequest {
             auth: auth.clone(),
+            auth_grant: self.auth_grant.clone(),
             desired_resource: desired_resource.to_string(),
             edge_instance_id: self.edge_instance_id.clone(),
             connection_id: self.connection_id.clone(),
@@ -116,6 +151,9 @@ impl EdgeConnectionActor {
             message_type: "chat".to_string(),
             raw_stanza: raw_stanza.to_vec(),
             auth: auth.clone(),
+            idempotency_key: None,
+            session_assertion: None,
+            canonical_input: None,
             trace: None,
         })
     }
@@ -135,6 +173,7 @@ mod tests {
         let auth_res = AuthenticateResponse {
             success: true,
             auth_context: Some(AuthContext::new("acc-1", "alice@example.com", 1, "local")),
+            auth_grant: None,
             challenge_or_response: Vec::new(),
             error: None,
         };
@@ -150,6 +189,7 @@ mod tests {
             success: true,
             full_jid: "alice@example.com/phone".to_string(),
             session_epoch: 1,
+            assertion: None,
             error: None,
         };
         let bound = actor.handle_bind_response(bind_res);
@@ -164,6 +204,9 @@ mod tests {
             target_full_jid: "alice@example.com/phone".to_string(),
             stanza: b"<message>hello</message>".to_vec(),
             trace: None,
+            server_message_id: "srv-1".to_owned(),
+            delivery_attempt: 1,
+            session_epoch: 1,
         };
 
         actor.deliver_to_socket(delivery).await.unwrap();

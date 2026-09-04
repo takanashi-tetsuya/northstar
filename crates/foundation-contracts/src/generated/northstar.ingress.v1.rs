@@ -18,6 +18,30 @@ pub struct SubmitMessageRequest {
     pub auth: ::core::option::Option<super::super::common::v1::AuthContext>,
     #[prost(message, optional, tag="7")]
     pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+    #[prost(message, optional, tag="8")]
+    pub idempotency_key: ::core::option::Option<super::super::common::v1::IdempotencyKey>,
+    #[prost(message, optional, tag="9")]
+    pub session_assertion: ::core::option::Option<super::super::security::v1::SessionAssertion>,
+    #[prost(message, optional, tag="10")]
+    pub canonical_input: ::core::option::Option<CanonicalMessageInput>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CanonicalMessageInput {
+    #[prost(string, tag="1")]
+    pub from_full_jid: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub to_jid: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub stanza_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub message_type: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="5")]
+    pub payload: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag="6")]
+    pub origin_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag="7")]
+    pub schema_version: u32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

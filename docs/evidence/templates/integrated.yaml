@@ -1,0 +1,12 @@
+service_id: example-service
+status: integrated
+last_verified_commit: 0000000
+required_checks:
+  - catalog-validator
+  - cargo-check
+  - integration-e2e
+  - failure-injection
+artifacts:
+  - docs/evidence/runs/<run-id>/integration-e2e.txt
+  - docs/evidence/runs/<run-id>/failure-injection.txt
+notes: "All evidence files must be immutable artifacts linked to the verified commit."

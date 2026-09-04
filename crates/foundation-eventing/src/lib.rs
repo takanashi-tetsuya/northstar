@@ -102,6 +102,7 @@ pub trait ConsumerInboxRepository: Send + Sync {
 }
 
 /// In-memory implementation of Outbox and Inbox for contract and unit testing.
+#[cfg(any(test, feature = "test-support"))]
 pub mod memory {
     use super::*;
     use std::collections::{HashMap, HashSet};

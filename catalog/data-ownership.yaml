@@ -9,244 +9,1726 @@ ownership:
   # Service: identity (northstar_identity)
   # ==========================================
   identity:
+    owner: identity
+    deployment_unit: identity-authority
+    semantic_owner: identity
+    cluster_class: primary-home
     database: northstar_identity
+    logical_database: northstar_identity
+    runtime_role: identity_runtime
+    migrator_role: identity_migrator
+    owner_role: identity_owner
+    ops_role: identity_ops
+    backup_role: identity_backup
     tables:
-      - users
-      - scram_credentials
-      - scram_sha1_credentials
-      - user_command_capabilities
-      - account_deletion_audit
-      - authorization_identity
+      - name: users
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: identity
+        export_owner: identity
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: scram_credentials
+        data_class: credential-secret
+        retention_class: account-lifecycle
+        legal_hold: false
+        delete_owner: identity
+        export_owner: identity
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: true
+        encryption_key_class: credential-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: scram_sha1_credentials
+        data_class: credential-secret
+        retention_class: account-lifecycle
+        legal_hold: false
+        delete_owner: identity
+        export_owner: identity
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: true
+        encryption_key_class: credential-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: user_command_capabilities
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: identity
+        export_owner: identity
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: account_deletion_audit
+        data_class: jid-pii
+        retention_class: audit-7y
+        legal_hold: false
+        delete_owner: identity
+        export_owner: identity
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: authorization_identity
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: identity
+        export_owner: identity
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: session-directory (northstar_session)
   # ==========================================
   session-directory:
+    owner: session-directory
+    deployment_unit: session-authority
+    semantic_owner: session-directory
+    cluster_class: primary-home
     database: northstar_session
+    logical_database: northstar_session
+    runtime_role: session-directory_runtime
+    migrator_role: session-directory_migrator
+    owner_role: session-directory_owner
+    ops_role: session-directory_ops
+    backup_role: session-directory_backup
     tables:
-      - active_sessions
-      - session_route_leases
-      - session_authority_capabilities
-      - session_authorization_jid_canonicalization
-      - cluster_replay_fence
+      - name: active_sessions
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: session-directory
+        export_owner: session-directory
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: session_route_leases
+        data_class: operational-audit
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: session-directory
+        export_owner: session-directory
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: session_authority_capabilities
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: session-directory
+        export_owner: session-directory
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: session_authorization_jid_canonicalization
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: session-directory
+        export_owner: session-directory
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: cluster_replay_fence
+        data_class: operational-audit
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: session-directory
+        export_owner: session-directory
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: roster-authority (northstar_roster)
   # ==========================================
   roster-authority:
+    owner: roster-authority
+    deployment_unit: communication-policy-authority
+    semantic_owner: roster-authority
+    cluster_class: primary-home
     database: northstar_roster
+    logical_database: northstar_roster
+    runtime_role: roster-authority_runtime
+    migrator_role: roster-authority_migrator
+    owner_role: roster-authority_owner
+    ops_role: roster-authority_ops
+    backup_role: roster-authority_backup
     tables:
-      - roster_items
-      - roster_groups
-      - roster_version
-      - roster_change_log
-      - pending_presence_subscriptions
+      - name: roster_items
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: roster-authority
+        export_owner: roster-authority
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: roster_groups
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: roster-authority
+        export_owner: roster-authority
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: roster_version
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: roster-authority
+        export_owner: roster-authority
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: roster_change_log
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: roster-authority
+        export_owner: roster-authority
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: pending_presence_subscriptions
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: roster-authority
+        export_owner: roster-authority
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
 
   # ==========================================
   # Service: presence-authority (northstar_presence)
   # ==========================================
   presence-authority:
+    owner: presence-authority
+    deployment_unit: communication-policy-authority
+    semantic_owner: presence-authority
+    cluster_class: primary-home
     database: northstar_presence
+    logical_database: northstar_presence
+    runtime_role: presence-authority_runtime
+    migrator_role: presence-authority_migrator
+    owner_role: presence-authority_owner
+    ops_role: presence-authority_ops
+    backup_role: presence-authority_backup
     tables:
-      - directed_presence
-      - federated_presence
-      - pending_presence_stanzas
+      - name: directed_presence
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: presence-authority
+        export_owner: presence-authority
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: federated_presence
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: presence-authority
+        export_owner: presence-authority
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: pending_presence_stanzas
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: presence-authority
+        export_owner: presence-authority
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
 
   # ==========================================
   # Service: message-ingress (northstar_message_ingress)
   # ==========================================
   message-ingress:
+    owner: message-ingress
+    deployment_unit: messaging-authority
+    semantic_owner: message-ingress
+    cluster_class: primary-home
     database: northstar_message_ingress
+    logical_database: northstar_message_ingress
+    runtime_role: message-ingress_runtime
+    migrator_role: message-ingress_migrator
+    owner_role: message-ingress_owner
+    ops_role: message-ingress_ops
+    backup_role: message-ingress_backup
     tables:
-      - accepted_messages
-      - ingress_outbox
-      - personal_message_admissions
-      - message_pow_admissions
+      - name: accepted_messages
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: message-ingress
+        export_owner: message-ingress
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: ingress_outbox
+        data_class: operational-audit
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: message-ingress
+        export_owner: message-ingress
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: personal_message_admissions
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: message-ingress
+        export_owner: message-ingress
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: message_pow_admissions
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: message-ingress
+        export_owner: message-ingress
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: delivery-router (northstar_delivery)
   # ==========================================
   delivery-router:
+    owner: delivery-router
+    deployment_unit: messaging-authority
+    semantic_owner: delivery-router
+    cluster_class: primary-home
     database: northstar_delivery
+    logical_database: northstar_delivery
+    runtime_role: delivery-router_runtime
+    migrator_role: delivery-router_migrator
+    owner_role: delivery-router_owner
+    ops_role: delivery-router_ops
+    backup_role: delivery-router_backup
     tables:
-      - offline_messages
-      - offline_replay_leases
-      - offline_replay_resource_leases
-      - durable_c2s_delivery
-      - delivery_inbox
+      - name: offline_messages
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: delivery-router
+        export_owner: delivery-router
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: offline_replay_leases
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: delivery-router
+        export_owner: delivery-router
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: offline_replay_resource_leases
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: delivery-router
+        export_owner: delivery-router
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: durable_c2s_delivery
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: delivery-router
+        export_owner: delivery-router
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: delivery_inbox
+        data_class: operational-audit
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: delivery-router
+        export_owner: delivery-router
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: federation-outbox (northstar_federation_outbox)
   # ==========================================
   federation-outbox:
+    owner: federation-outbox
+    deployment_unit: federation-authority
+    semantic_owner: federation-outbox
+    cluster_class: primary-home
     database: northstar_federation_outbox
+    logical_database: northstar_federation_outbox
+    runtime_role: federation-outbox_runtime
+    migrator_role: federation-outbox_migrator
+    owner_role: federation-outbox_owner
+    ops_role: federation-outbox_ops
+    backup_role: federation-outbox_backup
     tables:
-      - s2s_outbox
-      - s2s_outbox_sequence
+      - name: s2s_outbox
+        data_class: operational-audit
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: federation-outbox
+        export_owner: federation-outbox
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: s2s_outbox_sequence
+        data_class: operational-audit
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: federation-outbox
+        export_owner: federation-outbox
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0016-privacy (northstar_xep_0016)
   # ==========================================
   xep-0016-privacy:
+    owner: xep-0016-privacy
+    deployment_unit: communication-policy-authority
+    semantic_owner: xep-0016-privacy
+    cluster_class: primary-home
     database: northstar_xep_0016
+    logical_database: northstar_xep_0016
+    runtime_role: xep-0016-privacy_runtime
+    migrator_role: xep-0016-privacy_migrator
+    owner_role: xep-0016-privacy_owner
+    ops_role: xep-0016-privacy_ops
+    backup_role: xep-0016-privacy_backup
     tables:
-      - privacy_lists
-      - privacy_items
+      - name: privacy_lists
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0016-privacy
+        export_owner: xep-0016-privacy
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: privacy_items
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0016-privacy
+        export_owner: xep-0016-privacy
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0191-blocking (northstar_xep_0191)
   # ==========================================
   xep-0191-blocking:
+    owner: xep-0191-blocking
+    deployment_unit: communication-policy-authority
+    semantic_owner: xep-0191-blocking
+    cluster_class: primary-home
     database: northstar_xep_0191
+    logical_database: northstar_xep_0191
+    runtime_role: xep-0191-blocking_runtime
+    migrator_role: xep-0191-blocking_migrator
+    owner_role: xep-0191-blocking_owner
+    ops_role: xep-0191-blocking_ops
+    backup_role: xep-0191-blocking_backup
     tables:
-      - blocked_jids
+      - name: blocked_jids
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0191-blocking
+        export_owner: xep-0191-blocking
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0045-muc (northstar_xep_0045)
   # ==========================================
   xep-0045-muc:
+    owner: xep-0045-muc
+    deployment_unit: muc-authority
+    semantic_owner: xep-0045-muc
+    cluster_class: primary-home
     database: northstar_xep_0045
+    logical_database: northstar_xep_0045
+    runtime_role: xep-0045-muc_runtime
+    migrator_role: xep-0045-muc_migrator
+    owner_role: xep-0045-muc_owner
+    ops_role: xep-0045-muc_ops
+    backup_role: xep-0045-muc_backup
     tables:
-      - muc_rooms
-      - muc_occupants
-      - muc_affiliations
-      - muc_room_controls
-      - muc_archive_retention
-      - cluster_muc_authority
-      - cluster_muc_delivery_receipts
+      - name: muc_rooms
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0045-muc
+        export_owner: xep-0045-muc
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: muc_occupants
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0045-muc
+        export_owner: xep-0045-muc
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: muc_affiliations
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0045-muc
+        export_owner: xep-0045-muc
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: muc_room_controls
+        data_class: operational-audit
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0045-muc
+        export_owner: xep-0045-muc
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: muc_archive_retention
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: xep-0045-muc
+        export_owner: xep-0045-muc
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: cluster_muc_authority
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0045-muc
+        export_owner: xep-0045-muc
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: cluster_muc_delivery_receipts
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0045-muc
+        export_owner: xep-0045-muc
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0060-pubsub (northstar_xep_0060)
   # ==========================================
   xep-0060-pubsub:
+    owner: xep-0060-pubsub
+    deployment_unit: pubsub-authority
+    semantic_owner: xep-0060-pubsub
+    cluster_class: primary-home
     database: northstar_xep_0060
+    logical_database: northstar_xep_0060
+    runtime_role: xep-0060-pubsub_runtime
+    migrator_role: xep-0060-pubsub_migrator
+    owner_role: xep-0060-pubsub_owner
+    ops_role: xep-0060-pubsub_ops
+    backup_role: xep-0060-pubsub_backup
     tables:
-      - pubsub_nodes
-      - pubsub_items
-      - pubsub_subscriptions
-      - pubsub_affiliations
-      - pubsub_event_outbox
+      - name: pubsub_nodes
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0060-pubsub
+        export_owner: xep-0060-pubsub
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: pubsub_items
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0060-pubsub
+        export_owner: xep-0060-pubsub
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: pubsub_subscriptions
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0060-pubsub
+        export_owner: xep-0060-pubsub
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: pubsub_affiliations
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0060-pubsub
+        export_owner: xep-0060-pubsub
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: pubsub_event_outbox
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: xep-0060-pubsub
+        export_owner: xep-0060-pubsub
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0163-pep (northstar_xep_0163)
   # ==========================================
   xep-0163-pep:
+    owner: xep-0163-pep
+    deployment_unit: pubsub-authority
+    semantic_owner: xep-0163-pep
+    cluster_class: primary-home
     database: northstar_xep_0163
+    logical_database: northstar_xep_0163
+    runtime_role: xep-0163-pep_runtime
+    migrator_role: xep-0163-pep_migrator
+    owner_role: xep-0163-pep_owner
+    ops_role: xep-0163-pep_ops
+    backup_role: xep-0163-pep_backup
     tables:
-      - pep_nodes
-      - pep_items
-      - pep_subscriptions
-      - pep_outbox_authorization
+      - name: pep_nodes
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0163-pep
+        export_owner: xep-0163-pep
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: pep_items
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0163-pep
+        export_owner: xep-0163-pep
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: pep_subscriptions
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0163-pep
+        export_owner: xep-0163-pep
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: pep_outbox_authorization
+        data_class: operational-audit
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0163-pep
+        export_owner: xep-0163-pep
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0313-mam (northstar_xep_0313)
   # ==========================================
   xep-0313-mam:
+    owner: xep-0313-mam
+    deployment_unit: mam-authority
+    semantic_owner: xep-0313-mam
+    cluster_class: primary-home
     database: northstar_xep_0313
+    logical_database: northstar_xep_0313
+    runtime_role: xep-0313-mam_runtime
+    migrator_role: xep-0313-mam_migrator
+    owner_role: xep-0313-mam_owner
+    ops_role: xep-0313-mam_ops
+    backup_role: xep-0313-mam_backup
     tables:
-      - archive_messages
-      - archive_retention
-      - mam_preferences
+      - name: archive_messages
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: xep-0313-mam
+        export_owner: xep-0313-mam
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: archive_retention
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: xep-0313-mam
+        export_owner: xep-0313-mam
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: mam_preferences
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0313-mam
+        export_owner: xep-0313-mam
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0363-upload (northstar_xep_0363)
   # ==========================================
   xep-0363-upload:
+    owner: xep-0363-upload
+    deployment_unit: upload-authority
+    semantic_owner: xep-0363-upload
+    cluster_class: primary-home
     database: northstar_xep_0363
+    logical_database: northstar_xep_0363
+    runtime_role: xep-0363-upload_runtime
+    migrator_role: xep-0363-upload_migrator
+    owner_role: xep-0363-upload_owner
+    ops_role: xep-0363-upload_ops
+    backup_role: xep-0363-upload_backup
     tables:
-      - uploads
-      - upload_claims
-      - upload_retention
-      - upload_authority_capabilities
-      - upload_lease_fencing
+      - name: uploads
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: xep-0363-upload
+        export_owner: xep-0363-upload
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: upload_claims
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: xep-0363-upload
+        export_owner: xep-0363-upload
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: upload_retention
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: xep-0363-upload
+        export_owner: xep-0363-upload
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: upload_authority_capabilities
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: xep-0363-upload
+        export_owner: xep-0363-upload
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: upload_lease_fencing
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: xep-0363-upload
+        export_owner: xep-0363-upload
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0198-sm (northstar_xep_0198)
   # ==========================================
   xep-0198-sm:
+    owner: xep-0198-sm
+    deployment_unit: session-authority
+    semantic_owner: xep-0198-sm
+    cluster_class: primary-home
     database: northstar_xep_0198
+    logical_database: northstar_xep_0198
+    runtime_role: xep-0198-sm_runtime
+    migrator_role: xep-0198-sm_migrator
+    owner_role: xep-0198-sm_owner
+    ops_role: xep-0198-sm_ops
+    backup_role: xep-0198-sm_backup
     tables:
-      - sm_resume_states
-      - sm_durable_delivery_fences
+      - name: sm_resume_states
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0198-sm
+        export_owner: xep-0198-sm
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: sm_durable_delivery_fences
+        data_class: operational-audit
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0198-sm
+        export_owner: xep-0198-sm
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0484-fast (northstar_xep_0484)
   # ==========================================
   xep-0484-fast:
+    owner: xep-0484-fast
+    deployment_unit: identity-authority
+    semantic_owner: xep-0484-fast
+    cluster_class: primary-home
     database: northstar_xep_0484
+    logical_database: northstar_xep_0484
+    runtime_role: xep-0484-fast_runtime
+    migrator_role: xep-0484-fast_migrator
+    owner_role: xep-0484-fast_owner
+    ops_role: xep-0484-fast_ops
+    backup_role: xep-0484-fast_backup
     tables:
-      - fast_tokens
+      - name: fast_tokens
+        data_class: credential-secret
+        retention_class: account-lifecycle
+        legal_hold: false
+        delete_owner: xep-0484-fast
+        export_owner: xep-0484-fast
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: true
+        encryption_key_class: credential-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0049-private-storage (northstar_xep_0049)
   # ==========================================
   xep-0049-private-storage:
+    owner: xep-0049-private-storage
+    deployment_unit: profile-authority
+    semantic_owner: xep-0049-private-storage
+    cluster_class: primary-home
     database: northstar_xep_0049
+    logical_database: northstar_xep_0049
+    runtime_role: xep-0049-private-storage_runtime
+    migrator_role: xep-0049-private-storage_migrator
+    owner_role: xep-0049-private-storage_owner
+    ops_role: xep-0049-private-storage_ops
+    backup_role: xep-0049-private-storage_backup
     tables:
-      - private_xml
+      - name: private_xml
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0049-private-storage
+        export_owner: xep-0049-private-storage
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0054-vcard-temp (northstar_xep_0054)
   # ==========================================
   xep-0054-vcard-temp:
+    owner: xep-0054-vcard-temp
+    deployment_unit: profile-authority
+    semantic_owner: xep-0054-vcard-temp
+    cluster_class: primary-home
     database: northstar_xep_0054
+    logical_database: northstar_xep_0054
+    runtime_role: xep-0054-vcard-temp_runtime
+    migrator_role: xep-0054-vcard-temp_migrator
+    owner_role: xep-0054-vcard-temp_owner
+    ops_role: xep-0054-vcard-temp_ops
+    backup_role: xep-0054-vcard-temp_backup
     tables:
-      - vcards
+      - name: vcards
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0054-vcard-temp
+        export_owner: xep-0054-vcard-temp
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0357-push (northstar_xep_0357)
   # ==========================================
   xep-0357-push:
+    owner: xep-0357-push
+    deployment_unit: push-worker
+    semantic_owner: xep-0357-push
+    cluster_class: primary-home
     database: northstar_xep_0357
+    logical_database: northstar_xep_0357
+    runtime_role: xep-0357-push_runtime
+    migrator_role: xep-0357-push_migrator
+    owner_role: xep-0357-push_owner
+    ops_role: xep-0357-push_ops
+    backup_role: xep-0357-push_backup
     tables:
-      - push_registrations
+      - name: push_registrations
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0357-push
+        export_owner: xep-0357-push
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0280-carbons (northstar_xep_0280)
   # ==========================================
   xep-0280-carbons:
+    owner: xep-0280-carbons
+    deployment_unit: messaging-authority
+    semantic_owner: xep-0280-carbons
+    cluster_class: primary-home
     database: northstar_xep_0280
+    logical_database: northstar_xep_0280
+    runtime_role: xep-0280-carbons_runtime
+    migrator_role: xep-0280-carbons_migrator
+    owner_role: xep-0280-carbons_owner
+    ops_role: xep-0280-carbons_ops
+    backup_role: xep-0280-carbons_backup
     tables:
-      - carbon_subscriptions
+      - name: carbon_subscriptions
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0280-carbons
+        export_owner: xep-0280-carbons
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
 
   # ==========================================
   # Service: xep-0369-mix-core (northstar_xep_0369)
   # ==========================================
   xep-0369-mix-core:
+    owner: xep-0369-mix-core
+    deployment_unit: mix-authority
+    semantic_owner: xep-0369-mix-core
+    cluster_class: primary-home
     database: northstar_xep_0369
+    logical_database: northstar_xep_0369
+    runtime_role: xep-0369-mix-core_runtime
+    migrator_role: xep-0369-mix-core_migrator
+    owner_role: xep-0369-mix-core_owner
+    ops_role: xep-0369-mix-core_ops
+    backup_role: xep-0369-mix-core_backup
     tables:
-      - mix_channels
-      - mix_participants
-      - mix_messages
-      - mix_pam_durable_operations
+      - name: mix_channels
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0369-mix-core
+        export_owner: xep-0369-mix-core
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: mix_participants
+        data_class: jid-pii
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: xep-0369-mix-core
+        export_owner: xep-0369-mix-core
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: true
+        content: false
+        secret: false
+        encryption_key_class: pii-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: mix_messages
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: xep-0369-mix-core
+        export_owner: xep-0369-mix-core
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: mix_pam_durable_operations
+        data_class: operational-audit
+        retention_class: audit-7y
+        legal_hold: false
+        delete_owner: xep-0369-mix-core
+        export_owner: xep-0369-mix-core
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: abuse-risk & moderation (northstar_abuse_risk / moderation)
   # ==========================================
   abuse-risk:
+    owner: abuse-risk
+    deployment_unit: platform-data
+    semantic_owner: abuse-risk
+    cluster_class: primary-home
     database: northstar_abuse_risk
+    logical_database: northstar_abuse_risk
+    runtime_role: abuse-risk_runtime
+    migrator_role: abuse-risk_migrator
+    owner_role: abuse-risk_owner
+    ops_role: abuse-risk_ops
+    backup_role: abuse-risk_backup
     tables:
-      - abuse_challenges
-      - abuse_keys
-      - abuse_key_deployment
+      - name: abuse_challenges
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: abuse-risk
+        export_owner: abuse-risk
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: abuse_keys
+        data_class: credential-secret
+        retention_class: account-lifecycle
+        legal_hold: false
+        delete_owner: abuse-risk
+        export_owner: abuse-risk
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: true
+        encryption_key_class: credential-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
+      - name: abuse_key_deployment
+        data_class: credential-secret
+        retention_class: account-lifecycle
+        legal_hold: false
+        delete_owner: abuse-risk
+        export_owner: abuse-risk
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: true
+        encryption_key_class: credential-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
 
   moderation-reports:
+    owner: moderation-reports
+    deployment_unit: moderation-authority
+    semantic_owner: moderation-reports
+    cluster_class: primary-home
     database: northstar_moderation
+    logical_database: northstar_moderation
+    runtime_role: moderation-reports_runtime
+    migrator_role: moderation-reports_migrator
+    owner_role: moderation-reports_owner
+    ops_role: moderation-reports_ops
+    backup_role: moderation-reports_backup
     tables:
-      - abuse_reports
-      - abuse_report_evidence
+      - name: abuse_reports
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: moderation-reports
+        export_owner: moderation-reports
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: abuse_report_evidence
+        data_class: message-content
+        retention_class: message-30d
+        legal_hold: false
+        delete_owner: moderation-reports
+        export_owner: moderation-reports
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: true
+        secret: false
+        encryption_key_class: content-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
 
   # ==========================================
   # Service: admin-orchestrator & retention
   # ==========================================
   admin-orchestrator:
+    owner: admin-orchestrator
+    deployment_unit: admin-control-plane
+    semantic_owner: admin-orchestrator
+    cluster_class: primary-home
     database: northstar_admin_operations
+    logical_database: northstar_admin_operations
+    runtime_role: admin-orchestrator_runtime
+    migrator_role: admin-orchestrator_migrator
+    owner_role: admin-orchestrator_owner
+    ops_role: admin-orchestrator_ops
+    backup_role: admin-orchestrator_backup
     tables:
-      - api_operations
-      - api_operation_runtime
-      - api_keyset_pages
+      - name: api_operations
+        data_class: operational-audit
+        retention_class: audit-7y
+        legal_hold: false
+        delete_owner: admin-orchestrator
+        export_owner: admin-orchestrator
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: api_operation_runtime
+        data_class: operational-audit
+        retention_class: audit-7y
+        legal_hold: false
+        delete_owner: admin-orchestrator
+        export_owner: admin-orchestrator
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100
+      - name: api_keyset_pages
+        data_class: credential-secret
+        retention_class: account-lifecycle
+        legal_hold: false
+        delete_owner: admin-orchestrator
+        export_owner: admin-orchestrator
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: true
+        encryption_key_class: credential-key
+        backup_rpo_hours: 1
+        backup_rto_minutes: 30
+        restore_order: 100
 
   retention-orchestrator:
+    owner: retention-orchestrator
+    deployment_unit: retention-authority
+    semantic_owner: retention-orchestrator
+    cluster_class: primary-home
     database: northstar_retention
+    logical_database: northstar_retention
+    runtime_role: retention-orchestrator_runtime
+    migrator_role: retention-orchestrator_migrator
+    owner_role: retention-orchestrator_owner
+    ops_role: retention-orchestrator_ops
+    backup_role: retention-orchestrator_backup
     tables:
-      - data_lifecycle_governance
+      - name: data_lifecycle_governance
+        data_class: operational
+        retention_class: operational-90d
+        legal_hold: false
+        delete_owner: retention-orchestrator
+        export_owner: retention-orchestrator
+        residency: home_region
+        primary_key: service-defined
+        home_key: service-defined
+        partitioning: none
+        pii: false
+        content: false
+        secret: false
+        encryption_key_class: platform-key
+        backup_rpo_hours: 24
+        backup_rto_minutes: 120
+        restore_order: 100

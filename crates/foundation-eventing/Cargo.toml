@@ -6,6 +6,13 @@ license = "AGPL-3.0-only"
 description = "Transactional Outbox and Consumer Inbox patterns for Northstar microservices"
 publish = false
 
+[features]
+default = []
+# The memory repositories are available only to deterministic tests and the
+# current executable-prototype service fixtures. Production services must use
+# a database-backed repository and an explicit transaction owner.
+test-support = []
+
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }

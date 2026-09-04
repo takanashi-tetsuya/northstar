@@ -2,12 +2,12 @@
 //!
 //! Defined per `northstar_progress_and_next_plan_2026-09-04.md` (Milestone 1, Section 5).
 
-use foundation_service_runtime::{ServiceConfig, ServiceRuntime};
+use foundation_service_runtime::{ServiceConfig, ServiceProfile, ServiceRuntime};
 use service_message_ingress::MessageIngressService;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = ServiceConfig::new("message-ingress", 50053);
+    let config = ServiceConfig::load("message-ingress", 50053, ServiceProfile::from_environment())?;
     let runtime = ServiceRuntime::new(config.clone());
 
     println!(

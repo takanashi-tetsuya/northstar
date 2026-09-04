@@ -41,4 +41,43 @@ pub struct ConsumerInboxEntry {
     #[prost(bytes="vec", tag="4")]
     pub result_digest: ::prost::alloc::vec::Vec<u8>,
 }
+/// Versioned transport envelope; payload dispatch is allow-list based.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EventEnvelope {
+    #[prost(string, tag="1")]
+    pub event_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub producer_service: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub producer_instance: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub schema: ::prost::alloc::string::String,
+    #[prost(uint32, tag="5")]
+    pub schema_version: u32,
+    #[prost(string, tag="6")]
+    pub aggregate_type: ::prost::alloc::string::String,
+    #[prost(string, tag="7")]
+    pub aggregate_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="8")]
+    pub aggregate_version: u64,
+    #[prost(string, tag="9")]
+    pub partition_key: ::prost::alloc::string::String,
+    #[prost(string, tag="10")]
+    pub event_type: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="11")]
+    pub payload: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag="12")]
+    pub payload_type: ::prost::alloc::string::String,
+    #[prost(string, tag="13")]
+    pub correlation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="14")]
+    pub causation_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="15")]
+    pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+    #[prost(string, tag="16")]
+    pub classification: ::prost::alloc::string::String,
+    #[prost(int64, tag="17")]
+    pub created_at_unix_ms: i64,
+}
 // @@protoc_insertion_point(module)

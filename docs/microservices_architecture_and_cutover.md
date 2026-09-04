@@ -1,9 +1,10 @@
 # Northstar Microservices Architecture, Capacity & Production Cutover Specification
 
 **Document Version**: 2.0.0  
-**Audit Baseline**: `f32adaafdcd5c20ababfe022e672c571749bb865`  
+**Audit Baseline**: `aa2b0df`
 **Reference Specifications**: `northstar_microservices_deep_audit_2026-09-03.md`, `northstar_progress_and_next_plan_2026-09-04.md`  
 **Status**: Architecture prototype; runtime implementation in progress
+**Evidence source**: `docs/evidence/baselines/aa2b0df.yaml`
 
 ---
 
@@ -45,10 +46,17 @@ graph TD
 
 ## 2. Platform Service Catalog & Route Ownership Summary
 
-- **Declared Services**: 49 services declared in `catalog/services.yaml`.
-- **Declared Stanza Routes**: 38 unambiguous protocol routes in `catalog/routes.yaml`.
-- **Database Tables & Ownership**: 77 distinct tables in `catalog/data-ownership.yaml`, each mapped to exactly one authoritative microservice.
-- **Verification**: `scripts/check-microservice-catalog.mjs` verifies 0 orphan services, 0 duplicate routes, and 0 shared database tables across the entire workspace.
+- **Declared Services**: derived from `catalog/services.yaml` at the current baseline.
+- **Declared Stanza Routes**: derived from `catalog/routes.yaml` at the current baseline.
+- **Database Tables & Ownership**: derived from `catalog/data-ownership.yaml` at the current baseline.
+- **Verification**: `scripts/check-microservice-catalog.mjs` emits the authoritative counts and must return:
+  - 0 orphan services
+  - 0 duplicate routes
+  - 0 shared tables across owners.
+
+```sh
+node scripts/check-microservice-catalog.mjs
+```
 
 ---
 
@@ -121,7 +129,9 @@ sequenceDiagram
 ```
 
 ### 6.1 Point of No Return Criteria
-1. All 77 tables verified with 0 discrepancies via `data-split-migrator`.
+1. All catalog-owned tables verified with 0 discrepancies via
+   `data-split-migrator` (baseline count is sourced from
+   `catalog/data-ownership.yaml`).
 2. Full Kafka broker and database replication sync lag $< 100\,\text{ms}$.
 3. Synthetic end-to-end smoke test passes authentication, stanza ingress, delivery push, and MAM query.
 4. Once traffic DNS cuts over to `xmpp-edge` v2, all incoming writes commit exclusively to microservices databases.

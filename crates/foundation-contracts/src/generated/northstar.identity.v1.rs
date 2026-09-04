@@ -15,6 +15,76 @@ pub struct AuthenticateRequest {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StartAuthenticationRequest {
+    #[prost(string, tag="1")]
+    pub username: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub mechanism: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="3")]
+    pub client_first: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, optional, tag="4")]
+    pub channel_binding: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bytes="vec", optional, tag="5")]
+    pub channel_binding_data: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(message, optional, tag="6")]
+    pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StartAuthenticationResponse {
+    #[prost(bool, tag="1")]
+    pub success: bool,
+    #[prost(string, tag="2")]
+    pub exchange_id: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="3")]
+    pub server_first: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint32, tag="4")]
+    pub exchange_ttl_seconds: u32,
+    #[prost(message, optional, tag="5")]
+    pub error: ::core::option::Option<super::super::common::v1::ErrorDetail>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ContinueAuthenticationRequest {
+    #[prost(string, tag="1")]
+    pub exchange_id: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="2")]
+    pub client_final: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag="3")]
+    pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ContinueAuthenticationResponse {
+    #[prost(bool, tag="1")]
+    pub success: bool,
+    #[prost(bytes="vec", tag="2")]
+    pub server_final: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag="3")]
+    pub auth_grant: ::core::option::Option<super::super::security::v1::AuthGrant>,
+    #[prost(message, optional, tag="4")]
+    pub error: ::core::option::Option<super::super::common::v1::ErrorDetail>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AbortAuthenticationRequest {
+    #[prost(string, tag="1")]
+    pub exchange_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub reason: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AbortAuthenticationResponse {
+    #[prost(bool, tag="1")]
+    pub success: bool,
+    #[prost(message, optional, tag="2")]
+    pub error: ::core::option::Option<super::super::common::v1::ErrorDetail>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AuthenticateResponse {
     #[prost(bool, tag="1")]
     pub success: bool,
@@ -24,6 +94,9 @@ pub struct AuthenticateResponse {
     pub challenge_or_response: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, optional, tag="4")]
     pub error: ::core::option::Option<super::super::common::v1::ErrorDetail>,
+    /// Signed grant replaces auth_context once the SCRAM exchange cutover lands.
+    #[prost(message, optional, tag="5")]
+    pub auth_grant: ::core::option::Option<super::super::security::v1::AuthGrant>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -36,6 +109,8 @@ pub struct RegisterRequest {
     pub invitation_code: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="4")]
     pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+    #[prost(bytes="vec", tag="5")]
+    pub password_secret: ::prost::alloc::vec::Vec<u8>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -60,6 +135,10 @@ pub struct ChangePasswordRequest {
     pub new_password: ::prost::alloc::string::String,
     #[prost(message, optional, tag="4")]
     pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+    #[prost(bytes="vec", tag="5")]
+    pub old_password_secret: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="6")]
+    pub new_password_secret: ::prost::alloc::vec::Vec<u8>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

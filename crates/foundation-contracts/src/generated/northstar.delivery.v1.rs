@@ -3,7 +3,7 @@
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OpenDeliveryStreamRequest {
-    #[prost(oneof="open_delivery_stream_request::Payload", tags="1, 2")]
+    #[prost(oneof="open_delivery_stream_request::Payload", tags="1, 2, 3")]
     pub payload: ::core::option::Option<open_delivery_stream_request::Payload>,
 }
 /// Nested message and enum types in `OpenDeliveryStreamRequest`.
@@ -15,6 +15,8 @@ pub mod open_delivery_stream_request {
         Register(super::EdgeRegister),
         #[prost(message, tag="2")]
         Ack(super::DeliveryAck),
+        #[prost(message, tag="3")]
+        Heartbeat(super::EdgeHeartbeat),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -22,6 +24,20 @@ pub mod open_delivery_stream_request {
 pub struct EdgeRegister {
     #[prost(string, tag="1")]
     pub edge_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub protocol_version: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="3")]
+    pub attestation: ::prost::alloc::vec::Vec<u8>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeHeartbeat {
+    #[prost(string, tag="1")]
+    pub edge_instance_id: ::prost::alloc::string::String,
+    #[prost(int64, tag="2")]
+    pub observed_at_unix_ms: i64,
+    #[prost(uint32, tag="3")]
+    pub active_connections: u32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -32,6 +48,14 @@ pub struct DeliveryAck {
     pub delivered: bool,
     #[prost(string, optional, tag="3")]
     pub error_reason: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, tag="4")]
+    pub target_connection_id: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub target_full_jid: ::prost::alloc::string::String,
+    #[prost(uint64, tag="6")]
+    pub session_epoch: u64,
+    #[prost(string, tag="7")]
+    pub stage: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -46,6 +70,12 @@ pub struct OpenDeliveryStreamResponse {
     pub stanza: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, optional, tag="5")]
     pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+    #[prost(string, tag="6")]
+    pub server_message_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag="7")]
+    pub delivery_attempt: u32,
+    #[prost(uint64, tag="8")]
+    pub session_epoch: u64,
 }
 include!("northstar.delivery.v1.tonic.rs");
 // @@protoc_insertion_point(module)

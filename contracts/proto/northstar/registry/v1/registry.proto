@@ -2,13 +2,23 @@ syntax = "proto3";
 
 package northstar.registry.v1;
 
+import "northstar/common/v1/common.proto";
+import "northstar/security/v1/assertions.proto";
+
 service ProtocolRegistryService {
   rpc GetRouteSnapshot(GetRouteSnapshotRequest) returns (GetRouteSnapshotResponse);
+  rpc WatchSnapshots(WatchSnapshotsRequest) returns (stream GetRouteSnapshotResponse);
   rpc RegisterInstance(RegisterInstanceRequest) returns (RegisterInstanceResponse);
 }
 
 message GetRouteSnapshotRequest {
   uint64 since_version = 1;
+  northstar.common.v1.TraceContext trace = 2;
+}
+
+message WatchSnapshotsRequest {
+  uint64 after_version = 1;
+  northstar.common.v1.TraceContext trace = 2;
 }
 
 message RouteEntry {
@@ -30,6 +40,11 @@ message GetRouteSnapshotResponse {
   bytes signature = 2;
   repeated RouteEntry routes = 3;
   repeated DiscoFeature disco_features = 4;
+  bytes digest = 5;
+  string key_id = 6;
+  string alg = 7;
+  int64 issued_at_unix_ms = 8;
+  int64 expires_at_unix_ms = 9;
 }
 
 message RegisterInstanceRequest {
@@ -37,9 +52,13 @@ message RegisterInstanceRequest {
   string instance_id = 2;
   string endpoint = 3;
   uint64 weight = 4;
+  northstar.security.v1.SessionAssertion operator_assertion = 5;
+  northstar.common.v1.IdempotencyKey idempotency_key = 6;
+  northstar.common.v1.TraceContext trace = 7;
 }
 
 message RegisterInstanceResponse {
   bool acknowledged = 1;
   uint64 current_registry_version = 2;
+  optional northstar.common.v1.ErrorDetail error = 3;
 }

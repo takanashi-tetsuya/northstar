@@ -7,8 +7,10 @@ description = "Northstar microservices standard service runtime, configuration, 
 publish = false
 
 [dependencies]
+foundation-security = { path = "../foundation-security" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.43", features = ["sync", "macros", "rt", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1.43", features = ["sync", "macros", "rt", "rt-multi-thread", "signal", "time", "net", "io-util"] }
+tonic = { version = "0.12", default-features = false, features = ["transport"] }
 tracing = "0.1"
 thiserror = "2.0"

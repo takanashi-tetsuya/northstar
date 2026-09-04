@@ -9,6 +9,7 @@ services:
   # Platform Core Services (平台核心服务)
   # ==========================================
   - service_id: xmpp-edge
+
     implementation_status: executable-prototype
     code_path: "services/xmpp-edge"
     cargo_package: "service-xmpp-edge"
@@ -16,6 +17,20 @@ services:
     execution_class: transport
     home_key: connection_id
     database: none
+    owner_team: edge-platform
+    criticality: critical
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "target/release/xmpp-edge"
+    image: "ghcr.io/takanashi-tetsuya/northstar/xmpp-edge:${VERSION:-latest}"
+    deployment_unit: edge-gateway
+    semantic_owner: xmpp-edge
+    evidence:
+      status: executable-prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     rpc:
       consumes:
         - northstar.identity.v1.IdentityService
@@ -32,13 +47,30 @@ services:
       availability: 99.99
 
   - service_id: identity
+
     implementation_status: executable-prototype
     code_path: "services/identity"
     cargo_package: "service-identity"
     name: "User Identity and Credential Authority"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: account_id
     database: northstar_identity
+    owner_team: identity
+    criticality: high
+    data_classes:
+      - account
+      - credential
+      - pii
+    region_mode: home_region
+    runtime_binary: "target/release/identity"
+    image: "ghcr.io/takanashi-tetsuya/northstar/identity:${VERSION:-latest}"
+    deployment_unit: identity-authority
+    semantic_owner: identity
+    evidence:
+      status: executable-prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     rpc:
       provides:
         - northstar.identity.v1.IdentityService
@@ -53,11 +85,26 @@ services:
       availability: 99.99
 
   - service_id: retention-orchestrator
+
     implementation_status: planned
     name: "Data Lifecycle and Retention Governance"
-    execution_class: stateless
+    execution_class: remote-authority
     home_key: operation_id
     database: northstar_retention
+    owner_team: data-governance
+    criticality: high
+    data_classes:
+      - operational
+      - audit
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: retention-authority
+    semantic_owner: retention-orchestrator
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     rpc:
       provides:
         - northstar.retention.v1.RetentionOrchestratorService
@@ -70,13 +117,28 @@ services:
       availability: 99.9
 
   - service_id: session-directory
+
     implementation_status: executable-prototype
     code_path: "services/session-directory"
     cargo_package: "service-session-directory"
     name: "Session and Resource Binding Authority"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: bare_jid
     database: northstar_session
+    owner_team: session
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "target/release/session-directory"
+    image: "ghcr.io/takanashi-tetsuya/northstar/session-directory:${VERSION:-latest}"
+    deployment_unit: session-authority
+    semantic_owner: session-directory
+    evidence:
+      status: executable-prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     rpc:
       provides:
         - northstar.session.v1.SessionDirectoryService
@@ -88,13 +150,29 @@ services:
       availability: 99.99
 
   - service_id: message-ingress
+
     implementation_status: executable-prototype
     code_path: "services/message-ingress"
     cargo_package: "service-message-ingress"
     name: "Message Admission and Authority Ingress"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: sender_account_id
     database: northstar_message_ingress
+    owner_team: messaging
+    criticality: high
+    data_classes:
+      - message-content
+      - jid-metadata
+    region_mode: home_region
+    runtime_binary: "target/release/message-ingress"
+    image: "ghcr.io/takanashi-tetsuya/northstar/message-ingress:${VERSION:-latest}"
+    deployment_unit: messaging-authority
+    semantic_owner: message-ingress
+    evidence:
+      status: executable-prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     rpc:
       provides:
         - northstar.ingress.v1.MessageIngressService
@@ -109,13 +187,29 @@ services:
       availability: 99.99
 
   - service_id: delivery-router
+
     implementation_status: executable-prototype
     code_path: "services/delivery-router"
     cargo_package: "service-delivery-router"
     name: "Online Delivery and Offline Spool Router"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: recipient_bare_jid
     database: northstar_delivery
+    owner_team: messaging
+    criticality: high
+    data_classes:
+      - message-content
+      - jid-metadata
+    region_mode: home_region
+    runtime_binary: "target/release/delivery-router"
+    image: "ghcr.io/takanashi-tetsuya/northstar/delivery-router:${VERSION:-latest}"
+    deployment_unit: messaging-authority
+    semantic_owner: delivery-router
+    evidence:
+      status: executable-prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     rpc:
       provides:
         - northstar.delivery.v1.DeliveryRouterService
@@ -133,11 +227,26 @@ services:
       availability: 99.95
 
   - service_id: presence-authority
+
     implementation_status: planned
     name: "Presence State and Subscription Fanout"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: bare_jid
     database: northstar_presence
+    owner_team: communication-policy
+    criticality: high
+    data_classes:
+      - jid-metadata
+      - pii
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: communication-policy-authority
+    semantic_owner: presence-authority
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     rpc:
       provides:
         - northstar.presence.v1.PresenceAuthorityService
@@ -151,13 +260,29 @@ services:
       availability: 99.95
 
   - service_id: roster-authority
+
     implementation_status: prototype
     code_path: "services/roster-authority"
     cargo_package: "service-roster-authority"
     name: "Roster Management and Versioning Authority"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: owner_bare_jid
     database: northstar_roster
+    owner_team: communication-policy
+    criticality: high
+    data_classes:
+      - jid-metadata
+      - pii
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: communication-policy-authority
+    semantic_owner: roster-authority
+    evidence:
+      status: prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     rpc:
       provides:
         - northstar.roster.v1.RosterAuthorityService
@@ -169,11 +294,25 @@ services:
       availability: 99.95
 
   - service_id: communication-policy-projection
+
     implementation_status: planned
     name: "Compiled Communication Policy Read Projections"
-    execution_class: local-sdk
+    execution_class: signed-policy-snapshot
     home_key: principal_bare_jid
     database: northstar_policy_projection
+    owner_team: communication-policy
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: communication-policy-authority
+    semantic_owner: communication-policy-projection
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     rpc:
       provides:
         - northstar.policy.v1.PolicyProjectionService
@@ -187,13 +326,28 @@ services:
       availability: 99.99
 
   - service_id: federation-outbox
+
     implementation_status: prototype
     code_path: "services/federation-outbox"
     cargo_package: "service-federation-outbox"
     name: "Durable S2S Federation Outbox Queue"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: target_domain
     database: northstar_federation_outbox
+    owner_team: federation
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: federation-authority
+    semantic_owner: federation-outbox
+    evidence:
+      status: prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     rpc:
       provides:
         - northstar.federation.v1.FederationOutboxService
@@ -207,6 +361,7 @@ services:
       availability: 99.95
 
   - service_id: s2s-edge
+
     implementation_status: prototype
     code_path: "services/s2s-edge"
     cargo_package: "service-s2s-edge"
@@ -214,6 +369,20 @@ services:
     execution_class: transport
     home_key: target_domain
     database: none
+    owner_team: federation
+    criticality: critical
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: federation-gateway
+    semantic_owner: s2s-edge
+    evidence:
+      status: prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     rpc:
       consumes:
         - northstar.federation.v1.FederationOutboxService
@@ -226,6 +395,7 @@ services:
       availability: 99.95
 
   - service_id: protocol-registry
+
     implementation_status: executable-prototype
     code_path: "services/protocol-registry"
     cargo_package: "service-protocol-registry"
@@ -233,6 +403,20 @@ services:
     execution_class: control-plane
     home_key: singleton
     database: northstar_registry
+    owner_team: protocol
+    criticality: critical
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "target/release/protocol-registry"
+    image: "ghcr.io/takanashi-tetsuya/northstar/protocol-registry:${VERSION:-latest}"
+    deployment_unit: protocol-registry
+    semantic_owner: protocol-registry
+    evidence:
+      status: executable-prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     rpc:
       provides:
         - northstar.registry.v1.ProtocolRegistryService
@@ -244,11 +428,27 @@ services:
       availability: 99.99
 
   - service_id: abuse-risk
+
     implementation_status: planned
     name: "PoW Challenge and Rate-Limit Authority"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: client_ip
     database: northstar_abuse_risk
+    owner_team: platform
+    criticality: high
+    data_classes:
+      - security
+      - audit
+      - pii
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: abuse-risk-authority
+    semantic_owner: abuse-risk
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     rpc:
       provides:
         - northstar.abuserisk.v1.AbuseRiskService
@@ -260,11 +460,27 @@ services:
       availability: 99.99
 
   - service_id: moderation-reports
+
     implementation_status: planned
     name: "User Moderation Reports and Evidence Management"
-    execution_class: stateless
+    execution_class: remote-authority
     home_key: report_id
     database: northstar_moderation
+    owner_team: trust-and-safety
+    criticality: high
+    data_classes:
+      - security
+      - audit
+      - pii
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: moderation-authority
+    semantic_owner: moderation-reports
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     rpc:
       provides:
         - northstar.moderation.v1.ModerationReportsService
@@ -277,11 +493,25 @@ services:
       availability: 99.9
 
   - service_id: admin-api
+
     implementation_status: planned
     name: "External Admin REST BFF Gateway"
     execution_class: bff
     home_key: none
     database: none
+    owner_team: platform-operations
+    criticality: high
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: admin-control-plane
+    semantic_owner: admin-api
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     rpc:
       consumes:
         - northstar.identity.v1.IdentityService
@@ -291,13 +521,29 @@ services:
       availability: 99.9
 
   - service_id: admin-orchestrator
+
     implementation_status: prototype
     code_path: "services/admin-orchestrator"
     cargo_package: "service-admin-orchestrator"
     name: "Cross-Service Admin Saga Orchestration"
-    execution_class: stateful
+    execution_class: remote-authority
     home_key: operation_id
     database: northstar_admin_operations
+    owner_team: platform-operations
+    criticality: high
+    data_classes:
+      - operational
+      - audit
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: admin-control-plane
+    semantic_owner: admin-orchestrator
+    evidence:
+      status: prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     rpc:
       provides:
         - northstar.admin.v1.AdminOrchestratorService
@@ -312,11 +558,26 @@ services:
   # Stateful XEP Services (有状态 XEP 微服务)
   # ==========================================
   - service_id: xep-0016-privacy
+
     implementation_status: planned
     name: "XEP-0016 Privacy Lists"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: account_id
     database: northstar_xep_0016
+    owner_team: communication-policy
+    criticality: high
+    data_classes:
+      - jid-metadata
+      - pii
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: communication-policy-authority
+    semantic_owner: xep-0016-privacy
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     events:
       produces:
         - privacy.list.v1
@@ -325,13 +586,28 @@ services:
       availability: 99.95
 
   - service_id: xep-0045-muc
+
     implementation_status: prototype
     code_path: "services/xep-0045-muc"
     cargo_package: "service-xep-0045-muc"
     name: "XEP-0045 Multi-User Chat"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: room_id
     database: northstar_xep_0045
+    owner_team: real-time
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: muc-authority
+    semantic_owner: xep-0045-muc
+    evidence:
+      status: prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     events:
       produces:
         - muc.room.v1
@@ -342,43 +618,100 @@ services:
       availability: 99.95
 
   - service_id: xep-0049-private-storage
+
     implementation_status: planned
     name: "XEP-0049 Private XML Storage"
-    execution_class: stateful
+    execution_class: remote-authority
     home_key: account_id
     database: northstar_xep_0049
+    owner_team: profile
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: profile-authority
+    semantic_owner: xep-0049-private-storage
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     slo:
       command_p99_ms: 60
       availability: 99.9
 
   - service_id: xep-0050-ad-hoc-commands
+
     implementation_status: planned
     name: "XEP-0050 Ad-Hoc Commands"
-    execution_class: stateful
+    execution_class: remote-authority
     home_key: session_id
     database: northstar_xep_0050
+    owner_team: platform-operations
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: admin-control-plane
+    semantic_owner: xep-0050-ad-hoc-commands
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     slo:
       command_p99_ms: 100
       availability: 99.9
 
   - service_id: xep-0054-vcard-temp
+
     implementation_status: planned
     name: "XEP-0054 vCard-temp"
-    execution_class: stateful
+    execution_class: remote-authority
     home_key: account_id
     database: northstar_xep_0054
+    owner_team: profile
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: profile-authority
+    semantic_owner: xep-0054-vcard-temp
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     slo:
       command_p99_ms: 60
       availability: 99.9
 
   - service_id: xep-0060-pubsub
+
     implementation_status: prototype
     code_path: "services/xep-0060-pubsub"
     cargo_package: "service-xep-0060-pubsub"
     name: "XEP-0060 Publish-Subscribe"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: node_id
     database: northstar_xep_0060
+    owner_team: real-time
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: pubsub-authority
+    semantic_owner: xep-0060-pubsub
+    evidence:
+      status: prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     events:
       produces:
         - pubsub.event.v1
@@ -387,11 +720,25 @@ services:
       availability: 99.95
 
   - service_id: xep-0084-avatar
+
     implementation_status: planned
     name: "XEP-0084 User Avatar"
-    execution_class: stateful
+    execution_class: remote-authority
     home_key: account_id
     database: northstar_xep_0084
+    owner_team: profile
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: profile-authority
+    semantic_owner: xep-0084-avatar
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     events:
       produces:
         - avatar.update.v1
@@ -400,31 +747,74 @@ services:
       availability: 99.9
 
   - service_id: xep-0115-caps
+
     implementation_status: planned
     name: "XEP-0115 Entity Capabilities"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: verification_hash
     database: northstar_xep_0115
+    owner_team: protocol
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: protocol-registry
+    semantic_owner: xep-0115-caps
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     slo:
       command_p99_ms: 30
       availability: 99.95
 
   - service_id: xep-0160-offline-messages
+
     implementation_status: planned
     name: "XEP-0160 Best Practices for Offline Messages"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: recipient_bare_jid
     database: northstar_xep_0160
+    owner_team: messaging
+    criticality: high
+    data_classes:
+      - message-content
+      - jid-metadata
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: messaging-authority
+    semantic_owner: xep-0160-offline-messages
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     slo:
       command_p99_ms: 50
       availability: 99.95
 
   - service_id: xep-0163-pep
+
     implementation_status: planned
     name: "XEP-0163 Personal Eventing Protocol"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: owner_bare_jid
     database: northstar_xep_0163
+    owner_team: real-time
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: pubsub-authority
+    semantic_owner: xep-0163-pep
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     events:
       produces:
         - pep.event.v1
@@ -433,13 +823,29 @@ services:
       availability: 99.95
 
   - service_id: xep-0191-blocking
+
     implementation_status: prototype
     code_path: "services/xep-0191-blocking"
     cargo_package: "service-xep-0191-blocking"
     name: "XEP-0191 Blocking Command"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: account_id
     database: northstar_xep_0191
+    owner_team: communication-policy
+    criticality: high
+    data_classes:
+      - jid-metadata
+      - pii
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: communication-policy-authority
+    semantic_owner: xep-0191-blocking
+    evidence:
+      status: prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     events:
       produces:
         - blocking.list.v1
@@ -448,31 +854,73 @@ services:
       availability: 99.95
 
   - service_id: xep-0198-sm
+
     implementation_status: planned
     name: "XEP-0198 Stream Management"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: session_id
     database: northstar_xep_0198
+    owner_team: session
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: session-authority
+    semantic_owner: xep-0198-sm
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     slo:
       command_p99_ms: 20
       availability: 99.99
 
   - service_id: xep-0215-extdisco
+
     implementation_status: planned
     name: "XEP-0215 External Service Discovery"
-    execution_class: stateful
+    execution_class: remote-authority
     home_key: singleton
     database: northstar_xep_0215
+    owner_team: protocol
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: protocol-registry
+    semantic_owner: xep-0215-extdisco
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     slo:
       command_p99_ms: 50
       availability: 99.9
 
   - service_id: xep-0280-carbons
+
     implementation_status: planned
     name: "XEP-0280 Message Carbons"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: account_id
     database: northstar_xep_0280
+    owner_team: messaging
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: messaging-authority
+    semantic_owner: xep-0280-carbons
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     events:
       consumes:
         - message.accepted.v1
@@ -481,13 +929,29 @@ services:
       availability: 99.95
 
   - service_id: xep-0313-mam
+
     implementation_status: executable-prototype
     code_path: "services/xep-0313-mam"
     cargo_package: "service-xep-0313-mam"
     name: "XEP-0313 Message Archive Management"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: archive_scope_id
     database: northstar_xep_0313
+    owner_team: messaging
+    criticality: high
+    data_classes:
+      - message-content
+      - jid-metadata
+    region_mode: home_region
+    runtime_binary: "target/release/xep-0313-mam"
+    image: "ghcr.io/takanashi-tetsuya/northstar/xep-0313-mam:${VERSION:-latest}"
+    deployment_unit: mam-authority
+    semantic_owner: xep-0313-mam
+    evidence:
+      status: executable-prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     events:
       consumes:
         - message.accepted.v1
@@ -497,21 +961,49 @@ services:
       availability: 99.95
 
   - service_id: xep-0352-csi
+
     implementation_status: planned
     name: "XEP-0352 Client State Indication"
-    execution_class: stateful
+    execution_class: remote-authority
     home_key: session_id
     database: northstar_xep_0352
+    owner_team: edge-platform
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: edge-gateway
+    semantic_owner: xep-0352-csi
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     slo:
       command_p99_ms: 20
       availability: 99.99
 
   - service_id: xep-0357-push
+
     implementation_status: planned
     name: "XEP-0357 Push Notifications"
-    execution_class: stateful
+    execution_class: remote-authority
     home_key: account_id
     database: northstar_xep_0357
+    owner_team: notifications
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: push-worker
+    semantic_owner: xep-0357-push
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     events:
       consumes:
         - delivery.status.v1
@@ -520,13 +1012,29 @@ services:
       availability: 99.9
 
   - service_id: xep-0363-upload
+
     implementation_status: prototype
     code_path: "services/xep-0363-upload"
     cargo_package: "service-xep-0363-upload"
     name: "XEP-0363 HTTP File Upload"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: slot_id
     database: northstar_xep_0363
+    owner_team: storage
+    criticality: high
+    data_classes:
+      - file-metadata
+      - content
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: upload-authority
+    semantic_owner: xep-0363-upload
+    evidence:
+      status: prototype
+      required_checks:
+        - catalog-validator
+        - cargo-check
     events:
       produces:
         - upload.slot.v1
@@ -535,11 +1043,25 @@ services:
       availability: 99.95
 
   - service_id: xep-0369-mix-core
+
     implementation_status: planned
     name: "XEP-0369 Mediated Information eXchange Core"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: channel_id
     database: northstar_xep_0369
+    owner_team: real-time
+    criticality: high
+    data_classes:
+      - operational
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: mix-authority
+    semantic_owner: xep-0369-mix-core
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     events:
       produces:
         - mix.channel.v1
@@ -549,11 +1071,27 @@ services:
       availability: 99.95
 
   - service_id: xep-0484-fast
+
     implementation_status: planned
     name: "XEP-0484 Fast Authentication Token Authority"
-    execution_class: stateful-hot
+    execution_class: remote-authority
     home_key: account_id
     database: northstar_xep_0484
+    owner_team: identity
+    criticality: high
+    data_classes:
+      - account
+      - credential
+      - pii
+    region_mode: home_region
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: identity-authority
+    semantic_owner: xep-0484-fast
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
     slo:
       command_p99_ms: 30
       availability: 99.99
@@ -562,91 +1100,316 @@ services:
   # Grammar & Local SDK Extensions (纯本地规则扩展)
   # ==========================================
   - service_id: xep-0004-data-forms
+
     implementation_status: planned
     name: "XEP-0004 Data Forms Grammar"
     execution_class: local-sdk
     database: none
+    home_key: none
+    owner_team: platform
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: xmpp-edge
+    semantic_owner: xep-0004-data-forms
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0059-rsm
+
     implementation_status: planned
     name: "XEP-0059 Result Set Management Grammar"
     execution_class: local-sdk
     database: none
+    home_key: none
+    owner_team: platform
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: xmpp-edge
+    semantic_owner: xep-0059-rsm
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0082-datetime
+
     implementation_status: planned
     name: "XEP-0082 XMPP Date and Time Profiles"
     execution_class: local-sdk
     database: none
+    home_key: none
+    owner_team: platform
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: xmpp-edge
+    semantic_owner: xep-0082-datetime
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0085-chat-state
+
     implementation_status: planned
     name: "XEP-0085 Chat State Notifications"
-    execution_class: pass-through
+    execution_class: pass-through-codec
     database: none
+    home_key: none
+    owner_team: platform
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: xmpp-edge
+    semantic_owner: xep-0085-chat-state
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0092-version
+
     implementation_status: planned
     name: "XEP-0092 Software Version"
-    execution_class: stateless
+    execution_class: local-sdk
     database: none
+    home_key: none
+    owner_team: platform
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: xmpp-edge
+    semantic_owner: xep-0092-version
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0184-receipts
+
     implementation_status: planned
     name: "XEP-0184 Message Delivery Receipts"
-    execution_class: pass-through
+    execution_class: pass-through-codec
     database: none
+    home_key: none
+    owner_team: messaging
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: messaging-authority
+    semantic_owner: xep-0184-receipts
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0199-ping
+
     implementation_status: planned
     name: "XEP-0199 XMPP Ping"
     execution_class: local-sdk
     database: none
+    home_key: none
+    owner_team: platform
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: xmpp-edge
+    semantic_owner: xep-0199-ping
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0202-entity-time
+
     implementation_status: planned
     name: "XEP-0202 Entity Time"
-    execution_class: stateless
+    execution_class: local-sdk
     database: none
+    home_key: none
+    owner_team: platform
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: xmpp-edge
+    semantic_owner: xep-0202-entity-time
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0203-delayed-delivery
+
     implementation_status: planned
     name: "XEP-0203 Delayed Delivery"
     execution_class: local-sdk
     database: none
+    home_key: none
+    owner_team: platform
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: xmpp-edge
+    semantic_owner: xep-0203-delayed-delivery
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0333-chat-markers
+
     implementation_status: planned
     name: "XEP-0333 Chat Markers"
-    execution_class: pass-through
+    execution_class: pass-through-codec
     database: none
+    home_key: none
+    owner_team: messaging
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: messaging-authority
+    semantic_owner: xep-0333-chat-markers
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0334-processing-hints
+
     implementation_status: planned
     name: "XEP-0334 Message Processing Hints"
     execution_class: local-sdk
     database: none
+    home_key: none
+    owner_team: platform
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: xmpp-edge
+    semantic_owner: xep-0334-processing-hints
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0359-stanza-ids
+
     implementation_status: planned
     name: "XEP-0359 Unique and Stable Stanza IDs"
     execution_class: local-sdk
     database: none
+    home_key: none
+    owner_team: platform
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: xmpp-edge
+    semantic_owner: xep-0359-stanza-ids
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0380-eme
+
     implementation_status: planned
     name: "XEP-0380 Explicit Message Encryption"
-    execution_class: pass-through
+    execution_class: pass-through-codec
     database: none
+    home_key: none
+    owner_team: messaging
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: messaging-authority
+    semantic_owner: xep-0380-eme
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0444-reactions
+
     implementation_status: planned
     name: "XEP-0444 Message Reactions"
-    execution_class: pass-through
+    execution_class: pass-through-codec
     database: none
+    home_key: none
+    owner_team: platform
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: xmpp-edge
+    semantic_owner: xep-0444-reactions
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator
 
   - service_id: xep-0478-stream-limits
+
     implementation_status: planned
     name: "XEP-0478 Stream Limits"
     execution_class: local-sdk
     database: none
+    home_key: none
+    owner_team: platform
+    criticality: low
+    data_classes:
+      - none
+    region_mode: global
+    runtime_binary: "none"
+    image: "none"
+    deployment_unit: xmpp-edge
+    semantic_owner: xep-0478-stream-limits
+    evidence:
+      status: planned
+      required_checks:
+        - catalog-validator

@@ -1,0 +1,20 @@
+version: "2.0.0"
+
+retention_classes:
+  - class_id: operational-90d
+    duration_days: 90
+    legal_hold_supported: true
+    delete_owner_required: true
+  - class_id: message-30d
+    duration_days: 30
+    legal_hold_supported: true
+    delete_owner_required: true
+  - class_id: account-lifecycle
+    duration_days: 0
+    delete_on_account_erasure: true
+    legal_hold_supported: true
+    delete_owner_required: true
+  - class_id: audit-7y
+    duration_days: 2555
+    legal_hold_supported: true
+    delete_owner_required: true

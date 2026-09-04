@@ -1,0 +1,93 @@
+# Method-level internal RPC authorization.  Unknown methods are denied.
+version: "1.0.0"
+policies:
+  - service: northstar.identity.v1.IdentityService
+    method: Authenticate
+    allowed_workload_services: [xmpp-edge, admin-api]
+    required_scope: xmpp:authenticate
+  - service: northstar.identity.v1.IdentityService
+    method: StartAuthentication
+    allowed_workload_services: [xmpp-edge]
+    required_scope: xmpp:authenticate
+  - service: northstar.identity.v1.IdentityService
+    method: ContinueAuthentication
+    allowed_workload_services: [xmpp-edge]
+    required_scope: xmpp:authenticate
+  - service: northstar.identity.v1.IdentityService
+    method: AbortAuthentication
+    allowed_workload_services: [xmpp-edge]
+    required_scope: xmpp:authenticate
+  - service: northstar.identity.v1.IdentityService
+    method: Register
+    allowed_workload_services: [xmpp-edge, admin-api]
+    required_scope: account:register
+  - service: northstar.identity.v1.IdentityService
+    method: ChangePassword
+    allowed_workload_services: [xmpp-edge, admin-api]
+    required_scope: account:password
+  - service: northstar.identity.v1.IdentityService
+    method: RevokeCredentials
+    allowed_workload_services: [admin-api]
+    required_scope: account:revoke
+    required_role: security-admin
+    reason_required: true
+  - service: northstar.session.v1.SessionDirectoryService
+    method: BindSession
+    allowed_workload_services: [xmpp-edge]
+    required_scope: session:bind
+  - service: northstar.session.v1.SessionDirectoryService
+    method: RenewLease
+    allowed_workload_services: [xmpp-edge]
+    required_scope: session:renew
+  - service: northstar.session.v1.SessionDirectoryService
+    method: ResumeFence
+    allowed_workload_services: [xmpp-edge]
+    required_scope: session:resume
+  - service: northstar.session.v1.SessionDirectoryService
+    method: PrepareResume
+    allowed_workload_services: [xmpp-edge]
+    required_scope: session:resume
+  - service: northstar.session.v1.SessionDirectoryService
+    method: CommitResume
+    allowed_workload_services: [xmpp-edge]
+    required_scope: session:resume
+  - service: northstar.session.v1.SessionDirectoryService
+    method: ResolveTargets
+    allowed_workload_services: [delivery-router, xmpp-edge]
+    required_scope: session:resolve
+  - service: northstar.session.v1.SessionDirectoryService
+    method: ValidateAssertion
+    allowed_workload_services: [message-ingress, delivery-router]
+    required_scope: session:validate
+  - service: northstar.session.v1.SessionDirectoryService
+    method: RevokeAccountSessions
+    allowed_workload_services: [identity, admin-api]
+    required_scope: session:revoke
+    required_role: security-admin
+    reason_required: true
+  - service: northstar.session.v1.SessionDirectoryService
+    method: CloseSession
+    allowed_workload_services: [xmpp-edge]
+    required_scope: session:close
+  - service: northstar.ingress.v1.MessageIngressService
+    method: SubmitMessage
+    allowed_workload_services: [xmpp-edge, s2s-edge]
+    required_scope: message:submit
+  - service: northstar.delivery.v1.DeliveryRouterService
+    method: OpenDeliveryStream
+    allowed_workload_services: [xmpp-edge]
+    required_scope: delivery:stream
+  - service: northstar.registry.v1.ProtocolRegistryService
+    method: GetRouteSnapshot
+    allowed_workload_services: [xmpp-edge, identity, session-directory, message-ingress, delivery-router, s2s-edge]
+    required_scope: registry:read
+  - service: northstar.registry.v1.ProtocolRegistryService
+    method: WatchSnapshots
+    allowed_workload_services: [xmpp-edge, identity, session-directory, message-ingress, delivery-router, s2s-edge]
+    required_scope: registry:watch
+  - service: northstar.registry.v1.ProtocolRegistryService
+    method: RegisterInstance
+    allowed_workload_services: [admin-api]
+    required_scope: registry:register
+    required_role: operator
+    reason_required: true

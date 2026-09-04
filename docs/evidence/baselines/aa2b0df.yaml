@@ -1,0 +1,78 @@
+baseline:
+  id: aa2b0df
+  short_commit: aa2b0df
+  commit: aa2b0df03bed53bc6a032c5a5ac74374bb62167b
+  workflow_run: "33833472340"
+  branch: dev
+  date: 2026-09-04
+  program_title: split program-5
+  title: Northstar program-5 evidence freeze
+  status: frozen
+  maturity_estimate: 25-30%
+
+catalog_summary:
+  services: 51
+  stanza_routes: 38
+  owned_tables: 77
+  service_status:
+    executable_prototype: 7
+    prototype: 8
+    scaffold: 0
+    planned: 36
+    integrated: 0
+    production: 0
+
+governance:
+  governance_scope:
+    - contracts/ (wire contracts / proto generation)
+    - security + identity/session ownership paths
+    - multi-service runtime boundaries
+    - migration and role layout
+  branch_governance:
+    required_checks_enabled: false
+    branch_protection: false
+    summary: "To be configured in GitHub branch rules; docs/governance/branch-rules.md contains the target baseline."
+
+evidence:
+  ci:
+    command_matrix:
+      - cargo_fmt
+      - cargo_check
+      - cargo_test
+      - cargo_clippy
+      - cargo_build
+      - buf_contract_jobs
+      - parse_check_fuzzer
+      - microservice_catalog
+    result_overview: partially successful
+  notable_failures:
+    - "catalog check reports baseline drift against stale migration/bundle assumptions in some historical workflows"
+    - "database-role-path tests are partially blocked by hardened local-safety rails in CI templates"
+    - "release-signing/chain-of-trust gates are partially staged (M25/M26 scope)"
+  external_evidence:
+    - docs/WEB_CRYPTO_SUPPLY_CHAIN.md
+    - docs/BACKUP_SECURITY.md
+    - docs/DATABASE_ROLES.md
+
+operational_assumptions:
+  monolith_baseline:
+    role: reference
+    description: >
+      `src/` monolith remains the protocol behavior oracle and canonical fallback
+      until remote-service cutover reaches production-ready invariants.
+  multi_region:
+    role: staged
+    description: >
+      Multi-region design is in roadmap; single-region home-authority path is the
+      required operational boundary for this baseline.
+  public_federation:
+    status: pending
+    note: "Interoperability matrix and external federation claims remain operational evidence only; not yet production-certified."
+
+release_readiness:
+  integrated_services: 0
+  production_services: 0
+  blocking_gates:
+    - "Branch protection + CODEOWNER enforcement completed externally (non-code)"
+    - "Signed release workflow + immutable attestations"
+    - "Real multi-process fault-invariant evidence for critical paths"

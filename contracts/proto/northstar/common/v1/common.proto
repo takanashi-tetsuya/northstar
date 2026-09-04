@@ -4,20 +4,31 @@ package northstar.common.v1;
 
 import "google/protobuf/duration.proto";
 
-// Unified error response detail per northstar_microservices_deep_audit_2026-09-03.md (Appendix B.5).
+// Unified, safe error response detail.
+//
+// Fields 1-6 are retained as deprecated compatibility aliases for the
+// pre-M02 contract. New producers must populate reason/domain/correlation_id
+// and must not put infrastructure details, credentials, or raw JIDs in
+// safe_message.
 message ErrorDetail {
-  // Stable machine code (e.g. "AUTH_FAILED", "VERSION_CONFLICT", "RESOURCE_CONSTRAINT")
+  // Deprecated alias for reason. Do not add new producers using this field.
   string code = 1;
-  // Whether the client/caller is permitted to retry the command
+  // Whether the client/caller is permitted to retry the command.
   bool retryable = 2;
-  // User-facing safe error message with zero internal infrastructure leakage
+  // User-facing safe error message with zero internal infrastructure leakage.
   string safe_message = 3;
-  // Authoritative state version at the time of rejection (for version barrier check)
+  // Authoritative state version at the time of rejection (for version barrier check).
   optional uint64 current_version = 4;
-  // Detailed field violation list if validation failed
+  // Detailed field violation list if validation failed.
   repeated FieldViolation violations = 5;
-  // Recommended retry backoff duration
+  // Recommended retry backoff duration.
   optional google.protobuf.Duration retry_after = 6;
+  // Stable machine reason (e.g. "AUTH_FAILED", "VERSION_CONFLICT").
+  string reason = 7;
+  // Owning bounded context (e.g. "identity", "delivery", "registry").
+  string domain = 8;
+  // Safe correlation identifier for support and tracing; never a secret.
+  string correlation_id = 9;
 }
 
 message FieldViolation {
@@ -25,13 +36,37 @@ message FieldViolation {
   string description = 2;
 }
 
-// Authenticated principal context passed across internal RPCs.
+// Legacy principal context retained only for the migration window.
 message AuthContext {
+  // Deprecated compatibility envelope. New RPCs must use a verified signed
+  // assertion carried in authenticated metadata instead.
   string account_id = 1;
   string canonical_jid = 2;
   uint64 credential_generation = 3;
   repeated string roles = 4;
   string home_region = 5;
+}
+
+// Non-authoritative request metadata. Authentication and authorization are
+// established by workload mTLS and a verified SignedAssertion, not by fields
+// in this message.
+message RequestMetadata {
+  TraceContext trace = 1;
+  optional IdempotencyKey idempotency_key = 2;
+  optional PageToken page_token = 3;
+  // Caller-generated request identifier used only for tracing and diagnostics.
+  string request_id = 4;
+}
+
+// Opaque idempotency key. The owning service validates scope and lifetime.
+message IdempotencyKey {
+  string value = 1;
+}
+
+// Opaque pagination cursor. It is not a database offset and must be treated
+// as untrusted input by every consumer.
+message PageToken {
+  bytes value = 1;
 }
 
 // Distributed tracing context propagating causal relationships across asynchronous boundaries.

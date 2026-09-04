@@ -1,0 +1,9 @@
+service_id: example-service
+status: executable-prototype
+last_verified_commit: 0000000
+required_checks:
+  - catalog-validator
+  - cargo-check
+artifacts:
+  - docs/evidence/runs/<run-id>/catalog-validator.txt
+notes: "Local executable prototype evidence; not a production claim."

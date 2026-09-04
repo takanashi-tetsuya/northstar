@@ -2,7 +2,9 @@
 //!
 //! Defined per `northstar_microservices_deep_audit_2026-09-03.md` (Sections 5.2, 6, 19.5).
 
-use foundation_contracts::registry::{
+use chrono::Utc;
+use foundation_contracts::adapters::common::ErrorDetail;
+use foundation_contracts::adapters::registry::{
     DiscoFeature, GetRouteSnapshotRequest, GetRouteSnapshotResponse, RegisterInstanceRequest,
     RegisterInstanceResponse, RouteEntry,
 };
@@ -116,22 +118,43 @@ impl RegistryService {
             hasher.update(r.stanza.as_bytes());
             hasher.update(r.service_id.as_bytes());
         }
-        let signature = hasher.finalize().to_vec();
+        let digest = hasher.finalize().to_vec();
 
         GetRouteSnapshotResponse {
             snapshot_version: version,
-            signature,
+            signature: Vec::new(),
             routes,
             disco_features: disco,
+            digest,
+            key_id: String::new(),
+            algorithm: String::new(),
+            issued_at_unix_ms: 0,
+            expires_at_unix_ms: 0,
         }
     }
 
-    pub fn register_instance(&self, _req: RegisterInstanceRequest) -> RegisterInstanceResponse {
+    pub fn register_instance(&self, req: RegisterInstanceRequest) -> RegisterInstanceResponse {
+        let authorized_operator = req.operator_assertion.as_ref().is_some_and(|assertion| {
+            assertion
+                .validate_at(Utc::now(), "protocol-registry")
+                .is_ok()
+        });
+        if !authorized_operator {
+            return RegisterInstanceResponse {
+                acknowledged: false,
+                current_registry_version: *self.version.read().unwrap(),
+                error: Some(ErrorDetail::new(
+                    "UNAUTHENTICATED",
+                    "A verified operator assertion is required",
+                )),
+            };
+        }
         let mut ver = self.version.write().unwrap();
         *ver += 1;
         RegisterInstanceResponse {
             acknowledged: true,
             current_registry_version: *ver,
+            error: None,
         }
     }
 
@@ -162,10 +185,13 @@ mod tests {
     #[test]
     fn snapshot_generation_and_route_resolution() {
         let registry = RegistryService::new().with_default_routes();
-        let snapshot = registry.get_route_snapshot(GetRouteSnapshotRequest { since_version: 0 });
+        let snapshot = registry.get_route_snapshot(GetRouteSnapshotRequest {
+            since_version: 0,
+            trace: None,
+        });
 
         assert_eq!(snapshot.snapshot_version, 1);
-        assert!(!snapshot.signature.is_empty());
+        assert!(!snapshot.digest.is_empty());
         assert_eq!(snapshot.routes.len(), 6);
 
         let resolved =

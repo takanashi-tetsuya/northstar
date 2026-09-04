@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://northstar.invalid/schemas/catalog-routes.schema.json",
+  "title": "Northstar Route Catalog",
+  "type": "object",
+  "required": ["version", "routes"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "routes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/route" },
+      "minItems": 1
+    }
+  },
+  "definitions": {
+    "route": {
+      "type": "object",
+      "required": [
+        "namespace", "element", "stanza", "stanza_kind", "phase", "owner",
+        "semantic_owner", "deployment_unit", "execution_mode", "required_principal",
+        "required_scope", "deadline_ms", "max_payload_bytes", "retry_policy",
+        "idempotency", "ordering_key", "fanout", "failure_mode", "observability"
+      ],
+      "properties": {
+        "namespace": { "type": "string", "minLength": 1 },
+        "element": { "type": "string", "minLength": 1 },
+        "stanza": { "type": "string", "minLength": 1 },
+        "stanza_kind": { "type": "string" },
+        "phase": {
+          "type": "string",
+          "enum": ["pre-auth", "authenticating", "binding", "authenticated", "active", "fallback"]
+        },
+        "owner": { "type": "string", "minLength": 1 },
+        "semantic_owner": { "type": "string", "minLength": 1 },
+        "deployment_unit": { "type": "string" },
+        "execution_mode": {
+          "type": "string",
+          "enum": [
+            "remote-authority",
+            "remote-worker",
+            "transport",
+            "control-plane",
+            "bff",
+            "local-sdk",
+            "signed-policy-snapshot",
+            "pass-through-codec"
+          ]
+        },
+        "required_principal": { "type": "string" },
+        "required_scope": { "type": "string" },
+        "deadline_ms": { "type": "number", "minimum": 1 },
+        "max_payload_bytes": { "type": "number", "minimum": 1 },
+        "retry_policy": { "type": "string" },
+        "idempotency": { "type": "boolean" },
+        "ordering_key": { "type": "string" },
+        "fanout": { "type": "boolean" },
+        "failure_mode": {
+          "type": "string",
+          "enum": ["fail-closed", "fail-open"]
+        },
+        "observability": {
+          "required": ["trace_category", "required_labels"],
+          "type": "object",
+          "properties": {
+            "trace_category": { "type": "string" },
+            "required_labels": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

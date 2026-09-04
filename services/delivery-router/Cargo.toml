@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 foundation-contracts = { path = "../../crates/foundation-contracts" }
 foundation-security = { path = "../../crates/foundation-security" }
-foundation-eventing = { path = "../../crates/foundation-eventing" }
+foundation-eventing = { path = "../../crates/foundation-eventing", features = ["test-support"] }
 foundation-telemetry = { path = "../../crates/foundation-telemetry" }
 foundation-service-runtime = { path = "../../crates/foundation-service-runtime" }
 serde = { version = "1.0", features = ["derive"] }

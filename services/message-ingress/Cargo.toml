@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 foundation-contracts = { path = "../../crates/foundation-contracts" }
 foundation-security = { path = "../../crates/foundation-security" }
-foundation-eventing = { path = "../../crates/foundation-eventing" }
+foundation-eventing = { path = "../../crates/foundation-eventing", features = ["test-support"] }
 foundation-telemetry = { path = "../../crates/foundation-telemetry" }
 foundation-service-runtime = { path = "../../crates/foundation-service-runtime" }
 serde = { version = "1.0", features = ["derive"] }
@@ -20,6 +20,7 @@ tracing = "0.1"
 northstar-xmpp-types = { path = "../../crates/northstar-xmpp-types" }
 uuid = { version = "1.12", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
 
 [[bin]]
 name = "message-ingress"

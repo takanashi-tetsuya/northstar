@@ -114,6 +114,78 @@ pub mod identity_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        pub async fn start_authentication(
+            &mut self,
+            request: impl tonic::IntoRequest<super::StartAuthenticationRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::StartAuthenticationResponse>,
+            tonic::Status,
+        > {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::new(
+                    tonic::Code::Unknown,
+                    format!("Service was not ready: {}", e.into()),
+                )
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/northstar.identity.v1.IdentityService/StartAuthentication",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "northstar.identity.v1.IdentityService",
+                "StartAuthentication",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn continue_authentication(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ContinueAuthenticationRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ContinueAuthenticationResponse>,
+            tonic::Status,
+        > {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::new(
+                    tonic::Code::Unknown,
+                    format!("Service was not ready: {}", e.into()),
+                )
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/northstar.identity.v1.IdentityService/ContinueAuthentication",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "northstar.identity.v1.IdentityService",
+                "ContinueAuthentication",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn abort_authentication(
+            &mut self,
+            request: impl tonic::IntoRequest<super::AbortAuthenticationRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::AbortAuthenticationResponse>,
+            tonic::Status,
+        > {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::new(
+                    tonic::Code::Unknown,
+                    format!("Service was not ready: {}", e.into()),
+                )
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/northstar.identity.v1.IdentityService/AbortAuthentication",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "northstar.identity.v1.IdentityService",
+                "AbortAuthentication",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
         pub async fn register(
             &mut self,
             request: impl tonic::IntoRequest<super::RegisterRequest>,
@@ -245,6 +317,27 @@ pub mod identity_service_server {
             request: tonic::Request<super::AuthenticateRequest>,
         ) -> std::result::Result<
             tonic::Response<super::AuthenticateResponse>,
+            tonic::Status,
+        >;
+        async fn start_authentication(
+            &self,
+            request: tonic::Request<super::StartAuthenticationRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::StartAuthenticationResponse>,
+            tonic::Status,
+        >;
+        async fn continue_authentication(
+            &self,
+            request: tonic::Request<super::ContinueAuthenticationRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ContinueAuthenticationResponse>,
+            tonic::Status,
+        >;
+        async fn abort_authentication(
+            &self,
+            request: tonic::Request<super::AbortAuthenticationRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::AbortAuthenticationResponse>,
             tonic::Status,
         >;
         async fn register(
@@ -394,6 +487,105 @@ pub mod identity_service_server {
                             );
                         let res = grpc.unary(method, req).await;
                         Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/northstar.identity.v1.IdentityService/StartAuthentication" => {
+                    #[allow(non_camel_case_types)]
+                    struct StartAuthenticationSvc<T: IdentityService>(pub Arc<T>);
+                    impl<T: IdentityService> tonic::server::UnaryService<super::StartAuthenticationRequest>
+                        for StartAuthenticationSvc<T>
+                    {
+                        type Response = super::StartAuthenticationResponse;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::StartAuthenticationRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            Box::pin(async move {
+                                <T as IdentityService>::start_authentication(&inner, request).await
+                            })
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StartAuthenticationSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(accept_compression_encodings, send_compression_encodings)
+                            .apply_max_message_size_config(max_decoding_message_size, max_encoding_message_size);
+                        Ok(grpc.unary(method, req).await)
+                    };
+                    Box::pin(fut)
+                }
+                "/northstar.identity.v1.IdentityService/ContinueAuthentication" => {
+                    #[allow(non_camel_case_types)]
+                    struct ContinueAuthenticationSvc<T: IdentityService>(pub Arc<T>);
+                    impl<T: IdentityService> tonic::server::UnaryService<super::ContinueAuthenticationRequest>
+                        for ContinueAuthenticationSvc<T>
+                    {
+                        type Response = super::ContinueAuthenticationResponse;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ContinueAuthenticationRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            Box::pin(async move {
+                                <T as IdentityService>::continue_authentication(&inner, request).await
+                            })
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ContinueAuthenticationSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(accept_compression_encodings, send_compression_encodings)
+                            .apply_max_message_size_config(max_decoding_message_size, max_encoding_message_size);
+                        Ok(grpc.unary(method, req).await)
+                    };
+                    Box::pin(fut)
+                }
+                "/northstar.identity.v1.IdentityService/AbortAuthentication" => {
+                    #[allow(non_camel_case_types)]
+                    struct AbortAuthenticationSvc<T: IdentityService>(pub Arc<T>);
+                    impl<T: IdentityService> tonic::server::UnaryService<super::AbortAuthenticationRequest>
+                        for AbortAuthenticationSvc<T>
+                    {
+                        type Response = super::AbortAuthenticationResponse;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::AbortAuthenticationRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            Box::pin(async move {
+                                <T as IdentityService>::abort_authentication(&inner, request).await
+                            })
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = AbortAuthenticationSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(accept_compression_encodings, send_compression_encodings)
+                            .apply_max_message_size_config(max_decoding_message_size, max_encoding_message_size);
+                        Ok(grpc.unary(method, req).await)
                     };
                     Box::pin(fut)
                 }

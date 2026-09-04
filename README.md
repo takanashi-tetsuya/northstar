@@ -20,6 +20,9 @@ See the [documentation index](docs/README.md), [security policy](SECURITY.md),
 > **Architecture Evolution Status**:
 > - **Production Baseline**: The single-process modular monolith (`rust-xmpp-server`) remains the authoritative, supported production baseline for Northstar 0.2.0.
 > - **Microservices v2 Target**: The distributed microservices architecture (`services/*`) is under active prototype-to-integration development. Prototype code, gRPC wire schemas, and decoupled domain actors are being developed in accordance with `northstar_progress_and_next_plan_2026-09-04.md`.
+>
+> The architecture/evidence checkpoint currently aligned with runtime docs is
+> `docs/evidence/baselines/aa2b0df.yaml`.
 
 ## How to use
 

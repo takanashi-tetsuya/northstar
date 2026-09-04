@@ -3,11 +3,17 @@ syntax = "proto3";
 package northstar.session.v1;
 
 import "northstar/common/v1/common.proto";
+import "northstar/security/v1/assertions.proto";
 
 service SessionDirectoryService {
   rpc BindSession(BindSessionRequest) returns (BindSessionResponse);
+  rpc RenewLease(RenewLeaseRequest) returns (RenewLeaseResponse);
   rpc ResumeFence(ResumeFenceRequest) returns (ResumeFenceResponse);
+  rpc PrepareResume(PrepareResumeRequest) returns (PrepareResumeResponse);
+  rpc CommitResume(CommitResumeRequest) returns (CommitResumeResponse);
   rpc ResolveTargets(ResolveTargetsRequest) returns (ResolveTargetsResponse);
+  rpc ValidateAssertion(ValidateAssertionRequest) returns (ValidateAssertionResponse);
+  rpc RevokeAccountSessions(RevokeAccountSessionsRequest) returns (RevokeAccountSessionsResponse);
   rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);
 }
 
@@ -17,6 +23,8 @@ message BindSessionRequest {
   string edge_instance_id = 3;
   string connection_id = 4;
   northstar.common.v1.TraceContext trace = 5;
+  // Signed AuthGrant is authoritative once the transition is complete.
+  optional northstar.security.v1.AuthGrant auth_grant = 6;
 }
 
 message BindSessionResponse {
@@ -24,6 +32,7 @@ message BindSessionResponse {
   string full_jid = 2;
   uint64 session_epoch = 3;
   optional northstar.common.v1.ErrorDetail error = 4;
+  optional northstar.security.v1.SessionAssertion assertion = 5;
 }
 
 message ResumeFenceRequest {
@@ -32,6 +41,8 @@ message ResumeFenceRequest {
   string new_edge_instance_id = 3;
   string new_connection_id = 4;
   northstar.common.v1.TraceContext trace = 5;
+  uint64 expected_region_epoch = 6;
+  optional northstar.common.v1.IdempotencyKey idempotency_key = 7;
 }
 
 message ResumeFenceResponse {
@@ -42,6 +53,7 @@ message ResumeFenceResponse {
 
 message ResolveTargetsRequest {
   string bare_or_full_jid = 1;
+  northstar.common.v1.TraceContext trace = 2;
 }
 
 message SessionTarget {
@@ -49,6 +61,8 @@ message SessionTarget {
   string edge_instance_id = 2;
   string connection_id = 3;
   uint64 session_epoch = 4;
+  uint64 route_incarnation = 5;
+  int64 expires_at_unix_ms = 6;
 }
 
 message ResolveTargetsResponse {
@@ -60,8 +74,81 @@ message CloseSessionRequest {
   uint64 session_epoch = 2;
   string reason = 3;
   northstar.common.v1.TraceContext trace = 4;
+  uint64 expected_region_epoch = 5;
+  optional northstar.common.v1.IdempotencyKey idempotency_key = 6;
 }
 
 message CloseSessionResponse {
   bool success = 1;
+}
+
+message RenewLeaseRequest {
+  string full_jid = 1;
+  uint64 expected_session_epoch = 2;
+  uint64 expected_region_epoch = 3;
+  uint32 lease_ttl_seconds = 4;
+  optional northstar.common.v1.IdempotencyKey idempotency_key = 5;
+  northstar.common.v1.TraceContext trace = 6;
+}
+
+message RenewLeaseResponse {
+  bool success = 1;
+  uint64 session_epoch = 2;
+  int64 lease_expires_at_unix_ms = 3;
+  optional northstar.common.v1.ErrorDetail error = 4;
+}
+
+message PrepareResumeRequest {
+  string full_jid = 1;
+  bytes resume_token_hash = 2;
+  uint64 expected_session_epoch = 3;
+  string new_edge_instance_id = 4;
+  string new_connection_id = 5;
+  optional northstar.common.v1.IdempotencyKey idempotency_key = 6;
+  northstar.common.v1.TraceContext trace = 7;
+}
+
+message PrepareResumeResponse {
+  bool success = 1;
+  string resume_id = 2;
+  uint64 session_epoch = 3;
+  optional northstar.common.v1.ErrorDetail error = 4;
+}
+
+message CommitResumeRequest {
+  string resume_id = 1;
+  uint64 expected_session_epoch = 2;
+  optional northstar.common.v1.IdempotencyKey idempotency_key = 3;
+  northstar.common.v1.TraceContext trace = 4;
+}
+
+message CommitResumeResponse {
+  bool success = 1;
+  uint64 new_session_epoch = 2;
+  optional northstar.common.v1.ErrorDetail error = 3;
+}
+
+message ValidateAssertionRequest {
+  northstar.security.v1.SessionAssertion assertion = 1;
+  string expected_audience = 2;
+  northstar.common.v1.TraceContext trace = 3;
+}
+
+message ValidateAssertionResponse {
+  bool valid = 1;
+  optional northstar.common.v1.ErrorDetail error = 2;
+}
+
+message RevokeAccountSessionsRequest {
+  string account_id = 1;
+  uint64 expected_credential_generation = 2;
+  optional northstar.common.v1.IdempotencyKey idempotency_key = 3;
+  string reason = 4;
+  northstar.common.v1.TraceContext trace = 5;
+}
+
+message RevokeAccountSessionsResponse {
+  bool success = 1;
+  uint64 revoked_count = 2;
+  optional northstar.common.v1.ErrorDetail error = 3;
 }

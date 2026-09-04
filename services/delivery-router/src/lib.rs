@@ -2,9 +2,9 @@
 //!
 //! Defined per `northstar_microservices_deep_audit_2026-09-03.md` (Sections 6, 8, 12, 19.2).
 
-use foundation_contracts::delivery::DeliveryServerMessage;
-use foundation_contracts::events::MessageAcceptedEventPayload;
-use foundation_contracts::session::SessionTarget;
+use foundation_contracts::adapters::delivery::DeliveryServerMessage;
+use foundation_contracts::adapters::events::MessageAcceptedEventPayload;
+use foundation_contracts::adapters::session::SessionTarget;
 use foundation_eventing::memory::InMemoryInbox;
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -154,6 +154,9 @@ impl DeliveryRouterService {
                         target_full_jid: target.full_jid.clone(),
                         stanza: msg.raw_stanza.clone(),
                         trace: None,
+                        server_message_id: msg.server_message_id.clone(),
+                        delivery_attempt: 1,
+                        session_epoch: target.session_epoch,
                     };
 
                     match tx.send(delivery).await {
@@ -312,6 +315,8 @@ mod tests {
             edge_instance_id: "edge-1".to_string(),
             connection_id: "conn-123".to_string(),
             session_epoch: 1,
+            route_incarnation: 1,
+            expires_at_unix_ms: 0,
         };
 
         let processed = router
@@ -378,6 +383,8 @@ mod tests {
             edge_instance_id: "edge-broken".to_string(),
             connection_id: "conn-dead".to_string(),
             session_epoch: 1,
+            route_incarnation: 1,
+            expires_at_unix_ms: 0,
         };
 
         let processed = router
@@ -426,18 +433,24 @@ mod tests {
                 edge_instance_id: "edge-alive".to_string(),
                 connection_id: "conn-1".to_string(),
                 session_epoch: 1,
+                route_incarnation: 1,
+                expires_at_unix_ms: 0,
             },
             SessionTarget {
                 full_jid: "bob@example.com/mobile".to_string(),
                 edge_instance_id: "edge-dead".to_string(),
                 connection_id: "conn-2".to_string(),
                 session_epoch: 2,
+                route_incarnation: 1,
+                expires_at_unix_ms: 0,
             },
             SessionTarget {
                 full_jid: "bob@example.com/tablet".to_string(),
                 edge_instance_id: "edge-unregistered".to_string(),
                 connection_id: "conn-3".to_string(),
                 session_epoch: 3,
+                route_incarnation: 1,
+                expires_at_unix_ms: 0,
             },
         ];
 

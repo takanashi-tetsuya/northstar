@@ -52,6 +52,10 @@ members = [
     "crates/northstar-federation-application",
     "crates/northstar-protocol-runtime",
     "crates/foundation-security",
+    "crates/foundation-postgres",
+    "crates/foundation-db-test",
+    "crates/foundation-eventing-postgres",
+    "crates/foundation-kms",
     "crates/foundation-eventing",
     "crates/foundation-telemetry",
     "crates/foundation-contracts",
@@ -73,6 +77,11 @@ members = [
     "services/xep-0191-blocking",
     "services/admin-orchestrator",
     "tools/data-split-migrator",
+    "tools/db-bootstrap",
+    "tools/restore-verifier",
+    "tools/kafka-policy-generator",
+    "tools/catalog-validator",
+    "tools/architecture-validator",
 ]
 default-members = ["."]
 resolver = "2"

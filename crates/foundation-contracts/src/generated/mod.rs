@@ -34,4 +34,9 @@
             include!("northstar.session.v1.rs");
         }
     }
+    pub mod security {
+        pub mod v1 {
+            include!("northstar.security.v1.rs");
+        }
+    }
 }

@@ -694,22 +694,33 @@ async fn main() -> Result<()> {
         );
     }
 
+    let http_listener = tokio::net::TcpListener::bind(state.config.http_bind).await?;
+    let metrics_listener = tokio::net::TcpListener::bind(state.config.metrics_bind).await?;
+    let admin_listener = if state.config.web_admin_enabled {
+        Some(tokio::net::TcpListener::bind(state.config.web_admin_bind).await?)
+    } else {
+        None
+    };
+
     let shutdown_state = state.clone();
     spawn_service_task(
         &mut service_tasks,
         "metrics",
-        api::serve_metrics(state.clone(), cancel.clone()),
+        api::serve_metrics(state.clone(), cancel.clone(), metrics_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "HTTP",
-        api::serve(state.clone(), cancel.clone()),
+        api::serve(state.clone(), cancel.clone(), http_listener),
     );
     if state.config.web_admin_enabled {
+        let Some(listener) = admin_listener else {
+            unreachable!("web admin listener should be present when web_admin_enabled is true")
+        };
         spawn_service_task(
             &mut service_tasks,
             "Web administration",
-            api::serve_administration(state, cancel.clone()),
+            api::serve_administration(state, cancel.clone(), listener),
         );
     }
 

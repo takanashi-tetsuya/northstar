@@ -2,30 +2,25 @@
 """
 Allocate non-overlapping, available TCP ports within a specified range.
 Usage: python3 scripts/allocate-test-ports.py <min_port> <max_port> <count>
-Output: space-separated list of ports
+Output: space-separated list of ports.
 """
-import random
 import socket
 import sys
 
 def find_available_ports(min_port, max_port, count):
     ports = []
-    candidates = list(range(min_port, max_port + 1))
-    random.shuffle(candidates)
-
-    for port in candidates:
+    for port in range(min_port, max_port + 1):
+        if len(ports) == count:
+            break
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(('127.0.0.1', port))
             ports.append(port)
-            if len(ports) == count:
-                break
         except OSError:
-            continue
+            pass
         finally:
             s.close()
-
     if len(ports) < count:
         sys.stderr.write(f"Error: Could only find {len(ports)} of {count} available ports in range {min_port}-{max_port}\n")
         sys.exit(1)

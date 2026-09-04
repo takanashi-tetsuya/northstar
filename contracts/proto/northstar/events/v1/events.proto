@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package northstar.events.v1;
 
+import "northstar/common/v1/common.proto";
+
 // Standard Transactional Outbox Event format per Appendix B.2
 message OutboxEvent {
   string event_id = 1; // UUID v4
@@ -22,4 +24,28 @@ message ConsumerInboxEntry {
   string event_id = 2;
   int64 processed_at_unix_ms = 3;
   bytes result_digest = 4;
+}
+
+// EventEnvelope is the versioned, authenticated transport envelope.  Payload
+// bytes are interpreted only after payload_type has passed the consumer's
+// explicit allow-list; arbitrary Any/type_url dispatch is intentionally not
+// part of the contract.
+message EventEnvelope {
+  string event_id = 1;
+  string producer_service = 2;
+  string producer_instance = 3;
+  string schema = 4;
+  uint32 schema_version = 5;
+  string aggregate_type = 6;
+  string aggregate_id = 7;
+  uint64 aggregate_version = 8;
+  string partition_key = 9;
+  string event_type = 10;
+  bytes payload = 11;
+  string payload_type = 12;
+  string correlation_id = 13;
+  string causation_id = 14;
+  northstar.common.v1.TraceContext trace = 15;
+  string classification = 16;
+  int64 created_at_unix_ms = 17;
 }

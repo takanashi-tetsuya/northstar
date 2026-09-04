@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://northstar.invalid/schemas/evidence.schema.json",
+  "title": "Northstar Service Maturity Evidence",
+  "type": "object",
+  "required": ["service_id", "status", "last_verified_commit", "required_checks", "artifacts"],
+  "properties": {
+    "service_id": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["planned", "scaffold", "executable-prototype", "integrated", "production-candidate", "production"]
+    },
+    "last_verified_commit": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
+    "required_checks": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "artifacts": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "notes": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "enum": ["integrated", "production-candidate", "production"] } } },
+      "then": { "properties": { "artifacts": { "minItems": 2 } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "production" } } },
+      "then": { "properties": { "required_checks": { "contains": { "const": "external-audit" } } } }
+    }
+  ],
+  "additionalProperties": false
+}

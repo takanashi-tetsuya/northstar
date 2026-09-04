@@ -13,6 +13,8 @@ pub struct BindSessionRequest {
     pub connection_id: ::prost::alloc::string::String,
     #[prost(message, optional, tag="5")]
     pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+    #[prost(message, optional, tag="6")]
+    pub auth_grant: ::core::option::Option<super::super::security::v1::AuthGrant>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -25,6 +27,8 @@ pub struct BindSessionResponse {
     pub session_epoch: u64,
     #[prost(message, optional, tag="4")]
     pub error: ::core::option::Option<super::super::common::v1::ErrorDetail>,
+    #[prost(message, optional, tag="5")]
+    pub assertion: ::core::option::Option<super::super::security::v1::SessionAssertion>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -39,6 +43,10 @@ pub struct ResumeFenceRequest {
     pub new_connection_id: ::prost::alloc::string::String,
     #[prost(message, optional, tag="5")]
     pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+    #[prost(uint64, tag="6")]
+    pub expected_region_epoch: u64,
+    #[prost(message, optional, tag="7")]
+    pub idempotency_key: ::core::option::Option<super::super::common::v1::IdempotencyKey>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -55,6 +63,8 @@ pub struct ResumeFenceResponse {
 pub struct ResolveTargetsRequest {
     #[prost(string, tag="1")]
     pub bare_or_full_jid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -67,6 +77,10 @@ pub struct SessionTarget {
     pub connection_id: ::prost::alloc::string::String,
     #[prost(uint64, tag="4")]
     pub session_epoch: u64,
+    #[prost(uint64, tag="5")]
+    pub route_incarnation: u64,
+    #[prost(int64, tag="6")]
+    pub expires_at_unix_ms: i64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -85,12 +99,138 @@ pub struct CloseSessionRequest {
     pub reason: ::prost::alloc::string::String,
     #[prost(message, optional, tag="4")]
     pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+    #[prost(uint64, tag="5")]
+    pub expected_region_epoch: u64,
+    #[prost(message, optional, tag="6")]
+    pub idempotency_key: ::core::option::Option<super::super::common::v1::IdempotencyKey>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CloseSessionResponse {
     #[prost(bool, tag="1")]
     pub success: bool,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RenewLeaseRequest {
+    #[prost(string, tag="1")]
+    pub full_jid: ::prost::alloc::string::String,
+    #[prost(uint64, tag="2")]
+    pub expected_session_epoch: u64,
+    #[prost(uint64, tag="3")]
+    pub expected_region_epoch: u64,
+    #[prost(uint32, tag="4")]
+    pub lease_ttl_seconds: u32,
+    #[prost(message, optional, tag="5")]
+    pub idempotency_key: ::core::option::Option<super::super::common::v1::IdempotencyKey>,
+    #[prost(message, optional, tag="6")]
+    pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RenewLeaseResponse {
+    #[prost(bool, tag="1")]
+    pub success: bool,
+    #[prost(uint64, tag="2")]
+    pub session_epoch: u64,
+    #[prost(int64, tag="3")]
+    pub lease_expires_at_unix_ms: i64,
+    #[prost(message, optional, tag="4")]
+    pub error: ::core::option::Option<super::super::common::v1::ErrorDetail>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrepareResumeRequest {
+    #[prost(string, tag="1")]
+    pub full_jid: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="2")]
+    pub resume_token_hash: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag="3")]
+    pub expected_session_epoch: u64,
+    #[prost(string, tag="4")]
+    pub new_edge_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub new_connection_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="6")]
+    pub idempotency_key: ::core::option::Option<super::super::common::v1::IdempotencyKey>,
+    #[prost(message, optional, tag="7")]
+    pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrepareResumeResponse {
+    #[prost(bool, tag="1")]
+    pub success: bool,
+    #[prost(string, tag="2")]
+    pub resume_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="3")]
+    pub session_epoch: u64,
+    #[prost(message, optional, tag="4")]
+    pub error: ::core::option::Option<super::super::common::v1::ErrorDetail>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommitResumeRequest {
+    #[prost(string, tag="1")]
+    pub resume_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="2")]
+    pub expected_session_epoch: u64,
+    #[prost(message, optional, tag="3")]
+    pub idempotency_key: ::core::option::Option<super::super::common::v1::IdempotencyKey>,
+    #[prost(message, optional, tag="4")]
+    pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommitResumeResponse {
+    #[prost(bool, tag="1")]
+    pub success: bool,
+    #[prost(uint64, tag="2")]
+    pub new_session_epoch: u64,
+    #[prost(message, optional, tag="3")]
+    pub error: ::core::option::Option<super::super::common::v1::ErrorDetail>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidateAssertionRequest {
+    #[prost(message, optional, tag="1")]
+    pub assertion: ::core::option::Option<super::super::security::v1::SessionAssertion>,
+    #[prost(string, tag="2")]
+    pub expected_audience: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidateAssertionResponse {
+    #[prost(bool, tag="1")]
+    pub valid: bool,
+    #[prost(message, optional, tag="2")]
+    pub error: ::core::option::Option<super::super::common::v1::ErrorDetail>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RevokeAccountSessionsRequest {
+    #[prost(string, tag="1")]
+    pub account_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="2")]
+    pub expected_credential_generation: u64,
+    #[prost(message, optional, tag="3")]
+    pub idempotency_key: ::core::option::Option<super::super::common::v1::IdempotencyKey>,
+    #[prost(string, tag="4")]
+    pub reason: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="5")]
+    pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RevokeAccountSessionsResponse {
+    #[prost(bool, tag="1")]
+    pub success: bool,
+    #[prost(uint64, tag="2")]
+    pub revoked_count: u64,
+    #[prost(message, optional, tag="3")]
+    pub error: ::core::option::Option<super::super::common::v1::ErrorDetail>,
 }
 include!("northstar.session.v1.tonic.rs");
 // @@protoc_insertion_point(module)

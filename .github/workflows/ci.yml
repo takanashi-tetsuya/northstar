@@ -183,6 +183,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           base_ref="${GITHUB_BASE_REF:-recovery/program-6}"
+          if ! git fetch --no-tags origin "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}"; then
+            echo "unable to fetch origin/${base_ref}; refusing to skip the compatibility check" >&2
+            exit 1
+          fi
           if ! git show-ref --verify --quiet "refs/remotes/origin/${base_ref}"; then
             echo "missing origin/${base_ref}; refusing to skip the compatibility check" >&2
             exit 1

@@ -29,3 +29,15 @@ M01-07; this document does not claim otherwise.
   GitHub Actions result observed for the recovery program. It establishes the
   modular monolith as the behavior reference and records that distributed
   services are not integrated or production-ready.
+
+## Program 6 recovery boundary
+
+`archive/program-6-unaccepted` is an unaccepted checkpoint at
+`94cb2622934d1329905b982e26377176f18a44bb`. Assets from it may be restored
+only by the explicit paths permitted by the active task card. Whole-commit
+cherry-picks and whole-tree restores are prohibited.
+
+M00-07 is `accepted-bootstrap`: it permits the ordered M00 recovery tasks to
+start, but does not mean M00 is complete, does not permit M01 work, and does
+not raise any service maturity. The evidence-schema-specific promotion test is
+deferred to M01-07.

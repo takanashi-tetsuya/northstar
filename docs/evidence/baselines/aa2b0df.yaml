@@ -9,6 +9,23 @@ baseline:
   observed_at: "2026-09-04T04:41:02Z"
   recovery_plan: "NS-P6-RECOVERY-2026-09-05"
 
+program6_recovery:
+  m00_07_status: "accepted-bootstrap"
+  status_meaning: >
+    May satisfy ordering dependencies for M00 tasks only. It does not mark M00
+    complete, permit M01 work, or promote any service maturity.
+  unaccepted_checkpoint:
+    branch: "archive/program-6-unaccepted"
+    commit: "94cb2622934d1329905b982e26377176f18a44bb"
+    accepted: false
+    selective_restore_only: true
+    prohibited_operations:
+      - "whole commit cherry-pick"
+      - "whole tree restore"
+    claim_boundary:
+      - "M01-M06 work at this checkpoint is not accepted."
+      - "The repository CI is not all green at this checkpoint."
+
 ci:
   provider: "GitHub Actions"
   workflow: "CI"
@@ -77,7 +94,7 @@ known_blockers:
   - "PostgreSQL role, protocol, and disaster-recovery validations fail or are cancelled."
   - "Container, XEP-0487, MIX, and two-domain federation validations fail."
   - "The baseline lacks branch-protection and required-check enforcement evidence."
-  - "Maturity-evidence schema enforcement is not present at this baseline; M01-07 owns that work."
+  - "Maturity-evidence schema enforcement is not present at this baseline; M01-07 owns that work. The M00-07 integrated-without-evidence test is deferred_to_M01-07."
 
 claim_boundary:
   - "A successful local command is not evidence that a failed or cancelled CI job passed."

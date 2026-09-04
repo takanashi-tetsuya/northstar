@@ -1,7 +1,7 @@
-﻿use std::path::{Path, PathBuf};
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
-use anyhow::{Context, Result};
 
 /// A managed subprocess with isolated temporary storage and monitored lifecycle.
 pub struct ManagedProcess {
@@ -19,20 +19,26 @@ impl ManagedProcess {
             .unwrap_or_default()
             .as_nanos();
         let temp_dir = std::env::temp_dir().join(format!("northstar-test-{name}-{nonce}"));
-        std::fs::create_dir_all(&temp_dir)
-            .with_context(|| format!("failed to create temporary working directory at {}", temp_dir.display()))?;
+        std::fs::create_dir_all(&temp_dir).with_context(|| {
+            format!(
+                "failed to create temporary working directory at {}",
+                temp_dir.display()
+            )
+        })?;
 
         let log_path = temp_dir.join(format!("{name}.log"));
-        let log_file = std::fs::File::create(&log_path)
-            .context("failed to create process log file")?;
-        let log_file_err = log_file.try_clone()
+        let log_file =
+            std::fs::File::create(&log_path).context("failed to create process log file")?;
+        let log_file_err = log_file
+            .try_clone()
             .context("failed to clone log file descriptor")?;
 
         command.stdout(Stdio::from(log_file));
         command.stderr(Stdio::from(log_file_err));
         command.current_dir(&temp_dir);
 
-        let child = command.spawn()
+        let child = command
+            .spawn()
             .with_context(|| format!("failed to spawn process {name}"))?;
 
         Ok(Self {

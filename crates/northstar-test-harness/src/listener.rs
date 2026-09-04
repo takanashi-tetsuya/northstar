@@ -1,6 +1,6 @@
-﻿use std::net::{SocketAddr, TcpListener as StdTcpListener};
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use socket2::{Domain, Protocol, Socket, Type};
+use std::net::{SocketAddr, TcpListener as StdTcpListener};
 
 /// A pre-bound TCP listener that holds a socket open until handoff,
 /// avoiding the port-stealing/reuse race condition.
@@ -13,25 +13,34 @@ pub struct PreboundListener {
 impl PreboundListener {
     /// Bind a pre-bound listener on a specified address with SO_REUSEADDR.
     pub fn bind(addr: SocketAddr) -> Result<Self> {
-        let domain = if addr.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 };
+        let domain = if addr.is_ipv6() {
+            Domain::IPV6
+        } else {
+            Domain::IPV4
+        };
         let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))
             .context("failed to create socket")?;
-        
-        socket.set_reuse_address(true)
+
+        socket
+            .set_reuse_address(true)
             .context("failed to set SO_REUSEADDR")?;
         #[cfg(unix)]
         {
             let _ = socket.set_reuse_port(true);
         }
-        socket.set_nonblocking(true)
+        socket
+            .set_nonblocking(true)
             .context("failed to set nonblocking")?;
-        socket.bind(&addr.into())
+        socket
+            .bind(&addr.into())
             .with_context(|| format!("failed to bind listener to {addr}"))?;
-        socket.listen(128)
+        socket
+            .listen(128)
             .with_context(|| format!("failed to listen on {addr}"))?;
 
         let listener: StdTcpListener = socket.into();
-        let bound_addr = listener.local_addr()
+        let bound_addr = listener
+            .local_addr()
             .context("failed to query bound socket local address")?;
 
         Ok(Self {
@@ -75,10 +84,22 @@ pub struct PortRange {
 }
 
 impl PortRange {
-    pub const INTEGRATION: Self = Self { min_port: 34000, max_port: 35999 };
-    pub const MIX_FEDERATION: Self = Self { min_port: 36000, max_port: 37999 };
-    pub const FEDERATION: Self = Self { min_port: 38000, max_port: 39999 };
-    pub const XEP0487: Self = Self { min_port: 40000, max_port: 41999 };
+    pub const INTEGRATION: Self = Self {
+        min_port: 34000,
+        max_port: 35999,
+    };
+    pub const MIX_FEDERATION: Self = Self {
+        min_port: 36000,
+        max_port: 37999,
+    };
+    pub const FEDERATION: Self = Self {
+        min_port: 38000,
+        max_port: 39999,
+    };
+    pub const XEP0487: Self = Self {
+        min_port: 40000,
+        max_port: 41999,
+    };
 
     pub const fn new(min_port: u16, max_port: u16) -> Self {
         Self { min_port, max_port }
@@ -96,7 +117,8 @@ impl PortRange {
         let offset = (std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_nanos() % span as u128) as u16;
+            .as_nanos()
+            % span as u128) as u16;
 
         for i in 0..span {
             let port = self.min_port + ((offset + i) % span);
@@ -109,7 +131,11 @@ impl PortRange {
             }
         }
 
-        bail!("could only allocate {} of {count} requested ports in range {}-{}",
-            listeners.len(), self.min_port, self.max_port);
+        bail!(
+            "could only allocate {} of {count} requested ports in range {}-{}",
+            listeners.len(),
+            self.min_port,
+            self.max_port
+        );
     }
 }

@@ -75,4 +75,3 @@ pub struct SessionAssertion {
     pub key_id: String,
     pub signature: Vec<u8>,
 }
-

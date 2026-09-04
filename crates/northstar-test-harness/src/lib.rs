@@ -1,4 +1,4 @@
-﻿pub mod database;
+pub mod database;
 pub mod diagnostics;
 pub mod listener;
 pub mod process;
@@ -24,7 +24,9 @@ mod tests {
     #[test]
     fn port_range_allocation() {
         let range = PortRange::new(35000, 35050);
-        let listeners = range.allocate_listeners(3).expect("range allocation failed");
+        let listeners = range
+            .allocate_listeners(3)
+            .expect("range allocation failed");
         assert_eq!(listeners.len(), 3);
         assert_ne!(listeners[0].port(), listeners[1].port());
         assert_ne!(listeners[1].port(), listeners[2].port());

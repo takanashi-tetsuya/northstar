@@ -1,78 +1,102 @@
+# Program 6 M00-07 baseline freeze. This is an observation of an exact commit,
+# not a passing release, deployment, or infrastructure certification.
+schema_version: "1.0"
 baseline:
-  id: aa2b0df
-  short_commit: aa2b0df
-  commit: aa2b0df03bed53bc6a032c5a5ac74374bb62167b
-  workflow_run: "33833472340"
-  branch: dev
-  date: 2026-09-04
-  program_title: split program-5
-  title: Northstar program-5 evidence freeze
-  status: frozen
-  maturity_estimate: 25-30%
+  commit: "aa2b0df03bed53bc6a032c5a5ac74374bb62167b"
+  short_commit: "aa2b0df"
+  branch: "dev"
+  title: "split program-5"
+  observed_at: "2026-09-04T04:41:02Z"
+  recovery_plan: "NS-P6-RECOVERY-2026-09-05"
 
-catalog_summary:
-  services: 51
-  stanza_routes: 38
-  owned_tables: 77
-  service_status:
-    executable_prototype: 7
-    prototype: 8
-    scaffold: 0
+program6_recovery:
+  m00_07_status: "accepted-bootstrap"
+  status_meaning: >
+    May satisfy ordering dependencies for M00 tasks only. It does not mark M00
+    complete, permit M01 work, or promote any service maturity.
+  unaccepted_checkpoint:
+    branch: "archive/program-6-unaccepted"
+    commit: "94cb2622934d1329905b982e26377176f18a44bb"
+    accepted: false
+    selective_restore_only: true
+    prohibited_operations:
+      - "whole commit cherry-pick"
+      - "whole tree restore"
+    claim_boundary:
+      - "M01-M06 work at this checkpoint is not accepted."
+      - "The repository CI is not all green at this checkpoint."
+
+ci:
+  provider: "GitHub Actions"
+  workflow: "CI"
+  run_id: "33833472340"
+  url: "https://github.com/takanashi-tetsuya/northstar/actions/runs/33833472340"
+  conclusion: "failure"
+  run_attempt: 1
+  jobs:
+    success:
+      - "Dependency licenses and sources"
+      - "RustSec dependency audit"
+      - "Web static checks"
+    failure:
+      - "Isolated disaster-recovery drill"
+      - "MIX database, wire and federation validation"
+      - "Pinned non-root container build"
+      - "PostgreSQL protocol integration"
+      - "PostgreSQL workload role boundary"
+      - "Privilege-separated XEP-0487 HTTPS discovery"
+      - "Rust quality gates"
+      - "Two-domain S2S federation"
+      - "Wire contracts (Buf)"
+    cancelled:
+      - "Isolated PostgreSQL and Redis invariants"
+    skipped_by_workflow_condition:
+      - "Scheduled 1,000-session production envelope"
+      - "Scheduled multi-node cluster and raw 1,000-session load"
+      - "Timed parser robustness suite"
+
+catalog:
+  source: "catalog/services.yaml"
+  inventory_command: "node scripts/check-microservice-catalog.mjs"
+  service_count: 51
+  stanza_route_count: 38
+  owned_table_count: 77
+  maturity:
     planned: 36
+    scaffolded: 0
+    prototype: 8
+    executable_prototype: 7
     integrated: 0
     production: 0
+  executable_prototype_services:
+    - "xmpp-edge"
+    - "identity"
+    - "session-directory"
+    - "message-ingress"
+    - "delivery-router"
+    - "protocol-registry"
+    - "xep-0313-mam"
 
-governance:
-  governance_scope:
-    - contracts/ (wire contracts / proto generation)
-    - security + identity/session ownership paths
-    - multi-service runtime boundaries
-    - migration and role layout
-  branch_governance:
-    required_checks_enabled: false
-    branch_protection: false
-    summary: "To be configured in GitHub branch rules; docs/governance/branch-rules.md contains the target baseline."
-
-evidence:
-  ci:
-    command_matrix:
-      - cargo_fmt
-      - cargo_check
-      - cargo_test
-      - cargo_clippy
-      - cargo_build
-      - buf_contract_jobs
-      - parse_check_fuzzer
-      - microservice_catalog
-    result_overview: partially successful
-  notable_failures:
-    - "catalog check reports baseline drift against stale migration/bundle assumptions in some historical workflows"
-    - "database-role-path tests are partially blocked by hardened local-safety rails in CI templates"
-    - "release-signing/chain-of-trust gates are partially staged (M25/M26 scope)"
-  external_evidence:
-    - docs/WEB_CRYPTO_SUPPLY_CHAIN.md
-    - docs/BACKUP_SECURITY.md
-    - docs/DATABASE_ROLES.md
-
-operational_assumptions:
-  monolith_baseline:
-    role: reference
-    description: >
-      `src/` monolith remains the protocol behavior oracle and canonical fallback
-      until remote-service cutover reaches production-ready invariants.
+authority:
+  monolith:
+    status: "production-baseline"
+    role: "protocol behavior reference and supported single-process baseline"
+  distributed_services:
+    status: "prototype-program"
+    integrated: false
+    production: false
   multi_region:
-    role: staged
-    description: >
-      Multi-region design is in roadmap; single-region home-authority path is the
-      required operational boundary for this baseline.
-  public_federation:
-    status: pending
-    note: "Interoperability matrix and external federation claims remain operational evidence only; not yet production-certified."
+    status: "not-production-validated"
 
-release_readiness:
-  integrated_services: 0
-  production_services: 0
-  blocking_gates:
-    - "Branch protection + CODEOWNER enforcement completed externally (non-code)"
-    - "Signed release workflow + immutable attestations"
-    - "Real multi-process fault-invariant evidence for critical paths"
+known_blockers:
+  - "Rust quality gates fail at the baseline."
+  - "Wire contracts (Buf) fail at the baseline."
+  - "PostgreSQL role, protocol, and disaster-recovery validations fail or are cancelled."
+  - "Container, XEP-0487, MIX, and two-domain federation validations fail."
+  - "The baseline lacks branch-protection and required-check enforcement evidence."
+  - "Maturity-evidence schema enforcement is not present at this baseline; M01-07 owns that work. The M00-07 integrated-without-evidence test is deferred_to_M01-07."
+
+claim_boundary:
+  - "A successful local command is not evidence that a failed or cancelled CI job passed."
+  - "Static catalog validation is not evidence of a working PostgreSQL, Kafka, multi-process, or multi-region deployment."
+  - "This file must not be changed to promote a service; a later immutable task evidence record is required."

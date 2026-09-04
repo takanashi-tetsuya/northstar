@@ -1,5 +1,6 @@
 version: v2
 plugins:
+  # Remote plugin versions are the generation toolchain lock for this schema.
   - remote: buf.build/community/neoeinstein-prost:v0.4.0
     out: crates/foundation-contracts/src/generated
   - remote: buf.build/community/neoeinstein-tonic:v0.4.1

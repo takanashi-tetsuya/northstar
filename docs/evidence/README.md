@@ -1,42 +1,43 @@
-# Evidence directory (M00 baseline registry)
+# Evidence registry
 
-This directory stores evidence baselines that freeze architectural and operational
-claims at a committed checkpoint.
+This directory contains immutable, commit-bound records for claims about the
+distributed-architecture program. An evidence record identifies the exact
+commit, the CI run used for evaluation, the observed job results, known
+limitations, and the maturity that may be claimed at that point.
 
 ## Layout
 
-- `baselines/` — point-in-time snapshots that bind commit, workflow context and
-  major evidence outcomes.
-- `milestones/` — repository checkpoints that enumerate delivered structural
-  work and its reproducible verification commands.
-- Historical reports that are not baseline snapshots live under `docs/archive/`.
+- `baselines/` contains frozen checkpoints. A baseline is an observation, not a
+  release approval.
+- `milestones/` is reserved for accepted task records. A milestone record must
+  identify its exact result commit and CI run.
 
-## Baseline file contract
+## Maturity rules
 
-Each baseline file should include:
+`catalog/services.yaml` is the sole inventory source. A service may not be
+described as `integrated` or `production` merely because code or a directory
+exists. Such a promotion needs immutable, commit-bound evidence for the
+required dependencies and verification level.
 
-- fixed `commit` and `commit_short`
-- `workflow_run` identifier
-- baseline title and date
-- catalog-derived inventory summary (services / routes / table ownership)
-- required governance assumptions
-- known defects and risk level
-- maturation gate map (`production = 0`, `integrated = 0` at this stage)
+The Program 5 baseline does not contain a maturity-evidence schema or a
+validator that enforces that rule. That enforcement is deliberately deferred to
+M01-07; this document does not claim otherwise.
 
-## Current baselines
+## Current frozen record
 
-- [`aa2b0df.yaml`](baselines/aa2b0df.yaml) — program-5 frozen checkpoint used
-  for this cycle's governance and catalog normalization.
+- [Program 5 baseline (`aa2b0df`)](baselines/aa2b0df.yaml) records the exact
+  GitHub Actions result observed for the recovery program. It establishes the
+  modular monolith as the behavior reference and records that distributed
+  services are not integrated or production-ready.
 
-## Maturity templates
+## Program 6 recovery boundary
 
-Use the templates in `templates/` when a service changes maturity. The status
-must match `catalog/services.yaml`; an integrated, production-candidate, or
-production claim also requires a verified commit and immutable evidence
-artifacts. The Rust `catalog-validator` rejects missing or contradictory
-metadata, so a YAML-only status change cannot promote a service.
+`archive/program-6-unaccepted` is an unaccepted checkpoint at
+`94cb2622934d1329905b982e26377176f18a44bb`. Assets from it may be restored
+only by the explicit paths permitted by the active task card. Whole-commit
+cherry-picks and whole-tree restores are prohibited.
 
-## Validation rule
-
-Any documentation or code path that claims a status outside the baseline must be
-backed by a new baseline file and migration of linked references.
+M00-07 is `accepted-bootstrap`: it permits the ordered M00 recovery tasks to
+start, but does not mean M00 is complete, does not permit M01 work, and does
+not raise any service maturity. The evidence-schema-specific promotion test is
+deferred to M01-07.

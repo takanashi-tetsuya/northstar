@@ -9,7 +9,7 @@ services:
   # Platform Core Services (平台核心服务)
   # ==========================================
   - service_id: xmpp-edge
-    implementation_status: prototype
+    implementation_status: executable-prototype
     code_path: "services/xmpp-edge"
     cargo_package: "service-xmpp-edge"
     name: "XMPP C2S Edge Connection Gateway"
@@ -32,7 +32,7 @@ services:
       availability: 99.99
 
   - service_id: identity
-    implementation_status: prototype
+    implementation_status: executable-prototype
     code_path: "services/identity"
     cargo_package: "service-identity"
     name: "User Identity and Credential Authority"
@@ -53,7 +53,7 @@ services:
       availability: 99.99
 
   - service_id: session-directory
-    implementation_status: prototype
+    implementation_status: executable-prototype
     code_path: "services/session-directory"
     cargo_package: "service-session-directory"
     name: "Session and Resource Binding Authority"
@@ -71,7 +71,7 @@ services:
       availability: 99.99
 
   - service_id: message-ingress
-    implementation_status: prototype
+    implementation_status: executable-prototype
     code_path: "services/message-ingress"
     cargo_package: "service-message-ingress"
     name: "Message Admission and Authority Ingress"
@@ -92,7 +92,7 @@ services:
       availability: 99.99
 
   - service_id: delivery-router
-    implementation_status: prototype
+    implementation_status: executable-prototype
     code_path: "services/delivery-router"
     cargo_package: "service-delivery-router"
     name: "Online Delivery and Offline Spool Router"
@@ -209,7 +209,7 @@ services:
       availability: 99.95
 
   - service_id: protocol-registry
-    implementation_status: prototype
+    implementation_status: executable-prototype
     code_path: "services/protocol-registry"
     cargo_package: "service-protocol-registry"
     name: "Dynamic Protocol and Route Catalog Registry"
@@ -447,7 +447,7 @@ services:
       availability: 99.95
 
   - service_id: xep-0313-mam
-    implementation_status: prototype
+    implementation_status: executable-prototype
     code_path: "services/xep-0313-mam"
     cargo_package: "service-xep-0313-mam"
     name: "XEP-0313 Message Archive Management"

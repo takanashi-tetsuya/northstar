@@ -113,13 +113,30 @@ impl MamService {
             };
         };
 
+        // Range validation: if start > end, return empty immediately
+        if let (Some(start), Some(end)) = (req.start_time_ms, req.end_time_ms) {
+            if start > end {
+                return MamQueryResponse {
+                    messages: Vec::new(),
+                    first_id: None,
+                    last_id: None,
+                    complete: true,
+                };
+            }
+        }
+
         let max_limit = if req.max == 0 || req.max > 100 {
             50
         } else {
             req.max
         };
 
-        let filtered: Vec<ArchivedMessage> = items
+        let parsed_with = req
+            .with_jid
+            .as_deref()
+            .and_then(|w| northstar_xmpp_types::CanonicalJid::parse(w).ok());
+
+        let mut filtered: Vec<ArchivedMessage> = items
             .iter()
             .filter(|m| {
                 if let Some(start) = req.start_time_ms {
@@ -132,8 +149,17 @@ impl MamService {
                         return false;
                     }
                 }
-                if let Some(ref with) = req.with_jid {
-                    if !m.from_jid.starts_with(with) && !m.to_jid.starts_with(with) {
+                if let Some(ref target_with) = parsed_with {
+                    let from_j = northstar_xmpp_types::CanonicalJid::parse(&m.from_jid).ok();
+                    let to_j = northstar_xmpp_types::CanonicalJid::parse(&m.to_jid).ok();
+
+                    let matches = if target_with.resourcepart().is_some() {
+                        from_j.as_ref() == Some(target_with) || to_j.as_ref() == Some(target_with)
+                    } else {
+                        from_j.as_ref().map(|j| j.bare()) == Some(target_with.bare())
+                            || to_j.as_ref().map(|j| j.bare()) == Some(target_with.bare())
+                    };
+                    if !matches {
                         return false;
                     }
                 }
@@ -142,11 +168,26 @@ impl MamService {
             .cloned()
             .collect();
 
+        // Stable ordering by (timestamp_ms ASC, archive_id ASC)
+        filtered.sort_by(|a, b| {
+            a.timestamp_ms
+                .cmp(&b.timestamp_ms)
+                .then_with(|| a.archive_id.cmp(&b.archive_id))
+        });
+
         // Cursor pagination
         let mut start_idx = 0;
         if let Some(ref after_id) = req.after {
             if let Some(pos) = filtered.iter().position(|m| &m.archive_id == after_id) {
                 start_idx = pos + 1;
+            } else {
+                // Unknown/stale cursor: return empty rather than restarting from beginning
+                return MamQueryResponse {
+                    messages: Vec::new(),
+                    first_id: None,
+                    last_id: None,
+                    complete: true,
+                };
             }
         }
 
@@ -218,5 +259,114 @@ mod tests {
 
         assert_eq!(query_bob.messages.len(), 1);
         assert_eq!(query_bob.messages[0].server_message_id, "msg-101");
+    }
+
+    #[test]
+    fn prefix_collision_with_jid_rejected() {
+        let mam = MamService::new();
+        let event_id = Uuid::new_v4();
+
+        let msg = MessageAcceptedEventPayload {
+            server_message_id: "msg-prefix-1".to_string(),
+            from_full_jid: "alice@example.com/laptop".to_string(),
+            to_jid: "bob@example.com/mobile".to_string(),
+            stanza_id: "client-p1".to_string(),
+            message_type: "chat".to_string(),
+            raw_stanza: b"<message>For Bob only</message>".to_vec(),
+            timestamp_ms: 2000,
+        };
+        assert!(mam.ingest_message(event_id, msg));
+
+        // Attempt querying with a JID that starts with "bob" prefix but is a different user
+        let query_bobby = mam.query_archive(MamQueryRequest {
+            scope_jid: "alice@example.com".to_string(),
+            start_time_ms: None,
+            end_time_ms: None,
+            with_jid: Some("bobby@example.com".to_string()),
+            max: 10,
+            after: None,
+        });
+        assert_eq!(query_bobby.messages.len(), 0);
+
+        // Attempt querying with an attacker domain prefix collision
+        let query_evil = mam.query_archive(MamQueryRequest {
+            scope_jid: "alice@example.com".to_string(),
+            start_time_ms: None,
+            end_time_ms: None,
+            with_jid: Some("bob@example.com.evil.com".to_string()),
+            max: 10,
+            after: None,
+        });
+        assert_eq!(query_evil.messages.len(), 0);
+
+        // Querying with legitimate Bob succeeds
+        let query_bob = mam.query_archive(MamQueryRequest {
+            scope_jid: "alice@example.com".to_string(),
+            start_time_ms: None,
+            end_time_ms: None,
+            with_jid: Some("bob@example.com".to_string()),
+            max: 10,
+            after: None,
+        });
+        assert_eq!(query_bob.messages.len(), 1);
+        assert_eq!(query_bob.messages[0].server_message_id, "msg-prefix-1");
+    }
+
+    #[test]
+    fn missing_after_cursor_returns_empty() {
+        let mam = MamService::new();
+        let event_id = Uuid::new_v4();
+
+        let msg = MessageAcceptedEventPayload {
+            server_message_id: "msg-cursor-1".to_string(),
+            from_full_jid: "alice@example.com/laptop".to_string(),
+            to_jid: "bob@example.com/mobile".to_string(),
+            stanza_id: "client-c1".to_string(),
+            message_type: "chat".to_string(),
+            raw_stanza: b"<message>Testing cursor</message>".to_vec(),
+            timestamp_ms: 3000,
+        };
+        assert!(mam.ingest_message(event_id, msg));
+
+        // Query with an unknown/stale cursor ID: must return empty, not restart from beginning
+        let query_missing = mam.query_archive(MamQueryRequest {
+            scope_jid: "alice@example.com".to_string(),
+            start_time_ms: None,
+            end_time_ms: None,
+            with_jid: None,
+            max: 10,
+            after: Some("nonexistent-stale-archive-id".to_string()),
+        });
+        assert_eq!(query_missing.messages.len(), 0);
+        assert!(query_missing.complete);
+    }
+
+    #[test]
+    fn start_after_end_returns_empty() {
+        let mam = MamService::new();
+        let event_id = Uuid::new_v4();
+
+        let msg = MessageAcceptedEventPayload {
+            server_message_id: "msg-range-1".to_string(),
+            from_full_jid: "alice@example.com/laptop".to_string(),
+            to_jid: "bob@example.com/mobile".to_string(),
+            stanza_id: "client-r1".to_string(),
+            message_type: "chat".to_string(),
+            raw_stanza: b"<message>Testing range</message>".to_vec(),
+            timestamp_ms: 3000,
+        };
+        assert!(mam.ingest_message(event_id, msg));
+
+        // Query with start > end must be rejected and return empty page
+        let query_invalid = mam.query_archive(MamQueryRequest {
+            scope_jid: "alice@example.com".to_string(),
+            start_time_ms: Some(5000),
+            end_time_ms: Some(2000),
+            with_jid: None,
+            max: 10,
+            after: None,
+        });
+        assert_eq!(query_invalid.messages.len(), 0);
+        assert!(query_invalid.complete);
     }
 }

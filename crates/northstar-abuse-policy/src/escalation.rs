@@ -10,31 +10,31 @@ pub struct Policy {
 }
 
 /// Computes the action-specific policy parameters.
-pub fn policy(action: AbuseAction, base_work: u64, message_free_burst: usize) -> Policy {
+pub fn policy(action: AbuseAction, base: u64, message_free_burst: usize) -> Policy {
     match action {
         AbuseAction::Registration => Policy {
             free_burst: 1,
-            base_work,
+            base_work: base,
         },
         AbuseAction::Message => Policy {
             free_burst: message_free_burst,
-            base_work,
+            base_work: base,
         },
         AbuseAction::Report => Policy {
             free_burst: 0,
-            base_work: base_work.saturating_mul(2),
+            base_work: base.saturating_mul(2),
         },
         AbuseAction::Appeal => Policy {
             free_burst: 0,
-            base_work: base_work.saturating_mul(8),
+            base_work: base.saturating_mul(8),
         },
         AbuseAction::Login => Policy {
             free_burst: 5,
-            base_work,
+            base_work: base,
         },
         AbuseAction::PasswordChange => Policy {
             free_burst: 3,
-            base_work: base_work.saturating_mul(4),
+            base_work: base.saturating_mul(4),
         },
     }
 }

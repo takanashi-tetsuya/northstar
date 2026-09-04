@@ -51,7 +51,7 @@ const BASELINE = new Map([
 const STATIC_LITERAL_ALLOWLIST = [
   {
     file: 'src/xmpp/protocol/sasl2.rs',
-    line: 605,
+    line: 625,
     literal: '</stream:stream>',
     reason: 'parser-only synthetic close used to validate a stream opening element',
   },

@@ -1,0 +1,4 @@
+version: v2
+plugins:
+  - remote: buf.build/prost/plugins/prost:v0.3.0
+    out: crates/foundation-contracts/src/generated

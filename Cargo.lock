@@ -3383,6 +3383,7 @@ dependencies = [
  "foundation-security",
  "foundation-service-runtime",
  "foundation-telemetry",
+ "northstar-xmpp-types",
  "serde",
  "serde_json",
  "thiserror",

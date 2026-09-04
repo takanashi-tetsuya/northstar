@@ -1,99 +1,48 @@
 //! Northstar standard microservice runtime, configuration and health lifecycle.
 //!
-//! Defined per `northstar_progress_and_next_plan_2026-09-04.md` (Milestone 1, Section 5).
+//! Defined per `northstar_progress_and_next_plan_2026-09-04.md` and
+//! `northstar_progress_revalidation_and_next_plan_2026-09-04_85109d4.md` (Section 3.4).
 
-use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+pub mod config;
+pub mod health;
+pub mod shutdown;
+pub mod signal;
+
+pub use config::ServiceConfig;
+pub use health::ServiceHealth;
+pub use shutdown::ShutdownCoordinator;
+
+use std::time::Duration;
 use tokio::sync::broadcast;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceConfig {
-    pub service_id: String,
-    pub host: String,
-    pub port: u16,
-    pub database_url: Option<String>,
-    pub kafka_brokers: Option<String>,
-    pub environment: String,
-}
-
-impl ServiceConfig {
-    pub fn new(service_id: impl Into<String>, port: u16) -> Self {
-        Self {
-            service_id: service_id.into(),
-            host: "0.0.0.0".to_string(),
-            port,
-            database_url: std::env::var("DATABASE_URL").ok(),
-            kafka_brokers: std::env::var("KAFKA_BROKERS").ok(),
-            environment: std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string()),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ServiceHealth {
-    is_live: Arc<AtomicBool>,
-    is_ready: Arc<AtomicBool>,
-}
-
-impl ServiceHealth {
-    pub fn new() -> Self {
-        Self {
-            is_live: Arc::new(AtomicBool::new(true)),
-            is_ready: Arc::new(AtomicBool::new(true)),
-        }
-    }
-
-    pub fn set_ready(&self, ready: bool) {
-        self.is_ready.store(ready, Ordering::SeqCst);
-    }
-
-    pub fn set_live(&self, live: bool) {
-        self.is_live.store(live, Ordering::SeqCst);
-    }
-
-    pub fn is_ready(&self) -> bool {
-        self.is_ready.load(Ordering::SeqCst)
-    }
-
-    pub fn is_live(&self) -> bool {
-        self.is_live.load(Ordering::SeqCst)
-    }
-}
-
-impl Default for ServiceHealth {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 pub struct ServiceRuntime {
     pub config: ServiceConfig,
     pub health: ServiceHealth,
-    shutdown_tx: broadcast::Sender<()>,
+    shutdown_coordinator: ShutdownCoordinator,
 }
 
 impl ServiceRuntime {
     pub fn new(config: ServiceConfig) -> Self {
-        let (shutdown_tx, _) = broadcast::channel(1);
+        let drain_timeout = Duration::from_secs(config.drain_timeout_secs);
         Self {
             config,
             health: ServiceHealth::new(),
-            shutdown_tx,
+            shutdown_coordinator: ShutdownCoordinator::new(drain_timeout),
         }
     }
 
     pub fn subscribe_shutdown(&self) -> broadcast::Receiver<()> {
-        self.shutdown_tx.subscribe()
+        self.shutdown_coordinator.subscribe()
     }
 
     pub fn trigger_shutdown(&self) {
-        let _ = self.shutdown_tx.send(());
+        self.health.set_ready(false);
+        self.shutdown_coordinator.trigger();
     }
 
     pub async fn wait_for_shutdown_signal(&self) {
-        // Wait for OS shutdown signal (SIGINT / Ctrl+C)
-        let _ = tokio::signal::ctrl_c().await;
+        signal::wait_for_termination_signal().await;
+        // Drop readiness immediately on shutdown initiation so load balancers divert new traffic
         self.health.set_ready(false);
         tracing::info!(service = %self.config.service_id, "Shutdown signal received, initiating graceful drain");
         self.trigger_shutdown();
@@ -105,18 +54,22 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn runtime_health_and_shutdown() {
+    async fn runtime_health_and_shutdown_lifecycle() {
         let config = ServiceConfig::new("test-service", 8080);
         let runtime = ServiceRuntime::new(config);
 
         assert!(runtime.health.is_live());
+        assert!(!runtime.health.is_ready());
+
+        // Component marks readiness when started
+        runtime.health.set_ready(true);
         assert!(runtime.health.is_ready());
 
         let mut sub = runtime.subscribe_shutdown();
-        runtime.health.set_ready(false);
-        assert!(!runtime.health.is_ready());
-
         runtime.trigger_shutdown();
+
+        // Readiness must drop to false on shutdown
+        assert!(!runtime.health.is_ready());
         assert!(sub.recv().await.is_ok());
     }
 }

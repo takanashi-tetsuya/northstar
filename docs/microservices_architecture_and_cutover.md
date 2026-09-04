@@ -1,9 +1,8 @@
 # Northstar Microservices Architecture, Capacity & Production Cutover Specification
 
 **Document Version**: 2.0.0  
-**Audit Baseline**: `f32adaafdcd5c20ababfe022e672c571749bb865`  
-**Reference Specifications**: `northstar_microservices_deep_audit_2026-09-03.md`, `northstar_progress_and_next_plan_2026-09-04.md`  
-**Status**: Architecture prototype; runtime implementation in progress
+**Audit Baseline**: [`aa2b0df03bed53bc6a032c5a5ac74374bb62167b`](evidence/baselines/aa2b0df.yaml)
+**Status**: Architecture prototype; the modular monolith remains the production baseline. No distributed service is integrated or production-ready.
 
 ---
 
@@ -45,10 +44,16 @@ graph TD
 
 ## 2. Platform Service Catalog & Route Ownership Summary
 
-- **Declared Services**: 49 services declared in `catalog/services.yaml`.
-- **Declared Stanza Routes**: 38 unambiguous protocol routes in `catalog/routes.yaml`.
-- **Database Tables & Ownership**: 77 distinct tables in `catalog/data-ownership.yaml`, each mapped to exactly one authoritative microservice.
-- **Verification**: `scripts/check-microservice-catalog.mjs` verifies 0 orphan services, 0 duplicate routes, and 0 shared database tables across the entire workspace.
+`catalog/services.yaml`, `catalog/routes.yaml`, and
+`catalog/data-ownership.yaml` are the authoritative inventory. Run
+`node scripts/check-microservice-catalog.mjs` to obtain the current service,
+route, table-ownership, and maturity counts; this document intentionally does
+not duplicate those values.
+
+At the frozen Program 5 baseline, the catalog has no `integrated` or
+`production` services. A catalog status is an architectural declaration, not
+proof that a distributed deployment is operational. The immutable baseline
+record links it to the exact commit and CI result.
 
 ---
 

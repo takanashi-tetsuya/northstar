@@ -1,6 +1,8 @@
 # Northstar Microservices Catalog
 # Source of truth for service identities, ownership, databases, RPC, and events.
-# Defined per northstar_microservices_deep_audit_2026-09-03.md (Sections 5, 6, 7).
+# M00 freezes the Program 5 maturity state in docs/evidence/baselines/aa2b0df.yaml.
+# Derive inventory and status counts with scripts/check-microservice-catalog.mjs;
+# do not copy them into prose as a second source of truth.
 
 version: "2.0.0"
 

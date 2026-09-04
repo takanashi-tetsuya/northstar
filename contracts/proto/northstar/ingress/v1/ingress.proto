@@ -5,7 +5,7 @@ package northstar.ingress.v1;
 import "northstar/common/v1/common.proto";
 
 service MessageIngressService {
-  rpc SubmitMessage (SubmitMessageRequest) returns (SubmitMessageResponse);
+  rpc SubmitMessage(SubmitMessageRequest) returns (SubmitMessageResponse);
 }
 
 message SubmitMessageRequest {

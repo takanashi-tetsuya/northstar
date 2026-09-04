@@ -52,6 +52,23 @@ services:
       command_p99_ms: 50
       availability: 99.99
 
+  - service_id: retention-orchestrator
+    implementation_status: planned
+    name: "Data Lifecycle and Retention Governance"
+    execution_class: stateless
+    home_key: operation_id
+    database: northstar_retention
+    rpc:
+      provides:
+        - northstar.retention.v1.RetentionOrchestratorService
+    events:
+      produces:
+        - retention.command.issued.v1
+        - retention.owner.completed.v1
+    slo:
+      command_p99_ms: 100
+      availability: 99.9
+
   - service_id: session-directory
     implementation_status: executable-prototype
     code_path: "services/session-directory"
@@ -241,6 +258,23 @@ services:
     slo:
       command_p99_ms: 20
       availability: 99.99
+
+  - service_id: moderation-reports
+    implementation_status: planned
+    name: "User Moderation Reports and Evidence Management"
+    execution_class: stateless
+    home_key: report_id
+    database: northstar_moderation
+    rpc:
+      provides:
+        - northstar.moderation.v1.ModerationReportsService
+    events:
+      produces:
+        - moderation.report.created.v1
+        - moderation.report.resolved.v1
+    slo:
+      command_p99_ms: 50
+      availability: 99.9
 
   - service_id: admin-api
     implementation_status: planned

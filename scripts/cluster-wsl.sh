@@ -24,7 +24,7 @@ if [[ ! "$schema" =~ ^cluster_it_[0-9a-f]{12,48}$ ]]; then
 fi
 redis_tmp="$(mktemp -d /tmp/northstar-redis.XXXXXX)"
 pick_port() {
-  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+  python3 "$project_dir/scripts/allocate-test-ports.py" 56000 57999 1
 }
 declare -a allocated_ports=()
 assign_port() {

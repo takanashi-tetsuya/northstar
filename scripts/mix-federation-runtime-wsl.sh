@@ -18,7 +18,7 @@ schema_a="mix_fed_a_${nonce}"
 schema_b="mix_fed_b_${nonce}"
 [[ "$schema_a" =~ ^mix_fed_a_[0-9_]+$ && "$schema_b" =~ ^mix_fed_b_[0-9_]+$ ]] || exit 2
 read -r http_a http_b s2s_a s2s_b < <(
-  python3 -c "import socket; s=[socket.socket() for _ in range(4)]; [x.bind(('127.0.0.1',0)) for x in s]; print(*(x.getsockname()[1] for x in s)); [x.close() for x in s]"
+  python3 "$project_dir/scripts/allocate-test-ports.py" 36000 37999 4
 )
 runtime_dir="$(mktemp -d /tmp/northstar-mix-fed.XXXXXX)"
 pid_a=""

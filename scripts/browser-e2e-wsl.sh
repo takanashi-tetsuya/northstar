@@ -20,7 +20,7 @@ schema="northstar_browser_e2e_${suffix}"
   exit 2
 }
 read -r xmpp_port xmpps_port http_port s2s_port < <(
-  python3 -c "import socket; s=[socket.socket() for _ in range(4)]; [x.bind(('127.0.0.1',0)) for x in s]; print(*(x.getsockname()[1] for x in s)); [x.close() for x in s]"
+  python3 "$project_dir/scripts/allocate-test-ports.py" 60000 61999 4
 )
 browser_host="${NORTHSTAR_BROWSER_HOST:-127.0.0.1}"
 [[ "$browser_host" =~ ^[A-Za-z0-9.:-]+$ ]] || {

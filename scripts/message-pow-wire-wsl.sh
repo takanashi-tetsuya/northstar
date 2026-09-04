@@ -8,14 +8,9 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 test_database="${XMPP_TEST_DATABASE:-xmpp_test}"
 run_id="$(openssl rand -hex 8)"
 test_schema="northstar_message_pow_wire_${run_id}"
-pick_port() {
-  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
-}
-http_port="$(pick_port)"
-client_port="$(pick_port)"
-xmpps_port="$(pick_port)"
-s2s_port="$(pick_port)"
-s2s_tls_port="$(pick_port)"
+read -r http_port client_port xmpps_port s2s_port s2s_tls_port < <(
+  python3 "$project_dir/scripts/allocate-test-ports.py" 46000 47999 5
+)
 
 if [[ "$test_database" != "xmpp_test" ]]; then
   echo "message PoW wire tests are restricted to the disposable xmpp_test database" >&2

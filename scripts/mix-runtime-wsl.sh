@@ -17,7 +17,7 @@ nonce="$(date +%s%N)_$$"
 schema="mix_runtime_${nonce}"
 [[ "$schema" =~ ^mix_runtime_[0-9_]+$ ]] || { echo "unsafe MIX runtime schema" >&2; exit 2; }
 read -r xmpp_port xmpps_port http_port < <(
-  python3 -c "import socket; s=[socket.socket() for _ in range(3)]; [x.bind(('127.0.0.1',0)) for x in s]; print(*(x.getsockname()[1] for x in s)); [x.close() for x in s]"
+  python3 "$project_dir/scripts/allocate-test-ports.py" 44000 45999 3
 )
 runtime_dir="$(mktemp -d /tmp/northstar-mix.XXXXXX)"
 mkdir -p "$runtime_dir/logs"

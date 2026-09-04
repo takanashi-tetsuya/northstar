@@ -5697,15 +5697,25 @@ async fn deliver_cluster_muc_event(
         }
         "leave" | "expire" | "account_delete" => {
             let target = target.context("MUC departure event has no exact target")?;
+            let self_presence = target.full_jid == recipient.full_jid;
             stanzas.push(crate::xmpp::xml_util::muc_presence_stanza(
                 &target,
                 &recipient.full_jid,
                 true,
-                target.full_jid == recipient.full_jid,
+                self_presence,
                 false,
                 Some(&event_id),
                 context.room_non_anonymous || recipient.role == "moderator",
             ));
+            if self_presence {
+                let target_key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &target.nick);
+                state.remove_live_muc_membership(&target);
+                state.muc_occupants.remove_if(&target_key, |_, current| {
+                    current.full_jid == target.full_jid
+                        && current.cluster_epoch == target.cluster_epoch
+                        && current.connection_id == target.connection_id
+                });
+            }
         }
         "suspend" => {
             // XEP-0198 suspension retains membership until its PG lease
@@ -5728,11 +5738,12 @@ async fn deliver_cluster_muc_event(
                     .into_iter()
                     .find_map(|(_, actor)| (actor.full_jid == full).then_some(actor.nick))
             });
+            let self_presence = target.full_jid == recipient.full_jid;
             stanzas.push(crate::xmpp::xml_util::muc_presence_stanza_with_status(
                 &target,
                 &recipient.full_jid,
                 true,
-                target.full_jid == recipient.full_jid,
+                self_presence,
                 false,
                 Some(&event_id),
                 true,
@@ -5740,6 +5751,15 @@ async fn deliver_cluster_muc_event(
                 actor_nick.as_deref(),
                 reason,
             ));
+            if self_presence {
+                let target_key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &target.nick);
+                state.remove_live_muc_membership(&target);
+                state.muc_occupants.remove_if(&target_key, |_, current| {
+                    current.full_jid == target.full_jid
+                        && current.cluster_epoch == target.cluster_epoch
+                        && current.connection_id == target.connection_id
+                });
+            }
         }
         "destroy" | "locked_expiry" => {
             let alternate = context.details["alternate_jid"].as_str();

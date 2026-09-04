@@ -11,7 +11,10 @@ pub mod ingress;
 pub mod registry;
 pub mod session;
 
+pub mod generated;
+
 pub use common::*;
+pub use generated::northstar;
 
 #[cfg(test)]
 mod tests {

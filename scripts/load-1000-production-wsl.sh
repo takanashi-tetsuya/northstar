@@ -21,7 +21,7 @@ schema="northstar_load_envelope_${run_id}"
 [[ "$schema" =~ ^northstar_load_envelope_[0-9a-f]{32}$ ]] \
   || { echo "refusing an unexpected load schema" >&2; exit 2; }
 read -r xmpp_port xmpps_port s2s_port s2s_tls_port http_port metrics_port < <(
-  python3 -c "import socket; sockets=[socket.socket() for _ in range(6)]; [s.bind(('127.0.0.1',0)) for s in sockets]; print(*(s.getsockname()[1] for s in sockets)); [s.close() for s in sockets]"
+  python3 "$project_dir/scripts/allocate-test-ports.py" 62000 63999 6
 )
 ports=("$xmpp_port" "$xmpps_port" "$s2s_port" "$s2s_tls_port" "$http_port" "$metrics_port")
 [[ "$(printf '%s\n' "${ports[@]}" | sort -u | wc -l)" -eq 6 ]] \

@@ -55,3 +55,24 @@ pub struct FieldViolation {
     pub field: String,
     pub description: String,
 }
+
+/// Cryptographically verified session assertion issued by Session Directory / Identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionAssertion {
+    pub account_id: String,
+    pub canonical_bare_jid: String,
+    pub full_jid: String,
+    pub connection_id: String,
+    pub edge_instance_id: String,
+    pub session_epoch: u64,
+    pub credential_generation: u64,
+    pub home_region: String,
+    pub region_epoch: u64,
+    pub issued_at_ms: u64,
+    pub expires_at_ms: u64,
+    pub audience: String,
+    pub nonce: String,
+    pub key_id: String,
+    pub signature: Vec<u8>,
+}
+

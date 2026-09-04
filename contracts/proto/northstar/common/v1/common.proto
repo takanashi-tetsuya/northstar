@@ -41,3 +41,22 @@ message TraceContext {
   string correlation_id = 3;
   string causation_id = 4;
 }
+
+// Cryptographically verified session assertion issued by Session Directory / Identity.
+message SessionAssertion {
+  string account_id = 1;
+  string canonical_bare_jid = 2;
+  string full_jid = 3;
+  string connection_id = 4;
+  string edge_instance_id = 5;
+  uint64 session_epoch = 6;
+  uint64 credential_generation = 7;
+  string home_region = 8;
+  uint64 region_epoch = 9;
+  uint64 issued_at_ms = 10;
+  uint64 expires_at_ms = 11;
+  string audience = 12;
+  string nonce = 13;
+  string key_id = 14;
+  bytes signature = 15;
+}

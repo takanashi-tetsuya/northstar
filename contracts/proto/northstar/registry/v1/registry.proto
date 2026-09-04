@@ -3,8 +3,8 @@ syntax = "proto3";
 package northstar.registry.v1;
 
 service ProtocolRegistryService {
-  rpc GetRouteSnapshot (GetRouteSnapshotRequest) returns (GetRouteSnapshotResponse);
-  rpc RegisterInstance (RegisterInstanceRequest) returns (RegisterInstanceResponse);
+  rpc GetRouteSnapshot(GetRouteSnapshotRequest) returns (GetRouteSnapshotResponse);
+  rpc RegisterInstance(RegisterInstanceRequest) returns (RegisterInstanceResponse);
 }
 
 message GetRouteSnapshotRequest {

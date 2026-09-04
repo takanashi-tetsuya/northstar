@@ -5,10 +5,10 @@ package northstar.session.v1;
 import "northstar/common/v1/common.proto";
 
 service SessionDirectoryService {
-  rpc BindSession (BindSessionRequest) returns (BindSessionResponse);
-  rpc ResumeFence (ResumeFenceRequest) returns (ResumeFenceResponse);
-  rpc ResolveTargets (ResolveTargetsRequest) returns (ResolveTargetsResponse);
-  rpc CloseSession (CloseSessionRequest) returns (CloseSessionResponse);
+  rpc BindSession(BindSessionRequest) returns (BindSessionResponse);
+  rpc ResumeFence(ResumeFenceRequest) returns (ResumeFenceResponse);
+  rpc ResolveTargets(ResolveTargetsRequest) returns (ResolveTargetsResponse);
+  rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);
 }
 
 message BindSessionRequest {

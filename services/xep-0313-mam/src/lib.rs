@@ -37,6 +37,45 @@ pub struct MamQueryResponse {
     pub complete: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchivePrincipal {
+    pub account_id: Uuid,
+    pub bare_jid: String,
+    pub is_admin: bool,
+}
+
+impl ArchivePrincipal {
+    pub fn user(account_id: Uuid, bare_jid: impl Into<String>) -> Self {
+        Self {
+            account_id,
+            bare_jid: bare_jid.into(),
+            is_admin: false,
+        }
+    }
+
+    pub fn admin(account_id: Uuid, bare_jid: impl Into<String>) -> Self {
+        Self {
+            account_id,
+            bare_jid: bare_jid.into(),
+            is_admin: true,
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum MamQueryError {
+    #[error("Invalid with_jid filter: '{0}' cannot be parsed as a canonical JID")]
+    InvalidWithJid(String),
+    #[error("Invalid time range: start_time_ms ({0}) > end_time_ms ({1})")]
+    InvalidTimeRange(u64, u64),
+    #[error("Invalid page size: max limit must be between 1 and 100, got {0}")]
+    InvalidPageSize(usize),
+    #[error("Unauthorized to access archive scope: principal '{0}' cannot access scope '{1}'")]
+    UnauthorizedScope(String, String),
+    #[error("Unknown or invalid cursor: '{0}'")]
+    InvalidCursor(String),
+}
+
 pub struct MamService {
     inbox: InMemoryInbox,
     archives: RwLock<HashMap<String, Vec<ArchivedMessage>>>, // scope_jid -> archived items
@@ -66,33 +105,38 @@ impl MamService {
             .from_full_jid
             .split('/')
             .next()
-            .unwrap_or(&msg.from_full_jid);
-        let to_bare = msg.to_jid.split('/').next().unwrap_or(&msg.to_jid);
+            .unwrap_or(&msg.from_full_jid)
+            .to_string();
+        let to_bare = msg
+            .to_jid
+            .split('/')
+            .next()
+            .unwrap_or(&msg.to_jid)
+            .to_string();
 
-        let archive_id = Uuid::new_v4().to_string();
         let item = ArchivedMessage {
-            archive_id: archive_id.clone(),
-            scope_jid: from_bare.to_string(),
-            server_message_id: msg.server_message_id.clone(),
-            from_jid: msg.from_full_jid.clone(),
-            to_jid: msg.to_jid.clone(),
-            raw_stanza: msg.raw_stanza.clone(),
+            archive_id: Uuid::new_v4().to_string(),
+            scope_jid: from_bare.clone(),
+            server_message_id: msg.server_message_id,
+            from_jid: msg.from_full_jid,
+            to_jid: msg.to_jid,
+            raw_stanza: msg.raw_stanza,
             timestamp_ms: msg.timestamp_ms,
         };
 
         let mut archives = self.archives.write().unwrap();
         // Index under sender's archive
         archives
-            .entry(from_bare.to_string())
+            .entry(from_bare.clone())
             .or_default()
             .push(item.clone());
 
         // Index under recipient's archive if distinct
         if from_bare != to_bare {
             let mut recipient_item = item;
-            recipient_item.scope_jid = to_bare.to_string();
+            recipient_item.scope_jid = to_bare.clone();
             archives
-                .entry(to_bare.to_string())
+                .entry(to_bare)
                 .or_default()
                 .push(recipient_item);
         }
@@ -101,40 +145,56 @@ impl MamService {
         true
     }
 
-    /// Queries message archive with RSM cursor support.
-    pub fn query_archive(&self, req: MamQueryRequest) -> MamQueryResponse {
+    /// Queries message archive with caller authorization, fail-closed validation, and RSM cursor support.
+    pub fn query_archive(
+        &self,
+        principal: &ArchivePrincipal,
+        req: MamQueryRequest,
+    ) -> Result<MamQueryResponse, MamQueryError> {
+        // 1. Authorization check: scope JID must be normalized and principal must be owner or admin
+        let parsed_scope = northstar_xmpp_types::CanonicalJid::parse(&req.scope_jid).map_err(|_| {
+            MamQueryError::UnauthorizedScope(principal.bare_jid.clone(), req.scope_jid.clone())
+        })?;
+
+        if !principal.is_admin && principal.bare_jid != parsed_scope.bare() {
+            return Err(MamQueryError::UnauthorizedScope(
+                principal.bare_jid.clone(),
+                req.scope_jid,
+            ));
+        }
+
+        // 2. Strict with_jid validation (fail-closed)
+        let parsed_with = match req.with_jid.as_deref() {
+            Some(w) => Some(
+                northstar_xmpp_types::CanonicalJid::parse(w)
+                    .map_err(|_| MamQueryError::InvalidWithJid(w.to_string()))?,
+            ),
+            None => None,
+        };
+
+        // 3. Time range validation
+        if let (Some(start), Some(end)) = (req.start_time_ms, req.end_time_ms) {
+            if start > end {
+                return Err(MamQueryError::InvalidTimeRange(start, end));
+            }
+        }
+
+        // 4. Page size validation
+        let max_limit = match req.max {
+            0 => 50,
+            m if m > 100 => return Err(MamQueryError::InvalidPageSize(m)),
+            m => m,
+        };
+
         let archives = self.archives.read().unwrap();
-        let Some(items) = archives.get(&req.scope_jid) else {
-            return MamQueryResponse {
+        let Some(items) = archives.get(&parsed_scope.bare()) else {
+            return Ok(MamQueryResponse {
                 messages: Vec::new(),
                 first_id: None,
                 last_id: None,
                 complete: true,
-            };
+            });
         };
-
-        // Range validation: if start > end, return empty immediately
-        if let (Some(start), Some(end)) = (req.start_time_ms, req.end_time_ms) {
-            if start > end {
-                return MamQueryResponse {
-                    messages: Vec::new(),
-                    first_id: None,
-                    last_id: None,
-                    complete: true,
-                };
-            }
-        }
-
-        let max_limit = if req.max == 0 || req.max > 100 {
-            50
-        } else {
-            req.max
-        };
-
-        let parsed_with = req
-            .with_jid
-            .as_deref()
-            .and_then(|w| northstar_xmpp_types::CanonicalJid::parse(w).ok());
 
         let mut filtered: Vec<ArchivedMessage> = items
             .iter()
@@ -181,13 +241,7 @@ impl MamService {
             if let Some(pos) = filtered.iter().position(|m| &m.archive_id == after_id) {
                 start_idx = pos + 1;
             } else {
-                // Unknown/stale cursor: return empty rather than restarting from beginning
-                return MamQueryResponse {
-                    messages: Vec::new(),
-                    first_id: None,
-                    last_id: None,
-                    complete: true,
-                };
+                return Err(MamQueryError::InvalidCursor(after_id.clone()));
             }
         }
 
@@ -199,12 +253,12 @@ impl MamService {
         let first_id = result_messages.first().map(|m| m.archive_id.clone());
         let last_id = result_messages.last().map(|m| m.archive_id.clone());
 
-        MamQueryResponse {
+        Ok(MamQueryResponse {
             messages: result_messages,
             first_id,
             last_id,
             complete,
-        }
+        })
     }
 }
 
@@ -233,29 +287,41 @@ mod tests {
         // 2. Duplicate ingestion ignored by inbox
         assert!(!mam.ingest_message(event_id, msg));
 
-        // 3. Query from Alice's scope
-        let query_alice = mam.query_archive(MamQueryRequest {
-            scope_jid: "alice@example.com".to_string(),
-            start_time_ms: None,
-            end_time_ms: None,
-            with_jid: None,
-            max: 10,
-            after: None,
-        });
+        // 3. Query from Alice's scope as Alice
+        let alice_principal = ArchivePrincipal::user(Uuid::new_v4(), "alice@example.com");
+        let query_alice = mam
+            .query_archive(
+                &alice_principal,
+                MamQueryRequest {
+                    scope_jid: "alice@example.com".to_string(),
+                    start_time_ms: None,
+                    end_time_ms: None,
+                    with_jid: None,
+                    max: 10,
+                    after: None,
+                },
+            )
+            .expect("Alice query should succeed");
 
         assert_eq!(query_alice.messages.len(), 1);
         assert_eq!(query_alice.messages[0].server_message_id, "msg-101");
         assert!(query_alice.complete);
 
-        // 4. Query from Bob's scope (bilateral indexing)
-        let query_bob = mam.query_archive(MamQueryRequest {
-            scope_jid: "bob@example.com".to_string(),
-            start_time_ms: None,
-            end_time_ms: None,
-            with_jid: None,
-            max: 10,
-            after: None,
-        });
+        // 4. Query from Bob's scope as Bob (bilateral indexing)
+        let bob_principal = ArchivePrincipal::user(Uuid::new_v4(), "bob@example.com");
+        let query_bob = mam
+            .query_archive(
+                &bob_principal,
+                MamQueryRequest {
+                    scope_jid: "bob@example.com".to_string(),
+                    start_time_ms: None,
+                    end_time_ms: None,
+                    with_jid: None,
+                    max: 10,
+                    after: None,
+                },
+            )
+            .expect("Bob query should succeed");
 
         assert_eq!(query_bob.messages.len(), 1);
         assert_eq!(query_bob.messages[0].server_message_id, "msg-101");
@@ -277,43 +343,128 @@ mod tests {
         };
         assert!(mam.ingest_message(event_id, msg));
 
+        let alice_principal = ArchivePrincipal::user(Uuid::new_v4(), "alice@example.com");
+
         // Attempt querying with a JID that starts with "bob" prefix but is a different user
-        let query_bobby = mam.query_archive(MamQueryRequest {
-            scope_jid: "alice@example.com".to_string(),
-            start_time_ms: None,
-            end_time_ms: None,
-            with_jid: Some("bobby@example.com".to_string()),
-            max: 10,
-            after: None,
-        });
+        let query_bobby = mam
+            .query_archive(
+                &alice_principal,
+                MamQueryRequest {
+                    scope_jid: "alice@example.com".to_string(),
+                    start_time_ms: None,
+                    end_time_ms: None,
+                    with_jid: Some("bobby@example.com".to_string()),
+                    max: 10,
+                    after: None,
+                },
+            )
+            .unwrap();
         assert_eq!(query_bobby.messages.len(), 0);
 
         // Attempt querying with an attacker domain prefix collision
-        let query_evil = mam.query_archive(MamQueryRequest {
-            scope_jid: "alice@example.com".to_string(),
-            start_time_ms: None,
-            end_time_ms: None,
-            with_jid: Some("bob@example.com.evil.com".to_string()),
-            max: 10,
-            after: None,
-        });
+        let query_evil = mam
+            .query_archive(
+                &alice_principal,
+                MamQueryRequest {
+                    scope_jid: "alice@example.com".to_string(),
+                    start_time_ms: None,
+                    end_time_ms: None,
+                    with_jid: Some("bob@example.com.evil.com".to_string()),
+                    max: 10,
+                    after: None,
+                },
+            )
+            .unwrap();
         assert_eq!(query_evil.messages.len(), 0);
 
         // Querying with legitimate Bob succeeds
-        let query_bob = mam.query_archive(MamQueryRequest {
-            scope_jid: "alice@example.com".to_string(),
-            start_time_ms: None,
-            end_time_ms: None,
-            with_jid: Some("bob@example.com".to_string()),
-            max: 10,
-            after: None,
-        });
+        let query_bob = mam
+            .query_archive(
+                &alice_principal,
+                MamQueryRequest {
+                    scope_jid: "alice@example.com".to_string(),
+                    start_time_ms: None,
+                    end_time_ms: None,
+                    with_jid: Some("bob@example.com".to_string()),
+                    max: 10,
+                    after: None,
+                },
+            )
+            .unwrap();
         assert_eq!(query_bob.messages.len(), 1);
         assert_eq!(query_bob.messages[0].server_message_id, "msg-prefix-1");
     }
 
     #[test]
-    fn missing_after_cursor_returns_empty() {
+    fn invalid_with_jid_fails_closed() {
+        let mam = MamService::new();
+        let alice_principal = ArchivePrincipal::user(Uuid::new_v4(), "alice@example.com");
+
+        // Crucial security invariant: invalid with_jid must FAIL CLOSED, never ignored/fail-open
+        let result = mam.query_archive(
+            &alice_principal,
+            MamQueryRequest {
+                scope_jid: "alice@example.com".to_string(),
+                start_time_ms: None,
+                end_time_ms: None,
+                with_jid: Some("not a valid jid@@@evil.com".to_string()),
+                max: 10,
+                after: None,
+            },
+        );
+
+        match result {
+            Err(MamQueryError::InvalidWithJid(j)) => {
+                assert_eq!(j, "not a valid jid@@@evil.com");
+            }
+            _ => panic!("Expected InvalidWithJid error, got: {:?}", result),
+        }
+    }
+
+    #[test]
+    fn unauthorized_scope_query_rejected() {
+        let mam = MamService::new();
+        let eve_principal = ArchivePrincipal::user(Uuid::new_v4(), "eve@example.com");
+
+        // Eve tries to query Alice's archive
+        let result = mam.query_archive(
+            &eve_principal,
+            MamQueryRequest {
+                scope_jid: "alice@example.com".to_string(),
+                start_time_ms: None,
+                end_time_ms: None,
+                with_jid: None,
+                max: 10,
+                after: None,
+            },
+        );
+
+        match result {
+            Err(MamQueryError::UnauthorizedScope(principal_jid, scope)) => {
+                assert_eq!(principal_jid, "eve@example.com");
+                assert_eq!(scope, "alice@example.com");
+            }
+            _ => panic!("Expected UnauthorizedScope error, got: {:?}", result),
+        }
+
+        // Admin is authorized to query Alice's archive
+        let admin_principal = ArchivePrincipal::admin(Uuid::new_v4(), "admin@example.com");
+        let admin_result = mam.query_archive(
+            &admin_principal,
+            MamQueryRequest {
+                scope_jid: "alice@example.com".to_string(),
+                start_time_ms: None,
+                end_time_ms: None,
+                with_jid: None,
+                max: 10,
+                after: None,
+            },
+        );
+        assert!(admin_result.is_ok());
+    }
+
+    #[test]
+    fn missing_after_cursor_returns_error() {
         let mam = MamService::new();
         let event_id = Uuid::new_v4();
 
@@ -328,45 +479,74 @@ mod tests {
         };
         assert!(mam.ingest_message(event_id, msg));
 
-        // Query with an unknown/stale cursor ID: must return empty, not restart from beginning
-        let query_missing = mam.query_archive(MamQueryRequest {
-            scope_jid: "alice@example.com".to_string(),
-            start_time_ms: None,
-            end_time_ms: None,
-            with_jid: None,
-            max: 10,
-            after: Some("nonexistent-stale-archive-id".to_string()),
-        });
-        assert_eq!(query_missing.messages.len(), 0);
-        assert!(query_missing.complete);
+        let alice_principal = ArchivePrincipal::user(Uuid::new_v4(), "alice@example.com");
+
+        // Query with an unknown cursor ID must return typed InvalidCursor error
+        let result = mam.query_archive(
+            &alice_principal,
+            MamQueryRequest {
+                scope_jid: "alice@example.com".to_string(),
+                start_time_ms: None,
+                end_time_ms: None,
+                with_jid: None,
+                max: 10,
+                after: Some("nonexistent-stale-archive-id".to_string()),
+            },
+        );
+
+        match result {
+            Err(MamQueryError::InvalidCursor(c)) => {
+                assert_eq!(c, "nonexistent-stale-archive-id");
+            }
+            _ => panic!("Expected InvalidCursor error, got: {:?}", result),
+        }
     }
 
     #[test]
-    fn start_after_end_returns_empty() {
+    fn start_after_end_returns_error() {
         let mam = MamService::new();
-        let event_id = Uuid::new_v4();
+        let alice_principal = ArchivePrincipal::user(Uuid::new_v4(), "alice@example.com");
 
-        let msg = MessageAcceptedEventPayload {
-            server_message_id: "msg-range-1".to_string(),
-            from_full_jid: "alice@example.com/laptop".to_string(),
-            to_jid: "bob@example.com/mobile".to_string(),
-            stanza_id: "client-r1".to_string(),
-            message_type: "chat".to_string(),
-            raw_stanza: b"<message>Testing range</message>".to_vec(),
-            timestamp_ms: 3000,
-        };
-        assert!(mam.ingest_message(event_id, msg));
+        // Query with start > end must return typed InvalidTimeRange error
+        let result = mam.query_archive(
+            &alice_principal,
+            MamQueryRequest {
+                scope_jid: "alice@example.com".to_string(),
+                start_time_ms: Some(5000),
+                end_time_ms: Some(2000),
+                with_jid: None,
+                max: 10,
+                after: None,
+            },
+        );
 
-        // Query with start > end must be rejected and return empty page
-        let query_invalid = mam.query_archive(MamQueryRequest {
-            scope_jid: "alice@example.com".to_string(),
-            start_time_ms: Some(5000),
-            end_time_ms: Some(2000),
-            with_jid: None,
-            max: 10,
-            after: None,
-        });
-        assert_eq!(query_invalid.messages.len(), 0);
-        assert!(query_invalid.complete);
+        match result {
+            Err(MamQueryError::InvalidTimeRange(5000, 2000)) => {}
+            _ => panic!("Expected InvalidTimeRange error, got: {:?}", result),
+        }
+    }
+
+    #[test]
+    fn invalid_page_size_returns_error() {
+        let mam = MamService::new();
+        let alice_principal = ArchivePrincipal::user(Uuid::new_v4(), "alice@example.com");
+
+        // Query with max > 100 must return typed InvalidPageSize error
+        let result = mam.query_archive(
+            &alice_principal,
+            MamQueryRequest {
+                scope_jid: "alice@example.com".to_string(),
+                start_time_ms: None,
+                end_time_ms: None,
+                with_jid: None,
+                max: 150,
+                after: None,
+            },
+        );
+
+        match result {
+            Err(MamQueryError::InvalidPageSize(150)) => {}
+            _ => panic!("Expected InvalidPageSize error, got: {:?}", result),
+        }
     }
 }

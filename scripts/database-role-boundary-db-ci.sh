@@ -202,6 +202,22 @@ PSQL
     fi
   fi
 
+  if [[ -f "${privilege_matrix_file:-}" ]]; then
+    python3 - "${privilege_matrix_file}" "$project_dir/privilege-matrix.json" <<'PY' || true
+import json, sys
+try:
+    records = []
+    with open(sys.argv[1], 'r', encoding='utf-8') as f:
+        for line in f:
+            if line.strip():
+                records.append(json.loads(line.strip()))
+    with open(sys.argv[2], 'w', encoding='utf-8') as f:
+        json.dump({"probes": records, "total": len(records)}, f, indent=2)
+except Exception:
+    pass
+PY
+  fi
+
   case "$runtime_dir" in
     "$tmp_root"/northstar-database-role-ci.*)
       rm -rf -- "$runtime_dir" || cleanup_status=1
@@ -227,6 +243,68 @@ write_secret() {
   printf '%s\n' "$value" >"$path"
 }
 
+readonly privilege_matrix_file="$runtime_dir/privilege-matrix.jsonl"
+: >"$privilege_matrix_file"
+
+record_privilege_probe() {
+  local role="$1" database="$2" schema="$3" object="$4" privilege="$5" expected="$6" actual="$7" sqlstate="$8" classification="$9"
+  printf '{"role":"%s","database":"%s","schema":"%s","object":"%s","privilege":"%s","expected":"%s","actual":"%s","sqlstate":"%s","classification":"%s"}\n' \
+    "$role" "$database" "$schema" "$object" "$privilege" "$expected" "$actual" "$sqlstate" "$classification" >>"$privilege_matrix_file"
+}
+
+print_role_diagnostic() {
+  local classification="$1" role="$2" database="$3" schema="$4" object="$5" privilege="$6" expected="$7" actual="$8" sqlstate="$9"
+  printf '[WORKLOAD_ROLE_DIAGNOSTIC]\n' >&2
+  printf '  role: %s\n' "$role" >&2
+  printf '  database: %s\n' "$database" >&2
+  printf '  schema: %s\n' "$schema" >&2
+  printf '  object: %s\n' "$object" >&2
+  printf '  privilege: %s\n' "$privilege" >&2
+  printf '  expected: %s\n' "$expected" >&2
+  printf '  actual: %s\n' "$actual" >&2
+  printf '  SQLSTATE: %s\n' "$sqlstate" >&2
+  printf '  classification: %s\n' "$classification" >&2
+}
+
+parse_sql_metadata() {
+  local sql="$1"
+  local schema="public" object="unknown" privilege="UNKNOWN"
+  if [[ "$sql" =~ ALTER[[:space:]]+TABLE[[:space:]]+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+) ]]; then
+    schema="${BASH_REMATCH[1]}"
+    object="${BASH_REMATCH[2]}"
+    privilege="ALTER"
+  elif [[ "$sql" =~ UPDATE[[:space:]]+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+) ]]; then
+    schema="${BASH_REMATCH[1]}"
+    object="${BASH_REMATCH[2]}"
+    privilege="UPDATE"
+  elif [[ "$sql" =~ DELETE[[:space:]]+FROM[[:space:]]+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+) ]]; then
+    schema="${BASH_REMATCH[1]}"
+    object="${BASH_REMATCH[2]}"
+    privilege="DELETE"
+  elif [[ "$sql" =~ INSERT[[:space:]]+INTO[[:space:]]+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+) ]]; then
+    schema="${BASH_REMATCH[1]}"
+    object="${BASH_REMATCH[2]}"
+    privilege="INSERT"
+  elif [[ "$sql" =~ CREATE[[:space:]]+TEMPORARY ]]; then
+    schema="pg_temp"
+    object="temp_table"
+    privilege="CREATE_TEMP"
+  elif [[ "$sql" =~ CREATE[[:space:]]+TABLE ]]; then
+    schema="public"
+    object="table"
+    privilege="CREATE"
+  elif [[ "$sql" =~ SELECT[[:space:]]+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+) ]]; then
+    schema="${BASH_REMATCH[1]}"
+    object="${BASH_REMATCH[2]}"
+    privilege="EXECUTE"
+  elif [[ "$sql" =~ SET[[:space:]]+ROLE ]]; then
+    schema="pg_catalog"
+    object="role"
+    privilege="SET_ROLE"
+  fi
+  printf '%s\t%s\t%s' "$schema" "$object" "$privilege"
+}
+
 expect_insufficient_privilege() {
   local role=$1
   local password=$2
@@ -234,6 +312,8 @@ expect_insufficient_privilege() {
   local sql=$4
   local output
   local status
+  local schema object privilege
+  IFS=$'\t' read -r schema object privilege < <(parse_sql_metadata "$sql")
 
   denial_probe=$((denial_probe + 1))
   output="$runtime_dir/denial-$denial_probe.log"
@@ -246,13 +326,22 @@ expect_insufficient_privilege() {
   status=$?
   set -e
   if (( status == 0 )); then
+    print_role_diagnostic "SHOULD_DENY_BUT_ALLOWED" "$role" "$database_name" "$schema" "$object" "$privilege" "DENY (42501)" "ALLOWED (00000)" "00000"
+    record_privilege_probe "$role" "$database_name" "$schema" "$object" "$privilege" "42501" "00000" "00000" "SHOULD_DENY_BUT_ALLOWED"
     fail "$label unexpectedly succeeded as $role"
   fi
+  local actual_sqlstate
+  actual_sqlstate="$(sed -nE 's/.*ERROR:[[:space:]]+([0-9A-Z]{5}):.*/\1/p' "$output" | head -n 1)"
+  [[ -n "$actual_sqlstate" ]] || actual_sqlstate="UNKNOWN"
+
   if ! grep -Eq 'ERROR:[[:space:]]+42501:' "$output"; then
+    print_role_diagnostic "UNEXPECTED_SQLSTATE" "$role" "$database_name" "$schema" "$object" "$privilege" "42501" "$actual_sqlstate" "$actual_sqlstate"
+    record_privilege_probe "$role" "$database_name" "$schema" "$object" "$privilege" "42501" "$actual_sqlstate" "$actual_sqlstate" "UNEXPECTED_SQLSTATE"
     printf 'unexpected denial result for %s:\n' "$label" >&2
     sed -E 's/(password=)[^[:space:]]+/\1[REDACTED]/gi' "$output" >&2
     fail "$label failed for a reason other than insufficient_privilege"
   fi
+  record_privilege_probe "$role" "$database_name" "$schema" "$object" "$privilege" "42501" "42501" "42501" "DENIED_AS_EXPECTED"
 }
 
 expect_sqlstate() {
@@ -263,6 +352,8 @@ expect_sqlstate() {
   local sql=$5
   local output
   local status
+  local schema object privilege
+  IFS=$'\t' read -r schema object privilege < <(parse_sql_metadata "$sql")
 
   denial_probe=$((denial_probe + 1))
   output="$runtime_dir/sqlstate-$denial_probe.log"
@@ -275,13 +366,22 @@ expect_sqlstate() {
   status=$?
   set -e
   if (( status == 0 )); then
+    print_role_diagnostic "SHOULD_DENY_BUT_ALLOWED" "$role" "$database_name" "$schema" "$object" "$privilege" "DENY ($expected_state)" "ALLOWED (00000)" "00000"
+    record_privilege_probe "$role" "$database_name" "$schema" "$object" "$privilege" "$expected_state" "00000" "00000" "SHOULD_DENY_BUT_ALLOWED"
     fail "$label unexpectedly succeeded as $role"
   fi
+  local actual_sqlstate
+  actual_sqlstate="$(sed -nE 's/.*ERROR:[[:space:]]+([0-9A-Z]{5}):.*/\1/p' "$output" | head -n 1)"
+  [[ -n "$actual_sqlstate" ]] || actual_sqlstate="UNKNOWN"
+
   if ! grep -Eq "ERROR:[[:space:]]+${expected_state}:" "$output"; then
+    print_role_diagnostic "UNEXPECTED_SQLSTATE" "$role" "$database_name" "$schema" "$object" "$privilege" "$expected_state" "$actual_sqlstate" "$actual_sqlstate"
+    record_privilege_probe "$role" "$database_name" "$schema" "$object" "$privilege" "$expected_state" "$actual_sqlstate" "$actual_sqlstate" "UNEXPECTED_SQLSTATE"
     printf 'unexpected SQLSTATE result for %s:\n' "$label" >&2
     sed -E 's/(password=)[^[:space:]]+/\1[REDACTED]/gi' "$output" >&2
     fail "$label failed with an unexpected SQLSTATE"
   fi
+  record_privilege_probe "$role" "$database_name" "$schema" "$object" "$privilege" "$expected_state" "$expected_state" "$expected_state" "DENIED_AS_EXPECTED"
 }
 
 cd "$project_dir"

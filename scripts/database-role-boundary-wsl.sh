@@ -79,7 +79,7 @@ install -d -m 0700 "$socket_dir"
   --auth-host=scram-sha-256 \
   --no-instructions >/dev/null
 
-port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+port="$(python3 "$project_dir/scripts/allocate-test-ports.py" 58000 59999 1)"
 [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && (( port <= 65535 )) || {
   echo "could not allocate a safe PostgreSQL fixture port" >&2
   exit 2

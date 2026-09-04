@@ -1507,12 +1507,16 @@ set_target_database_connections() {
 activate_target_database_fence() {
   local sql_file="$work_dir/database-fence.sql" session_counts remaining_sessions allowed_sessions
   fence_attempted=true
-  set_target_database_connections false || return 1
+  if ! set_target_database_connections false; then
+    fence_attempted=false
+    return 1
+  fi
+  journal_append state ConnectionsDenied
   cat >"$sql_file" <<SQL
-\\set target_db $target_database
-\\set coordinator_pid $target_coordinator_backend_pid
-\\set primary_pid $primary_backend_pid
-\\set compensation_pid $compensation_backend_pid
+\set target_db $target_database
+\set coordinator_pid $target_coordinator_backend_pid
+\set primary_pid $primary_backend_pid
+\set compensation_pid $compensation_backend_pid
 SELECT COUNT(*) FILTER (
          WHERE pid NOT IN (:coordinator_pid, :primary_pid, :compensation_pid)
        )::text || ':' ||
@@ -1522,15 +1526,26 @@ SELECT COUNT(*) FILTER (
 FROM pg_stat_activity
 WHERE datname = :'target_db';
 SQL
-  control_session_command "$sql_file" "$work_dir/database-fence.out" || return 1
+  if ! control_session_command "$sql_file" "$work_dir/database-fence.out"; then
+    set_target_database_connections true || true
+    fence_attempted=false
+    return 1
+  fi
   session_counts="$(sed -n '/^[0-9][0-9]*:[0-9][0-9]*$/p' "$work_dir/database-fence.out")"
-  [[ "$session_counts" =~ ^[0-9]+:[0-9]+$ ]] \
-    || { echo "failed to identify the exact restore database sessions" >&2; return 1; }
+  if [[ ! "$session_counts" =~ ^[0-9]+:[0-9]+$ ]]; then
+    echo "failed to identify the exact restore database sessions" >&2
+    set_target_database_connections true || true
+    fence_attempted=false
+    return 1
+  fi
   IFS=: read -r remaining_sessions allowed_sessions <<<"$session_counts"
   if (( remaining_sessions != 0 || allowed_sessions != 3 )); then
     echo "restore refused: $remaining_sessions other target database session(s) remain after the connection fence; stop Northstar and all database clients, then retry" >&2
+    set_target_database_connections true || true
+    fence_attempted=false
     return 1
   fi
+  journal_append state OldWorkloadsDrained
   database_fence_active=true
   journal_append fence-active \
     "target-database=$target_database" \
@@ -1577,6 +1592,7 @@ release_target_database_fence() {
     echo "database replacement is final, but the connection fence could not be released" >&2
     return 1
   fi
+  journal_append state ConnectionsEnabled
   database_fence_active=false
   fence_attempted=false
 }
@@ -1936,6 +1952,7 @@ finish_restore() {
   fi
   if [[ "$compensation_ok" != true || "$fence_ok" != true \
      || "$cleanup_ok" != true ]]; then
+    journal_append state RecoveryRequired || true
     preserve_work=true
     status=1
     echo "RECOVERY REQUIRED: preserved plaintext work directory: $work_dir" >&2
@@ -2185,6 +2202,7 @@ run_pg_client_without_parent_fds pg_restore --list "$rollback_dump" >/dev/null
 fsync_path "$rollback_dump"
 fsync_path "$rollback_set"
 journal_append rollback-ready "$rollback_set"
+journal_append state Prepared
 
 # ALLOW_CONNECTIONS=false is the fail-closed boundary. The restore does not
 # terminate sessions: operators must stop the application and all clients first.
@@ -2197,6 +2215,7 @@ activate_target_database_fence
 release_primary_policy_lock_after_fence
 verify_manifest_objects "$old_manifest" "$resolved_upload" "${cutover_dir##*/}" \
   || { echo "upload root changed while the database fence was being installed" >&2; exit 1; }
+journal_append state BackupVerified
 compensation_required=true
 journal_append database-switch-intent
 replacement_committed=false
@@ -2205,6 +2224,8 @@ if ! replace_database_from_dump "$payload_dir/database.dump" restored exact \
   false
 fi
 journal_append database-switch-done
+journal_append state RestoreApplied
+journal_append state RolesReconciled
 
 inject_at() {
   local point="$1"
@@ -2282,6 +2303,7 @@ done <"$old_manifest"
 fsync_path "$previous_uploads"
 verify_manifest_objects "$old_manifest" "$previous_uploads"
 journal_append rollback-uploads-verified
+journal_append state PostRestoreVerified
 inject_at before-commit
 
 journal_append commit-intent
@@ -2312,6 +2334,7 @@ else
   echo "restore committed, but journal cleanup was retained for operator inspection: $cutover_dir" >&2
 fi
 compensation_required=false
+journal_append state Completed
 trap - ERR EXIT INT TERM
 
 echo "restore complete: database and $resolved_upload"

@@ -7021,25 +7021,6 @@ impl ProtocolSession {
                 if new_role == "none" {
                     let reason = child_text(item, "reason").map(str::to_owned);
                     let serializable = crate::state::SerializableMucOccupant::from(&occupant);
-                    self.state.remove_live_muc_membership(&serializable);
-                    self.state
-                        .muc_occupants
-                        .remove_if(&target_key, |_, current| {
-                            current.full_jid == occupant.full_jid
-                                && current.connection_id == occupant.connection_id
-                                && current.cluster_epoch == occupant.cluster_epoch
-                        });
-                    let is_empty = self.state.muc_occupants_for(room_jid).is_empty();
-                    run_muc_cluster_eviction(
-                        &self.state,
-                        room_jid,
-                        serializable,
-                        307,
-                        actor_nick.as_deref(),
-                        reason.as_deref(),
-                        is_empty,
-                    )
-                    .await;
                     for (_, other) in self.state.muc_occupants_for(room_jid) {
                         let self_presence = other.full_jid == occupant.full_jid;
                         let presence = muc_presence_stanza_with_status(
@@ -7074,6 +7055,25 @@ impl ProtocolSession {
                         .state
                         .deliver_to_muc_occupant(&occupant, presence)
                         .await;
+                    self.state.remove_live_muc_membership(&serializable);
+                    self.state
+                        .muc_occupants
+                        .remove_if(&target_key, |_, current| {
+                            current.full_jid == occupant.full_jid
+                                && current.connection_id == occupant.connection_id
+                                && current.cluster_epoch == occupant.cluster_epoch
+                        });
+                    let is_empty = self.state.muc_occupants_for(room_jid).is_empty();
+                    run_muc_cluster_eviction(
+                        &self.state,
+                        room_jid,
+                        serializable,
+                        307,
+                        actor_nick.as_deref(),
+                        reason.as_deref(),
+                        is_empty,
+                    )
+                    .await;
                 } else {
                     self.state
                         .muc_occupants

@@ -17,7 +17,7 @@ nonce="$(date +%s%N)_$$"
 schema="component_runtime_${nonce}"
 [[ "$schema" =~ ^component_runtime_[0-9_]+$ ]] || { echo "unsafe component test schema" >&2; exit 1; }
 read -r test_xmpp_port test_http_port test_component_port test_connect_port < <(
-  python3 -c "import socket; sockets=[socket.socket() for _ in range(4)]; [s.bind(('127.0.0.1',0)) for s in sockets]; print(*(s.getsockname()[1] for s in sockets)); [s.close() for s in sockets]"
+  python3 "$project_dir/scripts/allocate-test-ports.py" 42000 43999 4
 )
 export XMPP_TEST_CLIENT_PORT="$test_xmpp_port"
 export XMPP_TEST_HTTP_PORT="$test_http_port"

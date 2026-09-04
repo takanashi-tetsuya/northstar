@@ -18,7 +18,7 @@ schema_a="xep0487_a_${run_id}"
 schema_b="xep0487_b_${run_id}"
 [[ "$schema_a" =~ ^[a-z][a-z0-9_]{0,62}$ && "$schema_b" =~ ^[a-z][a-z0-9_]{0,62}$ ]] || exit 2
 pick_port() {
-  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
+  python3 "$project_dir/scripts/allocate-test-ports.py" 40000 41999 1
 }
 declare -a allocated_ports=(443)
 assign_port() {

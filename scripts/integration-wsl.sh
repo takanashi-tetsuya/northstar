@@ -17,7 +17,7 @@ test_database="${XMPP_TEST_DATABASE:-xmpp_test}"
 run_id="$(openssl rand -hex 8)"
 test_schema="northstar_integration_it_${run_id}"
 pick_port() {
-  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+  python3 "$project_dir/scripts/allocate-test-ports.py" 34000 35999 1
 }
 test_http_port="${XMPP_TEST_HTTP_PORT:-$(pick_port)}"
 test_metrics_port="${XMPP_TEST_METRICS_PORT:-$(pick_port)}"

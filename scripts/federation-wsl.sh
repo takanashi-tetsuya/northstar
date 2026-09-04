@@ -18,7 +18,7 @@ run_id="$(openssl rand -hex 8)"
 schema_a="federation_a_it_${run_id}"
 schema_b="federation_b_it_${run_id}"
 pick_port() {
-  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+  python3 "$project_dir/scripts/allocate-test-ports.py" 38000 39999 1
 }
 declare -a allocated_ports=()
 port_is_allocated() {

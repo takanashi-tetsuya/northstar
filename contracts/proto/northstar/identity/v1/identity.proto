@@ -5,11 +5,11 @@ package northstar.identity.v1;
 import "northstar/common/v1/common.proto";
 
 service IdentityService {
-  rpc Authenticate (AuthenticateRequest) returns (AuthenticateResponse);
-  rpc Register (RegisterRequest) returns (RegisterResponse);
-  rpc ChangePassword (ChangePasswordRequest) returns (ChangePasswordResponse);
-  rpc GetIdentity (GetIdentityRequest) returns (GetIdentityResponse);
-  rpc RevokeCredentials (RevokeCredentialsRequest) returns (RevokeCredentialsResponse);
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+  rpc GetIdentity(GetIdentityRequest) returns (GetIdentityResponse);
+  rpc RevokeCredentials(RevokeCredentialsRequest) returns (RevokeCredentialsResponse);
 }
 
 message AuthenticateRequest {

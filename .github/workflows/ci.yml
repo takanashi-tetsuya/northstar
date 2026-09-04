@@ -63,6 +63,38 @@ jobs:
       - name: Verify generated TLS identities and fail-closed CRL handling
         run: bash scripts/runtime-tls-test-wsl.sh
 
+  contracts-quality:
+    name: Wire contracts (Buf)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Buf
+        uses: bufbuild/buf-setup-action@a40733d7b322880c541c2c31e9c2f6d0f62b8ee3 # v1.50.0
+        with:
+          version: "1.50.0"
+
+      - name: Check Buf formatting
+        run: buf format --diff --exit-code
+
+      - name: Lint Buf wire contracts
+        run: buf lint
+
+      - name: Detect breaking wire contract changes
+        run: |
+          if git rev-parse --verify origin/main >/dev/null 2>&1; then
+            buf breaking --against ".git#branch=origin/main" || true
+          fi
+
+      - name: Verify generated contract drift
+        run: |
+          buf generate
+          git diff --exit-code -- crates/foundation-contracts/src/generated
+
   dependency-audit:
     name: RustSec dependency audit
     runs-on: ubuntu-latest

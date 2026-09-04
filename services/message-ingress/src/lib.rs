@@ -59,20 +59,50 @@ impl MessageIngressService {
         }
 
         // Validate sender authority: from_full_jid must match authenticated canonical JID
-        let authenticated_bare = &req.auth.canonical_jid;
-        if !req.from_full_jid.starts_with(authenticated_bare) {
+        let sender_jid = match northstar_xmpp_types::CanonicalJid::parse(&req.from_full_jid) {
+            Ok(j) => j,
+            Err(_) => {
+                return SubmitMessageResponse {
+                    accepted: false,
+                    server_message_id: String::new(),
+                    admission_timestamp_ms: 0,
+                    error: Some(ErrorDetail::new(
+                        "JABBER_ID_MALFORMED",
+                        "Sender JID cannot be parsed",
+                    )),
+                };
+            }
+        };
+
+        let auth_jid = match northstar_xmpp_types::CanonicalJid::parse(&req.auth.canonical_jid) {
+            Ok(j) => j,
+            Err(_) => {
+                return SubmitMessageResponse {
+                    accepted: false,
+                    server_message_id: String::new(),
+                    admission_timestamp_ms: 0,
+                    error: Some(ErrorDetail::new(
+                        "NOT_AUTHORIZED",
+                        "Authenticated identity JID is invalid",
+                    )),
+                };
+            }
+        };
+
+        if sender_jid.bare() != auth_jid.bare() {
             return SubmitMessageResponse {
                 accepted: false,
                 server_message_id: String::new(),
                 admission_timestamp_ms: 0,
                 error: Some(ErrorDetail::new(
                     "NOT_AUTHORIZED",
-                    "Sender JID does not match authenticated identity",
+                    "Sender bare JID does not match authenticated identity",
                 )),
             };
         }
 
-        let server_message_id = Uuid::new_v4().to_string();
+        // Generate time-sortable, monotonic-per-node UUIDv7 message ID
+        let server_message_id = Uuid::now_v7().to_string();
         let timestamp_ms = Utc::now().timestamp_millis() as u64;
 
         let accepted = StoredAcceptedMessage {
@@ -170,6 +200,27 @@ mod tests {
         };
 
         let res = ingress.submit_message(spoofed);
+        assert!(!res.accepted);
+        assert_eq!(res.error.unwrap().code, "NOT_AUTHORIZED");
+    }
+
+    #[test]
+    fn prefix_collision_spoofing_rejected() {
+        let ingress = MessageIngressService::new();
+        let auth = AuthContext::new("acc-1", "alice@example.com", 1, "local");
+
+        // Alice.evil domain suffix should NOT match alice@example.com even though it starts with the string
+        let collision_attack = SubmitMessageRequest {
+            from_full_jid: "alice@example.com.evil/desktop".to_string(),
+            to_jid: "bob@example.com".to_string(),
+            stanza_id: "client-id-evil".to_string(),
+            message_type: "chat".to_string(),
+            raw_stanza: b"<message>phishing</message>".to_vec(),
+            auth,
+            trace: None,
+        };
+
+        let res = ingress.submit_message(collision_attack);
         assert!(!res.accepted);
         assert_eq!(res.error.unwrap().code, "NOT_AUTHORIZED");
     }

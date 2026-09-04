@@ -55,6 +55,7 @@ members = [
     "crates/foundation-eventing",
     "crates/foundation-telemetry",
     "crates/foundation-contracts",
+    "crates/foundation-service-runtime",
     "services/protocol-registry",
     "services/identity",
     "services/session-directory",
@@ -72,6 +73,7 @@ members = [
     "services/admin-orchestrator",
     "tools/data-split-migrator",
 ]
+default-members = ["."]
 resolver = "2"
 
 [package]
@@ -84,6 +86,7 @@ description = "A single-node, standards-oriented XMPP server written in Rust"
 repository = "https://github.com/takanashi-tetsuya/northstar"
 homepage = "https://github.com/takanashi-tetsuya/northstar"
 readme = "README.md"
+publish = false
 
 [dependencies]
 northstar-abuse-policy = { path = "crates/northstar-abuse-policy" }

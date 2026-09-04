@@ -178,6 +178,7 @@ jobs:
           node scripts/omemo-security-tests.mjs
           node scripts/check-i18n.mjs
           node scripts/check-locales.mjs
+          node scripts/check-microservice-catalog.mjs
 
       - name: Check operational script syntax
         run: |

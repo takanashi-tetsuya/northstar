@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.97"
 license = "AGPL-3.0-only"
 description = "Capability-free personal-message commands and commit results for Northstar"
+publish = false
 
 [dependencies]
 uuid = "1.12"

@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.97"
 license = "AGPL-3.0-only"
 description = "Core PubSub/PEP domain types and outcomes"
+publish = false
 
 [dependencies]
 anyhow = "1.0"

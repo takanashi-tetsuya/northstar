@@ -108,8 +108,27 @@ impl DeliveryRouterService {
                     .collect()
             };
 
+            let mut any_delivered = false;
             for (tx, delivery) in to_send {
-                let _ = tx.send(delivery).await;
+                if tx.send(delivery).await.is_ok() {
+                    any_delivered = true;
+                }
+            }
+
+            if !any_delivered {
+                // Edge streams failed or disconnected: safely fallback to offline spool to avoid message loss
+                let offline = OfflineMessage {
+                    server_message_id: msg.server_message_id,
+                    recipient_bare_jid: recipient.clone(),
+                    stanza: msg.raw_stanza,
+                    timestamp_ms: msg.timestamp_ms,
+                };
+                self.offline_spool
+                    .write()
+                    .unwrap()
+                    .entry(recipient)
+                    .or_default()
+                    .push(offline);
             }
         }
 
@@ -205,5 +224,43 @@ mod tests {
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].server_message_id, "srv-msg-2");
         assert_eq!(router.offline_count("charlie@example.com"), 0);
+    }
+
+    #[tokio::test]
+    async fn delivery_router_edge_stream_failure_falls_back_to_offline_spool() {
+        let router = DeliveryRouterService::new();
+        // Register channel and immediately drop receiver to simulate abrupt edge disconnection
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        router.register_edge_stream("edge-broken", tx);
+
+        let event_id = Uuid::new_v4();
+        let msg = MessageAcceptedEventPayload {
+            server_message_id: "srv-msg-disconnected".to_string(),
+            from_full_jid: "alice@example.com/mobile".to_string(),
+            to_jid: "bob@example.com".to_string(),
+            stanza_id: "client-broken".to_string(),
+            message_type: "chat".to_string(),
+            raw_stanza: b"<message>Will not drop</message>".to_vec(),
+            timestamp_ms: 3000,
+        };
+
+        let target = SessionTarget {
+            full_jid: "bob@example.com/phone".to_string(),
+            edge_instance_id: "edge-broken".to_string(),
+            connection_id: "conn-dead".to_string(),
+            session_epoch: 1,
+        };
+
+        let processed = router
+            .process_accepted_message(event_id, msg, &[target])
+            .await;
+        assert!(processed);
+
+        // Crucial invariant: when edge stream sends fail, message is NOT dropped; it is safely spooled!
+        assert_eq!(router.offline_count("bob@example.com"), 1);
+        let drained = router.drain_offline_spool("bob@example.com");
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].server_message_id, "srv-msg-disconnected");
     }
 }

@@ -1,6 +1,7 @@
 //! Identity microservice implementation.
 //!
-//! Defined per `northstar_microservices_deep_audit_2026-09-03.md` (Sections 6, 8, 19.1, 19.2, 19.4).
+//! Defined per `northstar_microservices_deep_audit_2026-09-03.md` (Sections 6, 8, 19.1, 19.2, 19.4)
+//! and `northstar_progress_and_next_plan_2026-09-04.md` (Milestone 1, 2.1).
 
 use foundation_contracts::common::{AuthContext, ErrorDetail};
 use foundation_contracts::identity::{
@@ -10,7 +11,10 @@ use foundation_contracts::identity::{
 };
 use foundation_eventing::memory::InMemoryOutbox;
 use foundation_eventing::OutboxEvent;
-use sha2::{Digest, Sha256};
+use northstar_auth_core::{
+    compute_scram_sha256, constant_time_bytes_eq, generate_scram_salt, normalize_username,
+    validate_password, MIN_SCRAM_ITERATIONS,
+};
 use std::collections::HashMap;
 use std::sync::RwLock;
 use uuid::Uuid;
@@ -20,7 +24,10 @@ pub struct StoredAccount {
     pub account_id: String,
     pub username: String,
     pub canonical_jid: String,
-    pub password_hash: String,
+    pub scram_salt: Vec<u8>,
+    pub scram_iterations: u32,
+    pub stored_key: Vec<u8>,
+    pub server_key: Vec<u8>,
     pub credential_generation: u64,
     pub status: String,
     pub home_region: String,
@@ -41,23 +48,30 @@ impl IdentityService {
         }
     }
 
-    fn hash_password(password: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(b"salt_northstar_v2:");
-        hasher.update(password.as_bytes());
-        format!("{:x}", hasher.finalize())
-    }
-
     pub fn register(&self, req: RegisterRequest) -> RegisterResponse {
-        let username = req.username.to_lowercase();
-        if username.trim().is_empty() || username.contains('@') {
+        let username = match normalize_username(&req.username) {
+            Ok(u) if !u.is_empty() && !u.contains('@') => u,
+            _ => {
+                return RegisterResponse {
+                    success: false,
+                    account_id: String::new(),
+                    canonical_jid: String::new(),
+                    error: Some(ErrorDetail::new(
+                        "INVALID_USERNAME",
+                        "Username is invalid or contains forbidden characters",
+                    )),
+                };
+            }
+        };
+
+        if let Err(_err) = validate_password(&req.password) {
             return RegisterResponse {
                 success: false,
                 account_id: String::new(),
                 canonical_jid: String::new(),
                 error: Some(ErrorDetail::new(
-                    "INVALID_USERNAME",
-                    "Username contains invalid characters",
+                    "WEAK_PASSWORD",
+                    "Password does not meet length or complexity policy",
                 )),
             };
         }
@@ -74,19 +88,24 @@ impl IdentityService {
 
         let account_id = Uuid::new_v4().to_string();
         let canonical_jid = format!("{username}@{}", self.domain);
-        let password_hash = Self::hash_password(&req.password);
+        let salt = generate_scram_salt();
+        let iterations = MIN_SCRAM_ITERATIONS; // 4096 default for microservice prototype
+        let (stored_key, server_key) = compute_scram_sha256(&req.password, &salt, iterations);
 
         let account = StoredAccount {
             account_id: account_id.clone(),
             username: username.clone(),
             canonical_jid: canonical_jid.clone(),
-            password_hash,
+            scram_salt: salt,
+            scram_iterations: iterations,
+            stored_key,
+            server_key,
             credential_generation: 1,
             status: "active".to_string(),
             home_region: "local".to_string(),
         };
 
-        // Transactional Outbox: stage event in the same transaction
+        // Transactional Outbox: stage event in the same atomic unit
         let outbox_payload =
             serde_json::to_vec(&foundation_contracts::events::AccountCreatedEventPayload {
                 account_id: account_id.clone(),
@@ -117,7 +136,8 @@ impl IdentityService {
     }
 
     pub fn authenticate(&self, req: AuthenticateRequest) -> AuthenticateResponse {
-        let username = req.username.to_lowercase();
+        let username =
+            normalize_username(&req.username).unwrap_or_else(|_| req.username.to_lowercase());
         let accounts = self.accounts.read().unwrap();
 
         let Some(account) = accounts.get(&username) else {
@@ -144,11 +164,14 @@ impl IdentityService {
             };
         }
 
-        let expected_hash = &account.password_hash;
         let incoming_password = String::from_utf8_lossy(&req.auth_payload);
-        let incoming_hash = Self::hash_password(&incoming_password);
+        let (computed_stored, _) = compute_scram_sha256(
+            &incoming_password,
+            &account.scram_salt,
+            account.scram_iterations,
+        );
 
-        if &incoming_hash != expected_hash {
+        if !constant_time_bytes_eq(&computed_stored, &account.stored_key) {
             return AuthenticateResponse {
                 success: false,
                 auth_context: None,
@@ -177,6 +200,17 @@ impl IdentityService {
     }
 
     pub fn change_password(&self, req: ChangePasswordRequest) -> ChangePasswordResponse {
+        if let Err(_err) = validate_password(&req.new_password) {
+            return ChangePasswordResponse {
+                success: false,
+                new_credential_generation: 0,
+                error: Some(ErrorDetail::new(
+                    "WEAK_PASSWORD",
+                    "New password does not meet complexity policy",
+                )),
+            };
+        }
+
         let mut accounts = self.accounts.write().unwrap();
         let account = accounts
             .values_mut()
@@ -190,8 +224,12 @@ impl IdentityService {
             };
         };
 
-        let old_hash = Self::hash_password(&req.old_password);
-        if old_hash != account.password_hash {
+        let (computed_stored, _) = compute_scram_sha256(
+            &req.old_password,
+            &account.scram_salt,
+            account.scram_iterations,
+        );
+        if !constant_time_bytes_eq(&computed_stored, &account.stored_key) {
             return ChangePasswordResponse {
                 success: false,
                 new_credential_generation: 0,
@@ -202,7 +240,13 @@ impl IdentityService {
             };
         }
 
-        account.password_hash = Self::hash_password(&req.new_password);
+        let new_salt = generate_scram_salt();
+        let (new_stored, new_server) =
+            compute_scram_sha256(&req.new_password, &new_salt, account.scram_iterations);
+
+        account.scram_salt = new_salt;
+        account.stored_key = new_stored;
+        account.server_key = new_server;
         account.credential_generation += 1;
         let new_generation = account.credential_generation;
 
@@ -258,7 +302,10 @@ impl IdentityService {
         let accounts = self.accounts.read().unwrap();
         let found = match req {
             GetIdentityRequest::ById(id) => accounts.values().find(|a| a.account_id == id),
-            GetIdentityRequest::ByUsername(u) => accounts.get(&u.to_lowercase()),
+            GetIdentityRequest::ByUsername(u) => {
+                let norm = normalize_username(&u).unwrap_or_else(|_| u.to_lowercase());
+                accounts.get(&norm)
+            }
             GetIdentityRequest::ByJid(j) => accounts.values().find(|a| a.canonical_jid == j),
         };
 
@@ -298,7 +345,7 @@ mod tests {
     fn registration_authentication_and_revocation_lifecycle() {
         let identity = IdentityService::new("example.com");
 
-        // 1. Register account
+        // 1. Register account with compliant password
         let reg = identity.register(RegisterRequest {
             username: "bob".to_string(),
             password: "SecretPassword123!".to_string(),
@@ -313,7 +360,7 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].event_type, "identity.account.created.v1");
 
-        // 2. Authenticate successfully
+        // 2. Authenticate successfully using SCRAM key verification
         let auth = identity.authenticate(AuthenticateRequest {
             username: "bob".to_string(),
             mechanism: "PLAIN".to_string(),
@@ -324,11 +371,11 @@ mod tests {
         let ctx = auth.auth_context.unwrap();
         assert_eq!(ctx.credential_generation, 1);
 
-        // 3. Authenticate with wrong password fails
+        // 3. Authenticate with wrong password fails in constant time
         let fail_auth = identity.authenticate(AuthenticateRequest {
             username: "bob".to_string(),
             mechanism: "PLAIN".to_string(),
-            auth_payload: b"WrongPassword".to_vec(),
+            auth_payload: b"WrongPassword123!".to_vec(),
             trace: None,
         });
         assert!(!fail_auth.success);

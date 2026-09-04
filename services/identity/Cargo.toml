@@ -11,10 +11,17 @@ foundation-contracts = { path = "../../crates/foundation-contracts" }
 foundation-security = { path = "../../crates/foundation-security" }
 foundation-eventing = { path = "../../crates/foundation-eventing" }
 foundation-telemetry = { path = "../../crates/foundation-telemetry" }
+foundation-service-runtime = { path = "../../crates/foundation-service-runtime" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.43", features = ["sync", "macros", "rt", "rt-multi-thread", "time"] }
 thiserror = "2.0"
 tracing = "0.1"
+northstar-auth-core = { path = "../../crates/northstar-auth-core" }
+northstar-xmpp-types = { path = "../../crates/northstar-xmpp-types" }
 sha2 = "0.10"
 uuid = { version = "1.12", features = ["v4", "serde"] }
+
+[[bin]]
+name = "identity"
+path = "src/main.rs"

@@ -10,6 +10,7 @@ publish = false
 foundation-contracts = { path = "../../crates/foundation-contracts" }
 foundation-security = { path = "../../crates/foundation-security" }
 foundation-telemetry = { path = "../../crates/foundation-telemetry" }
+foundation-service-runtime = { path = "../../crates/foundation-service-runtime" }
 northstar-xml-framing = { path = "../../crates/northstar-xml-framing" }
 northstar-xml-builder = { path = "../../crates/northstar-xml-builder" }
 serde = { version = "1.0", features = ["derive"] }
@@ -18,3 +19,7 @@ tokio = { version = "1.43", features = ["sync", "macros", "rt", "rt-multi-thread
 thiserror = "2.0"
 tracing = "0.1"
 uuid = { version = "1.12", features = ["v4", "serde"] }
+
+[[bin]]
+name = "xmpp-edge"
+path = "src/main.rs"

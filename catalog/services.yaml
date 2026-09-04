@@ -9,6 +9,9 @@ services:
   # Platform Core Services (平台核心服务)
   # ==========================================
   - service_id: xmpp-edge
+    implementation_status: prototype
+    code_path: "services/xmpp-edge"
+    cargo_package: "service-xmpp-edge"
     name: "XMPP C2S Edge Connection Gateway"
     execution_class: transport
     home_key: connection_id
@@ -29,6 +32,9 @@ services:
       availability: 99.99
 
   - service_id: identity
+    implementation_status: prototype
+    code_path: "services/identity"
+    cargo_package: "service-identity"
     name: "User Identity and Credential Authority"
     execution_class: stateful-hot
     home_key: account_id
@@ -47,6 +53,9 @@ services:
       availability: 99.99
 
   - service_id: session-directory
+    implementation_status: prototype
+    code_path: "services/session-directory"
+    cargo_package: "service-session-directory"
     name: "Session and Resource Binding Authority"
     execution_class: stateful-hot
     home_key: bare_jid
@@ -62,6 +71,9 @@ services:
       availability: 99.99
 
   - service_id: message-ingress
+    implementation_status: prototype
+    code_path: "services/message-ingress"
+    cargo_package: "service-message-ingress"
     name: "Message Admission and Authority Ingress"
     execution_class: stateful-hot
     home_key: sender_account_id
@@ -80,6 +92,9 @@ services:
       availability: 99.99
 
   - service_id: delivery-router
+    implementation_status: prototype
+    code_path: "services/delivery-router"
+    cargo_package: "service-delivery-router"
     name: "Online Delivery and Offline Spool Router"
     execution_class: stateful-hot
     home_key: recipient_bare_jid
@@ -101,6 +116,7 @@ services:
       availability: 99.95
 
   - service_id: presence-authority
+    implementation_status: planned
     name: "Presence State and Subscription Fanout"
     execution_class: stateful-hot
     home_key: bare_jid
@@ -118,6 +134,9 @@ services:
       availability: 99.95
 
   - service_id: roster-authority
+    implementation_status: prototype
+    code_path: "services/roster-authority"
+    cargo_package: "service-roster-authority"
     name: "Roster Management and Versioning Authority"
     execution_class: stateful-hot
     home_key: owner_bare_jid
@@ -133,6 +152,7 @@ services:
       availability: 99.95
 
   - service_id: communication-policy-projection
+    implementation_status: planned
     name: "Compiled Communication Policy Read Projections"
     execution_class: local-sdk
     home_key: principal_bare_jid
@@ -150,6 +170,9 @@ services:
       availability: 99.99
 
   - service_id: federation-outbox
+    implementation_status: prototype
+    code_path: "services/federation-outbox"
+    cargo_package: "service-federation-outbox"
     name: "Durable S2S Federation Outbox Queue"
     execution_class: stateful-hot
     home_key: target_domain
@@ -167,6 +190,9 @@ services:
       availability: 99.95
 
   - service_id: s2s-edge
+    implementation_status: prototype
+    code_path: "services/s2s-edge"
+    cargo_package: "service-s2s-edge"
     name: "S2S Dialback and Inbound/Outbound Transport Gateway"
     execution_class: transport
     home_key: target_domain
@@ -183,6 +209,9 @@ services:
       availability: 99.95
 
   - service_id: protocol-registry
+    implementation_status: prototype
+    code_path: "services/protocol-registry"
+    cargo_package: "service-protocol-registry"
     name: "Dynamic Protocol and Route Catalog Registry"
     execution_class: control-plane
     home_key: singleton
@@ -198,6 +227,7 @@ services:
       availability: 99.99
 
   - service_id: abuse-risk
+    implementation_status: planned
     name: "PoW Challenge and Rate-Limit Authority"
     execution_class: stateful-hot
     home_key: client_ip
@@ -213,6 +243,7 @@ services:
       availability: 99.99
 
   - service_id: admin-api
+    implementation_status: planned
     name: "External Admin REST BFF Gateway"
     execution_class: bff
     home_key: none
@@ -226,6 +257,9 @@ services:
       availability: 99.9
 
   - service_id: admin-orchestrator
+    implementation_status: prototype
+    code_path: "services/admin-orchestrator"
+    cargo_package: "service-admin-orchestrator"
     name: "Cross-Service Admin Saga Orchestration"
     execution_class: stateful
     home_key: operation_id
@@ -244,6 +278,7 @@ services:
   # Stateful XEP Services (有状态 XEP 微服务)
   # ==========================================
   - service_id: xep-0016-privacy
+    implementation_status: planned
     name: "XEP-0016 Privacy Lists"
     execution_class: stateful-hot
     home_key: account_id
@@ -256,6 +291,9 @@ services:
       availability: 99.95
 
   - service_id: xep-0045-muc
+    implementation_status: prototype
+    code_path: "services/xep-0045-muc"
+    cargo_package: "service-xep-0045-muc"
     name: "XEP-0045 Multi-User Chat"
     execution_class: stateful-hot
     home_key: room_id
@@ -270,6 +308,7 @@ services:
       availability: 99.95
 
   - service_id: xep-0049-private-storage
+    implementation_status: planned
     name: "XEP-0049 Private XML Storage"
     execution_class: stateful
     home_key: account_id
@@ -279,6 +318,7 @@ services:
       availability: 99.9
 
   - service_id: xep-0050-ad-hoc-commands
+    implementation_status: planned
     name: "XEP-0050 Ad-Hoc Commands"
     execution_class: stateful
     home_key: session_id
@@ -288,6 +328,7 @@ services:
       availability: 99.9
 
   - service_id: xep-0054-vcard-temp
+    implementation_status: planned
     name: "XEP-0054 vCard-temp"
     execution_class: stateful
     home_key: account_id
@@ -297,6 +338,9 @@ services:
       availability: 99.9
 
   - service_id: xep-0060-pubsub
+    implementation_status: prototype
+    code_path: "services/xep-0060-pubsub"
+    cargo_package: "service-xep-0060-pubsub"
     name: "XEP-0060 Publish-Subscribe"
     execution_class: stateful-hot
     home_key: node_id
@@ -309,6 +353,7 @@ services:
       availability: 99.95
 
   - service_id: xep-0084-avatar
+    implementation_status: planned
     name: "XEP-0084 User Avatar"
     execution_class: stateful
     home_key: account_id
@@ -321,6 +366,7 @@ services:
       availability: 99.9
 
   - service_id: xep-0115-caps
+    implementation_status: planned
     name: "XEP-0115 Entity Capabilities"
     execution_class: stateful-hot
     home_key: verification_hash
@@ -330,6 +376,7 @@ services:
       availability: 99.95
 
   - service_id: xep-0160-offline-messages
+    implementation_status: planned
     name: "XEP-0160 Best Practices for Offline Messages"
     execution_class: stateful-hot
     home_key: recipient_bare_jid
@@ -339,6 +386,7 @@ services:
       availability: 99.95
 
   - service_id: xep-0163-pep
+    implementation_status: planned
     name: "XEP-0163 Personal Eventing Protocol"
     execution_class: stateful-hot
     home_key: owner_bare_jid
@@ -351,6 +399,9 @@ services:
       availability: 99.95
 
   - service_id: xep-0191-blocking
+    implementation_status: prototype
+    code_path: "services/xep-0191-blocking"
+    cargo_package: "service-xep-0191-blocking"
     name: "XEP-0191 Blocking Command"
     execution_class: stateful-hot
     home_key: account_id
@@ -363,6 +414,7 @@ services:
       availability: 99.95
 
   - service_id: xep-0198-sm
+    implementation_status: planned
     name: "XEP-0198 Stream Management"
     execution_class: stateful-hot
     home_key: session_id
@@ -372,6 +424,7 @@ services:
       availability: 99.99
 
   - service_id: xep-0215-extdisco
+    implementation_status: planned
     name: "XEP-0215 External Service Discovery"
     execution_class: stateful
     home_key: singleton
@@ -381,6 +434,7 @@ services:
       availability: 99.9
 
   - service_id: xep-0280-carbons
+    implementation_status: planned
     name: "XEP-0280 Message Carbons"
     execution_class: stateful-hot
     home_key: account_id
@@ -393,6 +447,9 @@ services:
       availability: 99.95
 
   - service_id: xep-0313-mam
+    implementation_status: prototype
+    code_path: "services/xep-0313-mam"
+    cargo_package: "service-xep-0313-mam"
     name: "XEP-0313 Message Archive Management"
     execution_class: stateful-hot
     home_key: archive_scope_id
@@ -406,6 +463,7 @@ services:
       availability: 99.95
 
   - service_id: xep-0352-csi
+    implementation_status: planned
     name: "XEP-0352 Client State Indication"
     execution_class: stateful
     home_key: session_id
@@ -415,6 +473,7 @@ services:
       availability: 99.99
 
   - service_id: xep-0357-push
+    implementation_status: planned
     name: "XEP-0357 Push Notifications"
     execution_class: stateful
     home_key: account_id
@@ -427,6 +486,9 @@ services:
       availability: 99.9
 
   - service_id: xep-0363-upload
+    implementation_status: prototype
+    code_path: "services/xep-0363-upload"
+    cargo_package: "service-xep-0363-upload"
     name: "XEP-0363 HTTP File Upload"
     execution_class: stateful-hot
     home_key: slot_id
@@ -439,6 +501,7 @@ services:
       availability: 99.95
 
   - service_id: xep-0369-mix-core
+    implementation_status: planned
     name: "XEP-0369 Mediated Information eXchange Core"
     execution_class: stateful-hot
     home_key: channel_id
@@ -452,6 +515,7 @@ services:
       availability: 99.95
 
   - service_id: xep-0484-fast
+    implementation_status: planned
     name: "XEP-0484 Fast Authentication Token Authority"
     execution_class: stateful-hot
     home_key: account_id
@@ -464,76 +528,91 @@ services:
   # Grammar & Local SDK Extensions (纯本地规则扩展)
   # ==========================================
   - service_id: xep-0004-data-forms
+    implementation_status: planned
     name: "XEP-0004 Data Forms Grammar"
     execution_class: local-sdk
     database: none
 
   - service_id: xep-0059-rsm
+    implementation_status: planned
     name: "XEP-0059 Result Set Management Grammar"
     execution_class: local-sdk
     database: none
 
   - service_id: xep-0082-datetime
+    implementation_status: planned
     name: "XEP-0082 XMPP Date and Time Profiles"
     execution_class: local-sdk
     database: none
 
   - service_id: xep-0085-chat-state
+    implementation_status: planned
     name: "XEP-0085 Chat State Notifications"
     execution_class: pass-through
     database: none
 
   - service_id: xep-0092-version
+    implementation_status: planned
     name: "XEP-0092 Software Version"
     execution_class: stateless
     database: none
 
   - service_id: xep-0184-receipts
+    implementation_status: planned
     name: "XEP-0184 Message Delivery Receipts"
     execution_class: pass-through
     database: none
 
   - service_id: xep-0199-ping
+    implementation_status: planned
     name: "XEP-0199 XMPP Ping"
     execution_class: local-sdk
     database: none
 
   - service_id: xep-0202-entity-time
+    implementation_status: planned
     name: "XEP-0202 Entity Time"
     execution_class: stateless
     database: none
 
   - service_id: xep-0203-delayed-delivery
+    implementation_status: planned
     name: "XEP-0203 Delayed Delivery"
     execution_class: local-sdk
     database: none
 
   - service_id: xep-0333-chat-markers
+    implementation_status: planned
     name: "XEP-0333 Chat Markers"
     execution_class: pass-through
     database: none
 
   - service_id: xep-0334-processing-hints
+    implementation_status: planned
     name: "XEP-0334 Message Processing Hints"
     execution_class: local-sdk
     database: none
 
   - service_id: xep-0359-stanza-ids
+    implementation_status: planned
     name: "XEP-0359 Unique and Stable Stanza IDs"
     execution_class: local-sdk
     database: none
 
   - service_id: xep-0380-eme
+    implementation_status: planned
     name: "XEP-0380 Explicit Message Encryption"
     execution_class: pass-through
     database: none
 
   - service_id: xep-0444-reactions
+    implementation_status: planned
     name: "XEP-0444 Message Reactions"
     execution_class: pass-through
     database: none
 
   - service_id: xep-0478-stream-limits
+    implementation_status: planned
     name: "XEP-0478 Stream Limits"
     execution_class: local-sdk
     database: none

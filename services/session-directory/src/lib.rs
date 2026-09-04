@@ -1,6 +1,7 @@
 //! Session Directory and Resource Binding Authority microservice.
 //!
-//! Defined per `northstar_microservices_deep_audit_2026-09-03.md` (Sections 6, 8, 19.1, 19.4).
+//! Defined per `northstar_microservices_deep_audit_2026-09-03.md` (Sections 6, 8, 19.1, 19.4)
+//! and `northstar_progress_and_next_plan_2026-09-04.md` (Milestone 1, 2.2).
 
 use foundation_contracts::common::ErrorDetail;
 use foundation_contracts::session::{
@@ -25,8 +26,15 @@ pub struct ActiveSession {
     pub session_epoch: u64,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct EpochRecord {
+    pub last_epoch: u64,
+    pub closed_at_ms: Option<u64>,
+}
+
 pub struct SessionDirectoryService {
     sessions: RwLock<HashMap<String, ActiveSession>>, // full_jid -> ActiveSession
+    epoch_ledger: RwLock<HashMap<String, EpochRecord>>, // full_jid -> EpochRecord (persistent epoch tracking)
     outbox: InMemoryOutbox,
 }
 
@@ -40,6 +48,7 @@ impl SessionDirectoryService {
     pub fn new() -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
+            epoch_ledger: RwLock::new(HashMap::new()),
             outbox: InMemoryOutbox::new(),
         }
     }
@@ -54,13 +63,13 @@ impl SessionDirectoryService {
 
         let full_jid = format!("{bare_jid}/{resource}");
         let mut sessions = self.sessions.write().unwrap();
+        let mut ledger = self.epoch_ledger.write().unwrap();
 
-        // Calculate next monotonic epoch for this full_jid
-        let session_epoch = if let Some(existing) = sessions.get(&full_jid) {
-            existing.session_epoch + 1
-        } else {
-            1
-        };
+        // Monotonic epoch allocation: survives session close/destruction
+        let record = ledger.entry(full_jid.clone()).or_default();
+        record.last_epoch += 1;
+        record.closed_at_ms = None;
+        let session_epoch = record.last_epoch;
 
         let active = ActiveSession {
             account_id: req.auth.account_id.clone(),
@@ -103,6 +112,8 @@ impl SessionDirectoryService {
 
     pub fn resume_fence(&self, req: ResumeFenceRequest) -> ResumeFenceResponse {
         let mut sessions = self.sessions.write().unwrap();
+        let mut ledger = self.epoch_ledger.write().unwrap();
+
         let Some(existing) = sessions.get_mut(&req.full_jid) else {
             return ResumeFenceResponse {
                 success: false,
@@ -130,6 +141,10 @@ impl SessionDirectoryService {
         existing.edge_instance_id = req.new_edge_instance_id;
         existing.connection_id = req.new_connection_id;
         let new_epoch = existing.session_epoch;
+
+        if let Some(record) = ledger.get_mut(&req.full_jid) {
+            record.last_epoch = new_epoch;
+        }
 
         ResumeFenceResponse {
             success: true,
@@ -173,10 +188,16 @@ impl SessionDirectoryService {
 
     pub fn close_session(&self, req: CloseSessionRequest) -> CloseSessionResponse {
         let mut sessions = self.sessions.write().unwrap();
+        let mut ledger = self.epoch_ledger.write().unwrap();
+
         if let Some(existing) = sessions.get(&req.full_jid) {
             // Verify epoch before closing
             if existing.session_epoch == req.session_epoch {
                 sessions.remove(&req.full_jid);
+
+                if let Some(record) = ledger.get_mut(&req.full_jid) {
+                    record.closed_at_ms = Some(1); // mark tombstone
+                }
 
                 let payload =
                     serde_json::to_vec(&foundation_contracts::events::SessionClosedEventPayload {
@@ -265,5 +286,40 @@ mod tests {
         });
         assert_eq!(updated_resolved.targets[0].edge_instance_id, "edge-2");
         assert_eq!(updated_resolved.targets[0].connection_id, "conn-200");
+    }
+
+    #[test]
+    fn epoch_persists_monotonically_across_session_close_and_rebind() {
+        let directory = SessionDirectoryService::new();
+        let auth = AuthContext::new("acc-1", "alice@example.com", 1, "local");
+
+        // 1. Initial bind gives epoch 1
+        let bind1 = directory.bind_session(BindSessionRequest {
+            auth: auth.clone(),
+            desired_resource: "mobile".to_string(),
+            edge_instance_id: "edge-1".to_string(),
+            connection_id: "conn-1".to_string(),
+            trace: None,
+        });
+        assert_eq!(bind1.session_epoch, 1);
+
+        // 2. Close session
+        let close = directory.close_session(CloseSessionRequest {
+            full_jid: "alice@example.com/mobile".to_string(),
+            session_epoch: 1,
+            reason: "client disconnect".to_string(),
+            trace: None,
+        });
+        assert!(close.success);
+
+        // 3. Re-binding the SAME resource MUST receive epoch 2 (never resets to 1, preventing ABA)
+        let bind2 = directory.bind_session(BindSessionRequest {
+            auth,
+            desired_resource: "mobile".to_string(),
+            edge_instance_id: "edge-1".to_string(),
+            connection_id: "conn-2".to_string(),
+            trace: None,
+        });
+        assert_eq!(bind2.session_epoch, 2);
     }
 }

@@ -1,15 +1,15 @@
 # Northstar Microservices Architecture, Capacity & Production Cutover Specification
 
 **Document Version**: 2.0.0  
-**Baseline SHA**: `17475c12bc1908ac9fc60d3b0d1f8052ce308220`  
-**Reference Specification**: `northstar_microservices_deep_audit_2026-09-03.md`  
-**Status**: Executed & Ready for Deployment
+**Audit Baseline**: `f32adaafdcd5c20ababfe022e672c571749bb865`  
+**Reference Specifications**: `northstar_microservices_deep_audit_2026-09-03.md`, `northstar_progress_and_next_plan_2026-09-04.md`  
+**Status**: Architecture prototype; runtime implementation in progress
 
 ---
 
 ## 1. Architectural Topology Overview
 
-Northstar has completed its transition from a monolithic XMPP server into a distributed microservice topology. The architecture strictly enforces:
+Northstar is actively developing a distributed microservice topology targeting high scalability and database exclusivity. The target architecture strictly enforces:
 1. **Stateless Edge Gateways**: `xmpp-edge` handles TCP/TLS/WebSocket socket I/O and framing. It holds zero database connections, zero global business state, and delegates authentication and stanza routing via gRPC.
 2. **Exclusive Stateful Databases**: Every stateful microservice owns a dedicated PostgreSQL instance and credentials. Cross-database queries, shared database schemas, foreign keys, and distributed two-phase commit (2PC) are forbidden.
 3. **Dual-Channel Eventing**:
@@ -61,7 +61,7 @@ graph TD
 - **Batching & Partitioning**:
   - Kafka topic `message.accepted.v1` is partitioned by `hash(bare_jid(to))` with 64 partitions to guarantee FIFO per-recipient ordering while allowing linear horizontal scaling.
   - Ingress and Delivery services use bounded lock-free ring buffers (16,384 capacity per worker) with cooperative batch flushes to PostgreSQL (500 items / 5ms max lag).
-- **SLO Commitments**:
+- **Target SLO Bounds**:
   - Ingress P99: $\le 20\,\text{ms}$
   - Delivery P99: $\le 50\,\text{ms}$
   - Edge Push Stream P99: $\le 10\,\text{ms}$

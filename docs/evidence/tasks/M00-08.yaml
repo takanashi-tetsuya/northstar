@@ -1,0 +1,32 @@
+schema_version: "1.0"
+task:
+  id: "M00-08"
+  title: "Audit the dev merge and isolate unaccepted Program 6 assets"
+  status: "in-progress"
+  branch: "dev"
+  integration_branch: "dev"
+  base_commit: "b9fc55517b6a81fc79c9c04277ed34269d891b4f"
+  acceptance_state: "pending-exact-dev-ci"
+scope:
+  checkpoint_range:
+    base: "aa2b0df03bed53bc6a032c5a5ac74374bb62167b"
+    checkpoint: "94cb2622934d1329905b982e26377176f18a44bb"
+  merge: "e02503b5d4a5491bb57002f4a5261552f4ec6772"
+  guarantees:
+    - "Every checkpoint change record maps to exactly one ownership and activation classification."
+    - "No unaccepted distributed service is a Cargo default member or root production startup target."
+    - "The audit fails closed on unmapped paths, missing conflict decisions, maturity promotion, or production reachability."
+  exclusions:
+    - "This task does not accept M01-M06 or promote any service maturity."
+    - "This task does not bulk-revert or bulk-accept the historical checkpoint."
+local_validation:
+  required:
+    - "node scripts/check-program6-convergence.mjs --base aa2b0df03bed53bc6a032c5a5ac74374bb62167b --checkpoint 94cb2622934d1329905b982e26377176f18a44bb --merge e02503b5d4a5491bb57002f4a5261552f4ec6772"
+    - "node tests/governance/program6-convergence/run.mjs"
+evidence:
+  workflow_runs: []
+  exact_dev_commit: null
+  passed_checks: []
+  failed_checks: []
+  notes:
+    - "Populate acceptance evidence only after the exact integration commit receives the M00-08 convergence CI result."

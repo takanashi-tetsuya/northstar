@@ -142,6 +142,16 @@ jobs:
       - name: Validate structured service catalog
         run: cargo run --locked -p catalog-validator -- validate --strict
 
+      - name: Audit Program 6 merge convergence
+        run: |
+          node scripts/check-program6-convergence.mjs \
+            --base aa2b0df03bed53bc6a032c5a5ac74374bb62167b \
+            --checkpoint 94cb2622934d1329905b982e26377176f18a44bb \
+            --merge e02503b5d4a5491bb57002f4a5261552f4ec6772 \
+            --output "$RUNNER_TEMP/program6-convergence.json" \
+            --quiet
+          node tests/governance/program6-convergence/run.mjs
+
       - name: Validate database bootstrap and recovery policy
         run: |
           cargo run --locked -p restore-verifier -- --catalog catalog/restore-order.yaml

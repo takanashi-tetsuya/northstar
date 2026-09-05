@@ -44,3 +44,11 @@ M00-07 is `accepted-bootstrap`: it permits the ordered M00 recovery tasks to
 start, but does not mean M00 is complete, does not permit M01 work, and does
 not raise any service maturity. The evidence-schema-specific promotion test is
 deferred to M01-07.
+
+## Dev merge audit
+
+`merge-audits/e02503b.yaml` records the parentage and all nine conflict
+decisions for the Program 6 merge. `catalog/program6-asset-status.yaml` is the
+machine-readable ownership and activation inventory for the checkpoint paths;
+`scripts/check-program6-convergence.mjs` makes an unclassified asset, a
+default-reachable dormant service, or a premature catalog promotion fail CI.

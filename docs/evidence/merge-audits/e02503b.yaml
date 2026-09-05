@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0",
+  "merge_commit": "e02503b5d4a5491bb57002f4a5261552f4ec6772",
+  "parents": [
+    "94cb2622934d1329905b982e26377176f18a44bb",
+    "03274cd21fe2faa00a99e87f868bfd0e21023e09"
+  ],
+  "checkpoint_range": {
+    "base": "aa2b0df03bed53bc6a032c5a5ac74374bb62167b",
+    "checkpoint": "94cb2622934d1329905b982e26377176f18a44bb"
+  },
+  "conflicts": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "resolution": "Retained one CI workflow while preserving the recovery checks; M00-02 subsequently made the contract gate immutable and singular.",
+      "review_result": "audited-no-runtime-authority"
+    },
+    {
+      "path": "README.md",
+      "resolution": "Kept the project-facing documentation merge while treating its Program 6 descriptions as non-authoritative until task evidence exists.",
+      "review_result": "historical-documentation-only"
+    },
+    {
+      "path": "crates/foundation-contracts/src/common.rs",
+      "resolution": "Preserved the contract refactor lineage; M00-02 now owns the generated wire-binding and compatibility boundary.",
+      "review_result": "owned-by-M00-02"
+    },
+    {
+      "path": "crates/northstar-test-harness/src/lib.rs",
+      "resolution": "Retained the combined harness surface, but its listener/process behavior remains dormant and is assigned to M00-03.",
+      "review_result": "deferred-to-M00-03"
+    },
+    {
+      "path": "crates/northstar-test-harness/src/listener.rs",
+      "resolution": "Retained the merge result without accepting its listener ownership semantics; M00-03 must provide the no-TOCTOU replacement.",
+      "review_result": "deferred-to-M00-03"
+    },
+    {
+      "path": "crates/northstar-test-harness/src/process.rs",
+      "resolution": "Retained the merge result without accepting process lifecycle behavior; M00-03 must prove bounded group cleanup and diagnostics.",
+      "review_result": "deferred-to-M00-03"
+    },
+    {
+      "path": "docs/evidence/README.md",
+      "resolution": "Kept the historical evidence boundary and records that ancestry never implies task acceptance.",
+      "review_result": "historical-evidence-only"
+    },
+    {
+      "path": "docs/evidence/baselines/aa2b0df.yaml",
+      "resolution": "Preserved the frozen Program 5 observation unchanged as the modular-monolith behavior reference.",
+      "review_result": "baseline-preserved"
+    },
+    {
+      "path": "docs/microservices_architecture_and_cutover.md",
+      "resolution": "Retained planning material but classifies it as historical until M01 ADRs and later service milestones produce accepted evidence.",
+      "review_result": "historical-documentation-only"
+    }
+  ]
+}

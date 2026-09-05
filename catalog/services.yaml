@@ -1,6 +1,9 @@
 # Northstar Microservices Catalog
 # Source of truth for service identities, ownership, databases, RPC, and events.
 # M00 freezes the Program 5 maturity state in docs/evidence/baselines/aa2b0df.yaml.
+# The M00-08 merge audit classifies Program 6 assets separately in
+# catalog/program6-asset-status.yaml; catalog intent alone never activates a
+# service or promotes it to integrated/production maturity.
 # Derive inventory and status counts with scripts/check-microservice-catalog.mjs;
 # do not copy them into prose as a second source of truth.
 

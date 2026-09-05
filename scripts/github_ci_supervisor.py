@@ -126,8 +126,8 @@ def main() -> int:
         finally:
             for signum, previous_handler in previous_handlers.items():
                 signal.signal(signum, previous_handler)
-            process.stdout.close()
             output_thread.join(timeout=5)
+            process.stdout.close()
 
     if expired:
         return 124

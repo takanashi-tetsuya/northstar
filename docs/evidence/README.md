@@ -11,6 +11,9 @@ limitations, and the maturity that may be claimed at that point.
   release approval.
 - `milestones/` is reserved for accepted task records. A milestone record must
   identify its exact result commit and CI run.
+- `tasks/` contains in-progress and accepted-bootstrap task evidence. A task
+  record remains non-authoritative until it names the exact `dev` commit and
+  its required CI result.
 
 ## Maturity rules
 

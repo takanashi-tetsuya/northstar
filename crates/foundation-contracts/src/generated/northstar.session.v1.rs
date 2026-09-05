@@ -13,6 +13,7 @@ pub struct BindSessionRequest {
     pub connection_id: ::prost::alloc::string::String,
     #[prost(message, optional, tag="5")]
     pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
+    /// Signed AuthGrant is authoritative once the transition is complete.
     #[prost(message, optional, tag="6")]
     pub auth_grant: ::core::option::Option<super::super::security::v1::AuthGrant>,
 }

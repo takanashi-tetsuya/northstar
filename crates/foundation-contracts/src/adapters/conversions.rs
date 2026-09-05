@@ -303,7 +303,7 @@ impl From<ErrorDetail> for wire_common::ErrorDetail {
             retry_after: wire_duration(retry_after_ms),
             reason: context.reason,
             domain: context.domain,
-            correlation_id: context.correlation_id,
+            correlation_id: context.correlation_id.unwrap_or_default(),
         }
     }
 }
@@ -339,7 +339,7 @@ impl From<wire_common::ErrorDetail> for ErrorDetail {
             context: Box::new(ErrorContext {
                 reason,
                 domain: value.domain,
-                correlation_id: value.correlation_id,
+                correlation_id: (!value.correlation_id.is_empty()).then_some(value.correlation_id),
             }),
         }
     }

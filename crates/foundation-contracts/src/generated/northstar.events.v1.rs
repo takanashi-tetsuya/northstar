@@ -41,7 +41,10 @@ pub struct ConsumerInboxEntry {
     #[prost(bytes="vec", tag="4")]
     pub result_digest: ::prost::alloc::vec::Vec<u8>,
 }
-/// Versioned transport envelope; payload dispatch is allow-list based.
+/// EventEnvelope is the versioned, authenticated transport envelope.  Payload
+/// bytes are interpreted only after payload_type has passed the consumer's
+/// explicit allow-list; arbitrary Any/type_url dispatch is intentionally not
+/// part of the contract.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EventEnvelope {

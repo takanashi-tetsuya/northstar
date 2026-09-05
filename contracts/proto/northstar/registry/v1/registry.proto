@@ -6,7 +6,12 @@ import "northstar/common/v1/common.proto";
 import "northstar/security/v1/assertions.proto";
 
 service ProtocolRegistryService {
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  // GetRouteSnapshot and WatchSnapshots intentionally share the stable snapshot representation.
   rpc GetRouteSnapshot(GetRouteSnapshotRequest) returns (GetRouteSnapshotResponse);
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // The stream deliberately emits the stable snapshot representation returned by GetRouteSnapshot.
   rpc WatchSnapshots(WatchSnapshotsRequest) returns (stream GetRouteSnapshotResponse);
   rpc RegisterInstance(RegisterInstanceRequest) returns (RegisterInstanceResponse);
 }

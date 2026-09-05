@@ -116,6 +116,36 @@ pub mod protocol_registry_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        pub async fn watch_snapshots(
+            &mut self,
+            request: impl tonic::IntoRequest<super::WatchSnapshotsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<tonic::codec::Streaming<super::GetRouteSnapshotResponse>>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/northstar.registry.v1.ProtocolRegistryService/WatchSnapshots",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "northstar.registry.v1.ProtocolRegistryService",
+                        "WatchSnapshots",
+                    ),
+                );
+            self.inner.server_streaming(req, path, codec).await
+        }
         pub async fn register_instance(
             &mut self,
             request: impl tonic::IntoRequest<super::RegisterInstanceRequest>,
@@ -146,33 +176,6 @@ pub mod protocol_registry_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        pub async fn watch_snapshots(
-            &mut self,
-            request: impl tonic::IntoRequest<super::WatchSnapshotsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<tonic::codec::Streaming<super::GetRouteSnapshotResponse>>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/northstar.registry.v1.ProtocolRegistryService/WatchSnapshots",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "northstar.registry.v1.ProtocolRegistryService",
-                "WatchSnapshots",
-            ));
-            self.inner.server_streaming(req, path, codec).await
-        }
     }
 }
 /// Generated server implementations.
@@ -189,8 +192,12 @@ pub mod protocol_registry_service_server {
             tonic::Response<super::GetRouteSnapshotResponse>,
             tonic::Status,
         >;
+        /// Server streaming response type for the WatchSnapshots method.
         type WatchSnapshotsStream: tonic::codegen::tokio_stream::Stream<
-                Item = std::result::Result<super::GetRouteSnapshotResponse, tonic::Status>,
+                Item = std::result::Result<
+                    super::GetRouteSnapshotResponse,
+                    tonic::Status,
+                >,
             >
             + Send
             + 'static;
@@ -338,10 +345,10 @@ pub mod protocol_registry_service_server {
                 "/northstar.registry.v1.ProtocolRegistryService/WatchSnapshots" => {
                     #[allow(non_camel_case_types)]
                     struct WatchSnapshotsSvc<T: ProtocolRegistryService>(pub Arc<T>);
-                    impl<T: ProtocolRegistryService>
-                        tonic::server::ServerStreamingService<super::WatchSnapshotsRequest>
-                        for WatchSnapshotsSvc<T>
-                    {
+                    impl<
+                        T: ProtocolRegistryService,
+                    > tonic::server::ServerStreamingService<super::WatchSnapshotsRequest>
+                    for WatchSnapshotsSvc<T> {
                         type Response = super::GetRouteSnapshotResponse;
                         type ResponseStream = T::WatchSnapshotsStream;
                         type Future = BoxFuture<
@@ -353,10 +360,14 @@ pub mod protocol_registry_service_server {
                             request: tonic::Request<super::WatchSnapshotsRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
-                            Box::pin(async move {
-                                <T as ProtocolRegistryService>::watch_snapshots(&inner, request)
+                            let fut = async move {
+                                <T as ProtocolRegistryService>::watch_snapshots(
+                                        &inner,
+                                        request,
+                                    )
                                     .await
-                            })
+                            };
+                            Box::pin(fut)
                         }
                     }
                     let accept_compression_encodings = self.accept_compression_encodings;
@@ -376,7 +387,8 @@ pub mod protocol_registry_service_server {
                                 max_decoding_message_size,
                                 max_encoding_message_size,
                             );
-                        Ok(grpc.server_streaming(method, req).await)
+                        let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
                     };
                     Box::pin(fut)
                 }

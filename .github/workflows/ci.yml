@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      contract_baseline_sha:
+        description: "Immutable commit SHA used for the manual contract compatibility comparison"
+        required: true
+        type: string
   schedule:
     - cron: "23 18 * * 6"
 
@@ -186,6 +191,14 @@ jobs:
         with:
           version: "1.50.0"
 
+      - name: Record contract toolchain and tree
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "current_sha=$(git rev-parse HEAD)"
+          echo "current_contract_tree=$(git rev-parse HEAD:contracts/proto)"
+          buf --version
+
       - name: Check Buf formatting
         run: buf format -d --exit-code
 
@@ -215,18 +228,32 @@ jobs:
 
       - name: Detect breaking wire contract changes
         shell: bash
+        env:
+          CONTRACT_BASELINE_SHA: ${{ inputs.contract_baseline_sha }}
+          CONTRACT_EVENT_BEFORE: ${{ github.event.before }}
+          CONTRACT_EVENT_NAME: ${{ github.event_name }}
+          CONTRACT_HEAD_SHA: ${{ github.sha }}
+          CONTRACT_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CONTRACT_REF_NAME: ${{ github.ref_name }}
         run: |
           set -Eeuo pipefail
-          base_ref="${GITHUB_BASE_REF:-dev}"
-          if ! git fetch --no-tags origin "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}"; then
-            echo "unable to fetch origin/${base_ref}; refusing to skip the compatibility check" >&2
-            exit 1
-          fi
-          if ! git show-ref --verify --quiet "refs/remotes/origin/${base_ref}"; then
-            echo "missing origin/${base_ref}; refusing to skip the compatibility check" >&2
-            exit 1
-          fi
-          buf breaking contracts/proto --against ".git#branch=${base_ref},subdir=contracts/proto"
+          resolution="$(bash scripts/resolve-contract-baseline.sh)"
+          printf '%s\n' "$resolution"
+          baseline_sha="$(awk -F= '$1 == "baseline_sha" { print $2 }' <<<"$resolution")"
+          test -n "$baseline_sha"
+          temp_branch="northstar-contract-baseline-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-$$"
+          temp_ref="refs/heads/${temp_branch}"
+          cleanup() {
+            git update-ref -d "$temp_ref"
+          }
+          trap cleanup EXIT
+          git update-ref "$temp_ref" "$baseline_sha"
+          echo "current_sha=$(git rev-parse HEAD)"
+          echo "current_contract_tree=$(git rev-parse HEAD:contracts/proto)"
+          echo "baseline_sha=$baseline_sha"
+          echo "baseline_contract_tree=$(git rev-parse "$baseline_sha:contracts/proto")"
+          buf --version
+          buf breaking contracts/proto --against ".git#branch=${temp_branch},subdir=contracts/proto"
 
   dependency-audit:
     name: RustSec dependency audit

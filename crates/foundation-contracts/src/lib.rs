@@ -70,7 +70,7 @@ mod tests {
         let wire: northstar::common::v1::ErrorDetail = domain.clone().into();
         assert_eq!(wire.reason, "AUTH_FAILED");
         assert_eq!(wire.domain, "identity");
-        assert_eq!(wire.correlation_id.as_deref(), Some("corr-1"));
+        assert_eq!(wire.correlation_id, "corr-1");
         let restored: adapters::common::ErrorDetail = wire.into();
         assert_eq!(restored.reason(), "AUTH_FAILED");
         assert_eq!(restored.domain(), "identity");

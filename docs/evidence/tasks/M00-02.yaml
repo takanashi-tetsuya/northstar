@@ -1,0 +1,42 @@
+schema_version: "1.0"
+task:
+  id: "M00-02"
+  title: "Close the Buf contract gate with immutable baselines"
+  status: "in-progress"
+  branch: "task/M00-02-contract-gate-finalize"
+  integration_branch: "dev"
+  base_commit: "e02503b5d4a5491bb57002f4a5261552f4ec6772"
+  acceptance_state: "pending-exact-dev-ci"
+scope:
+  scope_adjustment:
+    id: "M00-02-S1"
+    additional_paths:
+      - "crates/foundation-contracts/src/generated/**"
+      - "crates/foundation-contracts/src/adapters/conversions.rs"
+      - "crates/foundation-contracts/src/lib.rs"
+    reason: >
+      The declared Buf generation-drift check regenerated committed Rust wire
+      bindings and exposed an existing optional-string adapter mismatch. The
+      adapter now uses proto3's empty-string absence convention without
+      changing any field number or wire type.
+  guarantees:
+    - "Buf format, lint, generation drift, and breaking compatibility are separate fail-closed checks."
+    - "Compatibility resolves an event-derived immutable commit SHA, never a moving branch."
+    - "A temporary local Git ref exposes that SHA to Buf 1.50 and is removed after the check."
+  exclusions:
+    - "This record does not promote any distributed service maturity."
+    - "Final acceptance requires the exact merged dev commit and both required GitHub Actions jobs."
+local_validation:
+  required:
+    - "buf format -d --exit-code"
+    - "buf lint"
+    - "buf generate"
+    - "git diff --exit-code -- crates/foundation-contracts/src/generated"
+    - "bash scripts/resolve-contract-baseline.sh --self-test"
+evidence:
+  workflow_runs: []
+  exact_dev_commit: null
+  passed_checks: []
+  failed_checks: []
+  notes:
+    - "Populate this record only after the final M00-02 result is merged to dev and its two task-specific CI checks finish."

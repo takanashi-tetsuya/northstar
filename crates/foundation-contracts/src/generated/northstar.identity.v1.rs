@@ -13,6 +13,10 @@ pub struct AuthenticateRequest {
     #[prost(message, optional, tag="4")]
     pub trace: ::core::option::Option<super::super::common::v1::TraceContext>,
 }
+/// Starts an RFC 5802 SCRAM exchange. client_first is the decoded UTF-8
+/// client-first-message; it contains no password. channel_binding is the
+/// negotiated GS2 binding name (for example tls-exporter), while binding_data
+/// is the transport-provided binding value and is never logged.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StartAuthenticationRequest {
@@ -43,6 +47,9 @@ pub struct StartAuthenticationResponse {
     #[prost(message, optional, tag="5")]
     pub error: ::core::option::Option<super::super::common::v1::ErrorDetail>,
 }
+/// Completes an exchange identified by the opaque, single-use exchange_id.
+/// client_final is the decoded UTF-8 client-final-message and never contains a
+/// clear-text password; the proof is verified by northstar-auth-core.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ContinueAuthenticationRequest {
@@ -103,6 +110,8 @@ pub struct AuthenticateResponse {
 pub struct RegisterRequest {
     #[prost(string, tag="1")]
     pub username: ::prost::alloc::string::String,
+    /// Legacy field retained for wire compatibility; new transports must use
+    /// password_secret, which is handled as SecretBytes by the adapter.
     #[prost(string, tag="2")]
     pub password: ::prost::alloc::string::String,
     #[prost(string, optional, tag="3")]
@@ -129,6 +138,8 @@ pub struct RegisterResponse {
 pub struct ChangePasswordRequest {
     #[prost(string, tag="1")]
     pub account_id: ::prost::alloc::string::String,
+    /// Legacy fields retained for wire compatibility; new transports must use
+    /// the SecretBytes fields below.
     #[prost(string, tag="2")]
     pub old_password: ::prost::alloc::string::String,
     #[prost(string, tag="3")]

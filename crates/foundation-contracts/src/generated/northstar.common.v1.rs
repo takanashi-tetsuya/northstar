@@ -34,8 +34,8 @@ pub struct ErrorDetail {
     #[prost(string, tag="8")]
     pub domain: ::prost::alloc::string::String,
     /// Safe correlation identifier for support and tracing; never a secret.
-    #[prost(string, optional, tag="9")]
-    pub correlation_id: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, tag="9")]
+    pub correlation_id: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -49,6 +49,8 @@ pub struct FieldViolation {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AuthContext {
+    /// Deprecated compatibility envelope. New RPCs must use a verified signed
+    /// assertion carried in authenticated metadata instead.
     #[prost(string, tag="1")]
     pub account_id: ::prost::alloc::string::String,
     #[prost(string, tag="2")]

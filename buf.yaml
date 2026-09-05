@@ -4,6 +4,10 @@ modules:
 lint:
   use:
     - STANDARD
+  # Existing WatchSnapshots traffic deliberately reuses the stable snapshot
+  # payload emitted by GetRouteSnapshot. The two method-local ignores document
+  # that compatibility decision; all other RPCs keep the STANDARD rule.
+  disallow_comment_ignores: false
 breaking:
   use:
     - FILE

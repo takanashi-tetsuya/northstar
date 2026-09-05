@@ -14,7 +14,7 @@ message OpenDeliveryStreamRequest {
     EdgeRegister register = 1;
     DeliveryAck ack = 2;
     EdgeHeartbeat heartbeat = 3;
-}
+  }
 }
 
 message EdgeRegister {

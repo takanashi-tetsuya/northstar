@@ -25,6 +25,9 @@ pub struct SubmitMessageRequest {
     #[prost(message, optional, tag="10")]
     pub canonical_input: ::core::option::Option<CanonicalMessageInput>,
 }
+/// Canonical input is the bounded, normalized message representation used by
+/// the ingress authority for idempotency and signature verification.  raw_stanza
+/// remains a compatibility field and is never trusted as an identity key.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CanonicalMessageInput {

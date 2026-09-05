@@ -6,6 +6,7 @@ export METRICS_BIND=127.0.0.1:0
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
+source "$project_dir/scripts/lib/test-listener-readiness.sh"
 if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export PATH="$project_dir/.cargo-linux/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   export RUSTUP_HOME="$project_dir/.rustup-linux"
@@ -19,16 +20,13 @@ schema="northstar_omemo_runtime_${suffix}"
   echo "unsafe OMEMO runtime schema" >&2
   exit 2
 }
-read -r xmpp_port xmpps_port http_port < <(
-  python3 "$project_dir/scripts/allocate-test-ports.py" 50000 51999 3
-)
 runtime_dir="$(mktemp -d /tmp/northstar-omemo-runtime.XXXXXX)"
 server_pid=""
-
-port_is_listening() {
-  local port="$1"
-  ss -H -ltn "sport = :$port" 2>/dev/null | grep -q .
-}
+server_generation=0
+xmpp_port=""
+xmpps_port=""
+http_port=""
+declare -a fixture_listener_ports=()
 
 cleanup() {
   status=$?
@@ -45,17 +43,16 @@ cleanup() {
     --set ON_ERROR_STOP=1 --command "DROP SCHEMA IF EXISTS \"$schema\" CASCADE" >/dev/null 2>&1 || status=1
   remains="$(PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
     --tuples-only --no-align --command "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='$schema')" 2>/dev/null || printf unknown)"
-  for port in "$xmpp_port" "$xmpps_port" "$http_port"; do
-    if port_is_listening "$port"; then
-      echo "OMEMO runtime listener remained on port $port" >&2
-      status=1
-    fi
-  done
+  listener_count=0
+  if ! fixture_assert_no_listeners; then
+    listener_count=1
+    status=1
+  fi
   case "$runtime_dir" in
     /tmp/northstar-omemo-runtime.*) rm -rf -- "$runtime_dir" ;;
     *) status=1 ;;
   esac
-  echo "OMEMO runtime cleanup: schema=$schema remains=${remains:-unknown} listeners=0"
+  echo "OMEMO runtime cleanup: schema=$schema remains=${remains:-unknown} listeners=$listener_count"
   exit "$status"
 }
 trap cleanup EXIT INT TERM
@@ -84,11 +81,16 @@ env \
   "$binary" migrate
 
 start_server() {
+  server_generation=$((server_generation + 1))
+  local readiness_file="$runtime_dir/server-${server_generation}.ready.json"
+  local readiness_nonce
+  readiness_nonce="$(openssl rand -hex 16)"
   env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
     DATABASE_URL="$database_url" \
-    XMPP_BIND="127.0.0.1:$xmpp_port" XMPPS_BIND="127.0.0.1:$xmpps_port" \
-    HTTP_BIND="127.0.0.1:$http_port" S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
-    PUBLIC_URL="https://127.0.0.1:$http_port" WEBSOCKET_ALLOWED_ORIGINS=http://localhost \
+    XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 \
+    HTTP_BIND=127.0.0.1:0 S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
+    TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL=https://127.0.0.1 WEBSOCKET_ALLOWED_ORIGINS=http://localhost \
     API_CONTROL_ALLOW_EPHEMERAL=true ABUSE_STATE_ALLOW_EPHEMERAL=true FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token.secret" DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram.secret" UPLOAD_DIR="$runtime_dir/uploads" \
     TLS_CERT_PATH="$runtime_dir/server.crt" TLS_KEY_PATH="$runtime_dir/server.key" \
     OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=true REGISTRATION_RATE_PER_HOUR=20 \
@@ -96,6 +98,14 @@ start_server() {
     FEDERATION_ENABLED=false LOG_FORMAT=json RUST_LOG=rust_xmpp_server=info \
     "$binary" >>"$runtime_dir/server.log" 2>&1 &
   server_pid=$!
+  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid" || {
+    echo "OMEMO runtime server failed before publishing readiness" >&2
+    return 1
+  }
+  xmpp_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
+  xmpps_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
+  http_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+  curl --silent --fail "http://127.0.0.1:$http_port/readyz" >/dev/null
 }
 
 run_phase() {
@@ -152,10 +162,5 @@ if (( shutdowns < 2 )); then
   echo "OMEMO runtime server did not complete both graceful shutdowns" >&2
   exit 1
 fi
-for port in "$xmpp_port" "$xmpps_port" "$http_port"; do
-  if port_is_listening "$port"; then
-    echo "OMEMO runtime listener remained on port $port after graceful stop" >&2
-    exit 1
-  fi
-done
+fixture_assert_no_listeners || exit 1
 echo "OMEMO runtime: strict PEP/envelope validation, live/Carbons/CSI/MUC/offline/MAM/restart/revocation and no-plaintext DB evidence passed"

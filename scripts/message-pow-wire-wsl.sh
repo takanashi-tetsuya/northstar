@@ -5,12 +5,10 @@ export MIGRATOR_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT=true
 export METRICS_BIND=127.0.0.1:0
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$project_dir/scripts/lib/test-listener-readiness.sh"
 test_database="${XMPP_TEST_DATABASE:-xmpp_test}"
 run_id="$(openssl rand -hex 8)"
 test_schema="northstar_message_pow_wire_${run_id}"
-read -r http_port client_port xmpps_port s2s_port s2s_tls_port < <(
-  python3 "$project_dir/scripts/allocate-test-ports.py" 46000 47999 5
-)
 
 if [[ "$test_database" != "xmpp_test" ]]; then
   echo "message PoW wire tests are restricted to the disposable xmpp_test database" >&2
@@ -26,6 +24,11 @@ runtime_dir="$(mktemp -d /tmp/northstar-message-pow-wire.XXXXXX)"
 mkdir -p "$runtime_dir/logs"
 server_pid=""
 created=0
+server_generation=0
+http_port=""
+client_port=""
+xmpps_port=""
+declare -a fixture_listener_ports=()
 cleanup() {
   status=$?
   trap - EXIT INT TERM
@@ -56,6 +59,9 @@ cleanup() {
       echo "isolated message PoW wire schema remains: $test_schema (exists=$remains)" >&2
       status=1
     fi
+  fi
+  if ! fixture_assert_no_listeners; then
+    status=1
   fi
   case "$runtime_dir" in
     /tmp/northstar-message-pow-wire.*) rm -rf -- "$runtime_dir" ;;
@@ -118,18 +124,25 @@ env \
   "$target_dir/debug/rust-xmpp-server" migrate
 : >"$runtime_dir/server.log"
 start_server() {
+  server_generation=$((server_generation + 1))
+  local readiness_file="$runtime_dir/server-${server_generation}.ready.json"
+  local readiness_nonce
+  readiness_nonce="$(openssl rand -hex 16)"
   (
     trap - EXIT INT TERM
     export \
     NORTHSTAR_DISABLE_DOTENV=true \
     XMPP_DOMAIN=localhost \
     DATABASE_URL="$database_url" \
-    XMPP_BIND="127.0.0.1:$client_port" \
-    XMPPS_BIND="127.0.0.1:$xmpps_port" \
-    S2S_BIND="127.0.0.1:$s2s_port" \
-    S2S_TLS_BIND="127.0.0.1:$s2s_tls_port" \
-    HTTP_BIND="127.0.0.1:$http_port" \
-    PUBLIC_URL="https://127.0.0.1:$http_port" \
+    XMPP_BIND=127.0.0.1:0 \
+    XMPPS_BIND=127.0.0.1:0 \
+    S2S_BIND=127.0.0.1:0 \
+    S2S_TLS_BIND=127.0.0.1:0 \
+    HTTP_BIND=127.0.0.1:0 \
+    TEST_LISTENER_ACTIVATION=true \
+    TEST_READINESS_FILE="$readiness_file" \
+    TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL=https://127.0.0.1 \
     API_CONTROL_SECRET_FILE="$runtime_dir/api-control.secret" \
     FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token.secret" \
     DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram.secret" \
@@ -158,25 +171,14 @@ start_server() {
     exec "$target_dir/debug/rust-xmpp-server"
   ) >>"$runtime_dir/server.log" 2>&1 &
   server_pid=$!
-}
-wait_ready() {
-  for _ in $(seq 1 300); do
-    if curl --silent --fail "http://127.0.0.1:$http_port/readyz" >/dev/null; then
-      return 0
-    fi
-    if ! kill -0 "$server_pid" 2>/dev/null; then
-      set +e
-      wait "$server_pid"
-      process_status=$?
-      set -e
-      server_pid=""
-      echo "message PoW server exited before readiness (status=$process_status)" >&2
-      return 1
-    fi
-    sleep 0.1
-  done
-  echo "message PoW server readiness timed out" >&2
-  return 1
+  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid" || {
+    echo "message PoW server failed before publishing readiness" >&2
+    return 1
+  }
+  client_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
+  xmpps_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
+  http_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+  curl --silent --fail "http://127.0.0.1:$http_port/readyz" >/dev/null
 }
 
 export PGOPTIONS="-c search_path=$test_schema"
@@ -190,14 +192,18 @@ export XMPP_TEST_RUN_ID="$run_id"
 export XMPP_TEST_MESSAGE_POW_STATE="$runtime_dir/message-pow-state.json"
 
 start_server
-wait_ready
+export XMPP_TEST_HTTP_PORT="$http_port"
+export XMPP_TEST_CLIENT_PORT="$client_port"
+export XMPP_TEST_XMPPS_PORT="$xmpps_port"
 python3 scripts/message-pow-wire-wsl.py prepare
 
 kill "$server_pid"
 wait "$server_pid" 2>/dev/null || true
 server_pid=""
 start_server
-wait_ready
+export XMPP_TEST_HTTP_PORT="$http_port"
+export XMPP_TEST_CLIENT_PORT="$client_port"
+export XMPP_TEST_XMPPS_PORT="$xmpps_port"
 python3 scripts/message-pow-wire-wsl.py verify
 
 echo "message PoW isolated wire/restart validation passed"

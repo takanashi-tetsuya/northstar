@@ -25,20 +25,28 @@ relay_a_pid=""
 relay_b_pid=""
 relay_a_tls_port=""
 relay_b_tls_port=""
+relay_a_http_pid=""
+relay_b_http_pid=""
+relay_a_http_port=""
+relay_b_http_port=""
 http_a=""
 http_b=""
+http_a_backend=""
+http_b_backend=""
 s2s_tls_a=""
 s2s_tls_b=""
 target_a_tls="$runtime_dir/a.s2s-tls.target"
 target_b_tls="$runtime_dir/b.s2s-tls.target"
+target_a_http="$runtime_dir/a.http.target"
+target_b_http="$runtime_dir/b.http.target"
 declare -a fixture_listener_ports=()
 cleanup() {
   status=$?
   trap - EXIT INT TERM
-  for pid in "$pid_a" "$pid_b" "$relay_a_pid" "$relay_b_pid"; do [[ -z "$pid" ]] || kill "$pid" 2>/dev/null || true; done
-  for pid in "$pid_a" "$pid_b" "$relay_a_pid" "$relay_b_pid"; do [[ -z "$pid" ]] || wait "$pid" 2>/dev/null || true; done
+  for pid in "$pid_a" "$pid_b" "$relay_a_pid" "$relay_b_pid" "$relay_a_http_pid" "$relay_b_http_pid"; do [[ -z "$pid" ]] || kill "$pid" 2>/dev/null || true; done
+  for pid in "$pid_a" "$pid_b" "$relay_a_pid" "$relay_b_pid" "$relay_a_http_pid" "$relay_b_http_pid"; do [[ -z "$pid" ]] || wait "$pid" 2>/dev/null || true; done
   if [[ $status -ne 0 ]]; then
-    for log in "$runtime_dir/a.log" "$runtime_dir/b.log" "$runtime_dir/relay-a.log" "$runtime_dir/relay-b.log"; do [[ ! -f "$log" ]] || { echo "--- $log ---" >&2; tail -n 200 "$log" >&2; }; done
+    for log in "$runtime_dir/a.log" "$runtime_dir/b.log" "$runtime_dir/relay-a.log" "$runtime_dir/relay-b.log" "$runtime_dir/relay-a-http.log" "$runtime_dir/relay-b-http.log"; do [[ ! -f "$log" ]] || { echo "--- $log ---" >&2; tail -n 200 "$log" >&2; }; done
   fi
   for schema in "$schema_a" "$schema_b"; do
     if ! PGPASSWORD=xmpp-test-password psql -h 127.0.0.1 -U xmpp_test -d xmpp_test --set ON_ERROR_STOP=1 --command "DROP SCHEMA IF EXISTS \"$schema\" CASCADE;" >/dev/null 2>&1; then
@@ -103,6 +111,13 @@ fixture_start_tcp_relay "$project_dir" "$runtime_dir" a relay-a-s2s-tls "$target
   "$runtime_dir/relay-a.log" relay_a_pid relay_a_tls_port
 fixture_start_tcp_relay "$project_dir" "$runtime_dir" b relay-b-s2s-tls "$target_b_tls" \
   "$runtime_dir/relay-b.log" relay_b_pid relay_b_tls_port
+# The advertised HTTPS authorities remain stable across the intentional B
+# restart below.  They are fixture-owned relays; each child only publishes
+# the backend target after it has bound and authenticated its readiness file.
+fixture_start_tcp_relay "$project_dir" "$runtime_dir" a-http relay-a-http "$target_a_http" \
+  "$runtime_dir/relay-a-http.log" relay_a_http_pid relay_a_http_port
+fixture_start_tcp_relay "$project_dir" "$runtime_dir" b-http relay-b-http "$target_b_http" \
+  "$runtime_dir/relay-b-http.log" relay_b_http_pid relay_b_http_port
 
 cargo_args=(--locked); [[ "${XMPP_TEST_OFFLINE:-true}" == false ]] || cargo_args+=(--offline)
 if [[ "${NORTHSTAR_MIX_FEDERATION_SKIP_BUILD:-false}" != true ]]; then
@@ -121,12 +136,12 @@ export ABUSE_STATE_ALLOW_EPHEMERAL=true
 start_a() {
   local readiness_file="$runtime_dir/a.ready.json" readiness_nonce
   readiness_nonce="$(openssl rand -hex 16)"
-  rm -f -- "$readiness_file" "$target_a_tls"
+  rm -f -- "$readiness_file" "$target_a_tls" "$target_a_http"
   env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost DATABASE_URL="$database_url_a" \
     XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 \
     S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
     TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
-    PUBLIC_URL=https://127.0.0.1 WEBSOCKET_ALLOWED_ORIGINS=http://localhost \
+    PUBLIC_URL="https://127.0.0.1:$relay_a_http_port" WEBSOCKET_ALLOWED_ORIGINS=http://localhost \
     API_CONTROL_SECRET_FILE="$runtime_dir/api-control-a.secret" FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token-a.secret" DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram-a.secret" \
     UPLOAD_DIR="$runtime_dir/uploads-a" TLS_CERT_PATH="$runtime_dir/certs/a.crt" TLS_KEY_PATH="$runtime_dir/certs/a.key" \
     OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=false REGISTRATION_RATE_PER_HOUR=20 \
@@ -136,20 +151,24 @@ start_a() {
     "$binary" >"$runtime_dir/a.log" 2>&1 &
   pid_a=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_a" || return 1
-  http_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+  http_a_backend="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
   s2s_tls_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" s2s-tls)"
-  printf '127.0.0.1:%s\n' "$s2s_tls_a" >"$target_a_tls"
+  fixture_publish_relay_target "$target_a_tls" "$s2s_tls_a"
+  fixture_publish_relay_target "$target_a_http" "$http_a_backend"
+  http_a="$relay_a_http_port"
+  curl --silent --fail "http://127.0.0.1:$http_a_backend/readyz" >/dev/null
   curl --silent --fail "http://127.0.0.1:$http_a/readyz" >/dev/null
+  fixture_assert_public_url "$http_a" "https://127.0.0.1:$relay_a_http_port"
 }
 start_b() {
   local readiness_file="$runtime_dir/b.ready.json" readiness_nonce
   readiness_nonce="$(openssl rand -hex 16)"
-  rm -f -- "$readiness_file" "$target_b_tls"
+  rm -f -- "$readiness_file" "$target_b_tls" "$target_b_http"
   env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=remote.localhost DATABASE_URL="$database_url_b" \
     XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 \
     S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
     TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
-    PUBLIC_URL=https://127.0.0.1 WEBSOCKET_ALLOWED_ORIGINS=http://localhost \
+    PUBLIC_URL="https://127.0.0.1:$relay_b_http_port" WEBSOCKET_ALLOWED_ORIGINS=http://localhost \
     API_CONTROL_SECRET_FILE="$runtime_dir/api-control-b.secret" FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token-b.secret" DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram-b.secret" \
     UPLOAD_DIR="$runtime_dir/uploads-b" TLS_CERT_PATH="$runtime_dir/certs/b.crt" TLS_KEY_PATH="$runtime_dir/certs/b.key" \
     OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=false REGISTRATION_RATE_PER_HOUR=20 \
@@ -159,10 +178,14 @@ start_b() {
     "$binary" >"$runtime_dir/b.log" 2>&1 &
   pid_b=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_b" || return 1
-  http_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+  http_b_backend="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
   s2s_tls_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" s2s-tls)"
-  printf '127.0.0.1:%s\n' "$s2s_tls_b" >"$target_b_tls"
+  fixture_publish_relay_target "$target_b_tls" "$s2s_tls_b"
+  fixture_publish_relay_target "$target_b_http" "$http_b_backend"
+  http_b="$relay_b_http_port"
+  curl --silent --fail "http://127.0.0.1:$http_b_backend/readyz" >/dev/null
   curl --silent --fail "http://127.0.0.1:$http_b/readyz" >/dev/null
+  fixture_assert_public_url "$http_b" "https://127.0.0.1:$relay_b_http_port"
 }
 
 export MIX_FED_HTTP_A="$http_a" MIX_FED_HTTP_B="$http_b" XMPP_TEST_HOST=127.0.0.1

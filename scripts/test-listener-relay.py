@@ -27,6 +27,49 @@ from pathlib import Path
 
 STOP = threading.Event()
 MAX_BUFFERED_BYTES = 1024 * 1024
+STARTUP_DIAGNOSTIC_LIMIT = 4096
+
+
+def signal_child_group(process: subprocess.Popen[str], signal_number: int) -> None:
+    """Signal the isolated self-test group even after its direct child exits."""
+
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal_number)
+        except ProcessLookupError:
+            pass
+        return
+    if process.poll() is None:
+        process.send_signal(signal_number)
+
+
+def terminate_and_collect(process: subprocess.Popen[str], grace_seconds: float = 2.0) -> str:
+    """Reap a failed self-test group without blocking on an inherited pipe.
+
+    A direct ``stderr.read()`` waits for EOF, which a parent that exits before
+    a descendant (or a child that ignores TERM) need not produce.  All helper
+    children start in an isolated process group, so TERM and then KILL cover
+    that complete group even when ``process.poll()`` says the direct child has
+    exited.  Both drain attempts are deadline-bound; only a small diagnostic
+    tail is returned.
+    """
+
+    signal_child_group(process, signal.SIGTERM)
+    try:
+        _stdout, stderr = process.communicate(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        signal_child_group(process, signal.SIGKILL)
+        try:
+            _stdout, stderr = process.communicate(timeout=grace_seconds)
+        except subprocess.TimeoutExpired as error:
+            # This should be unreachable after a group KILL.  Do not fall
+            # back to an unbounded pipe read if the host process facility is
+            # broken; surface a bounded diagnostic instead.
+            diagnostic = error.stderr or ""
+            if isinstance(diagnostic, bytes):
+                diagnostic = diagnostic.decode("utf-8", errors="replace")
+            return f"relay diagnostic collection timed out: {diagnostic[-STARTUP_DIAGNOSTIC_LIMIT:]}"
+    return (stderr or "")[-STARTUP_DIAGNOSTIC_LIMIT:]
 
 
 def parse_target(path: Path) -> tuple[str, int]:
@@ -71,13 +114,19 @@ def publish_readiness(path: Path, nonce: str, purpose: str, port: int) -> None:
             output.write("\n")
             output.flush()
             os.fsync(output.fileno())
-        os.replace(temporary, path)
-    except BaseException:
+        # ``replace`` would overwrite a readiness proof created after the
+        # preflight check.  Publish with link(2) instead: it is an atomic
+        # create-only operation in this directory, so a stale or competing
+        # record fails closed rather than being silently replaced.
+        try:
+            os.link(temporary, path)
+        except FileExistsError as error:
+            raise RuntimeError(f"refusing to overwrite readiness record: {path}") from error
+    finally:
         try:
             os.unlink(temporary)
         except FileNotFoundError:
             pass
-        raise
 
 
 def relay_connection(client: socket.socket, target_file: Path) -> None:
@@ -193,6 +242,22 @@ def self_test() -> None:
         directory = Path(raw_directory)
         readiness_file = directory / "ready.json"
         target_file = directory / "target.txt"
+        occupied_readiness_file = directory / "occupied-ready.json"
+        occupied_payload = b'{"existing":"readiness-proof"}\n'
+        occupied_readiness_file.write_bytes(occupied_payload)
+        try:
+            publish_readiness(
+                occupied_readiness_file,
+                "0123456789abcdef",
+                "relay-self-test",
+                40123,
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("relay readiness publication overwrote an existing record")
+        if occupied_readiness_file.read_bytes() != occupied_payload:
+            raise RuntimeError("relay readiness publication changed an existing record")
         first_upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         first_upstream.bind(("127.0.0.1", 0))
         first_upstream.listen(1)
@@ -233,6 +298,59 @@ def self_test() -> None:
         second_thread = threading.Thread(target=serve_second_upstream, daemon=True)
         first_thread.start()
         second_thread.start()
+
+        # Keep the startup-failure path honest: the direct child exits first,
+        # while its descendant ignores TERM and retains inherited diagnostic
+        # pipes.  A ready file removes scheduling luck from this regression:
+        # the descendant has installed its handler and inherited the pipe
+        # before we wait for its direct parent to exit.
+        stubborn_child_ready = directory / "stubborn-child.ready"
+        stubborn_child_program = (
+            "import os, pathlib, signal, sys, time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()), encoding='ascii'); "
+            "sys.stderr.write('relay-startup-stubborn-descendant\\n'); "
+            "sys.stderr.flush(); time.sleep(60)"
+        )
+        stubborn_parent_program = (
+            "import subprocess, sys; "
+            f"subprocess.Popen([sys.executable, '-c', {stubborn_child_program!r}, sys.argv[1]]); "
+            "sys.stderr.write('relay-startup-parent-exited\\n'); "
+            "sys.stderr.flush()"
+        )
+        stubborn = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                stubborn_parent_program,
+                str(stubborn_child_ready),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        startup_deadline = time.monotonic() + 2
+        while not stubborn_child_ready.exists() and time.monotonic() < startup_deadline:
+            time.sleep(0.01)
+        if not stubborn_child_ready.exists():
+            raise RuntimeError("relay startup descendant did not become ready")
+        try:
+            stubborn_child_pid = int(
+                stubborn_child_ready.read_text(encoding="ascii").strip()
+            )
+        except ValueError as error:
+            raise RuntimeError("relay startup descendant published an invalid PID") from error
+        if os.name == "posix" and os.getpgid(stubborn_child_pid) != stubborn.pid:
+            raise RuntimeError("relay startup descendant escaped its private process group")
+        while stubborn.poll() is None and time.monotonic() < startup_deadline:
+            time.sleep(0.01)
+        if stubborn.poll() != 0:
+            raise RuntimeError("relay startup parent did not exit after launching its descendant")
+        stubborn_diagnostics = terminate_and_collect(stubborn, grace_seconds=0.25)
+        if "relay-startup-stubborn-descendant" not in stubborn_diagnostics:
+            raise RuntimeError("relay startup diagnostic cleanup was not bounded")
+
         command = [
             sys.executable,
             __file__,
@@ -245,13 +363,22 @@ def self_test() -> None:
             "--target-file",
             str(target_file),
         ]
-        relay = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        relay = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
         try:
             deadline = time.monotonic() + 5
             while not readiness_file.exists() and time.monotonic() < deadline:
                 time.sleep(0.01)
             if not readiness_file.exists():
-                raise RuntimeError(f"relay did not publish readiness: {relay.stderr.read()}")
+                raise RuntimeError(
+                    "relay did not publish readiness: "
+                    f"{terminate_and_collect(relay)}"
+                )
             record = json.loads(readiness_file.read_text(encoding="utf-8"))
             if record.get("pid") != relay.pid:
                 raise RuntimeError("relay readiness PID did not match child")
@@ -284,12 +411,7 @@ def self_test() -> None:
             if received != [b"ping-first", large_payload]:
                 raise RuntimeError("relay target rollover did not preserve the complete second stream")
         finally:
-            relay.terminate()
-            try:
-                relay.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                relay.kill()
-                relay.wait(timeout=5)
+            terminate_and_collect(relay)
             first_upstream.close()
             second_upstream.close()
 

@@ -68,6 +68,49 @@ fixture_assert_no_listeners() {
   ((leaked == 0))
 }
 
+# A dynamic backend port is not a substitute for a correct public endpoint.
+# Verify the server's own public configuration through the stable fixture
+# relay, so a runtime suite cannot silently advertise a default 80/443 URL
+# while its real test traffic bypasses that authority.
+fixture_assert_public_url() {
+  local port="$1" expected="$2" observed
+  if ! observed="$(curl --silent --fail "http://127.0.0.1:$port/api/v1/config" \
+    | python3 -c 'import json, sys; value = json.load(sys.stdin).get("public_url"); print(value if isinstance(value, str) else "")')"; then
+    echo "fixture could not read public_url through relay port $port" >&2
+    return 1
+  fi
+  if [[ "$observed" != "$expected" ]]; then
+    echo "fixture advertised public_url $observed, expected $expected" >&2
+    return 1
+  fi
+}
+
+# Publish a complete relay target in one rename operation.  The relay may be
+# accepting a connection while a server generation hands off its dynamic
+# backend port, so writing directly to the final file would allow it to parse
+# a transient partial HOST:PORT record.  The temporary lives beside the final
+# target to preserve same-filesystem rename atomicity.
+fixture_publish_relay_target() {
+  local target="$1" port="$2" temporary
+  [[ "$port" =~ ^[1-9][0-9]*$ ]] && ((port <= 65535)) || {
+    echo "refusing invalid relay target port: $port" >&2
+    return 1
+  }
+  temporary="$(mktemp "${target}.tmp.XXXXXX")" || return 1
+  if ! printf '127.0.0.1:%s\n' "$port" >"$temporary"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  if ! chmod 600 "$temporary"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  if ! mv -f -- "$temporary" "$target"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+}
+
 # Starts a child-owned TCP relay used only when a two-node fixture must know a
 # peer endpoint before either Northstar process can publish its own readiness
 # record.  The relay itself uses the same authenticated readiness contract and

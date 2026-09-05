@@ -30,8 +30,16 @@ relay_a_s2s_pid=""
 relay_b_s2s_tls_pid=""
 relay_a_s2s_port=""
 relay_b_s2s_tls_port=""
+relay_a_http_pid=""
+relay_b_http_pid=""
+relay_a_http_port=""
+relay_b_http_port=""
 target_a_s2s="$runtime_dir/a.s2s.target"
 target_b_s2s_tls="$runtime_dir/b.s2s-tls.target"
+target_a_http="$runtime_dir/a.http.target"
+target_b_http="$runtime_dir/b.http.target"
+http_a_backend=""
+http_b_backend=""
 http_a=""
 http_b=""
 xmpp_a=""
@@ -46,14 +54,14 @@ declare -a fixture_listener_ports=()
 cleanup() {
   exit_code=$?
   trap - EXIT INT TERM
-  for pid in "$pid_a" "$pid_b" "$relay_a_s2s_pid" "$relay_b_s2s_tls_pid"; do
+  for pid in "$pid_a" "$pid_b" "$relay_a_s2s_pid" "$relay_b_s2s_tls_pid" "$relay_a_http_pid" "$relay_b_http_pid"; do
     if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; fi
   done
-  for pid in "$pid_a" "$pid_b" "$relay_a_s2s_pid" "$relay_b_s2s_tls_pid"; do
+  for pid in "$pid_a" "$pid_b" "$relay_a_s2s_pid" "$relay_b_s2s_tls_pid" "$relay_a_http_pid" "$relay_b_http_pid"; do
     if [[ -n "$pid" ]]; then wait "$pid" 2>/dev/null || true; fi
   done
   if (( exit_code != 0 )); then
-    for log in "$log_a" "$log_b" "$runtime_dir/relay-a-s2s.log" "$runtime_dir/relay-b-s2s-tls.log"; do
+    for log in "$log_a" "$log_b" "$runtime_dir/relay-a-s2s.log" "$runtime_dir/relay-b-s2s-tls.log" "$runtime_dir/relay-a-http.log" "$runtime_dir/relay-b-http.log"; do
       if [[ -f "$log" ]]; then
         echo "--- $(basename "$log") (last 120 lines) ---" >&2
         tail -n 120 "$log" >&2 || true
@@ -154,6 +162,14 @@ fixture_start_tcp_relay "$project_dir" "$runtime_dir" a relay-a-s2s "$target_a_s
   "$runtime_dir/relay-a-s2s.log" relay_a_s2s_pid relay_a_s2s_port
 fixture_start_tcp_relay "$project_dir" "$runtime_dir" b relay-b-s2s-tls "$target_b_s2s_tls" \
   "$runtime_dir/relay-b-s2s-tls.log" relay_b_s2s_tls_pid relay_b_s2s_tls_port
+# PUBLIC_URL is observable protocol output (not only a local bind option).
+# Keep a fixture-owned HTTP authority stable while both server children choose
+# their own backend ports, exactly as the S2S relay above stabilizes startup
+# DNS overrides.
+fixture_start_tcp_relay "$project_dir" "$runtime_dir" a-http relay-a-http "$target_a_http" \
+  "$runtime_dir/relay-a-http.log" relay_a_http_pid relay_a_http_port
+fixture_start_tcp_relay "$project_dir" "$runtime_dir" b-http relay-b-http "$target_b_http" \
+  "$runtime_dir/relay-b-http.log" relay_b_http_pid relay_b_http_port
 
 cargo_args=(--locked)
 if [[ "${XMPP_TEST_OFFLINE:-true}" != "false" ]]; then
@@ -177,13 +193,13 @@ env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=remote.localhost \
 start_a() {
   local readiness_file="$runtime_dir/a.ready.json" readiness_nonce
   readiness_nonce="$(openssl rand -hex 16)"
-  rm -f -- "$readiness_file" "$target_a_s2s"
+  rm -f -- "$readiness_file" "$target_a_s2s" "$target_a_http"
   env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
     DATABASE_URL="$database_url_a" \
     XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 \
     S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
     TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
-    PUBLIC_URL=http://127.0.0.1 UPLOAD_DIR="$upload_a" \
+    PUBLIC_URL="http://127.0.0.1:$relay_a_http_port" UPLOAD_DIR="$upload_a" \
     TLS_CERT_PATH="$cert_dir/federation-a.crt" TLS_KEY_PATH="$cert_dir/federation-a.key" \
     OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=true REGISTRATION_RATE_PER_HOUR=20 \
     API_CONTROL_ALLOW_EPHEMERAL=true ABUSE_STATE_ALLOW_EPHEMERAL=true \
@@ -195,25 +211,29 @@ start_a() {
     "$binary" >"$log_a" 2>&1 &
   pid_a=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_a" || return 1
-  http_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+  http_a_backend="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
   xmpp_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
   xmpps_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
   s2s_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" s2s)"
   s2s_tls_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" s2s-tls)"
-  printf '127.0.0.1:%s\n' "$s2s_a" >"$target_a_s2s"
+  fixture_publish_relay_target "$target_a_s2s" "$s2s_a"
+  fixture_publish_relay_target "$target_a_http" "$http_a_backend"
+  http_a="$relay_a_http_port"
+  curl --silent --fail "http://127.0.0.1:$http_a_backend/readyz" >/dev/null
   curl --silent --fail "http://127.0.0.1:$http_a/readyz" >/dev/null
+  fixture_assert_public_url "$http_a" "http://127.0.0.1:$relay_a_http_port"
 }
 
 start_b() {
   local readiness_file="$runtime_dir/b.ready.json" readiness_nonce
   readiness_nonce="$(openssl rand -hex 16)"
-  rm -f -- "$readiness_file" "$target_b_s2s_tls"
+  rm -f -- "$readiness_file" "$target_b_s2s_tls" "$target_b_http"
   env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=remote.localhost \
     DATABASE_URL="$database_url_b" \
     XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 \
     S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
     TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
-    PUBLIC_URL=http://127.0.0.1 UPLOAD_DIR="$upload_b" \
+    PUBLIC_URL="http://127.0.0.1:$relay_b_http_port" UPLOAD_DIR="$upload_b" \
     TLS_CERT_PATH="$cert_dir/federation-b.crt" TLS_KEY_PATH="$cert_dir/federation-b.key" \
     OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=true REGISTRATION_RATE_PER_HOUR=20 \
     API_CONTROL_ALLOW_EPHEMERAL=true ABUSE_STATE_ALLOW_EPHEMERAL=true \
@@ -225,13 +245,17 @@ start_b() {
     "$binary" >"$log_b" 2>&1 &
   pid_b=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_b" || return 1
-  http_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+  http_b_backend="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
   xmpp_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
   xmpps_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
   s2s_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" s2s)"
   s2s_tls_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" s2s-tls)"
-  printf '127.0.0.1:%s\n' "$s2s_tls_b" >"$target_b_s2s_tls"
+  fixture_publish_relay_target "$target_b_s2s_tls" "$s2s_tls_b"
+  fixture_publish_relay_target "$target_b_http" "$http_b_backend"
+  http_b="$relay_b_http_port"
+  curl --silent --fail "http://127.0.0.1:$http_b_backend/readyz" >/dev/null
   curl --silent --fail "http://127.0.0.1:$http_b/readyz" >/dev/null
+  fixture_assert_public_url "$http_b" "http://127.0.0.1:$relay_b_http_port"
 }
 
 # Confirm each independently migrated runtime after its own authenticated

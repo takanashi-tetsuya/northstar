@@ -33,9 +33,9 @@ server_generation=0
 # The server selects its own HTTP port.  The integration suite nevertheless
 # exercises APIs which advertise PUBLIC_URL (BOSH, WebSocket discovery and
 # HTTP Upload slots), so retain one fixture-owned public endpoint for the
-# lifetime of all server generations.  The relay is a plain loopback test
-# proxy; requests carry the trusted forwarded scheme required by the HTTPS
-# public URL below.
+# lifetime of all server generations.  The relay is a plain loopback TCP test
+# proxy; the existing loopback secure-request policy models the TLS-terminating
+# proxy boundary for the HTTPS public URL below.
 integration_http_relay_pid=""
 integration_http_relay_port=""
 integration_http_relay_target="$runtime_dir/integration-http.target"
@@ -201,9 +201,7 @@ fixture_start_tcp_relay "$project_dir" "$runtime_dir" integration-http integrati
 integration_public_url="https://127.0.0.1:$integration_http_relay_port"
 
 publish_integration_http_target() {
-  local temporary="$runtime_dir/.integration-http.target.$server_generation.tmp"
-  printf '127.0.0.1:%s\n' "$test_http_backend_port" >"$temporary"
-  mv -- "$temporary" "$integration_http_relay_target"
+  fixture_publish_relay_target "$integration_http_relay_target" "$test_http_backend_port"
 }
 
 start_server() {

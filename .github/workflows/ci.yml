@@ -398,6 +398,8 @@ jobs:
           python3 -m py_compile scripts/test-listener-relay.py
           python3 scripts/wait-test-readiness.py --self-test
           python3 scripts/test-listener-relay.py --self-test
+          python3 scripts/test-redis-tls-unix-relay.py --self-test
+          bash scripts/test-listener-readiness.sh
           python3 scripts/xep0487-socket-activation.py --self-test
           python3 scripts/check-github-ci-summary.py
           bash scripts/check-github-ci-run.sh

@@ -1826,6 +1826,12 @@ pub async fn retract_muc_message_and_archive_action(
     };
 
     let mut transaction = pool.begin().await?;
+    // The retraction race fixture must stop before the authority snapshot.
+    // A concurrent affiliation change can then commit, after which this
+    // transaction takes the normal namespace/row locks and observes the
+    // changed authority instead of creating a time-of-check/time-of-use gap.
+    #[cfg(test)]
+    maybe_pause_muc_authorization_for_test("retraction").await;
     if mutation.authority.actor_scope != actor_scope
         || mutation.authority.full_jid != sender_jid
         || mutation.authority.nick != mutation.nick

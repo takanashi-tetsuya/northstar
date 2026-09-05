@@ -12,16 +12,18 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
 cd "$project_dir"
+source "$project_dir/scripts/lib/test-listener-readiness.sh"
 
 nonce="$(date +%s%N)_$$"
 schema="mix_runtime_${nonce}"
 [[ "$schema" =~ ^mix_runtime_[0-9_]+$ ]] || { echo "unsafe MIX runtime schema" >&2; exit 2; }
-read -r xmpp_port xmpps_port http_port < <(
-  python3 "$project_dir/scripts/allocate-test-ports.py" 44000 45999 3
-)
 runtime_dir="$(mktemp -d /tmp/northstar-mix.XXXXXX)"
 mkdir -p "$runtime_dir/logs"
 server_pid=""
+declare -a fixture_listener_ports=()
+xmpp_port=""
+xmpps_port=""
+http_port=""
 cleanup() {
   status=$?
   trap - EXIT
@@ -42,12 +44,16 @@ cleanup() {
   PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
     --set ON_ERROR_STOP=1 --command "DROP SCHEMA IF EXISTS \"$schema\" CASCADE;" >/dev/null 2>&1 || true
   remains="$(PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test --tuples-only --no-align --command "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='$schema';" 2>/dev/null | tail -n 1 || true)"
-  listeners="$(ss -ltnH 2>/dev/null | awk -v a=":$xmpp_port" -v b=":$xmpps_port" -v c=":$http_port" '$4 ~ a"$" || $4 ~ b"$" || $4 ~ c"$" {count++} END {print count+0}')"
+  listener_count=0
+  if ! fixture_assert_no_listeners; then
+    listener_count=1
+    status=1
+  fi
   case "$runtime_dir" in
     /tmp/northstar-mix.*) rm -rf -- "$runtime_dir" ;;
     *) echo "refusing to remove unexpected MIX runtime directory: $runtime_dir" >&2; status=1 ;;
   esac
-  echo "MIX cleanup: pid=$server_pid stopped; schema=$schema remains=${remains:-unknown}; listeners=$listeners"
+  echo "MIX cleanup: pid=$server_pid stopped; schema=$schema remains=${remains:-unknown}; listeners=$listener_count"
   exit "$status"
 }
 trap cleanup EXIT
@@ -79,11 +85,14 @@ mix_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_te
 env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
   MIGRATOR_DATABASE_URL="$mix_database_url" "$binary" migrate
 
+readiness_file="$runtime_dir/server.ready.json"
+readiness_nonce="$(openssl rand -hex 16)"
 env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
   DATABASE_URL="$mix_database_url" \
-  XMPP_BIND="127.0.0.1:$xmpp_port" XMPPS_BIND="127.0.0.1:$xmpps_port" \
-  HTTP_BIND="127.0.0.1:$http_port" S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
-  PUBLIC_URL="https://127.0.0.1:$http_port" WEBSOCKET_ALLOWED_ORIGINS=http://localhost \
+  XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 \
+  S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
+  TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
+  PUBLIC_URL=https://127.0.0.1 WEBSOCKET_ALLOWED_ORIGINS=http://localhost \
   API_CONTROL_SECRET_FILE="$runtime_dir/api-control.secret" \
   ABUSE_STATE_HMAC_KEY_FILE="$runtime_dir/abuse-state.secret" \
   FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token.secret" \
@@ -95,6 +104,15 @@ env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
   FEDERATION_ENABLED=false LOG_FORMAT=json RUST_LOG=rust_xmpp_server=debug \
   "$binary" >"$runtime_dir/server.log" 2>&1 &
 server_pid=$!
+
+fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid" || {
+  cat "$runtime_dir/server.log" >&2
+  exit 1
+}
+xmpp_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
+xmpps_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
+http_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+curl --silent --fail "http://127.0.0.1:$http_port/readyz" >/dev/null
 
 echo "MIX runtime schema: $schema"
 echo "MIX runtime ports: xmpp=$xmpp_port xmpps=$xmpps_port http=$http_port pid=$server_pid"

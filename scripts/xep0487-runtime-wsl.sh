@@ -414,12 +414,15 @@ start_b
 start_a stale-cache true
 client_probe deliver stale-seed 30
 sleep 1.3
-timeout_hits_before="$(grep -c 'host=remote.localhost mode=timeout' "$runtime_dir/https.log" || true)"
+# Assert timeout discovery from the calling server's structured result, not
+# the independently supervised HTTPS handler's buffered access log.  The
+# latter may not have flushed while the assertion is evaluated.
+timeout_hits_before="$(grep -c 'XEP-0487 HTTPS response read timed out' "$log_a" || true)"
 echo timeout >"$mode_file"
 client_probe deliver stale-recovery 30
-timeout_hits_after="$(grep -c 'host=remote.localhost mode=timeout' "$runtime_dir/https.log" || true)"
+timeout_hits_after="$(grep -c 'XEP-0487 HTTPS response read timed out' "$log_a" || true)"
 (( timeout_hits_after > timeout_hits_before )) || {
-  echo "stale-cache probe did not perform a fresh XEP-0487 HTTPS request" >&2; exit 1;
+  echo "stale-cache probe did not observe a fresh XEP-0487 discovery timeout" >&2; exit 1;
 }
 grep -q 'host=remote.localhost mode=stale-valid' "$runtime_dir/https.log"
 grep -q 'XEP-0487 discovery unavailable; trying cached and DNS connection methods' "$log_a"

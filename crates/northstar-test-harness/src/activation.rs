@@ -1,4 +1,6 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
+
+use anyhow::{Context, Result};
 use tokio::sync::oneshot;
 
 /// A one-shot readiness handoff for listener activation.
@@ -10,8 +12,10 @@ pub struct Activation {
 
 impl Activation {
     /// Send the local address once the listener is ready.
-    pub fn announce(self, address: SocketAddr) {
-        let _ = self.tx.send(address);
+    pub fn announce(self, address: SocketAddr) -> Result<()> {
+        self.tx
+            .send(address)
+            .map_err(|_| anyhow::anyhow!("{} readiness receiver was dropped", self.service))
     }
 
     pub fn service(&self) -> &str {
@@ -27,9 +31,12 @@ pub struct Readiness {
 }
 
 impl Readiness {
-    /// Await the activated listener address.
-    pub async fn wait(self) -> Option<SocketAddr> {
-        self.rx.await.ok()
+    /// Await the activated listener address within an explicit deadline.
+    pub async fn wait_for(self, deadline: Duration) -> Result<SocketAddr> {
+        tokio::time::timeout(deadline, self.rx)
+            .await
+            .with_context(|| format!("timed out waiting for {} readiness", self.service))?
+            .with_context(|| format!("{} exited before announcing readiness", self.service))
     }
 
     pub fn service(&self) -> &str {

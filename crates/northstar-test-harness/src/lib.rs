@@ -3,12 +3,14 @@ pub mod database;
 pub mod diagnostics;
 pub mod listener;
 pub mod process;
+pub mod readiness;
 
 pub use activation::{channel, Activation, Readiness};
 pub use database::IsolatedSchema;
 pub use diagnostics::{is_port_listening, wait_for_port, wait_for_port_closed};
 pub use listener::{PortRange, PreboundListener};
 pub use process::ManagedProcess;
+pub use readiness::{ReadinessRecord, ReadinessTranscript};
 
 #[cfg(test)]
 mod tests {
@@ -21,10 +23,14 @@ mod tests {
         let address = listener.local_addr();
         tokio::task::spawn_blocking(move || activation.announce(address))
             .await
-            .expect("activation announcement task failed");
+            .expect("activation announcement task failed")
+            .expect("activation receiver should be available");
         assert_eq!(
-            readiness.wait().await,
-            Some(address),
+            readiness
+                .wait_for(std::time::Duration::from_secs(1))
+                .await
+                .expect("readiness should arrive"),
+            address,
             "readiness channel should receive listener address"
         );
     }

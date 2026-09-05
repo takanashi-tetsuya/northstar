@@ -15,7 +15,7 @@ pub struct PreboundListener {
 }
 
 impl PreboundListener {
-    /// Bind a pre-bound listener on a specified address with SO_REUSEADDR only.
+    /// Bind a pre-bound listener on a specified address.
     pub fn bind(addr: SocketAddr) -> Result<Self> {
         let domain = if addr.is_ipv6() {
             Domain::IPV6
@@ -25,11 +25,9 @@ impl PreboundListener {
         let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))
             .context("failed to create socket")?;
 
-        // Keep SO_REUSEADDR to retain normal restart compatibility, but never
-        // enable REUSEPORT for test listener isolation.
-        socket
-            .set_reuse_address(true)
-            .context("failed to set SO_REUSEADDR")?;
+        // A test reservation is an ownership fence, not a production restart.
+        // Do not enable SO_REUSEADDR/REUSEPORT: either option can turn an
+        // accidental duplicate bind into a flaky test.
         socket
             .set_nonblocking(true)
             .context("failed to set nonblocking")?;

@@ -20,6 +20,9 @@ schema="component_runtime_${nonce}"
 runtime_dir="$(mktemp -d /tmp/northstar-component.XXXXXX)"
 pid=""
 mock_pid=""
+component_http_relay_pid=""
+component_http_relay_port=""
+component_http_relay_target="$runtime_dir/component-http.target"
 server_generation=0
 mock_generation=0
 test_xmpp_port=""
@@ -32,6 +35,10 @@ cleanup() {
   trap - EXIT INT TERM
   if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi
   if [[ -n "$mock_pid" ]]; then kill "$mock_pid" 2>/dev/null || true; wait "$mock_pid" 2>/dev/null || true; fi
+  if [[ -n "$component_http_relay_pid" ]]; then
+    kill "$component_http_relay_pid" 2>/dev/null || true
+    wait "$component_http_relay_pid" 2>/dev/null || true
+  fi
   if [[ $status -ne 0 && -f "$runtime_dir/server.log" ]]; then
     echo "component runtime server log after failure:" >&2
     tail -n 200 "$runtime_dir/server.log" >&2 || true
@@ -132,20 +139,34 @@ env NORTHSTAR_DISABLE_DOTENV=true \
   MIGRATOR_DATABASE_URL="$component_database_url" \
   "$binary" migrate
 
+# The configured public URL must remain an endpoint owned by this fixture even
+# as the server is intentionally crashed and restarted below.  The relay owns
+# its loopback port for the whole suite; each verified server generation
+# atomically replaces only the relay target.
+fixture_start_tcp_relay "$project_dir" "$runtime_dir" component-http component-http \
+  "$component_http_relay_target" "$runtime_dir/component-http-relay.log" \
+  component_http_relay_pid component_http_relay_port
+
+publish_component_http_target() {
+  local temporary="$runtime_dir/.component-http.target.$server_generation.tmp"
+  printf '127.0.0.1:%s\n' "$test_http_port" >"$temporary"
+  mv -f -- "$temporary" "$component_http_relay_target"
+}
+
 start_server() {
   local federation_enabled="${1:-true}"
   local readiness_file="$runtime_dir/server-$((server_generation + 1)).ready.json"
   local readiness_nonce
   server_generation=$((server_generation + 1))
   readiness_nonce="$(openssl rand -hex 16)"
-  rm -f -- "$readiness_file"
+  rm -f -- "$readiness_file" "$component_http_relay_target"
   env XMPP_DOMAIN=localhost \
     NORTHSTAR_DISABLE_DOTENV=true \
     DATABASE_URL="$component_database_url" \
     XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 METRICS_BIND=127.0.0.1:0 \
     S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 COMPONENT_BIND=127.0.0.1:0 \
     TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
-    PUBLIC_URL=http://127.0.0.1 UPLOAD_DIR="$runtime_dir/uploads" \
+    PUBLIC_URL="http://127.0.0.1:$component_http_relay_port" UPLOAD_DIR="$runtime_dir/uploads" \
     TLS_CERT_PATH="$runtime_dir/server.crt" TLS_KEY_PATH="$runtime_dir/server.key" \
     OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=false REGISTRATION_RATE_PER_HOUR=20 \
     FEDERATION_ENABLED="$federation_enabled" FEDERATION_ALLOWLIST=allowed.remote.invalid \
@@ -164,10 +185,15 @@ start_server() {
   test_xmpp_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
   test_http_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
   test_component_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" component)"
+  publish_component_http_target
   export XMPP_TEST_CLIENT_PORT="$test_xmpp_port"
-  export XMPP_TEST_HTTP_PORT="$test_http_port"
+  # The Python fixture is an external HTTP/WebSocket client.  Keep it on the
+  # stable public relay rather than leaking knowledge of a generation-specific
+  # server listener into test traffic.
+  export XMPP_TEST_HTTP_PORT="$component_http_relay_port"
   export COMPONENT_RUNTIME_PORT="$test_component_port"
   curl --silent --fail "http://127.0.0.1:$test_http_port/readyz" >/dev/null
+  curl --silent --fail "http://127.0.0.1:$component_http_relay_port/readyz" >/dev/null
 }
 
 start_connect_mock() {

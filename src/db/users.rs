@@ -4228,6 +4228,24 @@ mod tests {
             .await
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
+        // This fixture writes a complete upload locator directly. Migrations
+        // deliberately leave the durable capacity authority unbound until the
+        // runtime establishes its deployment policy, and the locator update
+        // must consequently fail closed without this explicit setup. Bind the
+        // same isolated-test policy used by the upload integration suite here
+        // rather than relying on a preceding test command to have bound state
+        // in this schema.
+        let (policy_generation, recovery_draining) =
+            crate::db::upload::validate_upload_capacity_policy(
+                &pool,
+                128,
+                10_000,
+                1024 * 1024 * 1024,
+            )
+            .await
+            .unwrap();
+        assert!(policy_generation > 0);
+        assert!(!recovery_draining);
 
         let suffix = Uuid::new_v4().simple().to_string();
         let removed_id = Uuid::new_v4();

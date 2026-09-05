@@ -13,17 +13,11 @@ fi
 target_dir="${CARGO_TARGET_DIR:-$project_dir/target}"
 
 cd "$project_dir"
+source "$project_dir/scripts/lib/test-listener-readiness.sh"
+
 test_database="${XMPP_TEST_DATABASE:-xmpp_test}"
 run_id="$(openssl rand -hex 8)"
 test_schema="northstar_integration_it_${run_id}"
-pick_port() {
-  python3 "$project_dir/scripts/allocate-test-ports.py" 34000 35999 1
-}
-test_http_port="${XMPP_TEST_HTTP_PORT:-$(pick_port)}"
-test_metrics_port="${XMPP_TEST_METRICS_PORT:-$(pick_port)}"
-test_client_port="${XMPP_TEST_CLIENT_PORT:-$(pick_port)}"
-test_xmpps_port="${XMPP_TEST_XMPPS_PORT:-$(pick_port)}"
-test_s2s_port="${XMPP_TEST_S2S_PORT:-$(pick_port)}"
 if [[ "$test_database" != "xmpp_test" ]]; then
   echo "integration tests are restricted to the dedicated xmpp_test database" >&2
   exit 2
@@ -34,14 +28,24 @@ if [[ ! "$test_schema" =~ ^northstar_integration_it_[0-9a-f]{16}$ ]]; then
 fi
 runtime_dir="$(mktemp -d /tmp/northstar-integration.XXXXXX)"
 mkdir -p "$runtime_dir/logs"
-export METRICS_BIND="127.0.0.1:$test_metrics_port"
 server_pid=""
+server_generation=0
+test_http_port=""
+test_metrics_port=""
+test_client_port=""
+test_xmpps_port=""
+declare -a fixture_listener_ports=()
 cleanup() {
   exit_code=$?
   trap - EXIT
   if [[ -n "$server_pid" ]]; then
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
+  fi
+  listener_count=0
+  if ! fixture_assert_no_listeners; then
+    listener_count=1
+    exit_code=1
   fi
   if (( exit_code != 0 )) && [[ -f "$runtime_dir/integration-server.log" ]]; then
     echo "--- integration-server.log (last 160 lines) ---" >&2
@@ -74,6 +78,7 @@ cleanup() {
     /tmp/northstar-integration.*) rm -rf -- "$runtime_dir" ;;
     *) echo "refusing to remove unexpected runtime directory: $runtime_dir" >&2; exit_code=1 ;;
   esac
+  echo "integration cleanup: schema=$test_schema listeners=$listener_count"
   exit "$exit_code"
 }
 trap cleanup EXIT
@@ -173,16 +178,25 @@ env \
 
 : >"$runtime_dir/integration-server.log"
 start_server() {
+  local readiness_file readiness_nonce
+  server_generation=$((server_generation + 1))
+  readiness_file="$runtime_dir/integration-server-$server_generation.ready.json"
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file"
   env \
     NORTHSTAR_DISABLE_DOTENV=true \
     XMPP_DOMAIN=localhost \
     DATABASE_URL="$integration_database_url" \
-    XMPP_BIND="127.0.0.1:$test_client_port" \
-    XMPPS_BIND="127.0.0.1:$test_xmpps_port" \
-    S2S_BIND="127.0.0.1:$test_s2s_port" \
+    XMPP_BIND="127.0.0.1:0" \
+    XMPPS_BIND="127.0.0.1:0" \
+    S2S_BIND="127.0.0.1:0" \
     S2S_TLS_BIND="127.0.0.1:0" \
-    HTTP_BIND="127.0.0.1:$test_http_port" \
-    PUBLIC_URL="https://127.0.0.1:$test_http_port" \
+    HTTP_BIND="127.0.0.1:0" \
+    METRICS_BIND="127.0.0.1:0" \
+    TEST_LISTENER_ACTIVATION=true \
+    TEST_READINESS_FILE="$readiness_file" \
+    TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL="https://127.0.0.1" \
     API_CONTROL_ALLOW_EPHEMERAL=true \
     ABUSE_STATE_ALLOW_EPHEMERAL=true \
     API_CONTROL_SECRET_FILE="$runtime_dir/api-control.secret" \
@@ -216,6 +230,11 @@ start_server() {
     RUST_LOG="${RUST_LOG:-rust_xmpp_server=info}" \
     "$target_dir/debug/rust-xmpp-server" >>"$runtime_dir/integration-server.log" 2>&1 &
   server_pid=$!
+  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid" || return 1
+  test_http_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+  test_metrics_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" metrics)"
+  test_client_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
+  test_xmpps_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
 }
 start_server
 
@@ -286,10 +305,6 @@ if [[ "${XMPP_TEST_ONLY_SASL:-false}" != "true" && "${XMPP_TEST_ONLY_ATOMIC_REGI
   wait "$server_pid" 2>/dev/null || true
   server_pid=""
   start_server
-  for _ in $(seq 1 150); do
-    if curl --silent --fail "http://127.0.0.1:$test_http_port/readyz" >/dev/null; then break; fi
-    sleep 0.1
-  done
   curl --silent --fail "http://127.0.0.1:$test_http_port/readyz" >/dev/null
 
   XMPP_TEST_HOST=127.0.0.1 \

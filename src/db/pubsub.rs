@@ -3069,7 +3069,22 @@ pub async fn publish_items_with_renderer(
         transaction.commit().await?;
         return Ok(PublishItemsOutcome::Published);
     }
-    for (item_id, xml_payload) in items {
+    // `clock_timestamp()` is shared by the whole locked mutation so that the
+    // outbox and authorization snapshot have one event instant. Item history
+    // additionally needs a stable per-node order when one publish contains
+    // several items. Advance from the newest retained timestamp while the
+    // node lock is held; UUID tie-breakers alone would make retention and
+    // disco#items order arbitrary for same-batch publications.
+    let first_item_time: DateTime<Utc> = sqlx::query_scalar(
+        "SELECT GREATEST($2, COALESCE(MAX(created_at) + INTERVAL '1 microsecond', $2))
+           FROM pubsub_items WHERE node_id=$1",
+    )
+    .bind(fresh.id)
+    .bind(event_time)
+    .fetch_one(&mut *transaction)
+    .await?;
+    for (ordinal, (item_id, xml_payload)) in items.iter().enumerate() {
+        let item_time = first_item_time + chrono::Duration::microseconds(ordinal as i64);
         // XEP-0060 section 12.9 requires an authorized publisher to overwrite
         // an existing NodeID+ItemID rather than rejecting the publication.
         // Node-level authorization has already happened at the protocol
@@ -3080,7 +3095,7 @@ pub async fn publish_items_with_renderer(
             .bind(item_id)
             .bind(&publisher_jid)
             .bind(xml_payload)
-            .bind(event_time)
+            .bind(item_time)
             .execute(&mut *transaction)
             .await?;
         if result.rows_affected() == 0 {
@@ -6699,6 +6714,14 @@ mod integration_tests {
         assert!(retained.iter().all(|item| item.item_id != "claimed"));
         let discovered = item_ids_for_disco(&pool, leaf_id).await.unwrap();
         assert_eq!(discovered.len(), 2);
+        assert_eq!(
+            retained
+                .iter()
+                .map(|item| item.item_id.as_str())
+                .collect::<Vec<_>>(),
+            discovered.iter().map(String::as_str).collect::<Vec<_>>(),
+            "disco#items must expose the exact retained item sequence"
+        );
         assert_eq!(discovered, ["new-3", "new-2"]);
         assert!(!discovered.iter().any(|item| item == "new-1"));
 

@@ -98,13 +98,17 @@ def _write_takeover_ack(port: int) -> None:
 
 def serve_https(*, activated: bool = False) -> None:
     port = int(os.environ.get("XEP0487_HTTPS_PORT", "443"))
-    s2s_port = int(os.environ["XEP0487_S2S_PORT"])
+    s2s_port_file = pathlib.Path(os.environ["XEP0487_S2S_PORT_FILE"])
     certificate = os.environ["XEP0487_HTTPS_CERT"]
     key = os.environ["XEP0487_HTTPS_KEY"]
     mode_file = pathlib.Path(os.environ["XEP0487_MODE_FILE"])
     correct_pin = os.environ["XEP0487_PUBLIC_KEY_PIN"]
 
     def document(mode: str) -> bytes:
+        # B deliberately owns an ephemeral listener. Read its current port
+        # for every discovery response so a restart cannot advertise an
+        # endpoint that was valid only before the restart.
+        s2s_port = int(s2s_port_file.read_text(encoding="ascii").strip())
         xmpp: dict[str, object] = {"ttl": 1 if mode == "stale-valid" else 60}
         if mode == "wrong-pin":
             xmpp["public-key-pins-sha-256"] = ["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="]

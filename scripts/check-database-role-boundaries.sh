@@ -34,6 +34,7 @@ cluster_authority_migration="$project_dir/migrations/0112_cluster_runtime_capaci
 upload_authority_migration="$project_dir/migrations/0113_upload_authority_capabilities.sql"
 session_authority_migration="$project_dir/migrations/0114_session_authority_capabilities.sql"
 admin_cleanup_fixture="$project_dir/scripts/admin-session-cleanup-db-wsl.sh"
+stateful_database_manifest="$project_dir/scripts/stateful-database-ci.sh"
 restore_runner="$project_dir/scripts/restore-backup.sh"
 dump_validator="$project_dir/scripts/validate-backup-dump-local.sh"
 disaster_fixture="$project_dir/scripts/backup-restore-wsl.sh"
@@ -87,6 +88,7 @@ for file in "$compose" "$init_script" "$grant_policy" "$grant_boundary" "$grant_
   "$cluster_authority_migration" "$upload_authority_migration" \
   "$session_authority_migration" \
   "$admin_cleanup_fixture" \
+  "$stateful_database_manifest" \
   "$restore_runner" "$dump_validator" "$role_runner" \
   "$disaster_fixture" "$message_pow_fixture" "$database_acceptance" "$loopback_fixture" \
   "$secret_generator" "$release_preflight" \
@@ -113,8 +115,11 @@ elif command -v python >/dev/null 2>&1; then
 else
   fail 'Python 3 is required for the database capability manifest check'
 fi
-require_literal "$ci_workflow" 'bash scripts/admin-session-cleanup-db-wsl.sh' \
-  'CI does not run the isolated administrator cleanup effect fixture'
+require_literal "$ci_workflow" 'bash scripts/stateful-database-ci.sh "${{ matrix.shard }}"' \
+  'CI does not route stateful database coverage through the checked shard entrypoint'
+require_literal "$stateful_database_manifest" \
+  'run_suite '\''Admin session cleanup database'\'' 480 admin-session-cleanup-db-wsl.sh' \
+  'the stateful database shard manifest does not run the isolated administrator cleanup effect fixture'
 for boundary_probe in \
   'runtime cleanup effect direct read' \
   'runtime cleanup effect direct mutation' \

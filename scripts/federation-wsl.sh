@@ -15,9 +15,32 @@ target_dir="${CARGO_TARGET_DIR:-$project_dir/target}"
 cd "$project_dir"
 source "$project_dir/scripts/lib/test-listener-readiness.sh"
 
-run_id="$(openssl rand -hex 8)"
-schema_a="federation_a_it_${run_id}"
-schema_b="federation_b_it_${run_id}"
+stress_database_a="${NORTHSTAR_LISTENER_STRESS_DATABASE_A:-}"
+stress_database_b="${NORTHSTAR_LISTENER_STRESS_DATABASE_B:-}"
+if [[ -n "$stress_database_a" || -n "$stress_database_b" ]]; then
+  [[ -n "$stress_database_a" && -n "$stress_database_b" ]] || {
+    echo "listener stress preprovisioning requires both database names" >&2
+    exit 2
+  }
+  [[ "$stress_database_a" =~ ^northstar_listener_[a-z0-9_]{1,42}$ \
+     && "$stress_database_b" =~ ^northstar_listener_[a-z0-9_]{1,42}$ \
+     && "$stress_database_a" != "$stress_database_b" ]] || {
+    echo "listener stress preprovisioned database names are invalid" >&2
+    exit 2
+  }
+  fixture_preprovisioned=true
+  schema_a=public
+  schema_b=public
+  database_name_a="$stress_database_a"
+  database_name_b="$stress_database_b"
+else
+  fixture_preprovisioned=false
+  run_id="$(openssl rand -hex 8)"
+  schema_a="federation_a_it_${run_id}"
+  schema_b="federation_b_it_${run_id}"
+  database_name_a=xmpp_test
+  database_name_b=xmpp_test
+fi
 runtime_dir="$(mktemp -d /tmp/northstar-federation.XXXXXX)"
 cert_dir="$runtime_dir/certs"
 upload_a="$runtime_dir/uploads-a"
@@ -69,21 +92,28 @@ cleanup() {
     done
   fi
   schema_cleanup=""
-  for schema in "$schema_a" "$schema_b"; do
-    if ! PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
-      --set ON_ERROR_STOP=1 --command "DROP SCHEMA IF EXISTS \"$schema\" CASCADE;" >/dev/null 2>&1; then
-      exit_code=1
-    fi
-    remains="$(PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
-      --tuples-only --no-align \
-      --command "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='$schema')" \
-      2>/dev/null || printf unknown)"
-    remains="${remains//[[:space:]]/}"
-    schema_cleanup+="${schema}:${remains:-unknown} "
-    if [[ "$remains" != "f" ]]; then
-      exit_code=1
-    fi
-  done
+  if [[ "$fixture_preprovisioned" == true ]]; then
+    # The stress driver owns these disposable databases.  A fixture must not
+    # drop `public`, because the parent validates and removes the whole
+    # database only after every server and relay in this private worker exits.
+    schema_cleanup="preprovisioned:${database_name_a},${database_name_b}"
+  else
+    for schema in "$schema_a" "$schema_b"; do
+      if ! PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
+        --set ON_ERROR_STOP=1 --command "DROP SCHEMA IF EXISTS \"$schema\" CASCADE;" >/dev/null 2>&1; then
+        exit_code=1
+      fi
+      remains="$(PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
+        --tuples-only --no-align \
+        --command "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='$schema')" \
+        2>/dev/null || printf unknown)"
+      remains="${remains//[[:space:]]/}"
+      schema_cleanup+="${schema}:${remains:-unknown} "
+      if [[ "$remains" != "f" ]]; then
+        exit_code=1
+      fi
+    done
+  fi
   listener_count=0
   if ! fixture_assert_no_listeners; then
     listener_count=1
@@ -103,15 +133,17 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for schema in "$schema_a" "$schema_b"; do
-  if [[ ! "$schema" =~ ^[a-z][a-z0-9_]{0,62}$ ]]; then
-    echo "Refusing unsafe test schema name: $schema" >&2
-    exit 2
-  fi
-  PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
-    --set ON_ERROR_STOP=1 \
-    --command "CREATE SCHEMA \"$schema\";" >/dev/null
-done
+if [[ "$fixture_preprovisioned" != true ]]; then
+  for schema in "$schema_a" "$schema_b"; do
+    if [[ ! "$schema" =~ ^[a-z][a-z0-9_]{0,62}$ ]]; then
+      echo "Refusing unsafe test schema name: $schema" >&2
+      exit 2
+    fi
+    PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
+      --set ON_ERROR_STOP=1 \
+      --command "CREATE SCHEMA \"$schema\";" >/dev/null
+  done
+fi
 
 mkdir -p "$cert_dir" "$upload_a" "$upload_b"
 openssl req -x509 -newkey rsa:3072 -nodes -days 1 -subj "/CN=Northstar Federation Test CA" \
@@ -180,15 +212,19 @@ if [[ "${NORTHSTAR_FEDERATION_SKIP_BUILD:-false}" != true ]]; then
 fi
 binary="$target_dir/debug/rust-xmpp-server"
 [[ -x "$binary" ]] || { echo "federation runtime binary is missing: $binary" >&2; exit 1; }
-database_url_a="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema_a"
-database_url_b="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema_b"
+database_url_a="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$database_name_a?options=-csearch_path%3D$schema_a"
+database_url_b="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$database_name_b?options=-csearch_path%3D$schema_b"
 
-# Runtime identities verify the migration ledger but never apply DDL. Keep the
-# two isolated schemas independent and migrate both before opening listeners.
-env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
-  MIGRATOR_DATABASE_URL="$database_url_a" "$binary" migrate
-env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=remote.localhost \
-  MIGRATOR_DATABASE_URL="$database_url_b" "$binary" migrate
+# Direct fixture runs migrate two isolated schemas before opening listeners.
+# Listener stress workers receive two parent-owned, domain-specific migrated
+# database copies instead; runtime startup still verifies the same ledger and
+# canonicalizer state before it binds any listener.
+if [[ "$fixture_preprovisioned" != true ]]; then
+  env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
+    MIGRATOR_DATABASE_URL="$database_url_a" "$binary" migrate
+  env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=remote.localhost \
+    MIGRATOR_DATABASE_URL="$database_url_b" "$binary" migrate
+fi
 
 start_a() {
   local readiness_file="$runtime_dir/a.ready.json" readiness_nonce
@@ -275,4 +311,6 @@ FEDERATION_TEST_S2S_STARTTLS_PORT_A="$s2s_a" \
 FEDERATION_TEST_S2S_DIRECT_TLS_PORT_A="$s2s_tls_a" \
 FEDERATION_TEST_SCHEMA_A="$schema_a" \
 FEDERATION_TEST_SCHEMA_B="$schema_b" \
+FEDERATION_TEST_DATABASE_A="$database_name_a" \
+FEDERATION_TEST_DATABASE_B="$database_name_b" \
 python3 scripts/federation-wsl.py

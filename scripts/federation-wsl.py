@@ -26,7 +26,17 @@ ALICE = "alice_fed"
 BOB = "bob_fed"
 
 
-def psql_schema(schema: str, sql: str) -> str:
+def required_test_database(name: str) -> str:
+    database = os.environ.get(name, "xmpp_test")
+    fixture.check(
+        re.fullmatch(r"(?:xmpp_test|northstar_listener_[a-z0-9_]{1,42})", database)
+        is not None,
+        f"{name} must name the shared fixture database or a private listener database",
+    )
+    return database
+
+
+def psql_schema(schema: str, database: str, sql: str) -> str:
     fixture.check(
         re.fullmatch(r"[a-z][a-z0-9_]{0,62}", schema) is not None,
         "federation fixture did not receive a safe random schema name",
@@ -51,7 +61,7 @@ def psql_schema(schema: str, sql: str) -> str:
             "--username",
             "xmpp_test",
             "--dbname",
-            "xmpp_test",
+            database,
             "--tuples-only",
             "--no-align",
             "--set",
@@ -773,6 +783,7 @@ def run() -> None:
         re.fullmatch(r"[a-z][a-z0-9_]{0,62}", schema_a) is not None,
         "federation fixture did not receive a safe random schema name",
     )
+    database_a = required_test_database("FEDERATION_TEST_DATABASE_A")
     psql_env = os.environ.copy()
     psql_env["PGPASSWORD"] = "xmpp-test-password"
     persisted = subprocess.run(
@@ -783,7 +794,7 @@ def run() -> None:
             "--username",
             "xmpp_test",
             "--dbname",
-            "xmpp_test",
+            database_a,
             "--tuples-only",
             "--no-align",
             "--set",
@@ -1511,6 +1522,8 @@ def run() -> None:
     # stream exists: the message can arrive only through that live stream.
     schema_a = os.environ.get("FEDERATION_TEST_SCHEMA_A", "")
     schema_b = os.environ.get("FEDERATION_TEST_SCHEMA_B", "")
+    database_a = required_test_database("FEDERATION_TEST_DATABASE_A")
+    database_b = required_test_database("FEDERATION_TEST_DATABASE_B")
     marker = "fed-no-store-persistence-probe"
     no_store_guard = f"""
         CREATE OR REPLACE FUNCTION reject_federated_no_store_outbox()
@@ -1527,7 +1540,7 @@ def run() -> None:
         BEFORE INSERT ON s2s_outbox
         FOR EACH ROW EXECUTE FUNCTION reject_federated_no_store_outbox();
     """
-    psql_schema(schema_a, no_store_guard)
+    psql_schema(schema_a, database_a, no_store_guard)
     try:
         alice.send(
             f"<message xmlns='jabber:client' to='bob_fed@remote.localhost' "
@@ -1555,9 +1568,10 @@ def run() -> None:
             "federated no-store message did not preserve online Carbons",
         )
 
-        for schema in (schema_a, schema_b):
+        for schema, database in ((schema_a, database_a), (schema_b, database_b)):
             persisted_no_store = psql_schema(
                 schema,
+                database,
                 f"""
                 SELECT
                     (SELECT COUNT(*) FROM s2s_outbox WHERE stanza LIKE '%{marker}%') +
@@ -1576,6 +1590,7 @@ def run() -> None:
     finally:
         psql_schema(
             schema_a,
+            database_a,
             "DROP TRIGGER IF EXISTS reject_federated_no_store_outbox ON s2s_outbox; "
             "DROP FUNCTION IF EXISTS reject_federated_no_store_outbox();",
         )

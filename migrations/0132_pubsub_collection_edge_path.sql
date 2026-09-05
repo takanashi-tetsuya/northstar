@@ -58,6 +58,7 @@ BEGIN
     EXECUTE pg_catalog.format(
         'ALTER FUNCTION %I.check_pubsub_collection_edge() '
         || 'SET search_path TO pg_catalog, %I, pg_temp',
+        migration_schema,
         migration_schema
     );
 

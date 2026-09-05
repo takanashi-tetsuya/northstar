@@ -111,12 +111,18 @@ redis-server \
   >"$redis_dir/redis.log" 2>&1 &
 redis_pid="$!"
 
-# Readiness is determined solely by a successful command over the exact
-# private Unix socket.  The short polling interval only avoids a busy loop;
-# there is no fixed startup delay that could mask a failed Redis child.
+# Readiness is determined solely by a direct RESP PING/PONG exchange over the
+# exact private Unix socket.  The probe also verifies that the socket remains
+# the same inode, belongs to this fixture user, and retains its private mode.
+# This avoids relying on a redis-cli variant being present or interpreting its
+# own transport errors as Redis readiness.  The short polling interval only
+# avoids a busy loop; there is no fixed startup delay that could mask a failed
+# Redis child.
 redis_ready=false
+redis_probe_result=""
 for _ in $(seq 1 50); do
-  if redis-cli --socket "$redis_socket" ping >/dev/null 2>&1; then
+  if redis_probe_result="$(python3 "$project_dir/scripts/redis-unix-ping.py" \
+      --socket "$redis_socket" 2>&1)"; then
     redis_ready=true
     break
   fi
@@ -129,6 +135,7 @@ for _ in $(seq 1 50); do
 done
 if [[ "$redis_ready" != "true" ]]; then
   echo "MUC Redis did not become ready on its Unix socket" >&2
+  echo "MUC Redis final Unix-socket probe: ${redis_probe_result:-no probe result}" >&2
   tail -n 160 "$redis_dir/redis.log" >&2 || true
   exit 1
 fi

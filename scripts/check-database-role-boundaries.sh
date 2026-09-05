@@ -422,6 +422,12 @@ require_literal "$init_script" 'CONNECTION LIMIT 8' \
   'fresh init does not bound XEP-0133 command database connections'
 require_literal "$main_source" 'db::attest_migrator_role(&pool).await?;' \
   'migrator command does not attest its database owner identity'
+[[ "$(grep -Fc 'db::migrate_for_domain(&pool, &environment.domain).await?;' "$main_source")" == 1 ]] \
+  || fail 'database DDL must have exactly one main-process call site: the explicit migrator command'
+[[ "$(grep -Fc 'return run_migrations().await;' "$main_source")" == 1 ]] \
+  || fail 'only the explicit xmpp-server migrate subcommand may dispatch database DDL'
+require_literal "$main_source" 'db::verify_schema(&pool, &config.domain)' \
+  'normal server startup must retain read-only schema verification'
 require_literal "$db_module" "pg_advisory_lock(" \
   'migration command does not serialize against ACL reconciliation'
 require_literal "$db_module" "northstar-database-role-policy-v1" \

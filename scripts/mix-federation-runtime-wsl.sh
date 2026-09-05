@@ -14,10 +14,33 @@ fi
 cd "$project_dir"
 source "$project_dir/scripts/lib/test-listener-readiness.sh"
 
-nonce="$(date +%s%N)_$$"
-schema_a="mix_fed_a_${nonce}"
-schema_b="mix_fed_b_${nonce}"
-[[ "$schema_a" =~ ^mix_fed_a_[0-9_]+$ && "$schema_b" =~ ^mix_fed_b_[0-9_]+$ ]] || exit 2
+stress_database_a="${NORTHSTAR_LISTENER_STRESS_DATABASE_A:-}"
+stress_database_b="${NORTHSTAR_LISTENER_STRESS_DATABASE_B:-}"
+if [[ -n "$stress_database_a" || -n "$stress_database_b" ]]; then
+  [[ -n "$stress_database_a" && -n "$stress_database_b" ]] || {
+    echo "listener stress preprovisioning requires both database names" >&2
+    exit 2
+  }
+  [[ "$stress_database_a" =~ ^northstar_listener_[a-z0-9_]{1,42}$ \
+     && "$stress_database_b" =~ ^northstar_listener_[a-z0-9_]{1,42}$ \
+     && "$stress_database_a" != "$stress_database_b" ]] || {
+    echo "listener stress preprovisioned database names are invalid" >&2
+    exit 2
+  }
+  fixture_preprovisioned=true
+  schema_a=public
+  schema_b=public
+  database_name_a="$stress_database_a"
+  database_name_b="$stress_database_b"
+else
+  fixture_preprovisioned=false
+  nonce="$(date +%s%N)_$$"
+  schema_a="mix_fed_a_${nonce}"
+  schema_b="mix_fed_b_${nonce}"
+  [[ "$schema_a" =~ ^mix_fed_a_[0-9_]+$ && "$schema_b" =~ ^mix_fed_b_[0-9_]+$ ]] || exit 2
+  database_name_a=xmpp_test
+  database_name_b=xmpp_test
+fi
 runtime_dir="$(mktemp -d /tmp/northstar-mix-fed.XXXXXX)"
 pid_a=""
 pid_b=""
@@ -48,12 +71,16 @@ cleanup() {
   if [[ $status -ne 0 ]]; then
     for log in "$runtime_dir/a.log" "$runtime_dir/b.log" "$runtime_dir/relay-a.log" "$runtime_dir/relay-b.log" "$runtime_dir/relay-a-http.log" "$runtime_dir/relay-b-http.log"; do [[ ! -f "$log" ]] || { echo "--- $log ---" >&2; tail -n 200 "$log" >&2; }; done
   fi
-  for schema in "$schema_a" "$schema_b"; do
-    if ! PGPASSWORD=xmpp-test-password psql -h 127.0.0.1 -U xmpp_test -d xmpp_test --set ON_ERROR_STOP=1 --command "DROP SCHEMA IF EXISTS \"$schema\" CASCADE;" >/dev/null 2>&1; then
-      status=1
-    fi
-  done
-  remains="$(PGPASSWORD=xmpp-test-password psql -h 127.0.0.1 -U xmpp_test -d xmpp_test -tAn --command "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name IN ('$schema_a','$schema_b');" 2>/dev/null | tail -n1 || true)"
+  if [[ "$fixture_preprovisioned" == true ]]; then
+    remains=0
+  else
+    for schema in "$schema_a" "$schema_b"; do
+      if ! PGPASSWORD=xmpp-test-password psql -h 127.0.0.1 -U xmpp_test -d xmpp_test --set ON_ERROR_STOP=1 --command "DROP SCHEMA IF EXISTS \"$schema\" CASCADE;" >/dev/null 2>&1; then
+        status=1
+      fi
+    done
+    remains="$(PGPASSWORD=xmpp-test-password psql -h 127.0.0.1 -U xmpp_test -d xmpp_test -tAn --command "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name IN ('$schema_a','$schema_b');" 2>/dev/null | tail -n1 || true)"
+  fi
   listeners=0
   if ! fixture_assert_no_listeners; then
     listeners=1
@@ -84,9 +111,11 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for schema in "$schema_a" "$schema_b"; do
-  PGPASSWORD=xmpp-test-password psql -h 127.0.0.1 -U xmpp_test -d xmpp_test --set ON_ERROR_STOP=1 --command "DROP SCHEMA IF EXISTS \"$schema\" CASCADE; CREATE SCHEMA \"$schema\";" >/dev/null
-done
+if [[ "$fixture_preprovisioned" != true ]]; then
+  for schema in "$schema_a" "$schema_b"; do
+    PGPASSWORD=xmpp-test-password psql -h 127.0.0.1 -U xmpp_test -d xmpp_test --set ON_ERROR_STOP=1 --command "DROP SCHEMA IF EXISTS \"$schema\" CASCADE; CREATE SCHEMA \"$schema\";" >/dev/null
+  done
+fi
 mkdir -p "$runtime_dir/certs" "$runtime_dir/uploads-a" "$runtime_dir/uploads-b"
 openssl req -x509 -newkey rsa:3072 -nodes -days 1 -subj "/CN=Northstar MIX Federation CA" -addext "basicConstraints=critical,CA:TRUE,pathlen:0" -addext "keyUsage=critical,keyCertSign,cRLSign" -keyout "$runtime_dir/certs/ca.key" -out "$runtime_dir/certs/ca.crt" >/dev/null 2>&1
 for side in a b; do
@@ -125,12 +154,17 @@ if [[ "${NORTHSTAR_MIX_FEDERATION_SKIP_BUILD:-false}" != true ]]; then
 fi
 binary="${CARGO_TARGET_DIR:-$project_dir/target}/debug/rust-xmpp-server"
 [[ -x "$binary" ]] || { echo "MIX federation runtime binary is missing: $binary" >&2; exit 1; }
-database_url_a="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema_a"
-database_url_b="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema_b"
-env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
-  MIGRATOR_DATABASE_URL="$database_url_a" "$binary" migrate
-env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=remote.localhost \
-  MIGRATOR_DATABASE_URL="$database_url_b" "$binary" migrate
+database_url_a="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$database_name_a?options=-csearch_path%3D$schema_a"
+database_url_b="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$database_name_b?options=-csearch_path%3D$schema_b"
+# Normal direct runs retain the explicit migrator boundary.  The listener
+# stress parent alone may supply disposable per-domain copies that it already
+# migrated; runtime startup still attests their exact ledger before binding.
+if [[ "$fixture_preprovisioned" != true ]]; then
+  env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
+    MIGRATOR_DATABASE_URL="$database_url_a" "$binary" migrate
+  env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=remote.localhost \
+    MIGRATOR_DATABASE_URL="$database_url_b" "$binary" migrate
+fi
 export ABUSE_STATE_ALLOW_EPHEMERAL=true
 
 start_a() {
@@ -196,13 +230,13 @@ echo "MIX federation ports: http=$http_a,$http_b s2s-tls=$s2s_tls_a,$s2s_tls_b p
 python3 scripts/mix-federation-runtime-wsl.py setup
 kill "$pid_b"; wait "$pid_b" || true; pid_b=""
 python3 scripts/mix-federation-runtime-wsl.py enqueue
-queued="$(PGPASSWORD=xmpp-test-password psql -h 127.0.0.1 -U xmpp_test -d xmpp_test -tAn --command "SET search_path TO \"$schema_a\"; SELECT COUNT(*) FROM s2s_outbox WHERE target_domain='mix.remote.localhost' AND stanza LIKE '%durable MIX handoff%';" | tail -n1)"
+queued="$(PGPASSWORD=xmpp-test-password psql -h 127.0.0.1 -U xmpp_test -d "$database_name_a" -tAn --command "SET search_path TO \"$schema_a\"; SELECT COUNT(*) FROM s2s_outbox WHERE target_domain='mix.remote.localhost' AND stanza LIKE '%durable MIX handoff%';" | tail -n1)"
 echo "MIX durable outbox rows before remote restart: $queued"
 [[ "$queued" == 1 ]] || { echo "expected one durable MIX row" >&2; exit 1; }
 start_b
 python3 scripts/mix-federation-runtime-wsl.py finish
 for _ in $(seq 1 100); do
-  remaining="$(PGPASSWORD=xmpp-test-password psql -h 127.0.0.1 -U xmpp_test -d xmpp_test -tAn --command "SET search_path TO \"$schema_a\"; SELECT COUNT(*) FROM s2s_outbox WHERE target_domain='mix.remote.localhost';" | tail -n1)"
+  remaining="$(PGPASSWORD=xmpp-test-password psql -h 127.0.0.1 -U xmpp_test -d "$database_name_a" -tAn --command "SET search_path TO \"$schema_a\"; SELECT COUNT(*) FROM s2s_outbox WHERE target_domain='mix.remote.localhost';" | tail -n1)"
   [[ "$remaining" == 0 ]] && break
   sleep .1
 done

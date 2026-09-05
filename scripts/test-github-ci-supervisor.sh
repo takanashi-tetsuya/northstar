@@ -84,6 +84,10 @@ cleanup() {
   trap - EXIT INT TERM
   local child_pid child_state expected_start
   for child_pid in "${tracked_pids[@]:-}"; do
+    # An empty array expansion under `set -u` produces one empty iteration in
+    # some Bash versions.  Never use that as an associative-array key during
+    # failure cleanup; the original fixture error must remain observable.
+    [[ -n "$child_pid" ]] || continue
     expected_start="${tracked_pid_starts[$child_pid]:-}"
     if [[ -n "$expected_start" ]] \
       && pid_matches_recorded_identity "$child_pid" "$expected_start"; then
@@ -215,6 +219,7 @@ spec = importlib.util.spec_from_file_location("northstar_ci_supervisor_startup_t
 if spec is None or spec.loader is None:
     raise SystemExit("could not load CI supervisor for startup-cancellation regression")
 module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 real_popen = module.subprocess.Popen
@@ -283,6 +288,7 @@ spec = importlib.util.spec_from_file_location("northstar_ci_supervisor_visibilit
 if spec is None or spec.loader is None:
     raise SystemExit("could not load CI supervisor for visibility regression")
 module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 real_popen = module.subprocess.Popen
@@ -381,6 +387,7 @@ spec = importlib.util.spec_from_file_location("northstar_ci_supervisor_console_t
 if spec is None or spec.loader is None:
     raise SystemExit("could not load CI supervisor for console-forwarding regression")
 module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 real_popen = module.subprocess.Popen

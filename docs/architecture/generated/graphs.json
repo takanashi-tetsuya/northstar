@@ -594,6 +594,18 @@
         "uuid"
       ],
       [
+        "db-bootstrap",
+        "serde"
+      ],
+      [
+        "db-bootstrap",
+        "serde_yaml"
+      ],
+      [
+        "db-bootstrap",
+        "thiserror"
+      ],
+      [
         "der",
         "const-oid"
       ],
@@ -766,6 +778,14 @@
         "uuid"
       ],
       [
+        "foundation-db-test",
+        "serde"
+      ],
+      [
+        "foundation-db-test",
+        "thiserror"
+      ],
+      [
         "foundation-eventing",
         "chrono"
       ],
@@ -786,12 +806,72 @@
         "uuid"
       ],
       [
+        "foundation-eventing-postgres",
+        "chrono"
+      ],
+      [
+        "foundation-eventing-postgres",
+        "foundation-eventing"
+      ],
+      [
+        "foundation-eventing-postgres",
+        "sqlx"
+      ],
+      [
+        "foundation-eventing-postgres",
+        "thiserror"
+      ],
+      [
+        "foundation-eventing-postgres",
+        "uuid"
+      ],
+      [
+        "foundation-kms",
+        "chrono"
+      ],
+      [
+        "foundation-kms",
+        "thiserror"
+      ],
+      [
+        "foundation-postgres",
+        "serde"
+      ],
+      [
+        "foundation-postgres",
+        "sqlx"
+      ],
+      [
+        "foundation-postgres",
+        "thiserror"
+      ],
+      [
+        "foundation-postgres",
+        "tokio"
+      ],
+      [
+        "foundation-security",
+        "chrono"
+      ],
+      [
+        "foundation-security",
+        "ring"
+      ],
+      [
         "foundation-security",
         "serde"
       ],
       [
         "foundation-security",
+        "sha2"
+      ],
+      [
+        "foundation-security",
         "zeroize"
+      ],
+      [
+        "foundation-service-runtime",
+        "foundation-security"
       ],
       [
         "foundation-service-runtime",
@@ -811,11 +891,19 @@
       ],
       [
         "foundation-service-runtime",
+        "tonic"
+      ],
+      [
+        "foundation-service-runtime",
         "tracing"
       ],
       [
         "foundation-telemetry",
         "serde"
+      ],
+      [
+        "foundation-telemetry",
+        "thiserror"
       ],
       [
         "foundation-telemetry",
@@ -1770,6 +1858,22 @@
         "wasm-bindgen"
       ],
       [
+        "kafka-policy-generator",
+        "serde"
+      ],
+      [
+        "kafka-policy-generator",
+        "serde_json"
+      ],
+      [
+        "kafka-policy-generator",
+        "serde_yaml"
+      ],
+      [
+        "kafka-policy-generator",
+        "thiserror"
+      ],
+      [
         "lazy_static",
         "spin"
       ],
@@ -2252,6 +2356,18 @@
       [
         "northstar-test-harness",
         "anyhow"
+      ],
+      [
+        "northstar-test-harness",
+        "libc"
+      ],
+      [
+        "northstar-test-harness",
+        "serde"
+      ],
+      [
+        "northstar-test-harness",
+        "serde_json"
       ],
       [
         "northstar-test-harness",
@@ -3430,6 +3546,18 @@
         "web-sys"
       ],
       [
+        "restore-verifier",
+        "serde"
+      ],
+      [
+        "restore-verifier",
+        "serde_yaml"
+      ],
+      [
+        "restore-verifier",
+        "thiserror"
+      ],
+      [
         "ring",
         "cc"
       ],
@@ -4267,6 +4395,18 @@
       ],
       [
         "service-identity",
+        "anyhow"
+      ],
+      [
+        "service-identity",
+        "base64"
+      ],
+      [
+        "service-identity",
+        "chrono"
+      ],
+      [
+        "service-identity",
         "foundation-contracts"
       ],
       [
@@ -4287,11 +4427,19 @@
       ],
       [
         "service-identity",
+        "hmac"
+      ],
+      [
+        "service-identity",
         "northstar-auth-core"
       ],
       [
         "service-identity",
         "northstar-xmpp-types"
+      ],
+      [
+        "service-identity",
+        "pbkdf2"
       ],
       [
         "service-identity",
@@ -4359,6 +4507,10 @@
       ],
       [
         "service-message-ingress",
+        "sha2"
+      ],
+      [
+        "service-message-ingress",
         "thiserror"
       ],
       [
@@ -4372,6 +4524,10 @@
       [
         "service-message-ingress",
         "uuid"
+      ],
+      [
+        "service-protocol-registry",
+        "chrono"
       ],
       [
         "service-protocol-registry",
@@ -4504,6 +4660,10 @@
       [
         "service-s2s-edge",
         "uuid"
+      ],
+      [
+        "service-session-directory",
+        "chrono"
       ],
       [
         "service-session-directory",
@@ -6575,6 +6735,7 @@
       "dashmap",
       "data-encoding",
       "data-split-migrator",
+      "db-bootstrap",
       "der",
       "der-parser",
       "deranged",
@@ -6596,7 +6757,11 @@
       "foldhash",
       "form_urlencoded",
       "foundation-contracts",
+      "foundation-db-test",
       "foundation-eventing",
+      "foundation-eventing-postgres",
+      "foundation-kms",
+      "foundation-postgres",
       "foundation-security",
       "foundation-service-runtime",
       "foundation-telemetry",
@@ -6658,6 +6823,7 @@
       "jni-sys-macros",
       "jobserver",
       "js-sys",
+      "kafka-policy-generator",
       "lazy_static",
       "libc",
       "libm",
@@ -6787,6 +6953,7 @@
       "regex-syntax",
       "reqwest",
       "resolv-conf",
+      "restore-verifier",
       "ring",
       "roxmltree",
       "rsa",

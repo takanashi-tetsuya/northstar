@@ -5,6 +5,11 @@ The child Northstar process owns the socket: fixtures configure loopback `:0`
 addresses, pass a one-time nonce and an empty readiness-file destination, then
 wait for the child to atomically publish its actual addresses.
 
+Several active fixture listeners may request `:0` on the same loopback address.
+Each request is a separate kernel allocation rather than an attempt to share a
+fixed listener. Fixed bind addresses still fail configuration validation when
+they overlap.
+
 The readiness record contains a protocol version, the parent-issued nonce, the
 child PID, and a stable map of listener purposes to resolved local addresses.
 The parent rejects an absent, malformed, stale, nonce-mismatched, or

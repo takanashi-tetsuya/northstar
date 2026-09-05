@@ -29,6 +29,8 @@ success_output=""
 run_wrapper 0 success_output 'wrapper success' \
   bash -c 'printf "%s\n" success-marker'
 [[ "$success_output" == *success-marker* ]] || fail 'successful output was lost'
+[[ "$success_output" == *'phase=command_completed title=wrapper success'* ]] \
+  || fail 'success emitted no completed phase record'
 [[ "$success_output" != *'::error '* ]] || fail 'success emitted an error annotation'
 
 failure_output=""
@@ -37,6 +39,8 @@ run_wrapper 23 failure_output 'wrapper failure' \
 [[ "$failure_output" == *root-failure-marker* ]] || fail 'failed output was lost'
 [[ "$failure_output" == *'::error title=wrapper failure::'* ]] \
   || fail 'failure emitted no named annotation'
+[[ "$failure_output" == *'phase=command_failed title=wrapper failure'* ]] \
+  || fail 'failure emitted no failed phase record'
 
 missing_output=""
 run_wrapper 127 missing_output 'wrapper missing command' \
@@ -61,7 +65,7 @@ mkdir -- "$fake_bin"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 99' >"$fake_bin/python3"
 chmod 0700 "$fake_bin/python3"
 set +e
-fallback_output="$(PATH="$fake_bin:$PATH" GITHUB_ACTIONS=true RUNNER_TEMP="$temporary_root" \
+fallback_output="$(env -u NORTHSTAR_CI_SUMMARIZER_PYTHON PATH="$fake_bin:$PATH" GITHUB_ACTIONS=true RUNNER_TEMP="$temporary_root" \
   bash "$wrapper" 'wrapper summarizer failure' \
   bash -c 'printf "%s\n" failure-with-broken-summarizer; exit 19' 2>&1)"
 fallback_status=$?
@@ -70,7 +74,31 @@ set -e
   || fail "summarizer failure replaced command status with $fallback_status"
 [[ "$fallback_output" == *'title=Northstar CI command failed'* ]] \
   || fail 'summarizer failure emitted no fixed safe fallback'
-[[ "$fallback_output" != *'title=wrapper summarizer failure'* ]] \
+[[ "$fallback_output" != *'::error title=wrapper summarizer failure::'* ]] \
   || fail 'summarizer fallback reused caller-controlled annotation metadata'
+
+timeout_output=""
+set +e
+timeout_output="$(NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS=1 GITHUB_ACTIONS=true RUNNER_TEMP="$temporary_root" \
+  bash "$wrapper" 'wrapper timeout' bash -c 'trap "exit 0" TERM; while :; do sleep 1; done' 2>&1)"
+timeout_status=$?
+set -e
+[[ "$timeout_status" == 124 ]] \
+  || fail "timed-out command returned $timeout_status instead of 124"
+[[ "$timeout_output" == *'phase=command_expired title=wrapper timeout'* ]] \
+  || fail 'timeout emitted no expiry phase record'
+[[ "$timeout_output" == *'::error title=wrapper timeout::'* ]] \
+  || fail 'timeout emitted no named annotation'
+
+invalid_timeout_output=""
+set +e
+invalid_timeout_output="$(NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS=0 RUNNER_TEMP="$temporary_root" \
+  bash "$wrapper" 'wrapper invalid timeout' bash -c true 2>&1)"
+invalid_timeout_status=$?
+set -e
+[[ "$invalid_timeout_status" == 2 ]] \
+  || fail "invalid timeout returned $invalid_timeout_status instead of 2"
+[[ "$invalid_timeout_output" == *'must be an integer from 1 through 7200'* ]] \
+  || fail 'invalid timeout was not diagnosed'
 
 printf 'GitHub CI wrapper self-test passed\n'

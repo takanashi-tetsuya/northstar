@@ -255,6 +255,13 @@ fn test_bind_address_collisions() {
         }
     );
 
+    // `:0` asks the kernel for a distinct ephemeral port per bind; it is not
+    // a concrete shared address and must remain usable by hermetic fixtures.
+    let ephemeral = v4(127, 0, 0, 1, 0);
+    let req = RequestedWebCapabilities::default()
+        .with_listeners(ListenerConfiguration::new(ephemeral, ephemeral));
+    assert!(req.resolve().is_ok());
+
     // 2. Public and Dedicated Observability collide
     let pub_addr = v4(0, 0, 0, 0, 5280);
     let req = RequestedWebCapabilities::default()

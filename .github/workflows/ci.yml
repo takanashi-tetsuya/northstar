@@ -869,6 +869,12 @@ jobs:
         run: cargo build --locked
 
       - name: Bind only the isolated HTTPS fixture as root
+        env:
+          # The fixture has internal second-scale readiness and request
+          # deadlines. This command budget is deliberately larger than all
+          # valid scenarios, but far below the job-level fallback, so a future
+          # lifecycle regression preserves a useful command-level transcript.
+          NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS: "900"
         run: |
           bash scripts/github-ci-run.sh "XEP-0487 privileged HTTPS runtime" sudo env \
             XEP0487_RUNTIME_UID="$(id -u)" \
@@ -877,6 +883,18 @@ jobs:
             XMPP_TEST_SYSTEM_TOOLCHAIN=true \
             XMPP_TEST_OFFLINE=false \
             bash scripts/xep0487-runtime-wsl.sh
+
+      - name: Upload failed XEP-0487 diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: xep0487-command-diagnostics-${{ github.run_id }}
+          # The wrapper retains raw logs only on the ephemeral runner. Upload
+          # its separately redacted copy, never a potentially credential-rich
+          # command transcript.
+          path: ${{ runner.temp }}/northstar-ci-diagnostics/*.redacted.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Stop loopback-only PostgreSQL fixture
         if: always()

@@ -2080,6 +2080,7 @@ name = "northstar-test-harness"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "libc",
  "serde",
  "serde_json",
  "socket2 0.5.10",

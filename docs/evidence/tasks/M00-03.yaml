@@ -21,11 +21,11 @@ work_units:
       result: "Harness readiness protocol, bounded in-process handoff, and exclusive pre-bound test listeners."
     - id: "M00-03.W2"
       result: "Runtime listener ownership, nonce-bound child readiness, and XEP-0487 migration away from the repeated port allocator."
+    - id: "M00-03.W4"
+      result: "Process-group teardown, retained redacted command diagnostics, and command-level deadline evidence infrastructure."
   pending:
     - id: "M00-03.W3"
       result: "Linux inherited-FD/socket-activation handoff where a parent must retain a privileged listener."
-    - id: "M00-03.W4"
-      result: "Process-group cleanup, retained diagnostics, and takeover/crash boundary evidence."
     - id: "M00-03.W5"
       result: "Migrate the remaining runtime fixtures and run the defined parallel stress matrix."
 local_validation:
@@ -35,6 +35,11 @@ local_validation:
     - "cargo test --locked readiness_publication_is_atomic_and_refuses_overwrite"
     - "cargo test -p northstar-test-harness --all-targets --locked"
     - "bash -n scripts/xep0487-runtime-wsl.sh"
+    - "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+    - "cargo test -p northstar-web-surface --locked"
+    - "cargo test --locked runtime_listener_inventory_uses_bound_ephemeral_addresses"
+    - "python scripts/check-github-ci-summary.py (local interpreter)"
+    - "bash -n scripts/github-ci-run.sh scripts/check-github-ci-run.sh scripts/xep0487-runtime-wsl.sh"
 evidence:
   workflow_runs: []
   exact_dev_commit: null

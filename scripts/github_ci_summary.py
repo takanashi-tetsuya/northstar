@@ -151,6 +151,18 @@ def redact_sensitive(text: str) -> str:
     return _BEARER_RE.sub("Bearer [REDACTED]", text)
 
 
+def redact_diagnostic_log(log_text: str) -> str:
+    """Return a control-free, credential-redacted diagnostic transcript.
+
+    This is intentionally less selective than a workflow annotation: a failed
+    command may need its phase history to be useful after the ephemeral runner
+    is gone. It is still safe to place in a restricted CI artifact because it
+    applies the same defense-in-depth secret filtering as the annotation.
+    """
+
+    return redact_sensitive(_strip_terminal_and_controls(log_text))
+
+
 def _is_json_noise(line: str) -> bool:
     stripped = line.strip()
     if not stripped or stripped[0] not in "[{":
@@ -189,7 +201,7 @@ def _deduplicate_keep_last(lines: Iterable[LogLine]) -> list[LogLine]:
 
 
 def clean_log(log_text: str) -> list[LogLine]:
-    cleaned = redact_sensitive(_strip_terminal_and_controls(log_text))
+    cleaned = redact_diagnostic_log(log_text)
     useful = [
         LogLine(number, line.rstrip())
         for number, line in enumerate(cleaned.splitlines(), start=1)
@@ -381,9 +393,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("log_file", type=Path)
     parser.add_argument("--title", required=True)
+    parser.add_argument(
+        "--redacted-copy",
+        type=Path,
+        help="write a complete control-free, credential-redacted diagnostic copy",
+    )
     arguments = parser.parse_args()
 
     log_text = arguments.log_file.read_bytes().decode("utf-8", errors="replace")
+    if arguments.redacted_copy is not None:
+        arguments.redacted_copy.write_bytes(redact_diagnostic_log(log_text).encode("utf-8"))
+        arguments.redacted_copy.chmod(0o600)
     # Write UTF-8 bytes explicitly.  Runner locales are normally UTF-8, but the
     # annotation must remain valid on self-hosted runners with legacy encodings.
     command = render_error_command(arguments.title, log_text)

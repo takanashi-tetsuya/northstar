@@ -618,16 +618,16 @@ async fn main() -> Result<()> {
     } else {
         None
     };
-    let listener_addresses = runtime_listener_addresses(
-        &xmpp_listener,
-        &xmpps_listener,
-        &http_listener,
-        &metrics_listener,
-        admin_listener.as_ref(),
-        s2s_listener.as_ref(),
-        s2s_tls_listener.as_ref(),
-        component_listener.as_ref(),
-    )?;
+    let listener_addresses = runtime_listener_addresses(RuntimeListeners {
+        xmpp: &xmpp_listener,
+        xmpps: &xmpps_listener,
+        http: &http_listener,
+        metrics: &metrics_listener,
+        admin: admin_listener.as_ref(),
+        s2s: s2s_listener.as_ref(),
+        s2s_tls: s2s_tls_listener.as_ref(),
+        component: component_listener.as_ref(),
+    })?;
 
     let mut service_tasks = JoinSet::new();
     spawn_service_task(
@@ -856,22 +856,26 @@ async fn bind_runtime_listener(
         .with_context(|| format!("could not bind {purpose} listener to {address}"))
 }
 
+struct RuntimeListeners<'a> {
+    xmpp: &'a tokio::net::TcpListener,
+    xmpps: &'a tokio::net::TcpListener,
+    http: &'a tokio::net::TcpListener,
+    metrics: &'a tokio::net::TcpListener,
+    admin: Option<&'a tokio::net::TcpListener>,
+    s2s: Option<&'a tokio::net::TcpListener>,
+    s2s_tls: Option<&'a tokio::net::TcpListener>,
+    component: Option<&'a tokio::net::TcpListener>,
+}
+
 fn runtime_listener_addresses(
-    xmpp: &tokio::net::TcpListener,
-    xmpps: &tokio::net::TcpListener,
-    http: &tokio::net::TcpListener,
-    metrics: &tokio::net::TcpListener,
-    admin: Option<&tokio::net::TcpListener>,
-    s2s: Option<&tokio::net::TcpListener>,
-    s2s_tls: Option<&tokio::net::TcpListener>,
-    component: Option<&tokio::net::TcpListener>,
+    listeners: RuntimeListeners<'_>,
 ) -> Result<BTreeMap<String, SocketAddr>> {
     let mut addresses = BTreeMap::new();
     for (purpose, listener) in [
-        ("xmpp", xmpp),
-        ("xmpps", xmpps),
-        ("http", http),
-        ("metrics", metrics),
+        ("xmpp", listeners.xmpp),
+        ("xmpps", listeners.xmpps),
+        ("http", listeners.http),
+        ("metrics", listeners.metrics),
     ] {
         addresses.insert(
             purpose.to_owned(),
@@ -881,10 +885,10 @@ fn runtime_listener_addresses(
         );
     }
     for (purpose, listener) in [
-        ("web-admin", admin),
-        ("s2s", s2s),
-        ("s2s-tls", s2s_tls),
-        ("component", component),
+        ("web-admin", listeners.admin),
+        ("s2s", listeners.s2s),
+        ("s2s-tls", listeners.s2s_tls),
+        ("component", listeners.component),
     ] {
         if let Some(listener) = listener {
             addresses.insert(
@@ -1135,9 +1139,16 @@ mod container_healthcheck_tests {
         let xmpps = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let http = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let metrics = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addresses = super::runtime_listener_addresses(
-            &xmpp, &xmpps, &http, &metrics, None, None, None, None,
-        )
+        let addresses = super::runtime_listener_addresses(super::RuntimeListeners {
+            xmpp: &xmpp,
+            xmpps: &xmpps,
+            http: &http,
+            metrics: &metrics,
+            admin: None,
+            s2s: None,
+            s2s_tls: None,
+            component: None,
+        })
         .unwrap();
         assert_eq!(addresses.len(), 4);
         for (purpose, address) in addresses {

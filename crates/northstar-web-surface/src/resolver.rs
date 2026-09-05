@@ -324,6 +324,13 @@ pub fn resolve_web_surface(
 /// address of their family, and IPv6 unspecified is treated as dual-stack
 /// because the platform's `IPV6_V6ONLY` default is not portable.
 fn socket_addresses_overlap(left: std::net::SocketAddr, right: std::net::SocketAddr) -> bool {
+    // Port zero delegates selection to the kernel for each independent bind.
+    // It is not a shared concrete endpoint, so treating two `:0` requests as
+    // a collision would reject the child-owned listener pattern used by
+    // hermetic test fixtures before either listener can obtain its own port.
+    if left.port() == 0 || right.port() == 0 {
+        return false;
+    }
     if left.port() != right.port() {
         return false;
     }
@@ -636,6 +643,14 @@ mod tests {
 
         let req_no_admin = req_collision.with_web_admin(false);
         assert!(resolve_web_surface(&req_no_admin).is_ok());
+
+        // Each `:0` bind is resolved by the kernel separately. It cannot
+        // represent an accidental shared listener and is required for
+        // child-owned test activation without a bind-close-launch race.
+        let ephemeral = addr(127, 0, 0, 1, 0);
+        let req_ephemeral = RequestedWebCapabilities::default()
+            .with_listeners(ListenerConfiguration::new(ephemeral, ephemeral));
+        assert!(resolve_web_surface(&req_ephemeral).is_ok());
 
         let obs_addr = addr(0, 0, 0, 0, 5280);
         let req_obs_collision = RequestedWebCapabilities::default().with_listeners(

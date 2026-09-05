@@ -11,6 +11,7 @@ target file before forwarding any accepted connection.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import selectors
@@ -25,6 +26,7 @@ from pathlib import Path
 
 
 STOP = threading.Event()
+MAX_BUFFERED_BYTES = 1024 * 1024
 
 
 def parse_target(path: Path) -> tuple[str, int]:
@@ -91,23 +93,94 @@ def relay_connection(client: socket.socket, target_file: Path) -> None:
             client.setblocking(False)
             upstream.setblocking(False)
             selector = selectors.DefaultSelector()
-            selector.register(client, selectors.EVENT_READ, upstream)
-            selector.register(upstream, selectors.EVENT_READ, client)
+            peers = {client: upstream, upstream: client}
+            buffered = {client: bytearray(), upstream: bytearray()}
+            read_closed: set[socket.socket] = set()
+            write_closed: set[socket.socket] = set()
+
+            def refresh_interest(connection: socket.socket) -> None:
+                """Apply TCP backpressure instead of dropping a partial write.
+
+                A source is not read while its peer has a full userspace
+                buffer.  The kernel receive window then provides the bounded
+                backpressure to the fixture client or server.  This keeps the
+                test relay faithful to a stream transport even when a peer is
+                deliberately slow.
+                """
+
+                events = 0
+                peer = peers[connection]
+                if (
+                    connection not in read_closed
+                    and len(buffered[peer]) < MAX_BUFFERED_BYTES
+                ):
+                    events |= selectors.EVENT_READ
+                if buffered[connection] and connection not in write_closed:
+                    events |= selectors.EVENT_WRITE
+                if not events:
+                    try:
+                        selector.unregister(connection)
+                    except KeyError:
+                        pass
+                    return
+                try:
+                    selector.modify(connection, events)
+                except KeyError:
+                    selector.register(connection, events)
+                except OSError:
+                    raise
+
+            def close_completed_write(source: socket.socket) -> None:
+                """Forward EOF only after all preceding bytes reach its peer."""
+
+                destination = peers[source]
+                if (
+                    source in read_closed
+                    and not buffered[destination]
+                    and destination not in write_closed
+                ):
+                    try:
+                        destination.shutdown(socket.SHUT_WR)
+                    except OSError:
+                        pass
+                    write_closed.add(destination)
+
+            selector.register(client, selectors.EVENT_READ)
+            selector.register(upstream, selectors.EVENT_READ)
             try:
                 while not STOP.is_set():
                     events = selector.select(0.25)
                     if not events:
                         continue
-                    for key, _ in events:
+                    for key, mask in events:
                         source = key.fileobj
-                        destination = key.data
-                        try:
-                            payload = source.recv(65536)
-                        except BlockingIOError:
-                            continue
-                        if not payload:
-                            return
-                        destination.sendall(payload)
+                        destination = peers[source]
+                        if mask & selectors.EVENT_READ:
+                            try:
+                                payload = source.recv(65536)
+                            except BlockingIOError:
+                                payload = None
+                            if payload is None:
+                                continue
+                            if payload:
+                                buffered[destination].extend(payload)
+                            else:
+                                read_closed.add(source)
+
+                        if mask & selectors.EVENT_WRITE and buffered[source]:
+                            try:
+                                written = source.send(buffered[source])
+                            except BlockingIOError:
+                                written = 0
+                            if written:
+                                del buffered[source][:written]
+
+                        close_completed_write(client)
+                        close_completed_write(upstream)
+                        refresh_interest(client)
+                        refresh_interest(upstream)
+                    if not selector.get_map():
+                        return
             except OSError:
                 return
             finally:
@@ -115,27 +188,51 @@ def relay_connection(client: socket.socket, target_file: Path) -> None:
 
 
 def self_test() -> None:
-    """Exercise a child relay with a real target socket and readiness record."""
+    """Exercise startup, target rollover, and slow-peer stream forwarding."""
     with tempfile.TemporaryDirectory(prefix="northstar-listener-relay-test-") as raw_directory:
         directory = Path(raw_directory)
         readiness_file = directory / "ready.json"
         target_file = directory / "target.txt"
-        upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        upstream.bind(("127.0.0.1", 0))
-        upstream.listen(1)
+        first_upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        first_upstream.bind(("127.0.0.1", 0))
+        first_upstream.listen(1)
+        second_upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        second_upstream.bind(("127.0.0.1", 0))
+        second_upstream.listen(1)
         target_file.write_text(
-            f"127.0.0.1:{upstream.getsockname()[1]}\n", encoding="ascii"
+            f"127.0.0.1:{first_upstream.getsockname()[1]}\n", encoding="ascii"
         )
         received: list[bytes] = []
 
-        def serve_upstream() -> None:
-            client, _address = upstream.accept()
-            with client:
-                received.append(client.recv(64))
-                client.sendall(b"pong")
+        def receive_exact(connection: socket.socket, expected: int) -> bytes:
+            chunks: list[bytes] = []
+            remaining = expected
+            while remaining:
+                chunk = connection.recv(remaining)
+                if not chunk:
+                    raise RuntimeError("relay peer closed before the expected payload arrived")
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            return b"".join(chunks)
 
-        server_thread = threading.Thread(target=serve_upstream, daemon=True)
-        server_thread.start()
+        def serve_first_upstream() -> None:
+            client, _address = first_upstream.accept()
+            with client:
+                received.append(receive_exact(client, len(b"ping-first")))
+                client.sendall(b"pong-first")
+
+        large_payload = os.urandom(2 * 1024 * 1024)
+
+        def serve_second_upstream() -> None:
+            client, _address = second_upstream.accept()
+            with client:
+                received.append(receive_exact(client, len(large_payload)))
+                client.sendall(hashlib.sha256(received[-1]).digest())
+
+        first_thread = threading.Thread(target=serve_first_upstream, daemon=True)
+        second_thread = threading.Thread(target=serve_second_upstream, daemon=True)
+        first_thread.start()
+        second_thread.start()
         command = [
             sys.executable,
             __file__,
@@ -163,12 +260,29 @@ def self_test() -> None:
             if host != "127.0.0.1" or not separator or not raw_port.isdigit():
                 raise RuntimeError("relay readiness address was invalid")
             with socket.create_connection((host, int(raw_port)), timeout=3) as client:
-                client.sendall(b"ping")
-                if client.recv(4) != b"pong":
-                    raise RuntimeError("relay did not preserve bidirectional bytes")
-            server_thread.join(3)
-            if received != [b"ping"]:
-                raise RuntimeError(f"relay target did not receive expected bytes: {received!r}")
+                client.sendall(b"ping-first")
+                if receive_exact(client, len(b"pong-first")) != b"pong-first":
+                    raise RuntimeError("relay did not preserve the first bidirectional stream")
+            first_thread.join(3)
+            if received != [b"ping-first"]:
+                raise RuntimeError(f"relay first target did not receive expected bytes: {received!r}")
+
+            # A restarted child replaces the dynamic target.  New S2S
+            # connections must use that new target, without moving the relay
+            # endpoint already embedded in the peer's startup DNS overrides.
+            target_file.write_text(
+                f"127.0.0.1:{second_upstream.getsockname()[1]}\n", encoding="ascii"
+            )
+            with socket.create_connection((host, int(raw_port)), timeout=3) as client:
+                client.sendall(large_payload)
+                if (
+                    receive_exact(client, hashlib.sha256().digest_size)
+                    != hashlib.sha256(large_payload).digest()
+                ):
+                    raise RuntimeError("relay lost or reordered bytes while its target was under backpressure")
+            second_thread.join(10)
+            if received != [b"ping-first", large_payload]:
+                raise RuntimeError("relay target rollover did not preserve the complete second stream")
         finally:
             relay.terminate()
             try:
@@ -176,7 +290,8 @@ def self_test() -> None:
             except subprocess.TimeoutExpired:
                 relay.kill()
                 relay.wait(timeout=5)
-            upstream.close()
+            first_upstream.close()
+            second_upstream.close()
 
 
 def main() -> int:

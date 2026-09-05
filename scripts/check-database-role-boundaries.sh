@@ -42,6 +42,7 @@ integration_fixture="$project_dir/scripts/integration-wsl.py"
 message_pow_fixture="$project_dir/scripts/message-pow-wire-wsl.py"
 role_runner="$project_dir/scripts/reconcile-database-roles.sh"
 database_acceptance="$project_dir/scripts/database-role-boundary-db-ci.sh"
+database_acceptance_local="$project_dir/scripts/database-role-boundary-wsl.sh"
 loopback_fixture="$project_dir/scripts/loopback-postgres-ci.sh"
 secret_generator="$project_dir/scripts/create-production-secrets.sh"
 release_preflight="$project_dir/scripts/release-preflight.sh"
@@ -91,6 +92,7 @@ for file in "$compose" "$init_script" "$grant_policy" "$grant_boundary" "$grant_
   "$stateful_database_manifest" \
   "$restore_runner" "$dump_validator" "$role_runner" \
   "$disaster_fixture" "$message_pow_fixture" "$database_acceptance" "$loopback_fixture" \
+  "$database_acceptance_local" \
   "$secret_generator" "$release_preflight" \
   "$ci_workflow"; do
   [[ -f "$file" ]] || fail "required policy file is missing: ${file#$project_dir/}"
@@ -132,6 +134,24 @@ for boundary_probe in \
   require_literal "$database_acceptance" "$boundary_probe" \
     "database role acceptance omits administrator cleanup boundary: $boundary_probe"
 done
+
+# The local role-boundary test is intentionally destructive.  It must never
+# select then release a TCP port before PostgreSQL owns it: a private Unix
+# socket directory gives it a collision-free transport and keeps it unable to
+# touch the developer's shared TCP PostgreSQL service.
+require_literal "$database_acceptance_local" "listen_addresses=''" \
+  'local database role fixture does not disable TCP listeners'
+require_literal "$database_acceptance_local" 'unix_socket_permissions=0700' \
+  'local database role fixture does not restrict its private Unix socket'
+require_literal "$database_acceptance_local" 'PGHOST="$socket_dir"' \
+  'local database role fixture does not pass its private Unix socket to the acceptance runner'
+if grep -Fq 'allocate-test-ports.py' "$database_acceptance_local"; then
+  fail 'local database role fixture still uses a released TCP port allocator'
+fi
+require_literal "$database_acceptance" "database_transport='private-unix-socket'" \
+  'database role acceptance does not recognize its exact private Unix socket transport'
+require_literal "$database_acceptance" 'host=${encoded_database_host}' \
+  'database role acceptance does not encode the private Unix socket in the migrator URL'
 for protected_table in admin_session_cleanup_effects admin_session_cleanup_capacity; do
   require_literal "$capability_manifest" \
     "('$protected_table',FALSE,FALSE,FALSE,FALSE,'0111')" \

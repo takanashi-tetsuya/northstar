@@ -22,6 +22,7 @@ http_a=""
 http_b=""
 s2s_tls_a=""
 s2s_tls_b=""
+s2s_port_file=""
 if ss -H -ltn 'sport = :443' 2>/dev/null | grep -q .; then
   echo "XEP-0487 fixture requires an unused local TCP port 443" >&2
   exit 2
@@ -309,6 +310,12 @@ start_b() {
   printf '%s\n' "$readiness" >"$runtime_dir/b.readiness"
   http_b="$(readiness_port "$readiness" http)"
   s2s_tls_b="$(readiness_port "$readiness" s2s-tls)"
+  # Discovery is served by the independently restarted HTTPS fixture.  Keep
+  # the port source current for every B lifecycle, not just the one restart
+  # exercised below.
+  if [[ -n "$s2s_port_file" ]]; then
+    printf '%s\n' "$s2s_tls_b" >"$s2s_port_file"
+  fi
   curl --silent --fail "http://127.0.0.1:$http_b/readyz" >/dev/null
   [[ "$(ps -o euid= -p "$pid_b" | tr -d '[:space:]')" == "$runtime_uid" ]] || {
     echo "Northstar B did not run as the non-root fixture uid" >&2; exit 1;
@@ -404,7 +411,6 @@ echo stale-valid >"$mode_file"
 # which remains usable during the later discovery timeout.
 stop_b
 start_b
-printf '%s\n' "$s2s_tls_b" >"$s2s_port_file"
 start_a stale-cache true
 client_probe deliver stale-seed 30
 sleep 1.3

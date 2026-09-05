@@ -2,11 +2,11 @@ schema_version: "1.0"
 task:
   id: "M00-08"
   title: "Audit the dev merge and isolate unaccepted Program 6 assets"
-  status: "in-progress"
+  status: "accepted-bootstrap"
   branch: "dev"
   integration_branch: "dev"
   base_commit: "b9fc55517b6a81fc79c9c04277ed34269d891b4f"
-  acceptance_state: "pending-exact-dev-ci"
+  acceptance_state: "accepted-bootstrap"
 scope:
   checkpoint_range:
     base: "aa2b0df03bed53bc6a032c5a5ac74374bb62167b"
@@ -24,9 +24,23 @@ local_validation:
     - "node scripts/check-program6-convergence.mjs --base aa2b0df03bed53bc6a032c5a5ac74374bb62167b --checkpoint 94cb2622934d1329905b982e26377176f18a44bb --merge e02503b5d4a5491bb57002f4a5261552f4ec6772"
     - "node tests/governance/program6-convergence/run.mjs"
 evidence:
-  workflow_runs: []
-  exact_dev_commit: null
-  passed_checks: []
-  failed_checks: []
+  workflow_runs:
+    - id: "33947438312"
+      exact_dev_commit: "ae53dc214b31188629cc7102f7fa0f51547de460"
+      task_job: "Rust quality gates"
+      task_step: "Audit Program 6 merge convergence"
+      task_step_conclusion: "success"
+  exact_dev_commit: "ae53dc214b31188629cc7102f7fa0f51547de460"
+  passed_checks:
+    - "Audit Program 6 merge convergence"
+    - "Structured service catalog validation"
+    - "Program 6 convergence negative fixtures"
+  failed_checks:
+    - check: "Validate architecture boundaries and generated graphs"
+      remediation_task: "M00-05"
+      disposition: "Pre-existing architectural-boundary failure; it did not run in place of or invalidate the M00-08 convergence check."
   notes:
-    - "Populate acceptance evidence only after the exact integration commit receives the M00-08 convergence CI result."
+    - "The exact dev SHA completed the dedicated convergence check in CI before the unrelated architecture-boundary check failed."
+    - "Run-level failures outside the M00-08 convergence check remain required work and are not passing evidence."
+    - "The CI scheduling lane uses a per-run group for dev/main so an older stalled run cannot serialize this exact-SHA check."
+    - "Final ratification remains deferred to M00-G1."

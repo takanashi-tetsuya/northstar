@@ -183,16 +183,32 @@ export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432
 
 run_exact_ignored() {
   local test_name="$1"
-  local output
-  output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture 2>&1)" || {
-    printf '%s\n' "$output"
-    exit 1
-  }
-  printf '%s\n' "$output"
-  grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$output" || {
+  local output_log command_status
+  output_log="$(mktemp --tmpdir="${TMPDIR:-/tmp}" northstar-pubsub-test.XXXXXXXX)"
+  if [[ ! -f "$output_log" || -L "$output_log" ]]; then
+    echo "failed to create a private PubSub test log" >&2
+    return 1
+  fi
+  chmod 600 "$output_log"
+
+  # Keep Cargo output live. Capturing it in a command substitution hides the
+  # compiler/test phase that is actually stuck and can leave a parent timeout
+  # with no useful evidence. The CI process-group supervisor still owns this
+  # pipeline, while the log retains the exact-one-test assertion below.
+  set +e
+  cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture 2>&1 | tee "$output_log"
+  command_status=${PIPESTATUS[0]}
+  set -e
+  if (( command_status != 0 )); then
+    rm -f -- "$output_log"
+    return "$command_status"
+  fi
+  if ! grep -Eq 'test result: ok\. 1 passed; 0 failed' "$output_log"; then
     echo "expected exactly one ignored PubSub/PEP test to execute: $test_name" >&2
-    exit 1
-  }
+    rm -f -- "$output_log"
+    return 1
+  fi
+  rm -f -- "$output_log"
 }
 
 run_exact_ignored \

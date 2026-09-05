@@ -47,11 +47,16 @@ echo "phase=command_started title=$annotation_title started_at=$started_utc time
 
 set +e
 if [[ -n "$timeout_seconds" ]]; then
-  timeout --foreground --signal=TERM --kill-after=15s "${timeout_seconds}s" "$@" 2>&1 | tee "$log_file"
+  "$summarizer_python" "$script_directory/github_ci_supervisor.py" \
+    --timeout-seconds "$timeout_seconds" \
+    --kill-after-seconds 15 \
+    --log-file "$log_file" \
+    -- "$@"
+  command_status=$?
 else
   "$@" 2>&1 | tee "$log_file"
+  command_status=${PIPESTATUS[0]}
 fi
-command_status=${PIPESTATUS[0]}
 set -e
 
 finished_epoch="$(date +%s)"

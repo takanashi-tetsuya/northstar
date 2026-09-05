@@ -3,9 +3,9 @@ set -Eeuo pipefail
 set +x
 
 # Local counterpart of the PostgreSQL 17 service job in .github/workflows/ci.yml.
-# It creates a private loopback-only cluster on a random port, runs the same
-# destructive role-boundary fixture there, and removes only the directory that
-# this wrapper created. It must never target the developer's shared PostgreSQL.
+# It creates a private Unix-socket-only cluster, runs the same destructive
+# role-boundary fixture there, and removes only the directory that this wrapper
+# created. It must never target the developer's shared PostgreSQL.
 
 readonly project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$project_dir"
@@ -15,7 +15,7 @@ if [[ "$(id -u)" -eq 0 ]]; then
   exit 2
 fi
 
-for command in bash cargo chmod id install mktemp pg_config python3 realpath rm tail; do
+for command in bash cargo chmod id install mktemp pg_config realpath rm tail; do
   command -v "$command" >/dev/null || {
     echo "database role boundary wrapper requires: $command" >&2
     exit 2
@@ -79,15 +79,8 @@ install -d -m 0700 "$socket_dir"
   --auth-host=scram-sha-256 \
   --no-instructions >/dev/null
 
-port="$(python3 "$project_dir/scripts/allocate-test-ports.py" 58000 59999 1)"
-[[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && (( port <= 65535 )) || {
-  echo "could not allocate a safe PostgreSQL fixture port" >&2
-  exit 2
-}
-readonly port
-
 if ! "$pg_bin/pg_ctl" -D "$data_dir" -l "$postgres_log" -w start \
-  -o "-c listen_addresses=127.0.0.1 -c port=$port -c unix_socket_directories=$socket_dir -c password_encryption=scram-sha-256" \
+  -o "-c listen_addresses='' -c unix_socket_directories=$socket_dir -c unix_socket_permissions=0700 -c password_encryption=scram-sha-256" \
   >/dev/null; then
   echo "private PostgreSQL fixture failed to start" >&2
   tail -n 80 "$postgres_log" >&2 || true
@@ -105,8 +98,7 @@ fi
 CI=true \
 NORTHSTAR_DATABASE_ROLE_CI=true \
 NORTHSTAR_CI_CONTROL_PASSWORD="$control_password" \
-PGHOST=127.0.0.1 \
-PGPORT="$port" \
+PGHOST="$socket_dir" \
 bash scripts/database-role-boundary-db-ci.sh
 
-echo "database role boundary WSL validation passed on a private loopback PostgreSQL cluster"
+echo "database role boundary WSL validation passed on a private Unix-socket PostgreSQL cluster"

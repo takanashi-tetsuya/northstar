@@ -11,6 +11,7 @@ set -euo pipefail
 
 readonly container_name='northstar-ci-loopback-postgres'
 readonly postgres_image='postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73'
+readonly max_connections="${NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS:-100}"
 
 stop_fixture() {
   docker rm --force "$container_name" >/dev/null 2>&1 || true
@@ -26,6 +27,10 @@ if [[ "${1:-start}" != start || $# -gt 1 ]]; then
 fi
 if [[ "${CI:-}" != true || "${GITHUB_ACTIONS:-}" != true ]]; then
   echo 'the loopback PostgreSQL fixture is restricted to GitHub Actions CI' >&2
+  exit 2
+fi
+if ! [[ "$max_connections" =~ ^[1-9][0-9]*$ ]] || ((max_connections < 16 || max_connections > 512)); then
+  echo 'NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS must be an integer from 16 through 512' >&2
   exit 2
 fi
 if docker container inspect "$container_name" >/dev/null 2>&1; then
@@ -50,6 +55,7 @@ docker run --detach \
   --env POSTGRES_PASSWORD=xmpp-test-password \
   "$postgres_image" \
   -c listen_addresses=127.0.0.1 \
+  -c "max_connections=$max_connections" \
   -c password_encryption=scram-sha-256 >/dev/null
 
 for _ in $(seq 1 60); do
@@ -79,4 +85,4 @@ if [[ "$fixture_ready" != true ]]; then
 fi
 
 trap - EXIT
-echo 'loopback PostgreSQL fixture ready on 127.0.0.1:5432'
+echo "loopback PostgreSQL fixture ready on 127.0.0.1:5432 max_connections=$max_connections"

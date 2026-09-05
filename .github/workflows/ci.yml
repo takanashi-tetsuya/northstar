@@ -402,6 +402,7 @@ jobs:
           python3 scripts/check-github-ci-summary.py
           bash scripts/check-github-ci-run.sh
           bash scripts/test-github-ci-supervisor.sh
+          bash scripts/test-listener-stress-worker.sh
           bash scripts/test-stateful-database-ci.sh
           bash scripts/check-database-role-boundaries.sh
           bash scripts/test-postgres-client-wrapper.sh
@@ -840,6 +841,138 @@ jobs:
         run: bash scripts/github-ci-run.sh "External component runtime" bash scripts/component-runtime-wsl.sh
 
       - name: Stop loopback-only PostgreSQL fixture
+        if: always()
+        run: bash scripts/loopback-postgres-ci.sh stop
+
+  listener-readiness-stress-regular:
+    name: Listener/readiness stress (regular 20x50 · ${{ matrix.fixture }})
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # This is a capacity ceiling only. Every fixture worker has its own
+    # process-group deadline inside the stress driver, so a hung child cannot
+    # consume a round until GitHub's job-level timeout.
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        fixture:
+          - federation
+          - mix-federation
+    env:
+      # 50 two-node workers require 100 initial application connections. The
+      # driver makes its per-process pool profile explicit; this isolated CI
+      # PostgreSQL ceiling covers the 200-connection maximum plus migrator
+      # headroom without changing production defaults.
+      NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "256"
+      NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
+      NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
+      NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS: "0"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start isolated loopback PostgreSQL fixture
+        run: bash scripts/loopback-postgres-ci.sh start
+
+      - name: Install pinned Rust 1.97.1
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
+        with:
+          toolchain: 1.97.1
+
+      # These S2S/MIX fixtures have no Redis configuration.  Do not start an
+      # unused cache and mistake that for cluster-runtime coverage; Redis
+      # pressure remains owned by the cluster/MUC fixture work.
+      - name: Install PostgreSQL client and listener diagnostic tools
+        run: sudo apt-get update && sudo apt-get install -y iproute2 postgresql-client
+
+      - name: Populate the locked dependency cache
+        run: cargo fetch --locked
+
+      - name: Run required regular listener/readiness matrix
+        env:
+          XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
+          XMPP_TEST_OFFLINE: "false"
+        run: >-
+          bash scripts/listener-readiness-stress-wsl.sh
+          --mode regular --fixture "${{ matrix.fixture }}" --rounds 20 --pairs 50
+
+      - name: Upload failed listener/readiness diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: listener-readiness-regular-${{ matrix.fixture }}-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/northstar-ci-diagnostics/*.redacted.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Stop isolated loopback PostgreSQL fixture
+        if: always()
+        run: bash scripts/loopback-postgres-ci.sh stop
+
+  listener-readiness-stress-scheduled:
+    name: Scheduled listener/readiness stress (100x50 · ${{ matrix.fixture }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # The 100-round workload remains unchanged. This limit bounds only the
+    # host capacity for the scheduled evidence run; worker deadlines remain
+    # enforced by the private process-group supervisor in the driver.
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        fixture:
+          - federation
+          - mix-federation
+    env:
+      NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "256"
+      NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
+      NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
+      NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS: "0"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start isolated loopback PostgreSQL fixture
+        run: bash scripts/loopback-postgres-ci.sh start
+
+      - name: Install pinned Rust 1.97.1
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
+        with:
+          toolchain: 1.97.1
+
+      # These S2S/MIX fixtures have no Redis configuration.  Do not start an
+      # unused cache and mistake that for cluster-runtime coverage; Redis
+      # pressure remains owned by the cluster/MUC fixture work.
+      - name: Install PostgreSQL client and listener diagnostic tools
+        run: sudo apt-get update && sudo apt-get install -y iproute2 postgresql-client
+
+      - name: Populate the locked dependency cache
+        run: cargo fetch --locked
+
+      - name: Run required scheduled listener/readiness matrix
+        env:
+          XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
+          XMPP_TEST_OFFLINE: "false"
+        run: >-
+          bash scripts/listener-readiness-stress-wsl.sh
+          --mode scheduled --fixture "${{ matrix.fixture }}" --rounds 100 --pairs 50
+
+      - name: Upload failed listener/readiness diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: listener-readiness-scheduled-${{ matrix.fixture }}-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/northstar-ci-diagnostics/*.redacted.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Stop isolated loopback PostgreSQL fixture
         if: always()
         run: bash scripts/loopback-postgres-ci.sh stop
 

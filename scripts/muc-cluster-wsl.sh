@@ -57,8 +57,13 @@ grep -q "grant_cluster_muc_invitation_in_tx" \
 grep -q '"offline_affiliation"' \
   "$project_dir/src/cluster.rs"
 
-redis_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
 redis_dir="$(mktemp -d -t northstar-muc-redis-XXXXXX)"
+chmod 700 "$redis_dir"
+if [[ "$(stat -c '%a' "$redis_dir")" != "700" ]]; then
+  echo "MUC Redis runtime directory must be private: $redis_dir" >&2
+  exit 1
+fi
+redis_socket="$redis_dir/redis.sock"
 redis_pid=""
 
 cleanup() {
@@ -68,17 +73,29 @@ cleanup() {
     kill "$redis_pid"
     wait "$redis_pid" 2>/dev/null || true
   fi
+  socket_remains=0
+  if [[ -e "$redis_socket" || -L "$redis_socket" ]]; then
+    socket_remains=1
+    echo "MUC Redis socket remained after its owned process stopped: $redis_socket" >&2
+    exit_code=1
+  fi
   case "$redis_dir" in
     /tmp/northstar-muc-redis-*) rm -rf -- "$redis_dir" ;;
     *) echo "refusing to remove unexpected MUC Redis directory: $redis_dir" >&2; exit_code=1 ;;
   esac
+  if [[ -e "$redis_dir" ]]; then
+    echo "MUC Redis runtime directory remained after cleanup: $redis_dir" >&2
+    exit_code=1
+  fi
+  echo "MUC Redis cleanup: socket_remains=$socket_remains"
   exit "$exit_code"
 }
 trap cleanup EXIT INT TERM
 
 redis-server \
-  --bind 127.0.0.1 \
-  --port "$redis_port" \
+  --port 0 \
+  --unixsocket "$redis_socket" \
+  --unixsocketperm 700 \
   --save '' \
   --appendonly no \
   --protected-mode yes \
@@ -86,13 +103,35 @@ redis-server \
   >"$redis_dir/redis.log" 2>&1 &
 redis_pid="$!"
 
+# Readiness is determined solely by a successful command over the exact
+# private Unix socket.  The short polling interval only avoids a busy loop;
+# there is no fixed startup delay that could mask a failed Redis child.
+redis_ready=false
 for _ in $(seq 1 50); do
-  if redis-cli -h 127.0.0.1 -p "$redis_port" ping >/dev/null 2>&1; then
+  if redis-cli --socket "$redis_socket" ping >/dev/null 2>&1; then
+    redis_ready=true
     break
+  fi
+  if ! kill -0 "$redis_pid" 2>/dev/null; then
+    echo "MUC Redis exited before publishing its Unix socket" >&2
+    tail -n 160 "$redis_dir/redis.log" >&2 || true
+    exit 1
   fi
   sleep 0.1
 done
-redis-cli -h 127.0.0.1 -p "$redis_port" ping >/dev/null
+if [[ "$redis_ready" != "true" ]]; then
+  echo "MUC Redis did not become ready on its Unix socket" >&2
+  tail -n 160 "$redis_dir/redis.log" >&2 || true
+  exit 1
+fi
+[[ -S "$redis_socket" ]] || {
+  echo "MUC Redis readiness succeeded without a Unix-domain socket: $redis_socket" >&2
+  exit 1
+}
+if [[ "$(stat -c '%a' "$redis_socket")" != "700" ]]; then
+  echo "MUC Redis socket permissions are not private: $redis_socket" >&2
+  exit 1
+fi
 
 cd "$project_dir"
 if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
@@ -102,7 +141,9 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
 
-export TEST_REDIS_URL="redis://127.0.0.1:$redis_port/"
+# `redis+unix:///absolute/path` is the Rust redis client syntax accepted by
+# Config's local Unix-socket transport validation.
+export TEST_REDIS_URL="redis+unix://$redis_socket"
 cargo test --locked --offline db::cluster_muc::tests:: -- --nocapture
 cargo test --locked --offline \
   cluster::tests::redis_muc_nickname_and_voice_mutations_reject_conflicts_and_aba \

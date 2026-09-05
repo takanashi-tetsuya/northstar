@@ -384,6 +384,7 @@ jobs:
           node scripts/check-session-lifecycle-boundary.mjs
           node scripts/check-documentation-consistency.mjs
           node scripts/check-outbound-xml-construction.mjs
+          node scripts/check-stateful-database-ci.mjs
           node scripts/omemo-security-tests.mjs
           node scripts/check-i18n.mjs
           node scripts/check-locales.mjs
@@ -394,6 +395,7 @@ jobs:
           find scripts -maxdepth 1 -type f -name '*.sh' -exec bash -n {} +
           find scripts -maxdepth 1 -type f -name '*.py' -exec python3 -m py_compile {} +
           python3 scripts/wait-test-readiness.py --self-test
+          python3 scripts/xep0487-socket-activation.py --self-test
           python3 scripts/check-github-ci-summary.py
           bash scripts/check-github-ci-run.sh
           bash scripts/check-database-role-boundaries.sh
@@ -689,9 +691,21 @@ jobs:
         run: bash scripts/loopback-postgres-ci.sh stop
 
   stateful-database-integration:
-    name: Isolated PostgreSQL and Redis invariants
+    name: Isolated PostgreSQL and Redis invariants (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    # Each shard receives its own runner and loopback-only PostgreSQL
+    # fixture.  Isolation is what makes this parallelism safe; no shard is
+    # given a shared schema, listener, or Redis namespace.
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        shard:
+          - auth-identity
+          - abuse-delivery
+          - collaboration-storage
+          - pubsub-federation
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -712,45 +726,25 @@ jobs:
       - name: Populate the locked offline dependency cache
         run: cargo fetch --locked
 
-      - name: Run isolated database and conflict suites
+      - name: Run isolated database and conflict suite shard
         env:
           XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
+          # This is a shard-level safety net.  The runner below places a
+          # shorter, explicit deadline around every suite and retains a
+          # redacted transcript when it expires.
+          NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS: "1800"
         run: |
-          # Service-layer persistence fences previously exercised only by the
-          # release validation list; they share this job's build cache and run
-          # strictly serially against the single disposable postgres service.
-          bash scripts/github-ci-run.sh "Auth/admin database" bash scripts/auth-admin-db-wsl.sh
-          bash scripts/github-ci-run.sh "Admin session cleanup database" bash scripts/admin-session-cleanup-db-wsl.sh
-          bash scripts/github-ci-run.sh "Authentication service database" bash scripts/authentication-service-db-wsl.sh
-          bash scripts/github-ci-run.sh "Abuse reporting database" bash scripts/abuse-reporting-db-wsl.sh
-          bash scripts/github-ci-run.sh "Abuse key deployment database" bash scripts/abuse-key-deployment-db-wsl.sh
-          bash scripts/github-ci-run.sh "Message PoW database" bash scripts/message-pow-db-wsl.sh
-          bash scripts/github-ci-run.sh "API operations database" bash scripts/api-operations-db-wsl.sh
-          bash scripts/github-ci-run.sh "API pages database" bash scripts/api-pages-db-wsl.sh
-          bash scripts/github-ci-run.sh "Migration upgrade" bash scripts/migration-upgrade-wsl.sh
-          bash scripts/github-ci-run.sh "Migration 0056 compatibility" bash scripts/migration-0056-db-wsl.sh
-          bash scripts/github-ci-run.sh "RFC 7622 identity database" bash scripts/rfc7622-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Identity audit database" bash scripts/identity-audit-db-wsl.sh
-          bash scripts/github-ci-run.sh "JID identity database" bash scripts/jid-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Authorization JID identity database" bash scripts/authorization-jid-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Push JID identity database" bash scripts/push-jid-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Push delivery database" bash scripts/push-delivery-db-wsl.sh
-          bash scripts/github-ci-run.sh "MIX JID identity database" bash scripts/mix-jid-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Session JID identity database" bash scripts/session-jid-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Profile JID identity database" bash scripts/profile-jid-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Roster service database" bash scripts/roster-service-db-wsl.sh
-          bash scripts/github-ci-run.sh "MUC database" bash scripts/muc-db-wsl.sh
-          bash scripts/github-ci-run.sh "PIE database" bash scripts/pie-db-wsl.sh
-          bash scripts/github-ci-run.sh "Privacy database" bash scripts/privacy-db-wsl.sh
-          bash scripts/github-ci-run.sh "Offline replay database" bash scripts/offline-replay-db-wsl.sh
-          bash scripts/github-ci-run.sh "PubSub database" bash scripts/pubsub-db-wsl.sh
-          bash scripts/github-ci-run.sh "PubSub outbox database" bash scripts/pubsub-outbox-db-wsl.sh
-          bash scripts/github-ci-run.sh "PubSub wire integration" bash scripts/pubsub-wire-wsl.sh
-          bash scripts/github-ci-run.sh "Retention database" bash scripts/retention-db-wsl.sh
-          bash scripts/github-ci-run.sh "Stream Management database" bash scripts/sm-db-wsl.sh
-          bash scripts/github-ci-run.sh "S2S database" bash scripts/s2s-db-wsl.sh
-          bash scripts/github-ci-run.sh "HTTP Upload database" bash scripts/upload-db-wsl.sh
-          bash scripts/github-ci-run.sh "MUC cluster database" bash scripts/muc-cluster-wsl.sh
+          bash scripts/github-ci-run.sh "Stateful database ${{ matrix.shard }}" \
+            bash scripts/stateful-database-ci.sh "${{ matrix.shard }}"
+
+      - name: Upload failed database shard diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stateful-database-${{ matrix.shard }}-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/northstar-ci-diagnostics/*.redacted.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Stop loopback-only PostgreSQL fixture
         if: always()

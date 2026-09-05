@@ -21,6 +21,25 @@ loopback and the XMPP domain is reserved for development (`localhost`,
 `*.localhost`, or `*.test`). It is disabled by default and cannot expose a
 production listener or accept an inherited socket.
 
+## Privileged fixture endpoint
+
+The XEP-0487 integration fixture is the sole Linux-only exception to
+child-owned `:0` allocation. It must prove HTTPS default-port discovery on
+`127.0.0.1:443`. `scripts/xep0487-socket-activation.py` therefore performs
+only the privileged bind. It passes exactly that listener to a non-root Python
+child with `pass_fds`, and keeps its own descriptor open until the child has:
+
+1. verified it received an IPv4 TCP listener on the exact loopback address;
+2. adopted it into the TLS HTTP server; and
+3. atomically written a new, owner-only acknowledgement containing the
+   parent-issued nonce, its PID, effective UID, and listener address.
+
+The supervisor verifies every acknowledgement field and its filesystem
+ownership before it releases the root-owned descriptor. It also terminates the
+child process group on signal, startup failure, or acknowledgement timeout.
+The server product does not implement descriptor activation, and Windows does
+not claim equivalent inherited-handle support.
+
 The shared verifier is:
 
 ```text

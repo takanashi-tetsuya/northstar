@@ -37,7 +37,17 @@ nonce-bound readiness record described in
 shared endpoint; the kernel chooses a distinct port for each listener. Fixed
 addresses continue to undergo collision validation before any listener binds.
 
-Database test sharding is intentionally deferred until each shard can prove an
-independent schema, Redis-key namespace, and resource budget. Increasing test
-threads without that isolation would exchange a visible stall for nondeterministic
-data races.
+The stateful PostgreSQL/Redis suite is split into four runner-isolated shards:
+`auth-identity`, `abuse-delivery`, `collaboration-storage`, and
+`pubsub-federation`. `scripts/stateful-database-ci.sh` is the explicit checked
+manifest of every required suite. Each shard starts a fresh loopback PostgreSQL
+fixture, and its listed suites retain their own schema and Redis-key isolation.
+The workflow runs at most three shards at once; suites inside a shard remain
+ordered where their own semantics require it. This reduces wall-clock time
+without turning shared-state tests into racy parallel tests.
+
+Every listed suite has a 8- or 10-minute command budget, and the shard has a
+30-minute budget plus job cleanup margin. A timeout preserves a redacted
+diagnostic transcript and fails the shard. Adding a database suite requires
+adding it to this manifest rather than appending an unbounded command to a
+workflow step.

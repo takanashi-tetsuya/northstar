@@ -20,7 +20,83 @@ ALICE = "xep0487_alice"
 BOB = "xep0487_bob"
 
 
-def serve_https() -> None:
+def _required_environment(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"{name} must be set")
+    return value
+
+
+def _activated_https_socket(port: int) -> socket.socket:
+    """Adopt the one listener passed by the root-only test activator.
+
+    This is deliberately a test-fixture-only protocol.  Northstar itself never
+    accepts an inherited descriptor in normal operation.  The activating parent
+    remains responsible for the privileged bind until this child publishes its
+    nonce-bound takeover acknowledgement.
+    """
+
+    raw_fd = _required_environment("XEP0487_INHERITED_HTTPS_FD")
+    try:
+        fd = int(raw_fd)
+    except ValueError as error:
+        raise RuntimeError("XEP0487_INHERITED_HTTPS_FD must be an integer") from error
+    if fd < 0:
+        raise RuntimeError("XEP0487_INHERITED_HTTPS_FD must be non-negative")
+    if os.geteuid() == 0:
+        raise RuntimeError("the XEP-0487 HTTPS handler must not run as root")
+
+    listener = socket.socket(fileno=fd)
+    if listener.family != socket.AF_INET or listener.type != socket.SOCK_STREAM:
+        listener.close()
+        raise RuntimeError("inherited XEP-0487 listener is not an IPv4 TCP socket")
+    address = listener.getsockname()
+    if address[0] != "127.0.0.1" or address[1] != port:
+        listener.close()
+        raise RuntimeError("inherited XEP-0487 listener is not bound to the expected loopback address")
+    return listener
+
+
+def _write_takeover_ack(port: int) -> None:
+    """Atomically publish child ownership after TLS has adopted the listener."""
+
+    ack_path = pathlib.Path(_required_environment("XEP0487_TAKEOVER_ACK"))
+    nonce = _required_environment("XEP0487_TAKEOVER_NONCE")
+    if not ack_path.is_absolute() or len(nonce) < 16:
+        raise RuntimeError("invalid XEP-0487 takeover acknowledgement configuration")
+    if ack_path.exists():
+        raise RuntimeError("XEP-0487 takeover acknowledgement already exists")
+
+    payload = json.dumps(
+        {
+            "version": 1,
+            "nonce": nonce,
+            "pid": os.getpid(),
+            "euid": os.geteuid(),
+            "listener": f"127.0.0.1:{port}",
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    temporary = ack_path.with_name(f".{ack_path.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        # The parent created an empty acknowledgement path contract and
+        # validates the nonce/PID before dropping its descriptor.  A rename
+        # makes partial JSON impossible for the waiting parent to observe.
+        os.replace(temporary, ack_path)
+    except BaseException:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def serve_https(*, activated: bool = False) -> None:
     port = int(os.environ.get("XEP0487_HTTPS_PORT", "443"))
     s2s_port = int(os.environ["XEP0487_S2S_PORT"])
     certificate = os.environ["XEP0487_HTTPS_CERT"]
@@ -113,12 +189,25 @@ def serve_https() -> None:
                 except (OSError, ssl.SSLError):
                     pass
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    if activated:
+        listener = _activated_https_socket(port)
+        server = http.server.ThreadingHTTPServer(
+            ("127.0.0.1", port), Handler, bind_and_activate=False
+        )
+        unused_socket = server.socket
+        server.socket = listener
+        unused_socket.close()
+        server.server_address = listener.getsockname()
+        server.server_name, server.server_port = server.server_address
+    else:
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(certificate, key)
     context.set_alpn_protocols(["http/1.1"])
     server.socket = context.wrap_socket(server.socket, server_side=True)
+    if activated:
+        _write_takeover_ack(port)
     server.serve_forever()
 
 
@@ -265,6 +354,8 @@ def stale_cache_probe() -> None:
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "serve":
         serve_https()
+    elif len(sys.argv) == 2 and sys.argv[1] == "serve-activated":
+        serve_https(activated=True)
     elif len(sys.argv) == 2 and sys.argv[1] == "bootstrap":
         run_probe()
     elif len(sys.argv) == 4 and sys.argv[1] == "deliver":
@@ -274,4 +365,4 @@ if __name__ == "__main__":
     elif len(sys.argv) == 2 and sys.argv[1] == "stale":
         stale_cache_probe()
     else:
-        raise SystemExit("usage: xep0487-runtime-wsl.py serve|bootstrap|deliver MARKER TIMEOUT|reject MARKER TIMEOUT|stale")
+        raise SystemExit("usage: xep0487-runtime-wsl.py serve|serve-activated|bootstrap|deliver MARKER TIMEOUT|reject MARKER TIMEOUT|stale")

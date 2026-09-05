@@ -299,10 +299,14 @@ stop_b() {
 
 start_b
 
+takeover_ack="$runtime_dir/https.takeover.json"
+takeover_nonce="$(openssl rand -hex 16)"
 XEP0487_HTTPS_PORT=443 XEP0487_S2S_PORT="$s2s_tls_b" \
 XEP0487_HTTPS_CERT="$runtime_dir/certs/https.crt" XEP0487_HTTPS_KEY="$runtime_dir/certs/https.key" \
 XEP0487_MODE_FILE="$mode_file" XEP0487_PUBLIC_KEY_PIN="$b_pin" \
-python3 scripts/xep0487-runtime-wsl.py serve >"$runtime_dir/https.log" 2>&1 &
+XEP0487_RUNTIME_UID="$runtime_uid" XEP0487_RUNTIME_GID="$runtime_gid" \
+XEP0487_TAKEOVER_ACK="$takeover_ack" XEP0487_TAKEOVER_NONCE="$takeover_nonce" \
+python3 scripts/xep0487-socket-activation.py >"$runtime_dir/https.log" 2>&1 &
 https_pid=$!
 for _ in $(seq 1 100); do
   if curl --silent --fail --noproxy '*' --cacert "$runtime_dir/certs/ca.crt" \
@@ -318,7 +322,8 @@ curl --silent --fail --noproxy '*' --cacert "$runtime_dir/certs/ca.crt" \
 echo valid >"$mode_file"
 start_a valid true
 client_probe bootstrap
-grep -q 'host=remote.localhost mode=valid uid=0' "$runtime_dir/https.log"
+grep -q "takeover-ack pid=.* uid=$runtime_uid listener=127.0.0.1:443" "$runtime_dir/https.log"
+grep -q "host=remote.localhost mode=valid uid=$runtime_uid" "$runtime_dir/https.log"
 grep -q 'authenticated outbound S2S certificate identity' "$log_a"
 grep -q 'authenticated inbound S2S certificate identity' "$runtime_dir/b.log"
 stop_a

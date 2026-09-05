@@ -5225,7 +5225,13 @@ mod integration_tests {
         };
         let collection = get_node_by_id(&pool, collection_id).await.unwrap().unwrap();
         let leaf = create_default_test_node(&pool, &format!("generic-leaf-{suffix}"), &owner).await;
-        let collection_options = PubSubSubscriptionOptions::for_node_type("collection");
+        // XEP-0248 defaults a collection subscription to `nodes`, which
+        // receives association/configuration notifications only. This race
+        // proves item retraction delivery through a direct collection edge,
+        // therefore request the explicit `items` subscription type while
+        // retaining the one-hop depth under test.
+        let mut collection_options = PubSubSubscriptionOptions::for_node_type("collection");
+        collection_options.subscription_type = "items".to_owned();
         assert!(matches!(
             set_subscription_limited_with_options_and_renderer(
                 &pool,

@@ -398,6 +398,7 @@ jobs:
           python3 scripts/xep0487-socket-activation.py --self-test
           python3 scripts/check-github-ci-summary.py
           bash scripts/check-github-ci-run.sh
+          bash scripts/test-github-ci-supervisor.sh
           bash scripts/check-database-role-boundaries.sh
           bash scripts/test-postgres-client-wrapper.sh
 

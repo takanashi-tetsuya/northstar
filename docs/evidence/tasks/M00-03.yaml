@@ -11,6 +11,7 @@ scope:
   guarantees:
     - "A fixture does not claim that a released numeric port is reserved."
     - "Child-owned listeners publish resolved addresses only through a nonce- and PID-bound readiness record."
+    - "The test activation path remains explicit, loopback-bound, and unavailable to ordinary production startup."
     - "A direct fixture parent exit is not treated as group completion while a private-group descendant remains alive."
     - "A failed database suite does not hide later isolated suites in the same declared shard."
   exclusions:
@@ -26,21 +27,45 @@ work_units:
       result: "Linux-only XEP-0487 socket activation: root retains the exclusive loopback 443 listener until a non-root TLS child writes a nonce-, PID-, UID-, and endpoint-bound acknowledgement."
   reopened:
     - id: "M00-03.W4"
-      implementation_commit: "3afa0e4cd971830246464dc73708c2eb95d6df32"
-      result: "The prior process-group implementation used direct-child completion as a terminal condition. The repair now requires group quiescence, bounded TERM-to-KILL cleanup, bounded output drain, and explicit cancellation propagation; its exact-dev Linux evidence is still required."
+      implementation_commits:
+        - "3afa0e4cd971830246464dc73708c2eb95d6df32"
+        - "b482b580be4ac852ac2561e01c3b05da12a7bc86"
+      result: "The prior process-group implementation used direct-child completion as a terminal condition. The repair now requires group quiescence, bounded TERM-to-KILL cleanup, bounded output drain, and explicit cancellation propagation. The database-shard runner also emits one terminal result per declared suite after ordinary failures, and distinguishes cancellation from not-run. Exact-dev Linux evidence remains required."
       reopened_by:
         run: "33958038598"
         attempt: 1
         observation: "Run 69 exposed the need to distinguish direct child completion from complete process-group termination."
   in_progress:
     - id: "M00-03.W5"
-      implementation_commit: "6be5a7a"
-      result: "MIX runtime, MIX federation, and two-domain S2S fixtures now use child-owned ephemeral listeners, nonce/PID-bound readiness, and a child-owned relay for bootstrap DNS. The required Linux pressure matrix has not yet produced exact-SHA evidence."
+      implementation_commits:
+        - "6be5a7a"
+        - "c901f5e"
+        - "52ba501"
+        - "8b6143d"
+        - "2cf6104"
+        - "2dac7ca"
+        - "ab622c8"
+        - "2063372"
+        - "66f1732"
+        - "3536bed"
+        - "b55e0f2"
+        - "ebea305"
+        - "a71a016"
+        - "a1b5934"
+        - "da5995e"
+        - "6cc8e54"
+      result: "The identified W5 fixture migrations are implemented: MIX runtime, MIX federation, two-domain S2S, integration/load, component, browser, message-PoW, moderation, OMEMO, profile-storage, PubSub-wire, MUC Redis, cluster Redis TLS/mTLS, and the local database-role fixture use child-owned endpoints, stable relays, or private Unix sockets. Public origins are checked through fixture-owned relays, and a shared atomic target handoff prevents partial target reads. The required Linux execution evidence is still pending."
+      implementation_scope_completed:
+        - "cluster two-node Redis TLS/mTLS and Northstar listener fixture"
+        - "stable public-origin relay handoff for migrated runtime fixtures"
+        - "bounded relay startup diagnostic cleanup"
+      audit_limit: "Fixture implementation is not pressure evidence. The S2S/MIX matrix does not establish cluster/Redis pressure, and cluster/Redis behavior requires its own bounded Linux run."
       required_validation:
         - "50 parallel dual-node fixtures for 20 ordinary-CI rounds without EADDRINUSE."
         - "100 scheduled-stress rounds without EADDRINUSE."
         - "Occupied-port, invalid readiness nonce/PID/address, and three child-crash phase probes."
         - "Listener tests with --test-threads=16 without sleep-based synchronization."
+        - "Independent, isolated, bounded results for Privacy, HTTP Upload, MUC cluster, PubSub outbox, and PubSub wire."
 local_validation:
   passed:
     - "cargo check --locked --bin rust-xmpp-server"
@@ -56,9 +81,17 @@ local_validation:
     - "bash scripts/test-stateful-database-ci.sh"
     - "cargo test -p northstar-test-harness --all-targets --locked (6 passed)"
     - "Git Bash syntax validation for the migrated MIX/S2S fixture scripts and readiness helper"
+    - "Git Bash syntax validation for component, browser, message-PoW, moderation, OMEMO, profile-storage, PubSub-wire, MUC Redis, and local database-role fixture migrations"
+    - "cargo fmt --check and cargo check --locked after the component/browser migration"
+    - "cargo test --locked --offline config::tests::development_database_role_override_accepts_only_local_redis_endpoints -- --exact (1 passed)"
+    - "scripts/pubsub-db-wsl.sh after 6a0ba75 (14 of 14 focused PubSub/PEP/vCard checks passed in an isolated PostgreSQL fixture)"
+    - "scripts/pie-db-wsl.sh after 426f72c (isolated account-deletion fixture passed with an explicitly bound upload capacity policy)"
+    - "Git Bash syntax/input validation for the listener stress driver, loopback PostgreSQL capacity bounds, and private-worker lifecycle scripts"
+    - "cargo check --workspace --all-targets --all-features --locked after the relay lifecycle implementation"
+    - "Git Bash syntax validation plus scripts/test-listener-readiness.sh for the shared atomic relay-target handoff"
   deferred:
     - "The full Linux process-group regression suite, including the real parent-cancellation probe, requires GitHub Actions evidence because this host lacks a usable WSL/POSIX Python environment."
-    - "The W5 20 x 50 regular and 100 x 50 scheduled two-node pressure matrices require isolated Linux PostgreSQL/Redis fixtures and remain unexecuted locally."
+    - "The W5 20 x 50 regular and 100 x 50 scheduled two-node pressure matrices require an isolated Linux PostgreSQL fixture and remain unexecuted locally. These specific S2S/MIX matrix targets do not configure Redis; cluster/Redis pressure remains separately unproven."
 evidence:
   exact_dev_commit: "fef174a2a8888278d118491d3d8e0fcace01ad56"
   workflow_runs:
@@ -144,6 +177,47 @@ evidence:
     - id: "9967124442"
       name: "stateful-database-pubsub-federation-diagnostics-33958038598"
       digest: "sha256:f74540c844523ac179149d41c7e3a2f50d3f4b3275fcf3e016929b8488b6174a"
+  post_run_remediation:
+    source_run:
+      id: "33958038598"
+      attempt: 1
+      exact_dev_commit: "fef174a2a8888278d118491d3d8e0fcace01ad56"
+    pie:
+      commits:
+        - "426f72c4852b34feef9bd9f6ee5d69e0cda446c9"
+      finding: "The Run 69 failure occurred while the account-deletion fixture prepared upload_slots, before the deletion assertion ran. The fixture now explicitly binds and checks its isolated upload capacity policy; the production fail-closed capacity guard is unchanged."
+      isolated_result: "scripts/pie-db-wsl.sh passed after the policy binding repair."
+    pubsub:
+      commits:
+        - "eb0032878a11cb16c504907bc03102d8197732fe"
+        - "6a0ba7545a6fdd72765cdb780ecaff69884a54ca"
+      finding: "At children_max=1, an update of the same collection edge was incorrectly counted as a new child by the quota trigger. The migration preserves the configured limit: an identical edge update returns without recounting, while a true move performs prospective quota/cycle/depth checks. The subsequent vCard fixture failure was a missing parent PEP node before a composite-FK subscription insert; the parent is now created before the subscription, without weakening the FK."
+      isolated_result: "scripts/pubsub-db-wsl.sh completed 14 of 14 focused checks after both repairs."
+    supervisor_and_shards:
+      commits:
+        - "3afa0e4cd971830246464dc73708c2eb95d6df32"
+        - "b482b580be4ac852ac2561e01c3b05da12a7bc86"
+        - "6cc8e548361d13a2d866e9ead66a6708f91f951e"
+      finding: "The supervisor and shard runner now have explicit source-level regression coverage for parent-exit residual groups, TERM-ignoring descendants, held output pipes, nested cancellation, low-output forwarding, ordinary suite failure continuation, timeout continuation, and cancellation/not-run finalization. Relay startup diagnostics also reap an isolated process group with bounded TERM-to-KILL collection rather than reading a held pipe indefinitely. Linux execution evidence is still pending."
+    listener_migrations:
+      commits:
+        - "6be5a7a"
+        - "c901f5e"
+        - "52ba501"
+        - "8b6143d"
+        - "2cf6104"
+        - "2dac7ca"
+        - "ab622c8"
+        - "2063372"
+        - "66f1732"
+        - "3536bed"
+        - "b55e0f2"
+        - "ebea305"
+        - "a71a016"
+        - "a1b5934"
+        - "da5995e"
+        - "6cc8e54"
+      finding: "The migrated fixtures retain their original protocol and security assertions while replacing released port allocation with nonce/PID-bound child readiness, stable public-origin relays, or private Unix sockets. Mutable relay targets now share one same-directory atomic handoff contract; one-shot readiness proofs remain create-only. The regular and scheduled W5 matrices are wired but not yet evidenced on an exact dev commit."
   baseline_comparison:
     baseline_commit: "e02503b5d4a5491bb57002f4a5261552f4ec6772"
     baseline_run: "33928852176"
@@ -162,6 +236,6 @@ evidence:
         attribution: "Same job-level failure category on both runs; each requires its planned M00-04 or M00-05 root-cause record rather than a generic historical label."
   notes:
     - "Run 69 is evidence of observed state, not accepted-bootstrap evidence."
-    - "The old collection item race passed in Run 69; PubSub now fails later at the first association preparation stage and is not recorded as waiting or timed out."
+    - "The old collection item race passed in Run 69; the PubSub failure phase was first association preparation."
     - "Every suite id above appears once. XEP-0487 is intentionally recorded separately from the 32 database suites."
-    - "M00-03 remains in-progress. Exact-SHA evidence for the W4 supervisor repair and W5 stress matrix is still required before any manual acceptance."
+    - "M00-03 remains in-progress and is not accepted-bootstrap. Exact-SHA Linux evidence for the W4 supervisor repair, the independent five previously blocked suites, the cluster fixture, and the W5 pressure matrix is required before manual acceptance."

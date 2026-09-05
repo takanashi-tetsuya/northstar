@@ -220,6 +220,13 @@ def self_test() -> None:
                     connection, _ = echo_listener.accept()
                 except TimeoutError:
                     continue
+                except OSError:
+                    # The fixture owner closes the listener to wake a blocked
+                    # accept during orderly teardown.  That is not a relay
+                    # failure; any other error remains visible to the test.
+                    if stop_echo.is_set():
+                        break
+                    raise
                 with connection:
                     while True:
                         payload = connection.recv(65536)

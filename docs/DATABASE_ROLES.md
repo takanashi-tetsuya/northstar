@@ -180,7 +180,7 @@ This script has no bootstrap secret. It refuses to continue unless:
 - it is connected to database `xmpp`.
 
 Grant application is ledger-gated. The exact manifest for this release contains
-128 migrations from `0001` through `0129`; `0021` is the sole intentional gap.
+131 migrations from `0001` through `0132`; `0021` is the sole intentional gap.
 Every listed row is identified by version, SQLx description and SHA-384 checksum.
 `bootstrap` accepts only a genuinely empty
 database with no sqlx ledger or application object. `auto` accepts either that
@@ -189,11 +189,40 @@ migrated installation. Both non-empty shapes must match the checked-in manifest
 by exact version, SQLx description and SHA-384 checksum; the intentional `0021`
 gap is part of that set. Missing, unknown, failed, duplicated or modified rows,
 one-sided 0114/0115, and post-0115-without-boundary ledgers fail closed. `exact`
-requires the complete checked-in `0001`-`0129` manifest, not merely the
+requires the complete checked-in `0001`-`0132` manifest, not merely the
 `0114`/`0115` transition boundary. Bootstrap and prepare
 leave runtime, command, and backup with **zero** database, schema, object, type,
 or routine capability. Only post-migration exact reconciliation installs the
 current-object workload grants.
+
+Migration `0130` is a stopped-writer identity-index transition. It replaces the
+raw canonical-scope unique B-tree for durable personal-message admissions with
+fixed-width, domain-separated lookup discriminators, and adds the corresponding
+candidate indexes used during account deletion. The discriminators are not
+identity authority: the archive conflict path compares the full canonical
+actor/target scopes, raw authority spelling, identity value, and payload
+evidence; account deletion rechecks the full canonical scope before selecting
+and locking candidate rows. A digest collision therefore fails the attempted
+admission closed or is excluded from deletion, rather than turning it into
+another principal's replay or deleting another principal's admission. Do not
+run a pre-`0130` binary beside a post-`0130` schema: the old
+raw-column `ON CONFLICT` target cannot infer the replacement unique index. Stop
+all application and maintenance writers, apply the migration, run exact grant
+reconciliation, and only then start the matching runtime binary.
+
+Migrations `0131` and `0132` are forward security/capability hardenings, not
+additional stopped-writer transitions. `0131` keeps the authoritative upload
+capacity ledger owner-only through a private `FOR UPDATE NOWAIT` primitive.
+Runtime-facing upload capabilities and table-mutator guards use that primitive
+so contention is a typed retryable SQLSTATE `55P03`, rather than an
+application-pool wait; their established `FALSE` and `in_progress` outcomes
+retain their existing meanings. Neither the lock primitive nor its trigger
+helper may receive a workload-role grant. `0132` pins the existing PubSub
+collection-edge trigger helper to the installation schema while retaining
+`SECURITY INVOKER`; it repairs caller-controlled name resolution without
+turning the graph guard into a privileged routine. Normal repository-ledger and
+ACL verification still applies to both migrations. Their final M00 validation
+evidence remains pending and they are not production acceptance claims.
 
 Exact reconciliation atomically revokes `PUBLIC`, refreshes current object
 grants, and makes future objects owner-only. Every revocation that can remove a grant
@@ -299,8 +328,8 @@ that marker before cleanup. It then:
    and separately proves empty bootstrap plus partial/tampered-ledger rejection;
    demotion;
 4. runs Northstar's real `migrate` command as `northstar_migrator`, comparing
-   the successful sqlx ledger with all 128 checked-in migrations from `0001`
-   through `0129` (including the intentional numbering gap at `0021`);
+   the successful sqlx ledger with all 131 checked-in migrations from `0001`
+   through `0132` (including the intentional numbering gap at `0021`);
 5. reapplies the shared `exact` post-migration ACL policy;
 6. removes the function/type override rows and injects missing, unknown, failed,
    and checksum/description-tampered ledger states to prove every audit fails
@@ -394,7 +423,7 @@ role also remains a true superuser by design; isolation depends on keeping its
 secret inside the PostgreSQL/bootstrap trust boundary and using it only for
 explicit maintenance.
 
-The `0001`-`0129` migration SQL and checksums used by both the one-shot migrator
+The `0001`-`0132` migration SQL and checksums used by both the one-shot migrator
 and normal startup verifier are embedded in the release binary. The checked-in
 migration directory remains an auditable source/build input, but replacing
 files beside an installed binary cannot redefine the schema that binary accepts.

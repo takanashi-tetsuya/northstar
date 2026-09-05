@@ -1497,10 +1497,120 @@ fn validate_test_listener_activation(
     Ok(())
 }
 
+/// Whether each listener was deliberately selected by the caller rather than
+/// filled by its production default. `envy` applies serde defaults before the
+/// configuration validator can observe this distinction.
+#[derive(Clone, Copy, Debug, Default)]
+struct TestListenerBindExplicitness {
+    xmpp: bool,
+    xmpps: bool,
+    http: bool,
+    web_admin: bool,
+    metrics: bool,
+    s2s: bool,
+    s2s_tls: bool,
+    component: bool,
+}
+
+impl TestListenerBindExplicitness {
+    fn from_environment() -> Self {
+        let supplied = |name: &str| std::env::var_os(name).is_some();
+        Self {
+            xmpp: supplied("XMPP_BIND"),
+            xmpps: supplied("XMPPS_BIND"),
+            http: supplied("HTTP_BIND"),
+            web_admin: supplied("WEB_ADMIN_BIND"),
+            metrics: supplied("METRICS_BIND"),
+            s2s: supplied("S2S_BIND"),
+            s2s_tls: supplied("S2S_TLS_BIND"),
+            component: supplied("COMPONENT_BIND"),
+        }
+    }
+}
+
+fn ephemeral_test_listener_bind() -> SocketAddr {
+    "127.0.0.1:0"
+        .parse()
+        .expect("the fixed loopback test listener bind is valid")
+}
+
+/// Test activation is an opt-in, loopback-only listener regime. Any listener
+/// a fixture did not explicitly choose becomes a child-owned ephemeral
+/// loopback listener. This makes readiness records the only authority for a
+/// dynamically selected endpoint, rather than allowing an inherited
+/// production port (such as the administration listener on 8081) to collide
+/// with another fixture. Explicit fixture endpoints—including privileged
+/// handoff fixtures—remain authoritative; ordinary deployments are unchanged.
+fn apply_test_listener_defaults(raw: &mut RawConfig, explicit: TestListenerBindExplicitness) {
+    if !raw.test_listener_activation {
+        return;
+    }
+
+    let ephemeral = ephemeral_test_listener_bind();
+    if !explicit.xmpp {
+        raw.xmpp_bind = ephemeral;
+    }
+    if !explicit.xmpps {
+        raw.xmpps_bind = ephemeral;
+    }
+    if !explicit.http {
+        raw.http_bind = ephemeral;
+    }
+    if !explicit.web_admin {
+        raw.web_admin_bind = ephemeral;
+    }
+    if !explicit.metrics {
+        raw.metrics_bind = ephemeral;
+    }
+    if !explicit.s2s {
+        raw.s2s_bind = ephemeral;
+    }
+    if !explicit.s2s_tls {
+        raw.s2s_tls_bind = ephemeral;
+    }
+    if !explicit.component {
+        raw.component_bind = ephemeral;
+    }
+}
+
+/// Resolve the public HTTP authority without ever advertising a listener's
+/// kernel-selected test port.  Test activation deliberately replaces inherited
+/// listener binds with port zero; unlike a readiness record, a public URL is a
+/// stable externally-consumed authority and therefore must be supplied by the
+/// fixture when it inherits `HTTP_BIND`.
+fn resolve_public_url(raw: &RawConfig, domain: &str, inherited_http_bind: bool) -> Result<String> {
+    anyhow::ensure!(
+        !(raw.test_listener_activation && inherited_http_bind && raw.public_url.is_none()),
+        "TEST_LISTENER_ACTIVATION with an inherited HTTP_BIND requires PUBLIC_URL; refusing to advertise the ephemeral port"
+    );
+    let default_public_url = if domain == "localhost" {
+        format!("http://localhost:{}", raw.http_bind.port())
+    } else {
+        format!("https://{domain}")
+    };
+    let public_url = raw
+        .public_url
+        .clone()
+        .unwrap_or(default_public_url)
+        .trim_end_matches('/')
+        .to_owned();
+    if !(public_url.starts_with("http://") || public_url.starts_with("https://"))
+        || public_url.chars().any(char::is_whitespace)
+    {
+        anyhow::bail!("PUBLIC_URL must be an absolute HTTP(S) URL without whitespace");
+    }
+    Ok(public_url)
+}
+
 impl Config {
     pub fn from_env() -> Result<Self> {
+        // `envy` applies serde defaults before exposing whether an environment
+        // variable was supplied. Retain that fact so test activation replaces
+        // only inherited production listener defaults.
+        let test_listener_bind_explicitness = TestListenerBindExplicitness::from_environment();
         let mut raw: RawConfig =
             envy::from_env().context("Failed to parse config from environment")?;
+        apply_test_listener_defaults(&mut raw, test_listener_bind_explicitness);
         let xmpp_extensions = Arc::new(crate::xmpp::extensions::ExtensionRuntime::resolve(
             crate::xmpp::extensions::ExtensionSwitches {
                 xep_0016: raw.xep_0016_enabled,
@@ -2432,22 +2542,7 @@ impl Config {
             );
         }
 
-        let default_public_url = if domain == "localhost" {
-            format!("http://localhost:{}", raw.http_bind.port())
-        } else {
-            format!("https://{domain}")
-        };
-        let public_url = raw
-            .public_url
-            .clone()
-            .unwrap_or(default_public_url)
-            .trim_end_matches('/')
-            .to_owned();
-        if !(public_url.starts_with("http://") || public_url.starts_with("https://"))
-            || public_url.chars().any(char::is_whitespace)
-        {
-            anyhow::bail!("PUBLIC_URL must be an absolute HTTP(S) URL without whitespace");
-        }
+        let public_url = resolve_public_url(&raw, &domain, !test_listener_bind_explicitness.http)?;
         if !(1..=100_000).contains(&raw.bosh_max_sessions)
             || !(1..=4_096).contains(&raw.bosh_max_concurrent_body_reads)
             || !(1..=120).contains(&raw.bosh_body_read_timeout_seconds)
@@ -3144,6 +3239,70 @@ mod tests {
 
         raw.test_listener_activation = false;
         assert!(super::validate_test_listener_activation(&raw, true, true).is_err());
+    }
+
+    #[test]
+    fn test_listener_activation_uses_ephemeral_listener_binds_only_when_inherited() {
+        let mut raw = web_dependency_fixture();
+        let configured_xmpp = raw.xmpp_bind;
+        let configured_admin = raw.web_admin_bind;
+
+        super::apply_test_listener_defaults(
+            &mut raw,
+            super::TestListenerBindExplicitness {
+                xmpp: true,
+                web_admin: true,
+                ..super::TestListenerBindExplicitness::default()
+            },
+        );
+        assert_eq!(raw.xmpp_bind, configured_xmpp);
+        assert_eq!(raw.web_admin_bind, configured_admin);
+
+        raw.test_listener_activation = true;
+        super::apply_test_listener_defaults(
+            &mut raw,
+            super::TestListenerBindExplicitness::default(),
+        );
+        let ephemeral = "127.0.0.1:0".parse().unwrap();
+        assert_eq!(raw.xmpp_bind, ephemeral);
+        assert_eq!(raw.xmpps_bind, ephemeral);
+        assert_eq!(raw.http_bind, ephemeral);
+        assert_eq!(raw.web_admin_bind, ephemeral);
+        assert_eq!(raw.metrics_bind, ephemeral);
+        assert_eq!(raw.s2s_bind, ephemeral);
+        assert_eq!(raw.s2s_tls_bind, ephemeral);
+        assert_eq!(raw.component_bind, ephemeral);
+
+        raw.web_admin_bind = "127.0.0.1:8443".parse().unwrap();
+        super::apply_test_listener_defaults(
+            &mut raw,
+            super::TestListenerBindExplicitness {
+                web_admin: true,
+                ..super::TestListenerBindExplicitness::default()
+            },
+        );
+        assert_eq!(raw.web_admin_bind, "127.0.0.1:8443".parse().unwrap());
+    }
+
+    #[test]
+    fn test_listener_activation_never_derives_a_public_url_from_port_zero() {
+        let mut raw = web_dependency_fixture();
+        raw.test_listener_activation = true;
+        raw.http_bind = "127.0.0.1:0".parse().unwrap();
+        assert!(super::resolve_public_url(&raw, "localhost", true).is_err());
+
+        raw.public_url = Some("https://fixture.example.test/".to_owned());
+        assert_eq!(
+            super::resolve_public_url(&raw, "localhost", true).unwrap(),
+            "https://fixture.example.test"
+        );
+
+        raw.public_url = None;
+        raw.http_bind = "127.0.0.1:18080".parse().unwrap();
+        assert_eq!(
+            super::resolve_public_url(&raw, "localhost", false).unwrap(),
+            "http://localhost:18080"
+        );
     }
 
     #[test]

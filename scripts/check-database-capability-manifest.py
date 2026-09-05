@@ -45,6 +45,7 @@ MIGRATIONS = {
     "0126": ROOT / "migrations/0126_mix_delivery_release_journal.sql",
     "0127": ROOT / "migrations/0127_sm_resume_authority_notifications.sql",
     "0128": ROOT / "migrations/0128_mix_capacity_authorities.sql",
+    "0131": ROOT / "migrations/0131_upload_capacity_nowait.sql",
 }
 
 # A later migration may replace an existing routine without changing its
@@ -56,11 +57,27 @@ RESECURED_BY_MIGRATION = {
         "northstar_sm_claim(bytea,uuid,inet,uuid,text,bool,uuid,int8)",
         "northstar_session_capability_catalog_healthy(text)",
     },
+    "0131": {
+        "reserve_upload_cleanup_debt()",
+        "northstar_upload_bind_capacity_policy(int8,int8,int8)",
+        "northstar_upload_capacity_lock()",
+        "northstar_upload_complete_cleanup(uuid,uuid)",
+        "northstar_upload_complete_storage_job(int8,uuid)",
+        "northstar_upload_retire_promotion_for_cleanup(uuid,uuid,int8,uuid)",
+        "northstar_upload_record_stage(uuid,uuid,text,text,text,text,bytea,int8,int8)",
+        "northstar_upload_release_claim(uuid,uuid)",
+        "northstar_upload_complete_promotion(uuid,uuid,uuid,text,text,text,bytea,int8,int8,int8)",
+        "northstar_upload_reserve_slot(uuid,uuid,text,text,int8,bytea,int8,int8,text,int8,int8,int8)",
+        "northstar_upload_claim_slot(uuid,bytea,int8,int8,int8)",
+        "northstar_upload_admit_expired_cleanup()",
+        "northstar_upload_delete_owned(uuid,int8,bytea,uuid,uuid)",
+        "northstar_upload_capability_catalog_healthy(text)",
+    },
 }
 
 ROW = re.compile(
     r"^\s*\('([^']+\([^']*\))','(runtime|command|private)',"
-    r"'(baseline-0111|0112|0113|0114|0126|0127|0128)'\)[,;]\s*$",
+    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131)'\)[,;]\s*$",
     re.MULTILINE,
 )
 RELATION_ROW = re.compile(
@@ -796,7 +813,7 @@ if "ON COMMIT DROP" in generator_text:
     fail("migration ledger temp table would disappear in autocommit audit sessions")
 
 manifest_text = read(MANIFEST)
-if "'baseline-0111','0112','0113','0114','0126','0127','0128'" not in manifest_text:
+if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131'" not in manifest_text:
     fail("canonical manifest origin constraint omits a reviewed capability migration")
 rows = ROW.findall(manifest_text)
 if not rows:
@@ -810,7 +827,7 @@ by_workload = {
 }
 by_origin = {
     origin: {signature for signature, _, row_origin in rows if row_origin == origin}
-    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128")
+    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131")
 }
 manifest_origin_by_signature = {
     signature: origin for signature, _, origin in rows
@@ -1244,14 +1261,27 @@ if security_definition_count == 0:
 
 for origin, migration in MIGRATIONS.items():
     text = read(migration)
-    marker_matches = list(re.finditer(r"FOREACH\s+\w+\s+IN\s+ARRAY\s+ARRAY\[", text, re.IGNORECASE))
-    if not marker_matches:
-        fail(f"{migration.name} has no migration-local capability security loop")
-    start = marker_matches[-1].end()
-    end = text.find("] LOOP", start)
-    if end < 0:
-        fail(f"{migration.name} capability security loop is unterminated")
-    migration_signatures = QUOTED_SIGNATURE.findall(text[start:end])
+    # A migration can contain several FOREACH loops (for example one for
+    # relations and another for workload roles used by ACL revocation).  The
+    # capability contract is the uniquely identifiable loop whose ARRAY
+    # contains routine signatures, not whichever loop happens to occur last.
+    # Older migrations use `signature` while newer ones use
+    # `routine_signature`, so variable spelling is deliberately not part of
+    # this structural identification.
+    candidates: list[tuple[int, list[str]]] = []
+    for marker in re.finditer(r"FOREACH\s+\w+\s+IN\s+ARRAY\s+ARRAY\[", text, re.IGNORECASE):
+        end = text.find("] LOOP", marker.end())
+        if end < 0:
+            fail(f"{migration.name} contains an unterminated FOREACH ARRAY loop")
+        signatures = QUOTED_SIGNATURE.findall(text[marker.end() : end])
+        if signatures:
+            candidates.append((marker.end(), signatures))
+    if len(candidates) != 1:
+        fail(
+            f"{migration.name} must contain exactly one migration-local "
+            "capability-signature security loop"
+        )
+    _start, migration_signatures = candidates[0]
     resecured = RESECURED_BY_MIGRATION.get(origin, set())
     if not resecured <= manifest_signature_set:
         fail(

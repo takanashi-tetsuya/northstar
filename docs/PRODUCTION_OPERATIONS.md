@@ -939,11 +939,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 128 files from `0001` through
-`0129`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 131 files from `0001` through
+`0132`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0129`, with the exact SQLx description and SHA-384 checksum, before it
+through `0132`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url` and `command_database_url` secrets; neither identity may
 attempt DDL. Pending, failed, unknown, duplicated, missing or checksum-drifted
@@ -986,6 +986,43 @@ update for an additional child. Stop writers through this migration and exact
 grant reconciliation; it changes a live trigger/function pair and is not a
 rolling-upgrade boundary.
 
+Migration `0130` is also a **stopped-writer migration**. It replaces the raw
+canonical-scope unique B-tree used by durable personal-message admission with
+fixed-width, domain-separated `md5` expression discriminators and adds indexed
+candidate lookup paths for account deletion. PostgreSQL's index discriminator
+is not an authority decision: archive conflict handling compares the full
+canonical actor and target scopes, raw authority spelling, identity value, and
+payload authentication evidence; account deletion rechecks the full canonical
+scope before selecting and locking candidate rows. Consequently a digest
+collision fails the attempted admission closed or is excluded from deletion; it
+cannot make one principal's message a replay of another's or delete another
+principal's admission. A
+pre-`0130` binary names the former raw-column `ON CONFLICT` target and will not
+be compatible with the replacement index. Stop every runtime and maintenance
+writer, apply `0130`, run exact grant reconciliation, and start only the
+matching binary. Do not treat an index build or a successful health probe as a
+safe rolling cut-over.
+
+Migration `0131` is an online, owner-held capacity-admission hardening; it is
+not another stopped-writer boundary. The private
+`northstar_upload_require_capacity_lock()` primitive takes the one authoritative
+upload ledger row with `FOR UPDATE NOWAIT`. Runtime-facing upload capabilities
+and BEFORE table-mutator guards reach that same primitive, so a held ledger is
+reported as SQLSTATE `55P03` for bounded retry rather than consuming an
+application-pool connection while waiting. It deliberately preserves existing
+`FALSE` and `in_progress` meanings for stale/no-op and claim paths. The
+primitive and its trigger helper remain owner-only: do not grant either to a
+runtime, command, backup, or public role.
+
+Migration `0132` is a forward-only repair for the PubSub collection-edge guard
+introduced by immutable migration `0129`. It pins that existing helper to the
+installation schema with a catalog-first `search_path`, but leaves it
+`SECURITY INVOKER`; making it a definer capability would incorrectly widen the
+authority of every collection-edge mutation. It also does not introduce a
+stopped-writer cut-over. Apply both migrations through the ordinary exact
+ledger/ACL verification sequence, and retain final M00 validation evidence
+before making any production-acceptance claim.
+
 Before each delivery-producing transaction, complete orphan-event reclamation
 and release-journal folding commit in their own authority transaction. Before a
 new remote PAM operation, complete retention-eligible terminal reconciliation
@@ -1026,7 +1063,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
 1. create and verify a signed, age-encrypted backup with the existing release;
 2. stop every Northstar runtime, MIX delivery worker, backup, restore, and
    maintenance client; verify that no application-schema writer remains before
-   migration `0126` and remains stopped through `0129`, and retain the old
+   migration `0126` and remains stopped through `0130`, and retain the old
    superuser secret until rollback is no longer needed;
 3. generate the new independent secrets, then run
    `scripts/reconcile-database-roles.sh --audit` with the existing superuser;
@@ -1034,7 +1071,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0129` manifest
+5. run the one-shot migration job through the complete `0001`-`0132` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

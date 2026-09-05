@@ -935,6 +935,98 @@ do
 done
 echo "migration 0129 preserves collection quota semantics for metadata updates and prospective edge moves"
 
+# Migration 0130 bounds the physical unique-index tuple for canonical JID
+# scopes without making a fixed-width digest authoritative.  Collision safety
+# remains in the archive/account-deletion exact comparisons; the database index
+# is solely an efficient candidate discriminator.
+personal_admission_scope_lookup_migration="migrations/0130_personal_message_admission_scope_lookup.sql"
+[ -f "$personal_admission_scope_lookup_migration" ] || {
+    echo "personal-message admission scope lookup migration is missing: $personal_admission_scope_lookup_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'DROP INDEX personal_message_admission_identity_key;' \
+    'CREATE UNIQUE INDEX personal_message_admission_identity_key' \
+    "'northstar:personal-admission-actor-scope:v1:'" \
+    "'northstar:personal-admission-target-scope:v1:'" \
+    "'northstar:personal-admission-scope:v1:'" \
+    'CREATE INDEX personal_message_admission_actor_scope_lookup_idx' \
+    'CREATE INDEX personal_message_admission_target_scope_lookup_idx' \
+    'identity_digest);'
+do
+    if ! grep -Fq "$required_fragment" "$personal_admission_scope_lookup_migration"; then
+        echo "migration 0130 is missing bounded personal-admission identity invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+personal_admission_unique_index=$(sed -n \
+    '/^CREATE UNIQUE INDEX personal_message_admission_identity_key/,/^        identity_digest);$/p' \
+    "$personal_admission_scope_lookup_migration")
+if ! printf '%s\n' "$personal_admission_unique_index" | grep -Fq 'pg_catalog.md5(' \
+   || ! printf '%s\n' "$personal_admission_unique_index" | grep -Fq 'actor_scope::pg_catalog.text' \
+   || ! printf '%s\n' "$personal_admission_unique_index" | grep -Fq 'target_scope::pg_catalog.text'; then
+    echo "migration 0130 must use fixed-width actor and target scope discriminators in its identity index" >&2
+    exit 1
+fi
+echo "migration 0130 bounds personal-admission identity and account-deletion lookup keys without making a digest authoritative"
+
+# Migration 0131 moves generic upload-capacity contention into the database
+# authority itself.  Do not reintroduce a caller-side wait or turn a held
+# ledger into a stale/no-op result: the private primitive must return 55P03
+# through NOWAIT and both direct capability and implicit trigger paths must
+# acquire it before legacy capacity accounting.
+upload_capacity_nowait_migration="migrations/0131_upload_capacity_nowait.sql"
+[ -f "$upload_capacity_nowait_migration" ] || {
+    echo "upload capacity NOWAIT migration is missing: $upload_capacity_nowait_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'CREATE FUNCTION northstar_upload_require_capacity_lock()' \
+    'FOR UPDATE NOWAIT;' \
+    'CREATE FUNCTION guard_upload_capacity_nowait()' \
+    'BEFORE INSERT OR DELETE ON upload_slots' \
+    'BEFORE UPDATE OF storage_object_key,storage_stage_key ON upload_slots' \
+    'BEFORE INSERT OR DELETE ON upload_storage_jobs' \
+    'BEFORE INSERT OR DELETE ON upload_cleanup_queue' \
+    'PERFORM northstar_upload_require_capacity_lock();' \
+    'REVOKE ALL ON FUNCTION %I.northstar_upload_require_capacity_lock() FROM %I' \
+    'REVOKE ALL ON FUNCTION %I.guard_upload_capacity_nowait() FROM %I'
+do
+    if ! grep -Fq "$required_fragment" "$upload_capacity_nowait_migration"; then
+        echo "migration 0131 is missing SQL-native upload capacity NOWAIT invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if grep -Fq "SET LOCAL lock_timeout='50ms'" "$upload_capacity_nowait_migration"; then
+    echo "migration 0131 must not reintroduce a caller-side timeout as generic capacity admission" >&2
+    exit 1
+fi
+echo "migration 0131 makes generic upload-capacity contention owner-held, NOWAIT, and owner-only"
+
+# Migration 0132 is deliberately forward-only: 0129 is already an immutable
+# history entry, so its caller-selected search_path is repaired by pinning the
+# installed invoker trigger helper in whatever application schema the migrator
+# selected.  Keep the security mode invoker-scoped; this graph guard is not a
+# privileged database capability.
+pubsub_edge_path_migration="migrations/0132_pubsub_collection_edge_path.sql"
+[ -f "$pubsub_edge_path_migration" ] || {
+    echo "PubSub collection-edge search-path migration is missing: $pubsub_edge_path_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'current_schema()' \
+    'check_pubsub_collection_edge() SECURITY INVOKER' \
+    'SET search_path TO pg_catalog, %I, pg_temp' \
+    'routine.proconfig=ARRAY[expected_path]::pg_catalog.text[]' \
+    'AND NOT routine.prosecdef'
+do
+    if ! grep -Fq "$required_fragment" "$pubsub_edge_path_migration"; then
+        echo "migration 0132 is missing PubSub collection-edge path invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+echo "migration 0132 pins the PubSub collection-edge trigger helper as a schema-local invoker routine"
+
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an
 # existing database, and this repository-side manifest catches the same mistake

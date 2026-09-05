@@ -14,41 +14,25 @@ const TEST_UPLOAD_RETAINED_FILES_LIMIT: i64 = 10_000;
 #[cfg(test)]
 const TEST_UPLOAD_RETAINED_BYTES_LIMIT: i64 = 1024 * 1024 * 1024;
 
-/// Every transaction which can fire an upload capacity/debt trigger acquires
-/// this singleton before locking a slot, queue row, storage job, or account.
-/// Keeping the short timeout active for the rest of the transaction also
-/// turns an unexpected external lock-order inversion into a retry instead of a
-/// PostgreSQL deadlock cycle which occupies the connection pool.
 #[cfg(test)]
-async fn try_lock_upload_capacity_ledger(
-    transaction: &mut Transaction<'_, Postgres>,
-) -> Result<bool> {
-    sqlx::query("SET LOCAL lock_timeout='50ms'")
-        .execute(&mut **transaction)
-        .await?;
+async fn lock_upload_capacity_ledger(transaction: &mut Transaction<'_, Postgres>) -> Result<()> {
     match sqlx::query_scalar::<_, bool>("SELECT northstar_upload_capacity_lock()")
         .fetch_optional(&mut **transaction)
         .await
     {
-        Ok(Some(true)) => Ok(true),
-        Ok(Some(false)) | Ok(None) => {
-            anyhow::bail!("upload storage capacity authority is missing")
+        Ok(Some(true)) => Ok(()),
+        Ok(Some(false)) | Ok(None) => anyhow::bail!("upload storage capacity authority is missing"),
+        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("55P03") => {
+            anyhow::bail!("upload storage capacity busy; retry")
         }
-        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("55P03") => Ok(false),
         Err(error) => Err(error.into()),
     }
 }
 
 #[cfg(test)]
-async fn lock_upload_capacity_ledger(
-    transaction: &mut Transaction<'_, Postgres>,
-    operation: &'static str,
-) -> Result<()> {
-    if try_lock_upload_capacity_ledger(transaction).await? {
-        Ok(())
-    } else {
-        anyhow::bail!("upload storage capacity busy; retry {operation}")
-    }
+fn is_retryable_upload_capacity_lock(error: &sqlx::Error) -> bool {
+    matches!(error, sqlx::Error::Database(database_error)
+        if database_error.code().as_deref()==Some("55P03"))
 }
 
 #[cfg(test)]
@@ -201,6 +185,9 @@ pub async fn create_upload_slot_bounded(
         "unsupported upload storage backend"
     );
     let id = Uuid::new_v4();
+    // Both the ledger and owner-row acquisitions are SQL-native NOWAIT.  The
+    // established false result covers either contention case without holding
+    // a pool connection behind a lock owner.
     let admitted = sqlx::query_scalar::<_, bool>(
         "SELECT northstar_upload_reserve_slot(
              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
@@ -310,6 +297,10 @@ pub async fn claim_upload_slot(
     lease_seconds: i64,
 ) -> Result<UploadClaimOutcome> {
     anyhow::ensure!((15..=300).contains(&lease_seconds), "invalid upload lease");
+    // This is the sole runtime transition which can introduce object/stage
+    // locators on a debt-free slot. The capability takes both capacity and
+    // target-slot locks with SQL-native NOWAIT, returning `in_progress` for
+    // either contention case rather than relying on a process timeout.
     let row = sqlx::query(
         "SELECT outcome,id,content_type,size,object_remaining_seconds,
                 storage_backend,storage_object_key,storage_object_version,
@@ -365,6 +356,11 @@ pub async fn renew_upload_claim(
     lease_seconds: i64,
 ) -> Result<UploadRenewOutcome> {
     anyhow::ensure!((15..=300).contains(&lease_seconds), "invalid upload lease");
+    // Renewal updates only the lease fence on an already debt-reserved slot.
+    // The database capability deliberately takes that slot with NOWAIT and
+    // does *not* touch retained-capacity authority; serializing healthy lease
+    // heartbeats on the global ledger would make an unrelated cleanup stall
+    // cancel an in-flight upload. Preserve that narrow capability contract.
     let outcome = sqlx::query_scalar::<_, String>("SELECT northstar_upload_renew_claim($1,$2,$3)")
         .bind(id)
         .bind(claim_token)
@@ -380,6 +376,9 @@ pub async fn renew_upload_claim(
 }
 
 pub async fn release_upload_claim(pool: &PgPool, id: Uuid, claim_token: Uuid) -> Result<bool> {
+    // The SQL capability takes the capacity ledger with NOWAIT before it can
+    // create a cleanup projection. Do not add an application timeout around
+    // that authoritative admission path.
     Ok(
         sqlx::query_scalar::<_, bool>("SELECT northstar_upload_release_claim($1,$2)")
             .bind(id)
@@ -421,6 +420,8 @@ pub async fn record_upload_stage(
         storage_fence,
     } = projection;
     let size = i64::try_from(size)?;
+    // This capability atomically creates the promotion projection and now
+    // performs its capacity admission as SQL-native NOWAIT.
     Ok(sqlx::query_scalar::<_, bool>(
         "SELECT northstar_upload_record_stage($1,$2,$3,$4,$5,$6,$7,$8,$9)",
     )
@@ -444,6 +445,9 @@ pub async fn begin_upload_promotion(
     storage_fence: i64,
     promotion_claim_token: Uuid,
 ) -> Result<bool> {
+    // A staged promotion already has either reserved cleanup debt or an exact
+    // cleanup projection, so this state-only update cannot fire a new debt
+    // reservation.  Keep it independent of unrelated capacity work.
     Ok(
         sqlx::query_scalar::<_, bool>("SELECT northstar_upload_begin_promotion($1,$2,$3,$4)")
             .bind(id)
@@ -670,6 +674,9 @@ pub async fn record_upload_replay(
     token_hash: &[u8],
     content_sha256: &[u8; 32],
 ) -> Result<bool> {
+    // A replay only touches a committed row.  Its initial claim already
+    // reserved cleanup debt, so the trigger's `NOT OLD...reserved` predicate
+    // is false and this hot path must not serialize behind the ledger.
     Ok(
         sqlx::query_scalar::<_, bool>("SELECT northstar_upload_record_replay($1,$2,$3,$4)")
             .bind(id)
@@ -901,6 +908,7 @@ pub async fn audit_upload_capacity_authority(
                ('account_upload_slot_capacity',TRUE),
                ('account_upload_storage_job_capacity',TRUE),
                ('account_upload_cleanup_capacity',TRUE),
+               ('guard_upload_capacity_nowait',TRUE),
                ('protect_upload_storage_job_identity',FALSE),
                ('protect_upload_cleanup_identity',FALSE),
                ('protect_upload_capacity_policy',FALSE)
@@ -934,32 +942,40 @@ pub async fn audit_upload_capacity_authority(
                LEFT JOIN pg_catalog.pg_language language_row
                  ON language_row.oid=function_row.prolang
            ), expected_triggers(
-                relation_name,trigger_name,function_name,trigger_type,
+                relation_name,trigger_name,function_name,function_signature,trigger_type,
                 attachment_count
            ) AS (
              VALUES
                ('upload_slots','upload_storage_delete_queue',
-                'queue_upload_storage_delete',11,1),
+                'queue_upload_storage_delete','queue_upload_storage_delete()',11,1),
                ('upload_slots','upload_slot_cleanup_debt_reserve',
-                'reserve_upload_cleanup_debt',19,1),
+                'reserve_upload_cleanup_debt','reserve_upload_cleanup_debt()',19,1),
                ('upload_slots','upload_slot_capacity_insert',
-                'account_upload_slot_capacity',5,2),
+                'account_upload_slot_capacity','account_upload_slot_capacity()',5,2),
                ('upload_slots','upload_slot_capacity_delete',
-                'account_upload_slot_capacity',9,2),
+                'account_upload_slot_capacity','account_upload_slot_capacity()',9,2),
+               ('upload_slots','northstar_upload_capacity_nowait_slots_insert_delete',
+                'guard_upload_capacity_nowait','guard_upload_capacity_nowait()',15,4),
+               ('upload_slots','northstar_upload_capacity_nowait_slot_locator_update',
+                'guard_upload_capacity_nowait','guard_upload_capacity_nowait()',19,4),
                ('upload_storage_jobs','upload_job_capacity_insert',
-                'account_upload_storage_job_capacity',5,2),
+                'account_upload_storage_job_capacity','account_upload_storage_job_capacity()',5,2),
                ('upload_storage_jobs','upload_job_capacity_delete',
-                'account_upload_storage_job_capacity',9,2),
+                'account_upload_storage_job_capacity','account_upload_storage_job_capacity()',9,2),
+               ('upload_storage_jobs','northstar_upload_capacity_nowait_storage_job_insert_delete',
+                'guard_upload_capacity_nowait','guard_upload_capacity_nowait()',15,4),
                ('upload_cleanup_queue','upload_cleanup_capacity_insert',
-                'account_upload_cleanup_capacity',5,2),
+                'account_upload_cleanup_capacity','account_upload_cleanup_capacity()',5,2),
                ('upload_cleanup_queue','upload_cleanup_capacity_delete',
-                'account_upload_cleanup_capacity',9,2),
+                'account_upload_cleanup_capacity','account_upload_cleanup_capacity()',9,2),
+               ('upload_cleanup_queue','northstar_upload_capacity_nowait_cleanup_insert_delete',
+                'guard_upload_capacity_nowait','guard_upload_capacity_nowait()',15,4),
                ('upload_storage_jobs','upload_storage_job_identity_guard',
-                'protect_upload_storage_job_identity',19,1),
+                'protect_upload_storage_job_identity','protect_upload_storage_job_identity()',19,1),
                ('upload_cleanup_queue','upload_cleanup_identity_guard',
-                'protect_upload_cleanup_identity',19,1),
+                'protect_upload_cleanup_identity','protect_upload_cleanup_identity()',19,1),
                ('upload_storage_capacity_ledger','upload_capacity_policy_guard',
-                'protect_upload_capacity_policy',19,1)
+                'protect_upload_capacity_policy','protect_upload_capacity_policy()',19,1)
            ), trigger_state AS (
              SELECT expected.*,
                     (SELECT pg_catalog.count(*)
@@ -981,8 +997,10 @@ pub async fn audit_upload_capacity_authority(
                         AND trigger_row.tgtype::pg_catalog.int4=
                             expected.trigger_type
                         AND function_schema.nspname=installation.schema_name
-                        AND function_row.proname=expected.function_name
-                        AND function_row.pronargs=0
+                        AND function_row.oid=pg_catalog.to_regprocedure(
+                          pg_catalog.format('%I.%s',
+                            installation.schema_name,expected.function_signature)
+                        )
                         AND function_row.prorettype=
                             'pg_catalog.trigger'::pg_catalog.regtype
                     ) AS exact_matches,
@@ -993,8 +1011,10 @@ pub async fn audit_upload_capacity_authority(
                        JOIN pg_catalog.pg_namespace function_schema
                          ON function_schema.oid=attached_function.pronamespace
                       WHERE function_schema.nspname=installation.schema_name
-                        AND attached_function.proname=expected.function_name
-                        AND attached_function.pronargs=0
+                        AND attached_function.oid=pg_catalog.to_regprocedure(
+                          pg_catalog.format('%I.%s',
+                            installation.schema_name,expected.function_signature)
+                        )
                         AND NOT attachment.tgisinternal
                     ) AS actual_attachments
                FROM installation
@@ -1203,6 +1223,10 @@ pub async fn complete_queued_upload_cleanup(
     id: Uuid,
     claim_token: Uuid,
 ) -> Result<bool> {
+    // The capability's first operation is SQL-native NOWAIT capacity
+    // admission. A held ledger returns 55P03 immediately, and central error
+    // mapping turns that retryable condition into a 503 rather than waiting
+    // behind the cleanup owner.
     Ok(
         sqlx::query_scalar("SELECT northstar_upload_complete_cleanup($1,$2)")
             .bind(id)
@@ -1607,7 +1631,7 @@ pub async fn queue_user_upload_delete(
     request_id: Uuid,
 ) -> Result<bool> {
     let mut tx = pool.begin().await?;
-    lock_upload_capacity_ledger(&mut tx, "test upload deletion").await?;
+    lock_upload_capacity_ledger(&mut tx).await?;
     let deleted = queue_user_upload_delete_in_tx(&mut tx, user_id, id, request_id).await?;
     tx.commit().await?;
     Ok(deleted)
@@ -1627,13 +1651,16 @@ pub struct UploadScrubJob {
 /// Claim a fixed-size manifest scrub batch. The indexed PostgreSQL manifest is
 /// authoritative; reconciliation never lists the provider bucket.
 pub async fn claim_upload_scrub_jobs(pool: &PgPool) -> Result<Vec<UploadScrubJob>> {
+    // Scrub leases only target committed rows, whose initial claim has already
+    // reserved cleanup debt.  This update cannot create a new obligation.
     let rows = sqlx::query(
         "SELECT object_id,storage_attempt,object_key,object_version,
                 expected_size,expected_sha256,claim_token
            FROM northstar_upload_claim_scrub()",
     )
     .fetch_all(pool)
-    .await?;
+    .await;
+    let rows = rows?;
     rows.into_iter()
         .map(|row| {
             let digest: Vec<u8> = row.get("expected_sha256");
@@ -1653,30 +1680,31 @@ pub async fn claim_upload_scrub_jobs(pool: &PgPool) -> Result<Vec<UploadScrubJob
 }
 
 pub async fn complete_upload_scrub(pool: &PgPool, id: Uuid, claim: Uuid) -> Result<bool> {
-    Ok(
-        sqlx::query_scalar::<_, bool>("SELECT northstar_upload_finish_scrub($1,$2,'complete')")
-            .bind(id)
-            .bind(claim)
-            .fetch_one(pool)
-            .await?,
-    )
+    finish_upload_scrub(pool, id, claim, "complete").await
 }
 
 pub async fn fail_upload_scrub(pool: &PgPool, id: Uuid, claim: Uuid) -> Result<bool> {
-    Ok(
-        sqlx::query_scalar::<_, bool>("SELECT northstar_upload_finish_scrub($1,$2,'fail')")
-            .bind(id)
-            .bind(claim)
-            .fetch_one(pool)
-            .await?,
-    )
+    finish_upload_scrub(pool, id, claim, "fail").await
 }
 
 pub async fn defer_upload_scrub(pool: &PgPool, id: Uuid, claim: Uuid) -> Result<bool> {
+    finish_upload_scrub(pool, id, claim, "defer").await
+}
+
+async fn finish_upload_scrub(
+    pool: &PgPool,
+    id: Uuid,
+    claim: Uuid,
+    outcome: &'static str,
+) -> Result<bool> {
+    // The claim capability only leases committed rows, so every permitted
+    // finish update has pre-existing cleanup debt and cannot invoke the
+    // reservation branch of the upload-slot trigger.
     Ok(
-        sqlx::query_scalar::<_, bool>("SELECT northstar_upload_finish_scrub($1,$2,'defer')")
+        sqlx::query_scalar::<_, bool>("SELECT northstar_upload_finish_scrub($1,$2,$3)")
             .bind(id)
             .bind(claim)
+            .bind(outcome)
             .fetch_one(pool)
             .await?,
     )
@@ -1687,18 +1715,20 @@ mod tests {
     use super::{
         audit_upload_capacity_authority, claim_upload_slot, cleanup_expired_upload_slots,
         cleanup_object_version, complete_queued_upload_cleanup, complete_upload,
-        create_upload_slot, defer_queued_upload_cleanup, queue_user_upload_delete,
-        queue_user_upload_delete_authorized, queued_upload_cleanup,
+        create_upload_slot, defer_queued_upload_cleanup, is_retryable_upload_capacity_lock,
+        queue_user_upload_delete, queue_user_upload_delete_authorized, queued_upload_cleanup,
         reconcile_upload_capacity_ledger, record_upload_replay, release_upload_claim,
         renew_upload_claim, upload_cleanup_generation_is_quiescent, uploaded_file,
         validate_upload_capacity_policy, UploadCapacityAuthorityAudit,
         UploadCapacityReconciliation, UploadClaimOutcome, UploadRenewOutcome, UploadReservation,
-        UserUploadDeleteOutcome, MAX_UPLOAD_ATTEMPTS, TEST_UPLOAD_PENDING_LIMIT,
-        TEST_UPLOAD_RETAINED_BYTES_LIMIT, TEST_UPLOAD_RETAINED_FILES_LIMIT,
+        UserUploadDeleteOutcome, MAX_UPLOAD_ATTEMPTS, MAX_UPLOAD_REPLAYS,
+        TEST_UPLOAD_PENDING_LIMIT, TEST_UPLOAD_RETAINED_BYTES_LIMIT,
+        TEST_UPLOAD_RETAINED_FILES_LIMIT,
     };
     use crate::db;
     use sqlx::{PgPool, Row};
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::sync::Barrier;
     use uuid::Uuid;
 
@@ -2517,16 +2547,17 @@ mod tests {
                     .next()
             })
             .expect("self-service account deletion implementation");
-        let fail_fast_timeout = account_delete
-            .find("SET LOCAL lock_timeout='50ms'")
-            .expect("account deletion ledger admission timeout");
         let capacity_lock = account_delete
             .find("SELECT northstar_upload_capacity_lock()")
             .expect("account deletion capacity lock");
         let mutation_timeout = account_delete
             .find("SET LOCAL lock_timeout='2s'")
             .expect("account deletion post-admission mutation timeout");
-        assert!(fail_fast_timeout < capacity_lock && capacity_lock < mutation_timeout);
+        assert!(
+            !account_delete.contains("SET LOCAL lock_timeout='50ms'")
+                && capacity_lock < mutation_timeout,
+            "account deletion must use SQL-native NOWAIT capacity admission before its normal mutation bound"
+        );
         let pie = include_str!("../pie.rs");
         let capacity_lock = pie
             .find("SELECT northstar_upload_capacity_lock()")
@@ -2537,7 +2568,12 @@ mod tests {
         let user_lock = pie
             .find("SELECT id,is_admin FROM users WHERE username=$1 FOR UPDATE")
             .expect("PIE user lock");
-        assert!(capacity_lock < domain_lock && domain_lock < user_lock);
+        assert!(
+            !pie.contains("SET LOCAL lock_timeout='50ms'")
+                && capacity_lock < domain_lock
+                && domain_lock < user_lock,
+            "PIE must use SQL-native NOWAIT admission without shortening replacement work"
+        );
 
         let upload_source = include_str!("upload.rs");
         let authority = include_str!("../../migrations/0113_upload_authority_capabilities.sql");
@@ -2617,6 +2653,302 @@ mod tests {
             .find("northstar_upload_delete_owned")
             .expect("authorized upload-delete typed capability");
         assert!(input_validation < capability && capability < session_hash);
+    }
+
+    #[test]
+    fn upload_capability_lock_scope_matches_cleanup_debt_invariant() {
+        let source = include_str!("upload.rs");
+        let authority = include_str!("../../migrations/0113_upload_authority_capabilities.sql");
+        let nowait = include_str!("../../migrations/0131_upload_capacity_nowait.sql");
+        let trigger = nowait
+            .split("CREATE OR REPLACE FUNCTION reserve_upload_cleanup_debt()")
+            .nth(1)
+            .and_then(|tail| {
+                tail.split("$northstar_reserve_upload_cleanup_debt$;")
+                    .next()
+            })
+            .expect("cleanup-debt trigger definition");
+        for condition in [
+            "NOT OLD.storage_cleanup_debt_reserved",
+            "(NEW.storage_object_key IS NOT NULL OR NEW.storage_stage_key IS NOT NULL)",
+            "NOT EXISTS(",
+            "PERFORM northstar_upload_require_capacity_lock()",
+        ] {
+            assert!(
+                trigger.contains(condition),
+                "cleanup-debt trigger must retain its precise admission condition: {condition}"
+            );
+        }
+        let capacity_primitive = nowait
+            .split("CREATE FUNCTION northstar_upload_require_capacity_lock()")
+            .nth(1)
+            .and_then(|tail| {
+                tail.split("$northstar_upload_require_capacity_lock$;")
+                    .next()
+            })
+            .expect("private SQL-native capacity primitive");
+        assert!(capacity_primitive.contains("FOR UPDATE NOWAIT"));
+        assert!(capacity_primitive.contains("ERRCODE='55000'"));
+        assert!(nowait.contains("CREATE FUNCTION guard_upload_capacity_nowait()"));
+        for trigger_name in [
+            "northstar_upload_capacity_nowait_slots_insert_delete",
+            "northstar_upload_capacity_nowait_slot_locator_update",
+            "northstar_upload_capacity_nowait_storage_job_insert_delete",
+            "northstar_upload_capacity_nowait_cleanup_insert_delete",
+        ] {
+            assert!(
+                nowait.contains(&format!("CREATE TRIGGER {trigger_name}")),
+                "implicit capacity mutator must take the NOWAIT guard first: {trigger_name}"
+            );
+        }
+
+        let claim_capability = authority
+            .split("CREATE FUNCTION northstar_upload_claim_slot(")
+            .nth(1)
+            .and_then(|tail| tail.split("$northstar_upload_claim_slot$;").next())
+            .expect("claim capability definition");
+        let capacity_lock = claim_capability
+            .find("FROM upload_storage_capacity_ledger")
+            .expect("claim capability capacity lock");
+        let first_debt_transition = claim_capability
+            .find("SET uploading=TRUE,claim_token=new_claim")
+            .expect("claim capability writes new attempt locators");
+        assert!(
+            capacity_lock < first_debt_transition
+                && claim_capability.contains("storage_stage_key=new_stage_key")
+                && claim_capability.contains("storage_object_key=new_object_key"),
+            "only claim may introduce new locators, and it must acquire capacity first"
+        );
+
+        // Reservation and claim have no Rust lock-timeout wrapper. Their SQL
+        // contracts preserve `false` and `in_progress` for both ledger and
+        // later user/slot contention.
+        for (name, next) in [
+            (
+                "create_upload_slot_bounded",
+                "pub async fn validate_upload_storage_backend(",
+            ),
+            ("claim_upload_slot", "pub async fn renew_upload_claim("),
+        ] {
+            let body = source
+                .split(&format!("pub async fn {name}("))
+                .nth(1)
+                .and_then(|tail| tail.split(next).next())
+                .unwrap_or_else(|| panic!("{name} implementation"));
+            assert!(
+                !body.contains("lock_timeout") && !body.contains("northstar_upload_capacity_lock"),
+                "{name} must rely exclusively on its typed SQL NOWAIT capability"
+            );
+        }
+
+        let reserve = nowait
+            .split("CREATE OR REPLACE FUNCTION northstar_upload_reserve_slot(")
+            .nth(1)
+            .and_then(|tail| tail.split("$northstar_upload_reserve_slot$;").next())
+            .expect("replacement reserve capability");
+        let reserve_ledger = reserve
+            .find("FROM upload_storage_capacity_ledger\n         WHERE singleton FOR UPDATE NOWAIT")
+            .expect("reserve capacity acquisition");
+        let reserve_owner = reserve
+            .find("users WHERE id=requested_user_id FOR UPDATE NOWAIT")
+            .expect("reserve owner acquisition");
+        let reserve_handler = reserve
+            .find("WHEN lock_not_available THEN")
+            .expect("reserve subtransaction contention handler");
+        assert!(
+            reserve_ledger < reserve_owner && reserve_owner < reserve_handler,
+            "reserve must place ledger and owner NOWAIT acquisitions in one rollback-capable subtransaction"
+        );
+        assert!(
+            reserve.contains("northstar_upload_reserve_slot_not_admitted")
+                && reserve.contains("WHEN SQLSTATE 'P0001' THEN")
+                && reserve.contains("GET STACKED DIAGNOSTICS caught_message = MESSAGE_TEXT"),
+            "typed false outcomes must abort the capacity-acquiring subtransaction rather than retain its ledger lock"
+        );
+        let claim = nowait
+            .split("CREATE OR REPLACE FUNCTION northstar_upload_claim_slot(")
+            .nth(1)
+            .and_then(|tail| tail.split("$northstar_upload_claim_slot$;").next())
+            .expect("replacement claim capability");
+        let claim_ledger = claim
+            .find("FROM upload_storage_capacity_ledger\n       WHERE singleton FOR UPDATE NOWAIT")
+            .expect("claim capacity acquisition");
+        let claim_ledger_lock = claim[claim_ledger..]
+            .find("FOR UPDATE NOWAIT;")
+            .map(|offset| claim_ledger + offset)
+            .expect("claim capacity lock clause");
+        let claim_slot = claim[claim_ledger_lock + "FOR UPDATE NOWAIT;".len()..]
+            .find("FOR UPDATE NOWAIT;")
+            .map(|offset| claim_ledger_lock + "FOR UPDATE NOWAIT;".len() + offset)
+            .expect("claim target-slot acquisition");
+        let claim_handler = claim
+            .find("WHEN lock_not_available THEN")
+            .expect("claim subtransaction contention handler");
+        assert!(
+            claim_ledger < claim_ledger_lock
+                && claim_ledger_lock < claim_slot
+                && claim_slot < claim_handler,
+            "claim must put ledger and slot NOWAIT acquisitions in one rollback-capable subtransaction"
+        );
+        assert!(
+            claim.contains("northstar_upload_claim_slot_not_admitted")
+                && claim.contains("WHEN SQLSTATE 'P0001' THEN")
+                && claim.contains("RETURN NEXT;\n        RETURN;"),
+            "typed claim outcomes must be emitted after rolling back the capacity-acquiring subtransaction"
+        );
+
+        // These state-only paths run only after claim established debt (or
+        // while an exact same-slot cleanup projection exists).  They must stay
+        // independent of unrelated capacity work.
+        for (name, next) in [
+            ("renew_upload_claim", "pub async fn release_upload_claim("),
+            (
+                "begin_upload_promotion",
+                "pub async fn claim_upload_promotion_job(",
+            ),
+            ("record_upload_replay", "pub async fn uploaded_file("),
+            (
+                "claim_upload_scrub_jobs",
+                "pub async fn complete_upload_scrub(",
+            ),
+            ("finish_upload_scrub", "#[cfg(test)]"),
+        ] {
+            let prefix = if name == "finish_upload_scrub" {
+                "async fn"
+            } else {
+                "pub async fn"
+            };
+            let body = source
+                .split(&format!("{prefix} {name}("))
+                .nth(1)
+                .and_then(|tail| tail.split(next).next())
+                .unwrap_or_else(|| panic!("{name} implementation"));
+            assert!(
+                !body.contains("lock_timeout") && !body.contains("northstar_upload_capacity_lock"),
+                "healthy {name} must not serialize on the global capacity ledger"
+            );
+        }
+
+        for (function_name, terminator, proof) in [
+            (
+                "northstar_upload_renew_claim",
+                "$northstar_upload_renew_claim$;",
+                "storage_cleanup_debt_reserved",
+            ),
+            (
+                "northstar_upload_begin_promotion",
+                "$northstar_upload_begin_promotion$;",
+                "storage_state IN ('staged','promoting')",
+            ),
+            (
+                "northstar_upload_record_replay",
+                "$northstar_upload_record_replay$;",
+                "AND uploaded",
+            ),
+            (
+                "northstar_upload_claim_scrub",
+                "$northstar_upload_claim_scrub$;",
+                "storage_state='committed'",
+            ),
+            (
+                "northstar_upload_finish_scrub",
+                "$northstar_upload_finish_scrub$;",
+                "storage_scrub_claim_token=requested_claim",
+            ),
+        ] {
+            let body = authority
+                .split(&format!("CREATE FUNCTION {function_name}("))
+                .nth(1)
+                .and_then(|tail| tail.split(terminator).next())
+                .unwrap_or_else(|| panic!("{function_name} definition"));
+            assert!(
+                body.contains(proof),
+                "{function_name} must retain its state fence proving no new cleanup debt"
+            );
+        }
+
+        for (name, next, capability) in [
+            (
+                "release_upload_claim",
+                "/// Used by startup recovery",
+                "northstar_upload_release_claim",
+            ),
+            (
+                "record_upload_stage",
+                "pub async fn begin_upload_promotion",
+                "northstar_upload_record_stage",
+            ),
+            (
+                "complete_promoted_upload",
+                "/// Resolve the only benign",
+                "northstar_upload_complete_promotion",
+            ),
+            (
+                "retire_upload_promotion_for_cleanup",
+                "#[cfg(test)]",
+                "northstar_upload_retire_promotion_for_cleanup",
+            ),
+            (
+                "cleanup_expired_upload_slots",
+                "pub async fn queued_upload_cleanup",
+                "northstar_upload_admit_expired_cleanup",
+            ),
+            (
+                "complete_queued_upload_cleanup",
+                "/// A deletion claimant",
+                "northstar_upload_complete_cleanup",
+            ),
+            (
+                "complete_upload_storage_job",
+                "pub async fn confirm_upload_stage_absence",
+                "northstar_upload_complete_storage_job",
+            ),
+            (
+                "queue_user_upload_delete_authorized",
+                "#[cfg(test)]",
+                "northstar_upload_delete_owned",
+            ),
+        ] {
+            let body = source
+                .split(&format!("pub async fn {name}("))
+                .nth(1)
+                .and_then(|tail| tail.split(next).next())
+                .unwrap_or_else(|| panic!("{name} implementation"));
+            assert!(
+                !body.contains("lock_timeout"),
+                "{name} must rely on SQL-native NOWAIT capacity admission"
+            );
+            let definition = nowait
+                .split(&format!("CREATE OR REPLACE FUNCTION {capability}("))
+                .nth(1)
+                .unwrap_or_else(|| panic!("{capability} migration definition"));
+            assert!(
+                definition.contains("PERFORM northstar_upload_require_capacity_lock();"),
+                "{capability} must acquire the SQL-native capacity primitive first"
+            );
+        }
+        let cleanup_completion = source
+            .split("pub async fn complete_queued_upload_cleanup(")
+            .nth(1)
+            .and_then(|tail| {
+                tail.split("pub async fn upload_cleanup_generation_is_quiescent(")
+                    .next()
+            })
+            .expect("upload cleanup completion implementation");
+        assert!(
+            cleanup_completion.contains("fetch_one(pool)")
+                && !cleanup_completion.contains("lock_timeout"),
+            "Run70 cleanup completion must expose SQL-native NOWAIT contention"
+        );
+        // Inspect the production portion only. The test's own literal
+        // assertion names must not make a source-wide containment check
+        // self-referential.
+        let runtime_source = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("production upload source before its test module");
+        assert!(!runtime_source.contains("begin_bounded_upload_admission"));
+        assert!(!runtime_source.contains("finish_retryable_upload_capacity_mutation"));
     }
 
     #[test]
@@ -4178,10 +4510,16 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
+        let active_lease = match claim_upload_slot(&pool, slot_id, token, 90).await.unwrap() {
+            UploadClaimOutcome::Acquired(lease) => lease,
+            other => panic!("unexpected initial upload claim outcome: {other:?}"),
+        };
 
-        // Model the prefix of account deletion: global ledger, then user. All
-        // upload mutators must fail/retry at the ledger without first holding
-        // a slot, cleanup row, or job that the account cascade may need.
+        // Model the prefix of account deletion: global ledger, then user.
+        // Claim's SQL capability has a NOWAIT ledger admission; ordinary lease
+        // renewal does not touch capacity authority. Generic capacity paths
+        // and implicit trigger accounting must return SQLSTATE 55P03 without
+        // waiting behind this owner.
         let mut account_tx = pool.begin().await.unwrap();
         sqlx::query(
             "SELECT singleton FROM upload_storage_capacity_ledger WHERE singleton FOR UPDATE",
@@ -4198,24 +4536,173 @@ mod tests {
             claim_upload_slot(&pool, slot_id, token, 90).await.unwrap(),
             UploadClaimOutcome::InProgress { .. }
         ));
+        assert_eq!(
+            renew_upload_claim(&pool, slot_id, active_lease.claim_token, 90)
+                .await
+                .unwrap(),
+            UploadRenewOutcome::Renewed,
+            "a healthy lease renewal must remain independent of unrelated capacity work"
+        );
         let queue_error = queue_user_upload_delete(&pool, user_id, slot_id, Uuid::new_v4())
             .await
             .unwrap_err();
         assert!(queue_error
             .to_string()
             .contains("upload storage capacity busy; retry"));
-        let completion_error =
-            complete_queued_upload_cleanup(&pool, Uuid::new_v4(), Uuid::new_v4())
-                .await
-                .unwrap_err();
-        assert!(completion_error
-            .to_string()
-            .contains("upload storage capacity busy; retry"));
+        let trigger_error = tokio::time::timeout(
+            Duration::from_secs(1),
+            sqlx::query(
+                "INSERT INTO upload_cleanup_queue(
+                     object_id,storage_backend,object_key,expected_size,storage_fence)
+                 VALUES($1,'local',$1::text,1,0)",
+            )
+            .bind(Uuid::new_v4())
+            .execute(&pool),
+        )
+        .await
+        .expect("implicit cleanup accounting must reject a held ledger promptly")
+        .unwrap_err();
+        assert!(
+            is_retryable_upload_capacity_lock(&trigger_error),
+            "implicit upload cleanup accounting must expose SQLSTATE 55P03: {trigger_error}"
+        );
+        let completion_error = tokio::time::timeout(
+            Duration::from_secs(1),
+            complete_queued_upload_cleanup(&pool, Uuid::new_v4(), Uuid::new_v4()),
+        )
+        .await
+        .expect(
+            "cleanup completion must reject ledger contention without waiting for the outer test",
+        )
+        .unwrap_err();
+        assert!(
+            completion_error
+                .chain()
+                .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+                .any(is_retryable_upload_capacity_lock),
+            "generic cleanup completion must preserve SQLSTATE 55P03 for central retry mapping: {completion_error:#}"
+        );
         account_tx.rollback().await.unwrap();
 
+        // A committed replay cannot establish another cleanup obligation: it
+        // must remain available while unrelated work holds the singleton.
+        let replay_digest = [7_u8; 32];
+        assert!(complete_upload(
+            &pool,
+            slot_id,
+            active_lease.claim_token,
+            &replay_digest,
+            600,
+        )
+        .await
+        .unwrap());
+        let mut healthy_tx = pool.begin().await.unwrap();
+        sqlx::query(
+            "SELECT singleton FROM upload_storage_capacity_ledger WHERE singleton FOR UPDATE",
+        )
+        .fetch_one(&mut *healthy_tx)
+        .await
+        .unwrap();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                record_upload_replay(&pool, slot_id, token, &replay_digest),
+            )
+            .await
+            .expect("committed replay must not wait for unrelated capacity authority")
+            .unwrap(),
+            "committed replay must retain normal dedupe accounting"
+        );
+        healthy_tx.rollback().await.unwrap();
+
+        // `reserve_slot` takes ledger then user internally. Both acquisitions
+        // are SQL NOWAIT, so user-row contention preserves the established
+        // unavailable result and releases the singleton with no Rust-side
+        // timeout or pre-acquisition.
+        let mut user_tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_one(&mut *user_tx)
+            .await
+            .unwrap();
+        let reservation = tokio::time::timeout(
+            Duration::from_secs(1),
+            create_upload_slot(
+                &pool,
+                UploadReservation {
+                    user_id,
+                    filename: "user-row-contention.bin",
+                    content_type: "application/octet-stream",
+                    size: 1,
+                    token_hash: b"user-row-contention",
+                    max_files_per_user: 10,
+                    max_bytes_per_user: 10,
+                    storage_backend: "local",
+                },
+            ),
+        )
+        .await
+        .expect("reservation must not retain the ledger behind a user-row lock")
+        .unwrap();
+        assert!(reservation.is_none());
+        sqlx::query(
+            "SELECT singleton FROM upload_storage_capacity_ledger WHERE singleton FOR UPDATE NOWAIT",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("reservation contention must release the global ledger");
+        user_tx.rollback().await.unwrap();
+
+        // The same requirement applies to the sole debt-creating claim
+        // transition: its SQL capability uses NOWAIT for both the ledger and
+        // target slot, returning the established retry result without holding
+        // the capability transaction behind either owner.
+        let contention_slot = create_upload_slot(
+            &pool,
+            UploadReservation {
+                user_id,
+                filename: "slot-row-contention.bin",
+                content_type: "application/octet-stream",
+                size: 1,
+                token_hash: b"slot-row-contention",
+                max_files_per_user: 10,
+                max_bytes_per_user: 10,
+                storage_backend: "local",
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut slot_tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM upload_slots WHERE id=$1 FOR UPDATE")
+            .bind(contention_slot)
+            .fetch_one(&mut *slot_tx)
+            .await
+            .unwrap();
+        let claim = tokio::time::timeout(
+            Duration::from_secs(1),
+            claim_upload_slot(&pool, contention_slot, b"slot-row-contention", 90),
+        )
+        .await
+        .expect("claim must not retain the ledger behind a slot-row lock")
+        .unwrap();
+        assert!(matches!(
+            claim,
+            UploadClaimOutcome::InProgress {
+                retry_after_seconds: 1
+            }
+        ));
+        sqlx::query(
+            "SELECT singleton FROM upload_storage_capacity_ledger WHERE singleton FOR UPDATE NOWAIT",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("claim contention must release the global ledger");
+        slot_tx.rollback().await.unwrap();
+
         // Reverse pressure: a cleanup owner holds ledger then its queue row.
-        // Account deletion must stop at the same short ledger timeout rather
-        // than locking the user and forming a cycle.
+        // Account deletion must surface the SQL-native 55P03 before it locks
+        // the user and can form a cycle.
         let cleanup_id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO upload_cleanup_queue(
@@ -4257,6 +4744,198 @@ mod tests {
                 .await
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+    async fn typed_upload_admission_results_release_capacity_lock_from_outer_transaction() {
+        let url = std::env::var("TEST_DATABASE_URL")
+            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(8)
+            .connect(&url)
+            .await
+            .unwrap();
+        db::migrate(&pool).await.unwrap();
+        validate_upload_capacity_policy(
+            &pool,
+            TEST_UPLOAD_PENDING_LIMIT,
+            TEST_UPLOAD_RETAINED_FILES_LIMIT,
+            TEST_UPLOAD_RETAINED_BYTES_LIMIT,
+        )
+        .await
+        .unwrap();
+        let user_id = insert_user(&pool).await;
+
+        // Reserve obtains the ledger before it attempts the owner row.  Hold
+        // that owner on one connection, retain the caller transaction after
+        // its typed `false`, and prove another connection can still acquire
+        // the ledger before either transaction completes.
+        let mut owner_tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_one(&mut *owner_tx)
+            .await
+            .unwrap();
+        let mut reserve_outer_tx = pool.begin().await.unwrap();
+        let reserved: bool = sqlx::query_scalar(
+            "SELECT northstar_upload_reserve_slot(
+                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
+             )",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind("outer-transaction-reserve.bin")
+        .bind("application/octet-stream")
+        .bind(1_i64)
+        .bind(b"outer-transaction-reserve".as_slice())
+        .bind(10_i64)
+        .bind(10_i64)
+        .bind("local")
+        .bind(TEST_UPLOAD_RETAINED_FILES_LIMIT)
+        .bind(TEST_UPLOAD_RETAINED_BYTES_LIMIT)
+        .bind(TEST_UPLOAD_PENDING_LIMIT)
+        .fetch_one(&mut *reserve_outer_tx)
+        .await
+        .unwrap();
+        assert!(
+            !reserved,
+            "owner-row NOWAIT contention must retain the established typed false result"
+        );
+        sqlx::query(
+            "SELECT singleton FROM upload_storage_capacity_ledger
+             WHERE singleton FOR UPDATE NOWAIT",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("typed reserve false must not retain the ledger in its outer transaction");
+        reserve_outer_tx.rollback().await.unwrap();
+        owner_tx.rollback().await.unwrap();
+
+        // The same savepoint rollback is required for an ordinary quota
+        // refusal, where the capacity and owner rows were both acquired but
+        // no reservation was admitted.
+        let slot_id = create_upload_slot(
+            &pool,
+            UploadReservation {
+                user_id,
+                filename: "outer-transaction-claim.bin",
+                content_type: "application/octet-stream",
+                size: 1,
+                token_hash: b"outer-transaction-claim",
+                max_files_per_user: 10,
+                max_bytes_per_user: 10,
+                storage_backend: "local",
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut reserve_quota_outer_tx = pool.begin().await.unwrap();
+        let quota_reserved: bool = sqlx::query_scalar(
+            "SELECT northstar_upload_reserve_slot(
+                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
+             )",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind("outer-transaction-quota.bin")
+        .bind("application/octet-stream")
+        .bind(1_i64)
+        .bind(b"outer-transaction-quota".as_slice())
+        .bind(1_i64)
+        .bind(10_i64)
+        .bind("local")
+        .bind(TEST_UPLOAD_RETAINED_FILES_LIMIT)
+        .bind(TEST_UPLOAD_RETAINED_BYTES_LIMIT)
+        .bind(TEST_UPLOAD_PENDING_LIMIT)
+        .fetch_one(&mut *reserve_quota_outer_tx)
+        .await
+        .unwrap();
+        assert!(
+            !quota_reserved,
+            "quota refusal must retain the established typed false result"
+        );
+        sqlx::query(
+            "SELECT singleton FROM upload_storage_capacity_ledger
+             WHERE singleton FOR UPDATE NOWAIT",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("ordinary reserve false must not retain the ledger in its outer transaction");
+        reserve_quota_outer_tx.rollback().await.unwrap();
+
+        // Claim follows the same ledger-then-slot order.  The slot owner and
+        // caller remain open while a third pooled connection verifies that the
+        // typed `in_progress` response rolled the capacity lock back.
+        let mut slot_tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM upload_slots WHERE id=$1 FOR UPDATE")
+            .bind(slot_id)
+            .fetch_one(&mut *slot_tx)
+            .await
+            .unwrap();
+        let mut claim_outer_tx = pool.begin().await.unwrap();
+        let claim_outcome: String = sqlx::query_scalar(
+            "SELECT outcome
+               FROM northstar_upload_claim_slot($1,$2,$3,$4,$5)",
+        )
+        .bind(slot_id)
+        .bind(b"outer-transaction-claim".as_slice())
+        .bind(90_i64)
+        .bind(MAX_UPLOAD_ATTEMPTS)
+        .bind(MAX_UPLOAD_REPLAYS)
+        .fetch_one(&mut *claim_outer_tx)
+        .await
+        .unwrap();
+        assert_eq!(claim_outcome, "in_progress");
+        sqlx::query(
+            "SELECT singleton FROM upload_storage_capacity_ledger
+             WHERE singleton FOR UPDATE NOWAIT",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("typed claim in_progress must not retain the ledger in its outer transaction");
+        claim_outer_tx.rollback().await.unwrap();
+        slot_tx.rollback().await.unwrap();
+
+        // Finally, verify the ordinary live-lease `in_progress` result.  It
+        // is not a lock conflict, but it must take the same rollback path
+        // rather than keeping the global authority for the caller's outer
+        // transaction.
+        let active_lease = match claim_upload_slot(&pool, slot_id, b"outer-transaction-claim", 90)
+            .await
+            .unwrap()
+        {
+            UploadClaimOutcome::Acquired(lease) => lease,
+            other => panic!("unexpected initial claim outcome: {other:?}"),
+        };
+        let mut live_claim_outer_tx = pool.begin().await.unwrap();
+        let live_claim_outcome: String = sqlx::query_scalar(
+            "SELECT outcome
+               FROM northstar_upload_claim_slot($1,$2,$3,$4,$5)",
+        )
+        .bind(slot_id)
+        .bind(b"outer-transaction-claim".as_slice())
+        .bind(90_i64)
+        .bind(MAX_UPLOAD_ATTEMPTS)
+        .bind(MAX_UPLOAD_REPLAYS)
+        .fetch_one(&mut *live_claim_outer_tx)
+        .await
+        .unwrap();
+        assert_eq!(live_claim_outcome, "in_progress");
+        sqlx::query(
+            "SELECT singleton FROM upload_storage_capacity_ledger
+             WHERE singleton FOR UPDATE NOWAIT",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("ordinary claim in_progress must not retain the ledger in its outer transaction");
+        live_claim_outer_tx.rollback().await.unwrap();
+        assert!(
+            release_upload_claim(&pool, slot_id, active_lease.claim_token)
+                .await
+                .unwrap()
         );
     }
 

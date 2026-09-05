@@ -1385,7 +1385,9 @@ SELECT NOT EXISTS (
          SELECT 1 FROM (VALUES
            ('northstar_protect_admin_session_cleanup_identity()'),
            ('northstar_enqueue_admin_generation_cleanup(uuid,uuid,int8,text)'),
-           ('northstar_enqueue_admin_exact_session_cleanup(uuid,uuid,int8,text,uuid)')
+           ('northstar_enqueue_admin_exact_session_cleanup(uuid,uuid,int8,text,uuid)'),
+           ('northstar_upload_require_capacity_lock()'),
+           ('guard_upload_capacity_nowait()')
          ) private_helper(signature)
          CROSS JOIN LATERAL (
            SELECT pg_catalog.to_regprocedure('public.' || private_helper.signature) AS oid

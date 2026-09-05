@@ -120,7 +120,7 @@ fi
 require_literal "$ci_workflow" 'bash scripts/stateful-database-ci.sh "${{ matrix.shard }}"' \
   'CI does not route stateful database coverage through the checked shard entrypoint'
 require_literal "$stateful_database_manifest" \
-  '\''admin-session-cleanup|Admin session cleanup database|480|admin-session-cleanup-db-wsl.sh'\'' \
+  'admin-session-cleanup|Admin session cleanup database|480|admin-session-cleanup-db-wsl.sh' \
   'the stateful database suite manifest does not route the isolated administrator cleanup effect fixture through its unique suite id'
 require_literal "$stateful_database_manifest" \
   'phase=database_suite_result' \

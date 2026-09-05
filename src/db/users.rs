@@ -2397,9 +2397,9 @@ async fn delete_user_with_roster_inner(
     // Global storage capacity always precedes every user/account row. Upload
     // cascade triggers update this ledger, so taking it after the user lock
     // would invert create-slot admission and permit a deadlock.
-    sqlx::query("SET LOCAL lock_timeout='50ms'")
-        .execute(&mut *transaction)
-        .await?;
+    // The capability is SQL-native NOWAIT as of migration 0131, so capacity
+    // contention is an immediate 55P03 rather than an arbitrary short
+    // timeout applied to every later account/roster mutation.
     if let Err(error) = sqlx::query("SELECT northstar_upload_capacity_lock()")
         .fetch_one(&mut *transaction)
         .await
@@ -2411,11 +2411,9 @@ async fn delete_user_with_roster_inner(
         }
         return Err(error.into());
     }
-    // The 50 ms bound above is only the fail-fast admission budget for the
-    // global ledger. Once this transaction owns that first lock, keeping the
-    // same budget for every roster/upload cascade lock makes a large account
-    // practically undeletable under ordinary short-lived contention. Restore
-    // the normal bounded mutation budget while preserving ledger-first order.
+    // After this transaction owns the ledger, retain the normal bounded
+    // mutation budget for its many roster/upload rows. That operational bound
+    // no longer controls capacity admission itself.
     sqlx::query("SET LOCAL lock_timeout='2s'")
         .execute(&mut *transaction)
         .await?;
@@ -2599,6 +2597,48 @@ pub(super) async fn delete_user_with_roster_locked_in_transaction(
     .bind(&account)
     .execute(&mut **transaction)
     .await?;
+    // Admission rows deliberately do not have a users FK: their canonical
+    // actor/target scopes may name a remote principal, while their durable
+    // archive, C2S, and S2S projections must survive ordinary retention.
+    // That projection-preservation rule used to leave a replay tombstone
+    // behind when an account's archive cascaded during deletion.  Account
+    // deletion is a different authority boundary: remove every admission
+    // whose canonical personal-message scope belongs to this account before
+    // deleting its projections.  The user row is already exclusively locked,
+    // so concurrent durable admissions either commit before this transaction
+    // or observe the disabled/deleted account; the surrounding transaction
+    // also restores these rows if a later teardown step fails.
+    // The scope lookup indexes use a fixed-width domain-separated digest;
+    // retain the exact canonical comparison so an MD5 collision cannot erase
+    // another principal's admission. Lock IDs in one total order before the
+    // delete: two simultaneous account removals for opposite ends of the same
+    // conversation then contend/retry rather than lock the same rows in
+    // actor-vs-target order.
+    let admission_ids = sqlx::query_scalar::<_, Uuid>(
+        "SELECT admission.id
+           FROM personal_message_admissions admission
+          WHERE (
+                    pg_catalog.md5('northstar:personal-admission-scope:v1:' || admission.actor_scope)
+                      = pg_catalog.md5('northstar:personal-admission-scope:v1:' || $1)
+                AND admission.actor_scope=$1
+                )
+             OR (
+                    pg_catalog.md5('northstar:personal-admission-scope:v1:' || admission.target_scope)
+                      = pg_catalog.md5('northstar:personal-admission-scope:v1:' || $1)
+                AND admission.target_scope=$1
+                )
+          ORDER BY admission.id
+          FOR UPDATE",
+    )
+    .bind(&account)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if !admission_ids.is_empty() {
+        sqlx::query("DELETE FROM personal_message_admissions WHERE id = ANY($1)")
+            .bind(&admission_ids)
+            .execute(&mut **transaction)
+            .await?;
+    }
     super::cluster_muc::revoke_cluster_muc_account_in_tx(transaction, user_id, &account).await?;
     let deletion: Result<()> = if let Some(fence) = admin_fence {
         let outcome: String = sqlx::query_scalar(
@@ -4411,6 +4451,38 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // Retention must preserve an identity while only one of its durable
+        // projections expires, but account deletion must erase both outgoing
+        // (actor scope) and incoming (target scope) identities atomically.
+        let incoming_archive_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO message_archive
+             (id,owner_id,peer_jid,peer_full_jid,stanza,encrypted)
+             VALUES($1,$2,$3,$3,'<message xmlns=\"jabber:client\"/>',FALSE)",
+        )
+        .bind(incoming_archive_id)
+        .bind(removed_id)
+        .bind(&contact_jid)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let incoming_admission_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO personal_message_admissions
+             (id,identity_kind,actor_scope_raw,actor_scope,target_scope,identity_value,
+              identity_digest,payload_key_id,payload_mac,recipient_archive_id)
+             VALUES($1,'remote-stanza',$2,$2,$3,'delete-test-incoming',$4,
+                    'AAAAAAAAAAAAAAAA',$5,$6)",
+        )
+        .bind(incoming_admission_id)
+        .bind(&contact_jid)
+        .bind(&removed_jid)
+        .bind(vec![12_u8; 32])
+        .bind(vec![13_u8; 32])
+        .bind(incoming_archive_id)
+        .execute(&pool)
+        .await
+        .unwrap();
 
         // Invalid historical group data makes journal materialization fail.
         // The reverse subscription update and user delete must both roll back.
@@ -4448,7 +4520,9 @@ mod tests {
             ("fast_tokens", fast_id),
             ("sm_resume_sessions", sm_id),
             ("message_archive", archive_id),
+            ("message_archive", incoming_archive_id),
             ("personal_message_admissions", admission_id),
+            ("personal_message_admissions", incoming_admission_id),
         ] {
             let count: i64 =
                 sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE id=$1"))
@@ -4547,7 +4621,9 @@ mod tests {
             ("fast_tokens", fast_id),
             ("sm_resume_sessions", sm_id),
             ("message_archive", archive_id),
+            ("message_archive", incoming_archive_id),
             ("personal_message_admissions", admission_id),
+            ("personal_message_admissions", incoming_admission_id),
         ] {
             let count: i64 =
                 sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE id=$1"))

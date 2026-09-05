@@ -3095,6 +3095,73 @@ impl PubSubService {
             })
     }
 
+    /// Classify a publish payload against the resolved node configuration.
+    ///
+    /// These failures have distinct XEP-0060 meanings.  Keeping them as one
+    /// broad precondition check collapses a malformed payload into
+    /// `precondition-not-met`, which prevents a client from distinguishing a
+    /// bad namespace or oversized payload from a stale publish-options form.
+    fn publish_validation_outcome(
+        config: &PubSubNodeConfig,
+        items: &[(String, String)],
+    ) -> Option<PubSubPublishOutcome> {
+        if config.node_type != "leaf" {
+            return Some(PubSubPublishOutcome::NotLeafNode);
+        }
+        if items.len() > config.max_items as usize {
+            return Some(PubSubPublishOutcome::MaxItemsExceeded);
+        }
+        if config.persist_items && items.is_empty() {
+            return Some(PubSubPublishOutcome::ItemRequired);
+        }
+        if !config.persist_items && !config.deliver_payloads && !items.is_empty() {
+            return Some(PubSubPublishOutcome::ItemForbidden);
+        }
+        if !config.persist_items && config.deliver_payloads && items.is_empty() {
+            return Some(PubSubPublishOutcome::ItemRequired);
+        }
+        if config.deliver_payloads
+            && items
+                .iter()
+                .any(|(_, item_xml)| !Self::item_xml_has_payload(item_xml))
+        {
+            return Some(PubSubPublishOutcome::PayloadRequired);
+        }
+        if items
+            .iter()
+            .any(|(_, item_xml)| item_xml.len() > config.max_payload_size as usize)
+        {
+            return Some(PubSubPublishOutcome::PayloadTooBig);
+        }
+        if config.payload_type.as_deref().is_some_and(|expected| {
+            items.iter().any(|(_, item_xml)| {
+                !Self::serialized_item_payload_matches_type(item_xml, expected)
+            })
+        }) {
+            return Some(PubSubPublishOutcome::InvalidPayload);
+        }
+        None
+    }
+
+    /// Apply the existing-node publish precedence without exposing its policy
+    /// to a requester that cannot publish.  Keeping this pure makes the
+    /// security ordering independently regression-testable from the database
+    /// authorization lookup that supplies `authorized`.
+    fn existing_node_publish_admission_outcome(
+        authorized: bool,
+        config: &PubSubNodeConfig,
+        publish_options: Option<&PubSubNodeConfig>,
+        items: &[(String, String)],
+    ) -> Option<PubSubPublishOutcome> {
+        if !authorized {
+            return Some(PubSubPublishOutcome::Forbidden);
+        }
+        if publish_options.is_some_and(|options| options != config) {
+            return Some(PubSubPublishOutcome::PreconditionNotMet);
+        }
+        Self::publish_validation_outcome(config, items)
+    }
+
     pub(crate) async fn execute_pubsub_publish(
         &self,
         command: PubSubPublishCommand<'_>,
@@ -3107,64 +3174,24 @@ impl PubSubService {
             });
         }
         let mut node = self.get_node(write.node).await?;
-        let had_publish_options = write.publish_options.is_some();
-        let effective_config = match (node.as_ref(), write.publish_options) {
-            (Some(node), Some(options)) => {
-                if options != &node.config() {
-                    return Ok(PubSubPublishResult {
-                        outcome: PubSubPublishOutcome::PreconditionNotMet,
-                    });
-                }
-                options.clone()
-            }
-            (Some(node), None) => node.config(),
-            (None, Some(options)) => options.clone(),
-            (None, None) => PubSubNodeConfig::default(),
-        };
-        if effective_config.node_type != "leaf" {
-            return Ok(PubSubPublishResult {
-                outcome: PubSubPublishOutcome::NotLeafNode,
-            });
-        }
-        if let Some(ref node) = node {
-            if !self.can_publish(node, write.publisher_jid).await? {
-                return Ok(PubSubPublishResult {
-                    outcome: PubSubPublishOutcome::Forbidden,
-                });
-            }
-        }
-        if write.items.len() > effective_config.max_items as usize {
-            return Ok(PubSubPublishResult {
-                outcome: PubSubPublishOutcome::MaxItemsExceeded,
-            });
-        }
-        if effective_config.persist_items && write.items.is_empty() {
-            return Ok(PubSubPublishResult {
-                outcome: PubSubPublishOutcome::ItemRequired,
-            });
-        }
-        if !effective_config.persist_items
-            && !effective_config.deliver_payloads
-            && !write.items.is_empty()
-        {
-            return Ok(PubSubPublishResult {
-                outcome: PubSubPublishOutcome::ItemForbidden,
-            });
-        }
-        if !effective_config.persist_items
-            && effective_config.deliver_payloads
-            && write.items.is_empty()
-        {
-            return Ok(PubSubPublishResult {
-                outcome: PubSubPublishOutcome::ItemRequired,
-            });
-        }
         if node.is_none() {
+            let requested_config = write
+                .publish_options
+                .cloned()
+                .unwrap_or_else(PubSubNodeConfig::default);
+            // A node created by publish must be validated before its creation
+            // side effect. Once the node is reloaded (including a create
+            // conflict), authorization always precedes policy validation so a
+            // racing unauthorized sender cannot probe another owner's node.
+            if let Some(outcome) = Self::publish_validation_outcome(&requested_config, write.items)
+            {
+                return Ok(PubSubPublishResult { outcome });
+            }
             match self
                 .create_node(
                     write.node,
                     write.publisher_jid,
-                    &effective_config,
+                    &requested_config,
                     write.max_nodes_per_owner,
                 )
                 .await?
@@ -3191,39 +3218,18 @@ impl PubSubService {
                 outcome: PubSubPublishOutcome::MissingNode,
             });
         };
-        if node.node_type != "leaf"
-            || write.items.len() > node.max_items as usize
-            || (node.persist_items && write.items.is_empty())
-            || (!node.persist_items && !node.deliver_payloads && !write.items.is_empty())
-            || (!node.persist_items && node.deliver_payloads && write.items.is_empty())
-            || (node.deliver_payloads
-                && write
-                    .items
-                    .iter()
-                    .any(|(_, item_xml)| !Self::item_xml_has_payload(item_xml)))
-            || write
-                .items
-                .iter()
-                .any(|(_, item_xml)| item_xml.len() > node.max_payload_size as usize)
-            || node.payload_type.as_deref().is_some_and(|expected| {
-                write.items.iter().any(|(_, item_xml)| {
-                    !Self::serialized_item_payload_matches_type(item_xml, expected)
-                })
-            })
-        {
-            return Ok(PubSubPublishResult {
-                outcome: PubSubPublishOutcome::PreconditionNotMet,
-            });
-        }
-        if had_publish_options && effective_config != node.config() {
-            return Ok(PubSubPublishResult {
-                outcome: PubSubPublishOutcome::PreconditionNotMet,
-            });
-        }
-        if !self.can_publish(&node, write.publisher_jid).await? {
-            return Ok(PubSubPublishResult {
-                outcome: PubSubPublishOutcome::Forbidden,
-            });
+        // This covers a concurrent creator as well as a node that existed at
+        // the initial lookup. Both its publish options and payload policy are
+        // private until the requester has passed authorization.
+        let node_config = node.config();
+        let authorized = self.can_publish(&node, write.publisher_jid).await?;
+        if let Some(outcome) = Self::existing_node_publish_admission_outcome(
+            authorized,
+            &node_config,
+            write.publish_options,
+            write.items,
+        ) {
+            return Ok(PubSubPublishResult { outcome });
         }
         let outcome = self
             .publish_items(
@@ -4642,6 +4648,83 @@ mod tests {
         let body = pubsub_event_body(&event).unwrap().unwrap();
         assert_eq!(body.len(), 1_023);
         assert_eq!(body, "a".repeat(1_023));
+    }
+
+    #[test]
+    fn publish_validation_reports_the_specific_payload_failure() {
+        let items = vec![(
+            "one".to_owned(),
+            "<item id='one'><payload xmlns='urn:test:wrong'>value</payload></item>".to_owned(),
+        )];
+        let mut config = PubSubNodeConfig {
+            payload_type: Some("urn:test:expected".to_owned()),
+            ..PubSubNodeConfig::default()
+        };
+
+        assert_eq!(
+            PubSubService::publish_validation_outcome(&config, &items),
+            Some(PubSubPublishOutcome::InvalidPayload),
+        );
+
+        config.payload_type = None;
+        config.max_payload_size = 1;
+        assert_eq!(
+            PubSubService::publish_validation_outcome(&config, &items),
+            Some(PubSubPublishOutcome::PayloadTooBig),
+        );
+
+        config.max_payload_size = 1_048_576;
+        let missing_payload = vec![("two".to_owned(), "<item id='two'/>".to_owned())];
+        assert_eq!(
+            PubSubService::publish_validation_outcome(&config, &missing_payload),
+            Some(PubSubPublishOutcome::PayloadRequired),
+        );
+    }
+
+    #[test]
+    fn existing_node_publish_hides_payload_policy_before_authorization() {
+        let items = vec![(
+            "wrong-namespace".to_owned(),
+            "<item id='wrong-namespace'><payload xmlns='urn:test:wrong'/></item>".to_owned(),
+        )];
+        let node_config = PubSubNodeConfig {
+            payload_type: Some("urn:test:expected".to_owned()),
+            ..PubSubNodeConfig::default()
+        };
+        let stale_options = PubSubNodeConfig {
+            max_items: node_config.max_items + 1,
+            ..node_config.clone()
+        };
+
+        // The same request has both policy-sensitive failures, but a caller
+        // without publish authorization must learn neither one.
+        assert_eq!(
+            PubSubService::existing_node_publish_admission_outcome(
+                false,
+                &node_config,
+                Some(&stale_options),
+                &items,
+            ),
+            Some(PubSubPublishOutcome::Forbidden),
+        );
+        assert_eq!(
+            PubSubService::existing_node_publish_admission_outcome(
+                true,
+                &node_config,
+                Some(&stale_options),
+                &items,
+            ),
+            Some(PubSubPublishOutcome::PreconditionNotMet),
+        );
+        assert_eq!(
+            PubSubService::existing_node_publish_admission_outcome(
+                true,
+                &node_config,
+                None,
+                &items,
+            ),
+            Some(PubSubPublishOutcome::InvalidPayload),
+        );
     }
 
     fn renderer_node(id: Uuid, name: &str, node_type: &str) -> db::PubSubNode {

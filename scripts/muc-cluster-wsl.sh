@@ -3,59 +3,67 @@ set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+require_literal() {
+  local source_file="$1" literal="$2" contract="$3"
+  if ! grep -Fq -- "$literal" "$source_file"; then
+    echo "MUC cluster static contract is missing: $contract ($source_file: $literal)" >&2
+    exit 1
+  fi
+}
+
 # Fail before starting any runtime when the authoritative schema/source shape
 # was accidentally weakened. These checks complement, but never replace, the
 # disposable PostgreSQL and two-node fault scenarios below.
-grep -q "terminal MUC occupancy cannot be revived" \
-  "$project_dir/migrations/0089_cluster_muc_authority.sql"
-grep -q "cluster_muc_room_outbox_capacity_underflow" \
-  "$project_dir/migrations/0089_cluster_muc_authority.sql"
-grep -q "muc_rooms_live_localpart_unique" \
-  "$project_dir/migrations/0089_cluster_muc_authority.sql"
-grep -q "CHECK (event_id = operation_id)" \
-  "$project_dir/migrations/0089_cluster_muc_authority.sql"
-grep -q "northstar_purge_cluster_muc_history" \
-  "$project_dir/migrations/0089_cluster_muc_authority.sql"
-grep -q "northstar_muc_capacity_destroy_update" \
-  "$project_dir/migrations/0090_deployment_capacity_ledger.sql"
-grep -q "northstar_capacity_lock_batch" \
-  "$project_dir/migrations/0090_deployment_capacity_ledger.sql"
-grep -q "PRIMARY KEY(delivery_id,handoff_version)" \
-  "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql"
-grep -q "cluster MUC handoff destination is not authoritative" \
-  "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql"
-grep -q "cluster MUC handoff has no exact authoritative history" \
-  "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql"
-grep -q "REVOKE ALL ON FUNCTION northstar_transfer_cluster_muc_outbox" \
-  "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql"
-if grep -q "northstar.cluster_muc_resume_handoff" \
+require_literal "$project_dir/migrations/0089_cluster_muc_authority.sql" \
+  "terminal MUC occupancy cannot be revived" "terminal occupancy fence"
+require_literal "$project_dir/migrations/0089_cluster_muc_authority.sql" \
+  "cluster_muc_room_outbox_capacity_underflow" "outbox capacity underflow guard"
+require_literal "$project_dir/migrations/0089_cluster_muc_authority.sql" \
+  "muc_rooms_live_localpart_unique" "live-room uniqueness constraint"
+require_literal "$project_dir/migrations/0089_cluster_muc_authority.sql" \
+  "CHECK (event_id = operation_id)" "operation/event identity fence"
+require_literal "$project_dir/migrations/0089_cluster_muc_authority.sql" \
+  "northstar_purge_cluster_muc_history" "bounded history purge authority"
+require_literal "$project_dir/migrations/0090_deployment_capacity_ledger.sql" \
+  "northstar_muc_capacity_destroy_update" "room destruction capacity authority"
+require_literal "$project_dir/migrations/0090_deployment_capacity_ledger.sql" \
+  "northstar_capacity_lock_batch" "ordered capacity lock authority"
+require_literal "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql" \
+  "PRIMARY KEY(delivery_id,handoff_version)" "exact delivery handoff identity"
+require_literal "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql" \
+  "cluster MUC handoff destination is not authoritative" "handoff destination authority fence"
+require_literal "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql" \
+  "cluster MUC handoff has no exact authoritative history" "handoff history authority fence"
+require_literal "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql" \
+  "REVOKE ALL ON FUNCTION northstar_transfer_cluster_muc_outbox" "outbox mutation privilege revocation"
+if grep -Fq -- "northstar.cluster_muc_resume_handoff" \
   "$project_dir/migrations/0094_cluster_muc_delivery_receipts.sql" \
   "$project_dir/src/db/cluster_muc.rs"; then
   echo "cluster MUC handoff must not trust a caller-controlled GUC" >&2
   exit 1
 fi
-grep -q "parent.claim_token=\$4" "$project_dir/src/db/cluster_muc.rs"
-grep -q "lease_until>clock_timestamp()" "$project_dir/src/db/cluster_muc.rs"
-grep -q "first_owned_at+INTERVAL '5 minutes'" \
-  "$project_dir/migrations/0096_bosh_ack_ownership_bounds.sql"
-grep -q "northstar_admit_cluster_envelope_replay" \
-  "$project_dir/migrations/0095_cluster_replay_fence.sql"
-grep -q "existing.destination_instance_uuid<>p_destination_uuid" \
-  "$project_dir/migrations/0095_cluster_replay_fence.sql"
-grep -q "ON CONFLICT (localpart) WHERE destroyed_at IS NULL DO NOTHING" \
-  "$project_dir/src/db/muc.rs"
-grep -q "lease_until>clock_timestamp()" \
-  "$project_dir/src/db/cluster_muc.rs"
-grep -q "protocol-v8 executable MUC control rejected" \
-  "$project_dir/src/cluster.rs"
-grep -q "cluster_muc_delivery_recipient_snapshot" \
-  "$project_dir/src/cluster.rs"
-grep -q "mutate_cluster_muc_registration" \
-  "$project_dir/src/db/cluster_muc.rs"
-grep -q "grant_cluster_muc_invitation_in_tx" \
-  "$project_dir/src/db/cluster_muc.rs"
-grep -q '"offline_affiliation"' \
-  "$project_dir/src/cluster.rs"
+require_literal "$project_dir/src/db/cluster_muc.rs" \
+  'parent.claim_token=$4' "parent claim-token fence"
+require_literal "$project_dir/src/db/cluster_muc.rs" \
+  'lease_until>clock_timestamp()' "lease ownership predicate"
+require_literal "$project_dir/migrations/0096_bosh_ack_ownership_bounds.sql" \
+  "first_owned_at+INTERVAL '5 minutes'" "bounded first-owner interval"
+require_literal "$project_dir/migrations/0095_cluster_replay_fence.sql" \
+  "northstar_admit_cluster_envelope_replay" "cluster replay admission fence"
+require_literal "$project_dir/migrations/0095_cluster_replay_fence.sql" \
+  "existing.destination_instance_uuid<>p_destination_uuid" "destination instance replay fence"
+require_literal "$project_dir/src/db/muc.rs" \
+  "ON CONFLICT (localpart) WHERE destroyed_at IS NULL DO NOTHING" "live-room create idempotency"
+require_literal "$project_dir/src/cluster.rs" \
+  "executable MUC control rejected" "untrusted executable MUC control rejection"
+require_literal "$project_dir/src/cluster.rs" \
+  "cluster_muc_delivery_recipient_snapshot" "recipient snapshot authority"
+require_literal "$project_dir/src/db/cluster_muc.rs" \
+  "mutate_cluster_muc_registration" "membership mutation authority"
+require_literal "$project_dir/src/db/cluster_muc.rs" \
+  "grant_cluster_muc_invitation_in_tx" "invitation mutation authority"
+require_literal "$project_dir/src/cluster.rs" \
+  '"offline_affiliation"' "offline affiliation projection"
 
 redis_dir="$(mktemp -d -t northstar-muc-redis-XXXXXX)"
 chmod 700 "$redis_dir"

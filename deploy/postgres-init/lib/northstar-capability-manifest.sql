@@ -14,7 +14,7 @@ CREATE TEMPORARY TABLE northstar_capability_manifest (
   workload pg_catalog.text NOT NULL
     CHECK (workload IN ('runtime','command','private')),
   origin pg_catalog.text NOT NULL
-    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128'))
+    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131'))
 );
 
 INSERT INTO pg_temp.northstar_capability_manifest(signature,workload,origin)
@@ -128,6 +128,8 @@ VALUES
   ('northstar_upload_admit_expired_cleanup()','runtime','0113'),
   ('northstar_upload_delete_owned(uuid,int8,bytea,uuid,uuid)','runtime','0113'),
   ('northstar_upload_capability_catalog_healthy(text)','runtime','0113'),
+  ('northstar_upload_require_capacity_lock()','private','0131'),
+  ('guard_upload_capacity_nowait()','private','0131'),
   ('northstar_session_delete_expired_live_leases()','runtime','0114'),
   ('northstar_session_capacity_reconcile_lock()','runtime','0114'),
   ('northstar_session_reserve_live(uuid,uuid,text,int8,bool)','runtime','0114'),

@@ -475,7 +475,18 @@ pub(crate) async fn admit_personal_history_in_transaction(
               identity_value,identity_digest,payload_key_id,payload_mac,
               sender_archive_id,recipient_archive_id,offline_message_id,s2s_outbox_id)
              VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-             ON CONFLICT (identity_kind,actor_scope,target_scope,identity_digest)
+             ON CONFLICT (
+                identity_kind,
+                (pg_catalog.md5(
+                    'northstar:personal-admission-actor-scope:v1:'::pg_catalog.text
+                    || actor_scope::pg_catalog.text
+                )),
+                (pg_catalog.md5(
+                    'northstar:personal-admission-target-scope:v1:'::pg_catalog.text
+                    || target_scope::pg_catalog.text
+                )),
+                identity_digest
+             )
              DO NOTHING",
         )
         .bind(admission_id)
@@ -497,10 +508,25 @@ pub(crate) async fn admit_personal_history_in_transaction(
             == 1;
         if !inserted {
             let row = sqlx::query(
-                "SELECT id,actor_scope_raw,identity_value,payload_key_id,payload_mac,payload_digest,
+                "SELECT id,actor_scope_raw,actor_scope,target_scope,identity_value,
+                        payload_key_id,payload_mac,payload_digest,
                         sender_archive_id,recipient_archive_id
                    FROM personal_message_admissions
-                  WHERE identity_kind=$1 AND actor_scope=$2 AND target_scope=$3
+                  WHERE identity_kind=$1
+                    AND pg_catalog.md5(
+                          'northstar:personal-admission-actor-scope:v1:'::pg_catalog.text
+                          || actor_scope::pg_catalog.text
+                        ) = pg_catalog.md5(
+                          'northstar:personal-admission-actor-scope:v1:'::pg_catalog.text
+                          || $2::pg_catalog.text
+                        )
+                    AND pg_catalog.md5(
+                          'northstar:personal-admission-target-scope:v1:'::pg_catalog.text
+                          || target_scope::pg_catalog.text
+                        ) = pg_catalog.md5(
+                          'northstar:personal-admission-target-scope:v1:'::pg_catalog.text
+                          || $3::pg_catalog.text
+                        )
                     AND identity_digest=$4
                   FOR UPDATE",
             )
@@ -534,7 +560,15 @@ pub(crate) async fn admit_personal_history_in_transaction(
                 }
                 _ => false,
             };
-            let exact_replay = row.get::<String, _>("actor_scope_raw") == identity.actor_scope_raw
+            // The unique B-tree uses bounded scope fingerprints so a valid
+            // maximum-size JID cannot exceed PostgreSQL's index tuple limit.
+            // Fingerprints only locate a conflict candidate: all identity
+            // scopes and the originally observed authority spelling remain
+            // exact comparisons. A hash collision is therefore a typed
+            // conflict, never a cross-principal replay.
+            let exact_replay = row.get::<String, _>("actor_scope").as_str() == actor_scope.as_str()
+                && row.get::<String, _>("target_scope").as_str() == target_scope.as_str()
+                && row.get::<String, _>("actor_scope_raw") == identity.actor_scope_raw
                 && row.get::<String, _>("identity_value") == identity.identity_value
                 && (keyed_exact || legacy_exact);
             if !exact_replay {
@@ -2819,6 +2853,40 @@ mod mam_query_tests {
         assert!(!sql.to_ascii_uppercase().contains("OFFSET"));
         assert!(sql.contains("(created_at, id) >"));
     }
+
+    #[test]
+    fn personal_message_admission_identity_index_is_bounded_and_exactly_rechecked() {
+        let migration =
+            include_str!("../../migrations/0130_personal_message_admission_scope_lookup.sql");
+        let unique_index = migration
+            .split("CREATE UNIQUE INDEX personal_message_admission_identity_key")
+            .nth(1)
+            .expect("bounded personal-admission identity index");
+        assert!(unique_index.contains("personal-admission-actor-scope:v1:"));
+        assert!(unique_index.contains("personal-admission-target-scope:v1:"));
+        assert!(unique_index.contains("pg_catalog.md5"));
+        assert!(
+            !unique_index.contains("(identity_kind, actor_scope, target_scope, identity_digest)"),
+            "a schema-valid 3071-octet scope must not be placed directly in a B-tree key"
+        );
+
+        let source = include_str!("archive.rs");
+        let replay_path = source
+            .split("let exact_replay =")
+            .nth(1)
+            .expect("personal-admission exact replay path");
+        for exact_field in [
+            "row.get::<String, _>(\"actor_scope\").as_str() == actor_scope.as_str()",
+            "row.get::<String, _>(\"target_scope\").as_str() == target_scope.as_str()",
+            "row.get::<String, _>(\"actor_scope_raw\") == identity.actor_scope_raw",
+            "row.get::<String, _>(\"identity_value\") == identity.identity_value",
+        ] {
+            assert!(
+                replay_path.contains(exact_field),
+                "a bounded-index conflict must recheck {exact_field} exactly"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2858,6 +2926,116 @@ mod history_identity_pg_tests {
             page: MamRsmPage::First,
             max: 50,
         }
+    }
+
+    fn maximum_canonical_full_jid(localpart: char, resourcepart: char) -> String {
+        // Strict IDNA applies the DNS wire-length limit: three 63-octet
+        // labels, two separators, and one 62-octet label make its largest
+        // accepted 253-octet domain. Together with maximum local/resource
+        // parts this is a 2301-octet canonical full JID. Two such scopes
+        // already exceed PostgreSQL's B-tree tuple limit in the former raw
+        // composite identity key.
+        let domainpart = [63, 63, 63, 62]
+            .into_iter()
+            .map(|length| "d".repeat(length))
+            .collect::<Vec<_>>()
+            .join(".");
+        assert_eq!(domainpart.len(), 253);
+        let jid = format!(
+            "{}@{}/{}",
+            localpart.to_string().repeat(1023),
+            domainpart,
+            resourcepart.to_string().repeat(1023)
+        );
+        assert_eq!(jid.len(), 2301);
+        assert_eq!(crate::jid::canonicalize(&jid).unwrap(), jid);
+        jid
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
+    async fn personal_message_admission_accepts_maximum_scope_with_bounded_identity_index() {
+        let url = std::env::var("TEST_DATABASE_URL")
+            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+        let admin = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(60))
+            .connect(&url)
+            .await
+            .unwrap();
+        let schema = format!("history_identity_test_{}", Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        eprintln!("isolated_schema_created={schema}");
+        let connection_schema = schema.clone();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .acquire_timeout(Duration::from_secs(60))
+            .after_connect(move |connection, _| {
+                let statement = format!("SET search_path TO {connection_schema}");
+                Box::pin(async move {
+                    sqlx::query(&statement).execute(connection).await?;
+                    Ok(())
+                })
+            })
+            .connect(&url)
+            .await
+            .unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+
+        let owner_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,'maxscope','test')")
+            .bind(owner_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let actor_scope = maximum_canonical_full_jid('a', 'r');
+        let target_scope = maximum_canonical_full_jid('b', 's');
+        let archive_id = Uuid::new_v4();
+        let writes = [PersonalArchiveWrite {
+            id: archive_id,
+            owner_id,
+            peer_jid: "peer@remote.test",
+            stanza: "<message id='maximum-scope'/>",
+            encrypted: false,
+            stanza_id: Some("maximum-scope"),
+        }];
+        let payload = "<message id='maximum-scope'><body>bounded index</body></message>";
+        let identity = personal_identity(
+            "local-origin",
+            &actor_scope,
+            &actor_scope,
+            &target_scope,
+            "maximum-scope-origin",
+            payload,
+        );
+        assert!(matches!(
+            admit_personal_history(&pool, Some(&identity), &writes)
+                .await
+                .unwrap(),
+            PersonalHistoryAdmission::Stored(ids) if ids == vec![archive_id]
+        ));
+        assert!(matches!(
+            admit_personal_history(&pool, Some(&identity), &writes)
+                .await
+                .unwrap(),
+            PersonalHistoryAdmission::Replay(ids) if ids == vec![archive_id]
+        ));
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM personal_message_admissions")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+
+        pool.close().await;
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

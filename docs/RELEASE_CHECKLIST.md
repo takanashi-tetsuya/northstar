@@ -87,9 +87,28 @@ production baseline; Windows AMD64 artifacts are for development and evaluation.
   PubSub collection-edge trigger with prospective quota/cycle/depth checks.
   Verify an at-capacity metadata update succeeds while a second child and a
   move into a full collection are rejected.
+- [ ] Keep all runtimes and maintenance writers stopped through migration
+  `0130`. It replaces the raw canonical-scope unique index used by durable
+  personal-message admission with fixed-width discriminators and adds the
+  exact candidate indexes used by account deletion. A pre-`0130` binary cannot
+  infer the replacement `ON CONFLICT` target, so this is not a rolling-upgrade
+  boundary. Apply the migration, run exact grant reconciliation, then start
+  only the matching binary. Verify a maximum-length valid canonical scope is
+  admitted, while an exact replay still requires the full scope and payload
+  evidence rather than trusting an index discriminator.
+- [ ] Apply migration `0131` as an online capacity-admission hardening, without
+  labeling it a stopped-writer migration. Verify the private owner-only ledger
+  primitive and its trigger helper have no workload-role grant; with the
+  authority ledger held, generic capacity work returns retryable `55P03` rather
+  than waiting on an application-pool connection, while the established
+  `FALSE` and `in_progress` outcomes retain their semantic meanings.
+- [ ] Apply forward repair migration `0132` and verify
+  `check_pubsub_collection_edge()` remains `SECURITY INVOKER` with its
+  schema-local catalog-first `search_path`; it must not be promoted to a
+  runtime-executable privileged capability.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 128 migrations from `0001` through the current
-  repository maximum `0129`, with `0021` as the sole intentional gap.
+  identity and verify all 131 migrations from `0001` through the current
+  repository maximum `0132`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

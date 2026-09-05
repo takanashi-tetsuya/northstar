@@ -27,6 +27,40 @@ fail() {
   exit 1
 }
 
+assert_manifest_mapping_guard() {
+  # The static checker must reject a set-preserving swap: the old independent
+  # ID and script lists would both have passed even though MUC and Privacy had
+  # exchanged their test coverage.  Keep this regression entirely in the
+  # temporary fixture so it cannot alter the checked repository manifest.
+  local manifest_copy="$runtime_dir/stateful-database-ci.mapping-guard.sh"
+  local checker_output="$runtime_dir/stateful-database-ci.mapping-guard.output"
+  cp "$project_dir/scripts/stateful-database-ci.sh" "$manifest_copy"
+  node - "$manifest_copy" <<'NODE'
+const fs = require('node:fs');
+const path = process.argv[2];
+let manifest = fs.readFileSync(path, 'utf8');
+const mucScript = 'muc-db-wsl.sh';
+const privacyScript = 'privacy-db-wsl.sh';
+const marker = '__mapping-guard-marker__.sh';
+if (!manifest.includes(mucScript) || !manifest.includes(privacyScript)) {
+  process.exit(2);
+}
+manifest = manifest
+  .replace(mucScript, marker)
+  .replace(privacyScript, mucScript)
+  .replace(marker, privacyScript);
+fs.writeFileSync(path, manifest);
+NODE
+  if NORTHSTAR_STATEFUL_DATABASE_MANIFEST="$manifest_copy" \
+    node "$project_dir/scripts/check-stateful-database-ci.mjs" >"$checker_output" 2>&1; then
+    fail 'stateful manifest checker accepted a suite_id-to-script mapping swap'
+  fi
+  grep -Fq 'mismatchedManifestEntries' "$checker_output" \
+    || fail 'stateful manifest checker did not report the swapped suite mapping'
+}
+
+assert_manifest_mapping_guard
+
 wait_for_file() {
   local path="$1" label="$2" attempt
   for ((attempt = 0; attempt < 100; attempt += 1)); do

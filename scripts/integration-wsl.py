@@ -26,6 +26,7 @@ METRICS_PORT = int(os.environ.get("XMPP_TEST_METRICS_PORT", str(HTTP_PORT)))
 XMPP_PORT = int(os.environ.get("XMPP_TEST_CLIENT_PORT", "15222"))
 XMPPS_PORT = int(os.environ.get("XMPP_TEST_XMPPS_PORT", "15223"))
 DOMAIN = os.environ.get("XMPP_TEST_DOMAIN", "localhost")
+PUBLIC_URL = os.environ.get("XMPP_TEST_PUBLIC_URL")
 ALICE = "alice_it"
 BOB = "bob_it"
 PASSWORD = "integration-password-123"
@@ -44,6 +45,28 @@ C2S_UNTRUSTED_KEY = os.environ.get("XMPP_TEST_C2S_UNTRUSTED_KEY")
 def check(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+def assert_public_url(url: str, expected_path_prefix: str, label: str) -> None:
+    """Keep advertised public endpoints tied to the fixture-owned relay.
+
+    The integration child binds a private ephemeral HTTP backend.  Its
+    externally advertised authority is a stable relay, so accepting an URL
+    merely because its path works against an out-of-band backend would hide a
+    broken PUBLIC_URL after a restart.
+    """
+
+    check(PUBLIC_URL is not None, "integration fixture did not provide XMPP_TEST_PUBLIC_URL")
+    expected = urllib.parse.urlsplit(PUBLIC_URL)
+    actual = urllib.parse.urlsplit(url)
+    check(
+        actual.scheme == expected.scheme and actual.netloc == expected.netloc,
+        f"{label} used {actual.scheme}://{actual.netloc}, expected public origin {PUBLIC_URL}",
+    )
+    check(
+        actual.path.startswith(expected_path_prefix),
+        f"{label} used unexpected path {actual.path!r}",
+    )
 
 
 def assert_carbon_shape(stanza: str, direction: str) -> None:
@@ -2131,6 +2154,19 @@ def run() -> None:
     status, config = api("GET", "/api/v1/config")
     check(status == 200 and config["domain"] == DOMAIN, "public config failed")
     check(config["archive_policy"] == "encrypted_only", "encrypted archive policy is not active")
+    check(
+        config.get("public_url") == PUBLIC_URL,
+        f"public config advertised {config.get('public_url')!r}, expected stable relay origin {PUBLIC_URL!r}",
+    )
+    status, _, host_meta = raw_http("GET", "/.well-known/host-meta")
+    host_meta_text = host_meta.decode("utf-8")
+    check(
+        status == 200
+        and PUBLIC_URL is not None
+        and f'href="{PUBLIC_URL}/http-bind"' in host_meta_text
+        and f'href="wss://{urllib.parse.urlsplit(PUBLIC_URL).netloc}/xmpp-websocket"' in host_meta_text,
+        f"host-meta did not advertise the stable public BOSH/WebSocket authority: {host_meta_text!r}",
+    )
     status, api_headers, _ = raw_http("GET", "/api/v1/config")
     check(
         status == 200 and api_headers.get("cache-control") == "no-store, max-age=0",
@@ -2477,6 +2513,8 @@ def run() -> None:
     put_match = re.search(r"<put url='([^']+)'>.*?Bearer ([A-Za-z0-9]+)", upload_slot)
     get_match = re.search(r"<get url='([^']+)'", upload_slot)
     check(put_match is not None and get_match is not None, f"invalid HTTP Upload slot: {upload_slot}")
+    assert_public_url(put_match.group(1), "/api/v1/upload/", "HTTP Upload PUT slot")
+    assert_public_url(get_match.group(1), "/uploads/", "HTTP Upload GET slot")
     put_path = re.sub(r"^https?://[^/]+", "", put_match.group(1))
     get_path = re.sub(r"^https?://[^/]+", "", get_match.group(1))
     status, _, _ = raw_http(

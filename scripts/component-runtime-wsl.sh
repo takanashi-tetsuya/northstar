@@ -148,9 +148,7 @@ fixture_start_tcp_relay "$project_dir" "$runtime_dir" component-http component-h
   component_http_relay_pid component_http_relay_port
 
 publish_component_http_target() {
-  local temporary="$runtime_dir/.component-http.target.$server_generation.tmp"
-  printf '127.0.0.1:%s\n' "$test_http_port" >"$temporary"
-  mv -f -- "$temporary" "$component_http_relay_target"
+  fixture_publish_relay_target "$component_http_relay_target" "$test_http_port"
 }
 
 start_server() {

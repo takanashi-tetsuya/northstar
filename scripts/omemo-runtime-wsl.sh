@@ -98,9 +98,7 @@ fixture_start_tcp_relay "$project_dir" "$runtime_dir" omemo-http omemo-http \
 public_url="https://127.0.0.1:$http_relay_port"
 
 publish_http_target() {
-  local temporary="$runtime_dir/.omemo-http.target.$server_generation.$server_pid.tmp"
-  printf '127.0.0.1:%s\n' "$http_backend_port" >"$temporary"
-  mv -- "$temporary" "$http_relay_target"
+  fixture_publish_relay_target "$http_relay_target" "$http_backend_port"
 }
 
 assert_advertised_public_url() {

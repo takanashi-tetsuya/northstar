@@ -165,7 +165,7 @@ fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "
 xmpp_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
 xmpps_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
 http_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
-printf '127.0.0.1:%s\n' "$http_port" >"$relay_target_file"
+fixture_publish_relay_target "$relay_target_file" "$http_port"
 curl --silent --fail "http://127.0.0.1:$http_port/readyz" >/dev/null
 if [[ "$browser_mode" == "external" ]]; then
   state_tmp="$control_dir/state.json.tmp"

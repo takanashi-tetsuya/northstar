@@ -207,9 +207,7 @@ xmpp_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
 xmpps_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
 http_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
 metrics_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" metrics)"
-http_target_tmp="$runtime_dir/.http.target.$server_pid.tmp"
-printf '127.0.0.1:%s\n' "$http_port" >"$http_target_tmp"
-mv -- "$http_target_tmp" "$http_relay_target"
+fixture_publish_relay_target "$http_relay_target" "$http_port"
 curl --silent --fail "http://127.0.0.1:$http_relay_port/readyz" >/dev/null
 
 export XMPP_TEST_HOST=127.0.0.1

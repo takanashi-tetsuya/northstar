@@ -4758,6 +4758,16 @@ mod integration_tests {
         .unwrap_or_else(|_| panic!("session {application_name} never reached its lock wait"));
     }
 
+    async fn await_mutation_observation(
+        receiver: &mut tokio::sync::mpsc::UnboundedReceiver<MutationObservation>,
+        phase: &str,
+    ) -> MutationObservation {
+        tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .unwrap_or_else(|_| panic!("{phase} did not emit its mutation observation"))
+            .unwrap_or_else(|| panic!("{phase} mutation observation channel closed"))
+    }
+
     async fn integration_pool(max_connections: u32) -> (String, PgPool) {
         let url = std::env::var("TEST_DATABASE_URL")
             .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
@@ -5307,10 +5317,15 @@ mod integration_tests {
         wait_for_named_session_lock(&pool, &graph_first_application).await;
         graph_change.commit().await.unwrap();
         assert_eq!(
-            graph_first_task.await.unwrap().unwrap(),
+            tokio::time::timeout(Duration::from_secs(5), graph_first_task)
+                .await
+                .expect("graph-first retraction did not return after graph release")
+                .expect("graph-first retraction task panicked")
+                .unwrap(),
             RetractItemsOutcome::Retracted
         );
-        let graph_first_observation = graph_first_rx.recv().await.unwrap();
+        let graph_first_observation =
+            await_mutation_observation(&mut graph_first_rx, "graph-first retraction").await;
         assert_eq!(graph_first_observation.kind, "retract");
         assert!(graph_first_observation.recipients.is_empty());
         assert_eq!(
@@ -5380,7 +5395,8 @@ mod integration_tests {
                 .await
             }
         });
-        let mutation_observation = mutation_rx.recv().await.unwrap();
+        let mutation_observation =
+            await_mutation_observation(&mut mutation_rx, "mutation-first retraction").await;
         assert_eq!(mutation_observation.recipients, vec![subscriber.clone()]);
         let graph_wait_application = format!("ps-graph-wait-{short}");
         let graph_wait_pool = named_single_connection_pool(&url, &graph_wait_application).await;
@@ -5403,11 +5419,19 @@ mod integration_tests {
         wait_for_named_session_lock(&pool, &graph_wait_application).await;
         gate.release();
         assert_eq!(
-            mutation_task.await.unwrap().unwrap(),
+            tokio::time::timeout(Duration::from_secs(5), mutation_task)
+                .await
+                .expect("mutation-first retraction did not return after renderer release")
+                .expect("mutation-first retraction task panicked")
+                .unwrap(),
             RetractItemsOutcome::Retracted
         );
         assert_eq!(
-            dissociate.await.unwrap().unwrap(),
+            tokio::time::timeout(Duration::from_secs(5), dissociate)
+                .await
+                .expect("graph dissociation did not return after retraction commit")
+                .expect("graph dissociation task panicked")
+                .unwrap(),
             CollectionUpdateOutcome::Updated
         );
         assert_eq!(
@@ -5464,7 +5488,8 @@ mod integration_tests {
             .unwrap(),
             CollectionUpdateOutcome::Updated
         );
-        let post_outcast = outcast_rx.recv().await.unwrap();
+        let post_outcast =
+            await_mutation_observation(&mut outcast_rx, "post-outcast association").await;
         assert_eq!(post_outcast.kind, "collection");
         assert!(post_outcast.recipients.is_empty());
         assert_eq!(
@@ -5534,7 +5559,8 @@ mod integration_tests {
         .await
         .unwrap();
         assert!(matches!(batch, SetSubscriptionsOutcome::Updated(_)));
-        let last_observation = last_rx.recv().await.unwrap();
+        let last_observation =
+            await_mutation_observation(&mut last_rx, "last-item subscription").await;
         assert_eq!(last_observation.kind, "subscription");
         assert_eq!(last_observation.recipients, vec![last_jid.clone()]);
         assert_eq!(

@@ -16,9 +16,13 @@ permissions:
   contents: read
 
 concurrency:
-  # Only superseded pull-request runs are cancelled. Pushes to dev/main retain
-  # their complete evidence even when a later push arrives.
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # A pull request has one supersedable validation lane.  Pushes intentionally
+  # use their run id instead: a stalled or timed-out historical dev/main run
+  # must not serialize a later exact-SHA validation run behind it.
+  #
+  # This controls scheduling only.  It does not weaken required jobs, replace
+  # per-test deadlines, or turn a cancelled run into passing evidence.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

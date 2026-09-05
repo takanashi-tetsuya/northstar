@@ -907,6 +907,34 @@ if [ "$(grep -Fc 'let _admission = self.pam_capacity_admission_guard().await;' s
 fi
 echo "migration 0128 commits delivery reclamation independently and gives MIX-PAM exact owner-maintained counters with pre-pool FIFO admission"
 
+# Migration 0129 keeps collection-child quota enforcement at the database
+# boundary without treating timestamp/no-op updates as a second child.  Actual
+# edge moves are checked against the prospective graph, so a raw maintenance
+# UPDATE cannot bypass quota, cycle, or depth invariants.
+pubsub_edge_update_migration="migrations/0129_pubsub_collection_edge_update_semantics.sql"
+[ -f "$pubsub_edge_update_migration" ] || {
+    echo "PubSub collection-edge update migration is missing: $pubsub_edge_update_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'CREATE OR REPLACE FUNCTION check_pubsub_collection_edge()' \
+    "IF TG_OP = 'UPDATE' THEN" \
+    'old_collection_id := OLD.collection_node_id;' \
+    'old_child_id := OLD.child_node_id;' \
+    'old_collection_id = NEW.collection_node_id' \
+    'old_child_id = NEW.child_node_id' \
+    'WITH RECURSIVE graph_edges(collection_node_id, child_node_id) AS (' \
+    'IS DISTINCT FROM (old_collection_id, old_child_id)' \
+    'BEFORE INSERT OR UPDATE OF collection_node_id, child_node_id' \
+    'pubsub collection child limit exceeded'
+do
+    if ! grep -Fq "$required_fragment" "$pubsub_edge_update_migration"; then
+        echo "migration 0129 is missing PubSub collection-edge update invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+echo "migration 0129 preserves collection quota semantics for metadata updates and prospective edge moves"
+
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an
 # existing database, and this repository-side manifest catches the same mistake

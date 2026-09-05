@@ -83,9 +83,13 @@ production baseline; Windows AMD64 artifacts are for development and evaluation.
 - [ ] Keep all runtimes stopped through migration `0128`, which installs exact
   owner-maintained MIX-PAM counters/capabilities and independently committed
   MIX delivery reclamation. Verify the startup counter audit and exact grants.
+- [ ] Keep all runtimes stopped through migration `0129`, which replaces the
+  PubSub collection-edge trigger with prospective quota/cycle/depth checks.
+  Verify an at-capacity metadata update succeeds while a second child and a
+  move into a full collection are rejected.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 127 migrations from `0001` through the current
-  repository maximum `0128`, with `0021` as the sole intentional gap.
+  identity and verify all 128 migrations from `0001` through the current
+  repository maximum `0129`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

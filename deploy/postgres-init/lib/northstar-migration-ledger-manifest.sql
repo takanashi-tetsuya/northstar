@@ -138,6 +138,7 @@ INSERT INTO pg_temp.northstar_migration_ledger_manifest(
   (125,'registration control fail closed',pg_catalog.decode('82db5852dc2dae1a86b8a3b5e977616218f52d6fcabbc10e3276c0e33143afd031de4541b74baa82aaf3a8e88a61ac39','hex')),
   (126,'mix delivery release journal',pg_catalog.decode('2f29bc461f1f2d51f993ae86b4ac8fb8c2e5cfd30390ac14c8a1eaa6a1f6a8d3dc2db6d6f29bad9221cf4c0783352dce','hex')),
   (127,'sm resume authority notifications',pg_catalog.decode('d6b5f916ad9e100b01b206ebdf3250f648bd26ffb94179ee172c2803d9f5398b8e4177c2ca2e19cc6332de93a3b6a42c','hex')),
-  (128,'mix capacity authorities',pg_catalog.decode('ba68ea758f4a8eecca4d0776485ec52eb4cd74d5ec2a5412222a68cbe7cc39e00825abd4067fb9a544be4374134aea7e','hex'));
+  (128,'mix capacity authorities',pg_catalog.decode('ba68ea758f4a8eecca4d0776485ec52eb4cd74d5ec2a5412222a68cbe7cc39e00825abd4067fb9a544be4374134aea7e','hex')),
+  (129,'pubsub collection edge update semantics',pg_catalog.decode('144e3397db1d0fdfde52b4e169f5b8b04cce369731286577a3dc9bfff0917e06abc58a8c863d707a9eb3f8aabfb8ab65','hex'));
 
 \set northstar_migration_ledger_manifest_is_loaded true

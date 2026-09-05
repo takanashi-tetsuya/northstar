@@ -7362,6 +7362,154 @@ mod integration_tests {
                 .unwrap(),
             CollectionUpdateOutcome::Updated
         );
+        // At the quota boundary the first association must own exactly one
+        // edge.  The graph guard must not count that same edge again when an
+        // update names its immutable identities or only stamps metadata.
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM pubsub_collection_members
+                  WHERE collection_node_id=$1 AND child_node_id=$2",
+            )
+            .bind(collection.id)
+            .bind(child.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query(
+                "UPDATE pubsub_collection_members
+                    SET collection_node_id=$1, child_node_id=$2
+                  WHERE collection_node_id=$1 AND child_node_id=$2",
+            )
+            .bind(collection.id)
+            .bind(child.id)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .rows_affected(),
+            1
+        );
+        assert_eq!(
+            sqlx::query(
+                "UPDATE pubsub_collection_members
+                    SET created_at=created_at + INTERVAL '1 microsecond'
+                  WHERE collection_node_id=$1 AND child_node_id=$2",
+            )
+            .bind(collection.id)
+            .bind(child.id)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .rows_affected(),
+            1
+        );
+
+        // A move within a collection replaces its old edge rather than
+        // consuming another slot.  Move it back before exercising the retry
+        // path below so the second request is an actual idempotent repeat.
+        let replacement =
+            create_default_test_node(&pool, &format!("associate-replacement-{suffix}"), &owner)
+                .await;
+        assert_eq!(
+            sqlx::query(
+                "UPDATE pubsub_collection_members SET child_node_id=$3
+                  WHERE collection_node_id=$1 AND child_node_id=$2",
+            )
+            .bind(collection.id)
+            .bind(child.id)
+            .bind(replacement.id)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .rows_affected(),
+            1
+        );
+        assert_eq!(
+            sqlx::query(
+                "UPDATE pubsub_collection_members SET child_node_id=$3
+                  WHERE collection_node_id=$1 AND child_node_id=$2",
+            )
+            .bind(collection.id)
+            .bind(replacement.id)
+            .bind(child.id)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .rows_affected(),
+            1
+        );
+
+        // A move into a separately full collection and a second direct
+        // insertion both remain database-enforced quota violations.
+        let full_collection_id = match create_node(
+            &pool,
+            &format!("associate-full-parent-{suffix}"),
+            &owner,
+            &collection_config,
+            10,
+        )
+        .await
+        .unwrap()
+        {
+            CreateNodeOutcome::Created(id) => id,
+            other => panic!("unexpected full collection create outcome: {other:?}"),
+        };
+        let full_collection = get_node_by_id(&pool, full_collection_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let full_child =
+            create_default_test_node(&pool, &format!("associate-full-child-{suffix}"), &owner)
+                .await;
+        assert_eq!(
+            associate_collection_child(&pool, &full_collection, &full_child, &owner)
+                .await
+                .unwrap(),
+            CollectionUpdateOutcome::Updated
+        );
+        let full_move = sqlx::query(
+            "UPDATE pubsub_collection_members SET collection_node_id=$3
+              WHERE collection_node_id=$1 AND child_node_id=$2",
+        )
+        .bind(collection.id)
+        .bind(child.id)
+        .bind(full_collection.id)
+        .execute(&pool)
+        .await
+        .expect_err("moving an edge into a full collection must be rejected");
+        assert_eq!(
+            full_move
+                .as_database_error()
+                .and_then(|error| error.code().map(|code| code.into_owned()))
+                .as_deref(),
+            Some("23514")
+        );
+        let overflow =
+            create_default_test_node(&pool, &format!("associate-overflow-{suffix}"), &owner).await;
+        assert_eq!(
+            associate_collection_child(&pool, &collection, &overflow, &owner)
+                .await
+                .unwrap(),
+            CollectionUpdateOutcome::LimitExceeded
+        );
+        let direct_overflow = sqlx::query(
+            "INSERT INTO pubsub_collection_members(collection_node_id, child_node_id)
+             VALUES($1, $2)",
+        )
+        .bind(collection.id)
+        .bind(overflow.id)
+        .execute(&pool)
+        .await
+        .expect_err("trigger must reject a second collection child at the limit");
+        assert_eq!(
+            direct_overflow
+                .as_database_error()
+                .and_then(|error| error.code().map(|code| code.into_owned()))
+                .as_deref(),
+            Some("23514")
+        );
 
         let mut graph_blocker = pool.begin().await.unwrap();
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('pubsub-collection-graph', 0))")

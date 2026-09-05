@@ -939,11 +939,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 127 files from `0001` through
-`0128`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 128 files from `0001` through
+`0129`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0128`, with the exact SQLx description and SHA-384 checksum, before it
+through `0129`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url` and `command_database_url` secrets; neither identity may
 attempt DDL. Pending, failed, unknown, duplicated, missing or checksum-drifted
@@ -978,6 +978,13 @@ both commit. The runtime role then has read-only counter access, no direct MIX-
 PAM operation INSERT/DELETE authority, and may mutate those rows only through
 the reviewed SECURITY DEFINER capabilities. Startup compares every counter to
 the operation journal and fails closed on drift.
+
+Migration `0129` replaces the PubSub collection-edge trigger with a
+prospective-graph guard. It preserves quota, cycle and depth enforcement for
+new edges and key moves, but does not mistake a timestamp-only or same-key
+update for an additional child. Stop writers through this migration and exact
+grant reconciliation; it changes a live trigger/function pair and is not a
+rolling-upgrade boundary.
 
 Before each delivery-producing transaction, complete orphan-event reclamation
 and release-journal folding commit in their own authority transaction. Before a
@@ -1019,7 +1026,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
 1. create and verify a signed, age-encrypted backup with the existing release;
 2. stop every Northstar runtime, MIX delivery worker, backup, restore, and
    maintenance client; verify that no application-schema writer remains before
-   migration `0126` and remains stopped through `0128`, and retain the old
+   migration `0126` and remains stopped through `0129`, and retain the old
    superuser secret until rollback is no longer needed;
 3. generate the new independent secrets, then run
    `scripts/reconcile-database-roles.sh --audit` with the existing superuser;
@@ -1027,7 +1034,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0128` manifest
+5. run the one-shot migration job through the complete `0001`-`0129` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

@@ -287,7 +287,8 @@ client_probe() {
 }
 
 start_b() {
-  local readiness_file readiness_nonce readiness
+  local readiness_file readiness_nonce readiness s2s_tls_bind
+  s2s_tls_bind="${1:-127.0.0.1:0}"
   readiness_file="$runtime_dir/b.ready.json"
   readiness_nonce="$(openssl rand -hex 16)"
   rm -f -- "$readiness_file"
@@ -299,6 +300,7 @@ start_b() {
     TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
     PUBLIC_URL="http://127.0.0.1" UPLOAD_DIR="$runtime_dir/uploads-b" \
     TLS_CERT_PATH="$runtime_dir/certs/b.crt" TLS_KEY_PATH="$runtime_dir/certs/b.key" \
+    S2S_TLS_BIND="$s2s_tls_bind" \
     FEDERATION_DNS_OVERRIDES= \
     "${runtime_prefix[@]}" "$binary" >>"$runtime_dir/b.log" 2>&1 &
   pid_b=$!
@@ -406,17 +408,32 @@ run_rejection timeout timeout true 15
 grep -q 'XEP-0487 HTTPS response read timed out' "$runtime_dir/a-timeout.log"
 
 echo stale-valid >"$mode_file"
-# Restart B before seeding the short-lived cache. This exercises B's dynamic
-# listener ownership while ensuring that the cached endpoint is the new one
-# which remains usable during the later discovery timeout.
+# Seed A's cache and then restart B on a different ephemeral port.  The old
+# cached endpoint is consequently unusable; after expiry, a valid discovery
+# response must refresh A to B's replacement port.
+start_a stale-cache true
+client_probe deliver stale-initial 30
+old_s2s_tls_b="$s2s_tls_b"
 stop_b
 start_b
-start_a stale-cache true
-client_probe deliver stale-seed 30
+[[ "$s2s_tls_b" != "$old_s2s_tls_b" ]] || {
+  echo "XEP-0487 stale-recovery did not replace B's dynamic S2S endpoint" >&2; exit 1;
+}
 sleep 1.3
-# Assert timeout discovery from the calling server's structured result, not
-# the independently supervised HTTPS handler's buffered access log.  The
-# latter may not have flushed while the assertion is evaluated.
+client_probe deliver stale-refresh 30
+
+# `stale-refresh` leaves a live outbound stream.  Restart B a second time on
+# its refreshed port solely to close that stream without invalidating the
+# refreshed cache entry.  When the entry expires, the next delivery must make
+# a fresh HTTPS request, observe its timeout, and recover through that stale
+# (but still routable) endpoint.
+refreshed_s2s_tls_b="$s2s_tls_b"
+stop_b
+start_b "127.0.0.1:$refreshed_s2s_tls_b"
+[[ "$s2s_tls_b" == "$refreshed_s2s_tls_b" ]] || {
+  echo "XEP-0487 stale-recovery could not preserve B's refreshed endpoint" >&2; exit 1;
+}
+sleep 1.3
 timeout_hits_before="$(grep -c 'XEP-0487 HTTPS response read timed out' "$log_a" || true)"
 echo timeout >"$mode_file"
 client_probe deliver stale-recovery 30

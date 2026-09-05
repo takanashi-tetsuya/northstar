@@ -1,60 +1,27 @@
-# Listener handoff and activation protocol
+# Test listener handoff
 
-## Scope
+Integration fixtures must never treat an available port number as a reservation.
+The child Northstar process owns the socket: fixtures configure loopback `:0`
+addresses, pass a one-time nonce and an empty readiness-file destination, then
+wait for the child to atomically publish its actual addresses.
 
-This document describes the deterministic handoff contract used by test
-and process orchestration:
+The readiness record contains a protocol version, the parent-issued nonce, the
+child PID, and a stable map of listener purposes to resolved local addresses.
+The parent rejects an absent, malformed, stale, nonce-mismatched, or
+PID-mismatched record. This makes a fixture fail with a bounded diagnostic
+instead of retrying an already released port forever.
 
-- The test harness pre-binds listeners in the parent process.
-- The parent keeps each listener open until the child/server task has taken
-  ownership.
-- Server readiness is reported through a one-shot control channel carrying
-  the effective `SocketAddr` actually bound by the listener.
+`TEST_LISTENER_ACTIVATION=true` is accepted only when every active listener is
+loopback and the XMPP domain is reserved for development (`localhost`,
+`*.localhost`, or `*.test`). It is disabled by default and cannot expose a
+production listener or accept an inherited socket.
 
-## Why
+The shared verifier is:
 
-Previous bind-close-launch behavior could produce transient `EADDRINUSE`
-and flappy failures when multiple suites or processes raced for the same
-ports. By keeping descriptors open in the parent, listen ownership is
-concrete and test orchestration no longer depends on ad hoc retry windows.
+```text
+python3 scripts/wait-test-readiness.py <record> <nonce> <child-pid> [timeout-seconds]
+```
 
-## Contract
-
-- Parent:
-  - Calls `tokio::net::TcpListener::bind` (or equivalent `PreboundListener`).
-  - Creates `(Activation, Readiness)` pairs for each service (`east`, `west`,
-    `admin`, `metrics`, etc.).
-  - Passes the listener to the service entrypoint.
-  - Records each `local_addr()` (after conversion to async listener if needed).
-- Child/server:
-  - Accepts a listener by value and serves directly from it.
-  - Calls `Activation::announce(address)` once after binding/initialization.
-  - Does not perform any further bind on the same `(ip,port)` pair.
-- Test/launcher:
-  - Awaits `Readiness::wait()` and uses returned bound address for probing.
-
-## Operational rules
-
-1. Disable `SO_REUSEPORT` for test listeners.
-2. Keep `SO_REUSEADDR` for expected local restart behavior.
-3. Port selection is deterministic per harness process lifetime to avoid
-   non-reproducible collisions and reduce CI flake.
-4. `ManagedProcess::stop` must use terminate-first semantics:
-   terminate request → wait → force kill on timeout.
-
-## Migration checklist
-
-- `crates/northstar-test-harness/src/listener.rs`
-  - remove `SO_REUSEPORT`.
-  - deterministic port cursor scanning.
-- `crates/northstar-test-harness/src/process.rs`
-  - terminate-first + forced shutdown fallback.
-- `crates/northstar-test-harness/src/activation.rs`
-  - readiness sender/receiver helper.
-- `scripts/allocate-test-ports.py`
-  - deterministic ascending scan (no random shuffle).
-
-## CI proof
-
-- `cargo test -p northstar-test-harness --all-targets`
-- Relevant suites that use listener handoff must request readiness before probing.
+It prints sorted `purpose=address` records after verification. Fixtures must
+preserve their child log, the readiness record, and the verifier output when a
+startup, takeover, or cleanup deadline expires.

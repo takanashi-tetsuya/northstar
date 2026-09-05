@@ -1,0 +1,44 @@
+schema_version: "1.0"
+task:
+  id: "M00-03"
+  title: "Establish race-free test listener ownership and structured readiness"
+  status: "in-progress"
+  branch: "dev"
+  integration_branch: "dev"
+  base_commit: "033d5f26f2dfbb6398cf8e8131165e2210087c17"
+  acceptance_state: "pending-exact-dev-ci"
+scope:
+  guarantees:
+    - "A fixture does not claim that a released numeric port is reserved."
+    - "Child-owned listeners publish resolved addresses only through a nonce- and PID-bound readiness record."
+    - "The test activation path is disabled by default and rejected outside loopback reserved-domain deployments."
+  exclusions:
+    - "This task does not weaken HTTPS, TLS, account-deletion, or data-isolation assertions."
+    - "Windows inherited-handle activation remains unimplemented until its named control channel has equivalent ownership proof."
+work_units:
+  completed:
+    - id: "M00-03.W1"
+      result: "Harness readiness protocol, bounded in-process handoff, and exclusive pre-bound test listeners."
+    - id: "M00-03.W2"
+      result: "Runtime listener ownership, nonce-bound child readiness, and XEP-0487 migration away from the repeated port allocator."
+  pending:
+    - id: "M00-03.W3"
+      result: "Linux inherited-FD/socket-activation handoff where a parent must retain a privileged listener."
+    - id: "M00-03.W4"
+      result: "Process-group cleanup, retained diagnostics, and takeover/crash boundary evidence."
+    - id: "M00-03.W5"
+      result: "Migrate the remaining runtime fixtures and run the defined parallel stress matrix."
+local_validation:
+  passed:
+    - "cargo check --locked --bin rust-xmpp-server"
+    - "cargo test --locked test_listener_activation_is_explicit_and_loopback_only"
+    - "cargo test --locked readiness_publication_is_atomic_and_refuses_overwrite"
+    - "cargo test -p northstar-test-harness --all-targets --locked"
+    - "bash -n scripts/xep0487-runtime-wsl.sh"
+evidence:
+  workflow_runs: []
+  exact_dev_commit: null
+  passed_checks: []
+  failed_checks: []
+  notes:
+    - "Exact-SHA CI and runtime fixture evidence are required before accepted-bootstrap."

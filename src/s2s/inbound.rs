@@ -187,20 +187,17 @@ async fn read_s2s_negotiation_frame<S: AsyncRead + AsyncWrite + Unpin + Send>(
 pub async fn serve_s2s_tls(
     state: Arc<AppState>,
     cancel: tokio_util::sync::CancellationToken,
+    listener: Option<TcpListener>,
 ) -> Result<()> {
     if !state.config.federation_enabled {
         wait_for_federation_shutdown(&cancel).await;
         return Ok(());
     }
-    let listener = TcpListener::bind(state.config.s2s_tls_bind)
-        .await
-        .with_context(|| {
-            format!(
-                "could not bind S2S Direct TLS listener to {}",
-                state.config.s2s_tls_bind
-            )
-        })?;
-    tracing::info!(address = %state.config.s2s_tls_bind, "XMPP S2S Direct TLS listener ready");
+    let listener = listener.context("S2S Direct TLS listener was not activated")?;
+    let address = listener
+        .local_addr()
+        .context("could not inspect S2S Direct TLS listener")?;
+    tracing::info!(%address, "XMPP S2S Direct TLS listener ready");
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
@@ -241,6 +238,7 @@ pub async fn serve(
     state: Arc<AppState>,
     mut outbound_wake: mpsc::Receiver<()>,
     cancel: tokio_util::sync::CancellationToken,
+    listener: Option<TcpListener>,
 ) -> Result<()> {
     if !state.config.federation_enabled {
         tracing::warn!("server-to-server federation is disabled by policy");
@@ -249,10 +247,11 @@ pub async fn serve(
         wait_for_federation_shutdown(&cancel).await;
         return Ok(());
     }
-    let listener = TcpListener::bind(state.config.s2s_bind)
-        .await
-        .with_context(|| format!("could not bind S2S listener to {}", state.config.s2s_bind))?;
-    tracing::info!(address = %state.config.s2s_bind, "XMPP S2S listener ready");
+    let listener = listener.context("S2S listener was not activated")?;
+    let address = listener
+        .local_addr()
+        .context("could not inspect S2S listener")?;
+    tracing::info!(%address, "XMPP S2S listener ready");
     let mut outbox_poll = tokio::time::interval(std::time::Duration::from_secs(1));
     outbox_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut outbound_wake_open = true;

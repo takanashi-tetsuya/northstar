@@ -26,6 +26,7 @@ mod s2s;
 mod services;
 mod state;
 mod storage;
+mod test_activation;
 mod tls;
 mod transport_parsing;
 mod upload_worker;
@@ -37,7 +38,10 @@ use config::Config;
 use futures::FutureExt;
 use sqlx::postgres::PgPoolOptions;
 use state::AppState;
-use std::{any::Any, future::Future, panic::AssertUnwindSafe, path::PathBuf, sync::Arc};
+use std::{
+    any::Any, collections::BTreeMap, future::Future, net::SocketAddr, panic::AssertUnwindSafe,
+    path::PathBuf, sync::Arc,
+};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -587,31 +591,69 @@ async fn main() -> Result<()> {
         },
     );
 
+    // Listener ownership belongs to this process before any service task is
+    // spawned. Test fixtures can therefore use `127.0.0.1:0` and consume a
+    // nonce-bound readiness record instead of racing a port-number allocator.
+    let xmpp_listener = bind_runtime_listener("XMPP", state.config.xmpp_bind).await?;
+    let xmpps_listener = bind_runtime_listener("XMPPS", state.config.xmpps_bind).await?;
+    let http_listener = bind_runtime_listener("HTTP", state.config.http_bind).await?;
+    let metrics_listener = bind_runtime_listener("metrics", state.config.metrics_bind).await?;
+    let admin_listener = if state.config.web_admin_enabled {
+        Some(bind_runtime_listener("web administration", state.config.web_admin_bind).await?)
+    } else {
+        None
+    };
+    let s2s_listener = if state.config.federation_enabled {
+        Some(bind_runtime_listener("S2S", state.config.s2s_bind).await?)
+    } else {
+        None
+    };
+    let s2s_tls_listener = if state.config.federation_enabled {
+        Some(bind_runtime_listener("S2S Direct TLS", state.config.s2s_tls_bind).await?)
+    } else {
+        None
+    };
+    let component_listener = if state.accepts_component_connections() {
+        Some(bind_runtime_listener("external component", state.config.component_bind).await?)
+    } else {
+        None
+    };
+    let listener_addresses = runtime_listener_addresses(
+        &xmpp_listener,
+        &xmpps_listener,
+        &http_listener,
+        &metrics_listener,
+        admin_listener.as_ref(),
+        s2s_listener.as_ref(),
+        s2s_tls_listener.as_ref(),
+        component_listener.as_ref(),
+    )?;
+
     let mut service_tasks = JoinSet::new();
     spawn_service_task(
         &mut service_tasks,
         "XMPP",
-        xmpp::serve_tcp(state.clone(), cancel.clone()),
+        xmpp::serve_tcp(state.clone(), cancel.clone(), xmpp_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "XMPPS",
-        xmpp::serve_xmpps_tcp(state.clone(), cancel.clone()),
+        xmpp::serve_xmpps_tcp(state.clone(), cancel.clone(), xmpps_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "S2S",
-        s2s::serve(state.clone(), federation_rx, cancel.clone()),
+        s2s::serve(state.clone(), federation_rx, cancel.clone(), s2s_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "S2S TLS",
-        s2s::serve_s2s_tls(state.clone(), cancel.clone()),
+        s2s::serve_s2s_tls(state.clone(), cancel.clone(), s2s_tls_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "external component",
-        components::serve(state.clone(), cancel.clone()),
+        components::serve(state.clone(), cancel.clone(), component_listener),
     );
     spawn_service_task(
         &mut service_tasks,
@@ -694,14 +736,6 @@ async fn main() -> Result<()> {
         );
     }
 
-    let http_listener = tokio::net::TcpListener::bind(state.config.http_bind).await?;
-    let metrics_listener = tokio::net::TcpListener::bind(state.config.metrics_bind).await?;
-    let admin_listener = if state.config.web_admin_enabled {
-        Some(tokio::net::TcpListener::bind(state.config.web_admin_bind).await?)
-    } else {
-        None
-    };
-
     let shutdown_state = state.clone();
     spawn_service_task(
         &mut service_tasks,
@@ -720,9 +754,10 @@ async fn main() -> Result<()> {
         spawn_service_task(
             &mut service_tasks,
             "Web administration",
-            api::serve_administration(state, cancel.clone(), listener),
+            api::serve_administration(state.clone(), cancel.clone(), listener),
         );
     }
+    test_activation::publish_if_enabled(&state.config, &listener_addresses, std::process::id())?;
 
     let mut shutdown_error = None;
     tokio::select! {
@@ -810,6 +845,57 @@ async fn main() -> Result<()> {
         Some(error) => Err(error),
         None => Ok(()),
     }
+}
+
+async fn bind_runtime_listener(
+    purpose: &'static str,
+    address: SocketAddr,
+) -> Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind(address)
+        .await
+        .with_context(|| format!("could not bind {purpose} listener to {address}"))
+}
+
+fn runtime_listener_addresses(
+    xmpp: &tokio::net::TcpListener,
+    xmpps: &tokio::net::TcpListener,
+    http: &tokio::net::TcpListener,
+    metrics: &tokio::net::TcpListener,
+    admin: Option<&tokio::net::TcpListener>,
+    s2s: Option<&tokio::net::TcpListener>,
+    s2s_tls: Option<&tokio::net::TcpListener>,
+    component: Option<&tokio::net::TcpListener>,
+) -> Result<BTreeMap<String, SocketAddr>> {
+    let mut addresses = BTreeMap::new();
+    for (purpose, listener) in [
+        ("xmpp", xmpp),
+        ("xmpps", xmpps),
+        ("http", http),
+        ("metrics", metrics),
+    ] {
+        addresses.insert(
+            purpose.to_owned(),
+            listener
+                .local_addr()
+                .with_context(|| format!("could not inspect {purpose} listener"))?,
+        );
+    }
+    for (purpose, listener) in [
+        ("web-admin", admin),
+        ("s2s", s2s),
+        ("s2s-tls", s2s_tls),
+        ("component", component),
+    ] {
+        if let Some(listener) = listener {
+            addresses.insert(
+                purpose.to_owned(),
+                listener
+                    .local_addr()
+                    .with_context(|| format!("could not inspect {purpose} listener"))?,
+            );
+        }
+    }
+    Ok(addresses)
 }
 
 fn unexpected_service_task_exit(
@@ -1041,6 +1127,27 @@ mod container_healthcheck_tests {
                 .unwrap();
         });
         (address, task)
+    }
+
+    #[tokio::test]
+    async fn runtime_listener_inventory_uses_bound_ephemeral_addresses() {
+        let xmpp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let xmpps = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let http = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let metrics = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addresses = super::runtime_listener_addresses(
+            &xmpp, &xmpps, &http, &metrics, None, None, None, None,
+        )
+        .unwrap();
+        assert_eq!(addresses.len(), 4);
+        for (purpose, address) in addresses {
+            assert!(address.ip().is_loopback(), "{purpose} must remain loopback");
+            assert_ne!(
+                address.port(),
+                0,
+                "{purpose} must be resolved before readiness"
+            );
+        }
     }
 
     #[tokio::test]

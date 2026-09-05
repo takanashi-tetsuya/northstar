@@ -17,23 +17,11 @@ run_id="$(openssl rand -hex 6)"
 schema_a="xep0487_a_${run_id}"
 schema_b="xep0487_b_${run_id}"
 [[ "$schema_a" =~ ^[a-z][a-z0-9_]{0,62}$ && "$schema_b" =~ ^[a-z][a-z0-9_]{0,62}$ ]] || exit 2
-pick_port() {
-  python3 "$project_dir/scripts/allocate-test-ports.py" 40000 41999 1
-}
 declare -a allocated_ports=(443)
-assign_port() {
-  local destination="$1" port=""
-  while :; do
-    port="$(pick_port)"
-    if [[ ! " ${allocated_ports[*]} " =~ " $port " ]]; then break; fi
-  done
-  allocated_ports+=("$port")
-  printf -v "$destination" '%s' "$port"
-}
-assign_port http_a
-assign_port http_b
-assign_port s2s_tls_a
-assign_port s2s_tls_b
+http_a=""
+http_b=""
+s2s_tls_a=""
+s2s_tls_b=""
 if ss -H -ltn 'sport = :443' 2>/dev/null | grep -q .; then
   echo "XEP-0487 fixture requires an unused local TCP port 443" >&2
   exit 2
@@ -48,6 +36,27 @@ https_pid=""
 port_is_listening() {
   local port="$1"
   ss -H -ltn "sport = :$port" 2>/dev/null | grep -q .
+}
+readiness_port() {
+  local record="$1" purpose="$2" address
+  address="$(awk -F= -v purpose="$purpose" '$1 == purpose { print $2; exit }' <<<"$record")"
+  [[ -n "$address" ]] || { echo "test readiness did not publish $purpose" >&2; return 1; }
+  printf '%s' "${address##*:}"
+}
+track_readiness_ports() {
+  local record="$1" purpose address port
+  while IFS='=' read -r purpose address; do
+    [[ -n "$purpose" && -n "$address" ]] || continue
+    port="${address##*:}"
+    [[ "$port" =~ ^[1-9][0-9]*$ ]] || { echo "invalid readiness address: $address" >&2; return 1; }
+    allocated_ports+=("$port")
+  done <<<"$record"
+}
+wait_for_readiness() {
+  local record_path="$1" nonce="$2" pid="$3" output
+  output="$(python3 "$project_dir/scripts/wait-test-readiness.py" "$record_path" "$nonce" "$pid" 15)" || return 1
+  track_readiness_ports "$output"
+  printf '%s\n' "$output"
 }
 cleanup() {
   status=$?
@@ -176,27 +185,15 @@ env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
 env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=remote.localhost \
   MIGRATOR_DATABASE_URL="$database_url_b" "$binary" migrate
 
-XEP0487_HTTPS_PORT=443 XEP0487_S2S_PORT="$s2s_tls_b" \
-XEP0487_HTTPS_CERT="$runtime_dir/certs/https.crt" XEP0487_HTTPS_KEY="$runtime_dir/certs/https.key" \
-XEP0487_MODE_FILE="$mode_file" XEP0487_PUBLIC_KEY_PIN="$b_pin" \
-python3 scripts/xep0487-runtime-wsl.py serve >"$runtime_dir/https.log" 2>&1 &
-https_pid=$!
-for _ in $(seq 1 100); do
-  if curl --silent --fail --noproxy '*' --cacert "$runtime_dir/certs/ca.crt" \
-    --resolve remote.localhost:443:127.0.0.1 \
-    https://remote.localhost/.well-known/host-meta.json >/dev/null; then break; fi
-  kill -0 "$https_pid" 2>/dev/null || { cat "$runtime_dir/https.log" >&2; exit 1; }
-  sleep .1
-done
-curl --silent --fail --noproxy '*' --cacert "$runtime_dir/certs/ca.crt" \
-  --resolve remote.localhost:443:127.0.0.1 \
-  https://remote.localhost/.well-known/host-meta.json >/dev/null
-
 common_env=(
   NORTHSTAR_DISABLE_DOTENV=true
   XMPP_BIND=127.0.0.1:0
   XMPPS_BIND=127.0.0.1:0
+  HTTP_BIND=127.0.0.1:0
   S2S_BIND=127.0.0.1:0
+  S2S_TLS_BIND=127.0.0.1:0
+  METRICS_BIND=127.0.0.1:0
+  WEB_ADMIN_BIND=127.0.0.1:0
   OPEN_REGISTRATION=true
   REQUIRE_ENCRYPTED_ARCHIVE=false
   REGISTRATION_RATE_PER_HOUR=20
@@ -211,23 +208,28 @@ common_env=(
 )
 
 start_a() {
-  local scenario="$1" allow_private="$2"
+  local scenario="$1" allow_private="$2" readiness_file readiness_nonce readiness
   log_a="$runtime_dir/a-$scenario.log"
+  readiness_file="$runtime_dir/a-$scenario.ready.json"
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file"
   env "${common_env[@]}" XMPP_DOMAIN=localhost FEDERATION_ALLOW_PRIVATE_IPS="$allow_private" \
     FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token-a.secret" \
     DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram-a.secret" \
     DATABASE_URL="$database_url_a" \
-    HTTP_BIND="127.0.0.1:$http_a" S2S_TLS_BIND="127.0.0.1:$s2s_tls_a" \
-    PUBLIC_URL="http://127.0.0.1:$http_a" UPLOAD_DIR="$runtime_dir/uploads-a" \
+    TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL="http://127.0.0.1" UPLOAD_DIR="$runtime_dir/uploads-a" \
     TLS_CERT_PATH="$runtime_dir/certs/a.crt" TLS_KEY_PATH="$runtime_dir/certs/a.key" \
     FEDERATION_DNS_OVERRIDES= \
     "${runtime_prefix[@]}" "$binary" >"$log_a" 2>&1 &
   pid_a=$!
-  for _ in $(seq 1 150); do
-    curl --silent --fail "http://127.0.0.1:$http_a/readyz" >/dev/null && break
-    kill -0 "$pid_a" 2>/dev/null || { cat "$log_a" >&2; exit 1; }
-    sleep .1
-  done
+  readiness="$(wait_for_readiness "$readiness_file" "$readiness_nonce" "$pid_a")" || {
+    cat "$log_a" >&2
+    return 1
+  }
+  printf '%s\n' "$readiness" >"$runtime_dir/a-$scenario.readiness"
+  http_a="$(readiness_port "$readiness" http)"
+  s2s_tls_a="$(readiness_port "$readiness" s2s-tls)"
   curl --silent --fail "http://127.0.0.1:$http_a/readyz" >/dev/null
   [[ "$(ps -o euid= -p "$pid_a" | tr -d '[:space:]')" == "$runtime_uid" ]] || {
     echo "Northstar A did not run as the non-root fixture uid" >&2; exit 1;
@@ -256,22 +258,28 @@ client_probe() {
 }
 
 start_b() {
+  local readiness_file readiness_nonce readiness
+  readiness_file="$runtime_dir/b.ready.json"
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file"
   env "${common_env[@]}" XMPP_DOMAIN=remote.localhost \
     FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token-b.secret" \
     DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram-b.secret" \
     FEDERATION_ALLOW_PRIVATE_IPS=true \
     DATABASE_URL="$database_url_b" \
-    HTTP_BIND="127.0.0.1:$http_b" S2S_TLS_BIND="127.0.0.1:$s2s_tls_b" \
-    PUBLIC_URL="http://127.0.0.1:$http_b" UPLOAD_DIR="$runtime_dir/uploads-b" \
+    TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL="http://127.0.0.1" UPLOAD_DIR="$runtime_dir/uploads-b" \
     TLS_CERT_PATH="$runtime_dir/certs/b.crt" TLS_KEY_PATH="$runtime_dir/certs/b.key" \
-    FEDERATION_DNS_OVERRIDES="localhost=xmpps://127.0.0.1:$s2s_tls_a" \
+    FEDERATION_DNS_OVERRIDES= \
     "${runtime_prefix[@]}" "$binary" >>"$runtime_dir/b.log" 2>&1 &
   pid_b=$!
-  for _ in $(seq 1 150); do
-    curl --silent --fail "http://127.0.0.1:$http_b/readyz" >/dev/null && break
-    kill -0 "$pid_b" 2>/dev/null || { cat "$runtime_dir/b.log" >&2; exit 1; }
-    sleep .1
-  done
+  readiness="$(wait_for_readiness "$readiness_file" "$readiness_nonce" "$pid_b")" || {
+    cat "$runtime_dir/b.log" >&2
+    return 1
+  }
+  printf '%s\n' "$readiness" >"$runtime_dir/b.readiness"
+  http_b="$(readiness_port "$readiness" http)"
+  s2s_tls_b="$(readiness_port "$readiness" s2s-tls)"
   curl --silent --fail "http://127.0.0.1:$http_b/readyz" >/dev/null
   [[ "$(ps -o euid= -p "$pid_b" | tr -d '[:space:]')" == "$runtime_uid" ]] || {
     echo "Northstar B did not run as the non-root fixture uid" >&2; exit 1;
@@ -290,6 +298,22 @@ stop_b() {
 }
 
 start_b
+
+XEP0487_HTTPS_PORT=443 XEP0487_S2S_PORT="$s2s_tls_b" \
+XEP0487_HTTPS_CERT="$runtime_dir/certs/https.crt" XEP0487_HTTPS_KEY="$runtime_dir/certs/https.key" \
+XEP0487_MODE_FILE="$mode_file" XEP0487_PUBLIC_KEY_PIN="$b_pin" \
+python3 scripts/xep0487-runtime-wsl.py serve >"$runtime_dir/https.log" 2>&1 &
+https_pid=$!
+for _ in $(seq 1 100); do
+  if curl --silent --fail --noproxy '*' --cacert "$runtime_dir/certs/ca.crt" \
+    --resolve remote.localhost:443:127.0.0.1 \
+    https://remote.localhost/.well-known/host-meta.json >/dev/null; then break; fi
+  kill -0 "$https_pid" 2>/dev/null || { cat "$runtime_dir/https.log" >&2; exit 1; }
+  sleep .1
+done
+curl --silent --fail --noproxy '*' --cacert "$runtime_dir/certs/ca.crt" \
+  --resolve remote.localhost:443:127.0.0.1 \
+  https://remote.localhost/.well-known/host-meta.json >/dev/null
 
 echo valid >"$mode_file"
 start_a valid true

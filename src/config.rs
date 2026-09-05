@@ -243,6 +243,14 @@ pub struct RawConfig {
     #[serde(default = "default_http_bind")]
     pub http_bind: SocketAddr,
 
+    /// Explicitly enables nonce-bound, child-owned listener readiness records
+    /// for hermetic test fixtures. It is rejected outside loopback reserved
+    /// domains and is never enabled by a production default.
+    #[serde(default)]
+    pub test_listener_activation: bool,
+    pub test_readiness_file: Option<PathBuf>,
+    pub test_readiness_nonce: Option<String>,
+
     /// Public HTTP capability switches. Routes for disabled capabilities are
     /// not installed at all; handlers therefore cannot be reached through an
     /// alternate path or an accidental static-file fallback.
@@ -1450,6 +1458,45 @@ fn validate_listener_plan(raw: &RawConfig, public_http_active: bool) -> Result<(
     Ok(())
 }
 
+fn validate_test_listener_activation(
+    raw: &RawConfig,
+    listeners_are_loopback: bool,
+    reserved_development_domain: bool,
+) -> Result<()> {
+    let configured = raw.test_readiness_file.is_some() || raw.test_readiness_nonce.is_some();
+    if !raw.test_listener_activation {
+        anyhow::ensure!(
+            !configured,
+            "TEST_READINESS_FILE and TEST_READINESS_NONCE require TEST_LISTENER_ACTIVATION=true"
+        );
+        return Ok(());
+    }
+    anyhow::ensure!(
+        listeners_are_loopback && reserved_development_domain,
+        "TEST_LISTENER_ACTIVATION is restricted to loopback listeners on a reserved development domain"
+    );
+    let path = raw
+        .test_readiness_file
+        .as_ref()
+        .context("TEST_LISTENER_ACTIVATION requires TEST_READINESS_FILE")?;
+    anyhow::ensure!(
+        path.is_absolute(),
+        "TEST_READINESS_FILE must be an absolute path"
+    );
+    let nonce = raw
+        .test_readiness_nonce
+        .as_deref()
+        .context("TEST_LISTENER_ACTIVATION requires TEST_READINESS_NONCE")?;
+    anyhow::ensure!(
+        (16..=128).contains(&nonce.len())
+            && nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "TEST_READINESS_NONCE must be 16-128 lowercase hexadecimal characters"
+    );
+    Ok(())
+}
+
 impl Config {
     pub fn from_env() -> Result<Self> {
         let mut raw: RawConfig =
@@ -1790,6 +1837,11 @@ impl Config {
             && (!raw.web_admin_enabled || raw.web_admin_bind.ip().is_loopback());
         let reserved_development_domain =
             domain == "localhost" || domain.ends_with(".localhost") || domain.ends_with(".test");
+        validate_test_listener_activation(
+            &raw,
+            listeners_are_loopback,
+            reserved_development_domain,
+        )?;
         let development_redis_is_local = redis_endpoint_is_local(raw.redis_url.as_deref())?;
         let ephemeral_abuse_state_is_allowed = raw.abuse_state_allow_ephemeral
             && raw.redis_url.is_none()
@@ -3076,6 +3128,22 @@ mod tests {
     fn web_dependency_fixture() -> super::RawConfig {
         envy::from_iter::<_, super::RawConfig>(std::iter::empty::<(String, String)>())
             .expect("RawConfig defaults must deserialize")
+    }
+
+    #[test]
+    fn test_listener_activation_is_explicit_and_loopback_only() {
+        let mut raw = web_dependency_fixture();
+        raw.test_listener_activation = true;
+        raw.test_readiness_file = Some(std::env::temp_dir().join("northstar-ready.json"));
+        raw.test_readiness_nonce = Some("0123456789abcdef".to_owned());
+        super::validate_test_listener_activation(&raw, true, true).unwrap();
+
+        assert!(super::validate_test_listener_activation(&raw, false, true).is_err());
+        raw.test_readiness_nonce = Some("not-a-canonical-nonce".to_owned());
+        assert!(super::validate_test_listener_activation(&raw, true, true).is_err());
+
+        raw.test_listener_activation = false;
+        assert!(super::validate_test_listener_activation(&raw, true, true).is_err());
     }
 
     #[test]

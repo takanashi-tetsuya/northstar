@@ -74,11 +74,12 @@ fn c2s_idle_timeout(authenticated: bool) -> Duration {
 pub async fn serve_tcp(
     state: Arc<AppState>,
     cancel: tokio_util::sync::CancellationToken,
+    listener: TcpListener,
 ) -> Result<()> {
-    let listener = TcpListener::bind(state.config.xmpp_bind)
-        .await
-        .with_context(|| format!("could not bind XMPP listener to {}", state.config.xmpp_bind))?;
-    tracing::info!(address = %state.config.xmpp_bind, "XMPP TCP listener ready");
+    let address = listener
+        .local_addr()
+        .context("could not inspect XMPP listener")?;
+    tracing::info!(%address, "XMPP TCP listener ready");
     loop {
         let (stream, peer) = tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
@@ -127,16 +128,12 @@ pub async fn serve_tcp(
 pub async fn serve_xmpps_tcp(
     state: Arc<AppState>,
     cancel: tokio_util::sync::CancellationToken,
+    listener: TcpListener,
 ) -> Result<()> {
-    let listener = TcpListener::bind(state.config.xmpps_bind)
-        .await
-        .with_context(|| {
-            format!(
-                "could not bind XMPPS listener to {}",
-                state.config.xmpps_bind
-            )
-        })?;
-    tracing::info!(address = %state.config.xmpps_bind, "XMPPS Direct TLS listener ready");
+    let address = listener
+        .local_addr()
+        .context("could not inspect XMPPS listener")?;
+    tracing::info!(%address, "XMPPS Direct TLS listener ready");
     loop {
         let (stream, peer) = tokio::select! {
             _ = cancel.cancelled() => return Ok(()),

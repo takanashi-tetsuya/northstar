@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import importlib.util
 import base64
+import json
 import os
 import pathlib
 import re
@@ -34,6 +35,80 @@ COMPONENT_CONNECT_PORT = int(os.environ.get("COMPONENT_CONNECT_RUNTIME_PORT", "1
 COMPONENT_CONNECT_SECRET = os.environ["COMPONENT_CONNECT_RUNTIME_SECRET"]
 COMPONENT_CA_FILE = os.environ["COMPONENT_RUNTIME_CA_FILE"]
 _READ_BUFFERS: dict[object, bytearray] = {}
+_READINESS_NONCE = re.compile(r"^[0-9a-f]{16,128}$")
+
+
+def publish_connect_readiness(listener: socket.socket) -> None:
+    """Publish the mock's child-owned endpoint without a bind-close race.
+
+    The component connect mock is a fixture child just like Northstar.  When
+    the parent asks for a record, it must receive an atomically installed,
+    nonce- and PID-bound endpoint only after this process owns the socket.
+    Leaving both variables unset preserves the standalone mock's historical
+    direct-invocation behavior.
+    """
+
+    raw_path = os.environ.get("COMPONENT_CONNECT_READINESS_FILE")
+    nonce = os.environ.get("COMPONENT_CONNECT_READINESS_NONCE")
+    if raw_path is None and nonce is None:
+        return
+    if not raw_path or not nonce:
+        raise RuntimeError(
+            "COMPONENT_CONNECT_READINESS_FILE and COMPONENT_CONNECT_READINESS_NONCE "
+            "must be set together"
+        )
+    if not _READINESS_NONCE.fullmatch(nonce):
+        raise RuntimeError("component connect readiness nonce is not canonical")
+
+    destination = pathlib.Path(raw_path)
+    if not destination.is_absolute() or not destination.parent.is_dir():
+        raise RuntimeError("component connect readiness destination is not an existing absolute path")
+    if destination.exists():
+        raise RuntimeError(f"refusing to overwrite component connect readiness record: {destination}")
+
+    host, port = listener.getsockname()[:2]
+    if host != "127.0.0.1" or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise RuntimeError(f"component connect mock did not bind a canonical loopback endpoint: {host}:{port}")
+    payload = json.dumps(
+        {
+            "version": 1,
+            "instance_nonce": nonce,
+            "pid": os.getpid(),
+            "listeners": {"component-connect": f"{host}:{port}"},
+        },
+        separators=(",", ":"),
+    ).encode() + b"\n"
+    temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+    descriptor = -1
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=True) as output:
+            descriptor = -1
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        # `link` is create-only, unlike replace: a racing pre-existing record
+        # makes startup fail instead of allowing one fixture to overwrite
+        # another fixture's proof.
+        os.link(temporary, destination)
+    except FileExistsError as error:
+        raise RuntimeError(f"component connect readiness record already exists: {destination}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def make_connect_listener(backlog: int) -> socket.socket:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", COMPONENT_CONNECT_PORT))
+    listener.listen(backlog)
+    publish_connect_readiness(listener)
+    return listener
 
 
 def login(*, register: bool) -> tuple[object, str]:
@@ -337,10 +412,7 @@ def modern_authenticate(modern_tls: ssl.SSLSocket, retry_once: bool) -> None:
 
 
 def connect_mock() -> None:
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", COMPONENT_CONNECT_PORT))
-    listener.listen(8)
+    listener = make_connect_listener(8)
     listener.settimeout(60)
     completed_sessions = 0
     rejected_credentials = 0
@@ -465,10 +537,7 @@ def connect_mock() -> None:
 
 def connect_disabled_federation_mock() -> None:
     """Prove that a connect-mode component cannot bypass a disabled federation router."""
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", COMPONENT_CONNECT_PORT))
-    listener.listen(1)
+    listener = make_connect_listener(1)
     listener.settimeout(60)
     try:
         connection, _ = listener.accept()

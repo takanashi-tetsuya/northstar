@@ -12,25 +12,21 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$project_dir/target-wsl}"
 fi
 cd "$project_dir"
+source "$project_dir/scripts/lib/test-listener-readiness.sh"
 
 nonce="$(date +%s%N)_$$"
 schema="component_runtime_${nonce}"
 [[ "$schema" =~ ^component_runtime_[0-9_]+$ ]] || { echo "unsafe component test schema" >&2; exit 1; }
-read -r test_xmpp_port test_http_port test_component_port test_connect_port < <(
-  python3 "$project_dir/scripts/allocate-test-ports.py" 42000 43999 4
-)
-export XMPP_TEST_CLIENT_PORT="$test_xmpp_port"
-export XMPP_TEST_HTTP_PORT="$test_http_port"
-export COMPONENT_RUNTIME_PORT="$test_component_port"
-export COMPONENT_CONNECT_RUNTIME_PORT="$test_connect_port"
-allocated_ports=("$test_xmpp_port" "$test_http_port" "$test_component_port" "$test_connect_port")
 runtime_dir="$(mktemp -d /tmp/northstar-component.XXXXXX)"
 pid=""
 mock_pid=""
-port_is_listening() {
-  local port="$1"
-  ss -H -ltn "sport = :$port" 2>/dev/null | grep -q .
-}
+server_generation=0
+mock_generation=0
+test_xmpp_port=""
+test_http_port=""
+test_component_port=""
+test_connect_port=""
+declare -a fixture_listener_ports=()
 cleanup() {
   status=$?
   trap - EXIT INT TERM
@@ -62,13 +58,7 @@ cleanup() {
     status=1
   fi
   listener_count=0
-  for port in "${allocated_ports[@]}"; do
-    if port_is_listening "$port"; then
-      echo "component runtime listener remained on port $port" >&2
-      listener_count=$((listener_count + 1))
-      status=1
-    fi
-  done
+  if ! fixture_assert_no_listeners; then listener_count=1; status=1; fi
   case "$runtime_dir" in
     /tmp/northstar-component.*) rm -rf -- "$runtime_dir" ;;
     *) echo "refusing to remove unexpected component runtime directory: $runtime_dir" >&2; status=1 ;;
@@ -114,10 +104,20 @@ outbound_component_secret="$(openssl rand -hex 32)"
 wrong_outbound_component_secret="$(openssl rand -hex 32)"
 printf '%s\n' "$wrong_outbound_component_secret" >"$runtime_dir/outbound-component.secret"
 chmod 600 "$runtime_dir/outbound-component.secret"
-cat >"$runtime_dir/components.json" <<EOF
+
+# The connect-mode mock owns its loopback socket before the server can be
+# configured with its address.  This deliberately writes configuration only
+# after the mock's nonce/PID-bound readiness record proves that ownership.
+write_components_config() {
+  [[ "$test_connect_port" =~ ^[1-9][0-9]*$ ]] && (( test_connect_port <= 65535 )) || {
+    echo "component connect mock did not publish a valid port" >&2
+    return 1
+  }
+  cat >"$runtime_dir/components.json" <<EOF
 {"components":[{"jid":"gateway.localhost","aliases":["alias.gateway.localhost"],"secret":"$component_secret","connection":"accept","legacy_0114":true,"modern_0225":true},{"jid":"outbound.localhost","aliases":[],"secret_file":"$runtime_dir/outbound-component.secret","connection":"connect","connect_endpoint":"127.0.0.1:$test_connect_port","legacy_0114":true,"modern_0225":false}]}
 EOF
-chmod 600 "$runtime_dir/components.json"
+  chmod 600 "$runtime_dir/components.json"
+}
 
 cargo_args=(--locked)
 if [[ "${XMPP_TEST_OFFLINE:-true}" != "false" ]]; then cargo_args+=(--offline); fi
@@ -134,12 +134,18 @@ env NORTHSTAR_DISABLE_DOTENV=true \
 
 start_server() {
   local federation_enabled="${1:-true}"
+  local readiness_file="$runtime_dir/server-$((server_generation + 1)).ready.json"
+  local readiness_nonce
+  server_generation=$((server_generation + 1))
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file"
   env XMPP_DOMAIN=localhost \
     NORTHSTAR_DISABLE_DOTENV=true \
     DATABASE_URL="$component_database_url" \
-    XMPP_BIND="127.0.0.1:$test_xmpp_port" XMPPS_BIND=127.0.0.1:0 HTTP_BIND="127.0.0.1:$test_http_port" \
-    S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 COMPONENT_BIND="127.0.0.1:$test_component_port" \
-    PUBLIC_URL="http://127.0.0.1:$test_http_port" UPLOAD_DIR="$runtime_dir/uploads" \
+    XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 METRICS_BIND=127.0.0.1:0 \
+    S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 COMPONENT_BIND=127.0.0.1:0 \
+    TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL=http://127.0.0.1 UPLOAD_DIR="$runtime_dir/uploads" \
     TLS_CERT_PATH="$runtime_dir/server.crt" TLS_KEY_PATH="$runtime_dir/server.key" \
     OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=false REGISTRATION_RATE_PER_HOUR=20 \
     FEDERATION_ENABLED="$federation_enabled" FEDERATION_ALLOWLIST=allowed.remote.invalid \
@@ -154,12 +160,32 @@ start_server() {
     LOG_FORMAT=json RUST_LOG=rust_xmpp_server=debug \
     "$binary" >"$runtime_dir/server.log" 2>&1 &
   pid=$!
-  for _ in $(seq 1 150); do
-    if curl --silent --fail "http://127.0.0.1:$test_http_port/readyz" >/dev/null; then return; fi
-    sleep 0.1
-  done
-  cat "$runtime_dir/server.log"
-  return 1
+  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid" || return 1
+  test_xmpp_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
+  test_http_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+  test_component_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" component)"
+  export XMPP_TEST_CLIENT_PORT="$test_xmpp_port"
+  export XMPP_TEST_HTTP_PORT="$test_http_port"
+  export COMPONENT_RUNTIME_PORT="$test_component_port"
+  curl --silent --fail "http://127.0.0.1:$test_http_port/readyz" >/dev/null
+}
+
+start_connect_mock() {
+  local mode="$1" log_file="$2"
+  local readiness_file="$runtime_dir/component-connect-$((mock_generation + 1)).ready.json"
+  local readiness_nonce
+  mock_generation=$((mock_generation + 1))
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file"
+  env COMPONENT_CONNECT_RUNTIME_PORT=0 \
+    COMPONENT_CONNECT_READINESS_FILE="$readiness_file" \
+    COMPONENT_CONNECT_READINESS_NONCE="$readiness_nonce" \
+    python3 scripts/component-runtime-wsl.py "$mode" >"$log_file" 2>&1 &
+  mock_pid=$!
+  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$mock_pid" || return 1
+  test_connect_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" component-connect)"
+  export COMPONENT_CONNECT_RUNTIME_PORT="$test_connect_port"
+  write_components_config
 }
 
 export COMPONENT_RUNTIME_SECRET="$component_secret"
@@ -167,16 +193,14 @@ export COMPONENT_CONNECT_RUNTIME_SECRET="$outbound_component_secret"
 export COMPONENT_RUNTIME_CA_FILE="$runtime_dir/component-ca.crt"
 python3 scripts/component-runtime-wsl.py reader-selftest
 echo "component runtime schema: $schema"
-echo "component runtime ports: xmpp=$test_xmpp_port http=$test_http_port component=$test_component_port connect-mock=$test_connect_port"
 
 # A configured connect-mode component is local authority only.  Even an
 # allowlisted remote domain must remain unreachable while federation itself is
 # disabled.  Use the correct mounted secret for this isolated negative phase.
 printf '%s\n' "$outbound_component_secret" >"$runtime_dir/outbound-component.secret"
-python3 scripts/component-runtime-wsl.py connect-disabled-federation-mock \
-  >"$runtime_dir/component-disabled-mock.log" 2>&1 &
-mock_pid=$!
+start_connect_mock connect-disabled-federation-mock "$runtime_dir/component-disabled-mock.log"
 start_server false
+echo "component runtime ports: xmpp=$test_xmpp_port http=$test_http_port component=$test_component_port connect-mock=$test_connect_port"
 for _ in $(seq 1 100); do
   if ! kill -0 "$mock_pid" 2>/dev/null; then break; fi
   sleep 0.1
@@ -199,8 +223,7 @@ pid=""
 # durability phase below.  The second startup explicitly enables federation
 # and proves that only the configured allowlist can be handed to S2S.
 printf '%s\n' "$wrong_outbound_component_secret" >"$runtime_dir/outbound-component.secret"
-python3 scripts/component-runtime-wsl.py connect-mock >"$runtime_dir/component-mock.log" 2>&1 &
-mock_pid=$!
+start_connect_mock connect-mock "$runtime_dir/component-mock.log"
 start_server true
 python3 scripts/component-runtime-wsl.py enqueue
 queued="$(PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \

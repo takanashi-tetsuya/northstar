@@ -6,6 +6,7 @@ export METRICS_BIND=127.0.0.1:0
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
+source "$project_dir/scripts/lib/test-listener-readiness.sh"
 if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export PATH="$project_dir/.cargo-linux/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   export RUSTUP_HOME="$project_dir/.rustup-linux"
@@ -19,24 +20,17 @@ schema="northstar_browser_e2e_${suffix}"
   echo "unsafe browser E2E schema" >&2
   exit 2
 }
-read -r xmpp_port xmpps_port http_port s2s_port < <(
-  python3 "$project_dir/scripts/allocate-test-ports.py" 60000 61999 4
-)
 browser_host="${NORTHSTAR_BROWSER_HOST:-127.0.0.1}"
-[[ "$browser_host" =~ ^[A-Za-z0-9.:-]+$ ]] || {
-  echo "unsafe browser E2E host" >&2
+[[ "$browser_host" == "127.0.0.1" || "$browser_host" == "localhost" ]] || {
+  echo "NORTHSTAR_BROWSER_HOST must be 127.0.0.1 or localhost for the loopback browser fixture" >&2
   exit 2
 }
-browser_http_bind="127.0.0.1"
 if [[ "${NORTHSTAR_BROWSER_ALLOW_NON_LOOPBACK_BIND:-false}" == "true" ]]; then
-  browser_http_bind="0.0.0.0"
-elif [[ "${NORTHSTAR_BROWSER_ALLOW_NON_LOOPBACK_BIND:-false}" != "false" ]]; then
-  echo "NORTHSTAR_BROWSER_ALLOW_NON_LOOPBACK_BIND must be true or false" >&2
+  echo "NORTHSTAR_BROWSER_ALLOW_NON_LOOPBACK_BIND=true is not supported by the nonce-bound loopback browser fixture" >&2
   exit 2
 fi
-if [[ "$browser_host" != "127.0.0.1" && "$browser_host" != "localhost" \
-   && "$browser_host" != "::1" && "$browser_http_bind" == "127.0.0.1" ]]; then
-  echo "a non-loopback NORTHSTAR_BROWSER_HOST requires NORTHSTAR_BROWSER_ALLOW_NON_LOOPBACK_BIND=true" >&2
+if [[ "${NORTHSTAR_BROWSER_ALLOW_NON_LOOPBACK_BIND:-false}" != "false" ]]; then
+  echo "NORTHSTAR_BROWSER_ALLOW_NON_LOOPBACK_BIND must be true or false" >&2
   exit 2
 fi
 browser_mode="${NORTHSTAR_BROWSER_MODE:-interop}"
@@ -72,16 +66,24 @@ fi
 
 runtime_dir="$(mktemp -d /tmp/northstar-browser-e2e.XXXXXX)"
 server_pid=""
-port_is_listening() {
-  local port="$1"
-  ss -H -ltn "sport = :$port" 2>/dev/null | grep -q .
-}
+browser_relay_pid=""
+browser_relay_port=""
+relay_target_file="$runtime_dir/browser-http.target"
+xmpp_port=""
+xmpps_port=""
+http_port=""
+s2s_port=""
+declare -a fixture_listener_ports=()
 cleanup() {
   status=$?
-  trap - EXIT
+  trap - EXIT INT TERM
   if [[ -n "$server_pid" ]]; then
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$browser_relay_pid" ]]; then
+    kill "$browser_relay_pid" 2>/dev/null || true
+    wait "$browser_relay_pid" 2>/dev/null || true
   fi
   if [[ $status -ne 0 && -f "$runtime_dir/server.log" ]]; then
     echo "browser E2E server log after failure:" >&2
@@ -91,20 +93,19 @@ cleanup() {
     --set ON_ERROR_STOP=1 --command "DROP SCHEMA IF EXISTS \"$schema\" CASCADE" >/dev/null 2>&1 || status=1
   remains="$(PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
     --tuples-only --no-align --command "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='$schema')" 2>/dev/null || printf unknown)"
-  for port in "$xmpp_port" "$xmpps_port" "$http_port" "$s2s_port"; do
-    if port_is_listening "$port"; then
-      echo "browser E2E listener remained on port $port" >&2
-      status=1
-    fi
-  done
+  remains="${remains//[[:space:]]/}"
+  listener_count=0
+  if ! fixture_assert_no_listeners; then listener_count=1; status=1; fi
   case "$runtime_dir" in
     /tmp/northstar-browser-e2e.*) rm -rf -- "$runtime_dir" ;;
     *) status=1 ;;
   esac
-  echo "browser E2E cleanup: schema=$schema remains=${remains:-unknown} listeners=0"
+  echo "browser E2E cleanup: schema=$schema remains=${remains:-unknown} listeners=$listener_count"
   exit "$status"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
   --set ON_ERROR_STOP=1 --command "CREATE SCHEMA \"$schema\"" >/dev/null
@@ -129,11 +130,25 @@ database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?o
 env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
   MIGRATOR_DATABASE_URL="$database_url" \
   "$target_dir/debug/rust-xmpp-server" migrate
+
+# The browser must know its origin before Northstar can bind its own ephemeral
+# HTTP listener.  A fixture-owned loopback relay supplies that stable origin;
+# it forwards only after the child server publishes its nonce/PID-bound HTTP
+# endpoint.  This preserves exact Origin enforcement without reserving a port
+# number or exposing a non-loopback test listener.
+fixture_start_tcp_relay "$project_dir" "$runtime_dir" browser browser-http "$relay_target_file" \
+  "$runtime_dir/browser-http-relay.log" browser_relay_pid browser_relay_port
+browser_url="http://$browser_host:$browser_relay_port"
+
+readiness_file="$runtime_dir/server.ready.json"
+readiness_nonce="$(openssl rand -hex 16)"
+rm -f -- "$readiness_file" "$relay_target_file"
 env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
   DATABASE_URL="$database_url" \
-  XMPP_BIND="127.0.0.1:$xmpp_port" XMPPS_BIND="127.0.0.1:$xmpps_port" \
-  HTTP_BIND="$browser_http_bind:$http_port" S2S_BIND="127.0.0.1:$s2s_port" S2S_TLS_BIND=127.0.0.1:0 \
-  PUBLIC_URL="http://$browser_host:$http_port" WEBSOCKET_ALLOWED_ORIGINS="http://$browser_host:$http_port" \
+  XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 METRICS_BIND=127.0.0.1:0 \
+  S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
+  TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
+  PUBLIC_URL="$browser_url" WEBSOCKET_ALLOWED_ORIGINS="$browser_url" \
   API_CONTROL_SECRET_FILE="$runtime_dir/api-control.secret" \
   ABUSE_STATE_HMAC_KEY_FILE="$runtime_dir/abuse-state.secret" \
   FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token.secret" \
@@ -146,14 +161,15 @@ env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
   "$target_dir/debug/rust-xmpp-server" >"$runtime_dir/server.log" 2>&1 &
 server_pid=$!
 
-for _ in $(seq 1 150); do
-  if curl --silent --fail "http://127.0.0.1:$http_port/readyz" >/dev/null; then break; fi
-  sleep 0.1
-done
+fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid"
+xmpp_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
+xmpps_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
+http_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+printf '127.0.0.1:%s\n' "$http_port" >"$relay_target_file"
 curl --silent --fail "http://127.0.0.1:$http_port/readyz" >/dev/null
 if [[ "$browser_mode" == "external" ]]; then
   state_tmp="$control_dir/state.json.tmp"
-  printf '{"url":"http://%s:%s","schema":"%s"}\n' "$browser_host" "$http_port" "$schema" >"$state_tmp"
+  printf '{"url":"%s","schema":"%s"}\n' "$browser_url" "$schema" >"$state_tmp"
   mv -- "$state_tmp" "$control_dir/state.json"
   for _ in $(seq 1 $((browser_timeout_seconds * 10))); do
     [[ -f "$control_dir/result.status" ]] && break
@@ -173,12 +189,8 @@ if [[ "$browser_mode" == "external" ]]; then
     exit 1
   }
 else
-  for _ in $(seq 1 150); do
-    if "$windows_curl" --silent --fail --output NUL "http://$browser_host:$http_port/readyz"; then break; fi
-    sleep 0.1
-  done
-  "$windows_curl" --silent --fail --output NUL "http://$browser_host:$http_port/readyz"
-  "$node_exe" "$(wslpath -w "$project_dir/scripts/web-e2e.cjs")" "http://$browser_host:$http_port"
+  "$windows_curl" --silent --fail --output NUL "$browser_url/readyz"
+  "$node_exe" "$(wslpath -w "$project_dir/scripts/web-e2e.cjs")" "$browser_url"
 fi
 kill "$server_pid"
 wait "$server_pid"

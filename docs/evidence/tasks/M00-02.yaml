@@ -2,11 +2,11 @@ schema_version: "1.0"
 task:
   id: "M00-02"
   title: "Close the Buf contract gate with immutable baselines"
-  status: "in-progress"
+  status: "accepted-bootstrap"
   branch: "task/M00-02-contract-gate-finalize"
   integration_branch: "dev"
   base_commit: "e02503b5d4a5491bb57002f4a5261552f4ec6772"
-  acceptance_state: "pending-exact-dev-ci"
+  acceptance_state: "accepted-bootstrap"
 scope:
   scope_adjustment:
     id: "M00-02-S1"
@@ -34,9 +34,46 @@ local_validation:
     - "git diff --exit-code -- crates/foundation-contracts/src/generated"
     - "bash scripts/resolve-contract-baseline.sh --self-test"
 evidence:
-  workflow_runs: []
-  exact_dev_commit: null
-  passed_checks: []
-  failed_checks: []
+  workflow_runs:
+    - 33939083133
+  exact_dev_commit: "a9af239c8fd8e1c263cc99d49d01454d4924eb07"
+  baseline_commit: "e02503b5d4a5491bb57002f4a5261552f4ec6772"
+  current_contract_tree: "11ec32b3b3f858365e87a2ba1a167a95bd92a9a3"
+  baseline_contract_tree: "88d61625dbb82a02d08d6e132cf7bef456bf2950"
+  buf_version: "1.50.0"
+  passed_checks:
+    - "Wire contracts (Buf)"
+    - "Contract compatibility"
+  failed_checks:
+    - job: "Pinned non-root container build"
+      inherited_from_baseline: true
+      remediation_task: "M00-04"
+    - job: "PostgreSQL workload role boundary"
+      inherited_from_baseline: true
+      remediation_task: "M00-04"
+    - job: "PostgreSQL protocol integration"
+      inherited_from_baseline: true
+      remediation_task: "M00-05"
+    - job: "MIX database, wire and federation validation"
+      inherited_from_baseline: true
+      remediation_task: "M00-05"
+    - job: "Two-domain S2S federation"
+      inherited_from_baseline: true
+      remediation_task: "M00-05"
+    - job: "Isolated disaster-recovery drill"
+      inherited_from_baseline: true
+      remediation_task: "M00-05"
+    - job: "Rust quality gates"
+      inherited_from_baseline: true
+      remediation_task: "M00-05"
+  terminal_cancellations:
+    - job: "Privilege-separated XEP-0487 HTTPS discovery"
+      reason: "GitHub Actions timeout after 30 minutes"
+      remediation_task: "M00-05"
+    - job: "Isolated PostgreSQL and Redis invariants"
+      reason: "GitHub Actions timeout after 70 minutes while the history identity atomicity test was running"
+      remediation_task: "M00-05"
   notes:
-    - "Populate this record only after the final M00-02 result is merged to dev and its two task-specific CI checks finish."
+    - "Run 33939083133 reached its natural terminal state without a new non-contract failed-job category relative to e02503b5d4a5491bb57002f4a5261552f4ec6772."
+    - "The two terminal cancellations are recorded separately because they are not failed-job categories; they remain M00-05 remediation evidence."
+    - "Final ratification is deferred to M00-G1; accepted-bootstrap does not promote service maturity or assert a repository-wide green CI result."

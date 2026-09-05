@@ -21,6 +21,7 @@ timeout_seconds="${NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS:-}"
 # The override exists for hermetic/self-hosted runners. GitHub-hosted Linux
 # runners use the pinned platform `python3` command by default.
 summarizer_python="${NORTHSTAR_CI_SUMMARIZER_PYTHON:-python3}"
+supervisor_python="${NORTHSTAR_CI_SUPERVISOR_PYTHON:-python3}"
 
 if [[ -n "$timeout_seconds" ]] && ! [[ "$timeout_seconds" =~ ^[1-9][0-9]{0,3}$ ]] \
   || [[ -n "$timeout_seconds" && "$timeout_seconds" -gt 7200 ]]; then
@@ -47,7 +48,7 @@ echo "phase=command_started title=$annotation_title started_at=$started_utc time
 
 set +e
 if [[ -n "$timeout_seconds" ]]; then
-  "$summarizer_python" "$script_directory/github_ci_supervisor.py" \
+  "$supervisor_python" "$script_directory/github_ci_supervisor.py" \
     --timeout-seconds "$timeout_seconds" \
     --kill-after-seconds 15 \
     --log-file "$log_file" \

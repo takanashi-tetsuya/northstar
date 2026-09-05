@@ -5,6 +5,11 @@ project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 wrapper="$project_dir/scripts/github-ci-run.sh"
 temporary_root="$(mktemp -d "${TMPDIR:-/tmp}/northstar-ci-wrapper-test.XXXXXX")"
 trap 'rm -rf -- "$temporary_root"' EXIT
+supervisor_python="$(command -v python3 || true)"
+[[ -n "$supervisor_python" ]] || {
+  echo 'GitHub CI wrapper self-test requires python3 for process supervision' >&2
+  exit 1
+}
 
 fail() {
   printf 'GitHub CI wrapper self-test failed: %s\n' "$1" >&2
@@ -66,6 +71,7 @@ printf '%s\n' '#!/usr/bin/env bash' 'exit 99' >"$fake_bin/python3"
 chmod 0700 "$fake_bin/python3"
 set +e
 fallback_output="$(env -u NORTHSTAR_CI_SUMMARIZER_PYTHON PATH="$fake_bin:$PATH" GITHUB_ACTIONS=true RUNNER_TEMP="$temporary_root" \
+  NORTHSTAR_CI_SUPERVISOR_PYTHON="$supervisor_python" \
   bash "$wrapper" 'wrapper summarizer failure' \
   bash -c 'printf "%s\n" failure-with-broken-summarizer; exit 19' 2>&1)"
 fallback_status=$?

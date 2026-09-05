@@ -25,6 +25,9 @@ ulimit -n 8192
 
 runtime_dir="$(mktemp -d /tmp/northstar-load-1000.XXXXXX)"
 server_pid=""
+http_relay_pid=""
+http_relay_port=""
+http_relay_target="$runtime_dir/http.target"
 schema_created=false
 http_port=""
 metrics_port=""
@@ -36,6 +39,10 @@ cleanup() {
   if [[ -n "$server_pid" ]]; then
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$http_relay_pid" ]]; then
+    kill "$http_relay_pid" 2>/dev/null || true
+    wait "$http_relay_pid" 2>/dev/null || true
   fi
   if (( status != 0 )) && [[ -f "$runtime_dir/server.log" ]]; then
     echo "load-test server log after failure:" >&2
@@ -90,6 +97,13 @@ env \
   MIGRATOR_DATABASE_URL="$database_url" \
   "$target_dir/debug/rust-xmpp-server" migrate
 
+# Public URLs must remain live fixture-owned endpoints after the server moves
+# to child-owned HTTP :0.  The relay binds first and stays stable for the
+# whole load run; only its target changes after the server proves ownership of
+# its actual HTTP listener through the nonce/PID readiness record.
+fixture_start_tcp_relay "$project_dir" "$runtime_dir" load-http load-http "$http_relay_target" \
+  "$runtime_dir/http-relay.log" http_relay_pid http_relay_port
+
 env \
   NORTHSTAR_DISABLE_DOTENV=true \
   XMPP_DOMAIN=localhost \
@@ -103,7 +117,7 @@ env \
   TEST_LISTENER_ACTIVATION=true \
   TEST_READINESS_FILE="$readiness_file" \
   TEST_READINESS_NONCE="$readiness_nonce" \
-  PUBLIC_URL="http://127.0.0.1" \
+  PUBLIC_URL="http://127.0.0.1:$http_relay_port" \
   API_CONTROL_ALLOW_EPHEMERAL=true \
   ABUSE_STATE_ALLOW_EPHEMERAL=true \
   FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token.secret" \
@@ -128,8 +142,12 @@ fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "
 http_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
 metrics_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" metrics)"
 xmpp_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
+http_target_tmp="$runtime_dir/.http.target.$server_pid.tmp"
+printf '127.0.0.1:%s\n' "$http_port" >"$http_target_tmp"
+mv -- "$http_target_tmp" "$http_relay_target"
+curl --silent --fail "http://127.0.0.1:$http_relay_port/readyz" >/dev/null
 
-XMPP_TEST_HTTP_PORT="$http_port" \
+XMPP_TEST_HTTP_PORT="$http_relay_port" \
 XMPP_TEST_METRICS_PORT="$metrics_port" \
 XMPP_TEST_CLIENT_PORT="$xmpp_port" \
 XMPP_LOAD_SESSIONS="${XMPP_LOAD_SESSIONS:-1000}" \

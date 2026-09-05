@@ -26,6 +26,9 @@ ulimit -n 8192
 runtime_dir="$(mktemp -d /tmp/northstar-load-envelope.XXXXXX)"
 chmod 0700 "$runtime_dir"
 server_pid=""
+http_relay_pid=""
+http_relay_port=""
+http_relay_target="$runtime_dir/http.target"
 schema_created=false
 xmpp_port=""
 xmpps_port=""
@@ -67,6 +70,10 @@ cleanup() {
     kill "$cleanup_pid" 2>/dev/null || true
     wait "$cleanup_pid" 2>/dev/null || true
     server_pid=""
+  fi
+  if [[ -n "$http_relay_pid" ]]; then
+    kill "$http_relay_pid" 2>/dev/null || true
+    wait "$http_relay_pid" 2>/dev/null || true
   fi
   if [[ "$status" -ne 0 && -f "$runtime_dir/server.log" ]]; then
     if log_contains_sensitive_value; then
@@ -142,6 +149,13 @@ env \
   MIGRATOR_DATABASE_URL="$database_url" \
   "$binary" migrate
 
+# The advertised HTTP origin must stay owned by this fixture even though the
+# server itself binds an ephemeral child-owned listener.  A stable relay lets
+# generated upload/BOSH URLs remain routable without reintroducing a released
+# numeric port allocation.
+fixture_start_tcp_relay "$project_dir" "$runtime_dir" load-http load-http "$http_relay_target" \
+  "$runtime_dir/http-relay.log" http_relay_pid http_relay_port
+
 readiness_file="$runtime_dir/server.ready.json"
 readiness_nonce="$(openssl rand -hex 16)"
 rm -f -- "$readiness_file"
@@ -160,7 +174,7 @@ env \
   TEST_LISTENER_ACTIVATION=true \
   TEST_READINESS_FILE="$readiness_file" \
   TEST_READINESS_NONCE="$readiness_nonce" \
-  PUBLIC_URL="http://127.0.0.1" \
+  PUBLIC_URL="http://127.0.0.1:$http_relay_port" \
   API_CONTROL_SECRET_FILE="$runtime_dir/api-control.secret" \
   FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token.secret" \
   DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram.secret" \
@@ -193,9 +207,13 @@ xmpp_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
 xmpps_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
 http_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
 metrics_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" metrics)"
+http_target_tmp="$runtime_dir/.http.target.$server_pid.tmp"
+printf '127.0.0.1:%s\n' "$http_port" >"$http_target_tmp"
+mv -- "$http_target_tmp" "$http_relay_target"
+curl --silent --fail "http://127.0.0.1:$http_relay_port/readyz" >/dev/null
 
 export XMPP_TEST_HOST=127.0.0.1
-export XMPP_TEST_HTTP_PORT="$http_port"
+export XMPP_TEST_HTTP_PORT="$http_relay_port"
 export XMPP_TEST_METRICS_PORT="$metrics_port"
 export XMPP_TEST_CLIENT_PORT="$xmpp_port"
 export XMPP_TEST_XMPPS_PORT="$xmpps_port"
@@ -209,6 +227,9 @@ wait "$server_pid"
 finished_pid="$server_pid"
 server_pid=""
 [[ ! -d "/proc/$finished_pid" ]] || { echo "load server PID remained after wait" >&2; exit 1; }
+kill "$http_relay_pid"
+wait "$http_relay_pid"
+http_relay_pid=""
 grep -q 'shutdown complete' "$runtime_dir/server.log" \
   || { echo "load server did not complete graceful shutdown" >&2; exit 1; }
 for forbidden_log_value in \

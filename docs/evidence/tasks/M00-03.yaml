@@ -11,9 +11,10 @@ scope:
   guarantees:
     - "A fixture does not claim that a released numeric port is reserved."
     - "Child-owned listeners publish resolved addresses only through a nonce- and PID-bound readiness record."
-    - "The test activation path is disabled by default and rejected outside loopback reserved-domain deployments."
+    - "A direct fixture parent exit is not treated as group completion while a private-group descendant remains alive."
+    - "A failed database suite does not hide later isolated suites in the same declared shard."
   exclusions:
-    - "This task does not weaken HTTPS, TLS, account-deletion, or data-isolation assertions."
+    - "This task does not weaken HTTPS, TLS, account-deletion, data-isolation, or collection-child-limit assertions."
     - "Windows inherited-handle activation remains unimplemented until its named control channel has equivalent ownership proof."
 work_units:
   completed:
@@ -21,30 +22,146 @@ work_units:
       result: "Harness readiness protocol, bounded in-process handoff, and exclusive pre-bound test listeners."
     - id: "M00-03.W2"
       result: "Runtime listener ownership, nonce-bound child readiness, and XEP-0487 migration away from the repeated port allocator."
-    - id: "M00-03.W4"
-      result: "Process-group teardown, retained redacted command diagnostics, and command-level deadline evidence infrastructure."
     - id: "M00-03.W3"
       result: "Linux-only XEP-0487 socket activation: root retains the exclusive loopback 443 listener until a non-root TLS child writes a nonce-, PID-, UID-, and endpoint-bound acknowledgement."
-  pending:
+  reopened:
+    - id: "M00-03.W4"
+      implementation_commit: "3afa0e4cd971830246464dc73708c2eb95d6df32"
+      result: "The prior process-group implementation used direct-child completion as a terminal condition. The repair now requires group quiescence, bounded TERM-to-KILL cleanup, bounded output drain, and explicit cancellation propagation; its exact-dev Linux evidence is still required."
+      reopened_by:
+        run: "33958038598"
+        attempt: 1
+        observation: "Run 69 exposed the need to distinguish direct child completion from complete process-group termination."
+  in_progress:
     - id: "M00-03.W5"
-      result: "Migrate the remaining runtime fixtures and run the defined parallel stress matrix."
+      implementation_commit: "6be5a7a"
+      result: "MIX runtime, MIX federation, and two-domain S2S fixtures now use child-owned ephemeral listeners, nonce/PID-bound readiness, and a child-owned relay for bootstrap DNS. The required Linux pressure matrix has not yet produced exact-SHA evidence."
+      required_validation:
+        - "50 parallel dual-node fixtures for 20 ordinary-CI rounds without EADDRINUSE."
+        - "100 scheduled-stress rounds without EADDRINUSE."
+        - "Occupied-port, invalid readiness nonce/PID/address, and three child-crash phase probes."
+        - "Listener tests with --test-threads=16 without sleep-based synchronization."
 local_validation:
   passed:
     - "cargo check --locked --bin rust-xmpp-server"
     - "cargo test --locked test_listener_activation_is_explicit_and_loopback_only"
     - "cargo test --locked readiness_publication_is_atomic_and_refuses_overwrite"
-    - "cargo test -p northstar-test-harness --all-targets --locked"
-    - "bash -n scripts/xep0487-runtime-wsl.sh"
-    - "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
-    - "cargo test -p northstar-web-surface --locked"
     - "cargo test --locked runtime_listener_inventory_uses_bound_ephemeral_addresses"
-    - "python scripts/check-github-ci-summary.py (local interpreter)"
-    - "bash -n scripts/github-ci-run.sh scripts/check-github-ci-run.sh scripts/xep0487-runtime-wsl.sh"
-    - "scripts/xep0487-socket-activation.py --self-test (local interpreter)"
+    - "cargo test -p northstar-web-surface --locked"
+    - "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+    - "bash -n scripts/xep0487-runtime-wsl.sh scripts/github-ci-run.sh scripts/check-github-ci-run.sh"
+    - "python scripts/check-github-ci-summary.py (local interpreter at the time of execution)"
+    - "scripts/xep0487-socket-activation.py --self-test (local interpreter at the time of execution)"
+    - "node scripts/check-stateful-database-ci.mjs"
+    - "bash scripts/test-stateful-database-ci.sh"
+    - "cargo test -p northstar-test-harness --all-targets --locked (6 passed)"
+    - "Git Bash syntax validation for the migrated MIX/S2S fixture scripts and readiness helper"
+  deferred:
+    - "The full Linux process-group regression suite, including the real parent-cancellation probe, requires GitHub Actions evidence because this host lacks a usable WSL/POSIX Python environment."
+    - "The W5 20 x 50 regular and 100 x 50 scheduled two-node pressure matrices require isolated Linux PostgreSQL/Redis fixtures and remain unexecuted locally."
 evidence:
-  workflow_runs: []
-  exact_dev_commit: null
-  passed_checks: []
-  failed_checks: []
+  exact_dev_commit: "fef174a2a8888278d118491d3d8e0fcace01ad56"
+  workflow_runs:
+    - id: "33958038598"
+      attempt: 1
+      exact_dev_commit: "fef174a2a8888278d118491d3d8e0fcace01ad56"
+      jobs:
+        - id: "101284814336"
+          name: "Isolated PostgreSQL and Redis invariants (auth-identity)"
+          conclusion: "success"
+        - id: "101284814172"
+          name: "Isolated PostgreSQL and Redis invariants (abuse-delivery)"
+          conclusion: "success"
+        - id: "101284814205"
+          name: "Isolated PostgreSQL and Redis invariants (collaboration-storage)"
+          conclusion: "failure"
+        - id: "101284814259"
+          name: "Isolated PostgreSQL and Redis invariants (pubsub-federation)"
+          conclusion: "failure"
+        - id: "101284814324"
+          name: "Privilege-separated XEP-0487 HTTPS discovery"
+          conclusion: "success"
+  database_suite_results:
+    total: 32
+    summary:
+      passed: 25
+      failed: 2
+      not_run: 5
+    passed:
+      - suite_id: "auth-admin"
+      - suite_id: "admin-session-cleanup"
+      - suite_id: "authentication-service"
+      - suite_id: "api-operations"
+      - suite_id: "api-pages"
+      - suite_id: "migration-upgrade"
+      - suite_id: "migration-0056-compatibility"
+      - suite_id: "rfc7622-identity"
+      - suite_id: "identity-audit"
+      - suite_id: "jid-identity"
+      - suite_id: "authorization-jid-identity"
+      - suite_id: "push-jid-identity"
+      - suite_id: "mix-jid-identity"
+      - suite_id: "session-jid-identity"
+      - suite_id: "profile-jid-identity"
+      - suite_id: "abuse-reporting"
+      - suite_id: "abuse-key-deployment"
+      - suite_id: "message-pow"
+      - suite_id: "push-delivery"
+      - suite_id: "offline-replay"
+      - suite_id: "retention"
+      - suite_id: "stream-management"
+      - suite_id: "s2s"
+      - suite_id: "roster-service"
+      - suite_id: "muc"
+    failed:
+      - suite_id: "pie"
+        failed_stage: "fixture upload_slots preparation before account deletion"
+        observed_error: "upload storage capacity policy is not fully bound"
+        remediation: "Bind and validate the isolated fixture capacity policy; retain fail-closed production policy enforcement and account-deletion assertions."
+      - suite_id: "pubsub"
+        failed_stage: "initial association preparation in repeated_associate_is_idempotent_after_a_graph_lock_wait"
+        observed_error: "pubsub collection child limit exceeded"
+        remediation: "Inspect initial edge state and trigger semantics at children_max=1; retain the configured limit and idempotency assertion."
+    not_run:
+      - suite_id: "privacy"
+        blocked_by: "collaboration-storage runner fail-fast after pie"
+      - suite_id: "http-upload"
+        blocked_by: "collaboration-storage runner fail-fast after pie"
+      - suite_id: "muc-cluster"
+        blocked_by: "collaboration-storage runner fail-fast after pie"
+      - suite_id: "pubsub-outbox"
+        blocked_by: "pubsub-federation runner fail-fast after pubsub"
+      - suite_id: "pubsub-wire"
+        blocked_by: "pubsub-federation runner fail-fast after pubsub"
+  xep_0487:
+    job_id: "101284814324"
+    conclusion: "success"
+    status: "separate-from-the-32-database-suite-count"
+  artifacts:
+    - id: "9967064147"
+      name: "stateful-database-collaboration-storage-diagnostics-33958038598"
+      digest: "sha256:cc4317a47c9791e9d17a4c7dac45426bebd3101e508f381b375e9c1d8c5c0888"
+    - id: "9967124442"
+      name: "stateful-database-pubsub-federation-diagnostics-33958038598"
+      digest: "sha256:f74540c844523ac179149d41c7e3a2f50d3f4b3275fcf3e016929b8488b6174a"
+  baseline_comparison:
+    baseline_commit: "e02503b5d4a5491bb57002f4a5261552f4ec6772"
+    baseline_run: "33928852176"
+    comparison:
+      - category: "stateful database shards"
+        baseline: "cancelled before suite-level terminal results"
+        current: "25 passed, 2 failed, 5 not-run with explicit blockers"
+        attribution: "Neither current PIE nor PubSub failure is claimed inherited or newly introduced until its root cause is compared after the isolated fixture repairs; the baseline lacked an executable suite-level outcome."
+      - category: "XEP-0487 privileged discovery"
+        baseline: "cancelled"
+        current: "success"
+        attribution: "Improved exact-SHA evidence, not final task acceptance."
+      - category: "Two-domain S2S, container build, role boundary, protocol integration, MIX, disaster recovery, architecture quality"
+        baseline: "failed"
+        current: "failed"
+        attribution: "Same job-level failure category on both runs; each requires its planned M00-04 or M00-05 root-cause record rather than a generic historical label."
   notes:
-    - "Exact-SHA CI and runtime fixture evidence are required before accepted-bootstrap."
+    - "Run 69 is evidence of observed state, not accepted-bootstrap evidence."
+    - "The old collection item race passed in Run 69; PubSub now fails later at the first association preparation stage and is not recorded as waiting or timed out."
+    - "Every suite id above appears once. XEP-0487 is intentionally recorded separately from the 32 database suites."
+    - "M00-03 remains in-progress. Exact-SHA evidence for the W4 supervisor repair and W5 stress matrix is still required before any manual acceptance."

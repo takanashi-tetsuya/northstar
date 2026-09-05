@@ -394,11 +394,15 @@ jobs:
         run: |
           find scripts -maxdepth 1 -type f -name '*.sh' -exec bash -n {} +
           find scripts -maxdepth 1 -type f -name '*.py' -exec python3 -m py_compile {} +
+          find scripts/lib -type f -name '*.sh' -exec bash -n {} +
+          python3 -m py_compile scripts/test-listener-relay.py
           python3 scripts/wait-test-readiness.py --self-test
+          python3 scripts/test-listener-relay.py --self-test
           python3 scripts/xep0487-socket-activation.py --self-test
           python3 scripts/check-github-ci-summary.py
           bash scripts/check-github-ci-run.sh
           bash scripts/test-github-ci-supervisor.sh
+          bash scripts/test-stateful-database-ci.sh
           bash scripts/check-database-role-boundaries.sh
           bash scripts/test-postgres-client-wrapper.sh
 

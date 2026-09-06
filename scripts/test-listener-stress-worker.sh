@@ -42,6 +42,54 @@ if grep -Fq 'grep -qx false' "$driver"; then
 fi
 grep -Fq 'retain_parent_diagnostic_artifact()' "$driver" \
   || { echo "listener stress driver no longer retains parent-side redacted evidence" >&2; exit 1; }
+grep -Fq 'establish_template_public_schema_owner()' "$driver" \
+  || { echo "listener stress driver no longer establishes template schema ownership before migration" >&2; exit 1; }
+grep -Fq "ALTER SCHEMA public OWNER TO CURRENT_USER;" "$driver" \
+  || { echo "listener stress driver no longer assigns public to the migration role" >&2; exit 1; }
+grep -Fq 'template_public_schema_is_migration_owned()' "$driver" \
+  || { echo "listener stress driver no longer catalog-attests template schema ownership" >&2; exit 1; }
+grep -Fq 'pg_catalog.pg_namespace namespace' "$driver" \
+  || { echo "listener stress driver no longer attests schema ownership from PostgreSQL catalogs" >&2; exit 1; }
+schema_owner_phase_line="$(grep -n '^  establish_template_public_schema_owner "\$database_name" || return 1$' "$driver" | cut -d: -f1 || true)"
+template_migrate_phase_line="$(grep -n '^  run_parent_phase "template-migrate-\$database_name"' "$driver" | cut -d: -f1 || true)"
+[[ "$schema_owner_phase_line" =~ ^[1-9][0-9]*$ && "$template_migrate_phase_line" =~ ^[1-9][0-9]*$ \
+   && "$schema_owner_phase_line" -lt "$template_migrate_phase_line" ]] \
+  || { echo "listener stress driver does not establish and attest public ownership before migration" >&2; exit 1; }
+grep -Fq 'NORTHSTAR_LISTENER_STRESS_DATABASE_HOST:-127.0.0.1' "$driver" \
+  || { echo "listener stress driver no longer supports its loopback endpoint override" >&2; exit 1; }
+grep -Fq 'NORTHSTAR_LISTENER_STRESS_DATABASE_PORT:-5432' "$driver" \
+  || { echo "listener stress driver no longer supports its explicit database port override" >&2; exit 1; }
+grep -Fq 'database_fixture_host" != 127.0.0.1' "$driver" \
+  || { echo "listener stress driver no longer rejects a non-loopback database host" >&2; exit 1; }
+grep -Fq '10#$database_fixture_port > 65535' "$driver" \
+  || { echo "listener stress driver no longer bounds its database port" >&2; exit 1; }
+grep -Fq 'only permits loopback host and port overrides; its fixture user and password are fixed' "$driver" \
+  || { echo "listener stress driver no longer pins its fixture credentials" >&2; exit 1; }
+grep -Fq '"NORTHSTAR_LISTENER_STRESS_DATABASE_HOST=$database_fixture_host"' "$driver" \
+  || { echo "listener stress driver no longer propagates the validated host to workers" >&2; exit 1; }
+grep -Fq '"NORTHSTAR_LISTENER_STRESS_DATABASE_PORT=$database_fixture_port"' "$driver" \
+  || { echo "listener stress driver no longer propagates the validated port to workers" >&2; exit 1; }
+for fixture_driver in "$project_dir/scripts/federation-wsl.sh" "$project_dir/scripts/mix-federation-runtime-wsl.sh"; do
+  grep -Fq 'stress_database_host="${NORTHSTAR_LISTENER_STRESS_DATABASE_HOST:-127.0.0.1}"' "$fixture_driver" \
+    || { echo "listener stress worker no longer consumes its validated host override: $fixture_driver" >&2; exit 1; }
+  grep -Fq 'stress_database_port="${NORTHSTAR_LISTENER_STRESS_DATABASE_PORT:-5432}"' "$fixture_driver" \
+    || { echo "listener stress worker no longer consumes its validated port override: $fixture_driver" >&2; exit 1; }
+  grep -Fq 'database_url_a="postgres://xmpp_test:xmpp-test-password@$database_host:$database_port/' "$fixture_driver" \
+    || { echo "listener stress worker no longer applies its endpoint override to database A: $fixture_driver" >&2; exit 1; }
+  grep -Fq 'database_url_b="postgres://xmpp_test:xmpp-test-password@$database_host:$database_port/' "$fixture_driver" \
+    || { echo "listener stress worker no longer applies its endpoint override to database B: $fixture_driver" >&2; exit 1; }
+done
+federation_python="$project_dir/scripts/federation-wsl.py"
+grep -Fq 'def listener_stress_database_endpoint()' "$federation_python" \
+  || { echo "federation verifier no longer independently validates its listener database endpoint" >&2; exit 1; }
+grep -Fq 'host == "127.0.0.1"' "$federation_python" \
+  || { echo "federation verifier no longer rejects a non-loopback listener database host" >&2; exit 1; }
+grep -Fq 'DATABASE_HOST, DATABASE_PORT = listener_stress_database_endpoint()' "$federation_python" \
+  || { echo "federation verifier no longer receives the listener database endpoint" >&2; exit 1; }
+if [[ "$(grep -Fc 'str(DATABASE_PORT)' "$federation_python")" != 2 ]]; then
+  echo "federation verifier does not apply the listener database port to every direct psql assertion" >&2
+  exit 1
+fi
 workflow="$project_dir/.github/workflows/ci.yml"
 grep -Fq 'listener-readiness-stress-smoke:' "$workflow" \
   || { echo "listener stress CI no longer proves the 1x1/1x2 path before pressure" >&2; exit 1; }

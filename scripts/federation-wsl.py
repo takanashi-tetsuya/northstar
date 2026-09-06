@@ -26,6 +26,36 @@ ALICE = "alice_fed"
 BOB = "bob_fed"
 
 
+def listener_stress_database_endpoint() -> tuple[str, int]:
+    """Return the parent-validated loopback endpoint for preprovisioned DBs.
+
+    Direct federation runs retain the historical 127.0.0.1:5432 default.  A
+    listener-stress parent may use a different local port for an isolated
+    PostgreSQL instance, but this Python assertion layer refuses any remote
+    host or malformed port even if the shell wrapper was bypassed.
+    """
+
+    host = os.environ.get("NORTHSTAR_LISTENER_STRESS_DATABASE_HOST", "127.0.0.1")
+    raw_port = os.environ.get("NORTHSTAR_LISTENER_STRESS_DATABASE_PORT", "5432")
+    fixture.check(
+        host == "127.0.0.1",
+        "listener stress database host must be the IPv4 loopback address",
+    )
+    fixture.check(
+        raw_port.isascii() and raw_port.isdecimal(),
+        "listener stress database port must be a decimal TCP port",
+    )
+    port = int(raw_port)
+    fixture.check(
+        1 <= port <= 65535,
+        "listener stress database port must be from 1 through 65535",
+    )
+    return host, port
+
+
+DATABASE_HOST, DATABASE_PORT = listener_stress_database_endpoint()
+
+
 def required_test_database(name: str) -> str:
     database = os.environ.get(name, "xmpp_test")
     fixture.check(
@@ -57,7 +87,9 @@ def psql_schema(schema: str, database: str, sql: str) -> str:
         [
             "psql",
             "--host",
-            "127.0.0.1",
+            DATABASE_HOST,
+            "--port",
+            str(DATABASE_PORT),
             "--username",
             "xmpp_test",
             "--dbname",
@@ -790,7 +822,9 @@ def run() -> None:
         [
             "psql",
             "--host",
-            "127.0.0.1",
+            DATABASE_HOST,
+            "--port",
+            str(DATABASE_PORT),
             "--username",
             "xmpp_test",
             "--dbname",

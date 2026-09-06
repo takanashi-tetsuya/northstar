@@ -17,6 +17,8 @@ source "$project_dir/scripts/lib/test-listener-readiness.sh"
 
 stress_database_a="${NORTHSTAR_LISTENER_STRESS_DATABASE_A:-}"
 stress_database_b="${NORTHSTAR_LISTENER_STRESS_DATABASE_B:-}"
+stress_database_host="${NORTHSTAR_LISTENER_STRESS_DATABASE_HOST:-127.0.0.1}"
+stress_database_port="${NORTHSTAR_LISTENER_STRESS_DATABASE_PORT:-5432}"
 if [[ -n "$stress_database_a" || -n "$stress_database_b" ]]; then
   [[ -n "$stress_database_a" && -n "$stress_database_b" ]] || {
     echo "listener stress preprovisioning requires both database names" >&2
@@ -26,6 +28,15 @@ if [[ -n "$stress_database_a" || -n "$stress_database_b" ]]; then
      && "$stress_database_b" =~ ^northstar_listener_[a-z0-9_]{1,42}$ \
      && "$stress_database_a" != "$stress_database_b" ]] || {
     echo "listener stress preprovisioned database names are invalid" >&2
+    exit 2
+  }
+  [[ "$stress_database_host" == 127.0.0.1 ]] || {
+    echo "listener stress preprovisioned database host must be 127.0.0.1" >&2
+    exit 2
+  }
+  [[ "$stress_database_port" =~ ^[1-9][0-9]{0,4}$ ]] \
+    && ((10#$stress_database_port <= 65535)) || {
+    echo "listener stress preprovisioned database port must be an integer from 1 through 65535" >&2
     exit 2
   }
   fixture_preprovisioned=true
@@ -40,6 +51,12 @@ else
   schema_b="federation_b_it_${run_id}"
   database_name_a=xmpp_test
   database_name_b=xmpp_test
+fi
+database_host=127.0.0.1
+database_port=5432
+if [[ "$fixture_preprovisioned" == true ]]; then
+  database_host="$stress_database_host"
+  database_port="$stress_database_port"
 fi
 runtime_dir="$(mktemp -d /tmp/northstar-federation.XXXXXX)"
 cert_dir="$runtime_dir/certs"
@@ -212,8 +229,8 @@ if [[ "${NORTHSTAR_FEDERATION_SKIP_BUILD:-false}" != true ]]; then
 fi
 binary="$target_dir/debug/rust-xmpp-server"
 [[ -x "$binary" ]] || { echo "federation runtime binary is missing: $binary" >&2; exit 1; }
-database_url_a="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$database_name_a?options=-csearch_path%3D$schema_a"
-database_url_b="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$database_name_b?options=-csearch_path%3D$schema_b"
+database_url_a="postgres://xmpp_test:xmpp-test-password@$database_host:$database_port/$database_name_a?options=-csearch_path%3D$schema_a"
+database_url_b="postgres://xmpp_test:xmpp-test-password@$database_host:$database_port/$database_name_b?options=-csearch_path%3D$schema_b"
 
 # Direct fixture runs migrate two isolated schemas before opening listeners.
 # Listener stress workers receive two parent-owned, domain-specific migrated

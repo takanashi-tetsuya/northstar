@@ -120,11 +120,30 @@ declare -A pair_database_b=()
 # The fixtures still perform their normal runtime ledger/canonicalizer checks;
 # they simply receive an already-migrated private database rather than asking
 # a live worker to contend for production's migration fence.
-database_fixture_host=127.0.0.1
-database_fixture_port=5432
-database_fixture_user=xmpp_test
-database_fixture_password=xmpp-test-password
-database_fixture_control_database=postgres
+# A local developer may bind the disposable Docker PostgreSQL fixture to a
+# different loopback port (for example 55432) when 5432 belongs to another
+# local service. Only that endpoint is configurable: the test control role,
+# its non-production password, and the control database stay fixed so this
+# harness cannot be redirected at an arbitrary local PostgreSQL identity.
+database_fixture_host="${NORTHSTAR_LISTENER_STRESS_DATABASE_HOST:-127.0.0.1}"
+database_fixture_port="${NORTHSTAR_LISTENER_STRESS_DATABASE_PORT:-5432}"
+readonly database_fixture_user=xmpp_test
+readonly database_fixture_password=xmpp-test-password
+readonly database_fixture_control_database=postgres
+if [[ -n "${NORTHSTAR_LISTENER_STRESS_DATABASE_USER+x}" \
+   || -n "${NORTHSTAR_LISTENER_STRESS_DATABASE_PASSWORD+x}" ]]; then
+  echo "listener stress only permits loopback host and port overrides; its fixture user and password are fixed" >&2
+  exit 2
+fi
+if [[ "$database_fixture_host" != 127.0.0.1 ]]; then
+  echo "NORTHSTAR_LISTENER_STRESS_DATABASE_HOST must be the IPv4 loopback address 127.0.0.1" >&2
+  exit 2
+fi
+if ! [[ "$database_fixture_port" =~ ^[1-9][0-9]{0,4}$ ]] \
+   || ((10#$database_fixture_port > 65535)); then
+  echo "NORTHSTAR_LISTENER_STRESS_DATABASE_PORT must be an integer from 1 through 65535" >&2
+  exit 2
+fi
 fixture_name="${fixture//-/_}"
 database_run_id="$(openssl rand -hex 8)"
 database_prefix="northstar_listener_${fixture_name}_${database_run_id}"
@@ -143,6 +162,22 @@ fixture_admin_psql() {
     --port "$database_fixture_port" \
     --username "$database_fixture_user" \
     --dbname "$database_fixture_control_database" \
+    --set ON_ERROR_STOP=1 "$@"
+}
+
+fixture_database_psql() {
+  # The only non-control databases this parent ever connects to are generated
+  # by this invocation and validated against its random prefix.  Keeping this
+  # guard here makes the schema-owner repair as narrowly scoped as the later
+  # clone and cleanup operations.
+  local database_name="$1"
+  shift
+  private_database_name_is_valid "$database_name" || return 2
+  PGPASSWORD="$database_fixture_password" psql \
+    --host "$database_fixture_host" \
+    --port "$database_fixture_port" \
+    --username "$database_fixture_user" \
+    --dbname "$database_name" \
     --set ON_ERROR_STOP=1 "$@"
 }
 
@@ -194,6 +229,28 @@ fixture_query_boolean() {
   local phase="$1" sql="$2" output status
   parent_query_sequence=$((parent_query_sequence + 1))
   if output="$(fixture_admin_psql --tuples-only --no-align --command "$sql" 2>>"$parent_diagnostic_raw")"; then
+    :
+  else
+    status=$?
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="$phase"
+    record_parent_diagnostic "phase=$phase status=$status query=failed"
+    echo "listener stress PostgreSQL boolean query failed: $phase" >&2
+    return 1
+  fi
+  if ! normalize_postgres_boolean "$output"; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="$phase"
+    record_parent_diagnostic "phase=$phase status=invalid_boolean_output query_sequence=$parent_query_sequence"
+    echo "listener stress PostgreSQL boolean query returned an invalid result: $phase" >&2
+    return 1
+  fi
+  postgres_boolean_result="$normalized_postgres_boolean"
+}
+
+fixture_database_query_boolean() {
+  local database_name="$1" phase="$2" sql="$3" output status
+  private_database_name_is_valid "$database_name" || return 1
+  parent_query_sequence=$((parent_query_sequence + 1))
+  if output="$(fixture_database_psql "$database_name" --tuples-only --no-align --command "$sql" 2>>"$parent_diagnostic_raw")"; then
     :
   else
     status=$?
@@ -446,6 +503,49 @@ template_database_url() {
     "$database_fixture_host" "$database_fixture_port" "$database_name"
 }
 
+template_public_schema_is_migration_owned() {
+  local database_name="$1" phase
+  private_database_name_is_valid "$database_name" || return 1
+  phase="template-schema-attestation-$database_name"
+  # Do not accept PostgreSQL 15's default pg_database_owner indirection here:
+  # the migrations deliberately require the physical installation schema and
+  # its protected relations to be owned by the exact migration role.  The
+  # catalog predicate is fail-closed for a missing schema, an unexpected owner,
+  # or an unexpected connection identity.
+  fixture_database_query_boolean "$database_name" "$phase" "
+    SELECT EXISTS(
+      SELECT 1
+        FROM pg_catalog.pg_namespace namespace
+        JOIN pg_catalog.pg_roles owner ON owner.oid=namespace.nspowner
+       WHERE namespace.nspname='public'
+         AND owner.rolname=current_user
+         AND current_user='$database_fixture_user'
+    )
+  " || return 1
+  [[ "$postgres_boolean_result" == true ]] || {
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="$phase"
+    record_parent_diagnostic "phase=$phase status=unexpected_schema_owner"
+    echo "listener stress template public schema is not owned by the migration role: $database_name" >&2
+    return 1
+  }
+}
+
+establish_template_public_schema_owner() {
+  local database_name="$1" phase
+  private_database_name_is_valid "$database_name" || return 1
+  phase="template-schema-owner-$database_name"
+  # PostgreSQL 15+ creates public owned by the pg_database_owner predefined
+  # role.  That is intentionally insufficient for Northstar's strict 0114
+  # installation-schema ownership audit, which compares nspowner directly to
+  # the migration role.  Make the role explicit before the migrator touches
+  # this disposable, prefix-validated database and immediately attest it.
+  run_parent_phase "$phase" \
+    fixture_database_psql "$database_name" \
+      --command 'ALTER SCHEMA public OWNER TO CURRENT_USER;' \
+    || return 1
+  template_public_schema_is_migration_owned "$database_name"
+}
+
 create_migration_template() {
   local database_name="$1" domain="$2" database_url
   private_database_name_is_valid "$database_name" || return 1
@@ -480,6 +580,13 @@ create_migration_template() {
   # must not strand an owned template simply because it never reached the
   # worker-provisioning stage.
   template_databases+=("$database_name")
+  if ! database_owner_is_fixture_user "$database_name"; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="template-create-$database_name"
+    record_parent_diagnostic "phase=template-create-$database_name resource=database resource_name=$database_name ownership=unverified state=not_eligible_for_schema_setup"
+    echo "listener stress template did not retain fixture database ownership: $database_name" >&2
+    return 1
+  fi
+  establish_template_public_schema_owner "$database_name" || return 1
   database_url="$(template_database_url "$database_name")"
   run_parent_phase "template-migrate-$database_name" \
     env NORTHSTAR_DISABLE_DOTENV=true \
@@ -635,6 +742,8 @@ start_stress_worker() {
       "$skip_variable=true" \
       "NORTHSTAR_LISTENER_STRESS_DATABASE_A=$database_a" \
       "NORTHSTAR_LISTENER_STRESS_DATABASE_B=$database_b" \
+      "NORTHSTAR_LISTENER_STRESS_DATABASE_HOST=$database_fixture_host" \
+      "NORTHSTAR_LISTENER_STRESS_DATABASE_PORT=$database_fixture_port" \
       "DATABASE_MAX_CONNECTIONS=$database_max_connections" \
       "DATABASE_MIN_CONNECTIONS=$database_min_connections" \
       "NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS=$worker_timeout_seconds" \

@@ -1,4 +1,77 @@
 use sqlx::postgres::PgPoolOptions;
+use std::borrow::Cow;
+
+// Exact source checksum from b588a0a. It is historical test evidence only;
+// it is never accepted as a valid current migration checksum.
+const MIGRATION_0132_PRE_FIX_SHA384: &str =
+    "878db593eff69e873434c109ed78211f2039fedf36076026a635f69add974f6f5f43c6a062a010ce48c8a102e0cfe6d5";
+// Exact corrected source checksum recorded by 6af75a6 and the repository
+// ledger manifest.
+const MIGRATION_0132_CURRENT_SHA384: &str =
+    "3bb9cc8cbda0798d78eb1f22b99a2076bdc6ed321aa59564e7c88faaffe8fbb4b0159ff6a6cc346a1d32769a408d535d";
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn migration_0132_current() -> sqlx::migrate::Migration {
+    super::MIGRATOR
+        .iter()
+        .find(|migration| migration.version == 132)
+        .cloned()
+        .expect("the embedded migration chain must contain 0132")
+}
+
+fn migrator_through(version: i64) -> sqlx::migrate::Migrator {
+    sqlx::migrate::Migrator {
+        migrations: Cow::Owned(
+            super::MIGRATOR
+                .iter()
+                .filter(|migration| migration.version <= version)
+                .cloned()
+                .collect(),
+        ),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    }
+}
+
+fn pre_fix_0132_migrator() -> sqlx::migrate::Migrator {
+    let mut migrations = super::MIGRATOR.iter().cloned().collect::<Vec<_>>();
+    let migration = migrations
+        .iter_mut()
+        .find(|migration| migration.version == 132)
+        .expect("the embedded migration chain must contain 0132");
+    let corrected_arguments = "        migration_schema,\n        migration_schema\n";
+    let historical_arguments = "        migration_schema\n";
+    let historical_sql = migration
+        .sql
+        .replacen(corrected_arguments, historical_arguments, 1);
+    assert_ne!(
+        historical_sql,
+        migration.sql.as_ref(),
+        "migration 0132 must retain the corrected two-argument format invocation"
+    );
+    *migration = sqlx::migrate::Migration::new(
+        migration.version,
+        migration.description.clone(),
+        migration.migration_type,
+        Cow::Owned(historical_sql),
+        migration.no_tx,
+    );
+    assert_eq!(
+        hex_encode(migration.checksum.as_ref()),
+        MIGRATION_0132_PRE_FIX_SHA384,
+        "the regression fixture must remain the exact b588 pre-fix migration byte stream"
+    );
+    sqlx::migrate::Migrator {
+        migrations: Cow::Owned(migrations),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    }
+}
 
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL pointing at a disposable random PostgreSQL schema prepared at migration 0013"]
@@ -503,4 +576,163 @@ async fn baseline_0013_upgrades_through_the_real_domain_migrator() {
         .execute(&pool)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL pointing at a disposable empty PostgreSQL schema"]
+async fn migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksum_is_enforced() {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to the disposable migration-0132 schema");
+    assert!(
+        url.contains("/xmpp_test?") && url.contains("search_path%3Dnorthstar_m0132_"),
+        "migration 0132 integrity test requires its generated xmpp_test schema"
+    );
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
+    let existing_relations: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema()",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        existing_relations, 0,
+        "the migration 0132 fixture must begin with an empty isolated schema"
+    );
+
+    // Apply the exact real migration chain through 0131. This creates the
+    // upgrade state that existed immediately before the faulty 0132 source was
+    // introduced, without inventing a synthetic ledger entry.
+    let through_0131 = migrator_through(131);
+    let expected_0131_rows = i64::try_from(through_0131.iter().count()).unwrap();
+    through_0131.run(&pool).await.unwrap();
+    let staged_state: (i64, Option<i64>, bool) = sqlx::query_as(
+        "SELECT COUNT(*),MAX(version),COALESCE(bool_and(success),FALSE) FROM _sqlx_migrations",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(staged_state, (expected_0131_rows, Some(131), true));
+
+    let current_0132 = migration_0132_current();
+    assert_eq!(
+        hex_encode(current_0132.checksum.as_ref()),
+        MIGRATION_0132_CURRENT_SHA384,
+        "the embedded migration source and reviewed current 0132 checksum drifted"
+    );
+    let pre_fix = pre_fix_0132_migrator();
+    let pre_fix_checksum = pre_fix
+        .iter()
+        .find(|migration| migration.version == 132)
+        .expect("the pre-fix fixture must contain 0132")
+        .checksum
+        .as_ref()
+        .to_vec();
+
+    // The b588 body fails inside its normal transactional migration before
+    // SQLx can insert a successful ledger record. This establishes the local
+    // recovery invariant; it deliberately does not claim anything about an
+    // independently administered database that has not been inspected.
+    let pre_fix_error = pre_fix.run(&pool).await.unwrap_err();
+    assert!(
+        pre_fix_error
+            .to_string()
+            .contains("too few arguments for format()"),
+        "the reconstructed pre-fix migration failed for an unexpected reason: {pre_fix_error}"
+    );
+    let failed_attempt_rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE version=132")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        failed_attempt_rows, 0,
+        "a transactional 0132 failure must not leave a dirty or successful ledger row"
+    );
+
+    // The corrected source must then upgrade the real 0131 state, and a
+    // repeated run must be a checksum-validated no-op.
+    super::MIGRATOR.run(&pool).await.unwrap();
+    super::MIGRATOR.run(&pool).await.unwrap();
+    let final_state: (i64, Option<i64>, bool) = sqlx::query_as(
+        "SELECT COUNT(*),MAX(version),COALESCE(bool_and(success),FALSE) FROM _sqlx_migrations",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        final_state,
+        (
+            i64::try_from(super::MIGRATOR.iter().count()).unwrap(),
+            Some(132),
+            true
+        )
+    );
+
+    let routine_is_schema_local_invoker: bool = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE((
+          SELECT NOT routine.prosecdef
+             AND routine.proconfig=ARRAY[
+                   pg_catalog.format(
+                     'search_path=pg_catalog, %I, pg_temp',
+                     pg_catalog.current_schema()
+                   )
+                 ]::pg_catalog.text[]
+            FROM pg_catalog.pg_proc AS routine
+           WHERE routine.oid=pg_catalog.to_regprocedure(
+                   pg_catalog.format(
+                     '%I.check_pubsub_collection_edge()',
+                     pg_catalog.current_schema()
+                   )
+                 )
+        ),FALSE)
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        routine_is_schema_local_invoker,
+        "migration 0132 must pin the PubSub collection-edge guard to its installation schema without granting definer authority"
+    );
+
+    let old_checksum_success_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM _sqlx_migrations
+          WHERE version=132
+            AND success
+            AND pg_catalog.encode(checksum,'hex')=$1",
+    )
+    .bind(MIGRATION_0132_PRE_FIX_SHA384)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        old_checksum_success_rows, 0,
+        "the current isolated ledger must not accept the pre-fix 0132 checksum"
+    );
+
+    // Simulate only the historical checksum in an otherwise successful
+    // isolated ledger. SQLx must reject it rather than silently rewriting the
+    // row, then accept an explicit restoration of the reviewed checksum.
+    sqlx::query("UPDATE _sqlx_migrations SET checksum=$1 WHERE version=132")
+        .bind(&pre_fix_checksum)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mismatch = super::MIGRATOR.run(&pool).await.unwrap_err();
+    assert!(
+        matches!(mismatch, sqlx::migrate::MigrateError::VersionMismatch(132)),
+        "the current migrator must reject a successful 0132 row with the pre-fix checksum: {mismatch}"
+    );
+    sqlx::query("UPDATE _sqlx_migrations SET checksum=$1 WHERE version=132")
+        .bind(current_0132.checksum.as_ref())
+        .execute(&pool)
+        .await
+        .unwrap();
+    super::MIGRATOR.run(&pool).await.unwrap();
 }

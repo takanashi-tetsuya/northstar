@@ -24,6 +24,60 @@ grep -Fq 'worker_group="$(wait_for_worker_group "$control_file" "$worker_pid")"'
   || { echo "listener stress driver no longer verifies private session ownership" >&2; exit 1; }
 grep -Fq 'kill "-$signal" -- "-$group"' "$driver" \
   || { echo "listener stress driver no longer uses scoped worker-group signalling" >&2; exit 1; }
+# Keep the parent-side safety gates coupled to the process-session regression.
+# The full 20x50/100x50 workload owns behavioral verification; these checks
+# prevent a future edit from reintroducing the already-observed entry failures
+# before the worker topology can even start.
+grep -Fq 'pg_catalog.host(pg_catalog.inet_server_addr())' "$driver" \
+  || { echo "listener stress driver no longer normalizes PostgreSQL inet host output" >&2; exit 1; }
+if grep -Fq 'inet_server_addr()::TEXT' "$driver"; then
+  echo "listener stress driver compares PostgreSQL inet text with a CIDR suffix" >&2
+  exit 1
+fi
+grep -Fq 'normalize_postgres_boolean()' "$driver" \
+  || { echo "listener stress driver no longer has an explicit PostgreSQL boolean parser" >&2; exit 1; }
+if grep -Fq 'grep -qx false' "$driver"; then
+  echo "listener stress driver still treats an unnormalized PostgreSQL boolean as shell text" >&2
+  exit 1
+fi
+grep -Fq 'retain_parent_diagnostic_artifact()' "$driver" \
+  || { echo "listener stress driver no longer retains parent-side redacted evidence" >&2; exit 1; }
+workflow="$project_dir/.github/workflows/ci.yml"
+grep -Fq 'listener-readiness-stress-smoke:' "$workflow" \
+  || { echo "listener stress CI no longer proves the 1x1/1x2 path before pressure" >&2; exit 1; }
+for lane in regular scheduled; do
+  if ! awk -v lane="$lane" '
+    $0 == "  listener-readiness-stress-" lane ":" { in_job = 1; next }
+    in_job && /^  [a-zA-Z0-9_-]+:$/ { exit }
+    in_job && /needs: listener-readiness-stress-smoke/ { found = 1; exit }
+    END { exit !found }
+  ' "$workflow"; then
+    echo "listener stress $lane lane no longer waits for its isolated 1x1/1x2 proof" >&2
+    exit 1
+  fi
+done
+for pairs in 1 2; do
+  if ! grep -Fq -- "--rounds 1 --pairs $pairs" "$workflow"; then
+    echo "listener stress smoke lane no longer contains its 1x$pairs execution" >&2
+    exit 1
+  fi
+done
+for lane in regular scheduled; do
+  if ! awk -v lane="$lane" '
+    $0 ~ "name: listener-readiness-" lane "-" { in_listener_artifact = 1; next }
+    in_listener_artifact && /if-no-files-found: error/ { found = 1; exit }
+    in_listener_artifact && /^      - name:/ { exit }
+    END { exit !found }
+  ' "$workflow"; then
+    echo "listener stress $lane diagnostic upload no longer fails closed when its artifact is absent" >&2
+    exit 1
+  fi
+done
+binary_gate_line="$(grep -n '^resolve_current_build_binary$' "$driver" | cut -d: -f1 || true)"
+database_attestation_line="$(grep -n '^assert_private_database_fixture$' "$driver" | tail -n 1 | cut -d: -f1 || true)"
+[[ "$binary_gate_line" =~ ^[1-9][0-9]*$ && "$database_attestation_line" =~ ^[1-9][0-9]*$ \
+   && "$binary_gate_line" -lt "$database_attestation_line" ]] \
+  || { echo "listener stress driver no longer validates its current binary before database work" >&2; exit 1; }
 
 runtime_dir="$(mktemp -d /tmp/northstar-listener-stress.XXXXXX)"
 control_file="$runtime_dir/worker.control"

@@ -74,11 +74,41 @@ database_min_connections="${NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS:-
   exit 2
 }
 
+umask 077
+# Parent-side failures happen before a worker reaches github-ci-run.sh, so they
+# need their own retained, redacted evidence path.  Keep it outside the private
+# runtime directory: cleanup removes that directory because it contains test
+# certificates and temporary credentials.
+diagnostic_root="${NORTHSTAR_CI_DIAGNOSTICS_DIR:-${RUNNER_TEMP:-/tmp}/northstar-ci-diagnostics}"
+if ! mkdir -p -- "$diagnostic_root"; then
+  echo "listener stress could not create its diagnostic directory" >&2
+  exit 2
+fi
 runtime_dir="$(mktemp -d /tmp/northstar-listener-stress.XXXXXX)"
+runtime_dir_resolved="$(readlink -f -- "$runtime_dir")"
+diagnostic_root_resolved="$(readlink -f -- "$diagnostic_root")"
+case "$diagnostic_root_resolved" in
+  "$runtime_dir_resolved"|"$runtime_dir_resolved"/*)
+    echo "listener stress diagnostics must not be placed in its removable runtime directory" >&2
+    exit 2
+    ;;
+esac
+parent_diagnostic_raw="$runtime_dir/parent-diagnostics.raw.log"
+: >"$parent_diagnostic_raw"
+parent_diagnostic_artifact=""
+parent_failure_phase=""
+parent_query_sequence=0
+normalized_postgres_boolean=""
+postgres_boolean_result=""
+database_exists_result=""
+binary=""
+readonly parent_diagnostic_max_bytes=524288
+readonly parent_phase_log_tail_bytes=131072
 declare -a workers=()
 declare -a worker_groups=()
 declare -a round_databases=()
 declare -a template_databases=()
+declare -a cleanup_debt=()
 declare -A pair_database_a=()
 declare -A pair_database_b=()
 
@@ -116,51 +146,258 @@ fixture_admin_psql() {
     --set ON_ERROR_STOP=1 "$@"
 }
 
+record_parent_diagnostic() {
+  # All callers pass fixed phase labels or generated private database names.
+  # Raw command output is written only inside the 0700 runtime directory and is
+  # redacted before it reaches the uploadable artifact.
+  printf '%s\n' "$*" >>"$parent_diagnostic_raw" || true
+}
+
+record_parent_phase_failure() {
+  local phase="$1" status="$2" phase_log="$3"
+  [[ -n "$parent_failure_phase" ]] || parent_failure_phase="$phase"
+  record_parent_diagnostic "phase=$phase status=$status"
+  if [[ -s "$phase_log" ]]; then
+    record_parent_diagnostic "--- phase=$phase bounded_output_tail ---"
+    tail -c "$parent_phase_log_tail_bytes" -- "$phase_log" >>"$parent_diagnostic_raw" || true
+    printf '\n' >>"$parent_diagnostic_raw" || true
+  fi
+}
+
+run_parent_phase() {
+  local phase="$1" phase_log status
+  shift
+  phase_log="$runtime_dir/parent-${phase//[^a-zA-Z0-9_.-]/_}.raw.log"
+  if "$@" >"$phase_log" 2>&1; then
+    return 0
+  else
+    status=$?
+  fi
+  record_parent_phase_failure "$phase" "$status" "$phase_log"
+  echo "listener stress parent phase failed: $phase (status=$status)" >&2
+  return "$status"
+}
+
+normalize_postgres_boolean() {
+  # psql command substitution strips the normal trailing newline.  Anything
+  # else (including an empty result, an extra row, or an error accidentally
+  # sent to stdout) is not a boolean and must fail closed.
+  normalized_postgres_boolean=""
+  case "$1" in
+    t|true) normalized_postgres_boolean=true ;;
+    f|false) normalized_postgres_boolean=false ;;
+    *) return 1 ;;
+  esac
+}
+
+fixture_query_boolean() {
+  local phase="$1" sql="$2" output status
+  parent_query_sequence=$((parent_query_sequence + 1))
+  if output="$(fixture_admin_psql --tuples-only --no-align --command "$sql" 2>>"$parent_diagnostic_raw")"; then
+    :
+  else
+    status=$?
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="$phase"
+    record_parent_diagnostic "phase=$phase status=$status query=failed"
+    echo "listener stress PostgreSQL boolean query failed: $phase" >&2
+    return 1
+  fi
+  if ! normalize_postgres_boolean "$output"; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="$phase"
+    record_parent_diagnostic "phase=$phase status=invalid_boolean_output query_sequence=$parent_query_sequence"
+    echo "listener stress PostgreSQL boolean query returned an invalid result: $phase" >&2
+    return 1
+  fi
+  postgres_boolean_result="$normalized_postgres_boolean"
+}
+
+database_exists() {
+  local database_name="$1"
+  database_exists_result=""
+  private_database_name_is_valid "$database_name" || return 1
+  fixture_query_boolean "database-exists-$database_name" \
+    "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_database WHERE datname='$database_name')" \
+    || return 1
+  database_exists_result="$postgres_boolean_result"
+}
+
+record_cleanup_debt() {
+  local database_name="$1" reason="$2"
+  local debt
+  for debt in "${cleanup_debt[@]}"; do
+    [[ "$debt" == "$database_name:$reason" ]] && return 0
+  done
+  cleanup_debt+=("$database_name:$reason")
+  record_parent_diagnostic "phase=cleanup resource=database resource_name=$database_name ownership=fixture-verified state=$reason"
+}
+
+append_runtime_log_tails() {
+  # Worker commands own their individual redacted supervisor artifacts.  This
+  # parent-side artifact supplements them with a bounded selection of local
+  # lifecycle logs, without echoing potentially credential-rich raw logs into
+  # the job console during cleanup.
+  local log collected=0
+  while IFS= read -r -d '' log; do
+    [[ "$log" == "$parent_diagnostic_raw" || "$log" == "$runtime_dir/parent-diagnostics.final.raw.log" ]] && continue
+    if (( collected >= 12 )); then
+      record_parent_diagnostic "runtime_log_tails_truncated=true retained=$collected"
+      break
+    fi
+    record_parent_diagnostic "--- runtime_log=$(basename "$log") bounded_tail ---"
+    tail -c 32768 -- "$log" >>"$parent_diagnostic_raw" || true
+    printf '\n' >>"$parent_diagnostic_raw" || true
+    collected=$((collected + 1))
+  done < <(find "$runtime_dir" -maxdepth 1 -type f -name '*.log' -print0 | LC_ALL=C sort -z)
+}
+
+retain_parent_diagnostic_artifact() {
+  local exit_status="$1" source_file artifact temporary_artifact target_artifact debt
+
+  source_file="$runtime_dir/parent-diagnostics.final.raw.log"
+  {
+    printf 'listener_readiness_stress_failure=true\n'
+    printf 'fixture=%s mode=%s exit_status=%s\n' "$fixture" "$mode" "$exit_status"
+    printf 'first_failure_phase=%s\n' "${parent_failure_phase:-unknown}"
+    if (( ${#cleanup_debt[@]} > 0 )); then
+      printf 'cleanup_debt_count=%s\n' "${#cleanup_debt[@]}"
+      for debt in "${cleanup_debt[@]}"; do
+        printf 'cleanup_debt=%s\n' "$debt"
+      done
+    fi
+    printf '%s\n' '--- bounded parent diagnostic tail ---'
+    tail -c "$parent_diagnostic_max_bytes" -- "$parent_diagnostic_raw" 2>/dev/null || true
+  } >"$source_file"
+
+  if ! temporary_artifact="$(mktemp "$diagnostic_root_resolved/listener-readiness-${fixture}.XXXXXX")"; then
+    echo "listener stress could not allocate a sanitized diagnostic artifact" >&2
+    return 1
+  fi
+  artifact="${temporary_artifact}.redacted.log"
+  if ! mv -- "$temporary_artifact" "$artifact"; then
+    echo "listener stress could not name its sanitized diagnostic artifact" >&2
+    rm -f -- "$temporary_artifact"
+    return 1
+  fi
+
+  # Reuse the repository's control-character and credential redactor.  A
+  # minimal safe fallback still records ownership and phase metadata if the
+  # redactor itself is unavailable; it never uploads the raw transcript.
+  if ! python3 "$project_dir/scripts/github_ci_summary.py" \
+    --title "Listener readiness stress parent failure" \
+    --redacted-copy "$artifact" "$source_file" >/dev/null 2>&1; then
+    {
+      printf 'listener_readiness_stress_failure=true\n'
+      printf 'fixture=%s mode=%s exit_status=%s\n' "$fixture" "$mode" "$exit_status"
+      printf 'first_failure_phase=%s\n' "${parent_failure_phase:-unknown}"
+      for debt in "${cleanup_debt[@]}"; do
+        printf 'cleanup_debt=%s\n' "$debt"
+      done
+      printf '%s\n' 'diagnostic_redactor_failed=true'
+    } >"$artifact"
+  fi
+  chmod 600 -- "$artifact" 2>/dev/null || true
+  if [[ ! -s "$artifact" ]]; then
+    echo "listener stress sanitized diagnostic artifact is empty: $artifact" >&2
+    return 1
+  fi
+  # A preflight/template failure is recorded before cleanup starts, then this
+  # same file is atomically refreshed after cleanup so its retained evidence
+  # includes any owned-resource debt and sanitized PostgreSQL failure output.
+  if [[ -n "$parent_diagnostic_artifact" ]]; then
+    target_artifact="$parent_diagnostic_artifact"
+    if ! mv -f -- "$artifact" "$target_artifact"; then
+      echo "listener stress could not refresh its sanitized diagnostic artifact" >&2
+      return 1
+    fi
+    artifact="$target_artifact"
+  fi
+  parent_diagnostic_artifact="$artifact"
+  echo "listener stress sanitized diagnostic artifact retained: $artifact" >&2
+}
+
 assert_private_database_fixture() {
-  local identity
+  local identity status
   identity="$(fixture_admin_psql --tuples-only --no-align --command "
-    SELECT pg_catalog.inet_server_addr()::TEXT || '|' || current_user || '|' ||
+    SELECT pg_catalog.host(pg_catalog.inet_server_addr()) || '|' || current_user || '|' ||
            (SELECT rolcreatedb::TEXT FROM pg_catalog.pg_roles WHERE rolname=current_user)
-  ")"
-  identity="${identity//[[:space:]]/}"
+  " 2>>"$parent_diagnostic_raw")" || {
+    status=$?
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase=database-fixture-attestation
+    record_parent_diagnostic "phase=database-fixture-attestation status=$status query=failed"
+    echo "listener stress database fixture attestation query failed" >&2
+    return 1
+  }
   [[ "$identity" == "127.0.0.1|xmpp_test|true" ]] || {
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase=database-fixture-attestation
+    record_parent_diagnostic "phase=database-fixture-attestation status=unexpected_identity"
     echo "listener stress database fixture must be loopback xmpp_test with CREATEDB, got ${identity:-unknown}" >&2
     return 1
   }
 }
 
 database_owner_is_fixture_user() {
-  local database_name="$1" owner
+  local database_name="$1" owner status
   private_database_name_is_valid "$database_name" || return 1
   owner="$(fixture_admin_psql --tuples-only --no-align --command "
     SELECT pg_catalog.pg_get_userbyid(datdba)
       FROM pg_catalog.pg_database
      WHERE datname='$database_name'
-  " 2>/dev/null || true)"
-  owner="${owner//[[:space:]]/}"
+  " 2>>"$parent_diagnostic_raw")" || {
+    status=$?
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="database-owner-$database_name"
+    record_parent_diagnostic "phase=database-owner-$database_name status=$status query=failed"
+    echo "listener stress database ownership query failed: $database_name" >&2
+    return 2
+  }
   [[ "$owner" == "$database_fixture_user" ]]
 }
 
 drop_private_database() {
-  local database_name="$1"
+  local database_name="$1" owner_status
   private_database_name_is_valid "$database_name" || {
     echo "refusing to drop an unexpected listener stress database: $database_name" >&2
     return 1
   }
-  if ! database_owner_is_fixture_user "$database_name"; then
-    # An absent database is already clean; any other owner is an ownership
-    # violation rather than a target for destructive test cleanup.
-    if fixture_admin_psql --tuples-only --no-align --command "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_database WHERE datname='$database_name')" \
-      | tr -d '[:space:]' | grep -qx false; then
+  if database_owner_is_fixture_user "$database_name"; then
+    :
+  else
+    owner_status=$?
+    # An absent database is already clean; any other owner or an ownership
+    # lookup failure is an audit failure rather than a target for destructive
+    # fixture cleanup.
+    if (( owner_status >= 2 )); then
+      record_cleanup_debt "$database_name" owner-query-failed
+      return 1
+    fi
+    if ! database_exists "$database_name"; then
+      record_cleanup_debt "$database_name" existence-query-failed
+      return 1
+    fi
+    if [[ "$database_exists_result" == false ]]; then
       return 0
     fi
+    record_cleanup_debt "$database_name" owner-mismatch
     echo "listener stress database is not owned by the fixture identity: $database_name" >&2
     return 1
   fi
   # Worker names are generated by this run and checked above. FORCE is an
   # intentional backstop for a killed child that left only connections to its
   # own disposable database; it never targets the shared control database.
-  fixture_admin_psql --command "DROP DATABASE \"$database_name\" WITH (FORCE);" >/dev/null
+  if ! run_parent_phase "cleanup-drop-$database_name" \
+    fixture_admin_psql --command "DROP DATABASE \"$database_name\" WITH (FORCE);"; then
+    record_cleanup_debt "$database_name" drop-failed
+    return 1
+  fi
+  if ! database_exists "$database_name"; then
+    record_cleanup_debt "$database_name" post-drop-existence-query-failed
+    return 1
+  fi
+  if [[ "$database_exists_result" != false ]]; then
+    record_cleanup_debt "$database_name" post-drop-still-exists
+    echo "listener stress database remained after its owned cleanup: $database_name" >&2
+    return 1
+  fi
+  return 0
 }
 
 create_private_database_from_template() {
@@ -170,20 +407,35 @@ create_private_database_from_template() {
     echo "listener stress refused unsafe database template names" >&2
     return 1
   }
-  fixture_admin_psql --tuples-only --no-align --command "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_database WHERE datname='$database_name')" \
-    | tr -d '[:space:]' | grep -qx false || {
+  if ! database_exists "$database_name"; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="clone-preflight-$database_name"
+    record_parent_diagnostic "phase=clone-preflight-$database_name status=existence_query_failed"
+    echo "listener stress could not determine whether a private database name is occupied: $database_name" >&2
+    return 1
+  fi
+  [[ "$database_exists_result" == false ]] || {
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="clone-preflight-$database_name"
+    record_parent_diagnostic "phase=clone-preflight-$database_name status=name_occupied"
     echo "listener stress database name was unexpectedly occupied: $database_name" >&2
     return 1
   }
   database_owner_is_fixture_user "$template_name" || {
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="clone-preflight-$database_name"
+    record_parent_diagnostic "phase=clone-preflight-$database_name status=template_not_fixture_owned template=$template_name"
     echo "listener stress migration template is missing or not owned by the fixture identity: $template_name" >&2
     return 1
   }
-  fixture_admin_psql --command "CREATE DATABASE \"$database_name\" WITH TEMPLATE \"$template_name\" OWNER \"$database_fixture_user\";" >/dev/null
-  database_owner_is_fixture_user "$database_name" || {
+  run_parent_phase "clone-create-$database_name" \
+    fixture_admin_psql --command "CREATE DATABASE \"$database_name\" WITH TEMPLATE \"$template_name\" OWNER \"$database_fixture_user\";" \
+    || return 1
+  if ! database_owner_is_fixture_user "$database_name"; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="clone-create-$database_name"
+    # The database name is owned by this invocation, but deletion remains
+    # forbidden until PostgreSQL proves that the fixture identity owns it.
+    record_parent_diagnostic "phase=clone-create-$database_name resource=database resource_name=$database_name ownership=unverified state=created_not_eligible_for_cleanup"
     echo "listener stress clone did not retain fixture ownership: $database_name" >&2
     return 1
-  }
+  fi
 }
 
 template_database_url() {
@@ -197,27 +449,55 @@ template_database_url() {
 create_migration_template() {
   local database_name="$1" domain="$2" database_url
   private_database_name_is_valid "$database_name" || return 1
+  if [[ -z "$binary" || ! -x "$binary" ]]; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase=template-preflight
+    record_parent_diagnostic "phase=template-preflight status=validated_binary_missing"
+    echo "listener stress refuses to create a template before validating its current binary" >&2
+    return 1
+  fi
   [[ "$domain" == localhost || "$domain" == remote.localhost ]] || {
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase=template-preflight
+    record_parent_diagnostic "phase=template-preflight status=unexpected_domain"
     echo "listener stress refused an unexpected template domain: $domain" >&2
     return 1
   }
-  fixture_admin_psql --tuples-only --no-align --command "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_database WHERE datname='$database_name')" \
-    | tr -d '[:space:]' | grep -qx false || {
+  if ! database_exists "$database_name"; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="template-preflight-$database_name"
+    record_parent_diagnostic "phase=template-preflight-$database_name status=existence_query_failed"
+    echo "listener stress could not determine whether a template database name is occupied: $database_name" >&2
+    return 1
+  fi
+  [[ "$database_exists_result" == false ]] || {
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="template-preflight-$database_name"
+    record_parent_diagnostic "phase=template-preflight-$database_name status=name_occupied"
     echo "listener stress template name was unexpectedly occupied: $database_name" >&2
     return 1
   }
-  fixture_admin_psql --command "CREATE DATABASE \"$database_name\" OWNER \"$database_fixture_user\";" >/dev/null
+  run_parent_phase "template-create-$database_name" \
+    fixture_admin_psql --command "CREATE DATABASE \"$database_name\" OWNER \"$database_fixture_user\";" \
+    || return 1
+  # Arm cleanup as soon as the private database exists.  A migration failure
+  # must not strand an owned template simply because it never reached the
+  # worker-provisioning stage.
   template_databases+=("$database_name")
   database_url="$(template_database_url "$database_name")"
-  env NORTHSTAR_DISABLE_DOTENV=true \
-    XMPP_DOMAIN="$domain" \
-    MIGRATOR_DATABASE_URL="$database_url" \
-    MIGRATOR_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT=true \
-    "$binary" migrate
+  run_parent_phase "template-migrate-$database_name" \
+    env NORTHSTAR_DISABLE_DOTENV=true \
+      XMPP_DOMAIN="$domain" \
+      MIGRATOR_DATABASE_URL="$database_url" \
+      MIGRATOR_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT=true \
+      "$binary" migrate \
+    || return 1
   # Clones must be made from a quiescent seed.  Disabling normal connections
   # also prevents a worker from being accidentally pointed at the template.
-  fixture_admin_psql --command "ALTER DATABASE \"$database_name\" WITH ALLOW_CONNECTIONS false;" >/dev/null
-  database_owner_is_fixture_user "$database_name"
+  run_parent_phase "template-quiesce-$database_name" \
+    fixture_admin_psql --command "ALTER DATABASE \"$database_name\" WITH ALLOW_CONNECTIONS false;" \
+    || return 1
+  if ! database_owner_is_fixture_user "$database_name"; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase="template-verify-$database_name"
+    record_parent_diagnostic "phase=template-verify-$database_name resource=database resource_name=$database_name ownership=unverified state=not_eligible_for_cleanup"
+    return 1
+  fi
 }
 
 provision_pair_databases() {
@@ -245,21 +525,31 @@ provision_pair_databases() {
 
 drop_round_databases() {
   local database_name failed=0
+  local -a remaining=()
   for database_name in "${round_databases[@]}"; do
-    drop_private_database "$database_name" || failed=1
+    if ! drop_private_database "$database_name"; then
+      remaining+=("$database_name")
+      failed=1
+    fi
   done
-  round_databases=()
-  pair_database_a=()
-  pair_database_b=()
+  round_databases=("${remaining[@]}")
+  if (( failed == 0 )); then
+    pair_database_a=()
+    pair_database_b=()
+  fi
   return "$failed"
 }
 
 drop_template_databases() {
   local database_name failed=0
+  local -a remaining=()
   for database_name in "${template_databases[@]}"; do
-    drop_private_database "$database_name" || failed=1
+    if ! drop_private_database "$database_name"; then
+      remaining+=("$database_name")
+      failed=1
+    fi
   done
-  template_databases=()
+  template_databases=("${remaining[@]}")
   return "$failed"
 }
 
@@ -373,6 +663,15 @@ start_stress_worker() {
 cleanup() {
   status=$?
   trap - EXIT INT TERM
+  # Do this before any potentially slow database cleanup.  A migration or
+  # preflight failure must leave redacted evidence even if its later cleanup
+  # cannot make progress; the artifact is refreshed below once cleanup returns.
+  if ((status != 0)); then
+    if ! retain_parent_diagnostic_artifact "$status"; then
+      echo "listener stress failed to retain its initial sanitized parent diagnostic artifact" >&2
+      status=1
+    fi
+  fi
   signal_worker_groups TERM
   if ! wait_for_workers_to_stop; then
     signal_worker_groups KILL
@@ -391,13 +690,25 @@ cleanup() {
     status=1
   fi
   if ((status != 0)); then
-    find "$runtime_dir" -type f -name '*.log' -print0 | while IFS= read -r -d '' log; do
-      echo "--- $(basename "$log") (last 80 lines) ---" >&2
-      tail -n 80 "$log" >&2 || true
-    done
+    append_runtime_log_tails
+    if ! retain_parent_diagnostic_artifact "$status"; then
+      echo "listener stress failed to retain its sanitized parent diagnostic artifact" >&2
+      status=1
+    fi
   fi
   case "$runtime_dir" in
-    /tmp/northstar-listener-stress.*) rm -rf -- "$runtime_dir" ;;
+    /tmp/northstar-listener-stress.*)
+      if ! rm -rf -- "$runtime_dir"; then
+        echo "listener stress could not remove its owned runtime directory: $runtime_dir" >&2
+        record_parent_diagnostic "phase=cleanup resource=runtime_directory resource_name=$runtime_dir state=remove_failed"
+        if [[ -n "$parent_diagnostic_artifact" ]]; then
+          printf '%s\n' 'cleanup_runtime_directory=remove_failed' >>"$parent_diagnostic_artifact" || true
+        elif ! retain_parent_diagnostic_artifact 1; then
+          echo "listener stress could not retain cleanup-failure evidence" >&2
+        fi
+        status=1
+      fi
+      ;;
     *) echo "refusing to remove unexpected stress directory: $runtime_dir" >&2; status=1 ;;
   esac
   exit "$status"
@@ -406,14 +717,63 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-command -v setsid >/dev/null || { echo "listener stress requires setsid for private worker groups" >&2; exit 2; }
-command -v ps >/dev/null || { echo "listener stress requires ps for private worker verification" >&2; exit 2; }
+if ! command -v setsid >/dev/null; then
+  parent_failure_phase=preflight-setsid
+  record_parent_diagnostic "phase=preflight-setsid status=missing_command"
+  echo "listener stress requires setsid for private worker groups" >&2
+  exit 2
+fi
+if ! command -v ps >/dev/null; then
+  parent_failure_phase=preflight-ps
+  record_parent_diagnostic "phase=preflight-ps status=missing_command"
+  echo "listener stress requires ps for private worker verification" >&2
+  exit 2
+fi
 
-# Compile exactly once.  Worker fixtures receive the explicit skip flag only
-# after this succeeds, so a missing binary is never reported as a port result.
-cargo_args=(--locked)
-[[ "${XMPP_TEST_OFFLINE:-true}" == false ]] || cargo_args+=(--offline)
-cargo build "${cargo_args[@]}"
+resolve_current_build_binary() {
+  local configured_target_dir candidate resolved_target_dir resolved_binary
+  local -a cargo_args
+  configured_target_dir="${CARGO_TARGET_DIR:-$project_dir/target}"
+  if [[ "$configured_target_dir" != /* ]]; then
+    configured_target_dir="$project_dir/$configured_target_dir"
+  fi
+
+  # Compile exactly once and resolve the binary immediately afterwards.  Cargo
+  # fingerprints make a successful build authoritative even when the file was
+  # already up to date; there is no fallback to an unrelated/default target
+  # directory or a previously discovered executable.
+  cargo_args=(--locked)
+  [[ "${XMPP_TEST_OFFLINE:-true}" == false ]] || cargo_args+=(--offline)
+  run_parent_phase preflight-build cargo build "${cargo_args[@]}" --bin rust-xmpp-server || return 1
+
+  candidate="$configured_target_dir/debug/rust-xmpp-server"
+  if [[ ! -f "$candidate" || ! -x "$candidate" ]]; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase=preflight-binary
+    record_parent_diagnostic "phase=preflight-binary status=missing_or_not_executable"
+    echo "listener stress current build did not produce an executable: $candidate" >&2
+    return 1
+  fi
+  if ! resolved_target_dir="$(readlink -f -- "$configured_target_dir")" \
+    || ! resolved_binary="$(readlink -f -- "$candidate")"; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase=preflight-binary
+    record_parent_diagnostic "phase=preflight-binary status=path_resolution_failed"
+    echo "listener stress could not resolve its current build output" >&2
+    return 1
+  fi
+  if [[ "$resolved_binary" != "$resolved_target_dir/debug/rust-xmpp-server" ]]; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase=preflight-binary
+    record_parent_diagnostic "phase=preflight-binary status=resolved_outside_expected_target"
+    echo "listener stress refused a binary resolved outside CARGO_TARGET_DIR" >&2
+    return 1
+  fi
+  binary="$resolved_binary"
+  record_parent_diagnostic "phase=preflight-binary status=validated target_directory=$resolved_target_dir"
+}
+
+# This is deliberately before database attestation, template creation, and any
+# worker provisioning.  A missing or wrong build artifact is a build failure,
+# never a database or listener failure.
+resolve_current_build_binary
 echo "listener stress profile: worker_timeout_seconds=$worker_timeout_seconds database_max_connections=$database_max_connections database_min_connections=$database_min_connections"
 
 assert_private_database_fixture

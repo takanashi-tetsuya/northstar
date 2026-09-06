@@ -1025,6 +1025,17 @@ do
         exit 1
     fi
 done
+pubsub_edge_path_set_call="$(awk '
+  /SET search_path TO pg_catalog, %I, pg_temp/ { capture=1 }
+  capture { print }
+  capture && /^[[:space:]]*\);[[:space:]]*$/ { exit }
+' "$pubsub_edge_path_migration")"
+pubsub_edge_path_argument_count="$(printf '%s\n' "$pubsub_edge_path_set_call" \
+  | grep -Ec '^[[:space:]]*migration_schema,?[[:space:]]*$')"
+if [[ "$pubsub_edge_path_argument_count" -ne 2 ]]; then
+    echo "migration 0132 must pass both schema identifiers to its two-placeholder format call" >&2
+    exit 1
+fi
 echo "migration 0132 pins the PubSub collection-edge trigger helper as a schema-local invoker routine"
 
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0

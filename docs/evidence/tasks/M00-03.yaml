@@ -96,7 +96,7 @@ evidence:
   # This is the newest fully completed observation. Run-specific records below
   # retain the earlier Run 69 evidence rather than treating it as evidence for
   # this later tree.
-  exact_dev_commit: "f367a930253a33c2ac1d5d7475ce540d5d6434f8"
+  exact_dev_commit: "6af75a68c05b92a723d7a75fb07158a4e7d50f55"
   workflow_runs:
     - id: "33958038598"
       attempt: 1
@@ -375,9 +375,62 @@ evidence:
       - "Obtain independent isolated bounded results for Privacy, HTTP Upload, MUC cluster, PubSub outbox, and PubSub wire without removing any suite or increasing a deadline."
       - "Complete the W5 regular and scheduled listener/readiness pressure matrices on the exact dev tree."
       - "Resolve each Run 70 suite failure by its stated invariant, then obtain a fresh exact-SHA CI observation."
+  run_73_observation:
+    source_run:
+      id: "33998876791"
+      attempt: 1
+      exact_dev_commit: "6af75a68c05b92a723d7a75fb07158a4e7d50f55"
+    classification: "Failed observation only. It neither accepts M00-03 nor supplies evidence for the uncommitted listener and migration repairs."
+    listener_entry_failures:
+      jobs:
+        - id: "101394068177"
+          fixture: "federation"
+        - id: "101394068267"
+          fixture: "mix-federation"
+      failed_stage: "database fixture attestation before templates or workers"
+      observed_error: "inet_server_addr() rendered 127.0.0.1/32 while the fixture comparison expected unqualified 127.0.0.1."
+      follow_up: "The next candidate validates host(inet_server_addr()), explicit PostgreSQL boolean results, the current CARGO_TARGET_DIR build output before database creation, and a retained parent diagnostic artifact. It first gates 1x1 and 1x2 Linux paths before either pressure matrix."
+    collaboration_storage:
+      job_id: "101394068175"
+      current_passes:
+        - suite_id: "pie"
+          status: "passed"
+          note: "The prior upload-policy fixture failure is historical only; it is not a current PIE failure."
+        - suite_id: "privacy"
+          status: "passed"
+          note: "The prior not-run record is historical only; Privacy is no longer blocked in this observation."
+      separately_registered_business_failures:
+        - id: "upload-object-id-conflict-target"
+          suite_id: "http-upload"
+          failed_stage: "expired upload cleanup admission"
+          root_cause: "0131 northstar_upload_admit_expired_cleanup RETURNS TABLE(object_id), making ON CONFLICT(object_id) ambiguous in PL/pgSQL."
+          owning_work_unit: "Upload SQL authority"
+          required_root_fix: "Forward migration using ON CONFLICT ON CONSTRAINT upload_cleanup_queue_pkey DO NOTHING; preserve the result-column contract."
+          excluded_from: "M00-03 listener and fixture-preflight scope"
+        - id: "upload-retained-bytes-batch-delete"
+          suite_id: "http-upload"
+          failed_stage: "capacity ledger cleanup"
+          root_cause: "0105 uses an AFTER ROW DELETE trigger, so a multi-row delete can make each deleted job appear to be the last projection and decrement retained bytes repeatedly."
+          owning_work_unit: "Upload capacity-ledger correctness"
+          required_root_fix: "Forward migration to a BEFORE ROW DELETE trigger with a final-projection predicate that excludes OLD.id; do not clamp the ledger or weaken its check constraint."
+          excluded_from: "M00-03 listener and fixture-preflight scope"
+        - id: "muc-cluster-destination-authority"
+          suite_id: "muc-cluster"
+          failed_stage: "signed cluster destination lookup"
+          root_cause: "The isolated test nodes did not establish the real process-authority lifecycle; the existing signer correctly failed closed. Direct mutation paths also need durable operation/outbox authority before Redis wakeup."
+          owning_work_unit: "MUC authority and durable outbox"
+          required_root_fix: "Exercise the real authority lifecycle in the fixture, then route role, affiliation, and policy mutations through cluster_muc_operations/outbox rather than mutating Redis before signed publication."
+          excluded_from: "M00-03 listener and fixture-preflight scope"
+    migration_0132_integrity:
+      historical_pre_fix_commit: "b588a0af99f3e523098ab4cd12c1c7b19f6981dc"
+      historical_pre_fix_sha384: "878db593eff69e873434c109ed78211f2039fedf36076026a635f69add974f6f5f43c6a062a010ce48c8a102e0cfe6d5"
+      current_sha384: "3bb9cc8cbda0798d78eb1f22b99a2076bdc6ed321aa59564e7c88faaffe8fbb4b0159ff6a6cc346a1d32769a408d535d"
+      observed_application_evidence: "No universal deployment claim is made. The pending isolated regression reconstructs the historical body, expects its format() failure, and requires no successful version-132 ledger row before applying the corrected source."
+      required_validation: "Empty schema, real 0131 upgrade, corrected rerun, and synthetic old-checksum rejection remain required on the next isolated Linux migration-upgrade suite."
   notes:
     - "Run 69 is evidence of observed state, not accepted-bootstrap evidence."
     - "Run 70 (33963557616, attempt 1) ended naturally on f367a930253a33c2ac1d5d7475ce540d5d6434f8. Its 32 database suites are counted once as 26 passed, 5 failed, 1 timeout and 0 not-run; XEP-0487 is recorded separately."
     - "The old collection item race passed in Run 69; the PubSub failure phase was first association preparation."
     - "Every suite id appears once within its own run observation. XEP-0487 is intentionally recorded separately from the 32 database suites."
     - "M00-03 remains in-progress and is not accepted-bootstrap. Exact-SHA Linux evidence for the W4 supervisor repair, the independent five previously blocked suites, the cluster fixture, and the W5 pressure matrix is required before manual acceptance. Final M00 ratification remains deferred to M00-G1 on one tree with two complete required-check runs."
+    - "Run 73 confirms PIE and Privacy pass on 6af75a6. The three separately registered Upload/MUC failures are not relabeled as M00-03 fixture failures and do not broaden this preflight repair into an unrelated authority change."

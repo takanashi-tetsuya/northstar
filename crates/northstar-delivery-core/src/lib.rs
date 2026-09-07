@@ -58,25 +58,71 @@ pub struct DurableDelivery {
     pub claim_id: Option<Uuid>,
 }
 
+/// The exact lease of a durable MIX recipient projection.
+///
+/// Unlike a C2S offline message, a MIX delivery is not identified by a
+/// recipient/message pair.  Both UUIDs are required at every transport
+/// hand-off so an old BOSH or XEP-0198 acknowledgement cannot consume a row
+/// which a later worker has re-leased.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MixDelivery {
+    pub delivery_id: Uuid,
+    pub lease_token: Uuid,
+}
+
+/// One recoverable source for an outbound stanza.
+///
+/// Keeping this as an enum makes C2S and MIX ownership mutually exclusive at
+/// the type boundary.  It replaces the former pattern where an item could
+/// accidentally carry an offline fence plus an unrelated in-memory receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransportOwnershipSource {
+    C2s(DurableDelivery),
+    Mix(MixDelivery),
+}
+
+impl TransportOwnershipSource {
+    pub const fn c2s(self) -> Option<DurableDelivery> {
+        match self {
+            Self::C2s(delivery) => Some(delivery),
+            Self::Mix(_) => None,
+        }
+    }
+
+    pub const fn mix(self) -> Option<MixDelivery> {
+        match self {
+            Self::C2s(_) => None,
+            Self::Mix(delivery) => Some(delivery),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SmUnackedStanza {
     pub stanza: String,
-    pub durable_delivery: Option<DurableDelivery>,
+    pub source: Option<TransportOwnershipSource>,
 }
 
 impl SmUnackedStanza {
     pub fn plain(stanza: String) -> Self {
         Self {
             stanza,
-            durable_delivery: None,
+            source: None,
         }
     }
 
+    pub fn with_source(stanza: String, source: Option<TransportOwnershipSource>) -> Self {
+        Self { stanza, source }
+    }
+
+    /// Compatibility constructor for the C2S-only callers.  New durable
+    /// paths must use [`Self::with_source`] so the source kind stays explicit.
     pub fn with_delivery(stanza: String, durable_delivery: Option<DurableDelivery>) -> Self {
-        Self {
-            stanza,
-            durable_delivery,
-        }
+        Self::with_source(stanza, durable_delivery.map(TransportOwnershipSource::C2s))
+    }
+
+    pub fn durable_delivery(&self) -> Option<DurableDelivery> {
+        self.source.and_then(TransportOwnershipSource::c2s)
     }
 }
 
@@ -169,6 +215,18 @@ mod tests {
             claim_id: Some(Uuid::from_u128(3)),
         };
         let entry = SmUnackedStanza::with_delivery("<message/>".to_owned(), Some(delivery));
-        assert_eq!(entry.durable_delivery, Some(delivery));
+        assert_eq!(entry.source, Some(TransportOwnershipSource::C2s(delivery)));
+        assert_eq!(entry.durable_delivery(), Some(delivery));
+    }
+
+    #[test]
+    fn sm_entry_cannot_mix_c2s_and_mix_ownership() {
+        let source = TransportOwnershipSource::Mix(MixDelivery {
+            delivery_id: Uuid::from_u128(4),
+            lease_token: Uuid::from_u128(5),
+        });
+        let entry = SmUnackedStanza::with_source("<message/>".to_owned(), Some(source));
+        assert_eq!(entry.source, Some(source));
+        assert_eq!(entry.durable_delivery(), None);
     }
 }

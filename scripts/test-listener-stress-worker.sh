@@ -79,6 +79,137 @@ for fixture_driver in "$project_dir/scripts/federation-wsl.sh" "$project_dir/scr
   grep -Fq 'database_url_b="postgres://xmpp_test:xmpp-test-password@$database_host:$database_port/' "$fixture_driver" \
     || { echo "listener stress worker no longer applies its endpoint override to database B: $fixture_driver" >&2; exit 1; }
 done
+mix_federation_driver="$project_dir/scripts/mix-federation-runtime-wsl.sh"
+listener_helper="$project_dir/scripts/lib/test-listener-readiness.sh"
+grep -Fq 'run_mix_federation_phase()' "$mix_federation_driver" \
+  || { echo "MIX federation fixture no longer validates relay ports at each Python phase" >&2; exit 1; }
+grep -Fq 'MIX federation relay readiness did not publish a valid HTTP port before $phase' "$mix_federation_driver" \
+  || { echo "MIX federation fixture no longer fails closed on an unpublished relay port" >&2; exit 1; }
+for phase in setup enqueue finish; do
+  grep -Fq "run_mix_federation_phase $phase" "$mix_federation_driver" \
+    || { echo "MIX federation fixture no longer injects dynamic ports for phase $phase" >&2; exit 1; }
+done
+grep -Fq 'fixture_assert_private_log_dir()' "$mix_federation_driver" \
+  || { echo "MIX federation fixture no longer attests private child logging" >&2; exit 1; }
+grep -Fq 'LOG_DIR="$runtime_dir/logs-a"' "$mix_federation_driver" \
+  || { echo "MIX federation fixture no longer gives side A a private log directory" >&2; exit 1; }
+grep -Fq 'LOG_DIR="$runtime_dir/logs-b"' "$mix_federation_driver" \
+  || { echo "MIX federation fixture no longer gives side B a private log directory" >&2; exit 1; }
+grep -Fq 'fixture_assert_private_log_dir a "$pid_a"' "$mix_federation_driver" \
+  || { echo "MIX federation fixture no longer verifies side A log containment" >&2; exit 1; }
+grep -Fq 'fixture_assert_private_log_dir b "$pid_b"' "$mix_federation_driver" \
+  || { echo "MIX federation fixture no longer verifies side B log containment" >&2; exit 1; }
+if grep -Eq 'NORTHSTAR_MIX_FEDERATION_(SEED_ACCOUNTS|ACCOUNTS_PRESEEDED)' \
+  "$driver" "$mix_federation_driver" "$project_dir/scripts/mix-federation-runtime-wsl.py"; then
+  echo "MIX listener stress must not clone registered/login-historical account templates" >&2
+  exit 1
+fi
+grep -Fq 'def register(fixture, username: str) -> None:' "$project_dir/scripts/mix-federation-runtime-wsl.py" \
+  || { echo "MIX federation fixture no longer registers accounts in each clean worker database" >&2; exit 1; }
+grep -Fq 'NORTHSTAR_MIX_FEDERATION_LOGIN_SLOT_DIR=$mix_login_slot_dir' "$driver" \
+  || { echo "listener stress driver no longer passes its private login slot directory to MIX workers" >&2; exit 1; }
+grep -Fq 'NORTHSTAR_MIX_FEDERATION_LOGIN_SLOT_COUNT=$login_slot_count' "$driver" \
+  || { echo "listener stress driver no longer passes its login slot count to MIX workers" >&2; exit 1; }
+for required_parent_function in \
+  initialize_mix_federation_phase_barrier \
+  await_mix_federation_setup_barrier \
+  verify_mix_federation_listener_ledger; do
+  grep -Fq "$required_parent_function()" "$driver" \
+    || { echo "listener stress driver no longer has $required_parent_function" >&2; exit 1; }
+done
+# `--phase-parent-status` deliberately returns one while a valid worker is
+# still reaching its signed-ready point.  Preserve that status through the
+# shell conditional: `$?` after an `if` without an `else` is the compound
+# conditional's status, not the Python command's one, and would kill every
+# worker before the parent can issue its release.
+grep -Fq $'    else\n      phase_status=$?\n    fi\n    if ((phase_status == 0)); then' "$driver" \
+  || { echo "listener stress MIX barrier no longer preserves a normal pending-status result" >&2; exit 1; }
+for required_phase_env in \
+  NORTHSTAR_MIX_FEDERATION_PHASE_CONTROL_DIR \
+  NORTHSTAR_MIX_FEDERATION_PHASE_RUN_NONCE \
+  NORTHSTAR_MIX_FEDERATION_PHASE_ROUND \
+  NORTHSTAR_MIX_FEDERATION_PHASE_PAIR; do
+  grep -Fq "$required_phase_env" "$driver" \
+    || { echo "listener stress driver no longer passes $required_phase_env to MIX workers" >&2; exit 1; }
+done
+grep -Fq 'publish_setup_barrier_ready_and_wait' "$mix_federation_driver" \
+  || { echo "MIX fixture no longer waits for the parent-owned setup barrier" >&2; exit 1; }
+grep -Fq 'publish_listener_ledger' "$mix_federation_driver" \
+  || { echo "MIX fixture no longer records owned listener identities" >&2; exit 1; }
+grep -Fq 'fixture_forget_listener_owner "$pid_b"' "$mix_federation_driver" \
+  || { echo "MIX fixture no longer forgets B's pre-restart listener identities" >&2; exit 1; }
+grep -Fq 'verify_listener_ledger_after_quiescence' "$project_dir/scripts/mix-federation-runtime-wsl.py" \
+  || { echo "MIX verifier no longer validates original listener socket identities" >&2; exit 1; }
+grep -Fq 'fixture_register_readiness_ports "$FIXTURE_READINESS_OUTPUT" "$pid"' "$listener_helper" \
+  || { echo "readiness helper no longer records listener ownership with its publication" >&2; exit 1; }
+if grep -Fq 'fixture_assert_no_listeners' "$mix_federation_driver" \
+  && ! grep -Fq 'phase_barrier_enabled' "$mix_federation_driver"; then
+  echo "MIX fixture regressed to an unconditional port-only residual check" >&2
+  exit 1
+fi
+grep -Fq 'must be set together' \
+  "$project_dir/scripts/mix-federation-runtime-wsl.py" \
+  || { echo "MIX federation login-slot configuration no longer fails closed on a partial environment" >&2; exit 1; }
+grep -Fq 'with claim_login_slot(LOGIN_SLOT_CONFIGURATION, timeout_seconds=None):' \
+  "$project_dir/scripts/mix-federation-runtime-wsl.py" \
+  || { echo "MIX federation fixture no longer separates phase admission from credential I/O" >&2; exit 1; }
+for phase in setup enqueue finish; do
+  grep -A 8 -F "def $phase()" "$project_dir/scripts/mix-federation-runtime-wsl.py" | grep -Fq 'with fixture_phase_auth_admission():' \
+    || { echo "MIX federation $phase phase no longer admits credential setup through the bounded fixture lane" >&2; exit 1; }
+done
+if [[ "$(grep -Fc 'deadline=attempt.deadline' "$project_dir/scripts/mix-federation-runtime-wsl.py")" != 3 ]]; then
+  echo "MIX registration, REST login, and WebSocket construction must each use a strict absolute authentication deadline" >&2
+  exit 1
+fi
+if grep -Fq 'return login(fixture, username)' "$project_dir/scripts/mix-federation-runtime-wsl.py"; then
+  echo "MIX clean-worker registration still creates and discards an unnecessary login session" >&2
+  exit 1
+fi
+grep -Fq 'timeout: float = 10' "$project_dir/scripts/integration-wsl.py" \
+  || { echo "integration fixture no longer accepts a bounded authentication I/O budget" >&2; exit 1; }
+grep -Fq 'deadline: float | None = None' "$project_dir/scripts/integration-wsl.py" \
+  || { echo "integration fixture no longer accepts an absolute authentication deadline" >&2; exit 1; }
+grep -Fq 'def _deadline_http_api(' "$project_dir/scripts/integration-wsl.py" \
+  || { echo "integration fixture no longer bounds the full authentication HTTP exchange" >&2; exit 1; }
+grep -Fq 'def deadline_io_self_test()' "$project_dir/scripts/integration-wsl.py" \
+  || { echo "integration fixture no longer proves its deadline I/O behavior" >&2; exit 1; }
+# Every direct PostgreSQL assertion in the MIX fixture must use the endpoint
+# that the parent listener-stress driver attested.  Falling back to 5432 here
+# made a valid isolated fixture appear to target a missing shared database
+# after the relay processes had already started.
+if grep -Fq 'psql -h 127.0.0.1' "$mix_federation_driver"; then
+  echo "MIX federation fixture bypasses its validated PostgreSQL endpoint" >&2
+  exit 1
+fi
+if [[ "$(grep -Fc 'psql -h "$database_host" -p "$database_port"' "$mix_federation_driver")" != 5 ]]; then
+  echo "MIX federation fixture does not apply its validated endpoint to every direct PostgreSQL assertion" >&2
+  exit 1
+fi
+mix_start_a_line="$(grep -n '^start_a$' "$mix_federation_driver" | tail -n 1 | cut -d: -f1 || true)"
+mix_start_b_line="$(grep -n '^start_b$' "$mix_federation_driver" | head -n 1 | cut -d: -f1 || true)"
+mix_setup_line="$(grep -n '^run_mix_federation_phase setup$' "$mix_federation_driver" | cut -d: -f1 || true)"
+mix_barrier_line="$(grep -n '^publish_setup_barrier_ready_and_wait$' "$mix_federation_driver" | cut -d: -f1 || true)"
+[[ "$mix_start_a_line" =~ ^[1-9][0-9]*$ && "$mix_start_b_line" =~ ^[1-9][0-9]*$ \
+   && "$mix_setup_line" =~ ^[1-9][0-9]*$ && "$mix_barrier_line" =~ ^[1-9][0-9]*$ \
+   && "$mix_start_a_line" -lt "$mix_start_b_line" && "$mix_start_b_line" -lt "$mix_barrier_line" \
+   && "$mix_barrier_line" -lt "$mix_setup_line" ]] \
+  || { echo "MIX federation fixture can invoke setup before every pair is parent-released" >&2; exit 1; }
+mix_federation_python="$project_dir/scripts/mix-federation-runtime-wsl.py"
+grep -Fq 'def required_fixture_http_port(name: str)' "$mix_federation_python" \
+  || { echo "MIX federation verifier no longer validates its dynamically supplied relay ports" >&2; exit 1; }
+grep -Fq 'def _rename_phase_record_noreplace(' "$mix_federation_python" \
+  || { echo "MIX federation phase records no longer use atomic no-replace publication" >&2; exit 1; }
+grep -Fq 'RENAME_NOREPLACE = 1' "$mix_federation_python" \
+  || { echo "MIX federation phase records no longer require Linux RENAME_NOREPLACE" >&2; exit 1; }
+if grep -Fq 'os.link(' "$mix_federation_python"; then
+  echo "MIX federation phase records reintroduced a transient hard-link publication window" >&2
+  exit 1
+fi
+grep -Fq 'try:' "$mix_federation_python" \
+  || { echo "MIX federation verifier no longer protects caller fixture environment restoration" >&2; exit 1; }
+grep -Fq 'finally:' "$mix_federation_python" \
+  || { echo "MIX federation verifier no longer restores caller fixture environment after import failure" >&2; exit 1; }
+python3 "$mix_federation_python" --phase-self-test
 federation_python="$project_dir/scripts/federation-wsl.py"
 grep -Fq 'def listener_stress_database_endpoint()' "$federation_python" \
   || { echo "federation verifier no longer independently validates its listener database endpoint" >&2; exit 1; }
@@ -126,6 +257,34 @@ database_attestation_line="$(grep -n '^assert_private_database_fixture$' "$drive
 [[ "$binary_gate_line" =~ ^[1-9][0-9]*$ && "$database_attestation_line" =~ ^[1-9][0-9]*$ \
    && "$binary_gate_line" -lt "$database_attestation_line" ]] \
   || { echo "listener stress driver no longer validates its current binary before database work" >&2; exit 1; }
+grep -Fq 'load_runtime_connection_budget()' "$driver" \
+  || { echo "listener stress driver no longer reads the built runtime connection budget" >&2; exit 1; }
+grep -Fq '"$binary" --runtime-connection-budget' "$driver" \
+  || { echo "listener stress driver no longer derives auxiliary pools from the current binary" >&2; exit 1; }
+grep -Fq 'fixture_control_connections_per_pair=1' "$driver" \
+  || { echo "listener stress driver no longer accounts for MIX direct control connections" >&2; exit 1; }
+grep -Fq 'assert_fixture_connection_capacity()' "$driver" \
+  || { echo "listener stress driver no longer attests actual PostgreSQL capacity" >&2; exit 1; }
+grep -Fq "SHOW max_connections;" "$driver" \
+  || { echo "listener stress driver no longer queries the fixture server capacity" >&2; exit 1; }
+grep -Fq 'must exactly match the attested fixture server capacity' "$driver" \
+  || { echo "listener stress driver no longer rejects a configured capacity mismatch" >&2; exit 1; }
+if grep -Fq 'NORTHSTAR_LISTENER_STRESS_POSTGRES_HEADROOM' "$driver"; then
+  echo "listener stress driver still accepts arbitrary PostgreSQL headroom" >&2
+  exit 1
+fi
+
+# The stress profile is intentionally a real configuration path, not a way to
+# bypass the runtime's two-connection primary-pool floor.  This fails before
+# build resolution or PostgreSQL work, so it proves the entry guard without
+# turning the lifecycle regression into an integration test.
+if invalid_pool_output="$(NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS=1 \
+  bash "$driver" --rounds 1 --pairs 1 2>&1)"; then
+  echo "listener stress driver accepted a one-connection primary pool" >&2
+  exit 1
+fi
+[[ "$invalid_pool_output" == *"must be 2 through 60"* ]] \
+  || { echo "listener stress driver rejected a one-connection pool for an unexpected reason" >&2; exit 1; }
 
 runtime_dir="$(mktemp -d /tmp/northstar-listener-stress.XXXXXX)"
 control_file="$runtime_dir/worker.control"

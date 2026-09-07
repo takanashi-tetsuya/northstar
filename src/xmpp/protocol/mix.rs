@@ -26,7 +26,7 @@ use crate::xmpp::xml_util::{
     add_stanza_id, is_encrypted, mam_extended_form, stanza_error, stanza_error_type,
 };
 use anyhow::{Context, Result};
-use futures::{stream, StreamExt};
+use futures::{future::BoxFuture, stream::FuturesUnordered, StreamExt};
 use roxmltree::{Document, Node};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -49,6 +49,129 @@ const MAX_ITEMS_PAGE: i64 = 200;
 // releases claimed leases immediately, leaving one second for the supervisor
 // and registry to record the terminal health transition.
 const MIX_OUTBOX_DRAIN_GRACE: Duration = Duration::from_secs(14);
+/// A claimed delivery may have already crossed a process or network boundary,
+/// so its lease is the recovery authority.  Keep the entire local attempt —
+/// effect, lease renewal, and final durable transition — within one absolute
+/// deadline.  A later worker can safely recover a fenced row after its lease
+/// expires; this worker must never retain its lane indefinitely.
+const MIX_OUTBOX_ATTEMPT_DEADLINE: Duration = Duration::from_secs(20);
+/// Claim and maintenance turns have no claimed lease to recover.  Bound them
+/// separately so a pool acquire or database wait cannot make a worker appear
+/// healthy while it has stopped making progress.
+const MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE: Duration = Duration::from_secs(5);
+/// Renew well before the durable lease expires, but never immediately after a
+/// claim.  Tokio intervals tick immediately, which used to let a renewal wait
+/// on the same admission permit as the still-running effect.
+const MIX_OUTBOX_LEASE_RENEWAL_INTERVAL: Duration = Duration::from_secs(10);
+/// An unavailable or not-yet-verified local route is not a failed delivery.
+/// Keep its durable projection parked for a bounded recovery interval.  The
+/// service layer reactivates it immediately when capability verification
+/// completes; this timer is only the fallback for a missed wake-up.
+const MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS: i64 = 30;
+// PAM results include peer-facing correlation/acknowledgement work.  Keep the
+// historical narrow window even when ordinary MIX delivery has a larger
+// capacity budget, so a burst cannot crowd out the remote listener's exact
+// response path.
+const PAM_RESULT_MAX_CONCURRENCY: usize = 2;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MixOutboxQueue {
+    Delivery,
+    PamResult,
+}
+
+/// External delivery can wait on a remote peer without holding a database
+/// connection.  Keep one independently startable PAM lane, capped at its
+/// protocol-safe window; MixService separately limits each short database
+/// round to the configured background budget.
+const fn mix_outbox_lane_budgets(background_budget: usize) -> (usize, usize) {
+    let pam_budget = if background_budget < PAM_RESULT_MAX_CONCURRENCY {
+        background_budget
+    } else {
+        PAM_RESULT_MAX_CONCURRENCY
+    };
+    (background_budget, pam_budget)
+}
+
+enum MixOutboxWork {
+    Delivery(crate::services::mix::ClaimedMixDelivery),
+    PamResult(ClaimedPamResult),
+}
+
+/// Claim only one protocol lane at a time.  The caller runs the delivery and
+/// PAM lanes concurrently, while the service serializes their short database
+/// turns.  A slow external delivery therefore never holds the start slot of a
+/// correlated PAM reply.
+async fn claim_mix_outbox_work(
+    state: &AppState,
+    cancel: &tokio_util::sync::CancellationToken,
+    queue: MixOutboxQueue,
+    budget: usize,
+) -> Result<Vec<MixOutboxWork>> {
+    let claim_limit = i64::try_from(budget)
+        .expect("MIX outbox background budget is bounded by its fixed maximum");
+    match queue {
+        MixOutboxQueue::Delivery => {
+            let deliveries = cancellable_mix_outbox_turn(
+                cancel,
+                state
+                    .mix_service()
+                    .claim_mix_deliveries(claim_limit, 8 * 1024 * 1024),
+            )
+            .await?;
+            Ok(deliveries
+                .into_iter()
+                .map(MixOutboxWork::Delivery)
+                .collect())
+        }
+        MixOutboxQueue::PamResult => Ok(cancellable_mix_outbox_turn(
+            cancel,
+            state.mix_service().claim_pam_results(claim_limit),
+        )
+        .await?
+        .into_iter()
+        .map(MixOutboxWork::PamResult)
+        .collect()),
+    }
+}
+
+type MixOutboxTask = BoxFuture<'static, (MixOutboxQueue, Result<()>)>;
+
+fn process_mix_outbox_work(
+    state: Arc<AppState>,
+    work: MixOutboxWork,
+    cancel: tokio_util::sync::CancellationToken,
+) -> MixOutboxTask {
+    Box::pin(async move {
+        match work {
+            MixOutboxWork::Delivery(delivery) => (
+                MixOutboxQueue::Delivery,
+                process_claimed_mix_delivery(state, delivery, cancel).await,
+            ),
+            MixOutboxWork::PamResult(result) => (
+                MixOutboxQueue::PamResult,
+                process_claimed_pam_result(state, result, cancel).await,
+            ),
+        }
+    })
+}
+
+/// Wait for the typed delivery wake without giving MIX-PAM a generic shared
+/// signal.  PAM has a different eligibility projection and continues to use
+/// its bounded recovery scan until it gains a dedicated authority channel.
+///
+/// A `watch` receiver retains an unseen generation, so this future resolves
+/// immediately if PostgreSQL committed a recipient row while the lane was
+/// claiming or delivering its previous batch.  The `None` branch is pending
+/// forever and is used only by the separate PAM lane.
+async fn wait_for_mix_delivery_wake(
+    subscription: &mut Option<crate::services::mix::MixDeliveryWakeSubscription>,
+) -> bool {
+    match subscription {
+        Some(subscription) => subscription.changed().await,
+        None => std::future::pending().await,
+    }
+}
+
 #[derive(Debug)]
 struct PermanentMixDeliveryError {
     reason: &'static str,
@@ -64,15 +187,149 @@ impl std::fmt::Display for PermanentMixDeliveryError {
 impl std::error::Error for PermanentMixDeliveryError {}
 
 #[derive(Debug)]
-struct MixCapabilityPending;
+struct MixDeliveryRoutePending;
 
-impl std::fmt::Display for MixCapabilityPending {
+impl std::fmt::Display for MixDeliveryRoutePending {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("waiting for verified MIX entity capabilities")
+        formatter.write_str("waiting for an eligible MIX delivery route")
     }
 }
 
-impl std::error::Error for MixCapabilityPending {}
+impl std::error::Error for MixDeliveryRoutePending {}
+
+/// The durable recipient projection remains authoritative until an eligible
+/// resource actually accepts it, an explicit permanent policy/account failure
+/// occurs, or its database retention window expires.  A successful personal
+/// archive write is deliberately not a live-delivery acknowledgement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DurableMixRouteAvailability {
+    NoTarget,
+    UnknownCapability,
+    Unsupported,
+    Deliverable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DurableMixRouteDisposition {
+    Accepted,
+    Park,
+    RetryCluster,
+    RetryDeliverable,
+}
+
+/// Classify only the live-routing outcome after any archive projection has
+/// completed.  `_archive_projection_present` is deliberately explicit: it
+/// documents and tests that a MAM projection cannot turn an unavailable route
+/// into an acknowledged durable delivery.  There is intentionally no delivery
+/// age input; elapsed capability discovery is not a terminal state.
+fn classify_durable_mix_route(
+    _archive_projection_present: bool,
+    accepted: bool,
+    availability: DurableMixRouteAvailability,
+    cluster_delivery_failed: bool,
+) -> DurableMixRouteDisposition {
+    if accepted {
+        DurableMixRouteDisposition::Accepted
+    } else if cluster_delivery_failed {
+        DurableMixRouteDisposition::RetryCluster
+    } else if availability == DurableMixRouteAvailability::Deliverable {
+        DurableMixRouteDisposition::RetryDeliverable
+    } else {
+        DurableMixRouteDisposition::Park
+    }
+}
+
+/// The precise reason one local ordered transport could not take a durable
+/// MIX source. Queue admission is deliberately absent: the recipient row is
+/// authoritative until the transport either writes it or persists a typed
+/// hand-off to XEP-0198/BOSH.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MixLocalTransportFailure {
+    QueueFull,
+    QueueClosed,
+    HandoffClosed,
+}
+
+impl std::fmt::Display for MixLocalTransportFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let detail = match self {
+            Self::QueueFull => "local session queue is full",
+            Self::QueueClosed => "local session queue is closed",
+            Self::HandoffClosed => "local transport closed before durable hand-off",
+        };
+        formatter.write_str(detail)
+    }
+}
+
+/// Cancels an exact session if a waiting caller is dropped before the item has
+/// crossed a recoverability boundary. This is the crucial replacement for the
+/// old 500 ms receipt timeout: the normal path waits for the actual durable
+/// hand-off, while cancellation, shutdown, or the outbox attempt deadline
+/// closes the one transport that could otherwise later expose a stale item.
+struct PendingMixLocalHandoff {
+    sender: crate::outbound::OutboundSender,
+    disconnect: tokio_util::sync::CancellationToken,
+    completed: bool,
+}
+
+impl PendingMixLocalHandoff {
+    fn new(
+        sender: crate::outbound::OutboundSender,
+        disconnect: tokio_util::sync::CancellationToken,
+    ) -> Self {
+        Self {
+            sender,
+            disconnect,
+            completed: false,
+        }
+    }
+
+    fn mark_completed(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for PendingMixLocalHandoff {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.sender.disconnect_backpressured_transport();
+            self.disconnect.cancel();
+        }
+    }
+}
+
+/// Try one already MIX-qualified local resource for a durable recipient row.
+///
+/// On every failure — including cancellation while awaiting a durable
+/// boundary — this closes *that exact* C2S transport. The queued item may
+/// otherwise still become visible after its source row is retried, which
+/// would violate in-order delivery on the old stream. A caller may safely try
+/// another qualified resource; only a typed hand-off lets it transfer or
+/// consume the source.
+async fn try_send_local_durable_mix(
+    sender: &crate::outbound::OutboundSender,
+    disconnect: &tokio_util::sync::CancellationToken,
+    stanza: String,
+    source: crate::outbound::MixDelivery,
+) -> std::result::Result<crate::outbound::MixTransportCompletion, MixLocalTransportFailure> {
+    let receiver = match sender.try_send_durable_mix(stanza, source) {
+        Ok(receiver) => receiver,
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            sender.disconnect_backpressured_transport();
+            disconnect.cancel();
+            return Err(MixLocalTransportFailure::QueueFull);
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            sender.disconnect_backpressured_transport();
+            disconnect.cancel();
+            return Err(MixLocalTransportFailure::QueueClosed);
+        }
+    };
+    let mut pending = PendingMixLocalHandoff::new(sender.clone(), disconnect.clone());
+    let completion = receiver.await.map_err(|_| MixLocalTransportFailure::HandoffClosed)?;
+    pending.mark_completed();
+    Ok(completion)
+}
 
 #[derive(Debug)]
 struct MixOutboxShutdown;
@@ -84,6 +341,121 @@ impl std::fmt::Display for MixOutboxShutdown {
 }
 
 impl std::error::Error for MixOutboxShutdown {}
+
+fn mix_outbox_is_shutting_down(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<MixOutboxShutdown>().is_some()
+}
+
+/// The caller reached its explicit durable-work deadline.  This is distinct
+/// from shutdown: the row remains fenced and lease expiry is the authoritative
+/// recovery path, rather than attempting another state change after ownership
+/// may have become uncertain.
+#[derive(Debug)]
+struct MixOutboxDeadlineElapsed;
+
+impl std::fmt::Display for MixOutboxDeadlineElapsed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("MIX outbox durable-work deadline elapsed")
+    }
+}
+
+impl std::error::Error for MixOutboxDeadlineElapsed {}
+
+fn mix_outbox_deadline_elapsed(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<MixOutboxDeadlineElapsed>().is_some()
+}
+
+/// Await one database turn while continuing to honor cancellation and one
+/// caller-owned absolute deadline.  Dropping the pending future also drops a
+/// pending semaphore/pool acquisition, so no detached task retains a worker
+/// lane after the caller has stopped owning the attempt.
+async fn bounded_mix_outbox_turn<T>(
+    cancel: &tokio_util::sync::CancellationToken,
+    deadline: tokio::time::Instant,
+    turn: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    if cancel.is_cancelled() {
+        return Err(MixOutboxShutdown.into());
+    }
+    if tokio::time::Instant::now() >= deadline {
+        return Err(MixOutboxDeadlineElapsed.into());
+    }
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err(MixOutboxShutdown.into()),
+        _ = tokio::time::sleep_until(deadline) => Err(MixOutboxDeadlineElapsed.into()),
+        result = turn => result,
+    }
+}
+
+/// Unclaimed polling and maintenance work has no row-specific attempt
+/// deadline.  Give each database turn a short, explicit progress budget;
+/// claimed effects use their shared attempt deadline through
+/// [`bounded_mix_outbox_turn`] directly.
+async fn cancellable_mix_outbox_turn<T>(
+    cancel: &tokio_util::sync::CancellationToken,
+    turn: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    bounded_mix_outbox_turn(
+        cancel,
+        tokio::time::Instant::now() + MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE,
+        turn,
+    )
+    .await
+}
+
+/// Drive the externally visible part of one claimed durable row while keeping
+/// its effect, cancellation, absolute deadline, and at most one lease renewal
+/// concurrently pollable.  In particular, renewal is *not* awaited inside a
+/// timer branch: an effect can hold the only outbox database admission permit,
+/// and pausing it while renewal waits for that same permit would self-deadlock.
+///
+/// `Ok(None)` means the lease was no longer ours.  The caller must not attempt
+/// an acknowledgement or retry in that case.
+async fn run_claimed_mix_effect_with_lease<T>(
+    cancel: tokio_util::sync::CancellationToken,
+    deadline: tokio::time::Instant,
+    renewal_interval: Duration,
+    effect: impl std::future::Future<Output = Result<T>> + Send,
+    mut renew: impl FnMut() -> BoxFuture<'static, Result<bool>>,
+) -> Result<Option<T>> {
+    let mut effect = Box::pin(effect);
+    let mut next_renewal = tokio::time::Instant::now() + renewal_interval;
+
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(MixOutboxDeadlineElapsed.into());
+        }
+
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(MixOutboxShutdown.into()),
+            _ = tokio::time::sleep_until(deadline) => return Err(MixOutboxDeadlineElapsed.into()),
+            result = &mut effect => return result.map(Some),
+            _ = tokio::time::sleep_until(next_renewal) => {}
+        }
+
+        // Do not start a renewal that cannot finish before the shared attempt
+        // deadline.  The deadline branch above will fence this worker instead.
+        if tokio::time::Instant::now() >= deadline {
+            return Err(MixOutboxDeadlineElapsed.into());
+        }
+
+        let mut renewal = Box::pin(bounded_mix_outbox_turn(&cancel, deadline, renew()));
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(MixOutboxShutdown.into()),
+            _ = tokio::time::sleep_until(deadline) => return Err(MixOutboxDeadlineElapsed.into()),
+            result = &mut effect => return result.map(Some),
+            renewed = &mut renewal => {
+                if !renewed? {
+                    return Ok(None);
+                }
+                next_renewal = tokio::time::Instant::now() + renewal_interval;
+            }
+        }
+    }
+}
 
 fn permanent_mix_delivery_error(reason: &'static str, detail: impl Into<String>) -> anyhow::Error {
     PermanentMixDeliveryError {
@@ -1780,7 +2152,28 @@ async fn handle_channel_relay_request(
     Ok(String::new())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChannelStanzaDatabaseLane {
+    /// A client-originated stanza uses the normal application pool without
+    /// borrowing durable outbox capacity.
+    LiveIngress,
+    /// A previously claimed durable outbox row must limit every local
+    /// recipient lookup, archive projection, cluster authority lookup, and
+    /// S2S outbox admission to the service-owned database budget. Each permit
+    /// is released before later transport or cluster-peer work, which may
+    /// wait on external I/O.
+    DurableOutbox,
+}
+
 struct ChannelStanzaDelivery<'a> {
+    /// Present only for a claimed durable outbox recipient.  It makes the
+    /// bounded stage logs below correlate with the authoritative lease without
+    /// logging stanza content or any client-supplied payload.
+    delivery_id: Option<Uuid>,
+    /// The exact leased MIX recipient source for a durable outbox row. A
+    /// source is deliberately absent for live ingress: only a claimed source
+    /// may be transferred to a recoverable transport or acknowledged.
+    mix_source: Option<crate::outbound::MixDelivery>,
     channel_jid: &'a str,
     recipient: &'a MixParticipant,
     stanza: String,
@@ -1788,14 +2181,26 @@ struct ChannelStanzaDelivery<'a> {
     archive: bool,
     encrypted: bool,
     durable: bool,
-    wait_for_unknown_caps: bool,
+    database_lane: ChannelStanzaDatabaseLane,
+}
+
+/// The outcome that determines who may consume a claimed MIX recipient row.
+/// A direct socket write and a federated outbox admission leave the claiming
+/// worker responsible for the final deletion. XEP-0198 or BOSH persistence
+/// transfers that responsibility to a typed durable owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChannelStanzaDeliveryOutcome {
+    CompletedByClaimingWorker,
+    TransferredToRecoverableTransport,
 }
 
 async fn deliver_channel_stanza(
     state: &Arc<AppState>,
     delivery: ChannelStanzaDelivery<'_>,
-) -> Result<()> {
+) -> Result<ChannelStanzaDeliveryOutcome> {
     let ChannelStanzaDelivery {
+        delivery_id,
+        mix_source,
         channel_jid,
         recipient,
         stanza,
@@ -1803,8 +2208,23 @@ async fn deliver_channel_stanza(
         archive,
         encrypted,
         durable,
-        wait_for_unknown_caps,
+        database_lane,
     } = delivery;
+    let durable_source = match (durable, delivery_id, mix_source) {
+        (true, Some(delivery_id), Some(source)) if source.delivery_id == delivery_id => Some(source),
+        (true, _, _) => anyhow::bail!("durable MIX routing requires its exact claimed source"),
+        (false, None, None) => None,
+        (false, _, _) => anyhow::bail!("live MIX routing must not carry a durable source"),
+    };
+    let durable_delivery_id = durable_source.map(|source| source.delivery_id);
+    if let Some(delivery_id) = durable_delivery_id {
+        tracing::debug!(
+            delivery_id = %delivery_id,
+            channel = channel_jid,
+            recipient = %recipient.jid,
+            "MIX durable delivery entered recipient routing"
+        );
+    }
     let recipient_jid = match CanonicalJid::parse_bare(&recipient.jid) {
         Ok(jid) => jid,
         Err(error) => {
@@ -1821,15 +2241,26 @@ async fn deliver_channel_stanza(
                     error.to_string(),
                 ));
             }
-            return Ok(());
+            return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
         }
     };
     let domain = recipient_jid.domainpart();
     if same_jid_domain(domain, &state.config.domain) {
         let Some(username) = recipient_jid.localpart() else {
-            return Ok(());
+            return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
         };
-        let user = match state.mix_service().find_enabled_user(username).await {
+        if let Some(delivery_id) = durable_delivery_id {
+            tracing::debug!(delivery_id = %delivery_id, "MIX durable delivery resolving local account");
+        }
+        let user = match database_lane {
+            ChannelStanzaDatabaseLane::LiveIngress => {
+                state.mix_service().find_enabled_user(username).await
+            }
+            ChannelStanzaDatabaseLane::DurableOutbox => {
+                state.mix_service().outbox_find_enabled_user(username).await
+            }
+        };
+        let user = match user {
             Ok(user) => user,
             Err(error) => {
                 record_mix_post_commit_failure(
@@ -1842,7 +2273,7 @@ async fn deliver_channel_stanza(
                 if durable {
                     return Err(error);
                 }
-                return Ok(());
+                return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
             }
         };
         let Some(user) = user else {
@@ -1852,14 +2283,28 @@ async fn deliver_channel_stanza(
                     "local MIX recipient no longer exists or is disabled",
                 ));
             }
-            return Ok(());
+            return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
         };
         // `recipient` is an immutable MIX Core participant/subscription
         // snapshot captured by the channel mutation transaction.  XEP-0405
         // PAM is only an optional account-side roster projection; requiring a
         // PAM row here silently dropped every event for a valid direct Core
         // join.  Account blocking remains a live, fail-closed privacy check.
-        let blocked = match state.mix_service().is_blocked(user.id, channel_jid).await {
+        if let Some(delivery_id) = durable_delivery_id {
+            tracing::debug!(delivery_id = %delivery_id, "MIX durable delivery evaluating recipient block policy");
+        }
+        let blocked = match database_lane {
+            ChannelStanzaDatabaseLane::LiveIngress => {
+                state.mix_service().is_blocked(user.id, channel_jid).await
+            }
+            ChannelStanzaDatabaseLane::DurableOutbox => {
+                state
+                    .mix_service()
+                    .outbox_is_blocked(user.id, channel_jid)
+                    .await
+            }
+        };
+        let blocked = match blocked {
             Ok(blocked) => blocked,
             Err(error) => {
                 record_mix_post_commit_failure(
@@ -1872,7 +2317,7 @@ async fn deliver_channel_stanza(
                 if durable {
                     return Err(error);
                 }
-                return Ok(());
+                return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
             }
         };
         if blocked {
@@ -1882,25 +2327,46 @@ async fn deliver_channel_stanza(
                     "recipient currently blocks this MIX channel",
                 ));
             }
-            return Ok(());
+            return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
         }
         if archive {
+            if let Some(delivery_id) = durable_delivery_id {
+                tracing::debug!(delivery_id = %delivery_id, "MIX durable delivery writing personal archive projection");
+            }
             let authoritative_stanza_id = authoritative_stanza_id
                 .context("archived MIX delivery requires an authoritative stanza id")?;
             let archive_id = Uuid::new_v4();
             let client_stanza_id = authoritative_stanza_id.to_string();
-            let admission = state
-                .mix_service()
-                .archive_mix_message_once(
-                    archive_id,
-                    user.id,
-                    channel_jid,
-                    authoritative_stanza_id,
-                    &stanza,
-                    encrypted,
-                    Some(&client_stanza_id),
-                )
-                .await;
+            let admission = match database_lane {
+                ChannelStanzaDatabaseLane::LiveIngress => {
+                    state
+                        .mix_service()
+                        .archive_mix_message_once(
+                            archive_id,
+                            user.id,
+                            channel_jid,
+                            authoritative_stanza_id,
+                            &stanza,
+                            encrypted,
+                            Some(&client_stanza_id),
+                        )
+                        .await
+                }
+                ChannelStanzaDatabaseLane::DurableOutbox => {
+                    state
+                        .mix_service()
+                        .outbox_archive_mix_message_once(
+                            archive_id,
+                            user.id,
+                            channel_jid,
+                            authoritative_stanza_id,
+                            &stanza,
+                            encrypted,
+                            Some(&client_stanza_id),
+                        )
+                        .await
+                }
+            };
             match admission {
                 Ok(SourceArchiveAdmission::Stored(_)) => {}
                 // The archive projection may have committed immediately
@@ -1919,37 +2385,94 @@ async fn deliver_channel_stanza(
                     if durable {
                         return Err(error);
                     }
-                    return Ok(());
+                    return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
                 }
             }
         }
-        let local_targets = state.session_entries_for(&recipient.jid);
+        let mut local_targets = state.session_entries_for(&recipient.jid);
+        // One leased recipient row may cross exactly one local transport.
+        // Sorting makes the choice deterministic across the hash-map-backed
+        // live-route registry; a source transferred to SM/BOSH or written to
+        // a socket must never also be queued to a second resource.
+        local_targets.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        if let Some(delivery_id) = durable_delivery_id {
+            tracing::debug!(delivery_id = %delivery_id, target_count = local_targets.len(), "MIX durable delivery evaluating local sessions");
+        }
         let mut had_deliverable_target = false;
         let mut had_unknown_target = false;
+        let mut had_route_target = !local_targets.is_empty();
         let mut cluster_delivery_failed = false;
         let mut accepted = false;
+        let mut transferred_to_recoverable_transport = false;
         for (jid, session) in &local_targets {
             match session_mix_capability(state, jid) {
                 MixSessionCapability::Supported => {
                     had_deliverable_target = true;
-                    match session.sender.try_send(stanza.clone()) {
-                        Ok(()) => accepted = true,
-                        Err(error) => {
-                            record_mix_post_commit_failure(
-                                state,
-                                channel_jid,
-                                jid,
-                                "local session queue",
-                                &error,
-                            );
+                    if durable {
+                        let source = durable_source.expect("durable source was validated above");
+                        match try_send_local_durable_mix(
+                            &session.sender,
+                            &session.disconnect,
+                            stanza.clone(),
+                            source,
+                        )
+                        .await
+                        {
+                            Ok(
+                                crate::outbound::MixTransportCompletion::SocketFenced { .. }
+                                | crate::outbound::MixTransportCompletion::SocketWritten
+                                | crate::outbound::MixTransportCompletion::SmPersisted { .. }
+                                | crate::outbound::MixTransportCompletion::BoshPersisted { .. },
+                            ) => {
+                                accepted = true;
+                                transferred_to_recoverable_transport = true;
+                                break;
+                            }
+                            Err(error) => {
+                                record_mix_post_commit_failure(
+                                    state,
+                                    channel_jid,
+                                    jid,
+                                    "local session durable transport hand-off",
+                                    &error,
+                                );
+                            }
                         }
+                    } else if let Err(error) = session.sender.try_send(stanza.clone()) {
+                        record_mix_post_commit_failure(
+                            state,
+                            channel_jid,
+                            jid,
+                            "local session queue",
+                            &error,
+                        );
                     }
                 }
                 MixSessionCapability::Unsupported => {}
                 MixSessionCapability::Unknown => had_unknown_target = true,
             }
         }
-        let nodes = match state.cluster.lookup_nodes(&recipient.jid).await {
+        if durable && transferred_to_recoverable_transport {
+            return Ok(ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport);
+        }
+        if durable && accepted {
+            return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
+        }
+        if let Some(delivery_id) = durable_delivery_id {
+            tracing::debug!(delivery_id = %delivery_id, "MIX durable delivery resolving cluster authorities");
+        }
+        let nodes = match database_lane {
+            ChannelStanzaDatabaseLane::LiveIngress => {
+                state.cluster.lookup_nodes(&recipient.jid).await
+            }
+            ChannelStanzaDatabaseLane::DurableOutbox => {
+                state
+                    .mix_service()
+                    .outbox_lookup_cluster_nodes(&state.cluster, &recipient.jid)
+                    .await
+            }
+        };
+        let nodes = match nodes {
             Ok(nodes) => nodes,
             Err(error) => {
                 record_mix_post_commit_failure(
@@ -1962,19 +2485,35 @@ async fn deliver_channel_stanza(
                 if durable {
                     return Err(error);
                 }
-                return Ok(());
+                return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
             }
         };
         for node_id in nodes {
             if node_id != state.cluster.node_id {
+                had_route_target = true;
                 match state
                     .cluster
-                    .send_to_node_mix(&node_id, &recipient.jid, &stanza)
+                    .send_to_node_mix(
+                        &node_id,
+                        &recipient.jid,
+                        &stanza,
+                        durable_source,
+                    )
                     .await
                 {
                     Ok(receipt) => {
                         if receipt.acknowledged {
-                            accepted |= receipt.delivered;
+                            // A v13 peer returns a typed hand-off only after
+                            // the source moved to its socket/SM/BOSH owner.
+                            // The original worker must then stop using its
+                            // old lease instead of deleting it or retrying it.
+                            if durable && receipt.mix_handoff.is_some() {
+                                accepted = true;
+                                transferred_to_recoverable_transport = true;
+                                break;
+                            } else {
+                                accepted |= receipt.delivered;
+                            }
                             had_deliverable_target |= receipt.mix_supported > 0;
                             had_unknown_target |= receipt.mix_unknown > 0;
                         } else {
@@ -1994,29 +2533,44 @@ async fn deliver_channel_stanza(
                 }
             }
         }
-        if durable && cluster_delivery_failed && !accepted {
-            anyhow::bail!("cluster MIX capability delivery failed");
+        // A remote v13 receipt names a durable boundary reached with the
+        // rotated source lease. The originating claimant must stop here: the
+        // original token is invalid and neither acknowledgement nor retry may
+        // race the remote socket/SM/BOSH owner.
+        if durable && transferred_to_recoverable_transport {
+            return Ok(ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport);
         }
-        if durable
-            && !accepted
-            && !had_deliverable_target
-            && had_unknown_target
-            && wait_for_unknown_caps
-        {
-            return Err(MixCapabilityPending.into());
-        }
-        if durable && !accepted && !had_deliverable_target && !archive {
-            return Err(permanent_mix_delivery_error(
-                "capability-unresolved",
-                if had_unknown_target {
-                    "no resource produced verified MIX capabilities within the bounded wait"
-                } else {
-                    "no MIX-capable resource was eligible for this non-archived delivery"
-                },
-            ));
-        }
-        if durable && had_deliverable_target && !accepted {
-            anyhow::bail!("no online MIX resource accepted durable delivery");
+        if durable {
+            let availability = if had_deliverable_target {
+                DurableMixRouteAvailability::Deliverable
+            } else if had_unknown_target {
+                DurableMixRouteAvailability::UnknownCapability
+            } else if had_route_target {
+                DurableMixRouteAvailability::Unsupported
+            } else {
+                DurableMixRouteAvailability::NoTarget
+            };
+            match classify_durable_mix_route(
+                archive,
+                accepted,
+                availability,
+                cluster_delivery_failed,
+            ) {
+                DurableMixRouteDisposition::Accepted => {}
+                // A route may become eligible after the recipient connects or
+                // finishes XEP-0115 verification.  Keep the ordered durable
+                // row; expiry is the terminal boundary, never an arbitrary
+                // capability-discovery age.
+                DurableMixRouteDisposition::Park => {
+                    return Err(MixDeliveryRoutePending.into());
+                }
+                DurableMixRouteDisposition::RetryCluster => {
+                    anyhow::bail!("cluster MIX capability delivery failed");
+                }
+                DurableMixRouteDisposition::RetryDeliverable => {
+                    anyhow::bail!("no online MIX resource accepted durable delivery");
+                }
+            }
         }
     } else if !state.federation_domain_allowed(domain) {
         if durable {
@@ -2025,19 +2579,35 @@ async fn deliver_channel_stanza(
                 "recipient federation domain is no longer allowed",
             ));
         }
-    } else if !state.federation.send(domain, stanza, None).await {
-        record_mix_post_commit_failure(
-            state,
-            channel_jid,
-            &recipient.jid,
-            "federation queue rejected stanza",
-            &"not accepted",
-        );
-        if durable {
-            anyhow::bail!("federated MIX delivery was not admitted");
+    } else {
+        if let Some(delivery_id) = durable_delivery_id {
+            tracing::debug!(delivery_id = %delivery_id, target_domain = domain, "MIX durable delivery admitting federation outbox projection");
+        }
+        let admitted = match database_lane {
+            ChannelStanzaDatabaseLane::LiveIngress => {
+                state.federation.send(domain, stanza, None).await
+            }
+            ChannelStanzaDatabaseLane::DurableOutbox => {
+                state
+                    .mix_service()
+                    .outbox_admit_federated_stanza(&state.federation, domain, stanza)
+                    .await
+            }
+        };
+        if !admitted {
+            record_mix_post_commit_failure(
+                state,
+                channel_jid,
+                &recipient.jid,
+                "federation queue rejected stanza",
+                &"not accepted",
+            );
+            if durable {
+                anyhow::bail!("federated MIX delivery was not admitted");
+            }
         }
     }
-    Ok(())
+    Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker)
 }
 
 fn addressed_mix_delivery(template: &str, recipient: &str) -> Result<String> {
@@ -2055,18 +2625,30 @@ async fn process_claimed_mix_delivery(
     delivery: crate::services::mix::ClaimedMixDelivery,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
+    let attempt_deadline = tokio::time::Instant::now() + MIX_OUTBOX_ATTEMPT_DEADLINE;
     let stanza = match addressed_mix_delivery(&delivery.stanza, &delivery.recipient.jid) {
         Ok(stanza) => stanza,
         Err(error) => {
-            let moved = state
-                .mix_service()
-                .dead_letter_mix_delivery(
+            let moved = match bounded_mix_outbox_turn(
+                &cancel,
+                attempt_deadline,
+                state.mix_service().dead_letter_mix_delivery(
                     delivery.delivery_id,
                     delivery.lease_token,
                     "invalid-template",
                     &error.to_string(),
-                )
-                .await?;
+                ),
+            )
+            .await
+            {
+                Ok(moved) => moved,
+                Err(wait) if mix_outbox_is_shutting_down(&wait) => return Ok(()),
+                Err(wait) if mix_outbox_deadline_elapsed(&wait) => {
+                    tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "MIX invalid-template handling exceeded its claimed delivery deadline; retaining fenced row for lease recovery");
+                    return Ok(());
+                }
+                Err(wait) => return Err(wait),
+            };
             if !moved {
                 tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "lost MIX delivery lease while dead-lettering an invalid template");
             }
@@ -2074,94 +2656,133 @@ async fn process_claimed_mix_delivery(
         }
     };
 
-    let mut operation = Box::pin(tokio::time::timeout(
-        Duration::from_secs(20),
-        deliver_channel_stanza(
-            &state,
-            ChannelStanzaDelivery {
-                channel_jid: &delivery.channel_jid,
-                recipient: &delivery.recipient,
-                stanza,
-                authoritative_stanza_id: delivery.authoritative_stanza_id,
-                archive: delivery.archive,
-                encrypted: delivery.encrypted,
-                durable: true,
-                wait_for_unknown_caps: chrono::Utc::now()
-                    .signed_duration_since(delivery.created_at)
-                    < chrono::Duration::seconds(30),
-            },
-        ),
-    ));
-    let mut renew = tokio::time::interval(Duration::from_secs(10));
-    renew.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let result = loop {
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => {
-                break Err(MixOutboxShutdown.into());
-            }
-            result = &mut operation => {
-                break result
-                    .map_err(|_| anyhow::anyhow!("MIX outbox delivery timed out"))
-                    .and_then(std::convert::identity);
-            }
-            _ = renew.tick() => {
-                if !state
+    let renewal_state = Arc::clone(&state);
+    let result = match run_claimed_mix_effect_with_lease(
+        cancel.clone(),
+        attempt_deadline,
+        MIX_OUTBOX_LEASE_RENEWAL_INTERVAL,
+        async {
+            Ok(deliver_channel_stanza(
+                &state,
+                ChannelStanzaDelivery {
+                    delivery_id: Some(delivery.delivery_id),
+                    mix_source: Some(crate::outbound::MixDelivery {
+                        delivery_id: delivery.delivery_id,
+                        lease_token: delivery.lease_token,
+                    }),
+                    channel_jid: &delivery.channel_jid,
+                    recipient: &delivery.recipient,
+                    stanza,
+                    authoritative_stanza_id: delivery.authoritative_stanza_id,
+                    archive: delivery.archive,
+                    encrypted: delivery.encrypted,
+                    durable: true,
+                    database_lane: ChannelStanzaDatabaseLane::DurableOutbox,
+                },
+            )
+            .await)
+        },
+        move || -> BoxFuture<'static, Result<bool>> {
+            let state = Arc::clone(&renewal_state);
+            let delivery_id = delivery.delivery_id;
+            let lease_token = delivery.lease_token;
+            Box::pin(async move {
+                state
                     .mix_service()
-                    .renew_mix_delivery_lease(delivery.delivery_id, delivery.lease_token)
-                    .await?
-                {
-                    tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "lost MIX delivery lease while an external side effect was in flight");
-                    return Ok(());
-                }
-            }
+                    .renew_mix_delivery_lease(delivery_id, lease_token)
+                    .await
+            })
+        },
+    )
+    .await
+    {
+        Ok(Some(result)) => result,
+        Ok(None) => {
+            tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "lost MIX delivery lease while an external side effect was in flight");
+            return Ok(());
         }
+        Err(error) if mix_outbox_is_shutting_down(&error) => return Ok(()),
+        Err(error) if mix_outbox_deadline_elapsed(&error) => {
+            tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "MIX delivery attempt exceeded its claimed deadline; retaining fenced row for lease recovery");
+            return Ok(());
+        }
+        Err(error) => return Err(error),
     };
 
-    let completed = match result {
-        Ok(()) => {
-            state
-                .mix_service()
-                .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token)
-                .await?
+    let completion = match result {
+        Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker) => {
+            bounded_mix_outbox_turn(
+                &cancel,
+                attempt_deadline,
+                state
+                    .mix_service()
+                    .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),
+            )
+            .await
+        }
+        Ok(ChannelStanzaDeliveryOutcome::TransferredToRecoverableTransport) => {
+            // XEP-0198 or BOSH rotated and persisted the exact source in its
+            // own authoritative queue. The old worker token is intentionally
+            // no longer valid, so this worker must not attempt a second
+            // acknowledgement, retry, or dead-letter transition.
+            Ok(true)
         }
         Err(error) => {
-            if error.downcast_ref::<MixOutboxShutdown>().is_some() {
-                // Do not count an orderly shutdown as a failed attempt. The
-                // one-second defer releases the ordered head lease before the
-                // process exits, while a possibly accepted network side effect
-                // remains safe under stanza-id replay semantics.
-                state
-                    .mix_service()
-                    .defer_mix_delivery(delivery.delivery_id, delivery.lease_token, 1)
-                    .await?
-            } else if error.downcast_ref::<MixCapabilityPending>().is_some() {
-                state
-                    .mix_service()
-                    .defer_mix_delivery(delivery.delivery_id, delivery.lease_token, 2)
-                    .await?
+            if mix_outbox_is_shutting_down(&error) {
+                // A cancellation-aware database turn must not turn orderly
+                // shutdown into an unbounded wait.  The claimed row remains
+                // fenced and its lease expiry is the authoritative recovery
+                // path; a possibly accepted transport side effect is safe
+                // under stanza-id replay semantics.
+                return Ok(());
+            } else if error.downcast_ref::<MixDeliveryRoutePending>().is_some() {
+                bounded_mix_outbox_turn(
+                    &cancel,
+                    attempt_deadline,
+                    state.mix_service().defer_mix_delivery(
+                        delivery.delivery_id,
+                        delivery.lease_token,
+                        delivery.route_wake_generation,
+                        MIX_DELIVERY_ROUTE_RECOVERY_DELAY_SECS,
+                    ),
+                )
+                .await
             } else if let Some(permanent) = error.downcast_ref::<PermanentMixDeliveryError>() {
-                state
-                    .mix_service()
-                    .dead_letter_mix_delivery(
+                bounded_mix_outbox_turn(
+                    &cancel,
+                    attempt_deadline,
+                    state.mix_service().dead_letter_mix_delivery(
                         delivery.delivery_id,
                         delivery.lease_token,
                         permanent.reason,
                         &permanent.detail,
-                    )
-                    .await?
+                    ),
+                )
+                .await
             } else {
-                state
-                    .mix_service()
-                    .retry_mix_delivery(
+                bounded_mix_outbox_turn(
+                    &cancel,
+                    attempt_deadline,
+                    state.mix_service().retry_mix_delivery(
                         delivery.delivery_id,
                         delivery.lease_token,
                         delivery.attempt_count,
+                        delivery.route_wake_generation,
                         &error.to_string(),
-                    )
-                    .await?
+                    ),
+                )
+                .await
             }
         }
+    };
+    let completed = match completion {
+        Ok(completed) => completed,
+        Err(error) if mix_outbox_is_shutting_down(&error) => return Ok(()),
+        Err(error) if mix_outbox_deadline_elapsed(&error) => {
+            tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "MIX delivery finalization exceeded its claimed deadline; retaining fenced row for lease recovery");
+            return Ok(());
+        }
+        Err(error) => return Err(error),
     };
     if !completed {
         tracing::warn!(delivery_id=%delivery.delivery_id, event_id=%delivery.event_id, channel_id=%delivery.channel_id, "MIX delivery completion lost its lease fence");
@@ -2212,8 +2833,8 @@ async fn deliver_claimed_pam_result(
         }
     }
     let nodes = state
-        .cluster
-        .lookup_nodes(&result.requester_full_jid)
+        .mix_service()
+        .outbox_lookup_cluster_nodes(&state.cluster, &result.requester_full_jid)
         .await?;
     for node in nodes {
         if node == state.cluster.node_id {
@@ -2240,67 +2861,94 @@ async fn process_claimed_pam_result(
     result: ClaimedPamResult,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
-    let mut delivery = Box::pin(tokio::time::timeout(
-        Duration::from_secs(20),
-        deliver_claimed_pam_result(&state, &result),
-    ));
-    let mut renew = tokio::time::interval(Duration::from_secs(10));
-    renew.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let routed = loop {
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => {
-                break Err(MixOutboxShutdown.into());
-            }
-            routed = &mut delivery => {
-                break routed
-                    .map_err(|_| anyhow::anyhow!("PAM result delivery timed out"))
-                    .and_then(std::convert::identity);
-            }
-            _ = renew.tick() => {
-                if !state
+    let attempt_deadline = tokio::time::Instant::now() + MIX_OUTBOX_ATTEMPT_DEADLINE;
+    let renewal_state = Arc::clone(&state);
+    let routed = match run_claimed_mix_effect_with_lease(
+        cancel.clone(),
+        attempt_deadline,
+        MIX_OUTBOX_LEASE_RENEWAL_INTERVAL,
+        async { Ok(deliver_claimed_pam_result(&state, &result).await) },
+        move || -> BoxFuture<'static, Result<bool>> {
+            let state = Arc::clone(&renewal_state);
+            let operation_id = result.operation_id;
+            let lease_token = result.lease_token;
+            Box::pin(async move {
+                state
                     .mix_service()
-                    .renew_pam_result_lease(result.operation_id, result.lease_token)
-                    .await?
-                {
-                    tracing::warn!(operation_id=%result.operation_id, "lost PAM result lease during delivery");
-                    return Ok(());
-                }
-            }
+                    .renew_pam_result_lease(operation_id, lease_token)
+                    .await
+            })
+        },
+    )
+    .await
+    {
+        Ok(Some(routed)) => routed,
+        Ok(None) => {
+            tracing::warn!(operation_id=%result.operation_id, "lost PAM result lease during delivery");
+            return Ok(());
         }
+        Err(error) if mix_outbox_is_shutting_down(&error) => return Ok(()),
+        Err(error) if mix_outbox_deadline_elapsed(&error) => {
+            tracing::warn!(operation_id=%result.operation_id, "PAM result delivery exceeded its claimed deadline; retaining fenced row for lease recovery");
+            return Ok(());
+        }
+        Err(error) => return Err(error),
     };
-    let completed = match routed {
+    let completion = match routed {
         Ok(PamResultRoute::Accepted) => {
-            state
-                .mix_service()
-                .acknowledge_pam_result(result.operation_id, result.lease_token)
-                .await?
+            bounded_mix_outbox_turn(
+                &cancel,
+                attempt_deadline,
+                state
+                    .mix_service()
+                    .acknowledge_pam_result(result.operation_id, result.lease_token),
+            )
+            .await
         }
         Ok(PamResultRoute::Offline) => {
             // Being offline is not a failed business attempt. Preserve the
             // exact response and retry without escalating the attempt count.
-            state
-                .mix_service()
-                .defer_pam_result(result.operation_id, result.lease_token, 5)
-                .await?
+            bounded_mix_outbox_turn(
+                &cancel,
+                attempt_deadline,
+                state
+                    .mix_service()
+                    .defer_pam_result(result.operation_id, result.lease_token, 5),
+            )
+            .await
         }
-        Err(error) if error.downcast_ref::<MixOutboxShutdown>().is_some() => {
-            state
-                .mix_service()
-                .defer_pam_result(result.operation_id, result.lease_token, 1)
-                .await?
+        Err(error) if mix_outbox_is_shutting_down(&error) => {
+            // See the delivery-side shutdown branch above: the durable
+            // result remains fenced and lease expiry recovers it without
+            // making the process wait for an unavailable database turn.
+            return Ok(());
+        }
+        Err(error) if mix_outbox_deadline_elapsed(&error) => {
+            tracing::warn!(operation_id=%result.operation_id, "PAM result route exceeded its claimed deadline; retaining fenced row for lease recovery");
+            return Ok(());
         }
         Err(error) => {
-            state
-                .mix_service()
-                .retry_pam_result(
+            bounded_mix_outbox_turn(
+                &cancel,
+                attempt_deadline,
+                state.mix_service().retry_pam_result(
                     result.operation_id,
                     result.lease_token,
                     result.attempt_count,
                     &error.to_string(),
-                )
-                .await?
+                ),
+            )
+            .await
         }
+    };
+    let completed = match completion {
+        Ok(completed) => completed,
+        Err(error) if mix_outbox_is_shutting_down(&error) => return Ok(()),
+        Err(error) if mix_outbox_deadline_elapsed(&error) => {
+            tracing::warn!(operation_id=%result.operation_id, "PAM result finalization exceeded its claimed deadline; retaining fenced row for lease recovery");
+            return Ok(());
+        }
+        Err(error) => return Err(error),
     };
     if !completed {
         tracing::warn!(operation_id=%result.operation_id, "PAM result completion lost its lease fence");
@@ -2335,6 +2983,196 @@ fn record_mix_post_commit_failure(
 /// Supervised durable MIX delivery worker.  Database rows are the authority;
 /// the timer is only a wake mechanism.  A crash after personal MAM commit is
 /// safe because archive replay continues to the same stanza-id delivery.
+async fn run_mix_outbox_lane(
+    state: Arc<AppState>,
+    cancel: tokio_util::sync::CancellationToken,
+    queue: MixOutboxQueue,
+    concurrency: usize,
+    maintain: bool,
+    heartbeat: crate::workers::WorkerHeartbeat,
+) -> Result<()> {
+    debug_assert!(concurrency > 0);
+    let mut in_flight = FuturesUnordered::<MixOutboxTask>::new();
+    // Install the retained receiver before the first claim.  Any committed
+    // recipient INSERT/DELETE that races a later wait remains observable, and
+    // the delivery lane therefore does not rely on Tokio timer scheduling for
+    // prompt progress.  The 250 ms scan below remains the durable recovery
+    // path across PostgreSQL listener outages and process crashes.
+    let mut delivery_wake = matches!(queue, MixOutboxQueue::Delivery)
+        .then(|| state.mix_service().subscribe_delivery_wake());
+    let mut next_claim = tokio::time::Instant::now();
+    // Startup must first make already-committed user delivery eligible.  A
+    // retention page is important but cannot be allowed to put four database
+    // turns ahead of the first claimed live MIX event on a small pool.
+    let mut next_maintenance = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut accepting = true;
+    let mut terminal_error = None;
+
+    loop {
+        // Heartbeat only after a real state-machine boundary.  Merely having
+        // an in-flight future is not evidence of liveness: a future waiting
+        // on an admission gate or pool acquire makes no forward progress.
+        let mut healthy_progress = false;
+        let mut failed_attempt_progress = false;
+        if accepting && cancel.is_cancelled() {
+            accepting = false;
+        }
+        if accepting && maintain && tokio::time::Instant::now() >= next_maintenance {
+            let maintenance = cancellable_mix_outbox_turn(&cancel, async {
+                // One bounded page per minute keeps durable retention finite
+                // without borrowing the PAM lane or holding a database gate
+                // across any outbound network operation.
+                state
+                    .mix_service()
+                    .prune_expired_business_intents(512)
+                    .await?;
+                state
+                    .mix_service()
+                    .prune_expired_federated_iq_results(512)
+                    .await?;
+                state
+                    .mix_service()
+                    .reconcile_expired_remote_pam(128)
+                    .await?;
+                state.mix_service().prune_expired_pam_results(512).await
+            })
+            .await;
+            next_maintenance = tokio::time::Instant::now() + Duration::from_secs(60);
+            match maintenance {
+                Ok(_) => healthy_progress = true,
+                Err(error) if mix_outbox_is_shutting_down(&error) => {
+                    accepting = false;
+                }
+                Err(error) => {
+                    // Do not drop already-claimed rows.  Cancel the local lanes
+                    // so their operations defer/retry through their normal lease
+                    // paths, then surface the error only after that bounded drain.
+                    terminal_error = Some(error);
+                    accepting = false;
+                    cancel.cancel();
+                }
+            }
+        }
+
+        if accepting && in_flight.len() < concurrency && tokio::time::Instant::now() >= next_claim {
+            let available = concurrency - in_flight.len();
+            match claim_mix_outbox_work(&state, &cancel, queue, available).await {
+                Ok(claimed) => {
+                    for work in claimed {
+                        in_flight.push(process_mix_outbox_work(
+                            Arc::clone(&state),
+                            work,
+                            cancel.clone(),
+                        ));
+                    }
+                    debug_assert!(in_flight.len() <= concurrency);
+                    next_claim = tokio::time::Instant::now() + Duration::from_millis(250);
+                    // Even an empty claim is a bounded, authoritative
+                    // database turn and therefore proves this lane is making
+                    // progress while idle.
+                    healthy_progress = true;
+                }
+                Err(error) if mix_outbox_is_shutting_down(&error) => {
+                    accepting = false;
+                }
+                Err(error) => {
+                    terminal_error = Some(error);
+                    accepting = false;
+                    cancel.cancel();
+                }
+            }
+        }
+
+        if !accepting && in_flight.is_empty() {
+            return match terminal_error {
+                Some(error) => Err(error),
+                None => Ok(()),
+            };
+        }
+
+        tokio::select! {
+            _ = cancel.cancelled(), if accepting => {
+                accepting = false;
+            }
+            wake_open = wait_for_mix_delivery_wake(&mut delivery_wake), if accepting && in_flight.len() < concurrency => {
+                if wake_open {
+                    // The wake carries no delivery authority.  It merely
+                    // asks the lane to run the normal fenced PostgreSQL
+                    // claim immediately instead of waiting for its recovery
+                    // scan.
+                    next_claim = tokio::time::Instant::now();
+                } else {
+                    terminal_error = Some(anyhow::anyhow!(
+                        "MIX delivery wake broker unexpectedly closed"
+                    ));
+                    accepting = false;
+                    cancel.cancel();
+                }
+            }
+            _ = tokio::time::sleep_until(next_claim), if accepting && in_flight.len() < concurrency => {}
+            Some((kind, outcome)) = in_flight.next(), if !in_flight.is_empty() => {
+                // A finished row has released one lane slot.  Claim again in
+                // the next loop turn instead of imposing the idle recovery
+                // cadence on an already-known work-conserving backlog.
+                next_claim = tokio::time::Instant::now();
+                if let Err(error) = outcome {
+                    // A claimed row retains its fenced lease and is retried by
+                    // the row-level completion path; one recipient must not
+                    // restart either lane or starve correlated PAM results.
+                    tracing::warn!(?error, ?kind, "MIX outbox work attempt failed before completion");
+                    heartbeat.error(&error);
+                    failed_attempt_progress = true;
+                } else {
+                    healthy_progress = true;
+                }
+            }
+        }
+        if healthy_progress {
+            heartbeat.ok();
+        } else if failed_attempt_progress {
+            // The worker completed a unit of work but it was not a healthy
+            // boundary.  Keep its error history while preventing a completed
+            // retry attempt from being mistaken for a deadlock.
+            heartbeat.pulse();
+        }
+    }
+}
+
+/// Wait for the two independent durable-MIX lanes as one supervised worker.
+///
+/// Both lanes are intentionally continuous.  A plain `join` therefore turns a
+/// failure in either lane into a silent hang: the failed future completes, but
+/// the healthy peer continues polling forever and the supervisor never sees
+/// the failure.  Cancel the shared child token as soon as either lane ends,
+/// then await the peer so it can defer any claimed lease through its ordinary
+/// shutdown path before returning the original result to the supervisor.
+async fn join_mix_outbox_lanes<D, P>(
+    lane_cancel: tokio_util::sync::CancellationToken,
+    delivery: D,
+    pam: P,
+) -> Result<()>
+where
+    D: std::future::Future<Output = Result<()>>,
+    P: std::future::Future<Output = Result<()>>,
+{
+    tokio::pin!(delivery);
+    tokio::pin!(pam);
+    tokio::select! {
+        delivery_result = &mut delivery => {
+            lane_cancel.cancel();
+            let pam_result = pam.await;
+            delivery_result?;
+            pam_result
+        }
+        pam_result = &mut pam => {
+            lane_cancel.cancel();
+            let delivery_result = delivery.await;
+            pam_result?;
+            delivery_result
+        }
+    }
+}
+
 pub(crate) fn start_mix_delivery_outbox(
     state: Arc<AppState>,
     cancel: tokio_util::sync::CancellationToken,
@@ -2351,137 +3189,33 @@ pub(crate) fn start_mix_delivery_outbox(
             let state = Arc::clone(&state);
             let cancel = cancel.clone();
             async move {
-                let mut next_intent_cleanup = tokio::time::Instant::now();
-                loop {
-                    tokio::select! {
-                        _ = cancel.cancelled() => return Ok(()),
-                        _ = tokio::time::sleep(Duration::from_millis(250)) => {}
-                    }
-                    if tokio::time::Instant::now() >= next_intent_cleanup {
-                        // One bounded page per minute is enough to keep replay
-                        // retention finite without competing with live MIX
-                        // mutations or authority/outbox rows.
-                        state
-                            .mix_service()
-                            .prune_expired_business_intents(512)
-                            .await?;
-                        state
-                            .mix_service()
-                            .prune_expired_federated_iq_results(512)
-                            .await?;
-                        state
-                            .mix_service()
-                            .reconcile_expired_remote_pam(128)
-                            .await?;
-                        state.mix_service().prune_expired_pam_results(512).await?;
-                        next_intent_cleanup = tokio::time::Instant::now() + Duration::from_secs(60);
-                    }
-                    let deliveries = state
-                        .mix_service()
-                        .claim_mix_deliveries(64, 8 * 1024 * 1024)
-                        .await?;
-                    let pam_results = state.mix_service().claim_pam_results(32).await?;
-                    let batch_state = Arc::clone(&state);
-                    let batch_cancel = cancel.clone();
-                    let mut batch = Box::pin(async move {
-                        let mix_state = Arc::clone(&batch_state);
-                        let mix_cancel = batch_cancel.clone();
-                        let mix_outcomes =
-                            stream::iter(deliveries.into_iter().map(move |delivery| {
-                                process_claimed_mix_delivery(
-                                    Arc::clone(&mix_state),
-                                    delivery,
-                                    mix_cancel.clone(),
-                                )
-                            }))
-                            .buffer_unordered(16)
-                            .collect::<Vec<_>>();
-                        let pam_outcomes =
-                            stream::iter(pam_results.into_iter().map(move |result| {
-                                process_claimed_pam_result(
-                                    Arc::clone(&batch_state),
-                                    result,
-                                    batch_cancel.clone(),
-                                )
-                            }))
-                            // A peer's signed cluster listener processes delivery
-                            // receipts in order. Bound concurrent exact-resource
-                            // IQs so their transport receipts cannot consume the
-                            // two-second correlated ACK window as one burst.
-                            .buffer_unordered(2)
-                            .collect::<Vec<_>>();
-                        let (mix_outcomes, pam_outcomes) =
-                            futures::future::join(mix_outcomes, pam_outcomes).await;
-                        for outcome in mix_outcomes {
-                            if let Err(error) = outcome {
-                                // A row retains its fenced lease and becomes
-                                // claimable again after expiry. One recipient
-                                // cannot restart the supervised worker.
-                                tracing::warn!(
-                                    ?error,
-                                    "MIX delivery attempt failed before completion"
-                                );
-                            }
-                        }
-                        for outcome in pam_outcomes {
-                            if let Err(error) = outcome {
-                                tracing::warn!(
-                                    ?error,
-                                    "PAM result attempt failed before completion"
-                                );
-                            }
-                        }
-                    });
-                    // Delivery calls carry their own row-lease renewal, while
-                    // this independent pulse proves the worker itself is live
-                    // even for an 80-second worst-case batch.
-                    let shutdown_requested =
-                        complete_mix_outbox_batch(&mut batch, &cancel, || heartbeat.ok()).await;
-                    heartbeat.ok();
-                    if shutdown_requested {
-                        return Ok(());
-                    }
-                }
+                let (delivery_budget, pam_budget) =
+                    mix_outbox_lane_budgets(state.mix_service().outbox_background_budget());
+                let lane_cancel = cancel.child_token();
+                let delivery = run_mix_outbox_lane(
+                    Arc::clone(&state),
+                    lane_cancel.clone(),
+                    MixOutboxQueue::Delivery,
+                    delivery_budget,
+                    true,
+                    heartbeat.clone(),
+                );
+                let pam = run_mix_outbox_lane(
+                    state,
+                    lane_cancel.clone(),
+                    MixOutboxQueue::PamResult,
+                    pam_budget,
+                    false,
+                    heartbeat,
+                );
+                // Both protocol lanes may wait on external I/O concurrently,
+                // but MixService serializes their database turns.  If either
+                // lane exits, the joiner cancels and drains the peer before
+                // surfacing the original result to the restartable supervisor.
+                join_mix_outbox_lanes(lane_cancel, delivery, pam).await
             }
         },
     );
-}
-
-async fn complete_mix_outbox_batch<F, H>(
-    batch: F,
-    cancel: &tokio_util::sync::CancellationToken,
-    mut heartbeat: H,
-) -> bool
-where
-    F: std::future::Future<Output = ()>,
-    H: FnMut(),
-{
-    tokio::pin!(batch);
-    let mut pulse = tokio::time::interval(Duration::from_secs(5));
-    pulse.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut batch_mode = MixOutboxBatchMode::Active;
-    loop {
-        tokio::select! {
-            _ = &mut batch => break,
-            _ = pulse.tick() => heartbeat(),
-            _ = cancel.cancelled(), if batch_mode == MixOutboxBatchMode::Active => {
-                // Claims already carry durable side effects and a strict
-                // per-recipient sequence. Dropping these futures during an
-                // orderly shutdown strands their leases until expiry, so an
-                // immediate restart can block every later stanza for that
-                // recipient. Stop claiming new work, but let this bounded
-                // batch acknowledge, retry, or defer each exact lease.
-                batch_mode = MixOutboxBatchMode::Draining;
-            },
-        }
-    }
-    batch_mode == MixOutboxBatchMode::Draining
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MixOutboxBatchMode {
-    Active,
-    Draining,
 }
 
 async fn push_mix_roster_update(
@@ -4871,6 +5605,14 @@ pub(crate) async fn publish_verified_mix_presence(
         return Ok(());
     };
     let actor_bare = actor.bare();
+    // A verified MIX-capable resource makes an already-persisted delivery
+    // head eligible immediately. This is deliberately separate from the
+    // presence projection below: a MAM/archive write or presence update never
+    // acknowledges the durable recipient row.
+    state
+        .mix_service()
+        .wake_mix_delivery_recipient(&actor_bare)
+        .await?;
     let available = XmlElement::namespaced("presence", "jabber:client")
         .attr("from", &actor_full)
         .finish();
@@ -5208,6 +5950,8 @@ async fn process_private_message(
     deliver_channel_stanza(
         state,
         ChannelStanzaDelivery {
+            delivery_id: None,
+            mix_source: None,
             channel_jid: &channel.jid(),
             recipient: &recipient,
             stanza: delivery.finish(),
@@ -5215,7 +5959,7 @@ async fn process_private_message(
             archive: false,
             encrypted,
             durable: false,
-            wait_for_unknown_caps: false,
+            database_lane: ChannelStanzaDatabaseLane::LiveIngress,
         },
     )
     .await?;
@@ -6783,6 +7527,245 @@ mod tests {
     use super::*;
     use crate::services::mix::MamRsmPage;
 
+    #[tokio::test]
+    async fn durable_local_mix_delivery_requires_transport_ownership_and_closes_failed_routes() {
+        let source = crate::outbound::MixDelivery {
+            delivery_id: Uuid::from_u128(1),
+            lease_token: Uuid::from_u128(2),
+        };
+
+        // Entering the bounded queue is deliberately insufficient: an exact
+        // C2S transport must write it or persist a typed hand-off.
+        let (output, mut consumer) = tokio::sync::mpsc::channel(1);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = tokio_util::sync::CancellationToken::new();
+        let waiter = {
+            let sender = sender.clone();
+            let disconnect = disconnect.clone();
+            tokio::spawn(async move {
+                try_send_local_durable_mix(&sender, &disconnect, "owned".to_owned(), source).await
+            })
+        };
+        let item = consumer.recv().await.expect("durable MIX item was queued");
+        assert_eq!(item.mix_delivery(), Some(source));
+        item.complete_mix_handoff(crate::outbound::MixTransportCompletion::SocketWritten);
+        assert_eq!(
+            waiter
+                .await
+                .expect("ownership waiter must not panic")
+                .expect("socket write must complete the durable hand-off"),
+            crate::outbound::MixTransportCompletion::SocketWritten
+        );
+        assert!(!disconnect.is_cancelled());
+
+        // A full bounded queue must close this transport before another
+        // durable retry could overtake its unconfirmed predecessor.
+        let (output, _consumer) = tokio::sync::mpsc::channel(1);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = tokio_util::sync::CancellationToken::new();
+        sender
+            .try_send("older".to_owned())
+            .expect("test queue accepts predecessor");
+        assert_eq!(
+            try_send_local_durable_mix(&sender, &disconnect, "full".to_owned(), source).await,
+            Err(MixLocalTransportFailure::QueueFull)
+        );
+        assert!(disconnect.is_cancelled());
+
+        // A live session object with an already closed output cannot accept a
+        // durable row either.
+        let (output, consumer) = tokio::sync::mpsc::channel(1);
+        drop(consumer);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = tokio_util::sync::CancellationToken::new();
+        assert_eq!(
+            try_send_local_durable_mix(&sender, &disconnect, "closed".to_owned(), source).await,
+            Err(MixLocalTransportFailure::QueueClosed)
+        );
+        assert!(disconnect.is_cancelled());
+
+        // If an output item disappears before it establishes ownership, the
+        // one-shot hand-off closes and the exact transport is rejected.
+        let (output, mut consumer) = tokio::sync::mpsc::channel(1);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = tokio_util::sync::CancellationToken::new();
+        let waiter = {
+            let sender = sender.clone();
+            let disconnect = disconnect.clone();
+            tokio::spawn(async move {
+                try_send_local_durable_mix(
+                    &sender,
+                    &disconnect,
+                    "handoff-closed".to_owned(),
+                    source,
+                )
+                .await
+            })
+        };
+        drop(
+            consumer
+                .recv()
+                .await
+                .expect("receipt-close MIX item was queued"),
+        );
+        assert_eq!(
+            waiter.await.expect("handoff waiter must not panic"),
+            Err(MixLocalTransportFailure::HandoffClosed)
+        );
+        assert!(disconnect.is_cancelled());
+
+        // Dropping a waiter after the item was dequeued also closes the exact
+        // transport. This is what makes the outbox deadline/cancellation safe
+        // without relying on a synthetic short receipt timeout.
+        let (output, mut consumer) = tokio::sync::mpsc::channel(1);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = tokio_util::sync::CancellationToken::new();
+        let waiter = {
+            let sender = sender.clone();
+            let disconnect = disconnect.clone();
+            tokio::spawn(async move {
+                try_send_local_durable_mix(&sender, &disconnect, "cancelled".to_owned(), source)
+                    .await
+            })
+        };
+        let late = consumer.recv().await.expect("cancelled MIX item was queued");
+        waiter.abort();
+        let _ = waiter.await;
+        assert!(disconnect.is_cancelled());
+        drop(late);
+    }
+
+    #[test]
+    fn mix_outbox_lane_budgets_preserve_the_pam_window() {
+        assert_eq!(mix_outbox_lane_budgets(1), (1, 1));
+        assert_eq!(mix_outbox_lane_budgets(16), (16, 2));
+    }
+
+    #[test]
+    fn durable_mix_no_live_route_is_parked_with_or_without_an_archive_projection() {
+        for archive_projection_present in [false, true] {
+            assert_eq!(
+                classify_durable_mix_route(
+                    archive_projection_present,
+                    false,
+                    DurableMixRouteAvailability::NoTarget,
+                    false,
+                ),
+                DurableMixRouteDisposition::Park,
+                "a MAM projection is not a live delivery acknowledgement",
+            );
+        }
+    }
+
+    #[test]
+    fn durable_mix_unknown_or_unsupported_route_is_parked_without_an_age_cutoff() {
+        // The classifier intentionally has no age input: a route that is
+        // still unknown after a delayed caps discovery remains recoverable
+        // until the database delivery expiry, not an arbitrary 30-second
+        // capability timer.
+        for availability in [
+            DurableMixRouteAvailability::UnknownCapability,
+            DurableMixRouteAvailability::Unsupported,
+        ] {
+            assert_eq!(
+                classify_durable_mix_route(false, false, availability, false),
+                DurableMixRouteDisposition::Park,
+            );
+        }
+    }
+
+    #[test]
+    fn durable_mix_route_preserves_accepted_and_real_failure_paths() {
+        assert_eq!(
+            classify_durable_mix_route(
+                false,
+                true,
+                DurableMixRouteAvailability::Deliverable,
+                false,
+            ),
+            DurableMixRouteDisposition::Accepted,
+        );
+        assert_eq!(
+            classify_durable_mix_route(
+                false,
+                false,
+                DurableMixRouteAvailability::Deliverable,
+                false,
+            ),
+            DurableMixRouteDisposition::RetryDeliverable,
+        );
+        assert_eq!(
+            classify_durable_mix_route(false, false, DurableMixRouteAvailability::NoTarget, true,),
+            DurableMixRouteDisposition::RetryCluster,
+        );
+    }
+
+    #[tokio::test]
+    async fn pam_lane_starts_while_a_delivery_lane_waits_on_external_io() {
+        let (delivery_started_tx, delivery_started_rx) = tokio::sync::oneshot::channel();
+        let (release_delivery_tx, release_delivery_rx) = tokio::sync::oneshot::channel();
+        let (pam_started_tx, pam_started_rx) = tokio::sync::oneshot::channel();
+        let lane_cancel = tokio_util::sync::CancellationToken::new();
+        let joined = tokio::spawn(async move {
+            join_mix_outbox_lanes(
+                lane_cancel,
+                async move {
+                    let _ = delivery_started_tx.send(());
+                    let _ = release_delivery_rx.await;
+                    Ok(())
+                },
+                async move {
+                    let _ = pam_started_tx.send(());
+                    Ok(())
+                },
+            )
+            .await
+        });
+
+        delivery_started_rx.await.unwrap();
+        // The delivery is deliberately held until after this assertion, so
+        // the bounded wait only permits ordinary CI scheduler latency; it
+        // cannot mask a return to serial delivery-then-PAM execution.
+        tokio::time::timeout(Duration::from_secs(1), pam_started_rx)
+            .await
+            .expect("PAM lane must start before a slow delivery is released")
+            .unwrap();
+        release_delivery_tx.send(()).unwrap();
+        assert!(joined.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn failed_mix_outbox_lane_cancels_and_drains_its_peer() {
+        let lane_cancel = tokio_util::sync::CancellationToken::new();
+        let peer_cancel = lane_cancel.clone();
+        let (peer_started_tx, peer_started_rx) = tokio::sync::oneshot::channel();
+        let (peer_drained_tx, peer_drained_rx) = tokio::sync::oneshot::channel();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            join_mix_outbox_lanes(
+                lane_cancel,
+                async move {
+                    peer_started_rx
+                        .await
+                        .expect("peer lane must begin before the failure");
+                    anyhow::bail!("injected MIX delivery lane failure")
+                },
+                async move {
+                    let _ = peer_started_tx.send(());
+                    peer_cancel.cancelled().await;
+                    let _ = peer_drained_tx.send(());
+                    Ok(())
+                },
+            ),
+        )
+        .await
+        .expect("failed lane must not wait forever for its continuous peer");
+        assert!(result.is_err());
+        peer_drained_rx
+            .await
+            .expect("peer must observe cancellation before join returns");
+    }
+
     #[test]
     fn verified_mix_presence_requires_the_exact_live_resource_epoch() {
         let expected = Uuid::new_v4();
@@ -6852,32 +7835,211 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn graceful_shutdown_drains_the_claimed_mix_batch_before_stopping() {
+    async fn cancellation_preempts_a_pending_mix_outbox_database_turn() {
         let cancel = tokio_util::sync::CancellationToken::new();
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let task_cancel = cancel.clone();
         let task = tokio::spawn(async move {
-            complete_mix_outbox_batch(
-                async move {
-                    let _ = started_tx.send(());
-                    let _ = release_rx.await;
-                },
-                &task_cancel,
-                || {},
-            )
+            cancellable_mix_outbox_turn(&task_cancel, async move {
+                let _ = started_tx.send(());
+                std::future::pending::<Result<()>>().await
+            })
             .await
         });
 
         started_rx.await.unwrap();
         cancel.cancel();
-        tokio::task::yield_now().await;
-        assert!(
-            !task.is_finished(),
-            "shutdown must not drop a batch that owns durable delivery leases"
-        );
-        release_tx.send(()).unwrap();
-        assert!(task.await.unwrap(), "the worker must stop after draining");
+        let error = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("cancellation must preempt a pending semaphore or database turn")
+            .expect("test task must not panic")
+            .expect_err("pending turn must report cancellation");
+        assert!(mix_outbox_is_shutting_down(&error));
+    }
+
+    #[tokio::test]
+    async fn claimed_mix_renewal_never_pauses_an_effect_holding_the_outbox_gate() {
+        let gate = Arc::new(tokio::sync::Semaphore::new(1));
+        let (effect_started_tx, effect_started_rx) = tokio::sync::oneshot::channel();
+        let (renewal_started_tx, renewal_started_rx) = tokio::sync::oneshot::channel();
+        let (release_effect_tx, release_effect_rx) = tokio::sync::oneshot::channel();
+        let effect_gate = Arc::clone(&gate);
+        let renewal_gate = Arc::clone(&gate);
+        let mut renewal_started_tx = Some(renewal_started_tx);
+
+        let task = tokio::spawn(async move {
+            run_claimed_mix_effect_with_lease(
+                tokio_util::sync::CancellationToken::new(),
+                tokio::time::Instant::now() + Duration::from_secs(1),
+                Duration::from_millis(10),
+                async move {
+                    let permit = effect_gate
+                        .acquire_owned()
+                        .await
+                        .expect("test gate remains open");
+                    let _ = effect_started_tx.send(());
+                    release_effect_rx
+                        .await
+                        .expect("test releases the effect after renewal starts");
+                    drop(permit);
+                    Ok(())
+                },
+                move || -> BoxFuture<'static, Result<bool>> {
+                    let gate = Arc::clone(&renewal_gate);
+                    let started = renewal_started_tx.take();
+                    Box::pin(async move {
+                        if let Some(started) = started {
+                            let _ = started.send(());
+                        }
+                        let _permit = gate.acquire_owned().await.expect("test gate remains open");
+                        Ok(true)
+                    })
+                },
+            )
+            .await
+        });
+
+        effect_started_rx
+            .await
+            .expect("effect must acquire the single permit");
+        tokio::time::timeout(Duration::from_secs(1), renewal_started_rx)
+            .await
+            .expect("delayed renewal must be scheduled")
+            .expect("renewal future must begin waiting for the same permit");
+        release_effect_tx
+            .send(())
+            .expect("effect remains pending until released");
+
+        let result = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("effect must remain pollable while renewal waits")
+            .expect("test task must not panic");
+        assert!(matches!(result, Ok(Some(()))));
+        assert_eq!(gate.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn claimed_mix_deadline_drops_a_pending_renewal_and_releases_the_gate() {
+        let gate = Arc::new(tokio::sync::Semaphore::new(1));
+        let (effect_started_tx, effect_started_rx) = tokio::sync::oneshot::channel();
+        let (renewal_started_tx, renewal_started_rx) = tokio::sync::oneshot::channel();
+        let effect_gate = Arc::clone(&gate);
+        let renewal_gate = Arc::clone(&gate);
+        let mut renewal_started_tx = Some(renewal_started_tx);
+
+        let task = tokio::spawn(async move {
+            run_claimed_mix_effect_with_lease(
+                tokio_util::sync::CancellationToken::new(),
+                tokio::time::Instant::now() + Duration::from_millis(80),
+                Duration::from_millis(10),
+                async move {
+                    let _permit = effect_gate
+                        .acquire_owned()
+                        .await
+                        .expect("test gate remains open");
+                    let _ = effect_started_tx.send(());
+                    std::future::pending::<Result<()>>().await
+                },
+                move || -> BoxFuture<'static, Result<bool>> {
+                    let gate = Arc::clone(&renewal_gate);
+                    let started = renewal_started_tx.take();
+                    Box::pin(async move {
+                        if let Some(started) = started {
+                            let _ = started.send(());
+                        }
+                        let _permit = gate.acquire_owned().await.expect("test gate remains open");
+                        Ok(true)
+                    })
+                },
+            )
+            .await
+        });
+
+        effect_started_rx
+            .await
+            .expect("effect must acquire the single permit");
+        tokio::time::timeout(Duration::from_secs(1), renewal_started_rx)
+            .await
+            .expect("renewal must be scheduled before the absolute deadline")
+            .expect("renewal future must begin waiting for the same permit");
+
+        let error = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("absolute deadline must remain pollable during renewal")
+            .expect("test task must not panic")
+            .expect_err("pending effect must report its claimed deadline");
+        assert!(mix_outbox_deadline_elapsed(&error));
+        assert_eq!(gate.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn claimed_mix_cancellation_drops_a_pending_renewal_and_releases_the_gate() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let gate = Arc::new(tokio::sync::Semaphore::new(1));
+        let (effect_started_tx, effect_started_rx) = tokio::sync::oneshot::channel();
+        let (renewal_started_tx, renewal_started_rx) = tokio::sync::oneshot::channel();
+        let effect_gate = Arc::clone(&gate);
+        let renewal_gate = Arc::clone(&gate);
+        let task_cancel = cancel.clone();
+        let mut renewal_started_tx = Some(renewal_started_tx);
+
+        let task = tokio::spawn(async move {
+            run_claimed_mix_effect_with_lease(
+                task_cancel,
+                tokio::time::Instant::now() + Duration::from_secs(1),
+                Duration::from_millis(10),
+                async move {
+                    let _permit = effect_gate
+                        .acquire_owned()
+                        .await
+                        .expect("test gate remains open");
+                    let _ = effect_started_tx.send(());
+                    std::future::pending::<Result<()>>().await
+                },
+                move || -> BoxFuture<'static, Result<bool>> {
+                    let gate = Arc::clone(&renewal_gate);
+                    let started = renewal_started_tx.take();
+                    Box::pin(async move {
+                        if let Some(started) = started {
+                            let _ = started.send(());
+                        }
+                        let _permit = gate.acquire_owned().await.expect("test gate remains open");
+                        Ok(true)
+                    })
+                },
+            )
+            .await
+        });
+
+        effect_started_rx
+            .await
+            .expect("effect must acquire the single permit");
+        tokio::time::timeout(Duration::from_secs(1), renewal_started_rx)
+            .await
+            .expect("renewal must be scheduled")
+            .expect("renewal future must begin waiting for the same permit");
+        cancel.cancel();
+
+        let error = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("cancellation must remain pollable during renewal")
+            .expect("test task must not panic")
+            .expect_err("pending effect must report cancellation");
+        assert!(mix_outbox_is_shutting_down(&error));
+        assert_eq!(gate.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn claimed_mix_final_database_turn_honors_the_shared_deadline() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let error = bounded_mix_outbox_turn(
+            &cancel,
+            tokio::time::Instant::now() + Duration::from_millis(20),
+            std::future::pending::<Result<()>>(),
+        )
+        .await
+        .expect_err("pending finalization must not outlive the claimed deadline");
+        assert!(mix_outbox_deadline_elapsed(&error));
     }
 
     #[test]

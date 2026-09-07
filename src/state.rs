@@ -1,6 +1,9 @@
 use crate::{
     abuse::{AbuseConfig, AbuseGuard},
-    config::Config,
+    config::{
+        AdminCommandPoolMode, Config, OMEMO_RECOVERY_POOL_MAX_CONNECTIONS,
+        SERVICE_CONTROL_POOL_MAX_CONNECTIONS,
+    },
     db,
     metrics::Metrics,
     s2s::FederationRouter,
@@ -38,6 +41,22 @@ use zeroize::{Zeroize, Zeroizing};
 const OMEMO_POLL_CONCURRENCY: usize = 4;
 const OMEMO_POLL_IP_REQUESTS_PER_MINUTE: usize = 30;
 const OMEMO_POLL_MAX_ACTIVE_IPS: usize = 65_536;
+/// A committed restart/shutdown generation is a safety boundary, not ordinary
+/// background work. Reserve one runtime-role connection so traffic workers
+/// cannot prevent the watcher from observing it under a saturated main pool.
+const SERVICE_CONTROL_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_millis(500);
+
+fn service_control_pool_options(config: &Config) -> PgPoolOptions {
+    let options = PgPoolOptions::new()
+        .max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)
+        .min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)
+        .acquire_timeout(SERVICE_CONTROL_POOL_ACQUIRE_TIMEOUT);
+    if config.database_allow_unsafe_role_for_development {
+        options
+    } else {
+        db::pin_public_application_schema(options)
+    }
+}
 
 fn admit_omemo_poll_ip_window(window: &mut VecDeque<Instant>, now: Instant) -> bool {
     let cutoff = now.checked_sub(Duration::from_secs(60)).unwrap_or(now);
@@ -1027,6 +1046,12 @@ pub struct AppState {
     /// capability. It cannot consume the primary 32-connection application
     /// pool during a capability flood.
     omemo_recovery_poll_pool: PgPool,
+    /// One reserved runtime-role connection for durable restart/shutdown
+    /// control. It is intentionally separate from both the application and
+    /// command pools: an exhausted traffic pool must not hide a committed
+    /// service-control generation, and the command role cannot gain a new
+    /// runtime authority merely by observing it.
+    service_control_pool: PgPool,
     api_control: db::ApiControlKeyring,
     /// Opaque REST pagination cursors use purpose-separated subkeys derived
     /// from the same current/previous process secrets as API idempotency.
@@ -1897,6 +1922,9 @@ impl AppState {
         let retraction_content_identity = abuse.personal_retraction_content_keyring();
         let mix_message_content_identity = abuse.mix_message_content_keyring();
         let mix_retraction_content_identity = abuse.mix_retraction_content_keyring();
+        // MIX receives the configured primary-pool capacity as a narrow
+        // scheduling input.  The protocol never inspects raw PgPool options.
+        let mix_primary_pool_max_connections = config.database_max_connections;
         let message_service = crate::services::messaging::MessageService::new(
             pool.clone(),
             message_content_identity,
@@ -1959,26 +1987,29 @@ impl AppState {
             config.pep_max_nodes_per_account,
             config.pep_max_storage_bytes_per_account,
         );
-        let command_pool_options = PgPoolOptions::new()
-            .max_connections(4)
-            .min_connections(0)
-            .acquire_timeout(Duration::from_secs(2));
-        let command_pool_options = if config.database_allow_unsafe_role_for_development {
-            command_pool_options
-        } else {
-            crate::db::pin_public_application_schema(command_pool_options)
+        let command_pool = match config.admin_command_pool_mode {
+            // The explicit loopback-only exception has no independent
+            // PostgreSQL principal.  A second PgPool with the same unsafe
+            // credential would add pressure without adding a capability
+            // boundary, so share the already-attested primary pool instead.
+            AdminCommandPoolMode::SharedUnsafeDevelopment => pool.clone(),
+            AdminCommandPoolMode::DedicatedProductionRole => {
+                let command_pool_options = crate::db::pin_public_application_schema(
+                    PgPoolOptions::new()
+                        .max_connections(4)
+                        .min_connections(0)
+                        .acquire_timeout(Duration::from_secs(2)),
+                );
+                let command_pool = command_pool_options
+                    .connect(&config.admin_command_database_url)
+                    .await
+                    .context("could not create bounded XEP-0133 command database pool")?;
+                crate::db::attest_admin_command_role(&command_pool).await?;
+                command_pool
+            }
         };
-        let command_pool = command_pool_options
-            .connect(&config.admin_command_database_url)
-            .await
-            .context("could not create bounded XEP-0133 command database pool")?;
-        if config.database_allow_unsafe_role_for_development {
-            crate::db::attest_development_database_is_loopback(&command_pool).await?;
-        } else {
-            crate::db::attest_admin_command_role(&command_pool).await?;
-        }
         let omemo_recovery_pool_options = PgPoolOptions::new()
-            .max_connections(2)
+            .max_connections(OMEMO_RECOVERY_POOL_MAX_CONNECTIONS)
             .min_connections(0)
             .acquire_timeout(Duration::from_secs(2));
         let omemo_recovery_pool_options = if config.database_allow_unsafe_role_for_development {
@@ -1990,6 +2021,19 @@ impl AppState {
             .connect(&config.database_url)
             .await
             .context("could not create isolated OMEMO recovery poll database pool")?;
+        // Do not reuse `command_pool`: its deliberately reduced role must not
+        // be widened with the runtime-only service-control capability. This
+        // pool uses the same attested runtime identity as `pool`, but reserves
+        // exactly one connection outside traffic/PubSub/MIX pressure.
+        let service_control_pool = service_control_pool_options(&config)
+            .connect(&config.database_url)
+            .await
+            .context("could not create isolated service-control database pool")?;
+        if config.database_allow_unsafe_role_for_development {
+            crate::db::attest_development_database_is_loopback(&service_control_pool).await?;
+        } else {
+            crate::db::attest_runtime_role(&service_control_pool).await?;
+        }
         let sm_authority_schema: String = sqlx::query_scalar("SELECT current_schema()")
             .fetch_one(&pool)
             .await
@@ -2002,7 +2046,19 @@ impl AppState {
             sm_authority_connect_options =
                 sm_authority_connect_options.options([("search_path", "public")]);
         }
-        let sm_service = crate::services::sm::SmService::new(pool.clone(), sm_authority_schema)?;
+        let sm_service =
+            crate::services::sm::SmService::new(pool.clone(), sm_authority_schema.clone())?;
+        // The MIX wake broker validates the same schema identity that the
+        // dedicated PostgreSQL listener attests below.  It never trusts a
+        // notification as delivery authority; schema matching only prevents
+        // a shared database's unrelated schema from creating local scan load.
+        let mix_service = crate::services::mix::MixService::new(
+            pool.clone(),
+            mix_message_content_identity,
+            mix_retraction_content_identity,
+            mix_primary_pool_max_connections,
+            sm_authority_schema,
+        )?;
         config.raw.database_url.zeroize();
         config.raw.database_url.clear();
         config.raw.admin_command_database_url.zeroize();
@@ -2018,11 +2074,7 @@ impl AppState {
             message_service,
             retraction_service,
             mam_service,
-            mix_service: crate::services::mix::MixService::new(
-                pool.clone(),
-                mix_message_content_identity,
-                mix_retraction_content_identity,
-            ),
+            mix_service,
             sm_service,
             blocking_service: crate::services::blocking::BlockingService::new(pool.clone()),
             presence_service: crate::services::presence::PresenceService::new(pool.clone()),
@@ -2055,6 +2107,7 @@ impl AppState {
             metrics_bearer_token,
             web_admin_gateway_token,
             omemo_recovery_poll_pool,
+            service_control_pool,
             api_control,
             api_cursor,
             upload_service,
@@ -2106,8 +2159,9 @@ impl AppState {
             "session-cleanup",
             crate::workers::WorkerCriticality::Restartable,
         );
-        crate::services::sm::start_sm_authority_listener(
+        crate::services::sm::start_database_authority_listener(
             state.sm_service().clone(),
+            state.mix_service().delivery_wake_broker(),
             sm_authority_connect_options,
             Arc::clone(state.worker_registry()),
             worker_cancel.clone(),
@@ -2673,7 +2727,7 @@ impl AppState {
                         let Some(state) = weak.upgrade() else {
                             return Ok(());
                         };
-                        match db::poll_admin_service_control(&state.pool).await {
+                        match db::poll_admin_service_control(&state.service_control_pool).await {
                             Ok(Some(control))
                                 if service_control_applies(state.process_started_at, &control)
                                     && acted != Some(control.generation) =>
@@ -5729,7 +5783,7 @@ mod session_key_tests {
         assert!(snapshot
             .unacked
             .iter()
-            .all(|entry| entry.durable_delivery.is_none()));
+            .all(|entry| entry.durable_delivery().is_none()));
 
         let before_h = snapshot.outbound_h;
         let before = snapshot.unacked.clone();

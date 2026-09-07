@@ -2513,7 +2513,7 @@ mod offline_queue_tests {
         );
         drop(tx);
         let delivered = rx.recv().await.unwrap();
-        crate::db::replay::acknowledge_durable_delivery(&pool, delivered.durable_delivery.unwrap())
+        crate::db::replay::acknowledge_durable_delivery(&pool, delivered.c2s_delivery().unwrap())
             .await
             .unwrap();
         assert_eq!(delivered.stanza, "<message id='dedupe-one'/>");
@@ -4241,7 +4241,7 @@ mod history_identity_pg_tests {
         );
         drop(offline_tx);
         let delivered = offline_rx.recv().await.unwrap();
-        crate::db::replay::acknowledge_durable_delivery(&pool, delivered.durable_delivery.unwrap())
+        crate::db::replay::acknowledge_durable_delivery(&pool, delivered.c2s_delivery().unwrap())
             .await
             .unwrap();
         assert_eq!(delivered.stanza, "<message id='visible-offline'/>");
@@ -4281,7 +4281,7 @@ mod history_identity_pg_tests {
         );
         drop(bind2_tx);
         let delivered = bind2_rx.recv().await.unwrap();
-        crate::db::replay::acknowledge_durable_delivery(&pool, delivered.durable_delivery.unwrap())
+        crate::db::replay::acknowledge_durable_delivery(&pool, delivered.c2s_delivery().unwrap())
             .await
             .unwrap();
         assert_eq!(delivered.stanza, "<message id='bind2-temporary-only'/>");

@@ -169,8 +169,179 @@ def omemo2_bundle(prekey_count: int = 25, first_prekey_id: int = 1) -> str:
     )
 
 
-def api(method: str, path: str, payload=None, token: str | None = None):
-    connection = http.client.HTTPConnection(HTTP_HOST, HTTP_PORT, timeout=10)
+_DEADLINE_HTTP_MAX_RESPONSE_BYTES = 1024 * 1024
+
+
+def _remaining_deadline_timeout(deadline: float, operation: str) -> float:
+    """Return the remaining wall-clock I/O budget without resetting it."""
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError(f"timed out during {operation}")
+    return remaining
+
+
+def _recv_with_deadline(sock: socket.socket, deadline: float, operation: str) -> bytes:
+    sock.settimeout(_remaining_deadline_timeout(deadline, operation))
+    chunk = sock.recv(8192)
+    if not chunk:
+        raise EOFError(f"connection closed during {operation}")
+    return chunk
+
+
+def _read_http_headers_with_deadline(sock: socket.socket, deadline: float) -> tuple[bytes, bytearray]:
+    received = bytearray()
+    while b"\r\n\r\n" not in received:
+        received.extend(_recv_with_deadline(sock, deadline, "HTTP response headers"))
+        if len(received) > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+            raise ValueError("HTTP response headers exceeded the fixture safety limit")
+    header_end = received.index(b"\r\n\r\n")
+    return bytes(received[:header_end]), received[header_end + 4 :]
+
+
+def _read_exact_http_body_with_deadline(
+    sock: socket.socket, body: bytearray, length: int, deadline: float
+) -> bytes:
+    if length < 0 or length > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+        raise ValueError("HTTP response body exceeded the fixture safety limit")
+    while len(body) < length:
+        body.extend(_recv_with_deadline(sock, deadline, "HTTP response body"))
+        if len(body) > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+            raise ValueError("HTTP response body exceeded the fixture safety limit")
+    return bytes(body[:length])
+
+
+def _read_chunked_http_body_with_deadline(
+    sock: socket.socket, buffered: bytearray, deadline: float
+) -> bytes:
+    """Read the small chunked responses used by local test endpoints."""
+
+    body = bytearray()
+
+    def read_line() -> bytes:
+        while b"\r\n" not in buffered:
+            buffered.extend(_recv_with_deadline(sock, deadline, "HTTP chunk header"))
+            if len(buffered) > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+                raise ValueError("HTTP response exceeded the fixture safety limit")
+        end = buffered.index(b"\r\n")
+        line = bytes(buffered[:end])
+        del buffered[: end + 2]
+        return line
+
+    def read_exact(length: int) -> bytes:
+        while len(buffered) < length:
+            buffered.extend(_recv_with_deadline(sock, deadline, "HTTP chunk body"))
+            if len(buffered) > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+                raise ValueError("HTTP response exceeded the fixture safety limit")
+        result = bytes(buffered[:length])
+        del buffered[:length]
+        return result
+
+    while True:
+        size_text = read_line().split(b";", 1)[0]
+        try:
+            size = int(size_text, 16)
+        except ValueError as error:
+            raise ValueError("invalid HTTP chunk size") from error
+        if size < 0 or len(body) + size > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+            raise ValueError("HTTP response body exceeded the fixture safety limit")
+        if size == 0:
+            # Consume optional trailers, stopping at the required empty line.
+            while read_line():
+                pass
+            return bytes(body)
+        body.extend(read_exact(size))
+        if read_exact(2) != b"\r\n":
+            raise ValueError("HTTP chunk did not end with CRLF")
+
+
+def _deadline_http_api(
+    method: str,
+    path: str,
+    body: bytes | None,
+    headers: dict[str, str],
+    deadline: float,
+) -> tuple[int, str, bytes]:
+    """Execute a fixture REST request under one non-extendable deadline.
+
+    ``http.client`` has a per-socket-operation timeout.  That is useful for
+    ordinary integration calls, but cannot express an authentication budget
+    that includes queueing, connect, write, header reads, and body reads.  The
+    MIX pressure fixture uses this deliberately small HTTP/1.1 client only
+    when it supplies an absolute deadline.
+    """
+
+    request_headers = {
+        "Host": f"{HTTP_HOST}:{HTTP_PORT}",
+        "Connection": "close",
+        **headers,
+    }
+    if body is not None:
+        request_headers["Content-Length"] = str(len(body))
+    request = (
+        f"{method} {path} HTTP/1.1\r\n"
+        + "".join(f"{name}: {value}\r\n" for name, value in request_headers.items())
+        + "\r\n"
+    ).encode() + (body or b"")
+
+    with socket.create_connection(
+        (HTTP_HOST, HTTP_PORT), timeout=_remaining_deadline_timeout(deadline, "HTTP connect")
+    ) as sock:
+        sock.settimeout(_remaining_deadline_timeout(deadline, "HTTP request write"))
+        sock.sendall(request)
+        raw_headers, buffered_body = _read_http_headers_with_deadline(sock, deadline)
+        try:
+            lines = raw_headers.decode("iso-8859-1").split("\r\n")
+        except UnicodeDecodeError as error:  # pragma: no cover - ISO-8859-1 always decodes bytes.
+            raise ValueError("HTTP response headers were not decodable") from error
+        if not lines:
+            raise ValueError("HTTP response did not contain a status line")
+        status_match = re.fullmatch(r"HTTP/1\.[01] ([1-5][0-9]{2})(?: .*)?", lines[0])
+        if status_match is None:
+            raise ValueError("HTTP response had an invalid status line")
+        response_headers: dict[str, str] = {}
+        for line in lines[1:]:
+            if not line or ":" not in line:
+                raise ValueError("HTTP response had an invalid header")
+            name, value = line.split(":", 1)
+            response_headers[name.lower()] = value.strip()
+        transfer_encoding = response_headers.get("transfer-encoding", "").lower()
+        if transfer_encoding == "chunked":
+            raw_body = _read_chunked_http_body_with_deadline(sock, buffered_body, deadline)
+        elif "content-length" in response_headers:
+            try:
+                content_length = int(response_headers["content-length"])
+            except ValueError as error:
+                raise ValueError("HTTP response had an invalid Content-Length") from error
+            raw_body = _read_exact_http_body_with_deadline(
+                sock, buffered_body, content_length, deadline
+            )
+        else:
+            # The client asked for connection-close semantics.  Keep reading
+            # under the absolute deadline, including any bytes that arrived
+            # with the headers.
+            while True:
+                try:
+                    buffered_body.extend(
+                        _recv_with_deadline(sock, deadline, "HTTP response body")
+                    )
+                except EOFError:
+                    break
+                if len(buffered_body) > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+                    raise ValueError("HTTP response body exceeded the fixture safety limit")
+            raw_body = bytes(buffered_body)
+        return int(status_match.group(1)), response_headers.get("content-type", ""), raw_body
+
+
+def api(
+    method: str,
+    path: str,
+    payload=None,
+    token: str | None = None,
+    timeout: float = 10,
+    deadline: float | None = None,
+):
+    check(0 < timeout <= 10, "HTTP API timeout must be greater than zero and no more than ten seconds")
     headers = {}
     body = None
     if payload is not None:
@@ -178,13 +349,103 @@ def api(method: str, path: str, payload=None, token: str | None = None):
         headers["Content-Type"] = "application/json"
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    connection.request(method, path, body=body, headers=headers)
-    response = connection.getresponse()
-    raw = response.read()
-    content_type = response.getheader("Content-Type", "")
+    if deadline is None:
+        connection = http.client.HTTPConnection(HTTP_HOST, HTTP_PORT, timeout=timeout)
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        raw = response.read()
+        content_type = response.getheader("Content-Type", "")
+        status = response.status
+        connection.close()
+    else:
+        status, content_type, raw = _deadline_http_api(method, path, body, headers, deadline)
     result = json.loads(raw) if raw and "json" in content_type else raw.decode()
-    connection.close()
-    return response.status, result
+    return status, result
+
+
+def deadline_io_self_test() -> None:
+    """Exercise deadline accounting without opening a real network listener."""
+
+    class FakeSocket:
+        def __init__(self, response: bytes):
+            self.response = bytearray(response)
+            self.timeouts: list[float] = []
+            self.sent = b""
+
+        def settimeout(self, value: float) -> None:
+            self.timeouts.append(value)
+
+        def sendall(self, payload: bytes) -> None:
+            self.sent += payload
+
+        def recv(self, length: int) -> bytes:
+            if not self.response:
+                return b""
+            result = bytes(self.response[:length])
+            del self.response[:length]
+            return result
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _kind, _value, _traceback) -> None:
+            return None
+
+    http_socket = FakeSocket(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+    )
+    original_create_connection = socket.create_connection
+    try:
+        socket.create_connection = lambda _address, timeout: http_socket  # type: ignore[assignment]
+        deadline = time.monotonic() + 1
+        status, content_type, body = _deadline_http_api(
+            "POST",
+            "/fixture",
+            b"{}",
+            {"Content-Type": "application/json"},
+            deadline,
+        )
+    finally:
+        socket.create_connection = original_create_connection  # type: ignore[assignment]
+    check(
+        status == 200 and content_type == "application/json" and body == b"{}",
+        "deadline HTTP fixture did not decode the bounded response",
+    )
+    check(
+        http_socket.timeouts and all(0 < value <= 1 for value in http_socket.timeouts),
+        "deadline HTTP fixture extended an I/O timeout past its absolute budget",
+    )
+    check(
+        b"Connection: close\r\n" in http_socket.sent
+        and b"Content-Length: 2\r\n" in http_socket.sent,
+        "deadline HTTP fixture did not emit its bounded request framing",
+    )
+
+    normal_socket = FakeSocket(b"\x81\x02ok")
+    normal_client = object.__new__(XmppWebSocket)
+    normal_client.sock = normal_socket
+    normal_client._construction_deadline = None
+    check(normal_client.receive(30) == "ok", "post-construction WebSocket receive failed")
+    check(
+        normal_socket.timeouts and normal_socket.timeouts[0] > 20,
+        "post-construction WebSocket receive was silently capped by the constructor timeout",
+    )
+
+    construction_socket = FakeSocket(b"\x81\x02ok")
+    construction_client = object.__new__(XmppWebSocket)
+    construction_client.sock = construction_socket
+    construction_client._construction_deadline = time.monotonic() + 0.5
+    check(construction_client.receive(30) == "ok", "construction WebSocket receive failed")
+    check(
+        construction_socket.timeouts and 0 < construction_socket.timeouts[0] <= 0.5,
+        "construction WebSocket receive ignored its shared absolute deadline",
+    )
+    try:
+        _remaining_deadline_timeout(time.monotonic() - 1, "expired deadline self-test")
+    except TimeoutError:
+        pass
+    else:
+        raise AssertionError("expired HTTP deadline was accepted")
 
 
 def metrics_api():
@@ -496,7 +757,9 @@ def atomic_registration_wire_conformance() -> None:
     check(status == 200 and login.get("token"), f"XEP-0389 account did not commit: {login}")
 
 
-def register_account(username: str, password: str) -> tuple[int, object]:
+def register_account(
+    username: str, password: str, timeout: float = 10, deadline: float | None = None
+) -> tuple[int, object]:
     request = {
         "username": username,
         "password": password,
@@ -511,6 +774,8 @@ def register_account(username: str, password: str) -> tuple[int, object]:
         "POST",
         "/api/v1/register",
         {**request, "pow": proof},
+        timeout=timeout,
+        deadline=deadline,
     )
 
 
@@ -1638,9 +1903,11 @@ def fast_after_process_restart_conformance() -> None:
     secure.close()
 
 
-def recv_exact(sock: socket.socket, length: int) -> bytes:
+def recv_exact(sock: socket.socket, length: int, deadline: float | None = None) -> bytes:
     result = bytearray()
     while len(result) < length:
+        if deadline is not None:
+            sock.settimeout(_remaining_deadline_timeout(deadline, "WebSocket frame read"))
         chunk = sock.recv(length - len(result))
         if not chunk:
             raise EOFError("WebSocket connection closed")
@@ -1659,9 +1926,18 @@ class XmppWebSocket:
         sasl2: bool = False,
         sasl2_resume=None,
         initial_presence: bool = True,
+        timeout: float = 10,
+        deadline: float | None = None,
     ):
-        self.sock = socket.create_connection((HTTP_HOST, HTTP_PORT), timeout=10)
-        self.sock.settimeout(10)
+        check(0 < timeout <= 10, "WebSocket construction timeout must be greater than zero and no more than ten seconds")
+        self._construction_deadline: float | None = (
+            time.monotonic() + timeout if deadline is None else deadline
+        )
+        _remaining_deadline_timeout(self._construction_deadline, "WebSocket construction")
+        self.sock = socket.create_connection(
+            (HTTP_HOST, HTTP_PORT), timeout=self._construction_timeout()
+        )
+        self.sock.settimeout(self._construction_timeout())
         key = base64.b64encode(os.urandom(16)).decode()
         request = (
             "GET /xmpp-websocket HTTP/1.1\r\n"
@@ -1674,7 +1950,7 @@ class XmppWebSocket:
             "X-Forwarded-Proto: https\r\n\r\n"
         ).encode()
         self.sock.sendall(request)
-        response = read_until(self.sock, b"\r\n\r\n")
+        response = self._read_during_construction(b"\r\n\r\n")
         check(response.startswith(b"HTTP/1.1 101"), f"WebSocket upgrade failed: {response!r}")
         accept = base64.b64encode(
             hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
@@ -1690,6 +1966,28 @@ class XmppWebSocket:
             self.login_sasl2(sasl2_resume, initial_presence)
         else:
             self.login(resume, expect_bind_conflict, initial_presence)
+        self._construction_deadline = None
+
+    def _construction_timeout(self) -> float:
+        """Return the remaining constructor budget without extending it."""
+
+        if self._construction_deadline is None:
+            raise RuntimeError("WebSocket construction deadline is no longer active")
+        return _remaining_deadline_timeout(
+            self._construction_deadline, "XMPP WebSocket construction"
+        )
+
+    def _read_during_construction(self, marker: bytes) -> bytes:
+        """Read an HTTP upgrade response under the same constructor deadline."""
+
+        data = bytearray()
+        while marker not in data:
+            self.sock.settimeout(self._construction_timeout())
+            chunk = self.sock.recv(8192)
+            if not chunk:
+                raise EOFError("WebSocket connection closed during HTTP upgrade")
+            data.extend(chunk)
+        return bytes(data)
 
     def send(self, text: str, opcode: int = 1) -> None:
         payload = text.encode()
@@ -1702,6 +2000,12 @@ class XmppWebSocket:
         else:
             header = bytes((first, 0x80 | 127)) + struct.pack("!Q", len(payload))
         masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+        if self._construction_deadline is None:
+            # A preceding bounded receive must not leave a stale short socket
+            # timeout behind for normal post-authentication protocol traffic.
+            self.sock.settimeout(10)
+        else:
+            self.sock.settimeout(self._construction_timeout())
         self.sock.sendall(header + mask + masked)
 
     def send_with_pow(self, text: str, token: str) -> dict[str, str]:
@@ -1732,24 +2036,27 @@ class XmppWebSocket:
         self.send(text[: -len("</message>")] + pow_xml + "</message>")
 
     def receive(self, timeout: float = 10) -> str:
+        check(timeout > 0, "WebSocket receive timeout must be greater than zero")
+        if self._construction_deadline is not None:
+            timeout = min(timeout, self._construction_timeout())
         deadline = time.monotonic() + timeout
         fragments = bytearray()
         while time.monotonic() < deadline:
-            self.sock.settimeout(max(0.1, deadline - time.monotonic()))
-            first, second = recv_exact(self.sock, 2)
+            first, second = recv_exact(self.sock, 2, deadline)
             opcode = first & 0x0F
             length = second & 0x7F
             if length == 126:
-                length = struct.unpack("!H", recv_exact(self.sock, 2))[0]
+                length = struct.unpack("!H", recv_exact(self.sock, 2, deadline))[0]
             elif length == 127:
-                length = struct.unpack("!Q", recv_exact(self.sock, 8))[0]
+                length = struct.unpack("!Q", recv_exact(self.sock, 8, deadline))[0]
             if second & 0x80:
-                mask = recv_exact(self.sock, 4)
+                mask = recv_exact(self.sock, 4, deadline)
                 payload = bytes(
-                    byte ^ mask[index % 4] for index, byte in enumerate(recv_exact(self.sock, length))
+                    byte ^ mask[index % 4]
+                    for index, byte in enumerate(recv_exact(self.sock, length, deadline))
                 )
             else:
-                payload = recv_exact(self.sock, length)
+                payload = recv_exact(self.sock, length, deadline)
             if opcode == 8:
                 raise EOFError("WebSocket was closed")
             if opcode == 9:

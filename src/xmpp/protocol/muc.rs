@@ -71,6 +71,64 @@ enum MucClusterEffect {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MucAdminMutationKind {
+    AffiliationBatch,
+    Role,
+}
+
+impl MucAdminMutationKind {
+    fn requires_affiliation_batch(self) -> bool {
+        matches!(self, Self::AffiliationBatch)
+    }
+}
+
+fn classify_muc_admin_items(items: &[Node<'_, '_>]) -> Result<MucAdminMutationKind, ()> {
+    if items.is_empty() || items.iter().any(|node| node.tag_name().name() != "item") {
+        return Err(());
+    }
+    if items.iter().any(|item| {
+        item.attribute("affiliation").is_some() == item.attribute("role").is_some()
+            || (item.attribute("affiliation").is_some() && item.attribute("jid").is_none())
+            || (item.attribute("role").is_some() && item.attribute("nick").is_none())
+    }) {
+        return Err(());
+    }
+    let affiliation_count = items
+        .iter()
+        .filter(|item| item.attribute("affiliation").is_some())
+        .count();
+    let role_count = items.len().saturating_sub(affiliation_count);
+    if (affiliation_count > 0 && role_count > 0) || role_count > 1 {
+        // Affiliation batches are atomic, while role changes operate on one
+        // live occupant. Do not admit an ambiguous mixed request.
+        return Err(());
+    }
+    if affiliation_count > 0 {
+        Ok(MucAdminMutationKind::AffiliationBatch)
+    } else {
+        Ok(MucAdminMutationKind::Role)
+    }
+}
+
+/// Returns whether `recipient` is the exact live occupancy being removed.
+///
+/// A bare/full JID comparison is insufficient here: a delayed administrative
+/// action must not make a replacement connection or a new occupant epoch look
+/// like the removed actor.  The removal paths use this when they deliver the
+/// target's self-presence separately from the room audience.
+fn is_exact_muc_removal_target(
+    recipient: &crate::state::MucOccupant,
+    target: &crate::state::MucOccupant,
+) -> bool {
+    crate::state::muc_departure_identity_matches(
+        recipient,
+        &target.full_jid,
+        target.connection_id,
+        target.cluster_epoch,
+    )
+}
+
 impl MucClusterEffect {
     async fn execute(
         self,
@@ -6217,27 +6275,9 @@ impl ProtocolSession {
             .children()
             .filter(|node| node.is_element())
             .collect::<Vec<_>>();
-        if items.is_empty() || items.iter().any(|node| node.tag_name().name() != "item") {
+        let Ok(mutation_kind) = classify_muc_admin_items(&items) else {
             return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request")));
-        }
-        if items.iter().any(|item| {
-            item.attribute("affiliation").is_some() == item.attribute("role").is_some()
-                || (item.attribute("affiliation").is_some() && item.attribute("jid").is_none())
-                || (item.attribute("role").is_some() && item.attribute("nick").is_none())
-        }) {
-            return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request")));
-        }
-        let affiliation_count = items
-            .iter()
-            .filter(|item| item.attribute("affiliation").is_some())
-            .count();
-        let role_count = items.len().saturating_sub(affiliation_count);
-        if (affiliation_count > 0 && role_count > 0) || role_count > 1 {
-            // The repository currently has atomic batch semantics for
-            // affiliations and exact single-target semantics for role/kick.
-            // Reject unsupported mixed/multi-role shapes before any write.
-            return Ok(Action::Send(iq_error_from(id, room_jid, "bad-request")));
-        }
+        };
 
         // Validate the entire IQ before committing any durable affiliation
         // changes.  XEP-0045 allows multiple items in one request; returning
@@ -6393,12 +6433,18 @@ impl ProtocolSession {
                 }
             }
         }
-        let all_affiliation_changes = items
-            .iter()
-            .all(|item| item.attribute("affiliation").is_some());
+        // `mutation_kind` is derived from the fully validated shape above.
+        // Reuse it rather than independently re-inferring the request kind
+        // from attributes, so the durable affiliation path cannot drift from
+        // the role-only path.
+        let all_affiliation_changes = mutation_kind.requires_affiliation_batch();
         let mut cluster_affiliation_operation = None;
-        let affiliation_outcome = if self.state.cluster.is_enabled() && !durable_changes.is_empty()
-        {
+        let affiliation_outcome = if !mutation_kind.requires_affiliation_batch() {
+            // A standard XEP-0045 role IQ (including a kick with role='none')
+            // owns no affiliation write. Never convert it into an invalid
+            // empty affiliation command; continue below into the role path.
+            MucAffiliationBatchOutcome::Applied
+        } else if self.state.cluster.is_enabled() {
             self.state
                 .cluster
                 .admit(crate::cluster::ClusterOperation::MucMutation)?;
@@ -7022,17 +7068,24 @@ impl ProtocolSession {
                     let reason = child_text(item, "reason").map(str::to_owned);
                     let serializable = crate::state::SerializableMucOccupant::from(&occupant);
                     for (_, other) in self.state.muc_occupants_for(room_jid) {
-                        let self_presence = other.full_jid == occupant.full_jid;
+                        // The target receives exactly one self-presence below.
+                        // Do not also deliver it through the room audience: a
+                        // second unavailable 110/307 can remain queued ahead
+                        // of a later rejoin response and violates ordered MUC
+                        // status delivery.  Match the complete occupancy
+                        // identity so a replacement connection is never
+                        // suppressed as if it were the removed actor.
+                        if is_exact_muc_removal_target(&other, &occupant) {
+                            continue;
+                        }
                         let presence = muc_presence_stanza_with_status(
                             &crate::state::SerializableMucOccupant::from(&occupant),
                             &other.full_jid,
                             true,
-                            self_presence,
+                            false,
                             false,
                             None,
-                            occupant.room_non_anonymous
-                                || self_presence
-                                || other.role == "moderator",
+                            occupant.room_non_anonymous || other.role == "moderator",
                             Some(307),
                             actor_nick.as_deref(),
                             reason.as_deref(),
@@ -7107,11 +7160,13 @@ impl ProtocolSession {
 mod tests {
     use super::{
         apply_muc_history_bounds, can_retrieve_muc_affiliation_list, canonical_local_muc_room,
+        classify_muc_admin_items, is_exact_muc_removal_target,
         muc_offline_affiliation_change_notice, muc_presence_payload, muc_sender_is_blocked,
         parse_moderation_request, parse_muc_author_retraction, parse_muc_history_request,
         parse_muc_invitation_decline, parse_muc_origin_id, parse_muc_subject_command,
         parse_muc_voice_form, should_broadcast_offline_affiliation_change, ModerationRequest,
-        MucHistoryRequest, MucPostCommitAdmissionError, MucPostCommitPlan, MucVoiceForm,
+        MucAdminMutationKind, MucHistoryRequest, MucPostCommitAdmissionError, MucPostCommitPlan,
+        MucVoiceForm,
     };
 
     #[test]
@@ -7121,6 +7176,90 @@ mod tests {
         assert_eq!(plan.try_push(2), Err(MucPostCommitAdmissionError::Full));
         plan.seal();
         assert_eq!(plan.try_push(3), Err(MucPostCommitAdmissionError::Sealed));
+    }
+
+    #[test]
+    fn standard_role_none_kick_is_not_an_affiliation_batch() {
+        let document = roxmltree::Document::parse(
+            "<iq xmlns='jabber:client' type='set' id='fed-muc-kick' to='federated-controls@conference.localhost'><query xmlns='http://jabber.org/protocol/muc#admin'><item nick='RemoteBob' role='none'><reason>Federated kick</reason></item></query></iq>",
+        )
+        .unwrap();
+        let query = document
+            .root_element()
+            .children()
+            .find(|node| node.is_element())
+            .expect("test IQ has an admin query");
+        let items = query
+            .children()
+            .filter(|node| node.is_element())
+            .collect::<Vec<_>>();
+
+        let mutation = classify_muc_admin_items(&items).expect("standard role kick is valid");
+        assert_eq!(mutation, MucAdminMutationKind::Role);
+        assert!(!mutation.requires_affiliation_batch());
+    }
+
+    #[test]
+    fn role_kick_excludes_only_the_exact_target_from_room_delivery() {
+        fn occupant(
+            full_jid: &str,
+            connection_id: uuid::Uuid,
+            cluster_epoch: uuid::Uuid,
+        ) -> crate::state::MucOccupant {
+            crate::state::MucOccupant {
+                full_jid: full_jid.to_owned(),
+                room_jid: "room@conference.example.test".to_owned(),
+                nick: "RemoteBob".to_owned(),
+                endpoint: crate::state::MucOccupantEndpoint::Federated {
+                    authenticated_domain: "remote.example.test".to_owned(),
+                    connection_id,
+                },
+                affiliation: "none".to_owned(),
+                role: "participant".to_owned(),
+                room_non_anonymous: true,
+                occupant_id: "occupant".to_owned(),
+                cluster_epoch,
+                connection_id,
+                sm_session_id: None,
+                payload: String::new(),
+            }
+        }
+
+        let connection_id = uuid::Uuid::new_v4();
+        let cluster_epoch = uuid::Uuid::new_v4();
+        let target = occupant(
+            "bob@remote.example.test/phone",
+            connection_id,
+            cluster_epoch,
+        );
+        let exact_target = occupant(
+            "bob@remote.example.test/phone",
+            connection_id,
+            cluster_epoch,
+        );
+        let replacement_connection = occupant(
+            "bob@remote.example.test/phone",
+            uuid::Uuid::new_v4(),
+            cluster_epoch,
+        );
+        let replacement_epoch = occupant(
+            "bob@remote.example.test/phone",
+            connection_id,
+            uuid::Uuid::new_v4(),
+        );
+        let other_occupant = occupant(
+            "carol@remote.example.test/laptop",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+
+        assert!(is_exact_muc_removal_target(&exact_target, &target));
+        assert!(!is_exact_muc_removal_target(
+            &replacement_connection,
+            &target
+        ));
+        assert!(!is_exact_muc_removal_target(&replacement_epoch, &target));
+        assert!(!is_exact_muc_removal_target(&other_occupant, &target));
     }
 
     #[tokio::test]

@@ -36,7 +36,7 @@ fn defer_stanza(
     item: crate::outbound::OutboundItem,
 ) -> Option<crate::outbound::OutboundItem> {
     let metadata = StanzaMetadata {
-        is_durable: item.durable_delivery.is_some(),
+        is_durable: item.durable_source.is_some(),
         has_transport_receipt: item.transport_receipt.is_some(),
         is_carbon: false,
         custom_bypass: false,
@@ -129,7 +129,7 @@ mod tests {
         let forwarded = defer_stanza(&mut queue, item.clone())
             .expect("durable delivery must bypass CSI deferral");
         assert_eq!(forwarded.stanza, item.stanza);
-        assert_eq!(forwarded.durable_delivery, item.durable_delivery);
+        assert_eq!(forwarded.durable_source, item.durable_source);
         assert!(queue.is_empty());
     }
 

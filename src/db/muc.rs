@@ -3636,7 +3636,7 @@ mod tests {
             .try_send_durable(local_invitation, local_delivery)
             .unwrap();
         let queued = local_rx.recv().await.unwrap();
-        assert_eq!(queued.durable_delivery, Some(local_delivery));
+        assert_eq!(queued.c2s_delivery(), Some(local_delivery));
         drop(queued);
         drop(local_rx);
         assert_eq!(
@@ -3692,7 +3692,7 @@ mod tests {
             .try_send_durable(federated_invitation, federated_delivery)
             .unwrap();
         let queued = federated_rx.recv().await.unwrap();
-        assert_eq!(queued.durable_delivery, Some(federated_delivery));
+        assert_eq!(queued.c2s_delivery(), Some(federated_delivery));
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM offline_messages WHERE id=$1")
                 .bind(repeated_invite_id)

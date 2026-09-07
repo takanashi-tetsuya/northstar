@@ -142,6 +142,11 @@ INSERT INTO pg_temp.northstar_migration_ledger_manifest(
   (129,'pubsub collection edge update semantics',pg_catalog.decode('144e3397db1d0fdfde52b4e169f5b8b04cce369731286577a3dc9bfff0917e06abc58a8c863d707a9eb3f8aabfb8ab65','hex')),
   (130,'personal message admission scope lookup',pg_catalog.decode('92ea567c26fc315b52e95bc43236ba6b1338b909b39e5cf2cc690007106279428850f8026e08c39feae7edca36817201','hex')),
   (131,'upload capacity nowait',pg_catalog.decode('b16a8d1b4cf9aefef5306c35112cfa7b957b61019ea28452c31936e04ba2ab3fccb9809c7fd7a80212e02e2ee780228e','hex')),
-  (132,'pubsub collection edge path',pg_catalog.decode('3bb9cc8cbda0798d78eb1f22b99a2076bdc6ed321aa59564e7c88faaffe8fbb4b0159ff6a6cc346a1d32769a408d535d','hex'));
+  (132,'pubsub collection edge path',pg_catalog.decode('3bb9cc8cbda0798d78eb1f22b99a2076bdc6ed321aa59564e7c88faaffe8fbb4b0159ff6a6cc346a1d32769a408d535d','hex')),
+  (133,'mix delivery wake notifications',pg_catalog.decode('a773eeb37f0976361574e9e61a741037ac5b1e8d94298689ee4d8b879d290d43bac5d7cf239387ff4630ed369c6d9269','hex')),
+  (134,'mix delivery route wake generation',pg_catalog.decode('e897eff1e56dd4c298af80bd35ff23afb1e04bcfaaae8cdb0067fa68f947f6d827783e0cead9c97aa935e2a90d5ee289','hex')),
+  (135,'mix transport handoffs',pg_catalog.decode('ff5bc36909170eca8deb85aa87ca59cd66dda2517a8acedfe8c3f39c57ec89bcd839a201467964fff5a26f9c28c2dda5','hex')),
+  (136,'sm mix teardown release',pg_catalog.decode('d391639680a7b79bbc4273a4a2f39274aca3ff7c76eaaba42ac0b28aa2086a217f189aef57fcf3d5d6577438ce0b5179','hex')),
+  (137,'mix cluster transport handoffs',pg_catalog.decode('f2e40e76a71bdd3100e5abaeab3e0803ab9819cce93909cdcaae8ceec2a9537ba2f2b48089b7d4ef390936e3e1333ba1','hex'));
 
 \set northstar_migration_ledger_manifest_is_loaded true

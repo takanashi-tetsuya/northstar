@@ -154,6 +154,32 @@ function asyncFunctionSpans(source, moduleName) {
   return functions;
 }
 
+function functionBody(source, span) {
+  return source.slice(span.opening + 1, span.closing);
+}
+
+function matchArm(source, markers, marker, description) {
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error(`missing ${description} match arm ${marker}`);
+  if (countMatches(source, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) !== 1) {
+    throw new Error(`${description} must have exactly one ${marker} match arm`);
+  }
+  const end = markers
+    .map((candidate) => source.indexOf(candidate))
+    .filter((index) => index > start)
+    .sort((left, right) => left - right)[0] ?? source.length;
+  return source.slice(start, end);
+}
+
+function statementBeforeAwait(source, awaitOffset) {
+  const boundary = Math.max(
+    source.lastIndexOf(';', awaitOffset),
+    source.lastIndexOf('{', awaitOffset),
+    source.lastIndexOf('}', awaitOffset),
+  );
+  return source.slice(boundary + 1, awaitOffset);
+}
+
 function classifyDbDependencies(source, moduleName) {
   let authorityReferences = 0;
   let domainReferences = 0;
@@ -223,6 +249,11 @@ function classifyDbDependencies(source, moduleName) {
 
 const state = read('src/state.rs');
 const configSource = read('src/config.rs');
+const mainSource = read('src/main.rs');
+const responsibilityDocument = read('docs/PROGRAM_RESPONSIBILITIES.md');
+const listenerStressDriver = read('scripts/listener-readiness-stress-wsl.sh');
+const loopbackPostgresFixture = read('scripts/loopback-postgres-ci.sh');
+const ciWorkflow = read('.github/workflows/ci.yml');
 const appState = structBody(state, 'pub struct AppState');
 const publicFields = countMatches(appState, /^\s*pub\s+[A-Za-z_][A-Za-z0-9_]*\s*:/gm);
 const cratePublicFields = countMatches(appState, /^\s*pub\(crate\)\s+[A-Za-z_][A-Za-z0-9_]*\s*:/gm);
@@ -308,6 +339,7 @@ for (const field of [
   'component_credentials',
   'components',
   'bosh',
+  'service_control_pool',
   's2s_dns_resolver',
   's2s_dnssec_resolver',
   'dialback_verifications',
@@ -331,6 +363,249 @@ if (!/^\s*dialback_secret\s*:\s*Zeroizing<Vec<u8>>\s*,/m.test(appState)) {
 }
 if (!/^\s*fast_token_secret\s*:\s*Arc<Zeroizing<Vec<u8>>>\s*,/m.test(appState)) {
   throw new Error('AppState fast_token_secret must remain private Arc<Zeroizing<Vec<u8>>>');
+}
+const serviceControlPoolConstruction = structBody(state, 'fn service_control_pool_options(');
+for (const invariant of [
+  'max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
+  'min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
+  'acquire_timeout(SERVICE_CONTROL_POOL_ACQUIRE_TIMEOUT)',
+  'db::pin_public_application_schema(options)',
+]) {
+  if (!serviceControlPoolConstruction.includes(invariant)) {
+    throw new Error(`service-control pool lost its isolated runtime-pool invariant: ${invariant}`);
+  }
+}
+const serviceControlWatcher = structBody(state, 'fn start_service_control_watcher(');
+if (!/poll_admin_service_control\(&state\.service_control_pool\)/.test(serviceControlWatcher)) {
+  throw new Error('service-control watcher must poll through its dedicated runtime pool');
+}
+if (/poll_admin_service_control\(&state\.pool\)/.test(serviceControlWatcher)) {
+  throw new Error('service-control watcher must not share the general traffic pool');
+}
+for (const invariant of [
+  'crate::workers::WorkerCriticality::Critical',
+  'Some(Duration::from_secs(3))',
+  'heartbeat.error(&error)',
+]) {
+  if (!serviceControlWatcher.includes(invariant)) {
+    throw new Error(`service-control watcher lost its fail-closed supervision invariant: ${invariant}`);
+  }
+}
+if (!responsibilityDocument.includes('| service-control pool | `northstar_runtime` | exactly 1 reserved connection, 500 ms acquire bound |')) {
+  throw new Error('program responsibility model must document the dedicated service-control pool');
+}
+const mixProtocol = read('src/xmpp/protocol/mix.rs');
+const mixProtocolProduction = productionWithoutCfgTestModules(
+  mixProtocol,
+  'src/xmpp/protocol/mix.rs',
+);
+const mixOutboxQueue = structBody(mixProtocolProduction, 'enum MixOutboxQueue');
+for (const lane of ['Delivery', 'PamResult']) {
+  if (!new RegExp(`^\\s*${lane}\\s*,?\\s*$`, 'm').test(mixOutboxQueue)) {
+    throw new Error(`MIX outbox must retain an independent ${lane} lane`);
+  }
+}
+if (!/const\s+PAM_RESULT_MAX_CONCURRENCY\s*:\s*usize\s*=\s*2\s*;/.test(mixProtocolProduction)) {
+  throw new Error('MIX PAM-result lane must remain capped at two concurrent deliveries');
+}
+const mixLaneBudgets = structBody(mixProtocolProduction, 'const fn mix_outbox_lane_budgets(');
+if (
+  !/let\s+pam_budget\s*=\s*if\s+background_budget\s*<\s*PAM_RESULT_MAX_CONCURRENCY\s*\{\s*background_budget\s*\}\s*else\s*\{\s*PAM_RESULT_MAX_CONCURRENCY\s*\};/s.test(
+    mixLaneBudgets,
+  ) ||
+  !/\(\s*background_budget\s*,\s*pam_budget\s*\)/.test(mixLaneBudgets)
+) {
+  throw new Error(
+    'MIX outbox lane budgets must give delivery the typed budget and PAM its independent cap',
+  );
+}
+const mixClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
+const mixClaimArmMarkers = [
+  'MixOutboxQueue::Delivery =>',
+  'MixOutboxQueue::PamResult =>',
+];
+const mixDeliveryClaimArm = matchArm(
+  mixClaimWork,
+  mixClaimArmMarkers,
+  'MixOutboxQueue::Delivery =>',
+  'MIX outbox claim',
+);
+const mixPamClaimArm = matchArm(
+  mixClaimWork,
+  mixClaimArmMarkers,
+  'MixOutboxQueue::PamResult =>',
+  'MIX outbox claim',
+);
+if (
+  !/\.claim_mix_deliveries\s*\(/.test(mixDeliveryClaimArm) ||
+  /\.claim_pam_results\s*\(/.test(mixDeliveryClaimArm) ||
+  !/\.claim_pam_results\s*\(/.test(mixPamClaimArm) ||
+  /\.claim_mix_deliveries\s*\(/.test(mixPamClaimArm)
+) {
+  throw new Error('MIX delivery and PAM lanes must claim only their own durable work; no fallback');
+}
+const mixProcessWork = structBody(mixProtocolProduction, 'fn process_mix_outbox_work(');
+if (
+  !/MixOutboxWork\s*::\s*Delivery\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*Delivery\s*,[\s\S]*?process_claimed_mix_delivery\s*\(/.test(
+    mixProcessWork,
+  ) ||
+  !/MixOutboxWork\s*::\s*PamResult\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*PamResult\s*,[\s\S]*?process_claimed_pam_result\s*\(/.test(
+    mixProcessWork,
+  )
+) {
+  throw new Error('MIX outbox work must stay in its claimed delivery or PAM lane');
+}
+const mixOutboxLaneWorker = structBody(mixProtocolProduction, 'async fn run_mix_outbox_lane(');
+if (
+  !/FuturesUnordered\s*::\s*<\s*MixOutboxTask\s*>\s*::\s*new\s*\(\s*\)/.test(
+    mixOutboxLaneWorker,
+  ) ||
+  !/claim_mix_outbox_work\s*\(\s*&state\s*,\s*&cancel\s*,\s*queue\s*,\s*available\s*\)/.test(
+    mixOutboxLaneWorker,
+  ) ||
+  !/in_flight\s*\.\s*push\s*\(\s*process_mix_outbox_work\s*\(/.test(mixOutboxLaneWorker) ||
+  !/cancellable_mix_outbox_turn\s*\(\s*&cancel\s*,/.test(mixOutboxLaneWorker)
+) {
+  throw new Error('each MIX outbox lane must own independently bounded, cancellation-aware work');
+}
+const joinMixOutboxLanes = structBody(mixProtocolProduction, 'async fn join_mix_outbox_lanes');
+if (
+  !/tokio\s*::\s*select!/.test(joinMixOutboxLanes) ||
+  !/lane_cancel\s*\.\s*cancel\s*\(\s*\)/.test(joinMixOutboxLanes) ||
+  !/pam\s*\.\s*await/.test(joinMixOutboxLanes) ||
+  !/delivery\s*\.\s*await/.test(joinMixOutboxLanes)
+) {
+  throw new Error('MIX lane join must cancel and drain its peer before surfacing a terminal lane result');
+}
+const startMixOutbox = structBody(mixProtocolProduction, 'pub(crate) fn start_mix_delivery_outbox(');
+const deliveryLaneStart = startMixOutbox.indexOf('let delivery = run_mix_outbox_lane(');
+const pamLaneStart = startMixOutbox.indexOf('let pam = run_mix_outbox_lane(');
+const laneJoin = startMixOutbox.indexOf('join_mix_outbox_lanes(lane_cancel, delivery, pam).await');
+if (deliveryLaneStart < 0 || pamLaneStart < 0 || laneJoin < 0 || deliveryLaneStart > pamLaneStart) {
+  throw new Error('MIX outbox startup must construct delivery and PAM lanes before joining them');
+}
+const deliveryLaneStartBody = startMixOutbox.slice(deliveryLaneStart, pamLaneStart);
+const pamLaneStartBody = startMixOutbox.slice(pamLaneStart, laneJoin);
+if (
+  !deliveryLaneStartBody.includes('MixOutboxQueue::Delivery') ||
+  !deliveryLaneStartBody.includes('delivery_budget') ||
+  deliveryLaneStartBody.includes('MixOutboxQueue::PamResult') ||
+  !pamLaneStartBody.includes('MixOutboxQueue::PamResult') ||
+  !pamLaneStartBody.includes('pam_budget') ||
+  pamLaneStartBody.includes('MixOutboxQueue::Delivery') ||
+  /\b(?:delivery|pam)\s*\.\s*await\b/.test(startMixOutbox)
+) {
+  throw new Error('MIX outbox lanes must start separately without delivery/PAM fallback or head-of-line blocking');
+}
+const mixNoHolTest = structBody(
+  mixProtocol,
+  'async fn pam_lane_starts_while_a_delivery_lane_waits_on_external_io(',
+);
+if (
+  !mixNoHolTest.includes('join_mix_outbox_lanes(') ||
+  !/timeout\s*\([\s\S]*?pam_started_rx\s*\)/.test(mixNoHolTest)
+) {
+  throw new Error('MIX must retain a regression test proving slow delivery cannot head-of-line block PAM');
+}
+const commandPoolConstruction = structBody(state, 'pub async fn new(');
+const commandPoolModeMatch = structBody(
+  commandPoolConstruction,
+  'let command_pool = match config.admin_command_pool_mode',
+);
+if (
+  countMatches(commandPoolModeMatch, /AdminCommandPoolMode\s*::\s*SharedUnsafeDevelopment/g) !== 1 ||
+  !/AdminCommandPoolMode\s*::\s*SharedUnsafeDevelopment\s*=>\s*pool\s*\.\s*clone\s*\(\s*\)\s*,/.test(
+    commandPoolModeMatch,
+  )
+) {
+  throw new Error('unsafe development must mount the command service on the already-attested primary pool');
+}
+if (
+  !/AdminCommandPoolMode\s*::\s*DedicatedProductionRole\s*=>\s*\{[\s\S]*?\.connect\s*\(\s*&config\s*\.\s*admin_command_database_url\s*\)[\s\S]*?attest_admin_command_role\s*\(\s*&command_pool\s*\)\s*\.\s*await\s*\?/.test(
+    commandPoolModeMatch,
+  )
+) {
+  throw new Error('production command mode must keep its separately attested command-role pool');
+}
+const adminCommandPoolMode = structBody(configSource, 'pub(crate) enum AdminCommandPoolMode');
+if (
+  !/^\s*DedicatedProductionRole\s*,?\s*$/m.test(adminCommandPoolMode) ||
+  !/^\s*SharedUnsafeDevelopment\s*,?\s*$/m.test(adminCommandPoolMode)
+) {
+  throw new Error('command-pool modes must distinguish dedicated production from shared unsafe development');
+}
+const resolveAdminCommandPoolMode = structBody(
+  configSource,
+  'fn resolve_admin_command_pool_mode(',
+);
+const unsafeDevelopmentCommandMode = structBody(
+  resolveAdminCommandPoolMode,
+  'if unsafe_development',
+);
+if (
+  !/!\s*configured/.test(unsafeDevelopmentCommandMode) ||
+  !/AdminCommandPoolMode\s*::\s*SharedUnsafeDevelopment/.test(unsafeDevelopmentCommandMode)
+) {
+  throw new Error('unsafe command mode must reject a separate command URL and select primary-pool sharing');
+}
+const runtimePoolBudget = structBody(configSource, 'fn validate_runtime_pool_budget(');
+if (
+  !/pub\(crate\)\s+const\s+DATABASE_PRIMARY_POOL_MIN_CONNECTIONS\s*:\s*u32\s*=\s*2\s*;/.test(
+    configSource,
+  ) ||
+  !/!\s*\(\s*DATABASE_PRIMARY_POOL_MIN_CONNECTIONS\s*\.\.\s*=\s*DATABASE_MAX_CONNECTIONS_LIMIT\s*\)\s*\.\s*contains\s*\(\s*&max_connections\s*\)/s.test(
+    runtimePoolBudget,
+  )
+) {
+  throw new Error('the primary runtime pool must reject capacity below two connections');
+}
+for (const invariant of [
+  'pub(crate) const RUNTIME_ROLE_CONNECTION_LIMIT: u32 = 64;',
+  'pub(crate) const OMEMO_RECOVERY_POOL_MAX_CONNECTIONS: u32 = 2;',
+  'pub(crate) const SM_AUTHORITY_LISTENER_MAX_CONNECTIONS: u32 = 1;',
+  'pub(crate) const SERVICE_CONTROL_POOL_MAX_CONNECTIONS: u32 = 1;',
+  'pub(crate) const DATABASE_MAX_CONNECTIONS_LIMIT: u32 =',
+  'RUNTIME_ROLE_CONNECTION_LIMIT - RUNTIME_ROLE_RESERVED_CONNECTIONS;',
+  'validate_runtime_pool_budget(raw.database_max_connections, raw.database_min_connections)?;',
+  'pub(crate) struct RuntimeConnectionBudgetManifest',
+  'pub(crate) const fn runtime_connection_budget_manifest()',
+  'auxiliary_connections: RUNTIME_ROLE_RESERVED_CONNECTIONS,',
+]) {
+  if (!configSource.includes(invariant)) {
+    throw new Error(`runtime pool-budget invariant is missing: ${invariant}`);
+  }
+}
+for (const invariant of [
+  'load_runtime_connection_budget()',
+  '"$binary" --runtime-connection-budget',
+  'runtime_connections_per_child=$((database_max_connections + runtime_auxiliary_connections))',
+  'readonly stress_child_count=$((pairs * 2))',
+  'fixture_control_connections_per_pair=1',
+  'required_fixture_connections=$((stress_child_count * runtime_connections_per_child + fixture_control_connections))',
+  'assert_fixture_connection_capacity()',
+  "SHOW max_connections;",
+  'fixture_actual_max_connections >= required_fixture_connections',
+  '10#$configured == fixture_actual_max_connections',
+]) {
+  if (!listenerStressDriver.includes(invariant)) {
+    throw new Error(`listener stress capacity calculation is missing: ${invariant}`);
+  }
+}
+if (!mainSource.includes('Some("--runtime-connection-budget")')) {
+  throw new Error('the server no longer exposes its runtime connection budget manifest');
+}
+if (listenerStressDriver.includes('NORTHSTAR_LISTENER_STRESS_POSTGRES_HEADROOM')) {
+  throw new Error('listener stress capacity must not rely on generic PostgreSQL headroom');
+}
+if (!/max_connections < 16 \|\| max_connections > 768/.test(loopbackPostgresFixture)) {
+  throw new Error('loopback PostgreSQL fixture no longer admits the reviewed stress capacity');
+}
+if (
+  countMatches(ciWorkflow, /NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "672"/g) !== 2 ||
+  !ciWorkflow.includes('NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "32"') ||
+  ciWorkflow.includes('NORTHSTAR_LISTENER_STRESS_POSTGRES_HEADROOM')
+) {
+  throw new Error('listener stress workflow no longer declares auditable smoke and full-matrix capacity budgets');
 }
 
 // Runtime secrets must be transferred exactly once from Config into their
@@ -467,6 +742,266 @@ if (new Set(mixProducerMethods).size !== mixProducerMethods.length) {
   throw new Error('MIX service producer mapping contains duplicate service methods');
 }
 const mixServiceSource = read('src/services/mix.rs');
+const mixServiceProduction = productionWithoutCfgTestModules(
+  mixServiceSource,
+  'src/services/mix.rs',
+);
+const mixServiceDefinition = structBody(mixServiceProduction, 'pub(crate) struct MixService');
+if (
+  !/^\s*outbox_background_budget\s*:\s*usize\s*,?\s*$/m.test(mixServiceDefinition) ||
+  !/^\s*outbox_db_admission\s*:\s*Arc\s*<\s*Semaphore\s*>\s*,?\s*$/m.test(
+    mixServiceDefinition,
+  ) ||
+  /^\s*pub(?:\(crate\))?\s+outbox_(?:background_budget|db_admission)\s*:/m.test(
+    mixServiceDefinition,
+  )
+) {
+  throw new Error(
+    'MixService must privately own its typed outbox budget and clone-shared Arc<Semaphore> DB gate',
+  );
+}
+if (
+  !/#\s*\[\s*derive\s*\(\s*Clone\s*\)\s*\]\s*pub\(crate\)\s+struct\s+MixService\b/.test(
+    mixServiceProduction,
+  )
+) {
+  throw new Error('MixService must clone the shared outbox DB admission gate instead of replacing it');
+}
+const mixServiceConstructor = structBody(mixServiceProduction, 'pub(crate) fn new(');
+if (
+  !/let\s+outbox_background_budget\s*=\s*Self\s*::\s*outbox_background_budget_for_primary_pool\s*\(\s*primary_pool_max_connections\s*\)\s*;/.test(
+    mixServiceConstructor,
+  ) ||
+  !/outbox_db_admission\s*:\s*Arc\s*::\s*new\s*\(\s*Semaphore\s*::\s*new\s*\(\s*outbox_background_budget\s*\)\s*\)/.test(
+    mixServiceConstructor,
+  )
+) {
+  throw new Error('MixService DB admission permits must be constructed from its typed outbox budget');
+}
+if (
+  !/pub\s*\(crate\)\s+const\s+fn\s+outbox_background_budget\s*\(\s*&self\s*\)\s*->\s*usize/.test(
+    mixServiceProduction,
+  )
+) {
+  throw new Error('MIX protocol scheduling must consume the service-owned typed outbox budget');
+}
+const mixOutboxBudgetCalculation = structBody(
+  mixServiceProduction,
+  'fn outbox_background_budget_for_primary_pool(',
+);
+if (
+  !/capacity\s*\.\s*saturating_sub\s*\(\s*1\s*\)\s*\.\s*clamp\s*\(\s*1\s*,\s*MAX_BACKGROUND_CONCURRENCY\s*\)/s.test(
+    mixOutboxBudgetCalculation,
+  )
+) {
+  throw new Error('MIX outbox budget must reserve one primary-pool connection for foreground work');
+}
+if (
+  !/async\s+fn\s+outbox_db_admission_guard\s*\(\s*&self\s*\)\s*->\s*OwnedSemaphorePermit/.test(
+    mixServiceProduction,
+  ) ||
+  /pub(?:\(crate\))?\s+async\s+fn\s+outbox_db_admission_guard\b/.test(mixServiceProduction)
+) {
+  throw new Error('MIX outbox DB permits must remain private OwnedSemaphorePermit capability tokens');
+}
+const mixOutboxDbAdmissionGuard = structBody(
+  mixServiceProduction,
+  'async fn outbox_db_admission_guard(',
+);
+if (
+  !/self\s*\.\s*outbox_db_admission\s*\.\s*clone\s*\(\s*\)\s*\.\s*acquire_owned\s*\(\s*\)\s*\.\s*await/.test(
+    mixOutboxDbAdmissionGuard,
+  )
+) {
+  throw new Error('MIX outbox DB admission must acquire an owned permit from the clone-shared semaphore');
+}
+
+// The only code that can hold this private owned permit is a reviewed service
+// method below. Every awaited operation in such a method is either a short
+// repository turn, another local admission lock, or one explicitly reviewed
+// authority/enqueue turn that has no peer/socket I/O; this structurally
+// excludes transport/federation delivery from the permit lifetime.
+const mixOutboxDbMethods = new Map([
+  ['reconcile_expired_remote_pam', 'reconcile_expired_remote_pam'],
+  ['claim_pam_results', 'claim_pam_results'],
+  ['renew_pam_result_lease', 'renew_pam_result_lease'],
+  ['acknowledge_pam_result', 'acknowledge_pam_result'],
+  ['defer_pam_result', 'defer_pam_result'],
+  ['retry_pam_result', 'retry_pam_result'],
+  ['prune_expired_pam_results', 'prune_expired_pam_results'],
+  ['outbox_find_enabled_user', 'find_enabled_user'],
+  ['outbox_is_blocked', 'is_blocked'],
+  ['outbox_archive_mix_message_once', 'archive_mix_message_once'],
+  [
+    'outbox_admit_federated_stanza',
+    {
+      description: 'FederationRouter::send durable outbox admission',
+      callPattern:
+        /\bfederation\s*\.\s*send\s*\(\s*target_domain\s*,\s*stanza\s*,\s*None\s*\)\s*\.\s*await\b/,
+      awaitPattern:
+        /\bfederation\s*\.\s*send\s*\(\s*target_domain\s*,\s*stanza\s*,\s*None\s*\)/,
+    },
+  ],
+  ['claim_mix_deliveries', 'claim_mix_deliveries'],
+  ['prune_expired_business_intents', 'prune_expired_mix_business_intents'],
+  ['prune_expired_federated_iq_results', 'prune_expired_federated_mix_iq_results'],
+  ['acknowledge_mix_delivery', 'acknowledge_mix_delivery'],
+  ['renew_mix_delivery_lease', 'renew_mix_delivery_lease'],
+  ['dead_letter_mix_delivery', 'dead_letter_mix_delivery'],
+  ['retry_mix_delivery', 'retry_mix_delivery'],
+  ['defer_mix_delivery', 'defer_mix_delivery'],
+  ['wake_mix_delivery_recipient', 'wake_mix_delivery_recipient'],
+  ['mix_delivery_dead_letters', 'mix_delivery_dead_letters'],
+  ['requeue_mix_delivery_dead_letter', 'requeue_mix_delivery_dead_letter'],
+]);
+const mixServiceFunctions = asyncFunctionSpans(mixServiceProduction, 'src/services/mix.rs');
+const mixOutboxDbPermitOwners = new Map();
+const mixOutboxDbPermitCallPattern = /self\s*\.\s*outbox_db_admission_guard\s*\(\s*\)\s*\.\s*await/g;
+for (let match; (match = mixOutboxDbPermitCallPattern.exec(mixServiceProduction)) !== null; ) {
+  const owner = mixServiceFunctions.find(
+    ({ opening, closing }) => opening < match.index && match.index < closing,
+  );
+  if (!owner) {
+    const line = countMatches(mixServiceProduction.slice(0, match.index), /\n/g) + 1;
+    throw new Error(`src/services/mix.rs:${line} acquires an outbox DB permit outside a service method`);
+  }
+  mixOutboxDbPermitOwners.set(owner.name, (mixOutboxDbPermitOwners.get(owner.name) ?? 0) + 1);
+}
+const unexpectedMixOutboxDbPermitOwners = [...mixOutboxDbPermitOwners.keys()]
+  .filter((name) => !mixOutboxDbMethods.has(name))
+  .sort();
+const missingMixOutboxDbPermitOwners = [...mixOutboxDbMethods.keys()]
+  .filter((name) => !mixOutboxDbPermitOwners.has(name))
+  .sort();
+const repeatedMixOutboxDbPermitOwners = [...mixOutboxDbPermitOwners]
+  .filter(([, count]) => count !== 1)
+  .map(([name]) => name)
+  .sort();
+if (
+  unexpectedMixOutboxDbPermitOwners.length > 0 ||
+  missingMixOutboxDbPermitOwners.length > 0 ||
+  repeatedMixOutboxDbPermitOwners.length > 0
+) {
+  const details = [];
+  if (unexpectedMixOutboxDbPermitOwners.length > 0) {
+    details.push(`unreviewed permit owners: ${unexpectedMixOutboxDbPermitOwners.join(', ')}`);
+  }
+  if (missingMixOutboxDbPermitOwners.length > 0) {
+    details.push(`outbox methods without a permit: ${missingMixOutboxDbPermitOwners.join(', ')}`);
+  }
+  if (repeatedMixOutboxDbPermitOwners.length > 0) {
+    details.push(`methods taking more than one permit: ${repeatedMixOutboxDbPermitOwners.join(', ')}`);
+  }
+  throw new Error(`MIX outbox DB admission manifest mismatch; ${details.join('; ')}`);
+}
+for (const [serviceMethod, repositoryMethod] of mixOutboxDbMethods) {
+  const owner = mixServiceFunctions.find(({ name }) => name === serviceMethod);
+  if (!owner) throw new Error(`missing MIX outbox DB service method ${serviceMethod}`);
+  const body = functionBody(mixServiceProduction, owner);
+  const reviewedTurn =
+    typeof repositoryMethod === 'string'
+      ? {
+          description: `db::${repositoryMethod} repository turn`,
+          callPattern: new RegExp(`\\bdb\\s*::\\s*${repositoryMethod}\\s*\\(`),
+          awaitPattern: /\bdb\s*::/,
+        }
+      : repositoryMethod;
+  if (!reviewedTurn.callPattern.test(body)) {
+    throw new Error(
+      `MIX outbox DB service method ${serviceMethod} must make its reviewed ${reviewedTurn.description}`,
+    );
+  }
+  const awaitPattern = /\.\s*await\b/g;
+  for (let awaited; (awaited = awaitPattern.exec(body)) !== null; ) {
+    const statement = statementBeforeAwait(body, awaited.index);
+    if (
+      !/self\s*\.\s*outbox_db_admission_guard\s*\(\s*\)/.test(statement) &&
+      !/self\s*\.\s*delivery_admission_guard\s*\(\s*\)/.test(statement) &&
+      !/self\s*\.\s*pam_capacity_admission_guard\s*\(\s*\)/.test(statement) &&
+      !reviewedTurn.awaitPattern.test(statement)
+    ) {
+      throw new Error(
+        `MIX outbox DB service method ${serviceMethod} awaits unreviewed work while its DB permit may be held`,
+      );
+    }
+  }
+}
+if (/\boutbox_db_admission(?:_guard)?\b/.test(mixProtocolProduction)) {
+  throw new Error('MIX protocol must not gain access to the service-owned outbox DB admission permit');
+}
+const channelStanzaDatabaseLane = structBody(
+  mixProtocolProduction,
+  'enum ChannelStanzaDatabaseLane',
+);
+for (const lane of ['LiveIngress', 'DurableOutbox']) {
+  if (!new RegExp(`^\\s*${lane}\\s*,?\\s*$`, 'm').test(channelStanzaDatabaseLane)) {
+    throw new Error(`MIX channel stanza database lanes must retain ${lane}`);
+  }
+}
+const deliverChannelStanza = structBody(mixProtocolProduction, 'async fn deliver_channel_stanza(');
+const deliveryDatabaseLaneMatches = [];
+const deliveryDatabaseLanePattern = /\bmatch\s+database_lane\s*\{/g;
+for (let match; (match = deliveryDatabaseLanePattern.exec(deliverChannelStanza)) !== null; ) {
+  const opening = deliverChannelStanza.indexOf('{', match.index);
+  const closing = matchingRustBrace(deliverChannelStanza, opening);
+  if (closing < 0) throw new Error('MIX channel stanza database-lane match is unterminated');
+  deliveryDatabaseLaneMatches.push(deliverChannelStanza.slice(opening + 1, closing));
+  deliveryDatabaseLanePattern.lastIndex = closing + 1;
+}
+// These are durable-delivery authority choices, not all PostgreSQL turns:
+// the session-route lookup is Redis-backed and must deliberately stay outside
+// the outbox database-admission permit. Keep its live/durable lane selection
+// explicit nevertheless, because it is part of the same routing decision.
+const channelStanzaDurableLaneOperations = [
+  ['find_enabled_user', 'outbox_find_enabled_user'],
+  ['is_blocked', 'outbox_is_blocked'],
+  ['archive_mix_message_once', 'outbox_archive_mix_message_once'],
+  ['lookup_nodes', 'outbox_lookup_cluster_nodes'],
+  ['send', 'outbox_admit_federated_stanza'],
+];
+if (deliveryDatabaseLaneMatches.length !== channelStanzaDurableLaneOperations.length) {
+  throw new Error('MIX channel delivery must explicitly select a durable lane for every routed authority operation');
+}
+for (const [index, [liveMethod, outboxMethod]] of channelStanzaDurableLaneOperations.entries()) {
+  const laneMatch = deliveryDatabaseLaneMatches[index];
+  const laneMarkers = [
+    'ChannelStanzaDatabaseLane::LiveIngress =>',
+    'ChannelStanzaDatabaseLane::DurableOutbox =>',
+  ];
+  const liveArm = matchArm(
+    laneMatch,
+    laneMarkers,
+    'ChannelStanzaDatabaseLane::LiveIngress =>',
+    'MIX channel stanza database lane',
+  );
+  const outboxArm = matchArm(
+    laneMatch,
+    laneMarkers,
+    'ChannelStanzaDatabaseLane::DurableOutbox =>',
+    'MIX channel stanza database lane',
+  );
+  if (
+    !new RegExp(`\\.\\s*${liveMethod}\\s*\\(`).test(liveArm) ||
+    new RegExp(`\\.\\s*${outboxMethod}\\s*\\(`).test(liveArm) ||
+    !new RegExp(`\\.\\s*${outboxMethod}\\s*\\(`).test(outboxArm) ||
+    new RegExp(`\\.\\s*${liveMethod}\\s*\\(`).test(outboxArm)
+  ) {
+    throw new Error(
+      `MIX durable outbox ${outboxMethod} must be a separate short DB turn, never a live-ingress fallback`,
+    );
+  }
+}
+const processClaimedMixDelivery = structBody(
+  mixProtocolProduction,
+  'async fn process_claimed_mix_delivery(',
+);
+if (
+  !/deliver_channel_stanza\s*\([\s\S]*?ChannelStanzaDelivery\s*\{[\s\S]*?database_lane\s*:\s*ChannelStanzaDatabaseLane\s*::\s*DurableOutbox/s.test(
+    processClaimedMixDelivery,
+  )
+) {
+  throw new Error('claimed MIX outbox work must select the bounded durable database lane before transport I/O');
+}
 for (const [serviceMethod] of mixProducerMappings) {
   const body = structBody(mixServiceSource, `pub(crate) async fn ${serviceMethod}(`);
   const gate = body.indexOf('self.delivery_admission_guard().await');
@@ -1938,8 +2473,6 @@ if (
 // the exact long-lived task identities and domain-service accessors synchronized
 // with the composition root so a renamed or newly introduced authority cannot
 // become invisible to review merely because aggregate budgets still pass.
-const responsibilityDocument = read('docs/PROGRAM_RESPONSIBILITIES.md');
-const mainSource = read('src/main.rs');
 function assertExactUniqueInventory(label, actual, expected) {
   const counts = new Map();
   for (const item of actual) counts.set(item, (counts.get(item) ?? 0) + 1);

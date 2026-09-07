@@ -167,11 +167,11 @@ inputs. They use the same registry and shutdown token; being registered outside
 | Worker/observer name | Registration owner | Criticality / mode | Stall watchdog | Shutdown | Owned recovery/work | Forbidden shortcut |
 | --- | --- | --- | --- | --- | --- | --- |
 | `session-cleanup` | `AppState` observer registration | restartable health observer; **no task/factory** | none | not applicable | synchronous per-session cleanup reports success/error into readiness | describing it as a restartable loop or hiding repeated cleanup errors |
-| `sm-authority-listener` | `SmService` startup | restartable / continuous | 15 s, fed by a 5 s liveness tick even when LISTEN is quiet | immediate | consume durable SM authority changes and fence local resume state | treating notification silence as failure or a notification as authority without the durable generation |
+| `sm-authority-listener` | `SmService` startup | restartable / continuous | 15 s, fed by a 5 s liveness tick even when LISTEN is quiet | immediate | consume durable SM authority and schema-only MIX delivery wake hints; each consumer reclaims its own fenced row/generation | treating notification silence as failure or a notification as authority without the durable generation |
 | `sm-suspension-recovery` | session-cleanup service startup | restartable / continuous | 30 s | drain up to 5 s | recover suspended SM/MUC endpoint teardown and replay ownership | dropping a claimed suffix on cancellation |
 | `caps-side-effects` | Caps subsystem startup | restartable / continuous | 60 s | bounded `CAPS_EFFECT_DRAIN_GRACE` | execute pending verified capability/PEP/MIX effects with no-lost-wakeup rescan | declaring work complete because a bounded hint queue filled |
 | `mix-iq-relay-expiry` | MIX protocol capability startup | restartable / continuous | 10 s | immediate | expire exact pending IQ relays and route generations | expiring a replacement relay by stale timer identity |
-| `mix-delivery-outbox` | MIX capability startup | restartable / continuous | 30 s | bounded `MIX_OUTBOX_DRAIN_GRACE` | claim and deliver durable MIX event outbox rows | treating live fan-out as outbox acknowledgement |
+| `mix-delivery-outbox` | MIX capability startup | restartable / continuous | 30 s | bounded `MIX_OUTBOX_DRAIN_GRACE` | claim and deliver durable MIX event outbox rows through independent delivery and PAM-result lanes; every background database turn races cancellation and an abandoned fenced lease recovers by expiry | treating live fan-out as outbox acknowledgement, allowing a slow delivery lane to delay PAM results, or waiting indefinitely for a database turn during shutdown |
 | `mix-presence-recovery` | MIX capability startup | restartable / one-shot | 90 s | immediate | rebuild eligible MIX presence after startup | running indefinitely or inventing participants absent durable authority |
 | `pubsub-digest-delivery` | PubSub capability startup | restartable / continuous | 5 s | immediate | deliver due digest batches from durable queue state | losing work when an in-memory wake is dropped |
 | `pubsub-event-outbox-delivery` | PubSub capability startup | restartable / continuous | 30 s | immediate | deliver/retry durable PubSub/PEP mutation events | publishing before the mutation/outbox transaction commits |
@@ -179,7 +179,7 @@ inputs. They use the same registry and shutdown token; being registered outside
 | `locked-muc-expiry` | `AppState` MUC startup | restartable / continuous | 20 s | immediate | expire locked empty-room creation windows | deleting an occupied/replacement room from a stale observation |
 | `federation-policy-refresh` | `AppState` federation startup | critical / continuous | 10 s | immediate | refresh the runtime projection of durable federation rules | continuing with silently stale allow/deny authority |
 | `administration-setting-refresh` | `AppState` administration startup | critical / continuous | 5 s | immediate | refresh security-relevant runtime administration settings | silently retaining a superseded security setting |
-| `service-control-watcher` | `AppState` service-control startup | critical / continuous | 3 s | immediate | observe committed service disable/shutdown authority | keeping listeners available after durable shutdown control changes |
+| `service-control-watcher` | `AppState` service-control startup | critical / continuous | 3 s | immediate | observe committed service disable/shutdown authority through a dedicated runtime control pool | sharing the traffic/PubSub/MIX pool and keeping listeners available after durable shutdown control changes |
 
 Criticality is a semantic declaration, not a performance tuning knob. A worker
 is critical only when continuing without it would violate an authority or
@@ -281,9 +281,11 @@ secret authority.
 ### Runtime startup
 
 1. CLI mode and configuration are parsed before listeners exist.
-2. Runtime and command pools connect with different PostgreSQL credentials;
-   role identity, migration/schema state and required capacity authorities are
-   attested before service construction.
+2. Production runtime and command pools connect with different PostgreSQL
+   credentials; the explicit loopback-only unsafe-development mode shares the
+   already-attested primary pool instead of creating a duplicate same-identity
+   command pool. Role identity, migration/schema state and required capacity
+   authorities are attested before service construction.
 3. `AppState` assembles services, stores, routers, registries, key owners and
    metrics. Failure is still startup-fatal.
 4. Security-critical and restartable background tasks are registered with the
@@ -426,17 +428,40 @@ into protocol or API handlers.
 | `northstar_bootstrap` | create/repair roles, owner and exact ACL policy | serve traffic, migrate normally, back up or restore application data | PostgreSQL initialization or explicit break-glass role reconciliation only |
 | `northstar_migrator` | own application DB/schema, migrate, reconcile grants and perform stopped restore; connect to maintenance DB for restore control | superuser, role/database creation, replication, bypass RLS or maintenance `TEMPORARY` | migration, database-grants and restore jobs |
 | `northstar_runtime` | execute runtime routine/table capability manifest | DDL, ownership, trigger disable, direct account-authority DML or command-only routines | long-lived server primary pool |
-| `northstar_commands` | execute the exact command-session routine manifest | relation/sequence reads, general runtime DML or migration | isolated command pool inside long-lived server |
+| `northstar_commands` | execute the exact command-session routine manifest | relation/sequence reads, general runtime DML or migration | isolated command pool inside the long-lived server in production; explicit loopback-only unsafe development has no command role and shares the primary runtime pool |
 | `northstar_backup` | read the exact backup surface | write, execute business routines, allocate sequences, restore or use maintenance DB | backup job only |
 
 ### PostgreSQL connection and pool responsibilities
 
+MIX outbox dispatch has two independently started protocol lanes: ordinary
+delivery receives the service's typed background budget and PAM results are
+capped at two concurrent attempts. Both lanes use the same private,
+clone-shared `Arc<Semaphore>` only for short repository claims, lease changes,
+completion writes and maintenance pages. The permit count equals that typed
+outbox budget and is released before any local transport, cluster or federation
+I/O, so a slow external delivery cannot hold a database slot or head-of-line
+block a PAM result. A newly started delivery lane claims due user work before
+its first maintenance page. Each semaphore, pool and query wait races the
+worker's child cancellation token; on cancellation the atomic claimed row is
+left fenced for normal lease-expiry recovery rather than keeping shutdown
+blocked behind an unavailable database. If either lane ends, it cancels and
+drains the peer before the supervisor observes the original result.
+
+Cluster recipient lookup is Redis-backed route authority, not a PostgreSQL
+outbox turn. It therefore has its own bounded Redis deadline and never holds a
+MIX outbox database-admission permit. A committed local capability transition
+uses the shared SM listener connection only as a schema-only wake; the worker
+then reclaims the row and checks the persisted route-wake generation before it
+releases a lease. This prevents a Redis outage or a lost notification from
+turning into pool exhaustion or an unbounded delivery delay.
+
 | Connection/pool | Role identity | Capacity | Consumers | Failure scope and restriction |
 | --- | --- | --- | --- | --- |
-| primary runtime pool | `northstar_runtime` | configured min/max, production maximum 64 | application services, repositories and legacy tracked runtime paths | shared workload pool; pre-pool gates must prevent one actor/NAT from occupying it while waiting |
-| command pool | `northstar_commands` | maximum 4 | XEP-0133/admin command service only | command-routine manifest only; no relation/sequence privileges |
+| primary runtime pool | `northstar_runtime` | configured primary capacity 2..60: one foreground connection remains available while one bounded MIX outbox database turn runs; four of the role's 64 connections are reserved by fixed auxiliary pools | application services, repositories and legacy tracked runtime paths | shared workload pool; pre-pool gates must prevent one actor/NAT from occupying it while waiting |
+| service-control pool | `northstar_runtime` | exactly 1 reserved connection, 500 ms acquire bound | durable restart/shutdown watcher only | separate from traffic and command pools; an exhausted workload pool cannot hide committed service control |
+| command pool | `northstar_commands` in production; shared primary runtime identity only in explicit loopback-only unsafe development | maximum 4 in production; no duplicate same-identity command pool in unsafe development | XEP-0133/admin command service only | command-routine manifest only in production; the unsafe-development exception reuses the already-attested primary pool |
 | OMEMO recovery polling pool | `northstar_runtime` | maximum 2 | bounded browser OMEMO recovery polling | isolates long polls from the primary pool but does not create a new DB authority |
-| SM authority listener pool | `northstar_runtime` | maximum 1 | PostgreSQL LISTEN/revalidation for SM authority | notification is a wake hint; durable row/generation remains authority |
+| SM authority listener pool | `northstar_runtime` | maximum 1 | PostgreSQL LISTEN/revalidation for SM authority and schema-only MIX route wakes | notification is a wake hint; the applicable durable row/generation remains authority |
 | identity audit pool | caller-supplied identity, operationally required to be runtime/read-only but not role-attested by the tool | maximum 1 | `audit-identities` only | default-read-only plus repeatable-read snapshot; never migrates; deployment wrapper/operator owns credential correctness |
 | migration pool | `northstar_migrator` | maximum 2 | `migrate` only | one-shot owner capability; never mounted into runtime |
 | PIE pool | runtime for export; migrator for import | configured value clamped to 1..8 | offline portability tool | import must be stopped and serializable; export does not gain migrator rights |

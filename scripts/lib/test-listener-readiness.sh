@@ -27,7 +27,11 @@ fixture_readiness_port() {
 }
 
 fixture_register_readiness_ports() {
-  local record="$1" purpose address port
+  # ``owner_pid`` is optional so existing standalone fixtures retain their
+  # lightweight port-only cleanup.  The MIX matrix declares the two
+  # associative ledgers below and upgrades each port to its exact owner
+  # identity before the parent later verifies socket inodes after quiescence.
+  local record="$1" owner_pid="${2:-}" purpose address port
   declare -p fixture_listener_ports >/dev/null 2>&1 || {
     echo "fixture_listener_ports must be declared by the parent fixture" >&2
     return 1
@@ -40,6 +44,18 @@ fixture_register_readiness_ports() {
       return 1
     }
     fixture_listener_ports+=("$port")
+    if [[ -n "$owner_pid" ]]; then
+      [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] || {
+        echo "invalid listener owner PID in readiness registration: $owner_pid" >&2
+        return 1
+      }
+      if declare -p fixture_listener_owner_pids >/dev/null 2>&1; then
+        fixture_listener_owner_pids["$port"]="$owner_pid"
+      fi
+      if declare -p fixture_listener_purposes >/dev/null 2>&1; then
+        fixture_listener_purposes["$port"]="$purpose"
+      fi
+    fi
   done <<<"$record"
 }
 
@@ -49,7 +65,7 @@ fixture_register_readiness_ports() {
 fixture_wait_for_readiness() {
   local project_dir="$1" record_path="$2" nonce="$3" pid="$4"
   FIXTURE_READINESS_OUTPUT="$(python3 "$project_dir/scripts/wait-test-readiness.py" "$record_path" "$nonce" "$pid" 15)" || return 1
-  fixture_register_readiness_ports "$FIXTURE_READINESS_OUTPUT"
+  fixture_register_readiness_ports "$FIXTURE_READINESS_OUTPUT" "$pid"
 }
 
 fixture_port_is_listening() {

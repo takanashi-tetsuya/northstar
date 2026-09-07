@@ -264,8 +264,9 @@ impl ProtocolSession {
             })
             .await
         {
-            Ok(SmSessionCreationOutcome::Created(id)) => {
+            Ok(SmSessionCreationOutcome::Created { id, ownership }) => {
                 self.sm_db_id = Some(id);
+                self.apply_sm_ownership_resolution(&ownership);
                 *self
                     .sm_session_id_shared
                     .write()
@@ -1275,8 +1276,10 @@ impl ProtocolSession {
             )
             .await;
         match checkpointed {
-            Ok(true) => {}
-            Ok(false) => {
+            Ok(outcome) if outcome.updated => {
+                self.apply_sm_ownership_resolution(&outcome.ownership);
+            }
+            Ok(_) => {
                 self.state.abort_local_muc_resume(&restored_muc, true).await;
                 anyhow::bail!("durable XEP-0198 stream lease was lost before MUC replay");
             }
@@ -1431,7 +1434,7 @@ impl ProtocolSession {
             .take(delta)
             .cloned()
             .collect::<Vec<_>>();
-        let remaining = self
+        let mut remaining = self
             .sm_unacked
             .iter()
             .skip(delta)
@@ -1448,7 +1451,7 @@ impl ProtocolSession {
             let mut snapshot = self.sm_snapshot();
             snapshot.acked_h = h;
             snapshot.unacked = remaining.iter().cloned().collect();
-            let updated = tokio::time::timeout(
+            let outcome = tokio::time::timeout(
                 std::time::Duration::from_secs(5),
                 self.state.sm_service().checkpoint_and_acknowledge(
                     id,
@@ -1465,17 +1468,24 @@ impl ProtocolSession {
             .map_err(|_| {
                 anyhow::anyhow!("XEP-0198 acknowledgement database operation timed out")
             })??;
-            anyhow::ensure!(updated, "durable XEP-0198 stream lease was lost");
+            anyhow::ensure!(
+                outcome.updated,
+                "durable XEP-0198 stream lease was lost"
+            );
+            Self::apply_sm_ownership_resolution_to_unacked(
+                &mut remaining,
+                &outcome.ownership,
+            );
         } else {
-            let deliveries = acknowledged
+            let sources = acknowledged
                 .iter()
-                .filter_map(|entry| entry.durable_delivery)
+                .filter_map(|entry| entry.source)
                 .collect::<Vec<_>>();
             tokio::time::timeout(
                 std::time::Duration::from_secs(5),
                 self.state
                     .sm_service()
-                    .acknowledge_delivery_batch(&deliveries),
+                    .acknowledge_delivery_batch(&sources),
             )
             .await
             .map_err(|_| {
@@ -1537,7 +1547,7 @@ fn stage_muc_replay_suffix(
         staged_h = staged_h.wrapping_add(1);
         staged.push_back(crate::outbound::SmUnackedStanza {
             stanza,
-            durable_delivery: None,
+            source: None,
         });
     }
     Some((staged, staged_h))
@@ -1702,7 +1712,7 @@ mod tests {
         );
         assert_eq!(outbound_h, 11);
         assert!(
-            unacked.iter().all(|entry| entry.durable_delivery.is_none()),
+            unacked.iter().all(|entry| entry.durable_delivery().is_none()),
             "volatile MUC traffic carries no durable delivery fence"
         );
     }

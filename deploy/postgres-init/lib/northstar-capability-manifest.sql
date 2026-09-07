@@ -282,6 +282,11 @@ VALUES
   ('offline_message_admissions',TRUE,TRUE,TRUE,TRUE,'0079'),
   ('abuse_key_deployments',TRUE,TRUE,TRUE,TRUE,'0082'),
   ('bosh_delivery_fences',TRUE,TRUE,TRUE,TRUE,'0083'),
+  -- MIX leases have a distinct primary-key and acknowledgement authority from
+  -- C2S offline messages.  Its BOSH hand-off fence therefore remains a
+  -- separate runtime relation rather than widening `bosh_delivery_fences`.
+  ('mix_bosh_delivery_fences',TRUE,TRUE,TRUE,TRUE,'0135'),
+  ('mix_cluster_delivery_fences',TRUE,TRUE,TRUE,TRUE,'0137'),
   ('pubsub_event_streams',TRUE,TRUE,TRUE,TRUE,'0085'),
   ('pubsub_event_outbox_capacity',TRUE,TRUE,TRUE,TRUE,'0085'),
   ('pubsub_event_outbox_domain_capacity',TRUE,TRUE,TRUE,TRUE,'0085'),

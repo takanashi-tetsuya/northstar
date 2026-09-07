@@ -664,11 +664,16 @@ async fn migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksu
     .fetch_one(&pool)
     .await
     .unwrap();
+    let current_migration_version = super::MIGRATOR
+        .iter()
+        .map(|migration| migration.version)
+        .max()
+        .expect("the embedded migration ledger is non-empty");
     assert_eq!(
         final_state,
         (
             i64::try_from(super::MIGRATOR.iter().count()).unwrap(),
-            Some(132),
+            Some(current_migration_version),
             true
         )
     );

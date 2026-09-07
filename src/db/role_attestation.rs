@@ -649,7 +649,8 @@ async fn attest_database_capability_catalog(pool: &PgPool) -> Result<()> {
                      AND dependency.deptype='e'
                 )
            ), application_routine AS (
-             SELECT routine.oid,routine.proowner,routine.proacl
+             SELECT routine.oid,routine.proowner,routine.proacl,
+                    routine.prosecdef,routine.prorettype
                FROM namespace
                JOIN pg_catalog.pg_proc routine ON routine.pronamespace=namespace.oid
               WHERE NOT EXISTS (
@@ -821,6 +822,19 @@ async fn attest_database_capability_catalog(pool: &PgPool) -> Result<()> {
                     ),FALSE
                   )
              )
+             -- Installed SECURITY INVOKER triggers execute through approved
+             -- table DML; runtime must not retain an independently callable
+             -- EXECUTE capability for any trigger-returning helper. Keep the
+             -- reviewed SECURITY DEFINER manifest and command-role policy in
+             -- their dedicated attestations below unchanged.
+             AND NOT EXISTS (
+               SELECT 1 FROM application_routine routine
+                WHERE NOT routine.prosecdef
+                  AND routine.prorettype='pg_catalog.trigger'::pg_catalog.regtype
+                  AND pg_catalog.has_function_privilege(
+                        (SELECT oid FROM runtime),routine.oid,'EXECUTE'
+                      )
+             )
              AND NOT EXISTS (
                SELECT 1 FROM application_type
                 WHERE typowner<>(SELECT oid FROM migrator)
@@ -984,7 +998,7 @@ async fn attest_database_capability_catalog(pool: &PgPool) -> Result<()> {
     .context("could not attest the shared PostgreSQL role/object capability catalog")?;
     anyhow::ensure!(
         accepted,
-        "shared PostgreSQL capability catalog drifted: reconcile role attributes, memberships, owners, relation/column/sequence/type/default ACLs, runtime dangerous privileges, and backup read-only access"
+        "shared PostgreSQL capability catalog drifted: reconcile role attributes, memberships, owners, relation/column/sequence/type/default ACLs, trigger-only runtime routine execution, runtime dangerous privileges, and backup read-only access"
     );
     Ok(())
 }
@@ -1521,8 +1535,8 @@ mod tests {
         assert!(manifest.versions.contains(&113));
         assert!(manifest.versions.contains(&114));
         assert!(manifest.versions.contains(&115));
-        assert_eq!(manifest.versions.last(), Some(&132));
-        assert_eq!(manifest.versions.len(), 131);
+        assert_eq!(manifest.versions.last(), Some(&133));
+        assert_eq!(manifest.versions.len(), 132);
         assert!(!manifest.versions.contains(&21));
         assert!(manifest
             .checksum_hex

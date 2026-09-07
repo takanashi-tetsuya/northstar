@@ -69,3 +69,21 @@ TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_t
   cargo test --locked --offline \
   db::mix::delivery_capacity_integration_tests::delivery_ack_is_independent_of_the_producer_fence_and_release_is_atomic \
   -- --ignored --nocapture
+
+# A verified recipient route may appear while the ordered head is leased.
+# Exercise the persisted wake epoch and recovery ordering against the same
+# fully migrated isolated schema used by the other MIX authority tests.
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+  cargo test --locked --offline \
+  db::mix::delivery_route_wake_integration_tests::leased_route_wake_defeats_defer_and_retry_but_not_unrelated_backoff \
+  -- --ignored --nocapture
+
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+  cargo test --locked --offline \
+  db::mix::delivery_route_wake_integration_tests::attempt_limit_route_wake_gets_one_fresh_claim_before_dead_letter \
+  -- --ignored --nocapture
+
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+  cargo test --locked --offline \
+  db::mix::delivery_route_wake_integration_tests::dead_letter_requeue_uses_tail_and_preserves_current_head_wake \
+  -- --ignored --nocapture

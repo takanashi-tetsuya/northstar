@@ -323,7 +323,30 @@ pub struct ClaimedMixDelivery {
     pub encrypted: bool,
     pub attempt_count: i32,
     pub lease_token: Uuid,
-    pub created_at: DateTime<Utc>,
+    /// Durable route-wake epoch observed while this exact recipient head was
+    /// leased. A later epoch prevents this worker from parking an available
+    /// route behind its recovery backoff.
+    pub route_wake_generation: i64,
+}
+
+/// Durable completion of one leased MIX delivery retry.
+///
+/// The repository owns the terminal decision because the claimed attempt
+/// snapshot can be stale by the time the worker releases its lease.  In
+/// particular, a committed route wake at the attempt limit is a durable
+/// routing fact which gets one fresh claim before the normal terminal path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MixDeliveryRetryOutcome {
+    /// The exact lease was no longer owned when finalization began.
+    LeaseLost,
+    /// The row was retained with the normal retry backoff (or a newer wake
+    /// advanced a non-terminal retry to now).
+    Retried,
+    /// A newer route wake defeated the terminal boundary and released the
+    /// existing attempt count for one immediate fresh claim.
+    RouteWokenAtAttemptLimit,
+    /// The unchanged route epoch reached the normal terminal attempt limit.
+    DeadLettered,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -371,6 +394,12 @@ const MIX_DELIVERY_MAX_BYTES: i64 = 268_435_456;
 const MIX_DELIVERY_RECIPIENT_OVERHEAD: i64 = 128;
 const MIX_DELIVERY_DEAD_LETTER_LIMIT: i64 = 10_000;
 const MIX_DELIVERY_LEASE_SECONDS: i64 = 90;
+// Direct sockets have no peer acknowledgement below XEP-0198. Keep a
+// separate bounded lease for the interval after the writer has fenced the
+// source but before the OS accepts the bytes. It is deliberately longer than
+// the transport write deadline and shorter than a normal worker lease; a
+// failed process therefore recovers through the same ordered claim path.
+const MIX_SOCKET_WRITE_FENCE_SECONDS: i64 = 30;
 
 static MIX_DELIVERY_CAPACITY_REJECTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static MIX_DELIVERY_LEASE_LOST_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -969,6 +998,23 @@ async fn dead_letter_expired_mix_deliveries(pool: &PgPool, limit: i64) -> Result
            JOIN mix_delivery_events event ON event.event_id=recipient.event_id
           WHERE event.expires_at<=clock_timestamp()
             AND (recipient.lease_until IS NULL OR recipient.lease_until<=clock_timestamp())
+            AND NOT EXISTS(
+                SELECT 1
+                  FROM sm_resume_stanzas stanza
+                  JOIN sm_resume_sessions session ON session.id=stanza.session_id
+                 WHERE stanza.mix_delivery_id=recipient.delivery_id
+                   AND session.expires_at>clock_timestamp()
+            )
+            AND NOT EXISTS(
+                SELECT 1 FROM mix_bosh_delivery_fences fence
+                 WHERE fence.delivery_id=recipient.delivery_id
+                   AND fence.expires_at>clock_timestamp()
+            )
+            AND NOT EXISTS(
+                SELECT 1 FROM mix_cluster_delivery_fences fence
+                 WHERE fence.delivery_id=recipient.delivery_id
+                   AND fence.expires_at>clock_timestamp()
+            )
           ORDER BY event.expires_at,recipient.delivery_sequence
           LIMIT $1 FOR UPDATE OF recipient SKIP LOCKED",
     )
@@ -1058,6 +1104,23 @@ pub async fn claim_mix_deliveries(
               WHERE event.expires_at>clock_timestamp()
                 AND (recipient.lease_until IS NULL OR recipient.lease_until<=clock_timestamp())
                 AND recipient.next_attempt_at<=clock_timestamp()
+                AND NOT EXISTS(
+                    SELECT 1
+                      FROM sm_resume_stanzas stanza
+                      JOIN sm_resume_sessions session ON session.id=stanza.session_id
+                     WHERE stanza.mix_delivery_id=recipient.delivery_id
+                       AND session.expires_at>clock_timestamp()
+                )
+                AND NOT EXISTS(
+                    SELECT 1 FROM mix_bosh_delivery_fences fence
+                     WHERE fence.delivery_id=recipient.delivery_id
+                       AND fence.expires_at>clock_timestamp()
+                )
+                AND NOT EXISTS(
+                    SELECT 1 FROM mix_cluster_delivery_fences fence
+                     WHERE fence.delivery_id=recipient.delivery_id
+                       AND fence.expires_at>clock_timestamp()
+                )
                 AND NOT EXISTS (
                     SELECT 1 FROM mix_delivery_recipients earlier
                      WHERE earlier.recipient_jid=recipient.recipient_jid
@@ -1086,7 +1149,7 @@ pub async fn claim_mix_deliveries(
                 claimed.recipient_participant_id,claimed.recipient_jid,
                 event.stanza_template AS stanza,event.authoritative_stanza_id,
                 event.archive,event.encrypted,claimed.attempt_count,
-                claimed.lease_token,event.created_at
+                claimed.lease_token,claimed.route_wake_generation
            FROM claimed JOIN mix_delivery_events event ON event.event_id=claimed.event_id
           ORDER BY event.created_at,claimed.delivery_sequence,claimed.delivery_id",
     )
@@ -1113,7 +1176,7 @@ pub async fn claim_mix_deliveries(
             encrypted: row.get("encrypted"),
             attempt_count: row.get("attempt_count"),
             lease_token: row.get("lease_token"),
-            created_at: row.get("created_at"),
+            route_wake_generation: row.get("route_wake_generation"),
         })
         .collect())
 }
@@ -1132,6 +1195,429 @@ pub async fn acknowledge_mix_delivery(
         MIX_DELIVERY_LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
     }
     Ok(removed)
+}
+
+/// Consume an optional remote-node fence while holding the recipient row.
+///
+/// A direct socket, XEP-0198 or BOSH transfer receives the rotated fence
+/// token through a signed cluster command. The token is sufficient proof of
+/// that exact hand-off, but the fence must be removed before the next local
+/// transport owner is recorded. Calling this for a normal local source is a
+/// no-op; a different active token is always an ownership violation.
+pub(crate) async fn consume_mix_cluster_delivery_fence_tx(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    source: crate::outbound::MixDelivery,
+) -> Result<()> {
+    let fence = sqlx::query(
+        "SELECT lease_token,expires_at>clock_timestamp() AS active
+           FROM mix_cluster_delivery_fences
+          WHERE delivery_id=$1 FOR UPDATE",
+    )
+    .bind(source.delivery_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(fence) = fence else {
+        return Ok(());
+    };
+    let fence_token: Uuid = fence.try_get("lease_token")?;
+    anyhow::ensure!(
+        fence_token == source.lease_token,
+        "MIX cluster hand-off fence is owned by a different source lease"
+    );
+    let removed = sqlx::query(
+        "DELETE FROM mix_cluster_delivery_fences
+          WHERE delivery_id=$1 AND lease_token=$2",
+    )
+    .bind(source.delivery_id)
+    .bind(source.lease_token)
+    .execute(&mut **transaction)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(
+        removed == 1,
+        "MIX cluster hand-off fence changed during local transport transfer"
+    );
+    Ok(())
+}
+
+/// Move an exact claimed source to one authenticated remote node before that
+/// node is allowed to enqueue it locally. The source worker's original token
+/// becomes invalid in the same transaction, so a lost Redis acknowledgement
+/// can only leave a recoverable remote fence rather than two active writers.
+pub async fn transfer_mix_delivery_to_cluster(
+    pool: &PgPool,
+    source: crate::outbound::MixDelivery,
+    node_id: &str,
+    request_id: Uuid,
+    ttl_seconds: u64,
+) -> Result<crate::outbound::MixDelivery> {
+    anyhow::ensure!(
+        !node_id.is_empty() && node_id.len() <= 128 && !node_id.chars().any(char::is_control),
+        "MIX cluster hand-off node identifier is invalid"
+    );
+    let ttl_seconds = i64::try_from(ttl_seconds.clamp(1, 300))
+        .context("MIX cluster hand-off TTL is too large")?;
+    let mut transaction = pool.begin().await?;
+    let recipient = sqlx::query(
+        "SELECT lease_until>clock_timestamp() AS active
+           FROM mix_delivery_recipients
+          WHERE delivery_id=$1 AND lease_token=$2
+          FOR UPDATE",
+    )
+    .bind(source.delivery_id)
+    .bind(source.lease_token)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(recipient) = recipient else {
+        anyhow::bail!("MIX lease changed before cluster hand-off");
+    };
+    anyhow::ensure!(
+        recipient.try_get::<bool, _>("active")?,
+        "MIX lease expired before cluster hand-off"
+    );
+    let sm_owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1
+               FROM sm_resume_stanzas stanza
+               JOIN sm_resume_sessions session ON session.id=stanza.session_id
+              WHERE stanza.mix_delivery_id=$1
+                AND session.expires_at>clock_timestamp()
+         )",
+    )
+    .bind(source.delivery_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    anyhow::ensure!(
+        !sm_owned,
+        "MIX delivery is already owned by an active XEP-0198 sequence"
+    );
+    let bosh_owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1 FROM mix_bosh_delivery_fences
+              WHERE delivery_id=$1 AND expires_at>clock_timestamp()
+         )",
+    )
+    .bind(source.delivery_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    anyhow::ensure!(
+        !bosh_owned,
+        "MIX delivery is already owned by an active BOSH response"
+    );
+    let existing = sqlx::query(
+        "SELECT expires_at>clock_timestamp() AS active
+           FROM mix_cluster_delivery_fences
+          WHERE delivery_id=$1 FOR UPDATE",
+    )
+    .bind(source.delivery_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if let Some(existing) = existing {
+        anyhow::ensure!(
+            !existing.try_get::<bool, _>("active")?,
+            "MIX delivery is already owned by an active remote node"
+        );
+        sqlx::query("DELETE FROM mix_cluster_delivery_fences WHERE delivery_id=$1")
+            .bind(source.delivery_id)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    let transferred = crate::outbound::MixDelivery {
+        delivery_id: source.delivery_id,
+        lease_token: Uuid::new_v4(),
+    };
+    let updated = sqlx::query(
+        "UPDATE mix_delivery_recipients
+            SET lease_token=$3,
+                lease_until=clock_timestamp()+make_interval(secs=>$4)
+          WHERE delivery_id=$1 AND lease_token=$2",
+    )
+    .bind(source.delivery_id)
+    .bind(source.lease_token)
+    .bind(transferred.lease_token)
+    .bind(ttl_seconds)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(updated == 1, "MIX lease changed during cluster hand-off");
+    let inserted = sqlx::query(
+        "INSERT INTO mix_cluster_delivery_fences(
+            delivery_id,lease_token,node_id,request_id,expires_at
+         ) VALUES($1,$2,$3,$4,clock_timestamp()+make_interval(secs=>$5))",
+    )
+    .bind(transferred.delivery_id)
+    .bind(transferred.lease_token)
+    .bind(node_id)
+    .bind(request_id)
+    .bind(ttl_seconds)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(inserted == 1, "MIX cluster hand-off did not create its fence");
+    transaction.commit().await?;
+    Ok(transferred)
+}
+
+/// Release an exact remote-node hand-off which failed before it became a
+/// socket, SM, or BOSH owner. A mismatched token is intentionally harmless:
+/// it proves that a later local transport already took responsibility.
+pub async fn release_mix_cluster_delivery(
+    pool: &PgPool,
+    source: crate::outbound::MixDelivery,
+    node_id: &str,
+    request_id: Uuid,
+) -> Result<bool> {
+    let mut transaction = pool.begin().await?;
+    let recipient = sqlx::query(
+        "SELECT lease_token FROM mix_delivery_recipients
+          WHERE delivery_id=$1 FOR UPDATE",
+    )
+    .bind(source.delivery_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(recipient) = recipient else {
+        transaction.commit().await?;
+        return Ok(false);
+    };
+    if recipient.try_get::<Option<Uuid>, _>("lease_token")? != Some(source.lease_token) {
+        transaction.commit().await?;
+        return Ok(false);
+    }
+    let fence = sqlx::query(
+        "SELECT lease_token FROM mix_cluster_delivery_fences
+          WHERE delivery_id=$1 AND node_id=$2 AND request_id=$3 FOR UPDATE",
+    )
+    .bind(source.delivery_id)
+    .bind(node_id)
+    .bind(request_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(fence) = fence else {
+        transaction.commit().await?;
+        return Ok(false);
+    };
+    if fence.try_get::<Uuid, _>("lease_token")? != source.lease_token {
+        transaction.commit().await?;
+        return Ok(false);
+    }
+    let released = sqlx::query(
+        "UPDATE mix_delivery_recipients
+            SET lease_token=NULL,lease_until=NULL,next_attempt_at=clock_timestamp(),
+                last_error='remote cluster transport did not establish ownership'
+          WHERE delivery_id=$1 AND lease_token=$2",
+    )
+    .bind(source.delivery_id)
+    .bind(source.lease_token)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(released == 1, "MIX cluster hand-off lost its recipient row");
+    let deleted = sqlx::query(
+        "DELETE FROM mix_cluster_delivery_fences
+          WHERE delivery_id=$1 AND lease_token=$2 AND node_id=$3 AND request_id=$4",
+    )
+    .bind(source.delivery_id)
+    .bind(source.lease_token)
+    .bind(node_id)
+    .bind(request_id)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(deleted == 1, "MIX cluster hand-off fence changed during release");
+    transaction.commit().await?;
+    Ok(true)
+}
+
+/// Transfer a claimed MIX recipient source to one direct TCP/WebSocket writer
+/// before it receives the stanza bytes. The returned rotated token belongs
+/// only to that writer. A claiming worker which still holds `source` can no
+/// longer retry or acknowledge it, so a queued stale item cannot overtake the
+/// recovery path after its caller is cancelled.
+pub async fn fence_mix_socket_write(
+    pool: &PgPool,
+    source: crate::outbound::MixDelivery,
+) -> Result<crate::outbound::MixDelivery> {
+    let mut transaction = pool.begin().await?;
+    let recipient = sqlx::query(
+        "SELECT lease_until>clock_timestamp() AS active
+           FROM mix_delivery_recipients
+          WHERE delivery_id=$1 AND lease_token=$2
+          FOR UPDATE",
+    )
+    .bind(source.delivery_id)
+    .bind(source.lease_token)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(recipient) = recipient else {
+        anyhow::bail!("MIX lease changed before direct socket fencing");
+    };
+    anyhow::ensure!(
+        recipient.try_get::<bool, _>("active")?,
+        "MIX lease expired before direct socket fencing"
+    );
+    let sm_owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1
+               FROM sm_resume_stanzas stanza
+               JOIN sm_resume_sessions session ON session.id=stanza.session_id
+              WHERE stanza.mix_delivery_id=$1
+                AND session.expires_at>clock_timestamp()
+         )",
+    )
+    .bind(source.delivery_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    anyhow::ensure!(
+        !sm_owned,
+        "MIX delivery is already owned by an active XEP-0198 sequence"
+    );
+    let bosh_owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1 FROM mix_bosh_delivery_fences
+              WHERE delivery_id=$1 AND expires_at>clock_timestamp()
+         )",
+    )
+    .bind(source.delivery_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    anyhow::ensure!(
+        !bosh_owned,
+        "MIX delivery is already owned by an active BOSH response"
+    );
+    consume_mix_cluster_delivery_fence_tx(&mut transaction, source).await?;
+    let fenced = crate::outbound::MixDelivery {
+        delivery_id: source.delivery_id,
+        lease_token: Uuid::new_v4(),
+    };
+    let updated = sqlx::query(
+        "UPDATE mix_delivery_recipients
+            SET lease_token=$3,
+                lease_until=clock_timestamp()+make_interval(secs=>$4)
+          WHERE delivery_id=$1 AND lease_token=$2",
+    )
+    .bind(source.delivery_id)
+    .bind(source.lease_token)
+    .bind(fenced.lease_token)
+    .bind(MIX_SOCKET_WRITE_FENCE_SECONDS)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(
+        updated == 1,
+        "MIX lease changed while direct socket fencing was committed"
+    );
+    transaction.commit().await?;
+    Ok(fenced)
+}
+
+/// Transfer one exact claimed MIX recipient lease to a BOSH actor before the
+/// actor is allowed to retain the stanza in its response FIFO. The original
+/// worker token is rotated in the same transaction so a delayed worker cannot
+/// retry, dead-letter, or acknowledge a source already owned by BOSH.
+pub async fn transfer_mix_delivery_to_bosh(
+    pool: &PgPool,
+    source: crate::outbound::MixDelivery,
+    session_id: Uuid,
+    ttl_seconds: u64,
+) -> Result<crate::outbound::MixDelivery> {
+    let ttl_seconds = i64::try_from(ttl_seconds.clamp(1, 300))
+        .context("MIX BOSH hand-off TTL is too large")?;
+    let mut transaction = pool.begin().await?;
+    let recipient = sqlx::query(
+        "SELECT lease_until>clock_timestamp() AS active
+           FROM mix_delivery_recipients
+          WHERE delivery_id=$1 AND lease_token=$2
+          FOR UPDATE",
+    )
+    .bind(source.delivery_id)
+    .bind(source.lease_token)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(recipient) = recipient else {
+        anyhow::bail!("MIX lease changed before BOSH ownership transfer");
+    };
+    anyhow::ensure!(
+        recipient.try_get::<bool, _>("active")?,
+        "MIX lease expired before BOSH ownership transfer"
+    );
+    let sm_owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1
+               FROM sm_resume_stanzas stanza
+               JOIN sm_resume_sessions session ON session.id=stanza.session_id
+              WHERE stanza.mix_delivery_id=$1
+                AND session.expires_at>clock_timestamp()
+         )",
+    )
+    .bind(source.delivery_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    anyhow::ensure!(
+        !sm_owned,
+        "MIX delivery is already owned by an active XEP-0198 sequence"
+    );
+    consume_mix_cluster_delivery_fence_tx(&mut transaction, source).await?;
+    let existing = sqlx::query(
+        "SELECT session_id,expires_at>clock_timestamp() AS active
+           FROM mix_bosh_delivery_fences
+          WHERE delivery_id=$1
+          FOR UPDATE",
+    )
+    .bind(source.delivery_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if let Some(existing) = existing {
+        anyhow::ensure!(
+            !existing.try_get::<bool, _>("active")?,
+            "MIX delivery is already owned by an active BOSH response"
+        );
+        sqlx::query("DELETE FROM mix_bosh_delivery_fences WHERE delivery_id=$1")
+            .bind(source.delivery_id)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    let transferred = crate::outbound::MixDelivery {
+        delivery_id: source.delivery_id,
+        lease_token: Uuid::new_v4(),
+    };
+    let updated = sqlx::query(
+        "UPDATE mix_delivery_recipients
+            SET lease_token=$3,
+                lease_until=clock_timestamp()+make_interval(secs=>$4)
+          WHERE delivery_id=$1 AND lease_token=$2",
+    )
+    .bind(source.delivery_id)
+    .bind(source.lease_token)
+    .bind(transferred.lease_token)
+    .bind(ttl_seconds)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(
+        updated == 1,
+        "MIX lease changed while BOSH ownership was being transferred"
+    );
+    let inserted = sqlx::query(
+        "INSERT INTO mix_bosh_delivery_fences(
+            delivery_id,lease_token,session_id,expires_at
+         ) VALUES(
+            $1,$2,$3,
+            clock_timestamp()+make_interval(secs=>$4)
+         )",
+    )
+    .bind(transferred.delivery_id)
+    .bind(transferred.lease_token)
+    .bind(session_id)
+    .bind(ttl_seconds)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(
+        inserted == 1,
+        "MIX BOSH ownership transfer did not create its fence"
+    );
+    transaction.commit().await?;
+    Ok(transferred)
 }
 
 pub async fn renew_mix_delivery_lease(
@@ -1186,49 +1672,142 @@ pub async fn retry_mix_delivery(
     pool: &PgPool,
     delivery_id: Uuid,
     lease_token: Uuid,
-    attempt_count: i32,
+    route_wake_generation: i64,
     error: &str,
-) -> Result<bool> {
-    let next_attempt = attempt_count.saturating_add(1);
-    if next_attempt >= 20 {
-        return dead_letter_mix_delivery(pool, delivery_id, lease_token, "attempt-limit", error)
-            .await;
-    }
-    let delay = 1_i64 << u32::try_from(next_attempt.clamp(0, 10)).unwrap_or(10);
-    let updated = sqlx::query(
-        "UPDATE mix_delivery_recipients SET attempt_count=$3,next_attempt_at=clock_timestamp()+make_interval(secs=>$4),lease_token=NULL,lease_until=NULL,last_error=left($5,2048) WHERE delivery_id=$1 AND lease_token=$2",
+) -> Result<MixDeliveryRetryOutcome> {
+    // The worker's claimed attempt count is intentionally *not* an authority:
+    // lease recovery or a route wake can race after claim.  Hold the exact
+    // recipient row while reading both durable values and while choosing
+    // between retry, route-woken release, and terminal deletion.  That makes
+    // a wake committed before this lock observable before the terminal branch;
+    // a wake that arrives later serializes after this completion and advances
+    // the then-current ordered head instead.
+    let mut transaction = pool.begin().await?;
+    let row = sqlx::query(
+        "SELECT attempt_count,route_wake_generation
+           FROM mix_delivery_recipients
+          WHERE delivery_id=$1 AND lease_token=$2
+          FOR UPDATE",
     )
     .bind(delivery_id)
     .bind(lease_token)
-    .bind(next_attempt)
-    .bind(delay)
-    .bind(error)
-    .execute(pool)
-    .await?
-    .rows_affected()
-        == 1;
-    if !updated {
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(row) = row else {
+        transaction.commit().await?;
         MIX_DELIVERY_LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
+        return Ok(MixDeliveryRetryOutcome::LeaseLost);
+    };
+
+    let persisted_attempt_count: i32 = row.get("attempt_count");
+    let persisted_route_wake_generation: i64 = row.get("route_wake_generation");
+    let next_attempt = persisted_attempt_count.saturating_add(1);
+    let outcome = if next_attempt >= 20 {
+        if persisted_route_wake_generation != route_wake_generation {
+            // Do not consume the terminal attempt merely because a routing
+            // fact arrived after claim. Keeping the persisted count unchanged
+            // grants the verified route exactly one new claimed delivery; a
+            // subsequent failure without another wake follows the ordinary
+            // terminal branch below.
+            let released = sqlx::query(
+                "UPDATE mix_delivery_recipients
+                    SET next_attempt_at=clock_timestamp(),
+                        lease_token=NULL,lease_until=NULL,last_error=left($3,2048)
+                  WHERE delivery_id=$1 AND lease_token=$2",
+            )
+            .bind(delivery_id)
+            .bind(lease_token)
+            .bind(error)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
+            anyhow::ensure!(
+                released == 1,
+                "MIX route-woken retry lost its locked delivery fence"
+            );
+            MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit
+        } else {
+            anyhow::ensure!(
+                move_mix_delivery_to_dead_letter_tx(
+                    &mut transaction,
+                    delivery_id,
+                    lease_token,
+                    "attempt-limit",
+                    error,
+                )
+                .await?,
+                "MIX terminal retry lost its locked delivery fence"
+            );
+            MixDeliveryRetryOutcome::DeadLettered
+        }
     } else {
-        MIX_DELIVERY_RETRIES_TOTAL.fetch_add(1, Ordering::Relaxed);
+        let delay = 1_i64 << u32::try_from(next_attempt.clamp(0, 10)).unwrap_or(10);
+        // A capacity/route wake can commit after this worker claimed the row
+        // but before it releases the lease. The row lock above makes this
+        // comparison the same durable observation used for terminal routing.
+        let released = sqlx::query(
+            "UPDATE mix_delivery_recipients
+                SET attempt_count=$3,
+                    next_attempt_at=CASE
+                        WHEN route_wake_generation<>$4 THEN clock_timestamp()
+                        ELSE clock_timestamp()+make_interval(secs=>$5)
+                    END,
+                    lease_token=NULL,lease_until=NULL,last_error=left($6,2048)
+              WHERE delivery_id=$1 AND lease_token=$2",
+        )
+        .bind(delivery_id)
+        .bind(lease_token)
+        .bind(next_attempt)
+        .bind(route_wake_generation)
+        .bind(delay)
+        .bind(error)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        anyhow::ensure!(
+            released == 1,
+            "MIX non-terminal retry lost its locked delivery fence"
+        );
+        MixDeliveryRetryOutcome::Retried
+    };
+    transaction.commit().await?;
+    match outcome {
+        MixDeliveryRetryOutcome::LeaseLost => unreachable!("handled before the transaction"),
+        MixDeliveryRetryOutcome::Retried | MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit => {
+            MIX_DELIVERY_RETRIES_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
+        MixDeliveryRetryOutcome::DeadLettered => {
+            MIX_DELIVERY_DEAD_LETTERS_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
     }
-    Ok(updated)
+    Ok(outcome)
 }
 
 pub async fn defer_mix_delivery(
     pool: &PgPool,
     delivery_id: Uuid,
     lease_token: Uuid,
+    route_wake_generation: i64,
     delay_seconds: i64,
 ) -> Result<bool> {
+    // `route_wake_generation` is captured atomically with the lease. A
+    // verified resource wake updates the same recipient row, so the UPDATE
+    // below serializes with it: if the wake committed first we release for an
+    // immediate re-claim; if it waits behind this UPDATE it advances the
+    // unleased head to `clock_timestamp()` afterwards. Either order retains
+    // the route wake across processes without weakening the fallback delay.
     let updated = sqlx::query(
         "UPDATE mix_delivery_recipients
-            SET next_attempt_at=clock_timestamp()+make_interval(secs=>$3),
+            SET next_attempt_at=CASE
+                    WHEN route_wake_generation<>$3 THEN clock_timestamp()
+                    ELSE clock_timestamp()+make_interval(secs=>$4)
+                END,
                 lease_token=NULL,lease_until=NULL
           WHERE delivery_id=$1 AND lease_token=$2",
     )
     .bind(delivery_id)
     .bind(lease_token)
+    .bind(route_wake_generation)
     .bind(delay_seconds.clamp(1, 30))
     .execute(pool)
     .await?
@@ -1237,6 +1816,38 @@ pub async fn defer_mix_delivery(
     if !updated {
         MIX_DELIVERY_LEASE_LOST_TOTAL.fetch_add(1, Ordering::Relaxed);
     }
+    Ok(updated)
+}
+
+/// Make the current ordered delivery head for one recipient eligible now.
+///
+/// A verified local MIX-capable resource is a routing fact, not an authority
+/// to manufacture a delivery. This helper only advances an already-persisted
+/// head row. It also advances a durable epoch while the head is leased, so
+/// its lease owner cannot overwrite this routing fact with a recovery delay.
+/// Normal fenced claiming still decides whether it can be delivered. Later
+/// rows deliberately remain untouched so per-recipient ordering is preserved.
+pub async fn wake_mix_delivery_recipient(pool: &PgPool, recipient_jid: &str) -> Result<u64> {
+    let updated = sqlx::query(
+        "UPDATE mix_delivery_recipients AS recipient
+            SET route_wake_generation=route_wake_generation+1,
+                next_attempt_at=CASE
+                    WHEN recipient.lease_token IS NULL
+                        THEN clock_timestamp()
+                    ELSE recipient.next_attempt_at
+                END
+          WHERE recipient.recipient_jid=$1
+            AND NOT EXISTS(
+                SELECT 1
+                  FROM mix_delivery_recipients AS earlier
+                 WHERE earlier.recipient_jid=recipient.recipient_jid
+                   AND earlier.delivery_sequence<recipient.delivery_sequence
+            )",
+    )
+    .bind(recipient_jid)
+    .execute(pool)
+    .await?
+    .rows_affected();
     Ok(updated)
 }
 
@@ -1274,9 +1885,12 @@ pub async fn mix_delivery_dead_letters(
         .collect())
 }
 
-/// Re-admit one terminal projection under its original recipient sequence.
-/// The operator action is all-or-nothing with capacity accounting, so a
-/// recovery cannot silently bypass the same queue limits as normal traffic.
+/// Re-admit one terminal projection at the recipient's current queue tail.
+///
+/// A dead-letter records historical order; it is not a license to recreate a
+/// lower sequence after later recipients have already been delivered. The
+/// operator action is all-or-nothing with capacity accounting, so a recovery
+/// cannot silently bypass the same queue limits as normal traffic.
 pub async fn requeue_mix_delivery_dead_letter(pool: &PgPool, dead_letter_id: Uuid) -> Result<bool> {
     let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     let row = sqlx::query(
@@ -1399,16 +2013,20 @@ pub async fn requeue_mix_delivery_dead_letter(pool: &PgPool, dead_letter_id: Uui
             template_bytes,
         )?;
     }
-    let delivery_sequence: i64 = row.get("delivery_sequence");
-    sqlx::query(
+    // Preserve in-order delivery for the live queue. A historical sequence
+    // can be lower than an already-finalized successor; restoring it would
+    // both reorder messages and let a head-local route-wake epoch disappear
+    // when the old row is acknowledged. Allocate one fresh tail sequence
+    // under the existing recipient-sequence authority instead.
+    let delivery_sequence: i64 = sqlx::query_scalar(
         "INSERT INTO mix_delivery_recipient_sequences(recipient_jid,next_sequence)
-         VALUES($1,$2)
+         VALUES($1,2)
          ON CONFLICT(recipient_jid) DO UPDATE
-             SET next_sequence=GREATEST(mix_delivery_recipient_sequences.next_sequence,EXCLUDED.next_sequence)",
+             SET next_sequence=mix_delivery_recipient_sequences.next_sequence+1
+         RETURNING next_sequence-1",
     )
     .bind(&recipient_jid)
-    .bind(delivery_sequence.saturating_add(1))
-    .execute(&mut *transaction)
+    .fetch_one(&mut *transaction)
     .await?;
     sqlx::query(
         "INSERT INTO mix_delivery_recipients(
@@ -8112,6 +8730,450 @@ mod delivery_capacity_integration_tests {
         assert!(!final_event);
         assert_eq!(final_releases, 0);
         assert_eq!(final_totals, baseline);
+        audit_mix_delivery_capacity_ledger(&pool).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod delivery_route_wake_integration_tests {
+    use super::*;
+    use crate::db;
+
+    async fn isolated_pool() -> PgPool {
+        let url = std::env::var("TEST_DATABASE_URL")
+            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(8)
+            .connect(&url)
+            .await
+            .unwrap();
+        db::migrate(&pool).await.unwrap();
+        pool
+    }
+
+    /// Insert through the same fenced capacity boundary used by production.
+    /// The caller selects a sequence explicitly so the ordering regression can
+    /// exercise a dead-letter predecessor and a deferred live successor.
+    async fn insert_delivery(
+        pool: &PgPool,
+        recipient: &str,
+        delivery_sequence: i64,
+    ) -> (Uuid, Uuid) {
+        let event_id = Uuid::new_v4();
+        let delivery_id = Uuid::new_v4();
+        let channel_id = Uuid::new_v4();
+        let stanza = "<message xmlns='jabber:client' type='groupchat'><body>route wake regression</body></message>";
+        let (mut transaction, fence) = begin_mix_delivery_admission(pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO mix_delivery_recipient_sequences(recipient_jid,next_sequence)
+              VALUES($1,$2)
+              ON CONFLICT(recipient_jid) DO UPDATE
+                  SET next_sequence=GREATEST(
+                      mix_delivery_recipient_sequences.next_sequence,EXCLUDED.next_sequence
+                  )",
+        )
+        .bind(recipient)
+        .bind(delivery_sequence + 1)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO mix_delivery_events(
+                 event_id,channel_id,channel_jid,stanza_template,
+                 authoritative_stanza_id,archive,encrypted
+             ) VALUES($1,$2,'route-wake@mix.example.test',$3,NULL,FALSE,FALSE)",
+        )
+        .bind(event_id)
+        .bind(channel_id)
+        .bind(stanza)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO mix_delivery_recipients(
+                 delivery_id,event_id,recipient_participant_id,recipient_jid,delivery_sequence
+             ) VALUES($1,$2,$3,$4,$5)",
+        )
+        .bind(delivery_id)
+        .bind(event_id)
+        .bind(Uuid::new_v4())
+        .bind(recipient)
+        .bind(delivery_sequence)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+        let mut deltas = BTreeMap::new();
+        add_mix_delivery_capacity_delta(
+            &mut deltas,
+            mix_delivery_capacity_bucket(event_id),
+            0,
+            i64::try_from(stanza.len()).unwrap(),
+        )
+        .unwrap();
+        add_mix_delivery_capacity_delta(
+            &mut deltas,
+            mix_delivery_capacity_bucket(delivery_id),
+            1,
+            i64::try_from(recipient.len() + MIX_DELIVERY_RECIPIENT_OVERHEAD as usize).unwrap(),
+        )
+        .unwrap();
+        reserve_mix_delivery_capacity_tx(&mut transaction, &fence, &deltas)
+            .await
+            .unwrap();
+        transaction.commit().await.unwrap();
+        (event_id, delivery_id)
+    }
+
+    async fn claim_delivery(pool: &PgPool, delivery_id: Uuid) -> ClaimedMixDelivery {
+        claim_mix_deliveries(pool, 128, 65_536)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|delivery| delivery.delivery_id == delivery_id)
+            .expect("the due test delivery was not claimed")
+    }
+
+    async fn schedule_is_due(pool: &PgPool, delivery_id: Uuid) -> (bool, Option<Uuid>, i32, i64) {
+        sqlx::query_as(
+            "SELECT next_attempt_at<=clock_timestamp(),lease_token,attempt_count,route_wake_generation
+               FROM mix_delivery_recipients WHERE delivery_id=$1",
+        )
+        .bind(delivery_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+    async fn leased_route_wake_defeats_defer_and_retry_but_not_unrelated_backoff() {
+        let pool = isolated_pool().await;
+        let recipient = format!("route-wake-{}@example.test", Uuid::new_v4());
+
+        let (_, deferred_id) = insert_delivery(&pool, &recipient, 1).await;
+        let deferred = claim_delivery(&pool, deferred_id).await;
+        assert_eq!(
+            wake_mix_delivery_recipient(&pool, &recipient)
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(defer_mix_delivery(
+            &pool,
+            deferred.delivery_id,
+            deferred.lease_token,
+            deferred.route_wake_generation,
+            30,
+        )
+        .await
+        .unwrap());
+        let (due, lease, attempts, generation) = schedule_is_due(&pool, deferred_id).await;
+        assert!(
+            due,
+            "a leased-head wake must defeat the later defer backoff"
+        );
+        assert!(lease.is_none());
+        assert_eq!(attempts, 0);
+        assert_eq!(generation, deferred.route_wake_generation + 1);
+        let deferred_again = claim_delivery(&pool, deferred_id).await;
+        assert!(acknowledge_mix_delivery(
+            &pool,
+            deferred_again.delivery_id,
+            deferred_again.lease_token
+        )
+        .await
+        .unwrap());
+
+        let (_, retry_id) = insert_delivery(&pool, &recipient, 2).await;
+        let retry = claim_delivery(&pool, retry_id).await;
+        assert_eq!(
+            wake_mix_delivery_recipient(&pool, &recipient)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            retry_mix_delivery(
+                &pool,
+                retry.delivery_id,
+                retry.lease_token,
+                retry.route_wake_generation,
+                "route wake regression",
+            )
+            .await
+            .unwrap(),
+            MixDeliveryRetryOutcome::Retried
+        );
+        let (due, lease, attempts, generation) = schedule_is_due(&pool, retry_id).await;
+        assert!(
+            due,
+            "a leased-head wake must defeat the later retry backoff"
+        );
+        assert!(lease.is_none());
+        assert_eq!(attempts, retry.attempt_count + 1);
+        assert_eq!(generation, retry.route_wake_generation + 1);
+        let retry_again = claim_delivery(&pool, retry_id).await;
+        assert!(
+            acknowledge_mix_delivery(&pool, retry_again.delivery_id, retry_again.lease_token)
+                .await
+                .unwrap()
+        );
+
+        // Controls deliberately omit wake: normal recovery remains delayed.
+        let (_, defer_control_id) = insert_delivery(&pool, &recipient, 3).await;
+        let defer_control = claim_delivery(&pool, defer_control_id).await;
+        assert!(defer_mix_delivery(
+            &pool,
+            defer_control.delivery_id,
+            defer_control.lease_token,
+            defer_control.route_wake_generation,
+            30,
+        )
+        .await
+        .unwrap());
+        let (due, lease, attempts, generation) = schedule_is_due(&pool, defer_control_id).await;
+        assert!(!due, "no-wake defer must retain its bounded recovery delay");
+        assert!(lease.is_none());
+        assert_eq!(attempts, 0);
+        assert_eq!(generation, defer_control.route_wake_generation);
+
+        // Clean this delayed control by making the route transition explicit,
+        // then verify retry's independent no-wake control below.
+        assert_eq!(
+            wake_mix_delivery_recipient(&pool, &recipient)
+                .await
+                .unwrap(),
+            1
+        );
+        let defer_control_again = claim_delivery(&pool, defer_control_id).await;
+        assert!(acknowledge_mix_delivery(
+            &pool,
+            defer_control_again.delivery_id,
+            defer_control_again.lease_token,
+        )
+        .await
+        .unwrap());
+
+        let (_, retry_control_id) = insert_delivery(&pool, &recipient, 4).await;
+        let retry_control = claim_delivery(&pool, retry_control_id).await;
+        assert_eq!(
+            retry_mix_delivery(
+                &pool,
+                retry_control.delivery_id,
+                retry_control.lease_token,
+                retry_control.route_wake_generation,
+                "normal retry control",
+            )
+            .await
+            .unwrap(),
+            MixDeliveryRetryOutcome::Retried
+        );
+        let (due, lease, attempts, generation) = schedule_is_due(&pool, retry_control_id).await;
+        assert!(!due, "no-wake retry must retain exponential backoff");
+        assert!(lease.is_none());
+        assert_eq!(attempts, retry_control.attempt_count + 1);
+        assert_eq!(generation, retry_control.route_wake_generation);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+    async fn attempt_limit_route_wake_gets_one_fresh_claim_before_dead_letter() {
+        let pool = isolated_pool().await;
+
+        // Reproduce the P1-C boundary with the real capacity admission,
+        // ordered claim, lease token, and committed route-wake transaction.
+        // The row's claimed snapshot is deliberately not the terminal
+        // authority: retry must reread this persisted count under its lease
+        // row lock.
+        let woken_recipient = format!("route-limit-woken-{}@example.test", Uuid::new_v4());
+        let (_, woken_id) = insert_delivery(&pool, &woken_recipient, 1).await;
+        assert_eq!(
+            sqlx::query(
+                "UPDATE mix_delivery_recipients SET attempt_count=19 WHERE delivery_id=$1",
+            )
+            .bind(woken_id)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .rows_affected(),
+            1
+        );
+        let claimed = claim_delivery(&pool, woken_id).await;
+        assert_eq!(claimed.attempt_count, 19);
+        assert_eq!(
+            wake_mix_delivery_recipient(&pool, &woken_recipient)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            retry_mix_delivery(
+                &pool,
+                claimed.delivery_id,
+                claimed.lease_token,
+                claimed.route_wake_generation,
+                "route wake at retry boundary",
+            )
+            .await
+            .unwrap(),
+            MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit
+        );
+        let (due, lease, attempts, generation) = schedule_is_due(&pool, woken_id).await;
+        assert!(due, "a committed wake must release the terminal row now");
+        assert!(lease.is_none());
+        assert_eq!(attempts, 19, "the wake preserves one fresh attempt");
+        assert_eq!(generation, claimed.route_wake_generation + 1);
+        let woken_dead_letters: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM mix_delivery_dead_letters WHERE delivery_id=$1",
+        )
+        .bind(woken_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(woken_dead_letters, 0);
+
+        let fresh_claim = claim_delivery(&pool, woken_id).await;
+        assert_eq!(fresh_claim.attempt_count, 19);
+        assert!(
+            acknowledge_mix_delivery(&pool, fresh_claim.delivery_id, fresh_claim.lease_token)
+                .await
+                .unwrap()
+        );
+
+        // The control keeps the exact old behavior: the same persisted count
+        // without a newer route generation becomes one attempt-limit dead
+        // letter. This prevents a route-wake exception from silently raising
+        // the ordinary retry ceiling.
+        let terminal_recipient = format!("route-limit-terminal-{}@example.test", Uuid::new_v4());
+        let (_, terminal_id) = insert_delivery(&pool, &terminal_recipient, 1).await;
+        assert_eq!(
+            sqlx::query(
+                "UPDATE mix_delivery_recipients SET attempt_count=19 WHERE delivery_id=$1",
+            )
+            .bind(terminal_id)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .rows_affected(),
+            1
+        );
+        let terminal_claim = claim_delivery(&pool, terminal_id).await;
+        assert_eq!(
+            retry_mix_delivery(
+                &pool,
+                terminal_claim.delivery_id,
+                terminal_claim.lease_token,
+                terminal_claim.route_wake_generation,
+                "normal terminal retry boundary",
+            )
+            .await
+            .unwrap(),
+            MixDeliveryRetryOutcome::DeadLettered
+        );
+        let source_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM mix_delivery_recipients WHERE delivery_id=$1)",
+        )
+        .bind(terminal_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!source_exists);
+        let terminal_dead_letter: (i32, String) = sqlx::query_as(
+            "SELECT attempt_count,terminal_reason
+               FROM mix_delivery_dead_letters WHERE delivery_id=$1",
+        )
+        .bind(terminal_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(terminal_dead_letter.0, 19);
+        assert_eq!(terminal_dead_letter.1, "attempt-limit");
+
+        reconcile_mix_delivery_capacity_committed(&pool)
+            .await
+            .unwrap();
+        audit_mix_delivery_capacity_ledger(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+    async fn dead_letter_requeue_uses_tail_and_preserves_current_head_wake() {
+        let pool = isolated_pool().await;
+        let recipient = format!("route-tail-{}@example.test", Uuid::new_v4());
+        let (_, dead_id) = insert_delivery(&pool, &recipient, 1).await;
+        let (_, successor_id) = insert_delivery(&pool, &recipient, 2).await;
+
+        let dead = claim_delivery(&pool, dead_id).await;
+        assert!(dead_letter_mix_delivery(
+            &pool,
+            dead.delivery_id,
+            dead.lease_token,
+            "test",
+            "tail"
+        )
+        .await
+        .unwrap());
+        let successor = claim_delivery(&pool, successor_id).await;
+        assert!(defer_mix_delivery(
+            &pool,
+            successor.delivery_id,
+            successor.lease_token,
+            successor.route_wake_generation,
+            30,
+        )
+        .await
+        .unwrap());
+        let letters = mix_delivery_dead_letters(&pool, None, 32).await.unwrap();
+        let letter = letters
+            .into_iter()
+            .find(|letter| letter.delivery_id == dead_id)
+            .expect("the terminal predecessor was not recorded");
+        assert!(
+            requeue_mix_delivery_dead_letter(&pool, letter.dead_letter_id)
+                .await
+                .unwrap()
+        );
+
+        let order: Vec<(Uuid, i64)> = sqlx::query_as(
+            "SELECT delivery_id,delivery_sequence FROM mix_delivery_recipients
+              WHERE recipient_jid=$1 ORDER BY delivery_sequence",
+        )
+        .bind(&recipient)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            order,
+            vec![(successor_id, 2), (dead_id, 3)],
+            "dead-letter recovery must append at the live recipient tail"
+        );
+
+        assert_eq!(
+            wake_mix_delivery_recipient(&pool, &recipient)
+                .await
+                .unwrap(),
+            1
+        );
+        let (due, _, _, generation) = schedule_is_due(&pool, successor_id).await;
+        assert!(due, "the extant deferred head must receive the route wake");
+        assert_eq!(generation, successor.route_wake_generation + 1);
+        let woken_head = claim_delivery(&pool, successor_id).await;
+        assert!(
+            acknowledge_mix_delivery(&pool, woken_head.delivery_id, woken_head.lease_token)
+                .await
+                .unwrap()
+        );
+        let requeued_tail = claim_delivery(&pool, dead_id).await;
+        assert!(acknowledge_mix_delivery(
+            &pool,
+            requeued_tail.delivery_id,
+            requeued_tail.lease_token
+        )
+        .await
+        .unwrap());
+        reconcile_mix_delivery_capacity_committed(&pool)
+            .await
+            .unwrap();
         audit_mix_delivery_capacity_ledger(&pool).await.unwrap();
     }
 }

@@ -935,7 +935,7 @@ async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
             return Ok(false);
         }
     };
-    let socket_delivery = if let Some(delivery) = item.durable_delivery.filter(|_| !managed_by_sm) {
+    let socket_delivery = if let Some(delivery) = item.c2s_delivery().filter(|_| !managed_by_sm) {
         match tokio::time::timeout(
             C2S_BACKEND_OPERATION_TIMEOUT,
             session.state.replay_service().fence_socket_write(delivery),
@@ -969,8 +969,26 @@ async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
     } else {
         None
     };
+    let socket_mix_delivery = match fence_mix_socket_write(session, item, managed_by_sm).await {
+        Ok(delivery) => delivery,
+        Err(error) => {
+            tcp_internal_backend_error(
+                io,
+                session,
+                opening,
+                "fence MIX socket write",
+                &error,
+            )
+            .await;
+            return Ok(false);
+        }
+    };
     send(io, &item.stanza).await?;
     if !managed_by_sm {
+        // The MIX source, if any, was already rotated to a writer-private
+        // socket fence before this write. A generic MUC receipt still waits
+        // for the actual bytes, but the former worker token is no longer
+        // eligible to retry while this transport owns the fence.
         item.confirm_transport_ownership();
     }
     if let Some(delivery) = socket_delivery {
@@ -992,7 +1010,53 @@ async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
             }
         }
     }
+    if let Some(delivery) = socket_mix_delivery {
+        match tokio::time::timeout(
+            C2S_BACKEND_OPERATION_TIMEOUT,
+            session
+                .state
+                .mix_service()
+                .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),
+        )
+        .await
+        {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => {
+                tracing::warn!(delivery_id = %delivery.delivery_id, "MIX socket fence changed before direct-write acknowledgement")
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(?error, delivery_id = %delivery.delivery_id, "MIX socket write succeeded but durable acknowledgement failed")
+            }
+            Err(_) => {
+                tracing::warn!(delivery_id = %delivery.delivery_id, "MIX socket write succeeded but durable acknowledgement timed out")
+            }
+        }
+    }
     Ok(true)
+}
+
+/// Fence a non-SM MIX source immediately before an ordered direct write. The
+/// returned token belongs to the writer, while the original claiming worker
+/// is notified only after that durable transfer commits. A later route retry
+/// therefore cannot make an already-queued stale item authoritative again.
+async fn fence_mix_socket_write(
+    session: &ProtocolSession,
+    item: &crate::outbound::OutboundItem,
+    managed_by_sm: bool,
+) -> Result<Option<crate::outbound::MixDelivery>> {
+    let Some(source) = item.mix_delivery().filter(|_| !managed_by_sm) else {
+        return Ok(None);
+    };
+    let fenced = tokio::time::timeout(
+        C2S_BACKEND_OPERATION_TIMEOUT,
+        session.state.mix_service().fence_mix_socket_write(source),
+    )
+    .await
+    .context("MIX socket-write fence timed out")??;
+    item.complete_mix_handoff(crate::outbound::MixTransportCompletion::SocketFenced {
+        connection_id: session.connection_id,
+    });
+    Ok(Some(fenced))
 }
 
 async fn tcp_internal_backend_error<S: AsyncWrite + Unpin>(
@@ -1560,7 +1624,7 @@ async fn websocket_record_and_send_item(
             return false;
         }
     };
-    let socket_delivery = if let Some(delivery) = item.durable_delivery.filter(|_| !managed_by_sm) {
+    let socket_delivery = if let Some(delivery) = item.c2s_delivery().filter(|_| !managed_by_sm) {
         match tokio::time::timeout(
             C2S_BACKEND_OPERATION_TIMEOUT,
             session.state.replay_service().fence_socket_write(delivery),
@@ -1600,6 +1664,23 @@ async fn websocket_record_and_send_item(
     } else {
         None
     };
+    let socket_mix_delivery = match fence_mix_socket_write(session, &item, managed_by_sm).await {
+        Ok(delivery) => delivery,
+        Err(error) => {
+            tracing::error!(?error, "failed to fence durable MIX WebSocket write");
+            session.sm_resume_allowed = false;
+            let domain = session.state.config.domain.clone();
+            websocket_fatal_error(
+                socket,
+                &domain,
+                opening,
+                crate::xmpp::xml_util::stream_error("internal-server-error"),
+                terminal,
+            )
+            .await;
+            return false;
+        }
+    };
     if !websocket_send_live(
         socket,
         Message::Text(item.stanza.clone().into()),
@@ -1610,6 +1691,9 @@ async fn websocket_record_and_send_item(
         return false;
     }
     if !managed_by_sm {
+        // See the TCP writer above. A direct MIX source was fenced before
+        // this WebSocket frame write; only generic receipts remain tied to
+        // successful frame acceptance.
         item.confirm_transport_ownership();
     }
     if let Some(delivery) = socket_delivery {
@@ -1628,6 +1712,28 @@ async fn websocket_record_and_send_item(
             }
             Err(_) => {
                 tracing::warn!(message_id = %delivery.message_id, "WebSocket write succeeded but durable delivery acknowledgement timed out")
+            }
+        }
+    }
+    if let Some(delivery) = socket_mix_delivery {
+        match tokio::time::timeout(
+            C2S_BACKEND_OPERATION_TIMEOUT,
+            session
+                .state
+                .mix_service()
+                .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),
+        )
+        .await
+        {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => {
+                tracing::warn!(delivery_id = %delivery.delivery_id, "MIX WebSocket fence changed before direct-write acknowledgement")
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(?error, delivery_id = %delivery.delivery_id, "MIX WebSocket write succeeded but durable acknowledgement failed")
+            }
+            Err(_) => {
+                tracing::warn!(delivery_id = %delivery.delivery_id, "MIX WebSocket write succeeded but durable acknowledgement timed out")
             }
         }
     }

@@ -73,6 +73,12 @@ const REDIS_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const REDIS_IO_TIMEOUT: Duration = Duration::from_millis(500);
 const CLUSTER_REDIS_POOL_MAX_SIZE: u32 = 16;
 const DELIVERY_ACK_TIMEOUT: Duration = Duration::from_secs(2);
+// This is the per-resource C2S ownership wait for the older exact-resource
+// delivery path. MIX uses a typed durable hand-off below instead: it waits for
+// an actual socket/SM/BOSH boundary and closes the one route if its caller is
+// cancelled, rather than declaring ownership after this timer elapses.
+const DELIVERY_TRANSPORT_RECEIPT_TIMEOUT: Duration = Duration::from_millis(500);
+const MIX_CLUSTER_HANDOFF_TTL_SECONDS: u64 = 30;
 const MAX_DELIVERY_ACK_BYTES: usize = 4096;
 const MAX_CLUSTER_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
 const MAX_DELIVERY_EXCLUSIONS: usize = 16;
@@ -82,12 +88,14 @@ const MUC_OUTBOX_BATCH_SIZE: i64 = 16;
 const MUC_OUTBOX_PASS_BUDGET: Duration = Duration::from_secs(20);
 const MUC_OUTBOX_DELIVERY_BUDGET: Duration = Duration::from_secs(5);
 const CLUSTER_MAINTENANCE_BUDGET: Duration = Duration::from_secs(25);
-const NODE_PROTOCOL_VERSION: &str = "11";
-const DELIVERY_CONTRACT_PROTOCOL_VERSION: u16 = 11;
+const NODE_PROTOCOL_VERSION: &str = "13";
+const DELIVERY_CONTRACT_PROTOCOL_VERSION: u16 = 13;
 // Version 8 introduced the explicit volatile/durable delivery contract.
-// Versions 9 through 11 retain that wire meaning while adding independent
-// signed envelope, presence-authority and MIX-capability requirements. They must never fall back to
-// the version-7 stanza-id inference rules during a rolling upgrade.
+// Versions 9 through 13 retain that wire meaning while adding independent
+// signed envelope, presence-authority, MIX-capability, and MIX transport
+// receipt requirements. Version 13 adds an exact leased MIX source; it must
+// never fall back to the version-7 stanza-id inference rules during a rolling
+// upgrade.
 const DELIVERY_CONTRACT_PROTOCOL_MIN: u16 = 8;
 const PRESENCE_AUTHORITY_VERSION: u16 = 1;
 const LEGACY_DELIVERY_PROTOCOL_MAX: u16 = 7;
@@ -255,6 +263,7 @@ pub struct NodeDeliveryReceipt {
     pub mix_supported: usize,
     pub mix_unsupported: usize,
     pub mix_unknown: usize,
+    pub mix_handoff: Option<ClusterMixHandoff>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -278,6 +287,11 @@ struct NodeDeliveryOptions<'a> {
     /// peer's in-memory queue. The receiver waits for the exact transport to
     /// take ownership (or rejects and keeps the durable source journal).
     transport_receipt_required: bool,
+    /// Dedicated transport-ownership acknowledgement for a bare-JID MIX
+    /// message. This deliberately differs from `transport_receipt_required`:
+    /// MIX must retain its verified-capability fan-out and may acknowledge any
+    /// one qualified resource, rather than a single preselected full JID.
+    mix_transport_receipt_required: bool,
     exclude_jids: &'a [&'a str],
     primary: bool,
     available_only: bool,
@@ -289,6 +303,10 @@ struct NodeDeliveryOptions<'a> {
     /// means the message is deliberately volatile; it must never be inferred
     /// as durable merely because it contains an XEP-0359 stanza-id.
     durable_delivery: Option<crate::outbound::DurableDelivery>,
+    /// Exact leased MIX recipient source. Unlike C2S, this source is first
+    /// transferred to a remote-node fence and then to socket/SM/BOSH
+    /// ownership; it is never inferred from a stanza-id.
+    mix_delivery: Option<crate::outbound::MixDelivery>,
     presence_authority: Option<ClusterPresenceAuthority>,
     presence_delivery: Option<ClusterPresenceDelivery>,
 }
@@ -396,6 +414,21 @@ enum NodeDeliveryContract {
         recipient_id: uuid::Uuid,
         message_id: uuid::Uuid,
     },
+    DurableMix {
+        delivery_id: uuid::Uuid,
+        lease_token: uuid::Uuid,
+    },
+}
+
+/// The durable local boundary reached by a remote node after it accepted one
+/// exact MIX source. The source node uses this only to decide that its old
+/// lease was transferred; database rows retain the actual new lease token.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClusterMixHandoff {
+    SocketFenced,
+    SmPersisted,
+    BoshPersisted,
 }
 
 impl NodeDeliveryContract {
@@ -438,6 +471,11 @@ struct NodeDeliveryAck {
     control_outcome: Option<ClusterControlOutcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     delivery: Option<NodeDeliveryContract>,
+    /// Present only for a durable MIX contract after the destination has
+    /// transferred the exact PostgreSQL source to a socket, SM, or BOSH
+    /// owner. Redis acknowledgement alone is deliberately not sufficient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mix_handoff: Option<ClusterMixHandoff>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -450,6 +488,7 @@ enum RequestedNodeMessageDelivery {
 enum ResolvedNodeMessageDelivery {
     Volatile,
     Durable(crate::outbound::DurableDelivery),
+    Mix(crate::outbound::MixDelivery),
 }
 
 impl ResolvedNodeMessageDelivery {
@@ -459,6 +498,10 @@ impl ResolvedNodeMessageDelivery {
             Self::Durable(delivery) => NodeDeliveryContract::DurableC2s {
                 recipient_id: delivery.recipient_id,
                 message_id: delivery.message_id,
+            },
+            Self::Mix(delivery) => NodeDeliveryContract::DurableMix {
+                delivery_id: delivery.delivery_id,
+                lease_token: delivery.lease_token,
             },
         }
     }
@@ -496,10 +539,15 @@ fn requested_node_message_delivery(
             }),
             "cluster delivery contract requires a delivery-contract capable protocol version"
         );
-        return Ok(Some(RequestedNodeMessageDelivery::Explicit(
-            serde_json::from_value(delivery.clone())
-                .context("cluster delivery contract is invalid")?,
-        )));
+        let contract: NodeDeliveryContract = serde_json::from_value(delivery.clone())
+            .context("cluster delivery contract is invalid")?;
+        if matches!(contract, NodeDeliveryContract::DurableMix { .. }) {
+            anyhow::ensure!(
+                advertised_version == Some(DELIVERY_CONTRACT_PROTOCOL_VERSION),
+                "typed MIX cluster hand-off requires the current protocol version"
+            );
+        }
+        return Ok(Some(RequestedNodeMessageDelivery::Explicit(contract)));
     }
     anyhow::ensure!(
         advertised_version.is_none_or(|version| version <= LEGACY_DELIVERY_PROTOCOL_MAX),
@@ -552,6 +600,51 @@ async fn resolve_node_message_delivery(
                 },
             ))
         }
+        RequestedNodeMessageDelivery::Explicit(NodeDeliveryContract::DurableMix {
+            delivery_id,
+            lease_token,
+        }) => {
+            anyhow::ensure!(
+                crate::jid::CanonicalJid::parse(target_jid)?
+                    .resourcepart()
+                    .is_none(),
+                "durable cluster MIX delivery requires a bare target"
+            );
+            let projection: Option<(String, String, bool, bool)> = sqlx::query_as(
+                "SELECT recipient.recipient_jid,event.stanza_template,
+                        recipient.lease_until>clock_timestamp() AS lease_active,
+                        event.expires_at>clock_timestamp() AS event_active
+                   FROM mix_delivery_recipients recipient
+                   JOIN mix_delivery_events event ON event.event_id=recipient.event_id
+                  WHERE recipient.delivery_id=$1 AND recipient.lease_token=$2",
+            )
+            .bind(delivery_id)
+            .bind(lease_token)
+            .fetch_optional(pool)
+            .await
+            .context("failed to verify clustered durable MIX projection")?;
+            let (recipient, template, lease_active, event_active) = projection
+                .context("cluster durable MIX delivery projection is missing")?;
+            anyhow::ensure!(
+                lease_active && event_active,
+                "cluster durable MIX delivery source is no longer active"
+            );
+            anyhow::ensure!(
+                crate::jid::canonicalize_bare(&recipient)?
+                    == crate::jid::canonicalize_bare(target_jid)?,
+                "cluster durable MIX recipient does not match the target"
+            );
+            anyhow::ensure!(
+                crate::xmpp::xml_util::set_to(&template, target_jid) == stanza,
+                "cluster durable MIX payload does not match its PostgreSQL projection"
+            );
+            Ok(ResolvedNodeMessageDelivery::Mix(
+                crate::outbound::MixDelivery {
+                    delivery_id,
+                    lease_token,
+                },
+            ))
+        }
         RequestedNodeMessageDelivery::LegacyInference => {
             let message_id = match crate::outbound::recipient_delivery_identity(stanza, target_jid)
             {
@@ -599,16 +692,21 @@ fn outbound_delivery_contract(
     stanza: &str,
     target_jid: &str,
     durable_delivery: Option<crate::outbound::DurableDelivery>,
+    mix_delivery: Option<crate::outbound::MixDelivery>,
 ) -> Result<Option<NodeDeliveryContract>> {
     let document = roxmltree::Document::parse(stanza).context("cluster stanza is invalid XML")?;
     let is_message = document.root_element().tag_name().name() == "message";
     if !is_message {
         anyhow::ensure!(
-            durable_delivery.is_none(),
+            durable_delivery.is_none() && mix_delivery.is_none(),
             "non-message cluster stanza cannot be durable"
         );
         return Ok(None);
     }
+    anyhow::ensure!(
+        !(durable_delivery.is_some() && mix_delivery.is_some()),
+        "cluster message cannot carry both C2S and MIX durable sources"
+    );
     if let Some(delivery) = durable_delivery {
         anyhow::ensure!(
             matches!(
@@ -618,6 +716,18 @@ fn outbound_delivery_contract(
             "durable cluster message lacks an unambiguous recipient stanza-id"
         );
         return NodeDeliveryContract::from_durable(delivery).map(Some);
+    }
+    if let Some(delivery) = mix_delivery {
+        anyhow::ensure!(
+            crate::jid::CanonicalJid::parse(target_jid)?
+                .resourcepart()
+                .is_none(),
+            "durable cluster MIX delivery requires a bare target"
+        );
+        return Ok(Some(NodeDeliveryContract::DurableMix {
+            delivery_id: delivery.delivery_id,
+            lease_token: delivery.lease_token,
+        }));
     }
     Ok(Some(NodeDeliveryContract::Volatile {}))
 }
@@ -652,6 +762,7 @@ struct DeliveryAckExpectation<'a> {
     require_delivery_contract: bool,
     mix_capable_only: bool,
     transport_receipt_required: bool,
+    mix_transport_receipt_required: bool,
 }
 
 fn validated_delivery_ack(
@@ -677,6 +788,20 @@ fn validated_delivery_ack(
     if expected.transport_receipt_required
         && (ack.delivered > 1 || (ack.delivered == 0) != ack.accepted_full_jid.is_none())
     {
+        return None;
+    }
+    if expected.mix_transport_receipt_required {
+        // A MIX recipient row is transferred to exactly one destination
+        // resource.  The capability counters may describe every resource,
+        // but the authoritative source can cross only one local boundary.
+        if !matches!(expected.delivery, Some(NodeDeliveryContract::DurableMix { .. }))
+            || ack.delivered > 1
+            || (ack.delivered == 0) != ack.accepted_full_jid.is_none()
+            || (ack.delivered == 0) != ack.mix_handoff.is_none()
+        {
+            return None;
+        }
+    } else if ack.mix_handoff.is_some() {
         return None;
     }
     if expected.mix_capable_only {
@@ -712,6 +837,7 @@ fn validated_delivery_ack(
         mix_supported: ack.mix_supported,
         mix_unsupported: ack.mix_unsupported,
         mix_unknown: ack.mix_unknown,
+        mix_handoff: ack.mix_handoff,
     })
 }
 
@@ -729,6 +855,70 @@ fn node_delivery_stanza(stanza: &str, carbons_only: bool, session_key: &str) -> 
         return stanza.to_owned();
     };
     crate::xmpp::xml_util::set_to(stanza, &exact_full_jid)
+}
+
+/// The remote cluster worker owns a concrete C2S route while awaiting a
+/// typed MIX hand-off.  If the request task is cancelled or the driver drops
+/// its completion channel, the route is torn down before an old queued item
+/// can become visible after its database lease is released for retry.
+struct PendingClusterMixHandoff {
+    sender: crate::outbound::OutboundSender,
+    disconnect: CancellationToken,
+    completed: bool,
+}
+
+impl PendingClusterMixHandoff {
+    fn new(sender: crate::outbound::OutboundSender, disconnect: CancellationToken) -> Self {
+        Self {
+            sender,
+            disconnect,
+            completed: false,
+        }
+    }
+
+    fn mark_completed(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for PendingClusterMixHandoff {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.sender.disconnect_backpressured_transport();
+            self.disconnect.cancel();
+        }
+    }
+}
+
+/// Enqueue an exact remote MIX source and wait for a typed durable boundary.
+/// There is intentionally no synthetic ownership timeout: a socket writer
+/// fences the source before bytes, while SM and BOSH persist it.  Cancellation
+/// closes only this route and leaves the database fence reclaimable.
+async fn try_send_cluster_mix_transport(
+    sender: &crate::outbound::OutboundSender,
+    disconnect: &CancellationToken,
+    stanza: String,
+    source: crate::outbound::MixDelivery,
+) -> Result<crate::outbound::MixTransportCompletion> {
+    let receiver = match sender.try_send_durable_mix(stanza, source) {
+        Ok(receiver) => receiver,
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            sender.disconnect_backpressured_transport();
+            disconnect.cancel();
+            anyhow::bail!("remote MIX resource output queue is full");
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            sender.disconnect_backpressured_transport();
+            disconnect.cancel();
+            anyhow::bail!("remote MIX resource output queue is closed");
+        }
+    };
+    let mut pending = PendingClusterMixHandoff::new(sender.clone(), disconnect.clone());
+    let completion = receiver
+        .await
+        .context("remote MIX resource closed before durable hand-off")?;
+    pending.mark_completed();
+    Ok(completion)
 }
 
 /// Privacy lists are resource scoped, while both Carbon wrappers are addressed
@@ -2363,14 +2553,17 @@ impl ClusterManager {
             .delivered)
     }
 
-    /// Signed MIX-only fanout with tri-state capability evidence. Unknown
-    /// resources are reported to the source so it can perform a bounded
-    /// capability wait without charging a business retry attempt.
+    /// Signed MIX-only fanout with tri-state capability evidence. A live
+    /// ingress stanza remains deliberately volatile; a claimed recipient row
+    /// supplies `source` and then requires an exact typed transport hand-off.
+    /// Unknown resources are reported to the source so its ordered row can
+    /// remain pending until a route becomes eligible.
     pub async fn send_to_node_mix(
         &self,
         node_id: &str,
         target_jid: &str,
         stanza: &str,
+        source: Option<crate::outbound::MixDelivery>,
     ) -> Result<NodeDeliveryReceipt> {
         self.send_to_node_receipt(
             node_id,
@@ -2378,6 +2571,8 @@ impl ClusterManager {
             stanza,
             NodeDeliveryOptions {
                 mix_capable_only: true,
+                mix_transport_receipt_required: source.is_some(),
+                mix_delivery: source,
                 ..NodeDeliveryOptions::default()
             },
         )
@@ -3141,20 +3336,24 @@ impl ClusterManager {
             );
         }
         if self.health.state.load(Ordering::Acquire) == CLUSTER_DURABLE_DIRECT_ONLY
-            && options.durable_delivery.is_some()
+            && (options.durable_delivery.is_some() || options.mix_delivery.is_some())
         {
             // The PostgreSQL row remains the only accepted projection. The
             // caller observes no live acceptance and leaves it for replay.
             return Ok(NodeDeliveryReceipt::default());
         }
-        self.admit(if options.durable_delivery.is_some() {
+        self.admit(if options.durable_delivery.is_some() || options.mix_delivery.is_some() {
             ClusterOperation::DurableDirect
         } else {
             ClusterOperation::VolatileDelivery
         })?;
         let target_jid = crate::jid::canonicalize(target_jid)?;
-        let delivery_contract =
-            outbound_delivery_contract(stanza, &target_jid, options.durable_delivery)?;
+        let delivery_contract = outbound_delivery_contract(
+            stanza,
+            &target_jid,
+            options.durable_delivery,
+            options.mix_delivery,
+        )?;
         if options.exclude_jids.len() > MAX_DELIVERY_EXCLUSIONS {
             anyhow::bail!("too many cluster delivery exclusions");
         }
@@ -3172,6 +3371,10 @@ impl ClusterManager {
                 ))
             })
             .transpose()?;
+        anyhow::ensure!(
+            !(options.transport_receipt_required && options.mix_transport_receipt_required),
+            "cluster delivery cannot combine exact-resource and MIX transport receipts"
+        );
         if options.transport_receipt_required {
             anyhow::ensure!(
                 delivery_contract.is_none()
@@ -3190,6 +3393,29 @@ impl ClusterManager {
                     && exclude_jids.is_empty()
                     && carbon_muc_scope.is_none(),
                 "transport-receipted cluster delivery requires one exact account resource"
+            );
+        }
+        if options.mix_transport_receipt_required {
+            anyhow::ensure!(
+                matches!(delivery_contract, Some(NodeDeliveryContract::DurableMix { .. }))
+                    && options.mix_capable_only
+                    && crate::jid::CanonicalJid::parse(&target_jid)?
+                        .resourcepart()
+                        .is_none()
+                    && !options.carbons_only
+                    && !options.blocklist_requested_only
+                    && !options.roster_requested_only
+                    && !options.privacy_requested_only
+                    && !options.primary
+                    && !options.available_only
+                    && !options.available_nonnegative_only
+                    && options.expected_user_id.is_none()
+                    && options.expected_auth_generation.is_none()
+                    && options.roster_version.is_none()
+                    && options.roster_annotated_stanza.is_none()
+                    && exclude_jids.is_empty()
+                    && carbon_muc_scope.is_none(),
+                "MIX transport-receipted cluster delivery requires one exact bare-JID MIX source"
             );
         }
         let legacy_exclude_jid = exclude_jids.first();
@@ -3214,6 +3440,7 @@ impl ClusterManager {
             "privacy_requested_only": options.privacy_requested_only,
             "mix_capable_only": options.mix_capable_only,
             "transport_receipt_required": options.transport_receipt_required,
+            "mix_transport_receipt_required": options.mix_transport_receipt_required,
             "exclude_jid": legacy_exclude_jid,
             "exclude_jids": exclude_jids,
             "request_id": request_id,
@@ -3331,6 +3558,7 @@ impl ClusterManager {
                         require_delivery_contract,
                         mix_capable_only: options.mix_capable_only,
                         transport_receipt_required: options.transport_receipt_required,
+                        mix_transport_receipt_required: options.mix_transport_receipt_required,
                     },
                 ) {
                     return Ok(receipt);
@@ -6030,6 +6258,7 @@ async fn listen_once(
         let mut mix_supported = 0usize;
         let mut mix_unsupported = 0usize;
         let mut mix_unknown = 0usize;
+        let mut mix_handoff = None;
         let mut control_processed = None;
         let mut control_outcome = None;
         let mut acknowledged_delivery = None;
@@ -6929,6 +7158,12 @@ async fn listen_once(
                     Some(serde_json::Value::Bool(value)) => *value,
                     Some(_) => continue,
                 };
+                let mix_transport_receipt_required =
+                    match json.get("mix_transport_receipt_required") {
+                        None => false,
+                        Some(serde_json::Value::Bool(value)) => *value,
+                        Some(_) => continue,
+                    };
                 let exclude_jids = delivery_exclusions(&json);
                 let Ok(carbon_muc_scope) = delivery_carbon_muc_scope(&json) else {
                     continue;
@@ -6973,6 +7208,62 @@ async fn listen_once(
                 {
                     continue;
                 }
+                // This is intentionally a separate contract from the
+                // exact-resource policy/PAM receipt above. A durable MIX
+                // event is a bare-JID message, is routed only to resources
+                // with verified MIX support, and may be acknowledged after
+                // any one such resource obtains true transport ownership.
+                // Reject every other combination rather than letting a
+                // signed-but-malformed payload silently downgrade to an
+                // in-memory `try_send` acknowledgement.
+                if mix_transport_receipt_required
+                    && (transport_receipt_required
+                        || !is_message_stanza
+                        || !matches!(
+                            resolved_message_delivery,
+                            Some(ResolvedNodeMessageDelivery::Mix(_))
+                        )
+                        || !mix_capable_only
+                        || crate::jid::CanonicalJid::parse(target)
+                            .map_or(true, |jid| jid.resourcepart().is_some())
+                        || carbons_only
+                        || blocklist_requested_only
+                        || roster_requested_only
+                        || privacy_requested_only
+                        || primary_one_to_one
+                        || available_only
+                        || available_nonnegative_only
+                        || expected_user_id.is_some()
+                        || expected_auth_generation.is_some()
+                        || roster_version.is_some()
+                        || roster_annotated_stanza.is_some()
+                        || !exclude_jids.is_empty()
+                        || carbon_muc_scope.is_some())
+                {
+                    continue;
+                }
+                // A typed MIX contract is never a hint.  Requiring the
+                // matching receipt flag in both directions prevents a
+                // signed-but-malformed command from taking the volatile
+                // queue branch while carrying a live recipient lease.
+                if matches!(
+                    resolved_message_delivery,
+                    Some(ResolvedNodeMessageDelivery::Mix(_))
+                ) != mix_transport_receipt_required
+                {
+                    continue;
+                }
+                let mix_request_id = if mix_transport_receipt_required {
+                    match json["request_id"]
+                        .as_str()
+                        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                    {
+                        Some(request_id) => Some(request_id),
+                        None => continue,
+                    }
+                } else {
+                    None
+                };
                 let mut targets = state.session_entries_for(target);
                 if (primary_one_to_one || available_only || available_nonnegative_only)
                     && !target.contains('/')
@@ -7071,7 +7362,19 @@ async fn listen_once(
                             {
                                 Some(durable)
                             }
-                            Some(ResolvedNodeMessageDelivery::Durable(_)) | None => continue,
+                            Some(ResolvedNodeMessageDelivery::Durable(_))
+                            | Some(ResolvedNodeMessageDelivery::Mix(_))
+                            | None => None,
+                        }
+                    } else {
+                        None
+                    };
+                    let mix_delivery = if is_message_stanza {
+                        match resolved_message_delivery {
+                            Some(ResolvedNodeMessageDelivery::Mix(source)) => Some(source),
+                            Some(ResolvedNodeMessageDelivery::Volatile)
+                            | Some(ResolvedNodeMessageDelivery::Durable(_))
+                            | None => None,
                         }
                     } else {
                         None
@@ -7109,6 +7412,97 @@ async fn listen_once(
                                 false
                             }
                         }
+                    } else if let (Some(source), Some(request_id)) =
+                        (mix_delivery, mix_request_id)
+                    {
+                        // Rotate the signed source into this node's durable
+                        // fence before putting it on a local C2S output.  No
+                        // acknowledgement is emitted until that output has
+                        // itself transferred to its socket/SM/BOSH owner.
+                        let remote_source = match state
+                            .mix_service()
+                            .transfer_mix_delivery_to_cluster(
+                                source,
+                                &state.cluster.node_id,
+                                request_id,
+                                MIX_CLUSTER_HANDOFF_TTL_SECONDS,
+                            )
+                            .await
+                        {
+                            Ok(source) => source,
+                            Err(error) => {
+                                tracing::warn!(
+                                    ?error,
+                                    delivery_id = %source.delivery_id,
+                                    "failed to establish remote MIX ownership fence"
+                                );
+                                break;
+                            }
+                        };
+                        match try_send_cluster_mix_transport(
+                            &session.sender,
+                            &session.disconnect,
+                            delivery.clone(),
+                            remote_source,
+                        )
+                        .await
+                        {
+                            Ok(crate::outbound::MixTransportCompletion::SocketFenced { .. }) => {
+                                mix_handoff = Some(ClusterMixHandoff::SocketFenced);
+                                true
+                            }
+                            Ok(crate::outbound::MixTransportCompletion::SmPersisted { .. }) => {
+                                mix_handoff = Some(ClusterMixHandoff::SmPersisted);
+                                true
+                            }
+                            Ok(crate::outbound::MixTransportCompletion::BoshPersisted { .. }) => {
+                                mix_handoff = Some(ClusterMixHandoff::BoshPersisted);
+                                true
+                            }
+                            // Direct writers report SocketFenced before bytes
+                            // are sent. SocketWritten is retained only for
+                            // compatibility fixtures and is not an accepted
+                            // remote hand-off because it carries no rotated
+                            // writer token.
+                            Ok(crate::outbound::MixTransportCompletion::SocketWritten) => {
+                                tracing::warn!(
+                                    delivery_id = %remote_source.delivery_id,
+                                    "rejected legacy unfenced remote MIX socket completion"
+                                );
+                                let _ = state
+                                    .mix_service()
+                                    .release_mix_cluster_delivery(
+                                        remote_source,
+                                        &state.cluster.node_id,
+                                        request_id,
+                                    )
+                                    .await;
+                                false
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    ?error,
+                                    delivery_id = %remote_source.delivery_id,
+                                    "remote MIX transport failed before durable ownership"
+                                );
+                                if let Err(release_error) = state
+                                    .mix_service()
+                                    .release_mix_cluster_delivery(
+                                        remote_source,
+                                        &state.cluster.node_id,
+                                        request_id,
+                                    )
+                                    .await
+                                {
+                                    tracing::error!(
+                                        ?release_error,
+                                        delivery_id = %remote_source.delivery_id,
+                                        "failed to release unowned remote MIX hand-off"
+                                    );
+                                }
+                                false
+                            }
+                        }
                     } else if transport_receipt_required {
                         let (receipt_tx, mut receipt_rx) = tokio::sync::mpsc::unbounded_channel();
                         match session
@@ -7116,7 +7510,7 @@ async fn listen_once(
                             .try_send_with_transport_receipt(delivery.clone(), receipt_tx)
                         {
                             Ok(()) => match tokio::time::timeout(
-                                Duration::from_millis(500),
+                                DELIVERY_TRANSPORT_RECEIPT_TIMEOUT,
                                 receipt_rx.recv(),
                             )
                             .await
@@ -7145,7 +7539,7 @@ async fn listen_once(
                     };
                     if accepted {
                         if is_message_stanza {
-                            let counter = if durable_delivery.is_some() {
+                            let counter = if durable_delivery.is_some() || mix_delivery.is_some() {
                                 &state.metrics.online_queue_durable_acceptances_total
                             } else {
                                 &state.metrics.online_queue_volatile_acceptances_total
@@ -7154,7 +7548,7 @@ async fn listen_once(
                         }
                         delivered += 1;
                         accepted_full_jid.get_or_insert(jid);
-                        if primary_one_to_one {
+                        if primary_one_to_one || mix_delivery.is_some() {
                             break;
                         }
                     }
@@ -7185,6 +7579,7 @@ async fn listen_once(
                         control_processed,
                         control_outcome,
                         delivery: acknowledged_delivery,
+                        mix_handoff,
                     };
                     let ack_payload = serde_json::to_value(&ack)?;
                     let _ = state
@@ -8178,17 +8573,21 @@ mod tests {
         assert!(!supports_control_ack(Some("6")));
         assert!(supports_control_ack(Some("7")));
         assert!(supports_control_ack(Some(NODE_PROTOCOL_VERSION)));
-        assert!(!supports_control_ack(Some("12")));
+        assert!(!supports_control_ack(Some(&future_protocol_version)));
         assert!(!supports_delivery_contract(Some("7")));
         assert!(supports_delivery_contract(Some("8")));
         assert!(supports_delivery_contract(Some("9")));
         assert!(supports_delivery_contract(Some(NODE_PROTOCOL_VERSION)));
         assert!(!supports_delivery_contract(Some(&future_protocol_version)));
-        // Presence authority became mandatory in application protocol 10.
-        // A new sender must not publish an executable payload to a live v9
-        // peer which would ignore the new UUID/generation fields.
-        assert!(supports_current_cluster_protocol(Some("11")));
-        assert!(!supports_current_cluster_protocol(Some("10")));
+        // Presence authority became mandatory in application protocol 10 and
+        // Exact MIX transport hand-offs became mandatory in application
+        // protocol 13.
+        // A new sender must not publish a receipt-required MIX event to a
+        // live v11 peer which would ignore the ownership requirement.
+        assert!(supports_current_cluster_protocol(Some(
+            NODE_PROTOCOL_VERSION
+        )));
+        assert!(!supports_current_cluster_protocol(Some("11")));
         assert!(!supports_current_cluster_protocol(None));
     }
 
@@ -8372,6 +8771,34 @@ mod tests {
                 }
             ))
         );
+        let mix_delivery_id = uuid::Uuid::from_u128(31);
+        let mix_lease_token = uuid::Uuid::from_u128(32);
+        let mix = serde_json::json!({
+            "protocol_version": NODE_PROTOCOL_VERSION,
+            "delivery": {
+                "reliability": "durable_mix",
+                "delivery_id": mix_delivery_id,
+                "lease_token": mix_lease_token
+            }
+        });
+        assert_eq!(
+            requested_node_message_delivery(&mix, true).unwrap(),
+            Some(RequestedNodeMessageDelivery::Explicit(
+                NodeDeliveryContract::DurableMix {
+                    delivery_id: mix_delivery_id,
+                    lease_token: mix_lease_token,
+                }
+            ))
+        );
+        let stale_mix = serde_json::json!({
+            "protocol_version": "12",
+            "delivery": {
+                "reliability": "durable_mix",
+                "delivery_id": mix_delivery_id,
+                "lease_token": mix_lease_token
+            }
+        });
+        assert!(requested_node_message_delivery(&stale_mix, true).is_err());
         assert!(requested_node_message_delivery(
             &serde_json::json!({"protocol_version": NODE_PROTOCOL_VERSION}),
             true
@@ -8498,6 +8925,7 @@ mod tests {
                     message_id: offline_row_id,
                     claim_id: None,
                 }),
+                None,
             )
             .unwrap(),
             Some(NodeDeliveryContract::DurableC2s {
@@ -8505,6 +8933,29 @@ mod tests {
                 message_id: offline_row_id,
             })
         );
+    }
+
+    #[test]
+    fn mix_contract_carries_only_the_exact_recipient_lease() {
+        let source = crate::outbound::MixDelivery {
+            delivery_id: uuid::Uuid::from_u128(41),
+            lease_token: uuid::Uuid::from_u128(42),
+        };
+        let stanza = "<message xmlns='jabber:client' to='bob@example.test' type='groupchat'><body>hello</body></message>";
+        assert_eq!(
+            outbound_delivery_contract(stanza, "bob@example.test", None, Some(source)).unwrap(),
+            Some(NodeDeliveryContract::DurableMix {
+                delivery_id: source.delivery_id,
+                lease_token: source.lease_token,
+            })
+        );
+        assert!(outbound_delivery_contract(
+            stanza,
+            "bob@example.test/resource",
+            None,
+            Some(source)
+        )
+        .is_err());
     }
 
     #[test]
@@ -8631,6 +9082,7 @@ mod tests {
             require_delivery_contract: false,
             mix_capable_only: false,
             transport_receipt_required: false,
+            mix_transport_receipt_required: false,
         }
     }
 
@@ -8648,6 +9100,7 @@ mod tests {
             control_processed: None,
             control_outcome: None,
             delivery: None,
+            mix_handoff: None,
         };
         let payload = serde_json::to_string(&ack).unwrap();
         let receipt = validated_delivery_ack(
@@ -8697,6 +9150,7 @@ mod tests {
                 control_processed: None,
                 control_outcome: None,
                 delivery: None,
+                mix_handoff: None,
             },
             NodeDeliveryAck {
                 request_id: "r".to_owned(),
@@ -8710,6 +9164,7 @@ mod tests {
                 control_processed: None,
                 control_outcome: None,
                 delivery: None,
+                mix_handoff: None,
             },
         ] {
             let payload = serde_json::to_string(&ack).unwrap();
@@ -8735,6 +9190,7 @@ mod tests {
             control_processed: None,
             control_outcome: None,
             delivery: None,
+            mix_handoff: None,
         };
         let mut expected = ack_expectation("mix-r", "mix-n", "node", "a@example.test");
         expected.primary = false;
@@ -8772,6 +9228,7 @@ mod tests {
             control_processed: None,
             control_outcome: None,
             delivery: None,
+            mix_handoff: None,
         };
         let expectation = || {
             let mut expected = ack_expectation("pam-r", "pam-n", "node", "a@example.test/one");
@@ -8806,6 +9263,144 @@ mod tests {
     }
 
     #[test]
+    fn mix_transport_receipt_ack_requires_confirmed_capable_resource() {
+        let source = crate::outbound::MixDelivery {
+            delivery_id: uuid::Uuid::from_u128(11),
+            lease_token: uuid::Uuid::from_u128(12),
+        };
+        let ack = NodeDeliveryAck {
+            request_id: "mix-r".to_owned(),
+            nonce: "mix-n".to_owned(),
+            node_id: "node".to_owned(),
+            // Capability accounting may describe more than one resource, but
+            // one ordered recipient row can be transferred only once.
+            delivered: 1,
+            accepted_full_jid: Some("a@example.test/one".to_owned()),
+            mix_supported: 2,
+            mix_unsupported: 1,
+            mix_unknown: 0,
+            control_processed: None,
+            control_outcome: None,
+            delivery: Some(NodeDeliveryContract::DurableMix {
+                delivery_id: source.delivery_id,
+                lease_token: source.lease_token,
+            }),
+            mix_handoff: Some(ClusterMixHandoff::SocketFenced),
+        };
+        let expectation = || {
+            let mut expected = ack_expectation("mix-r", "mix-n", "node", "a@example.test");
+            expected.primary = false;
+            expected.delivery = Some(NodeDeliveryContract::DurableMix {
+                delivery_id: source.delivery_id,
+                lease_token: source.lease_token,
+            });
+            expected.require_delivery_contract = true;
+            expected.mix_capable_only = true;
+            expected.mix_transport_receipt_required = true;
+            expected
+        };
+        assert!(
+            validated_delivery_ack(&serde_json::to_string(&ack).unwrap(), expectation()).is_some()
+        );
+
+        for forged in [
+            NodeDeliveryAck {
+                delivered: 0,
+                ..ack.clone()
+            },
+            NodeDeliveryAck {
+                accepted_full_jid: None,
+                ..ack.clone()
+            },
+            NodeDeliveryAck {
+                delivered: 3,
+                mix_supported: 2,
+                ..ack.clone()
+            },
+            NodeDeliveryAck {
+                mix_handoff: None,
+                ..ack.clone()
+            },
+        ] {
+            assert!(validated_delivery_ack(
+                &serde_json::to_string(&forged).unwrap(),
+                expectation(),
+            )
+            .is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn mix_transport_receipt_waits_for_typed_ownership_and_fails_closed() {
+        // A queued stanza is not yet delivered. The peer must explicitly
+        // signal the output boundary before the remote node reports success.
+        let source = crate::outbound::MixDelivery {
+            delivery_id: uuid::Uuid::from_u128(21),
+            lease_token: uuid::Uuid::from_u128(22),
+        };
+        let (output, mut consumer) = tokio::sync::mpsc::channel(1);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = CancellationToken::new();
+        let waiter = {
+            let sender = sender.clone();
+            let disconnect = disconnect.clone();
+            tokio::spawn(async move {
+                try_send_cluster_mix_transport(&sender, &disconnect, "owned".to_owned(), source)
+                    .await
+            })
+        };
+        let item = consumer.recv().await.expect("MIX item was queued");
+        item.complete_mix_handoff(crate::outbound::MixTransportCompletion::SocketFenced {
+            connection_id: uuid::Uuid::from_u128(23),
+        });
+        assert!(matches!(
+            waiter.await.unwrap(),
+            Ok(crate::outbound::MixTransportCompletion::SocketFenced { .. })
+        ));
+        assert!(!disconnect.is_cancelled());
+
+        // A full bounded queue must not become a successful remote receipt.
+        let (output, _consumer) = tokio::sync::mpsc::channel(1);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = CancellationToken::new();
+        sender.try_send("older".to_owned()).unwrap();
+        assert!(try_send_cluster_mix_transport(&sender, &disconnect, "full".to_owned(), source)
+            .await
+            .is_err());
+        assert!(disconnect.is_cancelled());
+
+        // A disconnected output transport cannot acknowledge a durable MIX
+        // row, even though the caller has a live session object.
+        let (output, consumer) = tokio::sync::mpsc::channel(1);
+        drop(consumer);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = CancellationToken::new();
+        assert!(try_send_cluster_mix_transport(&sender, &disconnect, "closed".to_owned(), source)
+            .await
+            .is_err());
+        assert!(disconnect.is_cancelled());
+
+        // A receiver that takes the item and drops it before a recoverable
+        // boundary closes the one-shot and is rejected without inventing a
+        // timer-based delivery decision.
+        let (output, mut consumer) = tokio::sync::mpsc::channel(1);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = CancellationToken::new();
+        let waiter = {
+            let sender = sender.clone();
+            let disconnect = disconnect.clone();
+            tokio::spawn(async move {
+                try_send_cluster_mix_transport(&sender, &disconnect, "late".to_owned(), source)
+                    .await
+            })
+        };
+        let late = consumer.recv().await.expect("late MIX item was queued");
+        drop(late);
+        assert!(waiter.await.unwrap().is_err());
+        assert!(disconnect.is_cancelled());
+    }
+
+    #[test]
     fn version_seven_ack_must_echo_the_exact_delivery_contract() {
         let ack = NodeDeliveryAck {
             request_id: "r".to_owned(),
@@ -8819,6 +9414,7 @@ mod tests {
             control_processed: None,
             control_outcome: None,
             delivery: Some(NodeDeliveryContract::Volatile {}),
+            mix_handoff: None,
         };
         let payload = serde_json::to_string(&ack).unwrap();
         let mut expected = ack_expectation("r", "n", "node", "a@example.test");

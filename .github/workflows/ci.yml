@@ -936,11 +936,11 @@ jobs:
           - federation
           - mix-federation
     env:
-      # 50 two-node workers require 100 initial application connections. The
-      # driver makes its per-process pool profile explicit; this isolated CI
-      # PostgreSQL ceiling covers the 200-connection maximum plus migrator
-      # headroom without changing production defaults.
-      NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "256"
+      # The stress driver queries the built binary's runtime-pool manifest and
+      # adds the MIX fixture's one direct control connection per pair. 672 is
+      # therefore checked against a 650-connection 50-pair requirement rather
+      # than treated as unexplained generic headroom.
+      NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "672"
       NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS: "0"
@@ -1010,7 +1010,9 @@ jobs:
           - federation
           - mix-federation
     env:
-      NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "256"
+      # Match the regular 50-pair runtime-pool plus fixture-control budget;
+      # this is host capacity, not a relaxation of the 100x50 matrix.
+      NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "672"
       NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS: "0"

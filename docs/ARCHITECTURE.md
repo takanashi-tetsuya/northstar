@@ -104,7 +104,7 @@ Key ownership:
   durable owner, and only the adapter owns channel/cancellation primitives.
 - `src/abuse.rs` owns PostgreSQL-backed PoW/rate/message-admission policy.
 - `src/cluster.rs` owns optional Redis leases/PubSub, the node/delivery-contract
-  protocol v11 and its explicit degraded state machine;
+  protocol v13 and its explicit degraded state machine;
   `src/cluster_security.rs` independently owns the signed Ed25519 envelope
   format v8, node ACLs and replay binding; `src/db/cluster_keys.rs` owns
   non-secret key generations and key-bound process-instance leases. Redis
@@ -281,7 +281,7 @@ Storage-eligible `normal`/`chat` delivery to a locally hosted account first
 commits a transient recipient spool row together with the trusted XEP-0359
 identity and any enabled MAM rows. That database fence follows the stanza
 through the bounded local or cross-node channel. The cluster node/delivery
-contract protocol v11 carries the exact recipient/row fence explicitly; the
+contract protocol v13 carries the exact recipient/row fence explicitly; the
 receiver verifies both the PostgreSQL row and its payload before any socket
 queue accepts it. Unsafe
 volatile/durable combinations with a legacy v6 peer fail closed. When
@@ -313,6 +313,23 @@ claim query and is released for the entire Pending wait. A valid bearer may
 cancel only the exact local connection incarnation named by PostgreSQL;
 cross-node ownership is never inferred from an in-memory event and changes
 only after a committed authority transition or its persisted boundary.
+
+Migrations `0133` and `0134` extend that same supervised PostgreSQL listener
+with a schema-only MIX durable-delivery wake. The notification is only a
+commit-ordered hint: a MIX worker always reclaims the fenced recipient row
+before delivery. A verified MIX-capable resource advances the persisted
+route-wake generation of the current ordered recipient head. The generation is
+captured with its lease, so a concurrent defer or retry cannot overwrite an
+already committed route transition with a recovery delay. A dead-letter retry
+is reinserted at the current recipient tail rather than reusing historical
+sequence order. Migrations `0135`–`0137` extend this rule to every resumable
+and cross-node boundary. SM entries and BOSH response fences store a typed MIX
+source rather than a generic message ID. A v13 cross-node command carries the
+exact leased recipient source; the destination atomically rotates it into a
+node/request fence before queueing it, and may report success only after that
+fence becomes a direct socket fence, XEP-0198 entry, or BOSH response owner. A
+bounded process queue admission or a Redis acknowledgement is never an
+acknowledgement.
 
 Members-only direct and mediated MUC invitations use this same ownership
 contract. Their affiliation and spool row commit atomically; local and Redis

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
@@ -16,6 +16,89 @@ use northstar_web_surface::{
     ResolvedWebCapabilities, UploadRuntimeFacts,
 };
 pub use northstar_web_surface::{RegistrationMode, UploadMode};
+
+/// PostgreSQL enforces this limit for the shared production runtime role, not
+/// for an individual pool.  The primary pool must leave room for every
+/// long-lived runtime-role connection owned by this process.
+pub(crate) const RUNTIME_ROLE_CONNECTION_LIMIT: u32 = 64;
+/// The browser OMEMO recovery pool is deliberately separate from traffic so a
+/// long poll cannot monopolize normal request connections.
+pub(crate) const OMEMO_RECOVERY_POOL_MAX_CONNECTIONS: u32 = 2;
+/// The SM authority listener owns one dedicated PostgreSQL connection.
+pub(crate) const SM_AUTHORITY_LISTENER_MAX_CONNECTIONS: u32 = 1;
+/// Durable restart/shutdown observation owns one dedicated runtime connection.
+pub(crate) const SERVICE_CONTROL_POOL_MAX_CONNECTIONS: u32 = 1;
+/// Fixed runtime-role reservations outside `DATABASE_MAX_CONNECTIONS`.
+pub(crate) const RUNTIME_ROLE_RESERVED_CONNECTIONS: u32 = OMEMO_RECOVERY_POOL_MAX_CONNECTIONS
+    + SM_AUTHORITY_LISTENER_MAX_CONNECTIONS
+    + SERVICE_CONTROL_POOL_MAX_CONNECTIONS;
+/// One primary slot remains available to foreground work while one bounded
+/// outbox database turn is in progress.  Accepting a one-connection primary
+/// pool would make that service guarantee impossible.
+pub(crate) const DATABASE_PRIMARY_POOL_MIN_CONNECTIONS: u32 = 2;
+/// Largest primary-pool size that cannot exceed the runtime role's physical
+/// PostgreSQL connection limit on a single process.
+pub(crate) const DATABASE_MAX_CONNECTIONS_LIMIT: u32 =
+    RUNTIME_ROLE_CONNECTION_LIMIT - RUNTIME_ROLE_RESERVED_CONNECTIONS;
+
+/// Stable, machine-readable facts for isolated capacity fixtures.
+///
+/// This is deliberately derived from the same constants that constrain a
+/// running server.  Test harnesses must not maintain a second hand-written
+/// total for the long-lived runtime pools.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct RuntimeConnectionBudgetManifest {
+    pub(crate) schema_version: u8,
+    pub(crate) runtime_role_connection_limit: u32,
+    pub(crate) primary_pool_min_connections: u32,
+    pub(crate) primary_pool_max_connections: u32,
+    pub(crate) omemo_recovery_pool_max_connections: u32,
+    pub(crate) sm_authority_listener_max_connections: u32,
+    pub(crate) service_control_pool_max_connections: u32,
+    pub(crate) auxiliary_connections: u32,
+}
+
+pub(crate) const fn runtime_connection_budget_manifest() -> RuntimeConnectionBudgetManifest {
+    RuntimeConnectionBudgetManifest {
+        schema_version: 1,
+        runtime_role_connection_limit: RUNTIME_ROLE_CONNECTION_LIMIT,
+        primary_pool_min_connections: DATABASE_PRIMARY_POOL_MIN_CONNECTIONS,
+        primary_pool_max_connections: DATABASE_MAX_CONNECTIONS_LIMIT,
+        omemo_recovery_pool_max_connections: OMEMO_RECOVERY_POOL_MAX_CONNECTIONS,
+        sm_authority_listener_max_connections: SM_AUTHORITY_LISTENER_MAX_CONNECTIONS,
+        service_control_pool_max_connections: SERVICE_CONTROL_POOL_MAX_CONNECTIONS,
+        auxiliary_connections: RUNTIME_ROLE_RESERVED_CONNECTIONS,
+    }
+}
+
+/// The command-session capability has a separate PostgreSQL principal in
+/// production.  The explicit loopback-only development exception deliberately
+/// has no such principal, so it must share the already-attested primary pool
+/// rather than create a second pool with the same credential.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AdminCommandPoolMode {
+    DedicatedProductionRole,
+    SharedUnsafeDevelopment,
+}
+
+fn resolve_admin_command_pool_mode(
+    unsafe_development: bool,
+    configured_database_url: &str,
+) -> Result<AdminCommandPoolMode> {
+    let configured = !configured_database_url.trim().is_empty();
+    if unsafe_development {
+        anyhow::ensure!(
+            !configured,
+            "DATABASE_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT reuses the primary pool and must not set ADMIN_COMMAND_DATABASE_URL or ADMIN_COMMAND_DATABASE_URL_FILE"
+        );
+        return Ok(AdminCommandPoolMode::SharedUnsafeDevelopment);
+    }
+    anyhow::ensure!(
+        configured,
+        "production XEP-0133 commands require ADMIN_COMMAND_DATABASE_URL_FILE (preferred) or ADMIN_COMMAND_DATABASE_URL for the bounded northstar_commands role"
+    );
+    Ok(AdminCommandPoolMode::DedicatedProductionRole)
+}
 
 #[derive(Deserialize)]
 pub struct RawConfig {
@@ -700,6 +783,23 @@ fn default_server_name() -> String {
 fn default_db_max_connections() -> u32 {
     32
 }
+
+fn validate_runtime_pool_budget(max_connections: u32, min_connections: u32) -> Result<()> {
+    if !(DATABASE_PRIMARY_POOL_MIN_CONNECTIONS..=DATABASE_MAX_CONNECTIONS_LIMIT)
+        .contains(&max_connections)
+        || min_connections > max_connections
+    {
+        anyhow::bail!(
+            "DATABASE_MAX_CONNECTIONS must be between {DATABASE_PRIMARY_POOL_MIN_CONNECTIONS} and {DATABASE_MAX_CONNECTIONS_LIMIT}; \
+             the remaining {RUNTIME_ROLE_RESERVED_CONNECTIONS} of the runtime role's \
+             {RUNTIME_ROLE_CONNECTION_LIMIT} connection limit are reserved for OMEMO recovery, \
+             SM authority LISTEN, and durable service control, and DATABASE_MIN_CONNECTIONS \
+             must not exceed DATABASE_MAX_CONNECTIONS"
+        );
+    }
+    Ok(())
+}
+
 fn default_cluster_signing_key_epoch() -> i64 {
     1
 }
@@ -1069,6 +1169,7 @@ fn default_admin_idle_seconds() -> u64 {
 
 pub struct Config {
     pub raw: RawConfig,
+    pub(crate) admin_command_pool_mode: AdminCommandPoolMode,
     pub domain: String,
     pub public_url: String,
     pub websocket_allowed_origins: Vec<String>,
@@ -1998,15 +2099,10 @@ impl Config {
                 "DATABASE_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT is allowed only for a loopback reserved-domain deployment with absent or loopback Redis"
             );
         }
-        if raw.admin_command_database_url.trim().is_empty() {
-            if raw.database_allow_unsafe_role_for_development {
-                raw.admin_command_database_url = raw.database_url.clone();
-            } else {
-                anyhow::bail!(
-                    "production XEP-0133 commands require ADMIN_COMMAND_DATABASE_URL_FILE (preferred) or ADMIN_COMMAND_DATABASE_URL for the bounded northstar_commands role"
-                );
-            }
-        }
+        let admin_command_pool_mode = resolve_admin_command_pool_mode(
+            raw.database_allow_unsafe_role_for_development,
+            &raw.admin_command_database_url,
+        )?;
         raw.upload_storage_backend = raw.upload_storage_backend.trim().to_ascii_lowercase();
         raw.upload_s3_credential_mode = raw.upload_s3_credential_mode.trim().to_ascii_lowercase();
         raw.upload_s3_region = raw.upload_s3_region.trim().to_owned();
@@ -2215,14 +2311,7 @@ impl Config {
                 anyhow::bail!("{name} must contain comma-separated URI values without whitespace");
             }
         }
-        if raw.database_max_connections == 0
-            || raw.database_max_connections > 64
-            || raw.database_min_connections > raw.database_max_connections
-        {
-            anyhow::bail!(
-                "DATABASE_MAX_CONNECTIONS must be between 1 and the bounded runtime role limit of 64, and not smaller than DATABASE_MIN_CONNECTIONS"
-            );
-        }
+        validate_runtime_pool_budget(raw.database_max_connections, raw.database_min_connections)?;
         if !(crate::auth::MIN_SCRAM_ITERATIONS..=crate::auth::MAX_SCRAM_ITERATIONS)
             .contains(&raw.scram_iterations)
         {
@@ -2700,6 +2789,7 @@ impl Config {
         let fast_token_enabled = raw.fast_token_secret.is_some() || ephemeral_fast_is_allowed;
         Ok(Self {
             raw,
+            admin_command_pool_mode,
             domain,
             public_url,
             websocket_allowed_origins,
@@ -3213,11 +3303,15 @@ mod tests {
         authentication_master_secrets_are_independent, domain_list, domain_pattern_matches,
         ephemeral_development_secret_allowed, listener_addresses_overlap,
         load_component_credentials, parse_external_service, parse_pow_v1_compatibility_until,
-        parse_xep_0487_ips, read_secret_file, redis_endpoint_is_local, resolve_web_capability_plan,
-        valid_http_bearer_secret, validate_cluster_dialback_secret, validate_cluster_fast_secret,
+        parse_xep_0487_ips, read_secret_file, redis_endpoint_is_local,
+        resolve_admin_command_pool_mode, resolve_web_capability_plan,
+        runtime_connection_budget_manifest, valid_http_bearer_secret,
+        validate_cluster_dialback_secret, validate_cluster_fast_secret,
         validate_component_capacity, validate_component_transport, validate_redis_transport,
-        validate_shared_runtime_secret, validate_web_admin_exposure, ComponentConnectionMode,
-        ComponentCredential,
+        validate_runtime_pool_budget, validate_shared_runtime_secret, validate_web_admin_exposure,
+        AdminCommandPoolMode, ComponentConnectionMode, ComponentCredential,
+        DATABASE_MAX_CONNECTIONS_LIMIT, DATABASE_PRIMARY_POOL_MIN_CONNECTIONS,
+        RUNTIME_ROLE_CONNECTION_LIMIT, RUNTIME_ROLE_RESERVED_CONNECTIONS,
     };
 
     fn web_dependency_fixture() -> super::RawConfig {
@@ -3338,6 +3432,60 @@ mod tests {
         assert!(!plan.upload.xmpp_advertisement);
         assert!(plan.upload.get);
         assert!(plan.upload.cleanup_worker);
+    }
+
+    #[test]
+    fn runtime_role_pool_budget_reserves_all_nonprimary_connections() {
+        let manifest = runtime_connection_budget_manifest();
+        assert_eq!(manifest.schema_version, 1);
+        assert_eq!(manifest.runtime_role_connection_limit, 64);
+        assert_eq!(manifest.primary_pool_min_connections, 2);
+        assert_eq!(manifest.primary_pool_max_connections, 60);
+        assert_eq!(manifest.omemo_recovery_pool_max_connections, 2);
+        assert_eq!(manifest.sm_authority_listener_max_connections, 1);
+        assert_eq!(manifest.service_control_pool_max_connections, 1);
+        assert_eq!(manifest.auxiliary_connections, 4);
+        assert_eq!(RUNTIME_ROLE_CONNECTION_LIMIT, 64);
+        assert_eq!(RUNTIME_ROLE_RESERVED_CONNECTIONS, 4);
+        assert_eq!(DATABASE_PRIMARY_POOL_MIN_CONNECTIONS, 2);
+        assert_eq!(DATABASE_MAX_CONNECTIONS_LIMIT, 60);
+
+        // The listener/MIX stress profile intentionally uses a tiny *primary*
+        // pool. It remains valid; the fixed auxiliary pools are accounted for
+        // separately rather than making the test's DB_MAX=2 impossible.
+        assert!(validate_runtime_pool_budget(2, 0).is_ok());
+        assert!(validate_runtime_pool_budget(DATABASE_MAX_CONNECTIONS_LIMIT, 0).is_ok());
+        assert!(validate_runtime_pool_budget(
+            DATABASE_MAX_CONNECTIONS_LIMIT,
+            DATABASE_MAX_CONNECTIONS_LIMIT
+        )
+        .is_ok());
+        assert!(validate_runtime_pool_budget(DATABASE_MAX_CONNECTIONS_LIMIT + 1, 0).is_err());
+        assert!(validate_runtime_pool_budget(2, 3).is_err());
+        assert!(validate_runtime_pool_budget(1, 0).is_err());
+        assert!(validate_runtime_pool_budget(0, 0).is_err());
+    }
+
+    #[test]
+    fn command_pool_mode_only_shares_the_primary_pool_in_explicit_unsafe_development() {
+        assert_eq!(
+            resolve_admin_command_pool_mode(true, "").unwrap(),
+            AdminCommandPoolMode::SharedUnsafeDevelopment
+        );
+        assert!(resolve_admin_command_pool_mode(
+            true,
+            "postgres://northstar_commands:secret@127.0.0.1/northstar"
+        )
+        .is_err());
+        assert!(resolve_admin_command_pool_mode(false, "").is_err());
+        assert_eq!(
+            resolve_admin_command_pool_mode(
+                false,
+                "postgres://northstar_commands:secret@127.0.0.1/northstar"
+            )
+            .unwrap(),
+            AdminCommandPoolMode::DedicatedProductionRole
+        );
     }
 
     #[test]

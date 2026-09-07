@@ -49,6 +49,34 @@ PID_B = int(os.environ.get("NORTHSTAR_CLUSTER_PID_B", "0"))
 NODE_B_PRIVATE_KEY_DER = os.environ.get("NORTHSTAR_CLUSTER_NODE_B_PRIVATE_KEY_DER", "")
 
 
+def repository_cluster_protocol_version() -> str:
+    """Read the exact cluster wire version the fixture's binary must expose.
+
+    The test deliberately mutates Redis heartbeats to exercise old/new-peer
+    rejection.  Keeping an independent literal here previously allowed the
+    fixture to drift from the Rust contract and turn a compatibility check
+    into a false observation.  The live heartbeat is checked against this
+    source contract before any mutation, so a stale binary also fails closed.
+    """
+
+    source = ROOT.parent / "src" / "cluster.rs"
+    try:
+        text = source.read_text(encoding="utf-8")
+    except OSError as error:
+        raise RuntimeError(f"cannot read cluster protocol contract: {source}") from error
+    match = re.search(
+        r'^const NODE_PROTOCOL_VERSION: &str = "([0-9]+)";$',
+        text,
+        flags=re.MULTILINE,
+    )
+    if match is None or int(match.group(1)) < 1:
+        raise RuntimeError("cluster protocol contract is missing or invalid")
+    return match.group(1)
+
+
+CLUSTER_PROTOCOL_VERSION = repository_cluster_protocol_version()
+
+
 def redis_cli(*arguments: str, input_bytes: bytes | None = None) -> str:
     environment = dict(os.environ)
     environment["REDISCLI_AUTH"] = REDIS_PASSWORD
@@ -722,7 +750,11 @@ def run() -> None:
         "<item nick='Bob' role='none'><reason>runtime kick</reason></item>"
         "</query></iq>"
     )
-    alice_a.receive_until("cluster-kick")
+    kick_result, _ = alice_a.receive_until("cluster-kick")
+    fixture.check(
+        "type='result'" in kick_result,
+        "cluster MUC kick was rejected before status delivery",
+    )
     kicked, _ = bob_b.receive_until("code='307'")
     fixture.check("type='unavailable'" in kicked, "remote kick was not acknowledged by owner node")
     bob_b.send(
@@ -990,10 +1022,20 @@ def run_faults() -> None:
     )
     bob_b.receive_until("after-oversize")
 
-    # Mixed application versions fail closed in both directions. Presence
-    # replay now carries UUID/generation authority which a v9 process would
-    # ignore, so a v10 sender must never publish executable traffic to it.
-    redis_cli("set", bob_alive, "11", "EX", "90")
+    # Mutate an otherwise healthy current-version heartbeat in both
+    # directions. The source-derived contract and the live node heartbeat
+    # must agree first; otherwise this fixture would silently test source
+    # text against a stale binary.
+    fixture.check(
+        redis_cli("get", bob_alive) == CLUSTER_PROTOCOL_VERSION,
+        "node B heartbeat protocol version differs from the repository contract",
+    )
+    newer_cluster_protocol_version = str(int(CLUSTER_PROTOCOL_VERSION) + 1)
+    older_cluster_protocol_version = str(max(1, int(CLUSTER_PROTOCOL_VERSION) - 1))
+
+    # Mixed application versions fail closed in both directions. New wire
+    # semantics must never be published to a node which could ignore them.
+    redis_cli("set", bob_alive, newer_cluster_protocol_version, "EX", "90")
     alice_a.send(
         f"<message xmlns='jabber:client' to='{bob_full}' type='chat' id='newer-peer-version'>"
         "<body>unknown peer contract must fail</body>"
@@ -1005,7 +1047,7 @@ def run_faults() -> None:
         f"unknown newer cluster delivery contract did not fail closed: {newer_rejected}",
     )
     expect_no_frame(bob_b, "newer-peer-version")
-    redis_cli("set", bob_alive, "9", "EX", "90")
+    redis_cli("set", bob_alive, older_cluster_protocol_version, "EX", "90")
     alice_a.send(
         f"<message xmlns='jabber:client' to='{bob_full}' type='chat' id='legacy-peer-version'>"
         "<body>peer version 9</body></message>"
@@ -1016,7 +1058,7 @@ def run_faults() -> None:
         f"older cluster application version did not fail closed: {legacy_rejected}",
     )
     expect_no_frame(bob_b, "legacy-peer-version")
-    redis_cli("set", bob_alive, "10", "EX", "90")
+    redis_cli("set", bob_alive, CLUSTER_PROTOCOL_VERSION, "EX", "90")
 
     # Claim a dedicated nonexistent full resource through the real
     # PostgreSQL process/connection authority, then pause node B so the test
@@ -1091,9 +1133,9 @@ def run_faults() -> None:
         request_envelope = subscriber_envelope(subscriber)
         request = request_envelope["payload"]
         fixture.check(
-            request.get("protocol_version") == "10"
+            request.get("protocol_version") == CLUSTER_PROTOCOL_VERSION
             and request.get("delivery") == {"reliability": "volatile"},
-            f"cluster no-store envelope omitted its volatile v10 contract: {request}",
+            f"cluster no-store envelope omitted its volatile current contract: {request}",
         )
         request_id = request["request_id"]
         nonce = request["ack_nonce"]

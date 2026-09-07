@@ -3,6 +3,7 @@ use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::HashSet;
+use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +65,15 @@ pub struct DurableServiceControl {
     pub fired_at: Option<chrono::DateTime<chrono::Utc>>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
 }
+
+// The service-control watcher has a three-second WorkerRegistry silence
+// budget. Keep all database phases materially below that budget so a stalled
+// control row reports a bounded business failure rather than looking like a
+// hung worker. The watcher owns an isolated one-connection runtime pool; these
+// limits are its second line of defense against a blocked database backend.
+const SERVICE_CONTROL_POLL_TIMEOUT: Duration = Duration::from_millis(750);
+const SERVICE_CONTROL_LOCK_TIMEOUT: &str = "250ms";
+const SERVICE_CONTROL_STATEMENT_TIMEOUT: &str = "500ms";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdminAccountIdentity {
@@ -1948,13 +1958,32 @@ pub async fn apply_admin_service_control_command(
 /// when its PostgreSQL-clock deadline has arrived.  Every node polls this row;
 /// only processes whose start time predates `fired_at` act on it.
 pub async fn poll_admin_service_control(pool: &PgPool) -> Result<Option<DurableServiceControl>> {
-    let row = sqlx::query(
-        "SELECT generation,action,execute_at,fired_at,expires_at
-           FROM northstar_admin_service_control_poll()",
-    )
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.as_ref().map(service_control_from_row))
+    tokio::time::timeout(SERVICE_CONTROL_POLL_TIMEOUT, async {
+        let mut transaction = pool.begin().await?;
+        sqlx::query("SELECT pg_catalog.set_config('lock_timeout',$1,TRUE)")
+            .bind(SERVICE_CONTROL_LOCK_TIMEOUT)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("SELECT pg_catalog.set_config('statement_timeout',$1,TRUE)")
+            .bind(SERVICE_CONTROL_STATEMENT_TIMEOUT)
+            .execute(&mut *transaction)
+            .await?;
+        let row = sqlx::query(
+            "SELECT generation,action,execute_at,fired_at,expires_at
+               FROM northstar_admin_service_control_poll()",
+        )
+        .fetch_optional(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok::<_, anyhow::Error>(row.map(|row| service_control_from_row(&row)))
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "durable service-control poll exceeded {} ms",
+            SERVICE_CONTROL_POLL_TIMEOUT.as_millis()
+        )
+    })?
 }
 
 fn service_control_from_row(row: &sqlx::postgres::PgRow) -> DurableServiceControl {
@@ -1971,6 +2000,7 @@ fn service_control_from_row(row: &sqlx::postgres::PgRow) -> DurableServiceContro
 mod boundary_tests {
     use super::*;
     use sha2::Digest;
+    use std::time::Instant;
 
     async fn database() -> PgPool {
         let url = std::env::var("TEST_DATABASE_URL")
@@ -2027,6 +2057,77 @@ mod boundary_tests {
             other => panic!("unexpected execution outcome: {other:?}"),
         };
         (bearer, claim, digest)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+    async fn service_control_poll_isolates_traffic_exhaustion_and_fails_closed_on_lock() {
+        let pool = database().await;
+        let url = std::env::var("TEST_DATABASE_URL")
+            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+        let traffic_pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_millis(100))
+            .connect(&url)
+            .await
+            .unwrap();
+        let control_pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .min_connections(1)
+            .acquire_timeout(Duration::from_millis(500))
+            .connect(&url)
+            .await
+            .unwrap();
+
+        // Saturating the traffic pool must not prevent the separate
+        // service-control connection from reading durable authority.
+        let traffic_lease = traffic_pool.acquire().await.unwrap();
+        assert!(
+            poll_admin_service_control(&control_pool).await.is_ok(),
+            "a traffic-pool stall must not make service control unavailable"
+        );
+        drop(traffic_lease);
+
+        let suffix = Uuid::new_v4().simple().to_string();
+        let actor_id = Uuid::new_v4();
+        let actor_name = format!("service-control-admin-{}", &suffix[..10]);
+        insert_account(&pool, actor_id, &actor_name, true).await;
+        assert!(
+            schedule_admin_service_control(&pool, actor_id, 0, "shutdown", 5, None,)
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        let lock_pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        let mut lock = lock_pool.begin().await.unwrap();
+        sqlx::query("SELECT singleton FROM admin_service_control WHERE singleton FOR UPDATE")
+            .execute(&mut *lock)
+            .await
+            .unwrap();
+
+        let started = Instant::now();
+        let locked = poll_admin_service_control(&control_pool).await;
+        assert!(
+            locked.is_err(),
+            "a locked control row must not be treated as healthy"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "a blocked control poll must fail below the three-second worker heartbeat deadline"
+        );
+        lock.rollback().await.unwrap();
+        assert!(
+            poll_admin_service_control(&control_pool)
+                .await
+                .unwrap()
+                .is_none(),
+            "a bounded lock failure must leave the scheduled control generation intact"
+        );
     }
 
     #[tokio::test]

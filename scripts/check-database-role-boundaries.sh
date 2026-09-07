@@ -122,6 +122,9 @@ require_literal "$ci_workflow" 'bash scripts/stateful-database-ci.sh "${{ matrix
 require_literal "$stateful_database_manifest" \
   'admin-session-cleanup|Admin session cleanup database|480|admin-session-cleanup-db-wsl.sh' \
   'the stateful database suite manifest does not route the isolated administrator cleanup effect fixture through its unique suite id'
+require_literal "$admin_cleanup_fixture" \
+  'service_control_poll_isolates_traffic_exhaustion_and_fails_closed_on_lock' \
+  'the administrator cleanup database fixture does not execute the service-control pool isolation regression'
 require_literal "$stateful_database_manifest" \
   'phase=database_suite_result' \
   'the stateful database suite manifest does not emit a terminal result for every invoked suite'
@@ -152,6 +155,8 @@ require_literal "$database_acceptance" "database_transport='private-unix-socket'
   'database role acceptance does not recognize its exact private Unix socket transport'
 require_literal "$database_acceptance" 'host=${encoded_database_host}' \
   'database role acceptance does not encode the private Unix socket in the migrator URL'
+require_literal "$database_acceptance" '@localhost/xmpp?host=${encoded_database_host}' \
+  'database role acceptance must retain a nonempty SQLx URL authority while overriding it with the private Unix socket'
 for protected_table in admin_session_cleanup_effects admin_session_cleanup_capacity; do
   require_literal "$capability_manifest" \
     "('$protected_table',FALSE,FALSE,FALSE,FALSE,'0111')" \
@@ -556,8 +561,17 @@ require_literal "$role_runner" \
   'repository migration ledger differs by version, description, success, or SHA-384 checksum' \
   'role audit does not reject missing/unknown/failed/tampered migration rows'
 require_literal "$grant_apply" \
-  'AND NOT routine.prosecdef' \
-  'runtime routine reconciliation must grant only SECURITY INVOKER routines by default'
+  "routine.prorettype<>'pg_catalog.trigger'::pg_catalog.regtype" \
+  'runtime routine reconciliation must exclude trigger-only SECURITY INVOKER helpers from direct EXECUTE'
+require_literal "$role_runner" \
+  "routine.prorettype<>'pg_catalog.trigger'::pg_catalog.regtype" \
+  'runtime role audit must classify trigger-only SECURITY INVOKER helpers as owner-only direct execution'
+require_literal "$role_attestation" \
+  "routine.prorettype='pg_catalog.trigger'::pg_catalog.regtype" \
+  'startup role attestation must reject runtime direct EXECUTE on trigger-only invoker helpers'
+require_literal "$role_attestation" \
+  'trigger-only runtime routine execution' \
+  'startup role attestation must describe trigger-only invoker execution drift'
 require_literal "$grant_apply" \
   'northstar_transfer_cluster_muc_outbox(uuid,uuid,uuid,uuid,int8,uuid,int8,text)' \
   'runtime SECURITY DEFINER allowlist is missing its exact MUC handoff signature'
@@ -1487,6 +1501,13 @@ require_literal "$database_acceptance" \
 require_literal "$database_acceptance" \
   'bash scripts/reconcile-database-grants.sh' \
   'database-backed acceptance test omits post-migration grant reconciliation'
+for trigger_only_invoker_evidence in \
+  'runtime direct EXECUTE was not denied for trigger-only invoker helpers' \
+  'runtime PubSub invoker trigger enforces the collection child limit' \
+  'runtime MIX DML did not fire both committed trigger-only wake paths'; do
+  require_literal "$database_acceptance" "$trigger_only_invoker_evidence" \
+    "database-backed acceptance omits trigger-only invoker evidence: $trigger_only_invoker_evidence"
+done
 for denied_boundary in \
   'runtime CREATE in public' \
   'runtime TEMPORARY object creation' \

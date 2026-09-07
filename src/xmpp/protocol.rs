@@ -789,7 +789,7 @@ impl ProtocolSession {
     }
 
     pub async fn record_outbound(&mut self, stanza: &str) -> Result<()> {
-        self.record_outbound_with_delivery(stanza, None).await
+        self.record_outbound_with_source(stanza, None).await
     }
 
     /// Record one transport item before it crosses the socket boundary.
@@ -800,23 +800,36 @@ impl ProtocolSession {
         &mut self,
         item: &crate::outbound::OutboundItem,
     ) -> Result<bool> {
-        let managed_by_sm = durable_delivery_managed_by_sm(
-            self.sm_enabled,
-            &item.stanza,
-            item.durable_delivery.is_some(),
+        anyhow::ensure!(
+            item.validate_durable_source_shape(),
+            "outbound item has an invalid durable source/hand-off shape"
         );
-        self.record_outbound_with_delivery(&item.stanza, item.durable_delivery)
+        let managed_by_sm = durable_delivery_managed_by_sm(
+            self.sm_enabled && self.sm_db_id.is_some(),
+            &item.stanza,
+            item.durable_source.is_some(),
+        );
+        self.record_outbound_with_source(&item.stanza, item.durable_source)
             .await?;
         if managed_by_sm {
-            item.confirm_transport_ownership();
+            if item.mix_delivery().is_some() {
+                let session_id = self
+                    .sm_db_id
+                    .context("XEP-0198 MIX ownership was not persisted")?;
+                item.complete_mix_handoff(crate::outbound::MixTransportCompletion::SmPersisted {
+                    session_id,
+                });
+            } else {
+                item.confirm_transport_ownership();
+            }
         }
         Ok(managed_by_sm)
     }
 
-    async fn record_outbound_with_delivery(
+    async fn record_outbound_with_source(
         &mut self,
         stanza: &str,
-        durable_delivery: Option<crate::outbound::DurableDelivery>,
+        durable_source: Option<crate::outbound::TransportOwnershipSource>,
     ) -> Result<()> {
         self.state
             .metrics
@@ -854,12 +867,12 @@ impl ProtocolSession {
             }
             self.sm_outbound_h = self.sm_outbound_h.wrapping_add(1);
             self.sm_unacked
-                .push_back(crate::outbound::SmUnackedStanza::with_delivery(
+                .push_back(crate::outbound::SmUnackedStanza::with_source(
                     stanza.to_owned(),
-                    durable_delivery,
+                    durable_source,
                 ));
             self.checkpoint_sm().await?;
-        } else if durable_delivery.is_some() {
+        } else if durable_source.is_some() {
             // With SM disabled, counted RFC 6120 stanzas are legitimately
             // completed at the transport write boundary. Non-counted control
             // elements always use that path as well. Only an active SM session
@@ -1009,7 +1022,7 @@ impl ProtocolSession {
             self.sm_resume_allowed = false;
             anyhow::bail!("XEP-0198 process memory capacity reached");
         }
-        let updated = tokio::time::timeout(
+        let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             self.state.sm_service().checkpoint_session(
                 id,
@@ -1023,8 +1036,32 @@ impl ProtocolSession {
         )
         .await
         .context("XEP-0198 checkpoint database operation timed out")??;
-        anyhow::ensure!(updated, "durable XEP-0198 stream lease was lost");
+        anyhow::ensure!(
+            outcome.updated,
+            "durable XEP-0198 stream lease was lost"
+        );
+        // A checkpoint can rotate a MIX lease while atomically transferring
+        // the stanza into the SM queue.  Keep the process-resident replay
+        // queue on that exact new lease: a later acknowledgement must never
+        // consume the old worker lease.
+        self.apply_sm_ownership_resolution(&outcome.ownership);
         Ok(())
+    }
+
+    pub(crate) fn apply_sm_ownership_resolution(
+        &mut self,
+        resolution: &crate::services::sm::SmQueueOwnershipResolution,
+    ) {
+        Self::apply_sm_ownership_resolution_to_unacked(&mut self.sm_unacked, resolution);
+    }
+
+    pub(crate) fn apply_sm_ownership_resolution_to_unacked(
+        stanzas: &mut VecDeque<crate::outbound::SmUnackedStanza>,
+        resolution: &crate::services::sm::SmQueueOwnershipResolution,
+    ) {
+        for stanza in stanzas {
+            stanza.source = resolution.resolve_source(stanza.source);
+        }
     }
 
     pub(crate) fn open_stream(&self) -> String {

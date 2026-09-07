@@ -106,9 +106,15 @@ production baseline; Windows AMD64 artifacts are for development and evaluation.
   `check_pubsub_collection_edge()` remains `SECURITY INVOKER` with its
   schema-local catalog-first `search_path`; it must not be promoted to a
   runtime-executable privileged capability.
+- [ ] Apply migrations `0133` through `0137`; verify MIX delivery notifications
+  contain only the installation schema, runtime cannot directly execute their
+  `SECURITY INVOKER` trigger helper, a route wake advances the persisted
+  recipient generation without replacing the fenced claim/lease authority,
+  SM/BOSH entries retain typed MIX sources, and cross-node MIX delivery creates
+  a node/request fence before reporting socket/SM/BOSH ownership.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 131 migrations from `0001` through the current
-  repository maximum `0132`, with `0021` as the sole intentional gap.
+  identity and verify all 136 migrations from `0001` through the current
+  repository maximum `0137`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

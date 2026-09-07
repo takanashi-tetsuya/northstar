@@ -195,6 +195,16 @@ async fn main() -> Result<()> {
         println!("{}", version_line());
         return Ok(());
     }
+    if arguments.first().map(String::as_str) == Some("--runtime-connection-budget") {
+        if arguments.len() != 1 {
+            anyhow::bail!("usage: xmpp-server --runtime-connection-budget");
+        }
+        println!(
+            "{}",
+            serde_json::to_string(&config::runtime_connection_budget_manifest())?
+        );
+        return Ok(());
+    }
     if arguments.first().map(String::as_str) == Some("--healthcheck") {
         let address = arguments
             .get(1)

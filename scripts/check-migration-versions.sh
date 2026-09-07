@@ -830,10 +830,14 @@ do
 done
 for required_broker_fragment in \
     'SM_AUTHORITY_NOTIFICATION_CHANNEL: &str = "northstar_sm_authority_v1"' \
-    'max_connections(1)' \
+    'SM_AUTHORITY_LISTENER_MAX_CONNECTIONS' \
     'PgListener::connect_with(&listener_pool)' \
     'notification = listener.try_recv()' \
     'authority.publish_listener_transition();' \
+    'MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL' \
+    '.listen_all([' \
+    'mix_delivery_wake.publish_listener_transition();' \
+    '.accept_committed_notification(notification.payload())' \
     'notification_sequence' \
     'borrow_and_update()' \
     'participants.fetch_sub(1, Ordering::AcqRel)' \
@@ -1037,6 +1041,281 @@ if [[ "$pubsub_edge_path_argument_count" -ne 2 ]]; then
     exit 1
 fi
 echo "migration 0132 pins the PubSub collection-edge trigger helper as a schema-local invoker routine"
+
+# Migration 0133 is intentionally an invoker-only trigger, not a new database
+# capability.  It turns a committed durable MIX recipient INSERT/DELETE into a
+# bounded schema-only wake hint.  The listener and workers must still make the
+# normal fenced PostgreSQL claim, which keeps the notification channel from
+# becoming either a delivery authority or a cross-schema data leak.
+mix_delivery_wake_migration="migrations/0133_mix_delivery_wake_notifications.sql"
+[ -f "$mix_delivery_wake_migration" ] || {
+    echo "MIX delivery wake migration is missing: $mix_delivery_wake_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'CREATE FUNCTION northstar_mix_delivery_notify()' \
+    'SECURITY INVOKER' \
+    'SET search_path FROM CURRENT' \
+    "'northstar_mix_delivery_v1'" \
+    'TG_TABLE_SCHEMA' \
+    'CREATE TRIGGER mix_delivery_recipients_wake' \
+    'AFTER INSERT OR DELETE ON mix_delivery_recipients' \
+    'FOR EACH STATEMENT EXECUTE FUNCTION northstar_mix_delivery_notify();' \
+    'SECURITY INVOKER SET search_path TO pg_catalog, %I, pg_temp' \
+    'REVOKE ALL ON FUNCTION %I.northstar_mix_delivery_notify() FROM PUBLIC' \
+    'NOT routine.prosecdef' \
+    'routine.proconfig=ARRAY[expected_path]::pg_catalog.text[]' \
+    'privilege.grantee=0'
+do
+    if ! grep -Fq "$required_fragment" "$mix_delivery_wake_migration"; then
+        echo "migration 0133 is missing MIX delivery wake invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+mix_delivery_notify_body=$(sed -n '/^CREATE FUNCTION northstar_mix_delivery_notify()/,/^\$\$;/p' "$mix_delivery_wake_migration")
+if [ "$(printf '%s\n' "$mix_delivery_notify_body" | grep -Fc 'pg_catalog.pg_notify(')" -ne 1 ] \
+   || [ "$(printf '%s\n' "$mix_delivery_notify_body" | grep -Fc 'TG_TABLE_SCHEMA')" -ne 1 ] \
+   || [ "$(printf '%s\n' "$mix_delivery_notify_body" | grep -Fc "'northstar_mix_delivery_v1'")" -ne 1 ]; then
+    echo "migration 0133 must emit exactly one schema-only MIX delivery notification" >&2
+    exit 1
+fi
+if printf '%s\n' "$mix_delivery_notify_body" | grep -Eq '(^|[^[:alnum:]_])(NEW|OLD)[[:space:]]*\.'; then
+    echo "migration 0133 notification body must not expose row data" >&2
+    exit 1
+fi
+if grep -Fq 'SECURITY DEFINER' "$mix_delivery_wake_migration"; then
+    echo "migration 0133 wake trigger must remain SECURITY INVOKER" >&2
+    exit 1
+fi
+for required_source_fragment in \
+    'MixDeliveryWakeBroker' \
+    'MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL: &str = "northstar_mix_delivery_v1"' \
+    'watch::Sender<u64>' \
+    'pub(crate) fn subscribe_delivery_wake' \
+    'accept_committed_notification' \
+    'publish_listener_transition'
+do
+    if ! grep -Fq "$required_source_fragment" src/services/mix.rs; then
+        echo "MIX delivery wake broker is missing source invariant: $required_source_fragment" >&2
+        exit 1
+    fi
+done
+for required_source_fragment in \
+    'let mut delivery_wake = matches!(queue, MixOutboxQueue::Delivery)' \
+    'subscribe_delivery_wake()' \
+    'wait_for_mix_delivery_wake(&mut delivery_wake)' \
+    'next_claim = tokio::time::Instant::now();'
+do
+    if ! grep -Fq "$required_source_fragment" src/xmpp/protocol/mix.rs; then
+        echo "MIX durable delivery lane is missing lossless wake invariant: $required_source_fragment" >&2
+        exit 1
+    fi
+done
+echo "migration 0133 emits schema-only committed MIX delivery wakes and the delivery lane consumes retained typed notifications"
+
+# Migration 0134 adds a durable, row-local route epoch to the ordered MIX
+# recipient projection. A verified route can appear after claim but before a
+# no-route worker clears its lease; defer and retry must compare the captured
+# epoch so neither recovery delay can overwrite that committed availability.
+# Keeping the epoch on the exact recipient row deliberately avoids introducing
+# a new sequence-authority lock order into the completion path.
+mix_delivery_route_epoch_migration="migrations/0134_mix_delivery_route_wake_generation.sql"
+[ -f "$mix_delivery_route_epoch_migration" ] || {
+    echo "MIX delivery route-wake epoch migration is missing: $mix_delivery_route_epoch_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'ADD COLUMN route_wake_generation BIGINT NOT NULL DEFAULT 0' \
+    'CHECK (route_wake_generation >= 0)' \
+    'CREATE TRIGGER mix_delivery_recipients_route_wake' \
+    'AFTER UPDATE OF route_wake_generation ON mix_delivery_recipients' \
+    'FOR EACH ROW' \
+    'WHEN (OLD.route_wake_generation IS DISTINCT FROM NEW.route_wake_generation)' \
+    'EXECUTE FUNCTION northstar_mix_delivery_notify();'
+do
+    if ! grep -Fq "$required_fragment" "$mix_delivery_route_epoch_migration"; then
+        echo "migration 0134 is missing MIX route-wake epoch invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if grep -Fq 'SECURITY DEFINER' "$mix_delivery_route_epoch_migration"; then
+    echo "migration 0134 must reuse the invoker-only MIX wake helper" >&2
+    exit 1
+fi
+for required_source_fragment in \
+    'route_wake_generation: i64' \
+    'WHEN route_wake_generation<>$3 THEN clock_timestamp()' \
+    'route_wake_generation=route_wake_generation+1' \
+    'route_wake_generation: delivery.route_wake_generation' \
+    'delivery.route_wake_generation,'
+do
+    if ! grep -Fq "$required_source_fragment" src/db/mix.rs src/services/mix.rs src/xmpp/protocol/mix.rs; then
+        echo "MIX route-wake epoch source invariant is missing: $required_source_fragment" >&2
+        exit 1
+    fi
+done
+mix_delivery_retry_source=$(sed -n '/^pub async fn retry_mix_delivery(/,/^pub async fn defer_mix_delivery(/p' src/db/mix.rs)
+for required_retry_fragment in \
+    'let mut transaction = pool.begin().await?;' \
+    'SELECT attempt_count,route_wake_generation' \
+    'FOR UPDATE' \
+    'let persisted_attempt_count' \
+    'persisted_route_wake_generation != route_wake_generation' \
+    'MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit' \
+    'MixDeliveryRetryOutcome::DeadLettered' \
+    'move_mix_delivery_to_dead_letter_tx(' \
+    'next_attempt >= 20'
+do
+    if ! printf '%s\n' "$mix_delivery_retry_source" | grep -Fq "$required_retry_fragment"; then
+        echo "MIX terminal retry must make its route-wake decision from one locked durable row: $required_retry_fragment" >&2
+        exit 1
+    fi
+done
+if printf '%s\n' "$mix_delivery_retry_source" | grep -Eq '^[[:space:]]*attempt_count:[[:space:]]*i32'; then
+    echo "MIX retry must not trust a caller-supplied attempt count at the terminal boundary" >&2
+    exit 1
+fi
+if printf '%s\n' "$mix_delivery_retry_source" | grep -Fq 'dead_letter_mix_delivery(pool'; then
+    echo "MIX retry terminal completion must stay in the locked retry transaction" >&2
+    exit 1
+fi
+mix_delivery_retry_service_source=$(sed -n '/^    pub(crate) async fn retry_mix_delivery(/,/^    pub(crate) async fn defer_mix_delivery(/p' src/services/mix.rs)
+for required_service_fragment in \
+    'db::MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit' \
+    'db::MixDeliveryRetryOutcome::DeadLettered' \
+    'self.publish_delivery_local_commit();'
+do
+    if ! printf '%s\n' "$mix_delivery_retry_service_source" | grep -Fq "$required_service_fragment"; then
+        echo "MIX retry service must publish terminal and route-woken local commits: $required_service_fragment" >&2
+        exit 1
+    fi
+done
+if ! grep -Fq 'Re-admit one terminal projection at the recipient'\''s current queue tail.' src/db/mix.rs \
+   || ! grep -Fq 'SET next_sequence=mix_delivery_recipient_sequences.next_sequence+1' src/db/mix.rs \
+   || ! grep -Fq 'RETURNING next_sequence-1' src/db/mix.rs; then
+    echo "MIX dead-letter requeue must allocate a fresh recipient tail sequence" >&2
+    exit 1
+fi
+echo "migration 0134 persists route wakes across leased deferral/retry, gives a committed terminal-boundary wake one fresh claim, and requeues dead letters at the ordered tail"
+
+# Migration 0135 adds typed MIX ownership at the two resumable transport
+# boundaries.  C2S and MIX sources intentionally have disjoint identities;
+# accepting a bare message id here would let an old acknowledgement consume a
+# recipient lease which was transferred to SM or BOSH.
+mix_transport_handoff_migration="migrations/0135_mix_transport_handoffs.sql"
+[ -f "$mix_transport_handoff_migration" ] || {
+    echo "MIX transport hand-off migration is missing: $mix_transport_handoff_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'ADD COLUMN mix_delivery_id UUID' \
+    'ADD COLUMN mix_delivery_lease_token UUID' \
+    'sm_resume_stanza_mix_delivery_fk' \
+    'ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED' \
+    'CREATE UNIQUE INDEX sm_resume_stanza_mix_delivery_owner' \
+    'CREATE TABLE mix_bosh_delivery_fences' \
+    'delivery_id UUID PRIMARY KEY' \
+    'lease_token UUID NOT NULL' \
+    'CHECK (expires_at <= first_owned_at + INTERVAL '\''5 minutes'\'')' \
+    'CREATE INDEX mix_bosh_delivery_fence_session_ack'
+do
+    if ! grep -Fq "$required_fragment" "$mix_transport_handoff_migration"; then
+        echo "migration 0135 is missing typed MIX transport-ownership invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if grep -Fq 'SECURITY DEFINER' "$mix_transport_handoff_migration"; then
+    echo "migration 0135 must not add a broad database capability for transport ownership" >&2
+    exit 1
+fi
+for required_source_fragment in \
+    'transfer_mix_delivery_to_bosh(' \
+    'mix_bosh_delivery_fences' \
+    'checkpoint_sm_session_with_ownership_resolution' \
+    'TransportOwnershipSource::Mix' \
+    'BoshResponseOwnership'
+do
+    if ! grep -Fq "$required_source_fragment" src/db/mix.rs src/db/replay.rs src/db/sm.rs src/services/mix.rs src/services/replay.rs src/services/sm.rs src/bosh.rs; then
+        echo "MIX transport ownership source invariant is missing: $required_source_fragment" >&2
+        exit 1
+    fi
+done
+echo "migration 0135 keeps MIX leases typed and recoverable across SM and BOSH hand-offs"
+
+# Parent session teardown cascades the SM queue.  The invoker-only BEFORE
+# trigger in 0136 must first release each exact rotated MIX lease, otherwise
+# a terminated resumable stream would strand an ordered recipient head until
+# a lease timeout.  It is deliberately not SECURITY DEFINER: the existing
+# session owner is the only authority allowed to delete the parent row.
+sm_mix_teardown_migration="migrations/0136_sm_mix_teardown_release.sql"
+[ -f "$sm_mix_teardown_migration" ] || {
+    echo "MIX SM teardown migration is missing: $sm_mix_teardown_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'CREATE FUNCTION northstar_release_sm_session_mix_delivery_owners()' \
+    'SECURITY INVOKER' \
+    'BEFORE DELETE ON sm_resume_sessions' \
+    'sm_resume_sessions_release_mix_delivery_owners' \
+    'recipient.lease_token=stanza.mix_delivery_lease_token' \
+    'SET search_path FROM CURRENT' \
+    'SECURITY INVOKER SET search_path TO pg_catalog, %I, pg_temp' \
+    'REVOKE ALL ON FUNCTION %I.northstar_release_sm_session_mix_delivery_owners() FROM PUBLIC' \
+    'NOT routine.prosecdef'
+do
+    if ! grep -Fq "$required_fragment" "$sm_mix_teardown_migration"; then
+        echo "migration 0136 is missing MIX SM teardown invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if grep -Fq 'SECURITY DEFINER' "$sm_mix_teardown_migration"; then
+    echo "migration 0136 teardown helper must remain SECURITY INVOKER" >&2
+    exit 1
+fi
+echo "migration 0136 releases exact SM-owned MIX leases before parent queue cascade"
+
+# Migration 0137 adds the third typed MIX boundary: a signed cluster command
+# cannot itself own a recipient row.  The destination must first rotate that
+# exact lease into a bounded database fence, then consume the fence only while
+# creating its socket/SM/BOSH owner.  This keeps Redis advisory and prevents a
+# lost acknowledgement from producing two active writers.
+mix_cluster_handoff_migration="migrations/0137_mix_cluster_transport_handoffs.sql"
+[ -f "$mix_cluster_handoff_migration" ] || {
+    echo "MIX cluster hand-off migration is missing: $mix_cluster_handoff_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'CREATE TABLE mix_cluster_delivery_fences' \
+    'delivery_id UUID PRIMARY KEY' \
+    'lease_token UUID NOT NULL' \
+    'node_id TEXT NOT NULL' \
+    'request_id UUID NOT NULL' \
+    'CREATE UNIQUE INDEX mix_cluster_delivery_fence_request' \
+    'CHECK (expires_at <= first_owned_at + INTERVAL '\''5 minutes'\'')'
+do
+    if ! grep -Fq "$required_fragment" "$mix_cluster_handoff_migration"; then
+        echo "migration 0137 is missing MIX cluster ownership invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if grep -Eq 'SECURITY DEFINER|public\.' "$mix_cluster_handoff_migration"; then
+    echo "migration 0137 must not use public schema or a broad database capability" >&2
+    exit 1
+fi
+for required_source_fragment in \
+    'NodeDeliveryContract::DurableMix' \
+    'ClusterMixHandoff' \
+    'transfer_mix_delivery_to_cluster(' \
+    'release_mix_cluster_delivery(' \
+    'consume_mix_cluster_delivery_fence_tx' \
+    'SocketFenced'
+do
+    if ! grep -Fq "$required_source_fragment" src/cluster.rs src/db/mix.rs src/db/sm.rs src/services/mix.rs src/xmpp/mod.rs src/xmpp/protocol/mix.rs; then
+        echo "MIX cluster ownership source invariant is missing: $required_source_fragment" >&2
+        exit 1
+    fi
+done
+echo "migration 0137 keeps remote MIX delivery typed, fenced, and recoverable before local transport hand-off"
 
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an

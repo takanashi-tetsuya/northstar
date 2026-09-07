@@ -29,8 +29,8 @@ if [[ "${CI:-}" != true || "${GITHUB_ACTIONS:-}" != true ]]; then
   echo 'the loopback PostgreSQL fixture is restricted to GitHub Actions CI' >&2
   exit 2
 fi
-if ! [[ "$max_connections" =~ ^[1-9][0-9]*$ ]] || ((max_connections < 16 || max_connections > 512)); then
-  echo 'NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS must be an integer from 16 through 512' >&2
+if ! [[ "$max_connections" =~ ^[1-9][0-9]*$ ]] || ((max_connections < 16 || max_connections > 768)); then
+  echo 'NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS must be an integer from 16 through 768' >&2
   exit 2
 fi
 if docker container inspect "$container_name" >/dev/null 2>&1; then

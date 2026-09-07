@@ -963,18 +963,25 @@ def run() -> None:
         "<item nick='RemoteBob' role='none'><reason>Federated kick</reason></item>"
         "</query></iq>"
     )
-    alice.receive_until("fed-muc-kick")
+    kick_result, _ = alice.receive_until("fed-muc-kick")
+    fixture.check(
+        "type='result'" in kick_result,
+        "federated MUC kick was rejected before status delivery",
+    )
     kicked, _ = bob.receive_until("code='307'", timeout=20)
     fixture.check(
         "Federated kick" in kicked and "type='unavailable'" in kicked,
         "remote occupant did not receive MUC kick status 307",
     )
     bob.send(
-        f"<presence xmlns='jabber:client' to='{federated_room}/RemoteBobReturn'>"
+        f"<presence xmlns='jabber:client' id='fed-muc-rejoin' to='{federated_room}/RemoteBobReturn'>"
         "<x xmlns='http://jabber.org/protocol/muc'/></presence>"
     )
-    returned, _ = bob.receive_until("code='110'", timeout=20)
-    fixture.check("role='participant'" in returned, "kicked remote occupant could not rejoin")
+    returned, _ = bob.receive_until("fed-muc-rejoin", timeout=20)
+    fixture.check(
+        "code='110'" in returned and "role='participant'" in returned,
+        "kicked remote occupant could not rejoin: " + returned,
+    )
     alice.receive_until(f"from='{federated_room}/RemoteBobReturn'", timeout=20)
     alice.send(
         f"<iq xmlns='jabber:client' type='set' id='fed-muc-ban' to='{federated_room}'>"

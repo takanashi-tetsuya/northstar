@@ -1,12 +1,12 @@
 pub use northstar_delivery_core::{
-    recipient_delivery_identity, DurableDelivery, RecipientDeliveryIdentity, SmUnackedStanza,
+    recipient_delivery_identity, DurableDelivery, MixDelivery, RecipientDeliveryIdentity,
+    SmUnackedStanza, TransportOwnershipSource,
 };
 use northstar_delivery_core::{
     GuardedEnqueue, OrderedOutboundSink, OutboundFuture, OutboundQueueError,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-#[cfg(test)]
 use uuid::Uuid;
 
 /// A database-backed C2S delivery which must not be acknowledged merely
@@ -17,7 +17,14 @@ use uuid::Uuid;
 #[derive(Clone, Debug)]
 pub struct OutboundItem {
     pub stanza: String,
-    pub durable_delivery: Option<DurableDelivery>,
+    /// The one authoritative durable source, if this stanza is recoverable.
+    /// C2S offline messages and MIX recipient leases are deliberately a tagged
+    /// union: a transport can transfer or acknowledge exactly one source.
+    pub durable_source: Option<TransportOwnershipSource>,
+    /// One-shot completion for a durable MIX source. This is intentionally
+    /// distinct from the legacy generic receipt: it names an exact lease and
+    /// distinguishes direct socket completion from SM/BOSH persistence.
+    pub mix_handoff: Option<MixTransportHandoff>,
     /// Completion signal for a clustered MUC policy outbox item. It is fired
     /// at durable SM/BOSH ownership or after a non-SM socket write, never when
     /// the stanza merely enters the bounded process channel.
@@ -34,7 +41,8 @@ impl OutboundItem {
     pub fn plain(stanza: String) -> Self {
         Self {
             stanza,
-            durable_delivery: None,
+            durable_source: None,
+            mix_handoff: None,
             transport_receipt: None,
             transient_sm_capacity: None,
         }
@@ -43,16 +51,60 @@ impl OutboundItem {
     pub fn durable(stanza: String, delivery: DurableDelivery) -> Self {
         Self {
             stanza,
-            durable_delivery: Some(delivery),
+            durable_source: Some(TransportOwnershipSource::C2s(delivery)),
+            mix_handoff: None,
             transport_receipt: None,
             transient_sm_capacity: None,
+        }
+    }
+
+    pub fn durable_mix(
+        stanza: String,
+        delivery: MixDelivery,
+    ) -> (Self, oneshot::Receiver<MixTransportCompletion>) {
+        let (handoff, receiver) = MixTransportHandoff::new();
+        (
+            Self {
+                stanza,
+                durable_source: Some(TransportOwnershipSource::Mix(delivery)),
+                mix_handoff: Some(handoff),
+                transport_receipt: None,
+                transient_sm_capacity: None,
+            },
+            receiver,
+        )
+    }
+
+    pub fn c2s_delivery(&self) -> Option<DurableDelivery> {
+        self.durable_source.and_then(TransportOwnershipSource::c2s)
+    }
+
+    pub fn mix_delivery(&self) -> Option<MixDelivery> {
+        self.durable_source.and_then(TransportOwnershipSource::mix)
+    }
+
+    /// Only MIX sources carry a hand-off completion capability.  Keeping
+    /// this invariant explicit prevents a generic BOSH receipt from ever
+    /// standing in for a durable MIX acknowledgement.
+    pub fn validate_durable_source_shape(&self) -> bool {
+        matches!(
+            (self.durable_source, self.mix_handoff.is_some()),
+            (None | Some(TransportOwnershipSource::C2s(_)), false)
+                | (Some(TransportOwnershipSource::Mix(_)), true)
+        )
+    }
+
+    pub fn complete_mix_handoff(&self, completion: MixTransportCompletion) {
+        if let Some(handoff) = &self.mix_handoff {
+            handoff.complete(completion);
         }
     }
 
     pub fn with_transport_receipt(stanza: String, receipt: mpsc::UnboundedSender<()>) -> Self {
         Self {
             stanza,
-            durable_delivery: None,
+            durable_source: None,
+            mix_handoff: None,
             transport_receipt: Some(receipt),
             transient_sm_capacity: None,
         }
@@ -64,7 +116,8 @@ impl OutboundItem {
     ) -> Self {
         Self {
             stanza,
-            durable_delivery: None,
+            durable_source: None,
+            mix_handoff: None,
             transport_receipt: None,
             transient_sm_capacity: Some(capacity),
         }
@@ -73,6 +126,83 @@ impl OutboundItem {
     pub fn confirm_transport_ownership(&self) {
         if let Some(receipt) = &self.transport_receipt {
             let _ = receipt.send(());
+        }
+    }
+}
+
+/// The durable boundary reached by a MIX recipient source.
+///
+/// A direct stream writer first rotates the worker lease into a short-lived
+/// socket fence, then reports [`Self::SocketFenced`]. The claiming worker
+/// must stop using its old token at that point; the writer either deletes the
+/// new token after bytes are accepted or lets its bounded fence expire for a
+/// later claim. This prevents a late queue item from writing after a retry
+/// has made the original worker lease stale.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MixTransportCompletion {
+    SocketFenced { connection_id: Uuid },
+    SocketWritten,
+    SmPersisted { session_id: uuid::Uuid },
+    BoshPersisted { session_id: uuid::Uuid },
+}
+
+/// The durable sources carried by one cached BOSH response. Source tokens are
+/// deliberately absent: the BOSH coordinator verifies tokens while binding
+/// its private fence, while cache replay only needs immutable identities to
+/// prove that the same response still owns the same rows.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BoshResponseOwnership {
+    pub c2s_message_ids: Vec<Uuid>,
+    pub mix_delivery_ids: Vec<Uuid>,
+}
+
+impl BoshResponseOwnership {
+    pub fn is_empty(&self) -> bool {
+        self.c2s_message_ids.is_empty() && self.mix_delivery_ids.is_empty()
+    }
+}
+
+/// Clone-safe, exactly-once completion capability for one MIX outbound item.
+/// Multiple queue stages may clone an item, but only the stage that durably
+/// owns or actually writes it can take the sender.
+#[derive(Clone)]
+pub struct MixTransportHandoff {
+    completion: std::sync::Arc<std::sync::Mutex<Option<oneshot::Sender<MixTransportCompletion>>>>,
+}
+
+impl std::fmt::Debug for MixTransportHandoff {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let completion_available = self
+            .completion
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some();
+        formatter
+            .debug_struct("MixTransportHandoff")
+            .field("completion_available", &completion_available)
+            .finish()
+    }
+}
+
+impl MixTransportHandoff {
+    fn new() -> (Self, oneshot::Receiver<MixTransportCompletion>) {
+        let (sender, receiver) = oneshot::channel();
+        (
+            Self {
+                completion: std::sync::Arc::new(std::sync::Mutex::new(Some(sender))),
+            },
+            receiver,
+        )
+    }
+
+    fn complete(&self, completion: MixTransportCompletion) {
+        let sender = self
+            .completion
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(sender) = sender {
+            let _ = sender.send(completion);
         }
     }
 }
@@ -133,6 +263,28 @@ impl OutboundSender {
     ) -> Result<(), mpsc::error::TrySendError<String>> {
         match self.try_send_item(OutboundItem::durable(stanza, delivery)) {
             Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(item)) => {
+                self.backpressure_disconnect.cancel();
+                Err(mpsc::error::TrySendError::Full(item.stanza))
+            }
+            Err(mpsc::error::TrySendError::Closed(item)) => {
+                Err(mpsc::error::TrySendError::Closed(item.stanza))
+            }
+        }
+    }
+
+    /// Enqueue one leased MIX source and return the completion receiver for
+    /// its actual transport boundary. Queue admission alone is never a
+    /// completion: a full queue latches the transport closed so an ordered
+    /// source cannot be overtaken by a later retry.
+    pub fn try_send_durable_mix(
+        &self,
+        stanza: String,
+        delivery: MixDelivery,
+    ) -> Result<oneshot::Receiver<MixTransportCompletion>, mpsc::error::TrySendError<String>> {
+        let (item, receiver) = OutboundItem::durable_mix(stanza, delivery);
+        match self.try_send_item(item) {
+            Ok(()) => Ok(receiver),
             Err(mpsc::error::TrySendError::Full(item)) => {
                 self.backpressure_disconnect.cancel();
                 Err(mpsc::error::TrySendError::Full(item.stanza))

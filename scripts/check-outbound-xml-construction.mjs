@@ -235,7 +235,12 @@ function rustStringLiterals(source) {
       const terminator = `"${hashes}`;
       const end = source.indexOf(terminator, contentStart);
       if (end < 0) throw new Error(`unterminated raw Rust string at line ${lineAt(source, start)}`);
-      literals.push({ value: source.slice(contentStart, end), line: lineAt(source, start) });
+      literals.push({
+        value: source.slice(contentStart, end),
+        line: lineAt(source, start),
+        start,
+        end: end + terminator.length,
+      });
       index = end + terminator.length;
       continue;
     }
@@ -264,7 +269,7 @@ function rustStringLiterals(source) {
       if (cursor >= source.length) {
         throw new Error(`unterminated Rust string at line ${lineAt(source, start)}`);
       }
-      literals.push({ value, line: lineAt(source, start) });
+      literals.push({ value, line: lineAt(source, start), start, end: cursor + 1 });
       index = cursor + 1;
       continue;
     }
@@ -273,21 +278,23 @@ function rustStringLiterals(source) {
   return literals;
 }
 
-// SQLx query literals are data for PostgreSQL, not outbound XMPP construction.
-// Classify the literal itself rather than exempting a database file, raw
-// strings, or a call-site directory: those scopes can also contain a real
-// dynamically-built stanza.  This is intentionally a conservative lexical
-// classifier, not a Rust/SQL parser; a string with an XML-shaped prefix never
-// qualifies as SQL merely because it later contains SQL-looking words.
-function isSqlLiteral(value) {
-  return /^(?:\s|\/\*[\s\S]*?\*\/)*(?:WITH|SELECT|INSERT|UPDATE|DELETE|VALUES|ALTER|CREATE|DROP)\b/i.test(
-    value,
-  );
+// SQLx query literals are PostgreSQL input, not outbound XMPP construction.
+// A SQL-looking prefix is insufficient: a dynamically-built stanza can begin
+// with `SELECT` and later be sent somewhere else. Classify only a literal
+// directly passed to a reviewed query-construction call. This remains a
+// narrow lexical guard rather than an exemption for a directory, raw strings,
+// a variable name, or arbitrary SQL-looking content.
+function isSqlQueryArgument(source, literal) {
+  const prefix = source.slice(Math.max(0, literal.start - 512), literal.start);
+  const queryCall =
+    /(?:sqlx::)?(?:query|query_scalar|query_as|query_with|query_scalar_with|query_as_with)(?:\s*::\s*<[^(){};]{0,256}>)?\s*\(\s*$/s;
+  const builderCall = /QueryBuilder(?:\s*::\s*<[^(){};]{0,256}>)?\s*::\s*new\s*\(\s*$/s;
+  return queryCall.test(prefix) || builderCall.test(prefix);
 }
 
 function findings(relativePath, source) {
   return rustStringLiterals(productionSource(source))
-    .filter(({ value }) => !isSqlLiteral(value))
+    .filter((literal) => !isSqlQueryArgument(source, literal))
     .filter(({ value }) => XML_TAG.test(value))
     .filter(({ line, value }) =>
       !STATIC_LITERAL_ALLOWLIST.some(
@@ -313,6 +320,15 @@ fn query() {
 `;
 if (findings('self-test.rs', sqlComparisonSelfTest).length !== 0) {
   throw new Error('outbound XML detector confused SQL comparison operators with XML tags');
+}
+const sqlPrefixedXmlSelfTest = String.raw`
+fn output(body: &str) {
+  let stanza = format!("SELECT <message>{body}</message>");
+  send(stanza.strip_prefix("SELECT ").unwrap());
+}
+`;
+if (findings('self-test.rs', sqlPrefixedXmlSelfTest).length !== 1) {
+  throw new Error('outbound XML detector accepted a SQL-prefixed non-query stanza');
 }
 const mixedSqlAndXmlSelfTest = String.raw`
 fn query() { sqlx::query(r#"WITH chosen AS (SELECT 1) SELECT * FROM chosen"#); }

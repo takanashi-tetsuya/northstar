@@ -456,6 +456,7 @@ if (
   throw new Error('MIX outbox work must stay in its claimed delivery or PAM lane');
 }
 const mixOutboxLaneWorker = structBody(mixProtocolProduction, 'async fn run_mix_outbox_lane(');
+const mixOutboxMaintenance = structBody(mixProtocolProduction, 'fn process_mix_outbox_maintenance(');
 if (
   !/FuturesUnordered\s*::\s*<\s*MixOutboxTask\s*>\s*::\s*new\s*\(\s*\)/.test(
     mixOutboxLaneWorker,
@@ -464,9 +465,16 @@ if (
     mixOutboxLaneWorker,
   ) ||
   !/in_flight\s*\.\s*push\s*\(\s*process_mix_outbox_work\s*\(/.test(mixOutboxLaneWorker) ||
-  !/cancellable_mix_outbox_turn\s*\(\s*&cancel\s*,/.test(mixOutboxLaneWorker)
+  !/maintenance_task\s*=\s*Some\s*\(\s*process_mix_outbox_maintenance\s*\(/.test(
+    mixOutboxLaneWorker,
+  ) ||
+  !/next_mix_outbox_progress\s*\(\s*&mut\s+in_flight\s*,\s*&mut\s+maintenance_task\s*\)/.test(
+    mixOutboxLaneWorker,
+  ) ||
+  !/cancellable_mix_outbox_turn\s*\(\s*&cancel\s*,/.test(mixOutboxMaintenance) ||
+  !/maintain_mix_delivery_retention\s*\(\s*\)/.test(mixOutboxMaintenance)
 ) {
-  throw new Error('each MIX outbox lane must own independently bounded, cancellation-aware work');
+  throw new Error('each MIX outbox lane must keep claims and maintenance independently bounded, cancellation-aware, and jointly polled');
 }
 const joinMixOutboxLanes = structBody(mixProtocolProduction, 'async fn join_mix_outbox_lanes');
 if (

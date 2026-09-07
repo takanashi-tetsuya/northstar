@@ -1082,10 +1082,11 @@ async fn prune_empty_mix_delivery_sequences(pool: &PgPool, limit: i64) -> Result
 /// Run bounded retention work outside the latency-sensitive delivery claim.
 ///
 /// An expired recipient which has no active worker or durable transport owner
-/// is terminal, so the claim query may advance beyond it immediately.  This
-/// page records the terminal dead-letter projection and reclaims its orphaned
-/// event/sequence state later; none of those cleanup writes are a prerequisite
-/// for claiming a currently deliverable row.
+/// must still be terminalized before its successor in the same recipient
+/// sequence can advance. This page records that dead-letter projection and
+/// then reclaims orphaned event/sequence state. It remains outside the normal
+/// first-message claim path: only a predecessor in the same ordering domain
+/// waits for this bounded terminalization step.
 pub async fn maintain_mix_delivery_retention(pool: &PgPool) -> Result<()> {
     dead_letter_expired_mix_deliveries(pool, 256).await?;
     // Event GC only appends a release fact. It never takes the producer
@@ -1131,36 +1132,14 @@ pub async fn claim_mix_deliveries(
                 )
                 AND NOT EXISTS (
                     SELECT 1 FROM mix_delivery_recipients earlier
-                     JOIN mix_delivery_events earlier_event
-                       ON earlier_event.event_id=earlier.event_id
                      WHERE earlier.recipient_jid=recipient.recipient_jid
+                       -- The row remains the ordered head until a durable
+                       -- terminal transition removes it. In particular,
+                       -- expiry without a lease/SM/BOSH/cluster owner is not
+                       -- itself terminal: retention must first record the
+                       -- dead-letter projection. This does not put unrelated
+                       -- retention ahead of a first delivery.
                        AND earlier.delivery_sequence < recipient.delivery_sequence
-                       -- A live predecessor, an active claimant, or a
-                       -- recoverable transport owner remains the ordered
-                       -- head. An expired row without any such owner is
-                       -- terminal and is dead-lettered by the separate
-                       -- maintenance page instead of delaying a new message.
-                       AND (
-                            earlier_event.expires_at>clock_timestamp()
-                         OR earlier.lease_until>clock_timestamp()
-                         OR EXISTS(
-                             SELECT 1
-                               FROM sm_resume_stanzas stanza
-                               JOIN sm_resume_sessions session ON session.id=stanza.session_id
-                              WHERE stanza.mix_delivery_id=earlier.delivery_id
-                                AND session.expires_at>clock_timestamp()
-                         )
-                         OR EXISTS(
-                             SELECT 1 FROM mix_bosh_delivery_fences fence
-                              WHERE fence.delivery_id=earlier.delivery_id
-                                AND fence.expires_at>clock_timestamp()
-                         )
-                         OR EXISTS(
-                             SELECT 1 FROM mix_cluster_delivery_fences fence
-                              WHERE fence.delivery_id=earlier.delivery_id
-                                AND fence.expires_at>clock_timestamp()
-                         )
-                       )
                 )
               ORDER BY event.created_at,recipient.delivery_sequence,recipient.delivery_id
               LIMIT 512 FOR UPDATE OF recipient,authority SKIP LOCKED
@@ -8892,7 +8871,7 @@ mod delivery_route_wake_integration_tests {
 
     #[tokio::test]
     #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
-    async fn an_expired_unowned_head_does_not_delay_a_live_successor_claim() {
+    async fn an_expired_unowned_head_blocks_until_terminalized() {
         let pool = isolated_pool().await;
         let recipient = format!("expired-head-{}@example.test", Uuid::new_v4());
         let (expired_event_id, expired_delivery_id) = insert_delivery(&pool, &recipient, 1).await;
@@ -8912,17 +8891,22 @@ mod delivery_route_wake_integration_tests {
             1
         );
 
-        // The live successor is eligible immediately. Claim must not first
-        // run retention work just to remove an already-terminal predecessor.
+        // MX08: expiry does not bypass the same-recipient ordering contract.
+        // The predecessor is not eligible for delivery, but its successor may
+        // advance only after the bounded retention page records its terminal
+        // dead-letter projection and removes the ordered head.
         let claimed = claim_mix_deliveries(&pool, 128, 65_536).await.unwrap();
-        assert!(claimed
-            .iter()
-            .any(|row| row.delivery_id == live_delivery_id));
         assert!(
             !claimed
                 .iter()
                 .any(|row| row.delivery_id == expired_delivery_id),
             "expired head must never be delivered"
+        );
+        assert!(
+            !claimed
+                .iter()
+                .any(|row| row.delivery_id == live_delivery_id),
+            "successor must wait until the expired head is terminalized"
         );
         let pending_expired: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM mix_delivery_recipients WHERE delivery_id=$1)",
@@ -8942,6 +8926,14 @@ mod delivery_route_wake_integration_tests {
         .await
         .unwrap();
         assert!(dead_lettered, "the bounded maintenance page records expiry");
+
+        let claimed = claim_mix_deliveries(&pool, 128, 65_536).await.unwrap();
+        assert!(
+            claimed
+                .iter()
+                .any(|row| row.delivery_id == live_delivery_id),
+            "successor becomes eligible after terminalization removes its head"
+        );
     }
 
     #[tokio::test]
@@ -9348,6 +9340,76 @@ mod nickname_tests {
         );
         assert!(canonical_user_bare("alice@example.test/bad\u{0007}resource").is_err());
         assert!(canonical_user_bare("alice@example..test/Phone").is_err());
+    }
+}
+
+#[cfg(test)]
+mod delivery_order_contract_tests {
+    /// This pure contract model mirrors the `NOT EXISTS earlier` predicate in
+    /// `claim_mix_deliveries`. Database fixtures separately prove the SQL row
+    /// transition; the model prevents an expired-but-present predecessor from
+    /// being silently reclassified as terminal during A-phase review.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum Predecessor {
+        None,
+        Live,
+        ExpiredUnowned,
+        Leased,
+        SmOwned,
+        BoshOwned,
+        ClusterFenced,
+        Terminalized,
+    }
+
+    const fn blocks_successor(predecessor: Predecessor) -> bool {
+        !matches!(predecessor, Predecessor::None | Predecessor::Terminalized)
+    }
+
+    fn has_blocking_predecessor(
+        entries: &[(&str, i64, Predecessor)],
+        recipient: &str,
+        delivery_sequence: i64,
+    ) -> bool {
+        entries
+            .iter()
+            .any(|(entry_recipient, entry_sequence, state)| {
+                *entry_recipient == recipient
+                    && *entry_sequence < delivery_sequence
+                    && blocks_successor(*state)
+            })
+    }
+
+    #[test]
+    fn mx08_expired_unowned_predecessor_blocks_until_terminalization() {
+        assert!(blocks_successor(Predecessor::ExpiredUnowned));
+        assert!(!blocks_successor(Predecessor::Terminalized));
+    }
+
+    #[test]
+    fn ordered_predecessor_contract_distinguishes_no_head_from_all_live_owners() {
+        assert!(!blocks_successor(Predecessor::None));
+        for predecessor in [
+            Predecessor::Live,
+            Predecessor::Leased,
+            Predecessor::SmOwned,
+            Predecessor::BoshOwned,
+            Predecessor::ClusterFenced,
+        ] {
+            assert!(blocks_successor(predecessor));
+        }
+    }
+
+    #[test]
+    fn mx09_and_mx11_scope_a_strict_head_to_its_recipient_ordering_domain() {
+        let entries = [
+            ("alice@example.test", 1, Predecessor::ExpiredUnowned),
+            ("alice@example.test", 2, Predecessor::Terminalized),
+            ("bob@example.test", 1, Predecessor::Live),
+        ];
+        assert!(has_blocking_predecessor(&entries, "alice@example.test", 2));
+        assert!(!has_blocking_predecessor(&entries, "alice@example.test", 1));
+        assert!(!has_blocking_predecessor(&entries, "carol@example.test", 2));
+        assert!(has_blocking_predecessor(&entries, "bob@example.test", 2));
     }
 }
 

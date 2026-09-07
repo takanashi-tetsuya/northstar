@@ -163,6 +163,7 @@ async fn claim_mix_outbox_work(
 }
 
 type MixOutboxTask = BoxFuture<'static, (MixOutboxQueue, Result<()>)>;
+type MixOutboxMaintenanceTask = BoxFuture<'static, Result<()>>;
 
 fn process_mix_outbox_work(
     state: Arc<AppState>,
@@ -181,6 +182,75 @@ fn process_mix_outbox_work(
             ),
         }
     })
+}
+
+/// Start one bounded maintenance page without parking already-claimed work.
+/// The event loop polls this future beside `in_flight`; retaining it as a
+/// separate task prevents a pool/gate wait in retention from becoming a point
+/// at which a claimed delivery can no longer make the progress needed to
+/// release that same resource.
+fn process_mix_outbox_maintenance(
+    state: Arc<AppState>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> MixOutboxMaintenanceTask {
+    Box::pin(async move {
+        cancellable_mix_outbox_turn(&cancel, async {
+            state
+                .mix_service()
+                .maintain_mix_delivery_retention()
+                .await?;
+            state
+                .mix_service()
+                .prune_expired_business_intents(512)
+                .await?;
+            state
+                .mix_service()
+                .prune_expired_federated_iq_results(512)
+                .await?;
+            state
+                .mix_service()
+                .reconcile_expired_remote_pam(128)
+                .await?;
+            state
+                .mix_service()
+                .prune_expired_pam_results(512)
+                .await
+                .map(|_| ())
+        })
+        .await
+    })
+}
+
+enum MixOutboxProgress {
+    InFlight(MixOutboxQueue, Result<()>),
+    Maintenance(Result<()>),
+}
+
+/// Poll claimed delivery work and the independent maintenance page together.
+/// A maintenance future may wait on a bounded database/gate turn whose owner
+/// is released only when an already-claimed future is polled. Keeping both in
+/// this one select prevents the maintenance turn from becoming an accidental
+/// progress barrier for the delivery lane.
+async fn next_mix_outbox_progress(
+    in_flight: &mut FuturesUnordered<MixOutboxTask>,
+    maintenance: &mut Option<MixOutboxMaintenanceTask>,
+) -> MixOutboxProgress {
+    debug_assert!(!in_flight.is_empty() || maintenance.is_some());
+    tokio::select! {
+        biased;
+        Some((kind, outcome)) = in_flight.next(), if !in_flight.is_empty() => {
+            MixOutboxProgress::InFlight(kind, outcome)
+        }
+        outcome = async {
+            maintenance
+                .as_mut()
+                .expect("maintenance branch requires a task")
+                .await
+        }, if maintenance.is_some() => {
+            maintenance.take();
+            MixOutboxProgress::Maintenance(outcome)
+        }
+    }
 }
 
 /// Wait for the typed delivery wake without giving MIX-PAM a generic shared
@@ -3032,6 +3102,7 @@ async fn run_mix_outbox_lane(
     // Retention work is important but cannot be allowed to put a maintenance
     // page ahead of the first claimed live MIX event on a small pool.
     let mut maintenance_schedule = MixMaintenanceSchedule::starting_at(tokio::time::Instant::now());
+    let mut maintenance_task: Option<MixOutboxMaintenanceTask> = None;
     let mut accepting = true;
     let mut terminal_error = None;
 
@@ -3044,51 +3115,22 @@ async fn run_mix_outbox_lane(
         if accepting && cancel.is_cancelled() {
             accepting = false;
         }
-        if accepting && maintain && maintenance_schedule.due(tokio::time::Instant::now()) {
-            let maintenance = cancellable_mix_outbox_turn(&cancel, async {
-                // Retention is a separate, bounded page. In particular it is
-                // never awaited by `claim_mix_deliveries`, so a newly due
-                // first message needs only its fenced claim turn.
-                state
-                    .mix_service()
-                    .maintain_mix_delivery_retention()
-                    .await?;
-                // The remaining bounded pages keep auxiliary correlation
-                // state finite without borrowing the PAM lane or holding a
-                // database gate across any outbound network operation.
-                state
-                    .mix_service()
-                    .prune_expired_business_intents(512)
-                    .await?;
-                state
-                    .mix_service()
-                    .prune_expired_federated_iq_results(512)
-                    .await?;
-                state
-                    .mix_service()
-                    .reconcile_expired_remote_pam(128)
-                    .await?;
-                state.mix_service().prune_expired_pam_results(512).await
-            })
-            .await;
-            maintenance_schedule.record_completed_page(tokio::time::Instant::now());
-            match maintenance {
-                Ok(_) => healthy_progress = true,
-                Err(error) if mix_outbox_is_shutting_down(&error) => {
-                    accepting = false;
-                }
-                Err(error) => {
-                    // Do not drop already-claimed rows.  Cancel the local lanes
-                    // so their operations defer/retry through their normal lease
-                    // paths, then surface the error only after that bounded drain.
-                    terminal_error = Some(error);
-                    accepting = false;
-                    cancel.cancel();
-                }
-            }
+        if accepting
+            && maintain
+            && maintenance_task.is_none()
+            && maintenance_schedule.due(tokio::time::Instant::now())
+        {
+            maintenance_task = Some(process_mix_outbox_maintenance(
+                Arc::clone(&state),
+                cancel.clone(),
+            ));
         }
 
-        if accepting && in_flight.len() < concurrency && tokio::time::Instant::now() >= next_claim {
+        if accepting
+            && maintenance_task.is_none()
+            && in_flight.len() < concurrency
+            && tokio::time::Instant::now() >= next_claim
+        {
             let available = concurrency - in_flight.len();
             match claim_mix_outbox_work(&state, &cancel, queue, available).await {
                 Ok(claimed) => {
@@ -3125,10 +3167,48 @@ async fn run_mix_outbox_lane(
         }
 
         tokio::select! {
+            biased;
             _ = cancel.cancelled(), if accepting => {
                 accepting = false;
             }
-            wake_open = wait_for_mix_delivery_wake(&mut delivery_wake), if accepting && in_flight.len() < concurrency => {
+            progress = next_mix_outbox_progress(&mut in_flight, &mut maintenance_task), if !in_flight.is_empty() || maintenance_task.is_some() => {
+                match progress {
+                    MixOutboxProgress::InFlight(kind, outcome) => {
+                        // A finished row has released one lane slot. Claim again
+                        // in the next loop turn instead of imposing the idle
+                        // recovery cadence on an already-known backlog.
+                        next_claim = tokio::time::Instant::now();
+                        if let Err(error) = outcome {
+                            // A claimed row retains its fenced lease and is retried
+                            // by the row-level completion path; one recipient must
+                            // not restart either lane or starve PAM results.
+                            tracing::warn!(?error, ?kind, "MIX outbox work attempt failed before completion");
+                            heartbeat.error(&error);
+                            failed_attempt_progress = true;
+                        } else {
+                            healthy_progress = true;
+                        }
+                    }
+                    MixOutboxProgress::Maintenance(outcome) => {
+                        maintenance_schedule.record_completed_page(tokio::time::Instant::now());
+                        match outcome {
+                            Ok(_) => healthy_progress = true,
+                            Err(error) if mix_outbox_is_shutting_down(&error) => {
+                                accepting = false;
+                            }
+                            Err(error) => {
+                                // Do not drop already-claimed rows. Cancel the local
+                                // lanes so their operations defer/retry through their
+                                // normal lease paths before surfacing the error.
+                                terminal_error = Some(error);
+                                accepting = false;
+                                cancel.cancel();
+                            }
+                        }
+                    }
+                }
+            }
+            wake_open = wait_for_mix_delivery_wake(&mut delivery_wake), if accepting && maintenance_task.is_none() && in_flight.len() < concurrency => {
                 if wake_open {
                     // The wake carries no delivery authority.  It merely
                     // asks the lane to run the normal fenced PostgreSQL
@@ -3143,23 +3223,7 @@ async fn run_mix_outbox_lane(
                     cancel.cancel();
                 }
             }
-            _ = tokio::time::sleep_until(next_claim), if accepting && in_flight.len() < concurrency => {}
-            Some((kind, outcome)) = in_flight.next(), if !in_flight.is_empty() => {
-                // A finished row has released one lane slot.  Claim again in
-                // the next loop turn instead of imposing the idle recovery
-                // cadence on an already-known work-conserving backlog.
-                next_claim = tokio::time::Instant::now();
-                if let Err(error) = outcome {
-                    // A claimed row retains its fenced lease and is retried by
-                    // the row-level completion path; one recipient must not
-                    // restart either lane or starve correlated PAM results.
-                    tracing::warn!(?error, ?kind, "MIX outbox work attempt failed before completion");
-                    heartbeat.error(&error);
-                    failed_attempt_progress = true;
-                } else {
-                    healthy_progress = true;
-                }
-            }
+            _ = tokio::time::sleep_until(next_claim), if accepting && maintenance_task.is_none() && in_flight.len() < concurrency => {}
         }
         if healthy_progress {
             heartbeat.ok();
@@ -7718,6 +7782,37 @@ mod tests {
             delayed_completion + MIX_OUTBOX_MAINTENANCE_INTERVAL
         );
         assert!(!schedule.due(delayed_completion));
+    }
+
+    #[tokio::test]
+    async fn maintenance_wait_continues_polling_claimed_work_that_releases_it() {
+        let (release_maintenance, maintenance_released) = tokio::sync::oneshot::channel();
+        let mut in_flight = FuturesUnordered::<MixOutboxTask>::new();
+        in_flight.push(Box::pin(async move {
+            release_maintenance
+                .send(())
+                .expect("maintenance receiver must still be present");
+            (MixOutboxQueue::Delivery, Ok(()))
+        }));
+        let mut maintenance: Option<MixOutboxMaintenanceTask> = Some(Box::pin(async move {
+            maintenance_released
+                .await
+                .expect("claimed work must release maintenance");
+            Ok(())
+        }));
+
+        // MX12: the maintenance future is pending until the claimed future
+        // runs. If the worker awaited maintenance outside the shared poll,
+        // this controlled dependency would never make progress.
+        assert!(matches!(
+            next_mix_outbox_progress(&mut in_flight, &mut maintenance).await,
+            MixOutboxProgress::InFlight(MixOutboxQueue::Delivery, Ok(()))
+        ));
+        assert!(matches!(
+            next_mix_outbox_progress(&mut in_flight, &mut maintenance).await,
+            MixOutboxProgress::Maintenance(Ok(()))
+        ));
+        assert!(maintenance.is_none());
     }
 
     #[test]

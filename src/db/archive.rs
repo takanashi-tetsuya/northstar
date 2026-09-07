@@ -2935,7 +2935,12 @@ mod history_identity_pg_tests {
         // parts this is a 2301-octet canonical full JID. Two such scopes
         // already exceed PostgreSQL's B-tree tuple limit in the former raw
         // composite identity key.
-        let domainpart = [63, 63, 63, 62]
+        // Four labels retain three separators.  Their label octets must sum
+        // to 250, not 251: 63 + 63 + 63 + 61 + 3 dots is the RFC DNS
+        // wire-length boundary of 253 octets.  Keeping the construction
+        // exact matters here because this test protects the B-tree identity
+        // bound for the largest canonical XMPP domain.
+        let domainpart = [63, 63, 63, 61]
             .into_iter()
             .map(|length| "d".repeat(length))
             .collect::<Vec<_>>()
@@ -2950,6 +2955,23 @@ mod history_identity_pg_tests {
         assert_eq!(jid.len(), 2301);
         assert_eq!(crate::jid::canonicalize(&jid).unwrap(), jid);
         jid
+    }
+
+    #[test]
+    fn maximum_canonical_full_jid_uses_the_253_octet_dns_boundary() {
+        let jid = maximum_canonical_full_jid('a', 'r');
+        let (_, domain_and_resource) = jid
+            .split_once('@')
+            .expect("constructed full JID has a localpart separator");
+        let (domain, _) = domain_and_resource
+            .split_once('/')
+            .expect("constructed full JID has a resource separator");
+        assert_eq!(domain.len(), 253);
+        assert_eq!(
+            domain.split('.').map(str::len).collect::<Vec<_>>(),
+            vec![63, 63, 63, 61]
+        );
+        assert_eq!(jid.len(), 2301);
     }
 
     #[tokio::test]

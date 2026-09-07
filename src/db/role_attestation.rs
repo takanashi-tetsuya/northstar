@@ -257,6 +257,37 @@ fn parse_migration_ledger_manifest(source: &str) -> Result<MigrationLedgerManife
     })
 }
 
+fn validate_migration_ledger_source(
+    expected: &[(i64, String, String)],
+    manifest: &MigrationLedgerManifest,
+) -> Result<()> {
+    anyhow::ensure!(
+        expected.len() == manifest.versions.len()
+            && expected.len() == manifest.descriptions.len()
+            && expected.len() == manifest.checksum_hex.len(),
+        "embedded migration ledger does not contain the complete migration set"
+    );
+    for (
+        (version, description, checksum),
+        (actual_version, (actual_description, actual_checksum)),
+    ) in expected.iter().zip(
+        manifest.versions.iter().zip(
+            manifest
+                .descriptions
+                .iter()
+                .zip(manifest.checksum_hex.iter()),
+        ),
+    ) {
+        anyhow::ensure!(
+            version == actual_version
+                && description == actual_description
+                && checksum == actual_checksum,
+            "embedded migration ledger entry differs from the migration compiled into this binary"
+        );
+    }
+    Ok(())
+}
+
 async fn attest_migration_ledger(pool: &PgPool) -> Result<()> {
     let expected = parse_migration_ledger_manifest(MIGRATION_LEDGER_MANIFEST_SQL)?;
     let accepted: bool = sqlx::query_scalar(
@@ -1535,13 +1566,70 @@ mod tests {
         assert!(manifest.versions.contains(&113));
         assert!(manifest.versions.contains(&114));
         assert!(manifest.versions.contains(&115));
-        assert_eq!(manifest.versions.last(), Some(&133));
-        assert_eq!(manifest.versions.len(), 132);
+        // The ledger has one intentional historical gap (0021).  Keep this
+        // assertion exact so adding a migration requires reviewing both the
+        // embedded capability manifest and its attestation expectation.
+        assert_eq!(manifest.versions.last(), Some(&138));
+        assert_eq!(manifest.versions.len(), 137);
         assert!(!manifest.versions.contains(&21));
         assert!(manifest
             .checksum_hex
             .iter()
             .all(|checksum| checksum.len() == 96));
+    }
+
+    #[test]
+    fn embedded_migration_ledger_matches_every_compiled_sqlx_migration() {
+        let expected = super::super::MIGRATOR
+            .iter()
+            .map(|migration| {
+                (
+                    migration.version,
+                    migration.description.to_string(),
+                    migration
+                        .checksum
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let manifest = parse_migration_ledger_manifest(MIGRATION_LEDGER_MANIFEST_SQL).unwrap();
+        validate_migration_ledger_source(&expected, &manifest).unwrap();
+    }
+
+    #[test]
+    fn migration_ledger_source_comparison_rejects_missing_extra_and_changed_entries() {
+        let expected = vec![
+            (1, "one".to_owned(), "a".repeat(96)),
+            (2, "two".to_owned(), "b".repeat(96)),
+        ];
+        let complete = MigrationLedgerManifest {
+            versions: vec![1, 2],
+            descriptions: vec!["one".to_owned(), "two".to_owned()],
+            checksum_hex: vec!["a".repeat(96), "b".repeat(96)],
+        };
+        validate_migration_ledger_source(&expected, &complete).unwrap();
+
+        for manifest in [
+            MigrationLedgerManifest {
+                versions: vec![1],
+                descriptions: vec!["one".to_owned()],
+                checksum_hex: vec!["a".repeat(96)],
+            },
+            MigrationLedgerManifest {
+                versions: vec![1, 2, 3],
+                descriptions: vec!["one".to_owned(), "two".to_owned(), "three".to_owned()],
+                checksum_hex: vec!["a".repeat(96), "b".repeat(96), "c".repeat(96)],
+            },
+            MigrationLedgerManifest {
+                versions: vec![1, 2],
+                descriptions: vec!["one".to_owned(), "changed".to_owned()],
+                checksum_hex: vec!["a".repeat(96), "c".repeat(96)],
+            },
+        ] {
+            assert!(validate_migration_ledger_source(&expected, &manifest).is_err());
+        }
     }
 
     #[test]

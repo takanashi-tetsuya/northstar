@@ -2352,6 +2352,14 @@ impl MixService {
             .collect())
     }
 
+    /// Keep MIX retention bounded without putting cleanup ahead of a live
+    /// recipient claim. This remains a short repository-only turn under the
+    /// private outbox admission capability.
+    pub(crate) async fn maintain_mix_delivery_retention(&self) -> Result<()> {
+        let _admission = self.outbox_db_admission_guard().await;
+        db::maintain_mix_delivery_retention(&self.pool).await
+    }
+
     pub(crate) async fn prune_expired_business_intents(&self, limit: i64) -> Result<u64> {
         let _admission = self.outbox_db_admission_guard().await;
         db::prune_expired_mix_business_intents(&self.pool, limit).await
@@ -2418,13 +2426,8 @@ impl MixService {
         request_id: Uuid,
     ) -> Result<bool> {
         let _admission = self.outbox_db_admission_guard().await;
-        let released = db::mix::release_mix_cluster_delivery(
-            &self.pool,
-            source,
-            node_id,
-            request_id,
-        )
-        .await?;
+        let released =
+            db::mix::release_mix_cluster_delivery(&self.pool, source, node_id, request_id).await?;
         if released {
             self.publish_delivery_local_commit();
         }

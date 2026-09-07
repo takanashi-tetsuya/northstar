@@ -15,6 +15,16 @@ limitations, and the maturity that may be claimed at that point.
   record remains non-authoritative until it names the exact `dev` commit and
   its required CI result.
 
+`tasks/V13-MIX-HANDOFF.yaml` is a separate in-progress acceptance card for the
+MIX v13 transport hand-off. It is deliberately independent from M00-03: it
+records the required authority, transport-write, and peer-confirmation facts
+without promoting listener-fixture work or claiming delivery from a lease
+transfer alone.
+
+The current task partition is deliberately narrow: M00-03 owns CI/fixture
+lifecycle evidence, M00-04 owns release-input and database role/migration
+authority, and M00-05 owns protocol/MIX business correctness.
+
 ## Maturity rules
 
 `catalog/services.yaml` is the sole inventory source. A service may not be

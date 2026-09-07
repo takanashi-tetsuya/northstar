@@ -873,19 +873,21 @@ impl SmService {
         max_bytes: usize,
     ) -> Result<SmCheckpointOutcome> {
         let snapshot = db::SmSessionSnapshot::from(snapshot);
-        Ok(db::checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
-            &self.pool,
-            session_id,
-            connection_id,
-            &snapshot,
-            acknowledged,
-            ttl_seconds,
-            live_lease_seconds,
-            max_stanzas,
-            max_bytes,
+        Ok(
+            db::checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
+                &self.pool,
+                session_id,
+                connection_id,
+                &snapshot,
+                acknowledged,
+                ttl_seconds,
+                live_lease_seconds,
+                max_stanzas,
+                max_bytes,
+            )
+            .await?
+            .into(),
         )
-        .await?
-        .into())
     }
 
     pub(crate) async fn acknowledge_delivery_batch(

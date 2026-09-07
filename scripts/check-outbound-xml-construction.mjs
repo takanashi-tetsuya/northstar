@@ -273,8 +273,21 @@ function rustStringLiterals(source) {
   return literals;
 }
 
+// SQLx query literals are data for PostgreSQL, not outbound XMPP construction.
+// Classify the literal itself rather than exempting a database file, raw
+// strings, or a call-site directory: those scopes can also contain a real
+// dynamically-built stanza.  This is intentionally a conservative lexical
+// classifier, not a Rust/SQL parser; a string with an XML-shaped prefix never
+// qualifies as SQL merely because it later contains SQL-looking words.
+function isSqlLiteral(value) {
+  return /^(?:\s|\/\*[\s\S]*?\*\/)*(?:WITH|SELECT|INSERT|UPDATE|DELETE|VALUES|ALTER|CREATE|DROP)\b/i.test(
+    value,
+  );
+}
+
 function findings(relativePath, source) {
   return rustStringLiterals(productionSource(source))
+    .filter(({ value }) => !isSqlLiteral(value))
     .filter(({ value }) => XML_TAG.test(value))
     .filter(({ line, value }) =>
       !STATIC_LITERAL_ALLOWLIST.some(
@@ -291,6 +304,30 @@ if (findings('self-test.rs', 'fn x() { format!("<iq id={}/>", id); }').length !=
 }
 if (findings('self-test.rs', 'fn x() { format!("{form_type}<"); }').length !== 0) {
   throw new Error('outbound XML detector confused a caps hash delimiter with an XML tag');
+}
+const sqlComparisonSelfTest = String.raw`
+fn query() {
+  sqlx::query(r#"SELECT * FROM recipient WHERE earlier.sequence<recipient.sequence
+    AND earlier.sequence<=recipient.sequence-1 AND earlier.sequence<>0"#);
+}
+`;
+if (findings('self-test.rs', sqlComparisonSelfTest).length !== 0) {
+  throw new Error('outbound XML detector confused SQL comparison operators with XML tags');
+}
+const mixedSqlAndXmlSelfTest = String.raw`
+fn query() { sqlx::query(r#"WITH chosen AS (SELECT 1) SELECT * FROM chosen"#); }
+fn output() { format!("<message>{body}</message>"); }
+`;
+if (findings('self-test.rs', mixedSqlAndXmlSelfTest).length !== 1) {
+  throw new Error('outbound XML detector exempted a raw stanza merely because the file also contains SQL');
+}
+if (
+  findings(
+    'self-test.rs',
+    'fn builder() { XmlElement::namespaced("message", "jabber:client").finish(); }',
+  ).length !== 0
+) {
+  throw new Error('outbound XML detector rejected a structured XML builder');
 }
 const splitProductionSelfTest = `
 fn before() { format!("<iq/>"); }

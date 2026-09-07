@@ -939,11 +939,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 133 files from `0001` through
-`0137`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 137 files from `0001` through
+`0138`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0137`, with the exact SQLx description and SHA-384 checksum, before it
+through `0138`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url` and `command_database_url` secrets; neither identity may
 attempt DDL. Pending, failed, unknown, duplicated, missing or checksum-drifted
@@ -1027,24 +1027,26 @@ Migrations `0133` and `0134` are ordinary forward migrations for MIX durable
 delivery recovery. They add schema-only PostgreSQL wake notifications and a
 persisted recipient route-wake generation; neither notification is delivery
 authority, and exact grant reconciliation must continue to deny direct runtime
-`EXECUTE` on the trigger helper. Migrations `0135` through `0137` add typed
+`EXECUTE` on the trigger helper. Migrations `0135` through `0138` add typed
 MIX ownership at SM, BOSH and remote-node boundaries: the remote node rotates
 the exact recipient lease into a node/request fence before it may report a
-socket, SM or BOSH owner. Apply all five migrations through the same complete
+socket, SM or BOSH owner. `0138` updates the strict session-capability catalog
+to recognize the known `0136` SM teardown trigger without admitting any
+unknown trigger, routine, owner or ACL. Apply all six migrations through the same complete
 ledger and ACL verification sequence. A mixed cluster protocol version is
 rejected for durable MIX cross-node hand-offs, so roll every participating node
 to the same v13 release before enabling that path.
 
-Before each delivery-producing transaction, complete orphan-event reclamation
-and release-journal folding commit in their own authority transaction. Before a
-new remote PAM operation, complete retention-eligible terminal reconciliation
-does the same for its exact counters. Bounded background GC/pruning reduces
-latency and retained rows, but neither worker page size nor cadence is required
-to make a later admission correct. If a completion commits after the
-reconciliation boundary, it is a later state transition and the following
-admission observes it. Do not raise capacity limits to hide a repeatable
-false-full condition: fail startup on counter drift, retain the evidence and
-repair the authority invariant before accepting new writes.
+Delivery claiming does not await retention cleanup. An expired, unowned head is
+terminal, so the claim query can advance to the next live ordered row; the
+separate bounded maintenance page later records the dead letter and reclaims
+empty event/sequence projections. Live predecessor leases and SM, BOSH or
+cluster transport fences still block the successor, preserving order. Release
+journal folding and retention-eligible terminal reconciliation remain separate
+authority transactions. Their cadence improves reclamation latency but is not a
+precondition for a valid foreground claim. Do not raise capacity limits to hide
+a repeatable false-full condition: fail startup on counter drift, retain the
+evidence and repair the authority invariant before accepting new writes.
 
 After the cut-over, every delivery-producing MIX application-service operation
 enters one FIFO gate before checking out a PgPool connection. Its database
@@ -1083,7 +1085,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0137` manifest
+5. run the one-shot migration job through the complete `0001`-`0138` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

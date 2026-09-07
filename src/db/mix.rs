@@ -1079,18 +1079,26 @@ async fn prune_empty_mix_delivery_sequences(pool: &PgPool, limit: i64) -> Result
     Ok(())
 }
 
+/// Run bounded retention work outside the latency-sensitive delivery claim.
+///
+/// An expired recipient which has no active worker or durable transport owner
+/// is terminal, so the claim query may advance beyond it immediately.  This
+/// page records the terminal dead-letter projection and reclaims its orphaned
+/// event/sequence state later; none of those cleanup writes are a prerequisite
+/// for claiming a currently deliverable row.
+pub async fn maintain_mix_delivery_retention(pool: &PgPool) -> Result<()> {
+    dead_letter_expired_mix_deliveries(pool, 256).await?;
+    // Event GC only appends a release fact. It never takes the producer
+    // capacity fence, so cleanup remains independent of foreground admission.
+    prune_empty_mix_delivery_events(pool, 256).await?;
+    prune_empty_mix_delivery_sequences(pool, 256).await
+}
+
 pub async fn claim_mix_deliveries(
     pool: &PgPool,
     limit: i64,
     max_bytes: i64,
 ) -> Result<Vec<ClaimedMixDelivery>> {
-    dead_letter_expired_mix_deliveries(pool, 256).await?;
-    // Event GC only appends a release fact. It never takes the producer
-    // capacity fence, so ACK/claim maintenance stays independent of the fair
-    // producer queue. The next real producer folds credits through the
-    // owner-held drain capability.
-    prune_empty_mix_delivery_events(pool, 256).await?;
-    prune_empty_mix_delivery_sequences(pool, 256).await?;
     let rows = sqlx::query(
         "WITH candidates AS (
              SELECT recipient.delivery_id,
@@ -1123,8 +1131,36 @@ pub async fn claim_mix_deliveries(
                 )
                 AND NOT EXISTS (
                     SELECT 1 FROM mix_delivery_recipients earlier
+                     JOIN mix_delivery_events earlier_event
+                       ON earlier_event.event_id=earlier.event_id
                      WHERE earlier.recipient_jid=recipient.recipient_jid
                        AND earlier.delivery_sequence < recipient.delivery_sequence
+                       -- A live predecessor, an active claimant, or a
+                       -- recoverable transport owner remains the ordered
+                       -- head. An expired row without any such owner is
+                       -- terminal and is dead-lettered by the separate
+                       -- maintenance page instead of delaying a new message.
+                       AND (
+                            earlier_event.expires_at>clock_timestamp()
+                         OR earlier.lease_until>clock_timestamp()
+                         OR EXISTS(
+                             SELECT 1
+                               FROM sm_resume_stanzas stanza
+                               JOIN sm_resume_sessions session ON session.id=stanza.session_id
+                              WHERE stanza.mix_delivery_id=earlier.delivery_id
+                                AND session.expires_at>clock_timestamp()
+                         )
+                         OR EXISTS(
+                             SELECT 1 FROM mix_bosh_delivery_fences fence
+                              WHERE fence.delivery_id=earlier.delivery_id
+                                AND fence.expires_at>clock_timestamp()
+                         )
+                         OR EXISTS(
+                             SELECT 1 FROM mix_cluster_delivery_fences fence
+                              WHERE fence.delivery_id=earlier.delivery_id
+                                AND fence.expires_at>clock_timestamp()
+                         )
+                       )
                 )
               ORDER BY event.created_at,recipient.delivery_sequence,recipient.delivery_id
               LIMIT 512 FOR UPDATE OF recipient,authority SKIP LOCKED
@@ -1353,7 +1389,10 @@ pub async fn transfer_mix_delivery_to_cluster(
     .execute(&mut *transaction)
     .await?
     .rows_affected();
-    anyhow::ensure!(inserted == 1, "MIX cluster hand-off did not create its fence");
+    anyhow::ensure!(
+        inserted == 1,
+        "MIX cluster hand-off did not create its fence"
+    );
     transaction.commit().await?;
     Ok(transferred)
 }
@@ -1423,7 +1462,10 @@ pub async fn release_mix_cluster_delivery(
     .execute(&mut *transaction)
     .await?
     .rows_affected();
-    anyhow::ensure!(deleted == 1, "MIX cluster hand-off fence changed during release");
+    anyhow::ensure!(
+        deleted == 1,
+        "MIX cluster hand-off fence changed during release"
+    );
     transaction.commit().await?;
     Ok(true)
 }
@@ -1520,8 +1562,8 @@ pub async fn transfer_mix_delivery_to_bosh(
     session_id: Uuid,
     ttl_seconds: u64,
 ) -> Result<crate::outbound::MixDelivery> {
-    let ttl_seconds = i64::try_from(ttl_seconds.clamp(1, 300))
-        .context("MIX BOSH hand-off TTL is too large")?;
+    let ttl_seconds =
+        i64::try_from(ttl_seconds.clamp(1, 300)).context("MIX BOSH hand-off TTL is too large")?;
     let mut transaction = pool.begin().await?;
     let recipient = sqlx::query(
         "SELECT lease_until>clock_timestamp() AS active
@@ -1839,9 +1881,13 @@ pub async fn wake_mix_delivery_recipient(pool: &PgPool, recipient_jid: &str) -> 
           WHERE recipient.recipient_jid=$1
             AND NOT EXISTS(
                 SELECT 1
-                  FROM mix_delivery_recipients AS earlier
+                 FROM mix_delivery_recipients AS earlier
                  WHERE earlier.recipient_jid=recipient.recipient_jid
-                   AND earlier.delivery_sequence<recipient.delivery_sequence
+                   -- Keep the native strict comparison. The XML gate
+                   -- classifies SQL literals by content, so comparison
+                   -- syntax is never rewritten merely to satisfy a source
+                   -- checker (and cannot acquire arithmetic edge cases).
+                   AND earlier.delivery_sequence < recipient.delivery_sequence
             )",
     )
     .bind(recipient_jid)
@@ -8842,6 +8888,60 @@ mod delivery_route_wake_integration_tests {
         .fetch_one(pool)
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+    async fn an_expired_unowned_head_does_not_delay_a_live_successor_claim() {
+        let pool = isolated_pool().await;
+        let recipient = format!("expired-head-{}@example.test", Uuid::new_v4());
+        let (expired_event_id, expired_delivery_id) = insert_delivery(&pool, &recipient, 1).await;
+        let (_, live_delivery_id) = insert_delivery(&pool, &recipient, 2).await;
+
+        assert_eq!(
+            sqlx::query(
+                "UPDATE mix_delivery_events
+                    SET expires_at=clock_timestamp()-INTERVAL '1 second'
+                  WHERE event_id=$1",
+            )
+            .bind(expired_event_id)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .rows_affected(),
+            1
+        );
+
+        // The live successor is eligible immediately. Claim must not first
+        // run retention work just to remove an already-terminal predecessor.
+        let claimed = claim_mix_deliveries(&pool, 128, 65_536).await.unwrap();
+        assert!(claimed
+            .iter()
+            .any(|row| row.delivery_id == live_delivery_id));
+        assert!(
+            !claimed
+                .iter()
+                .any(|row| row.delivery_id == expired_delivery_id),
+            "expired head must never be delivered"
+        );
+        let pending_expired: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM mix_delivery_recipients WHERE delivery_id=$1)",
+        )
+        .bind(expired_delivery_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(pending_expired, "claim must not perform retention cleanup");
+
+        maintain_mix_delivery_retention(&pool).await.unwrap();
+        let dead_lettered: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM mix_delivery_dead_letters WHERE delivery_id=$1)",
+        )
+        .bind(expired_delivery_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(dead_lettered, "the bounded maintenance page records expiry");
     }
 
     #[tokio::test]

@@ -92,6 +92,74 @@ local_validation:
   deferred:
     - "The full Linux process-group regression suite, including the real parent-cancellation probe, requires GitHub Actions evidence because this host lacks a usable WSL/POSIX Python environment."
     - "The W5 20 x 50 regular and 100 x 50 scheduled two-node pressure matrices require an isolated Linux PostgreSQL fixture and remain unexecuted locally. These specific S2S/MIX matrix targets do not configure Redis; cluster/Redis pressure remains separately unproven."
+candidate_preparation:
+  plan: "N00-N07 bounded candidate preparation (2026-09-07); this record does not promote M00-03."
+  source_identity:
+    branch: "dev"
+    base_commit: "fd5a8af493c989267377be75247a9aabeffce140"
+    base_tree: "c1b5035ceac7c64f7ba16923d8bd09dc7ce77465"
+    result_commit: null
+    source_state: "uncommitted-worktree"
+    source_input_fingerprint: "sha256-utf8-lf-record-manifest-v1:5e0bc259cdbb7efa0fdd38a53713bad61fa517fedd04effed49aca6a0ce64094"
+    source_input_file_count: 2860
+    source_input_includes_untracked: "migrations/0138_sm_mix_teardown_catalog.sql"
+  change_ownership:
+    M00-03:
+      - "scripts/check-outbound-xml-construction.mjs: SQL/XML classifier and positive/negative gate fixtures"
+      - "scripts/check-architecture-boundaries.mjs: reviewed permit-owner negative fixture"
+      - "docs/evidence/README.md and M00-03 evidence scope records"
+    M00-04:
+      - "migrations/0138_sm_mix_teardown_catalog.sql and deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql"
+      - "src/db/schema.rs and src/db/role_attestation.rs"
+      - "scripts/check-migration-versions.sh and database-role/release documentation"
+      - "docs/evidence/tasks/M00-04.yaml"
+    M00-05-and-v13:
+      - "crates/northstar-xmpp-types/src/jid.rs and src/db/archive.rs"
+      - "src/db/mix.rs, src/services/mix.rs, src/xmpp/protocol/mix.rs"
+      - "src/bosh.rs, src/cluster.rs, src/outbound-adjacent protocol paths, src/db/sm.rs, src/services/sm.rs, src/db/replay.rs, src/services/replay.rs, src/xmpp/mod.rs, src/xmpp/protocol.rs, and src/xmpp/protocol/sm.rs"
+      - "docs/evidence/tasks/M00-05.yaml and docs/evidence/tasks/V13-MIX-HANDOFF.yaml"
+    shared-documentation:
+      - "docs/KNOWN_ISSUES.md, docs/PRODUCTION_OPERATIONS.md, docs/PROGRAM_RESPONSIBILITIES.md, docs/RELEASE_CHECKLIST.md, and docs/TRACEABILITY.md"
+  preserved_untracked_user_artifacts:
+    - ".tmp-listener-full-matrix.sh"
+    - ".tmp-mix-family.result-dir"
+    - ".tmp-mix-matrix.result-dir"
+    - ".tmp-run-full-mix-matrix.sh"
+    - ".tmp-run-mix-family.sh"
+    - "privilege-matrix.json"
+  excluded_from_source_fingerprint:
+    - "target/ and other build outputs"
+    - "candidate receipts/logs/artifacts produced after the source manifest"
+    - "the preserved untracked user artifacts listed above"
+  reported_vs_observed:
+    historical_ci: "reported/historical only; no earlier GitHub run is evidence for this uncommitted candidate."
+    current_static_and_pure_unit: "N07 records only the exact static and pure-unit receipts listed below; no runtime result is inferred."
+    runtime: "not-run: safety-pause; no WSL, Docker, database, wire, cross-node, SM/BOSH hand-off, recovery, permission, or pressure execution."
+  n07_candidate_receipts:
+    source_fingerprint:
+      algorithm: "sha256-utf8-lf-record-manifest-v1"
+      value: "5e0bc259cdbb7efa0fdd38a53713bad61fa517fedd04effed49aca6a0ce64094"
+      file_count: 2860
+      excludes: "build/evidence outputs and the preserved user artifacts enumerated above"
+    passed_static:
+      - "cargo fmt --all -- --check"
+      - "cargo check --workspace --all-targets --all-features --locked --offline"
+      - "cargo clippy --workspace --all-targets --all-features --locked --offline -- -D warnings"
+      - "node scripts/check-outbound-xml-construction.mjs"
+      - "node scripts/check-architecture-boundaries.mjs"
+      - "node scripts/check-documentation-consistency.mjs"
+      - "node scripts/check-process-isolation.mjs"
+      - "node scripts/check-runtime-migration-boundary.mjs"
+      - "node scripts/check-session-lifecycle-boundary.mjs"
+      - "node scripts/check-i18n.mjs"
+      - "node scripts/check-locales.mjs"
+    passed_pure_unit:
+      root_binary_tests: 21
+      xmpp_types_tests: 2
+      coverage: "session-authority diagnostic bounds/fail-closed behavior; compiled migration ledger parity; DNS/JID octet boundaries; MIX scheduler/cancellation models"
+    incomplete_or_paused:
+      - "scripts/check-migration-versions.sh was source-reviewed and its compiled-MIGRATOR parity test passed, but the Git-Bash invocation did not produce a bounded terminal receipt; it is not counted as passed evidence."
+      - "All database, migration, role/permission, WSL, Docker, network, two-node, Stream Management, BOSH, recovery, pressure, fuzz, and chaos checks remain not-run: safety-pause."
 evidence:
   # This is the newest fully completed observation. Run-specific records below
   # retain the earlier Run 69 evidence rather than treating it as evidence for

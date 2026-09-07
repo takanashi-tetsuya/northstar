@@ -186,7 +186,7 @@ This script has no bootstrap secret. It refuses to continue unless:
 - it is connected to database `xmpp`.
 
 Grant application is ledger-gated. The exact manifest for this release contains
-136 migrations from `0001` through `0137`; `0021` is the sole intentional gap.
+137 migrations from `0001` through `0138`; `0021` is the sole intentional gap.
 Every listed row is identified by version, SQLx description and SHA-384 checksum.
 `bootstrap` accepts only a genuinely empty
 database with no sqlx ledger or application object. `auto` accepts either that
@@ -195,7 +195,7 @@ migrated installation. Both non-empty shapes must match the checked-in manifest
 by exact version, SQLx description and SHA-384 checksum; the intentional `0021`
 gap is part of that set. Missing, unknown, failed, duplicated or modified rows,
 one-sided 0114/0115, and post-0115-without-boundary ledgers fail closed. `exact`
-requires the complete checked-in `0001`-`0137` manifest, not merely the
+requires the complete checked-in `0001`-`0138` manifest, not merely the
 `0114`/`0115` transition boundary. Bootstrap and prepare
 leave runtime, command, and backup with **zero** database, schema, object, type,
 or routine capability. Only post-migration exact reconciliation installs the
@@ -216,7 +216,7 @@ raw-column `ON CONFLICT` target cannot infer the replacement unique index. Stop
 all application and maintenance writers, apply the migration, run exact grant
 reconciliation, and only then start the matching runtime binary.
 
-Migrations `0131` through `0137` are forward security/capability hardenings, not
+Migrations `0131` through `0138` are forward security/capability hardenings, not
 additional stopped-writer transitions. `0131` keeps the authoritative upload
 capacity ledger owner-only through a private `FOR UPDATE NOWAIT` primitive.
 Runtime-facing upload capabilities and table-mutator guards use that primitive
@@ -235,9 +235,12 @@ row trigger, so a committed verified-route transition defeats a concurrent
 lease defer/retry without granting a new workload capability. `0135` records
 typed MIX ownership in SM and BOSH, `0136` releases SM-owned MIX leases before
 parent-session cascade, and `0137` adds a node/request hand-off fence for
-cross-node MIX transport. These are relation-level ownership records, not new
-runtime-executable capabilities. Final M00 validation evidence remains pending
-and these migrations are not production acceptance claims.
+cross-node MIX transport. `0138` extends the strict session-capability catalog
+with the reviewed `0136` teardown trigger; it still rejects unknown triggers,
+routine bindings, owners, search paths and grants. These are relation-level
+ownership records, not new runtime-executable capabilities. Final M00
+validation evidence remains pending and these migrations are not production
+acceptance claims.
 
 Exact reconciliation atomically revokes `PUBLIC`, refreshes current object
 grants, and makes future objects owner-only. Every revocation that can remove a grant
@@ -343,8 +346,8 @@ that marker before cleanup. It then:
    and separately proves empty bootstrap plus partial/tampered-ledger rejection;
    demotion;
 4. runs Northstar's real `migrate` command as `northstar_migrator`, comparing
-   the successful sqlx ledger with all 136 checked-in migrations from `0001`
-   through `0137` (including the intentional numbering gap at `0021`);
+the successful sqlx ledger with all 137 checked-in migrations from `0001`
+through `0138` (including the intentional numbering gap at `0021`);
 5. reapplies the shared `exact` post-migration ACL policy;
 6. removes the function/type override rows and injects missing, unknown, failed,
    and checksum/description-tampered ledger states to prove every audit fails
@@ -441,7 +444,7 @@ role also remains a true superuser by design; isolation depends on keeping its
 secret inside the PostgreSQL/bootstrap trust boundary and using it only for
 explicit maintenance.
 
-The `0001`-`0137` migration SQL and checksums used by both the one-shot migrator
+The `0001`-`0138` migration SQL and checksums used by both the one-shot migrator
 and normal startup verifier are embedded in the release binary. The checked-in
 migration directory remains an auditable source/build input, but replacing
 files beside an installed binary cannot redefine the schema that binary accepts.

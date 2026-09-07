@@ -59,6 +59,10 @@ const MIX_OUTBOX_ATTEMPT_DEADLINE: Duration = Duration::from_secs(20);
 /// separately so a pool acquire or database wait cannot make a worker appear
 /// healthy while it has stopped making progress.
 const MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE: Duration = Duration::from_secs(5);
+/// Retention has a fixed deadline owned by the worker lifecycle, rather than
+/// by individual delivery wakes.  Recreating this deadline after every claim
+/// would let sustained traffic starve bounded maintenance forever.
+const MIX_OUTBOX_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60);
 /// Renew well before the durable lease expires, but never immediately after a
 /// claim.  Tokio intervals tick immediately, which used to let a renewal wait
 /// on the same admission permit as the still-running effect.
@@ -77,6 +81,30 @@ const PAM_RESULT_MAX_CONCURRENCY: usize = 2;
 enum MixOutboxQueue {
     Delivery,
     PamResult,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MixMaintenanceSchedule {
+    next_deadline: tokio::time::Instant,
+}
+
+impl MixMaintenanceSchedule {
+    fn starting_at(now: tokio::time::Instant) -> Self {
+        Self {
+            next_deadline: now + MIX_OUTBOX_MAINTENANCE_INTERVAL,
+        }
+    }
+
+    fn due(self, now: tokio::time::Instant) -> bool {
+        now >= self.next_deadline
+    }
+
+    fn record_completed_page(&mut self, completed_at: tokio::time::Instant) {
+        // Schedule one future page from the actual completion point. This is
+        // intentionally skip-like: delayed workers never burst an arbitrary
+        // number of maintenance pages ahead of delivery work.
+        self.next_deadline = completed_at + MIX_OUTBOX_MAINTENANCE_INTERVAL;
+    }
 }
 
 /// External delivery can wait on a remote peer without holding a database
@@ -326,7 +354,9 @@ async fn try_send_local_durable_mix(
         }
     };
     let mut pending = PendingMixLocalHandoff::new(sender.clone(), disconnect.clone());
-    let completion = receiver.await.map_err(|_| MixLocalTransportFailure::HandoffClosed)?;
+    let completion = receiver
+        .await
+        .map_err(|_| MixLocalTransportFailure::HandoffClosed)?;
     pending.mark_completed();
     Ok(completion)
 }
@@ -2211,7 +2241,9 @@ async fn deliver_channel_stanza(
         database_lane,
     } = delivery;
     let durable_source = match (durable, delivery_id, mix_source) {
-        (true, Some(delivery_id), Some(source)) if source.delivery_id == delivery_id => Some(source),
+        (true, Some(delivery_id), Some(source)) if source.delivery_id == delivery_id => {
+            Some(source)
+        }
         (true, _, _) => anyhow::bail!("durable MIX routing requires its exact claimed source"),
         (false, None, None) => None,
         (false, _, _) => anyhow::bail!("live MIX routing must not carry a durable source"),
@@ -2493,12 +2525,7 @@ async fn deliver_channel_stanza(
                 had_route_target = true;
                 match state
                     .cluster
-                    .send_to_node_mix(
-                        &node_id,
-                        &recipient.jid,
-                        &stanza,
-                        durable_source,
-                    )
+                    .send_to_node_mix(&node_id, &recipient.jid, &stanza, durable_source)
                     .await
                 {
                     Ok(receipt) => {
@@ -3001,10 +3028,10 @@ async fn run_mix_outbox_lane(
     let mut delivery_wake = matches!(queue, MixOutboxQueue::Delivery)
         .then(|| state.mix_service().subscribe_delivery_wake());
     let mut next_claim = tokio::time::Instant::now();
-    // Startup must first make already-committed user delivery eligible.  A
-    // retention page is important but cannot be allowed to put four database
-    // turns ahead of the first claimed live MIX event on a small pool.
-    let mut next_maintenance = tokio::time::Instant::now() + Duration::from_secs(60);
+    // Startup must first make already-committed user delivery eligible.
+    // Retention work is important but cannot be allowed to put a maintenance
+    // page ahead of the first claimed live MIX event on a small pool.
+    let mut maintenance_schedule = MixMaintenanceSchedule::starting_at(tokio::time::Instant::now());
     let mut accepting = true;
     let mut terminal_error = None;
 
@@ -3017,11 +3044,18 @@ async fn run_mix_outbox_lane(
         if accepting && cancel.is_cancelled() {
             accepting = false;
         }
-        if accepting && maintain && tokio::time::Instant::now() >= next_maintenance {
+        if accepting && maintain && maintenance_schedule.due(tokio::time::Instant::now()) {
             let maintenance = cancellable_mix_outbox_turn(&cancel, async {
-                // One bounded page per minute keeps durable retention finite
-                // without borrowing the PAM lane or holding a database gate
-                // across any outbound network operation.
+                // Retention is a separate, bounded page. In particular it is
+                // never awaited by `claim_mix_deliveries`, so a newly due
+                // first message needs only its fenced claim turn.
+                state
+                    .mix_service()
+                    .maintain_mix_delivery_retention()
+                    .await?;
+                // The remaining bounded pages keep auxiliary correlation
+                // state finite without borrowing the PAM lane or holding a
+                // database gate across any outbound network operation.
                 state
                     .mix_service()
                     .prune_expired_business_intents(512)
@@ -3037,7 +3071,7 @@ async fn run_mix_outbox_lane(
                 state.mix_service().prune_expired_pam_results(512).await
             })
             .await;
-            next_maintenance = tokio::time::Instant::now() + Duration::from_secs(60);
+            maintenance_schedule.record_completed_page(tokio::time::Instant::now());
             match maintenance {
                 Ok(_) => healthy_progress = true,
                 Err(error) if mix_outbox_is_shutting_down(&error) => {
@@ -7628,11 +7662,62 @@ mod tests {
                     .await
             })
         };
-        let late = consumer.recv().await.expect("cancelled MIX item was queued");
+        let late = consumer
+            .recv()
+            .await
+            .expect("cancelled MIX item was queued");
         waiter.abort();
         let _ = waiter.await;
         assert!(disconnect.is_cancelled());
         drop(late);
+    }
+
+    #[test]
+    fn mix_maintenance_starts_after_the_first_foreground_claim_window() {
+        let start = tokio::time::Instant::now();
+        let schedule = MixMaintenanceSchedule::starting_at(start);
+        // MX01: a committed delivery can be claimed before the first retention
+        // page is due; the worker does not begin with maintenance.
+        assert!(!schedule.due(start));
+        assert!(schedule.next_deadline > start);
+    }
+
+    #[test]
+    fn mix_maintenance_runs_only_at_its_fixed_deadline() {
+        let start = tokio::time::Instant::now();
+        let schedule = MixMaintenanceSchedule::starting_at(start);
+        // MX02: ordinary wakes do not make a future maintenance page due.
+        assert!(!schedule.due(schedule.next_deadline - Duration::from_nanos(1)));
+        assert!(schedule.due(schedule.next_deadline));
+    }
+
+    #[test]
+    fn mix_maintenance_deadline_is_not_reset_by_foreground_work() {
+        let start = tokio::time::Instant::now();
+        let schedule = MixMaintenanceSchedule::starting_at(start);
+        let original_deadline = schedule.next_deadline;
+        // MX03: a busy delivery wake may change next_claim, but it has no
+        // authority to mutate this lifecycle-owned maintenance deadline.
+        for _ in 0..1_000 {
+            assert_eq!(schedule.next_deadline, original_deadline);
+        }
+        assert!(schedule.due(original_deadline));
+    }
+
+    #[test]
+    fn mix_maintenance_skips_missed_ticks_and_yields_between_pages() {
+        let start = tokio::time::Instant::now();
+        let mut schedule = MixMaintenanceSchedule::starting_at(start);
+        let delayed_completion = schedule.next_deadline + Duration::from_secs(300);
+        assert!(schedule.due(delayed_completion));
+        schedule.record_completed_page(delayed_completion);
+        // MX04/MX12: one delayed page creates one future deadline, not a
+        // catch-up burst. A multi-page backlog therefore yields between pages.
+        assert_eq!(
+            schedule.next_deadline,
+            delayed_completion + MIX_OUTBOX_MAINTENANCE_INTERVAL
+        );
+        assert!(!schedule.due(delayed_completion));
     }
 
     #[test]

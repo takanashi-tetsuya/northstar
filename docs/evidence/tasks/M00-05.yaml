@@ -1,0 +1,58 @@
+schema_version: "1.0"
+task:
+  id: "M00-05"
+  title: "Validate durable protocol behavior and MIX business correctness"
+  status: "in-progress"
+  branch: "dev"
+  acceptance_state: "pending-isolated-protocol-evidence"
+scope:
+  owns:
+    - "MIX database, wire, federation, Stream Management and BOSH behavior assigned to M00-05 by the Program 6 evidence map."
+    - "Message-ordering and durable-claim correctness, including foreground latency boundaries."
+    - "Canonical history/admission boundary tests whose input must match the protocol limit."
+  does_not_own:
+    - "Listener/fixture process ownership owned by M00-03."
+    - "Database role/migration catalog authority owned by M00-04."
+    - "Final v13 hand-off acceptance, which is tracked separately in V13-MIX-HANDOFF."
+current_work:
+  - "The archive maximum-domain fixture uses the real 253-octet DNS boundary rather than a 254-octet input with a 253-octet expectation."
+  - "MIX claims no longer await bounded retention cleanup; active predecessor leases and SM/BOSH/cluster owners still preserve recipient order."
+  - "The isolated MIX delivery, cross-node, SM and BOSH fixture results remain required before acceptance."
+candidate_preparation:
+  plan: "N00-N07 bounded candidate preparation (2026-09-07); no PostgreSQL concurrency, transport, or federation result is implied."
+  source_state: "uncommitted-worktree on dev@fd5a8af493c989267377be75247a9aabeffce140"
+  source_input_fingerprint: "sha256-utf8-lf-record-manifest-v1:5e0bc259cdbb7efa0fdd38a53713bad61fa517fedd04effed49aca6a0ce64094"
+  n03_jid_boundary:
+    dns_name: "The 253-octet ASCII DNS presentation boundary is 63.63.63.61 labels; 254 octets and 64-octet labels are rejected after strict IDNA A-label validation."
+    jid_scope: "This does not redefine RFC 7622 localpart/resourcepart 1023-octet limits or case-sensitive opaque resourceparts, and does not make a database-index test pass by shrinking its other inputs."
+    database_follow_up: "Archive scope/index and collision behavior remain runtime database cases (JD07/JD08), not evidence from the pure canonicalizer tests."
+  n04_scheduler_policy:
+    foreground: "claim_mix_deliveries performs only the fenced claim; retention is not a foreground prerequisite."
+    maintenance: "The worker owns one fixed 60-second deadline. Delivery wakes do not reset it; a completed delayed page schedules one future page rather than catch-up bursts."
+    budget: "Each retention helper retains its existing bounded page size and each unclaimed database turn keeps the five-second cancellation/deadline budget."
+    ordering: "A live predecessor, active lease, SM owner, BOSH fence, or cluster fence blocks only the same recipient sequence domain. An expired unowned predecessor is terminal but its real dead-letter/SQL progress is still a database validation case."
+    pure_mapping:
+      MX01: "mix_maintenance_starts_after_the_first_foreground_claim_window"
+      MX02: "mix_maintenance_runs_only_at_its_fixed_deadline"
+      MX03: "mix_maintenance_deadline_is_not_reset_by_foreground_work"
+      MX04: "mix_maintenance_skips_missed_ticks_and_yields_between_pages"
+      MX05: "cancellation_preempts_a_pending_mix_outbox_database_turn"
+      MX06: "failed_mix_outbox_lane_cancels_and_drains_its_peer"
+      MX10: "claimed_mix_cancellation_drops_a_pending_renewal_and_releases_the_gate plus claimed_mix_final_database_turn_honors_the_shared_deadline"
+    database_required:
+      - "MX07/MX08: expired-head ownership and dead-letter progression"
+      - "MX09: cross-recipient progress under row locking"
+      - "MX11: PostgreSQL sequence constraints/query plan and strict predecessor behavior"
+      - "MX12: multi-page maintenance progress with actual pool/transaction behavior"
+  n05_static_guard:
+    change: "The outbound XML gate classifies SQL literal contents rather than exempting src/db/mix.rs, a directory, or raw strings. The native SQL strict-predecessor operator is retained."
+    positive_and_negative: "The checker self-tests SQL comparison operators, SQL plus a real XML string in one file, real raw XML rejection, structured builder acceptance, cfg(test) masking, and an architecture permit-owner omission."
+  runtime_status: "not-run: safety-pause (no isolated PostgreSQL, MIX wire, two-node federation, SM, BOSH, Redis, or recovery execution)"
+  n07_receipt_reference:
+    source_fingerprint: "sha256-utf8-lf-record-manifest-v1:5e0bc259cdbb7efa0fdd38a53713bad61fa517fedd04effed49aca6a0ce64094"
+    passed_pure_unit: "two DNS/JID boundary tests and eight MIX scheduler/cancellation models; these do not prove SQL concurrency or delivery."
+    pending: "JD07/JD08, MX07-MX12 runtime portions, and all protocol transport evidence remain not-run: safety-pause."
+evidence:
+  exact_result_commit: null
+  workflow_runs: []
+  pending_reason: "No exact post-change isolated Linux PostgreSQL/two-node protocol result is available."

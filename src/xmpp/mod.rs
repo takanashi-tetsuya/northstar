@@ -972,14 +972,8 @@ async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
     let socket_mix_delivery = match fence_mix_socket_write(session, item, managed_by_sm).await {
         Ok(delivery) => delivery,
         Err(error) => {
-            tcp_internal_backend_error(
-                io,
-                session,
-                opening,
-                "fence MIX socket write",
-                &error,
-            )
-            .await;
+            tcp_internal_backend_error(io, session, opening, "fence MIX socket write", &error)
+                .await;
             return Ok(false);
         }
     };

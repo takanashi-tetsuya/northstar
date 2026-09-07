@@ -437,11 +437,15 @@ MIX outbox dispatch has two independently started protocol lanes: ordinary
 delivery receives the service's typed background budget and PAM results are
 capped at two concurrent attempts. Both lanes use the same private,
 clone-shared `Arc<Semaphore>` only for short repository claims, lease changes,
-completion writes and maintenance pages. The permit count equals that typed
-outbox budget and is released before any local transport, cluster or federation
-I/O, so a slow external delivery cannot hold a database slot or head-of-line
-block a PAM result. A newly started delivery lane claims due user work before
-its first maintenance page. Each semaphore, pool and query wait races the
+completion writes and maintenance pages. A delivery claim does not run
+retention cleanup first: an expired head without an active lease or
+SM/BOSH/cluster owner is terminal and cannot delay a live successor; the
+separate supervised maintenance page records its dead letter and reclaims
+orphan state. The permit count equals that typed outbox budget and is released
+before any local transport, cluster or federation I/O, so a slow external
+delivery cannot hold a database slot or head-of-line block a PAM result. A
+newly started delivery lane claims due user work before its first maintenance
+page. Each semaphore, pool and query wait races the
 worker's child cancellation token; on cancellation the atomic claimed row is
 left fenced for normal lease-expiry recovery rather than keeping shutdown
 blocked behind an unavailable database. If either lane ends, it cancels and

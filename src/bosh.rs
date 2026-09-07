@@ -1191,9 +1191,7 @@ impl BoshActor {
                     return false;
                 }
             };
-            item.durable_source = Some(crate::outbound::TransportOwnershipSource::Mix(
-                transferred,
-            ));
+            item.durable_source = Some(crate::outbound::TransportOwnershipSource::Mix(transferred));
             item.complete_mix_handoff(crate::outbound::MixTransportCompletion::BoshPersisted {
                 session_id: self.delivery_session_id,
             });
@@ -1422,13 +1420,12 @@ impl BoshActor {
         Vec<crate::outbound::TransportOwnershipSource>,
         Vec<mpsc::UnboundedSender<()>>,
     )> {
-        let (payload, sources, transport_receipts, transient_sm_capacity) =
-            take_response_payload(
-                &mut self.output,
-                &mut self.output_bytes,
-                self.max_response_bytes,
-                self.protocol.state.sm_memory_governor(),
-            )?;
+        let (payload, sources, transport_receipts, transient_sm_capacity) = take_response_payload(
+            &mut self.output,
+            &mut self.output_bytes,
+            self.max_response_bytes,
+            self.protocol.state.sm_memory_governor(),
+        )?;
         let body = bosh_body_element(
             condition,
             terminate,
@@ -1598,12 +1595,7 @@ fn take_response_payload(
             sources.push(source);
         }
     }
-    Ok((
-        payload,
-        sources,
-        transport_receipts,
-        transient_sm_capacity,
-    ))
+    Ok((payload, sources, transport_receipts, transient_sm_capacity))
 }
 
 pub async fn http_bind(
@@ -1795,7 +1787,11 @@ fn advance_bosh_key_sequence(
 fn replay_response(
     replay: &mut VecDeque<CachedResponse>,
     request: &BoshRequest,
-) -> Option<(BoshHttpResponse, bool, crate::outbound::BoshResponseOwnership)> {
+) -> Option<(
+    BoshHttpResponse,
+    bool,
+    crate::outbound::BoshResponseOwnership,
+)> {
     let cached = replay.iter_mut().find(|cached| cached.rid == request.rid)?;
     if cached.fingerprint != request.fingerprint {
         return Some((
@@ -2603,21 +2599,16 @@ mod tests {
             delivery_id: uuid::Uuid::from_u128(21),
             lease_token: uuid::Uuid::from_u128(22),
         };
-        let c2s_item = crate::outbound::OutboundItem::durable("<message id='c2s'/>".to_owned(), c2s);
-        let (mix_item, _handoff) = crate::outbound::OutboundItem::durable_mix(
-            "<message id='mix'/>".to_owned(),
-            mix,
-        );
+        let c2s_item =
+            crate::outbound::OutboundItem::durable("<message id='c2s'/>".to_owned(), c2s);
+        let (mix_item, _handoff) =
+            crate::outbound::OutboundItem::durable_mix("<message id='mix'/>".to_owned(), mix);
         let mut output = VecDeque::from([c2s_item.clone(), mix_item.clone()]);
         let mut bytes = output.iter().map(|item| item.stanza.len()).sum();
 
-        let (payload, sources, receipts, holds) = take_response_payload(
-            &mut output,
-            &mut bytes,
-            4_096,
-            &response_test_governor(),
-        )
-        .unwrap();
+        let (payload, sources, receipts, holds) =
+            take_response_payload(&mut output, &mut bytes, 4_096, &response_test_governor())
+                .unwrap();
 
         assert_eq!(payload, format!("{}{}", c2s_item.stanza, mix_item.stanza));
         assert_eq!(

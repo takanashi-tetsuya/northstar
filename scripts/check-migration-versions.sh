@@ -1317,6 +1317,41 @@ do
 done
 echo "migration 0137 keeps remote MIX delivery typed, fenced, and recoverable before local transport hand-off"
 
+# Migration 0136 intentionally installed a BEFORE DELETE SM trigger so an
+# exact MIX lease is released before the parent-session cascade destroys the
+# source queue.  The strict 0127 catalog verifier initially classified that
+# reviewed trigger as unknown.  Migration 0138 must extend the exact trigger
+# manifest rather than exempting it or weakening the unknown-trigger guard.
+sm_mix_teardown_catalog_migration="migrations/0138_sm_mix_teardown_catalog.sql"
+[ -f "$sm_mix_teardown_catalog_migration" ] || {
+    echo "SM MIX teardown catalog migration is missing: $sm_mix_teardown_catalog_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'CREATE OR REPLACE FUNCTION northstar_session_capability_catalog_healthy(' \
+    "('sm_resume_sessions','sm_resume_sessions_release_mix_delivery_owners'," \
+    "'northstar_release_sm_session_mix_delivery_owners()',11::pg_catalog.int2," \
+    'AND NOT EXISTS(SELECT 1 FROM unexpected_trigger)' \
+    'pg_catalog.count(*)=8' \
+    "tgenabled='O' AND tgqual IS NULL" \
+    'tgnargs=0 AND pg_catalog.octet_length(tgargs)=0' \
+    'tgconstraint=0 AND NOT tgdeferrable AND NOT tginitdeferred' \
+    "prorettype='pg_catalog.trigger'::pg_catalog.regtype" \
+    'proconfig IS NOT DISTINCT FROM ARRAY[' \
+    'SECURITY DEFINER SET search_path TO pg_catalog, %I, pg_temp' \
+    'REVOKE ALL ON FUNCTION %I.northstar_session_capability_catalog_healthy(text) FROM PUBLIC'
+do
+    if ! grep -Fq "$required_fragment" "$sm_mix_teardown_catalog_migration"; then
+        echo "migration 0138 is missing exact SM MIX teardown catalog invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if grep -Fq 'public.' "$sm_mix_teardown_catalog_migration"; then
+    echo "migration 0138 must remain installation-schema-local" >&2
+    exit 1
+fi
+echo "migration 0138 makes the exact session authority manifest recognize the reviewed SM-to-MIX BEFORE DELETE hook"
+
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an
 # existing database, and this repository-side manifest catches the same mistake

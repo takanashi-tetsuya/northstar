@@ -162,6 +162,23 @@ pub fn prepare_resourcepart(value: &str) -> Result<String> {
     Ok(prepared)
 }
 
+fn validate_dns_ascii_domain(ascii: &str) -> Result<()> {
+    // A DNS presentation name without the final root separator occupies at
+    // most 253 octets: 255 wire octets minus the root label and its length
+    // byte.  RFC 7622 preparation retains the U-label for the JID, but the
+    // strict IDNA A-label is the boundary that DNS and TLS must actually use.
+    if ascii.len() > 253 {
+        anyhow::bail!("JID domainpart exceeds the 253-octet DNS name limit");
+    }
+    if ascii
+        .split('.')
+        .any(|label| label.is_empty() || label.len() > 63)
+    {
+        anyhow::bail!("JID domainpart violates the DNS label length limit");
+    }
+    Ok(())
+}
+
 pub fn prepare_domainpart(value: &str) -> Result<String> {
     let value = strip_final_label_separator(value);
     if value.is_empty() {
@@ -176,6 +193,7 @@ pub fn prepare_domainpart(value: &str) -> Result<String> {
         let ascii = idna::domain_to_ascii_strict(value)
             .map_err(|_| anyhow::anyhow!("JID domainpart is not a valid IDNA domain"))?
             .to_ascii_lowercase();
+        validate_dns_ascii_domain(&ascii)?;
         let (unicode, result) = idna::domain_to_unicode(&ascii);
         result.map_err(|_| anyhow::anyhow!("JID domainpart is not a valid IDNA domain"))?;
         unicode
@@ -419,6 +437,54 @@ mod tests {
         let oversized_resource = format!("alice@example.test/{}", "a".repeat(1024));
         assert!(CanonicalJid::parse(&oversized_localpart).is_err());
         assert!(CanonicalJid::parse(&oversized_resource).is_err());
+    }
+
+    #[test]
+    fn dns_ascii_domain_boundaries_are_counted_in_octets_not_characters() {
+        let maximum_domain = [63, 63, 63, 61]
+            .into_iter()
+            .map(|length| "d".repeat(length))
+            .collect::<Vec<_>>()
+            .join(".");
+        assert_eq!(maximum_domain.len(), 253);
+        assert_eq!(
+            CanonicalJid::parse(&format!("alice@{maximum_domain}"))
+                .unwrap()
+                .domainpart(),
+            maximum_domain
+        );
+
+        let oversized_domain = [63, 63, 63, 62]
+            .into_iter()
+            .map(|length| "d".repeat(length))
+            .collect::<Vec<_>>()
+            .join(".");
+        assert_eq!(oversized_domain.len(), 254);
+        assert!(CanonicalJid::parse(&format!("alice@{oversized_domain}")).is_err());
+    }
+
+    #[test]
+    fn dns_label_and_trailing_root_boundaries_remain_distinct_from_jid_parts() {
+        let label_63 = "a".repeat(63);
+        let label_64 = "a".repeat(64);
+        assert!(CanonicalJid::parse(&format!("alice@{label_63}.example")).is_ok());
+        assert!(CanonicalJid::parse(&format!("alice@{label_64}.example")).is_err());
+        assert_eq!(
+            CanonicalJid::parse("alice@example.test.")
+                .unwrap()
+                .domainpart(),
+            "example.test"
+        );
+        assert_eq!(
+            CanonicalJid::parse("ALICE@B\u{fc}CHER.example/Phone")
+                .unwrap()
+                .to_string(),
+            "alice@b\u{fc}cher.example/Phone"
+        );
+        assert_ne!(
+            CanonicalJid::parse("alice@example.test/Phone").unwrap(),
+            CanonicalJid::parse("alice@example.test/phone").unwrap()
+        );
     }
 
     #[test]

@@ -327,14 +327,8 @@ impl ReplayService {
         sources: &[crate::outbound::TransportOwnershipSource],
         ttl_seconds: u64,
     ) -> Result<crate::outbound::BoshResponseOwnership> {
-        db::replay::bind_bosh_transport_response(
-            &self.pool,
-            session_id,
-            rid,
-            sources,
-            ttl_seconds,
-        )
-        .await
+        db::replay::bind_bosh_transport_response(&self.pool, session_id, rid, sources, ttl_seconds)
+            .await
     }
 
     pub(crate) async fn release_bosh_fences(&self, session_id: Uuid) -> Result<()> {

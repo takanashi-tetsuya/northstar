@@ -623,8 +623,8 @@ async fn resolve_node_message_delivery(
             .fetch_optional(pool)
             .await
             .context("failed to verify clustered durable MIX projection")?;
-            let (recipient, template, lease_active, event_active) = projection
-                .context("cluster durable MIX delivery projection is missing")?;
+            let (recipient, template, lease_active, event_active) =
+                projection.context("cluster durable MIX delivery projection is missing")?;
             anyhow::ensure!(
                 lease_active && event_active,
                 "cluster durable MIX delivery source is no longer active"
@@ -794,8 +794,10 @@ fn validated_delivery_ack(
         // A MIX recipient row is transferred to exactly one destination
         // resource.  The capability counters may describe every resource,
         // but the authoritative source can cross only one local boundary.
-        if !matches!(expected.delivery, Some(NodeDeliveryContract::DurableMix { .. }))
-            || ack.delivered > 1
+        if !matches!(
+            expected.delivery,
+            Some(NodeDeliveryContract::DurableMix { .. })
+        ) || ack.delivered > 1
             || (ack.delivered == 0) != ack.accepted_full_jid.is_none()
             || (ack.delivered == 0) != ack.mix_handoff.is_none()
         {
@@ -3342,11 +3344,13 @@ impl ClusterManager {
             // caller observes no live acceptance and leaves it for replay.
             return Ok(NodeDeliveryReceipt::default());
         }
-        self.admit(if options.durable_delivery.is_some() || options.mix_delivery.is_some() {
-            ClusterOperation::DurableDirect
-        } else {
-            ClusterOperation::VolatileDelivery
-        })?;
+        self.admit(
+            if options.durable_delivery.is_some() || options.mix_delivery.is_some() {
+                ClusterOperation::DurableDirect
+            } else {
+                ClusterOperation::VolatileDelivery
+            },
+        )?;
         let target_jid = crate::jid::canonicalize(target_jid)?;
         let delivery_contract = outbound_delivery_contract(
             stanza,
@@ -3397,8 +3401,10 @@ impl ClusterManager {
         }
         if options.mix_transport_receipt_required {
             anyhow::ensure!(
-                matches!(delivery_contract, Some(NodeDeliveryContract::DurableMix { .. }))
-                    && options.mix_capable_only
+                matches!(
+                    delivery_contract,
+                    Some(NodeDeliveryContract::DurableMix { .. })
+                ) && options.mix_capable_only
                     && crate::jid::CanonicalJid::parse(&target_jid)?
                         .resourcepart()
                         .is_none()
@@ -7412,8 +7418,7 @@ async fn listen_once(
                                 false
                             }
                         }
-                    } else if let (Some(source), Some(request_id)) =
-                        (mix_delivery, mix_request_id)
+                    } else if let (Some(source), Some(request_id)) = (mix_delivery, mix_request_id)
                     {
                         // Rotate the signed source into this node's durable
                         // fence before putting it on a local C2S output.  No
@@ -7447,7 +7452,9 @@ async fn listen_once(
                         )
                         .await
                         {
-                            Ok(crate::outbound::MixTransportCompletion::SocketFenced { .. }) => {
+                            Ok(crate::outbound::MixTransportCompletion::SocketFenced {
+                                ..
+                            }) => {
                                 mix_handoff = Some(ClusterMixHandoff::SocketFenced);
                                 true
                             }
@@ -7455,7 +7462,9 @@ async fn listen_once(
                                 mix_handoff = Some(ClusterMixHandoff::SmPersisted);
                                 true
                             }
-                            Ok(crate::outbound::MixTransportCompletion::BoshPersisted { .. }) => {
+                            Ok(crate::outbound::MixTransportCompletion::BoshPersisted {
+                                ..
+                            }) => {
                                 mix_handoff = Some(ClusterMixHandoff::BoshPersisted);
                                 true
                             }
@@ -9364,9 +9373,11 @@ mod tests {
         let sender = crate::outbound::OutboundSender::new(output);
         let disconnect = CancellationToken::new();
         sender.try_send("older".to_owned()).unwrap();
-        assert!(try_send_cluster_mix_transport(&sender, &disconnect, "full".to_owned(), source)
-            .await
-            .is_err());
+        assert!(
+            try_send_cluster_mix_transport(&sender, &disconnect, "full".to_owned(), source)
+                .await
+                .is_err()
+        );
         assert!(disconnect.is_cancelled());
 
         // A disconnected output transport cannot acknowledge a durable MIX
@@ -9375,9 +9386,11 @@ mod tests {
         drop(consumer);
         let sender = crate::outbound::OutboundSender::new(output);
         let disconnect = CancellationToken::new();
-        assert!(try_send_cluster_mix_transport(&sender, &disconnect, "closed".to_owned(), source)
-            .await
-            .is_err());
+        assert!(
+            try_send_cluster_mix_transport(&sender, &disconnect, "closed".to_owned(), source)
+                .await
+                .is_err()
+        );
         assert!(disconnect.is_cancelled());
 
         // A receiver that takes the item and drops it before a recoverable

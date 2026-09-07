@@ -1468,14 +1468,8 @@ impl ProtocolSession {
             .map_err(|_| {
                 anyhow::anyhow!("XEP-0198 acknowledgement database operation timed out")
             })??;
-            anyhow::ensure!(
-                outcome.updated,
-                "durable XEP-0198 stream lease was lost"
-            );
-            Self::apply_sm_ownership_resolution_to_unacked(
-                &mut remaining,
-                &outcome.ownership,
-            );
+            anyhow::ensure!(outcome.updated, "durable XEP-0198 stream lease was lost");
+            Self::apply_sm_ownership_resolution_to_unacked(&mut remaining, &outcome.ownership);
         } else {
             let sources = acknowledged
                 .iter()
@@ -1483,9 +1477,7 @@ impl ProtocolSession {
                 .collect::<Vec<_>>();
             tokio::time::timeout(
                 std::time::Duration::from_secs(5),
-                self.state
-                    .sm_service()
-                    .acknowledge_delivery_batch(&sources),
+                self.state.sm_service().acknowledge_delivery_batch(&sources),
             )
             .await
             .map_err(|_| {
@@ -1712,7 +1704,9 @@ mod tests {
         );
         assert_eq!(outbound_h, 11);
         assert!(
-            unacked.iter().all(|entry| entry.durable_delivery().is_none()),
+            unacked
+                .iter()
+                .all(|entry| entry.durable_delivery().is_none()),
             "volatile MUC traffic carries no durable delivery fence"
         );
     }

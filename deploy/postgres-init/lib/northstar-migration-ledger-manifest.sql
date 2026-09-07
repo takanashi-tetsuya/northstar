@@ -147,6 +147,7 @@ INSERT INTO pg_temp.northstar_migration_ledger_manifest(
   (134,'mix delivery route wake generation',pg_catalog.decode('e897eff1e56dd4c298af80bd35ff23afb1e04bcfaaae8cdb0067fa68f947f6d827783e0cead9c97aa935e2a90d5ee289','hex')),
   (135,'mix transport handoffs',pg_catalog.decode('ff5bc36909170eca8deb85aa87ca59cd66dda2517a8acedfe8c3f39c57ec89bcd839a201467964fff5a26f9c28c2dda5','hex')),
   (136,'sm mix teardown release',pg_catalog.decode('d391639680a7b79bbc4273a4a2f39274aca3ff7c76eaaba42ac0b28aa2086a217f189aef57fcf3d5d6577438ce0b5179','hex')),
-  (137,'mix cluster transport handoffs',pg_catalog.decode('f2e40e76a71bdd3100e5abaeab3e0803ab9819cce93909cdcaae8ceec2a9537ba2f2b48089b7d4ef390936e3e1333ba1','hex'));
+  (137,'mix cluster transport handoffs',pg_catalog.decode('f2e40e76a71bdd3100e5abaeab3e0803ab9819cce93909cdcaae8ceec2a9537ba2f2b48089b7d4ef390936e3e1333ba1','hex')),
+  (138,'sm mix teardown catalog',pg_catalog.decode('fef9f9cf5f09968c8edb9e4b8ed205ffcf7182e515cd0383af92138d089b3acee6e6c634d68db4d73f8c8b27e591b268','hex'));
 
 \set northstar_migration_ledger_manifest_is_loaded true

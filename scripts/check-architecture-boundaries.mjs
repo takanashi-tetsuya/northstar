@@ -843,9 +843,42 @@ const mixOutboxDbMethods = new Map([
     },
   ],
   ['claim_mix_deliveries', 'claim_mix_deliveries'],
+  ['maintain_mix_delivery_retention', 'maintain_mix_delivery_retention'],
   ['prune_expired_business_intents', 'prune_expired_mix_business_intents'],
   ['prune_expired_federated_iq_results', 'prune_expired_federated_mix_iq_results'],
   ['acknowledge_mix_delivery', 'acknowledge_mix_delivery'],
+  [
+    'fence_mix_socket_write',
+    {
+      description: 'db::mix::fence_mix_socket_write repository turn',
+      callPattern: /\bdb\s*::\s*mix\s*::\s*fence_mix_socket_write\s*\(/,
+      awaitPattern: /\bdb\s*::\s*mix\s*::/,
+    },
+  ],
+  [
+    'transfer_mix_delivery_to_cluster',
+    {
+      description: 'db::mix::transfer_mix_delivery_to_cluster repository turn',
+      callPattern: /\bdb\s*::\s*mix\s*::\s*transfer_mix_delivery_to_cluster\s*\(/,
+      awaitPattern: /\bdb\s*::\s*mix\s*::/,
+    },
+  ],
+  [
+    'release_mix_cluster_delivery',
+    {
+      description: 'db::mix::release_mix_cluster_delivery repository turn',
+      callPattern: /\bdb\s*::\s*mix\s*::\s*release_mix_cluster_delivery\s*\(/,
+      awaitPattern: /\bdb\s*::\s*mix\s*::/,
+    },
+  ],
+  [
+    'transfer_mix_delivery_to_bosh',
+    {
+      description: 'db::mix::transfer_mix_delivery_to_bosh repository turn',
+      callPattern: /\bdb\s*::\s*mix\s*::\s*transfer_mix_delivery_to_bosh\s*\(/,
+      awaitPattern: /\bdb\s*::\s*mix\s*::/,
+    },
+  ],
   ['renew_mix_delivery_lease', 'renew_mix_delivery_lease'],
   ['dead_letter_mix_delivery', 'dead_letter_mix_delivery'],
   ['retry_mix_delivery', 'retry_mix_delivery'],
@@ -854,6 +887,31 @@ const mixOutboxDbMethods = new Map([
   ['mix_delivery_dead_letters', 'mix_delivery_dead_letters'],
   ['requeue_mix_delivery_dead_letter', 'requeue_mix_delivery_dead_letter'],
 ]);
+function reviewedPermitManifestDetails(requiredMethods, observedOwners) {
+  const unexpected = [...observedOwners.keys()]
+    .filter((name) => !requiredMethods.has(name))
+    .sort();
+  const missing = [...requiredMethods.keys()]
+    .filter((name) => !observedOwners.has(name))
+    .sort();
+  const repeated = [...observedOwners]
+    .filter(([, count]) => count !== 1)
+    .map(([name]) => name)
+    .sort();
+  return { unexpected, missing, repeated };
+}
+
+// A missing reviewed owner is a hard failure, not an invitation to expand the
+// permit allowlist. Keep this small negative regression adjacent to the same
+// helper used for the production source scan.
+const permitManifestNegativeFixture = reviewedPermitManifestDetails(
+  new Map([['required_turn', 'repository_turn']]),
+  new Map(),
+);
+if (permitManifestNegativeFixture.missing.join(',') !== 'required_turn') {
+  throw new Error('MIX outbox permit manifest self-test did not reject a missing reviewed owner');
+}
+
 const mixServiceFunctions = asyncFunctionSpans(mixServiceProduction, 'src/services/mix.rs');
 const mixOutboxDbPermitOwners = new Map();
 const mixOutboxDbPermitCallPattern = /self\s*\.\s*outbox_db_admission_guard\s*\(\s*\)\s*\.\s*await/g;
@@ -867,16 +925,11 @@ for (let match; (match = mixOutboxDbPermitCallPattern.exec(mixServiceProduction)
   }
   mixOutboxDbPermitOwners.set(owner.name, (mixOutboxDbPermitOwners.get(owner.name) ?? 0) + 1);
 }
-const unexpectedMixOutboxDbPermitOwners = [...mixOutboxDbPermitOwners.keys()]
-  .filter((name) => !mixOutboxDbMethods.has(name))
-  .sort();
-const missingMixOutboxDbPermitOwners = [...mixOutboxDbMethods.keys()]
-  .filter((name) => !mixOutboxDbPermitOwners.has(name))
-  .sort();
-const repeatedMixOutboxDbPermitOwners = [...mixOutboxDbPermitOwners]
-  .filter(([, count]) => count !== 1)
-  .map(([name]) => name)
-  .sort();
+const {
+  unexpected: unexpectedMixOutboxDbPermitOwners,
+  missing: missingMixOutboxDbPermitOwners,
+  repeated: repeatedMixOutboxDbPermitOwners,
+} = reviewedPermitManifestDetails(mixOutboxDbMethods, mixOutboxDbPermitOwners);
 if (
   unexpectedMixOutboxDbPermitOwners.length > 0 ||
   missingMixOutboxDbPermitOwners.length > 0 ||

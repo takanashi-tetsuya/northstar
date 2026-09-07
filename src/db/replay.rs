@@ -1948,10 +1948,12 @@ pub async fn renew_bosh_transport_fences(
     let response_count = c2s
         .iter()
         .filter_map(|fence| fence.try_get::<i64, _>("response_rid").ok())
-        .chain(
-            mix.iter()
-                .filter_map(|fence| fence.try_get::<Option<i64>, _>("response_rid").ok().flatten()),
-        )
+        .chain(mix.iter().filter_map(|fence| {
+            fence
+                .try_get::<Option<i64>, _>("response_rid")
+                .ok()
+                .flatten()
+        }))
         .collect::<BTreeSet<_>>()
         .len();
     anyhow::ensure!(
@@ -1976,12 +1978,20 @@ pub async fn renew_bosh_transport_fences(
                     .ok()
                     .flatten()
                     == Some(response_rid))
-                    .then(|| fence.try_get::<Uuid, _>("delivery_id").ok())
-                    .flatten()
+                .then(|| fence.try_get::<Uuid, _>("delivery_id").ok())
+                .flatten()
             })
             .collect::<BTreeSet<_>>();
-        let expected_c2s = expected.c2s_message_ids.iter().copied().collect::<BTreeSet<_>>();
-        let expected_mix = expected.mix_delivery_ids.iter().copied().collect::<BTreeSet<_>>();
+        let expected_c2s = expected
+            .c2s_message_ids
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let expected_mix = expected
+            .mix_delivery_ids
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
         anyhow::ensure!(
             actual_c2s == expected_c2s && actual_mix == expected_mix,
             "cached BOSH response no longer owns its exact durable transport sources"
@@ -2166,7 +2176,10 @@ pub async fn release_bosh_transport_fences(pool: &PgPool, session_id: Uuid) -> R
             .execute(&mut *transaction)
             .await?
             .rows_affected();
-            anyhow::ensure!(released == 1, "MIX BOSH lease release lost its recipient row");
+            anyhow::ensure!(
+                released == 1,
+                "MIX BOSH lease release lost its recipient row"
+            );
         }
         sqlx::query(
             "DELETE FROM mix_bosh_delivery_fences

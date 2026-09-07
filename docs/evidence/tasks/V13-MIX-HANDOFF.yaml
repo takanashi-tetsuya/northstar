@@ -1,0 +1,105 @@
+schema_version: "1.0"
+acceptance:
+  id: "V13-MIX-HANDOFF"
+  title: "MIX v13 durable transport hand-off acceptance"
+  status: "in-progress"
+  acceptance_state: "pending-isolated-runtime-evidence"
+  source_commit: "fd5a8af493c989267377be75247a9aabeffce140"
+  branch: "dev"
+  independent_from: "M00-03"
+scope:
+  purpose: >-
+    Record transport hand-off semantics independently from listener/fixture work.
+    A hand-off is not recorded as end-to-end delivery unless its authority,
+    transport-write, and peer-confirmation facts are each evidenced.
+  non_claims:
+    - "A database lease transfer alone is not a socket write."
+    - "A socket, Stream Management, or BOSH recoverability boundary is not remote peer confirmation."
+    - "A remote acknowledgement alone does not prove an application-level recipient acknowledgement."
+  required_scenarios:
+    - id: "lease-rotation-ack-loss"
+      action: "Rotate the recipient lease, lose the source-side acknowledgement, and retry from the authoritative owner."
+    - id: "remote-crash-after-handoff"
+      action: "Crash the remote owner after authority transfer and before a final source acknowledgement."
+    - id: "late-stale-token-completion"
+      action: "Attempt completion with the old token after a newer lease/token is authoritative."
+    - id: "sm-bosh-takeover-retry"
+      action: "Retry after a Stream Management or BOSH recoverability takeover."
+    - id: "expired-lease-old-node-recovery"
+      action: "Allow the lease to expire, then verify an old node cannot recover or acknowledge the replacement claim."
+    - id: "cancellation-and-shutdown"
+      action: "Cancel an in-flight attempt and perform orderly worker shutdown without allowing a stale local transport hand-off."
+required_observations:
+  - fact: "authority_handoff"
+    meaning: "The durable row is owned by exactly one valid lease/token/node fence."
+  - fact: "transport_write"
+    meaning: "The exact outbound transport crossed its documented socket, SM, or BOSH recoverability boundary."
+  - fact: "peer_confirmation"
+    meaning: "A remote protocol acknowledgement matched the current request/token; it is not inferred from a local write."
+implementation_locations:
+  - "migrations/0135_mix_transport_handoffs.sql"
+  - "migrations/0136_sm_mix_teardown_release.sql"
+  - "migrations/0137_mix_cluster_transport_handoffs.sql"
+  - "src/db/mix.rs"
+  - "src/cluster.rs"
+  - "src/xmpp/protocol/mix.rs"
+candidate_preparation:
+  plan: "N06 static ownership/call-graph mapping (2026-09-07); all VH runtime observations remain pending."
+  source_state: "uncommitted-worktree on dev@fd5a8af493c989267377be75247a9aabeffce140"
+  source_input_fingerprint: "sha256-utf8-lf-record-manifest-v1:5e0bc259cdbb7efa0fdd38a53713bad61fa517fedd04effed49aca6a0ce64094"
+  call_graph:
+    claimed_source: "src/xmpp/protocol/mix.rs::process_claimed_mix_delivery receives ClaimedMixDelivery(delivery_id, lease_token) from MixService::claim_mix_deliveries and keeps one absolute attempt deadline."
+    renewal_and_finalization: "run_claimed_mix_effect_with_lease renews only the current token; process_claimed_mix_delivery chooses acknowledge/defer/retry/dead-letter only through MixService CAS methods, and retains the row on cancellation/deadline uncertainty."
+    direct_socket: "src/xmpp/mod.rs fences the exact source through MixService::fence_mix_socket_write before completing OutboundItem::MixTransportHandoff as SocketFenced; the old claimant stops finalization once the rotated source transfers."
+    stream_management: "src/db/sm.rs stores mix_delivery_id and mix_delivery_lease_token with the SM stanza; src/xmpp/protocol/sm.rs owns checkpoint/resume/ACK processing; migration 0136 releases only the matching pre-cascade source lease on SM parent teardown."
+    bosh: "src/bosh.rs::record_and_push_item calls MixService::transfer_mix_delivery_to_bosh before retaining the response FIFO and completes only BoshPersisted; response acknowledgement later owns final source handling."
+    cluster: "src/cluster.rs validates the signed v13 delivery identity, calls MixService::transfer_mix_delivery_to_cluster before local transport enqueue, and calls release_mix_cluster_delivery only with the exact delivery/node/request identity when no local durable boundary is reached."
+    transport_boundary: "src/outbound.rs::MixTransportHandoff is one-shot; Queue/Redis admission is not a completion. SocketFenced, SmPersisted, and BoshPersisted are distinct boundaries; SocketWritten alone is explicitly insufficient for remote cluster hand-off acceptance."
+  ownership_transition_table:
+    claimed: "recipient row plus live lease_token; recoverable but not delivered"
+    cluster_fenced: "rotated token plus delivery_id/node_id/request_id fence; remote responsibility acquired, not peer confirmation"
+    queued: "in-memory OutboundItem is not recovery authority; persistent source/fence remains authoritative"
+    socket_fenced: "rotated socket writer source; fencing established, not proof that bytes reached the peer"
+    sm_persisted: "exact source stored with SM sequence; ACK remains separate"
+    bosh_persisted: "exact source bound to BOSH session/RID response ownership; response ACK remains separate"
+    terminal: "acknowledge/dead-letter policy result only after its applicable CAS/fence contract"
+  vh_mapping:
+    VH01: "cluster transfer is after source claim and before destination enqueue; Redis receipt alone is not terminal (runtime required)"
+    VH02: "transfer_mix_delivery_to_cluster rotates the token atomically; renew/complete/release CAS paths require the exact current identity (runtime required)"
+    VH03: "cluster fence preserves recovery responsibility until a socket/SM/BOSH hand-off or exact release/expiry (runtime required)"
+    VH04: "unique cluster request fence and exact source identity define the duplicate-request test (runtime required)"
+    VH05: "delivery_id, token, node_id, and request_id are all checked by cluster transfer/release paths (runtime required)"
+    VH06: "node/process incarnation binding is an evidence gap: current mapping identifies node_id/request_id but requires runtime/fixture proof against old-instance reuse"
+    VH07: "one-shot MixTransportHandoff plus typed socket/SM/BOSH ownership prevents a late generic release from representing success (runtime required)"
+    VH08: "SM source columns and protocol ACK/checkpoint path are mapped; sequence/fence recovery requires runtime evidence"
+    VH09: "BOSH response FIFO records typed ownership before push; RID replay/response ACK behavior requires runtime evidence"
+    VH10: "0136 exact token update before SM cascade plus 0138 catalog recognition are mapped; teardown behavior requires runtime evidence"
+    VH11: "0136 UPDATE joins both delivery_id and mix_delivery_lease_token, so an old teardown cannot match a rotated owner; runtime race proof required"
+    VH12: "terminal/source deletion paths are mapped to exact CAS methods; deletion/retry non-resurrection requires runtime evidence"
+    VH13: "shared attempt deadline and cancellation-aware database turn are mapped; live shutdown/transport cleanup requires runtime evidence"
+    VH14: "SocketFenced and SocketWritten are explicitly distinct; no end-to-end exactly-once assertion is made"
+    VH15: "database CAS is mapped, but external-writer fencing after lease expiry remains a runtime evidence requirement"
+    VH16: "claim query scopes strict predecessors by recipient_jid and sequence; multi-transport ordering requires runtime evidence"
+    VH17: "route classification maps no target/unknown/unsupported to park rather than acknowledgement; runtime retry/terminal behavior required"
+    VH18: "cluster protocol v13 path rejects legacy unfenced completion; incompatibility fixture required"
+    VH19: "volatile and durable sources are distinct OutboundItem/NodeDeliveryContract variants; runtime confirmation required"
+    VH20: "claim eligibility treats active SM/BOSH/cluster fences as blocking despite event expiry; final expiry/cleanup progress requires runtime evidence"
+  prohibited_claims:
+    - "No mapping is a cross-node, socket, SM, BOSH, Redis, database, or peer-confirmation result."
+    - "No raw lease token, SM resume token, BOSH bearer, or signing secret is present in this evidence record."
+  runtime_status: "not-run: safety-pause"
+  n07_receipt_reference:
+    source_fingerprint: "sha256-utf8-lf-record-manifest-v1:5e0bc259cdbb7efa0fdd38a53713bad61fa517fedd04effed49aca6a0ce64094"
+    result: "VH01-VH20 have static call-graph and authority mappings only. No required scenario is accepted from this candidate preparation."
+evidence:
+  exact_result_commit: null
+  workflow_runs: []
+  local_results: []
+  pending_reason: >-
+    No isolated Linux PostgreSQL/two-node execution has been recorded for this
+    acceptance card. Static code inspection and unit compilation do not close
+    any required runtime scenario.
+ownership:
+  ci_fixture: "MIX database/cross-node/SM/BOSH fixture family"
+  database_permissions: "Database migration and runtime-role task owners"
+  business_correctness: "MIX durable delivery task owner"

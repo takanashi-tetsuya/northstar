@@ -1036,10 +1036,7 @@ impl ProtocolSession {
         )
         .await
         .context("XEP-0198 checkpoint database operation timed out")??;
-        anyhow::ensure!(
-            outcome.updated,
-            "durable XEP-0198 stream lease was lost"
-        );
+        anyhow::ensure!(outcome.updated, "durable XEP-0198 stream lease was lost");
         // A checkpoint can rotate a MIX lease while atomically transferring
         // the stanza into the SM queue.  Keep the process-resident replay
         // queue on that exact new lease: a later acknowledgement must never

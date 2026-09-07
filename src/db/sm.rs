@@ -408,19 +408,21 @@ pub async fn checkpoint_sm_session_and_acknowledge(
     max_stanzas: usize,
     max_bytes: usize,
 ) -> Result<bool> {
-    Ok(checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
-        pool,
-        id,
-        connection_id,
-        snapshot,
-        acknowledged,
-        ttl_seconds,
-        live_lease_seconds,
-        max_stanzas,
-        max_bytes,
+    Ok(
+        checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
+            pool,
+            id,
+            connection_id,
+            snapshot,
+            acknowledged,
+            ttl_seconds,
+            live_lease_seconds,
+            max_stanzas,
+            max_bytes,
+        )
+        .await?
+        .updated,
     )
-    .await?
-    .updated)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1611,7 +1613,9 @@ async fn replace_queue(
         )?
         .context("persisted SM durable row has no source")?;
         anyhow::ensure!(
-            existing.insert(durable_source_key(source), source).is_none(),
+            existing
+                .insert(durable_source_key(source), source)
+                .is_none(),
             "duplicate durable source in persisted SM queue"
         );
     }
@@ -1619,23 +1623,20 @@ async fn replace_queue(
     let mut next = source_map(queue, "SM snapshot")?;
     let completed = source_map(acknowledged, "SM acknowledgement")?;
     anyhow::ensure!(
-        completed.iter().all(|(key, completed)| {
-            existing
-                .get(key)
-                .is_some_and(|owned| owned == completed)
-        }),
+        completed
+            .iter()
+            .all(|(key, completed)| { existing.get(key).is_some_and(|owned| owned == completed) }),
         "SM acknowledgement does not own the durable source fence"
     );
     anyhow::ensure!(
-        next.iter().all(|(key, source)| {
-            existing.get(key).is_none_or(|owned| owned == source)
-        }),
+        next.iter()
+            .all(|(key, source)| { existing.get(key).is_none_or(|owned| owned == source) }),
         "SM snapshot changed an existing durable source fence"
     );
     anyhow::ensure!(
-        existing.keys().all(|key| {
-            next.contains_key(key) || completed.contains_key(key)
-        }),
+        existing
+            .keys()
+            .all(|key| { next.contains_key(key) || completed.contains_key(key) }),
         "SM snapshot attempted to drop a durable source without client acknowledgement"
     );
     anyhow::ensure!(
@@ -1675,10 +1676,7 @@ async fn replace_queue(
     for previous in new_mix {
         let current = rotate_new_mix_source_for_sm_transfer(transaction, previous).await?;
         let key = durable_source_key(crate::outbound::TransportOwnershipSource::Mix(previous));
-        let replaced = next.insert(
-            key,
-            crate::outbound::TransportOwnershipSource::Mix(current),
-        );
+        let replaced = next.insert(key, crate::outbound::TransportOwnershipSource::Mix(current));
         anyhow::ensure!(
             replaced == Some(crate::outbound::TransportOwnershipSource::Mix(previous)),
             "MIX source changed while rotating into SM ownership"
@@ -1771,7 +1769,9 @@ async fn fetch_queue(
             row.try_get("mix_delivery_id")?,
             row.try_get("mix_delivery_lease_token")?,
         )?;
-        Ok(crate::outbound::SmUnackedStanza::with_source(stanza, source))
+        Ok(crate::outbound::SmUnackedStanza::with_source(
+            stanza, source,
+        ))
     })
     .collect()
 }

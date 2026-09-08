@@ -3796,6 +3796,25 @@ impl PubSubService {
             }
         }
 
+        // A publication holds the per-node audience lock while it derives
+        // the causal delivery set, and subsequently takes the block-policy
+        // locks for that same set.  A live authorization must take those
+        // shared authorities in exactly that order.  Taking block policy
+        // first here creates an advisory-lock cycle with a simultaneous
+        // security-sensitive publication: publish owns audience and waits for
+        // block policy while delivery owns block policy and waits for
+        // audience.  Causal-audience events do not consult a live node policy
+        // and therefore intentionally do not take the audience lock.
+        let requires_live_node_access =
+            subject.authorization_mode == PepOutboxAuthorizationMode::LiveNodeAccess;
+        if requires_live_node_access {
+            lock_pep_audience(
+                &mut transaction,
+                subject.sender_account_id,
+                &item.source_node,
+            )
+            .await?;
+        }
         for owner_id in &account_ids {
             lock_pep_block_policy(&mut transaction, *owner_id).await?;
         }
@@ -3873,13 +3892,7 @@ impl PubSubService {
             }
         }
 
-        if subject.authorization_mode == PepOutboxAuthorizationMode::LiveNodeAccess {
-            lock_pep_audience(
-                &mut transaction,
-                subject.sender_account_id,
-                &item.source_node,
-            )
-            .await?;
+        if requires_live_node_access {
             let policy = sqlx::query(
                 "SELECT access_model,deliver_notifications,roster_groups_allowed,access_whitelist
                    FROM pep_nodes

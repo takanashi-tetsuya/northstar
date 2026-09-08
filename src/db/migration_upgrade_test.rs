@@ -37,6 +37,92 @@ fn migrator_through(version: i64) -> sqlx::migrate::Migrator {
     }
 }
 
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL pointing at the N08-owned empty loopback database"]
+async fn historical_0137_baseline_is_built_from_the_embedded_migration_chain() {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to the N08-owned historical-0137 database");
+    assert_eq!(
+        std::env::var("NORTHSTAR_N08_HISTORICAL_0137_FIXTURE").as_deref(),
+        Ok("true"),
+        "the historical-0137 fixture must be explicitly opted in"
+    );
+    assert!(
+        url.contains("@127.0.0.1:") && url.contains("/xmpp"),
+        "historical-0137 fixture is restricted to an owned loopback xmpp database"
+    );
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
+    let application_relations: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+           FROM pg_catalog.pg_class AS relation
+           JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid=relation.relnamespace
+          WHERE namespace.nspname='public'
+            AND relation.relkind IN ('r','p','v','m','S','f')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        application_relations, 0,
+        "historical-0137 fixture must begin before application DDL"
+    );
+
+    let historical = migrator_through(137);
+    let expected_rows = i64::try_from(historical.iter().count()).unwrap();
+    historical.run(&pool).await.unwrap();
+    let ledger: (i64, Option<i64>, bool) = sqlx::query_as(
+        "SELECT COUNT(*),MAX(version),COALESCE(bool_and(success),FALSE)
+           FROM public._sqlx_migrations",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        ledger,
+        (expected_rows, Some(137), true),
+        "historical baseline must contain precisely the embedded successful migrations through 0137"
+    );
+    let migration_0138_rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM public._sqlx_migrations WHERE version=138")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        migration_0138_rows, 0,
+        "historical baseline must never apply then erase migration 0138"
+    );
+
+    // Keep a durable application record so the external R07 harness can
+    // prove that the explicit 0138 migration and its idempotent rerun do not
+    // rewrite historical data.  `actor_id` is deliberately NULL: this is a
+    // standalone migration fixture, not a fabricated user session.
+    sqlx::query(
+        "INSERT INTO public.audit_log(action,target,details)
+         VALUES('n08.migration.fixture','historical-0137',
+                jsonb_build_object('migration_version',137))",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let fixture_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM public.audit_log
+          WHERE action='n08.migration.fixture' AND target='historical-0137'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        fixture_rows, 1,
+        "historical fixture record was not retained"
+    );
+}
+
 fn pre_fix_0132_migrator() -> sqlx::migrate::Migrator {
     let mut migrations = super::MIGRATOR.iter().cloned().collect::<Vec<_>>();
     let migration = migrations

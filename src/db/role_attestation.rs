@@ -8,6 +8,53 @@ const CAPABILITY_MANIFEST_SQL: &str =
 const RUNTIME_RELATION_MANIFEST_SQL: &str = CAPABILITY_MANIFEST_SQL;
 const MIGRATION_LEDGER_MANIFEST_SQL: &str =
     include_str!("../../deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql");
+// PostgreSQL's polymorphic `unnest` overload accepts one array at a time.
+// Keep independently typed manifest arrays aligned through ordinality instead
+// of relying on a non-existent `unnest(int8[], text[], text[])` signature.
+const MIGRATION_LEDGER_ATTESTATION_SQL: &str = r#"WITH version_rows AS (
+             SELECT version,ordinality
+               FROM pg_catalog.unnest($1::pg_catalog.int8[])
+                    WITH ORDINALITY AS value(version,ordinality)
+           ), description_rows AS (
+             SELECT description,ordinality
+               FROM pg_catalog.unnest($2::pg_catalog.text[])
+                    WITH ORDINALITY AS value(description,ordinality)
+           ), checksum_rows AS (
+             SELECT checksum_hex,ordinality
+               FROM pg_catalog.unnest($3::pg_catalog.text[])
+                    WITH ORDINALITY AS value(checksum_hex,ordinality)
+           ), expected AS (
+             SELECT version,description,checksum_hex
+               FROM version_rows
+               JOIN description_rows USING(ordinality)
+               JOIN checksum_rows USING(ordinality)
+           ), actual AS (
+             SELECT version,description,success,
+                    pg_catalog.encode(checksum,'hex') AS checksum_hex
+               FROM public._sqlx_migrations
+           )
+           SELECT (SELECT pg_catalog.count(*) FROM version_rows)
+                  =(SELECT pg_catalog.count(*) FROM description_rows)
+             AND (SELECT pg_catalog.count(*) FROM version_rows)
+                  =(SELECT pg_catalog.count(*) FROM checksum_rows)
+             AND NOT EXISTS (
+                    SELECT 1 FROM actual
+                     WHERE NOT success OR version<=0 OR description=''
+                        OR pg_catalog.length(checksum_hex)<>96
+                  )
+             AND (SELECT pg_catalog.count(*) FROM actual)
+                  =(SELECT pg_catalog.count(DISTINCT version) FROM actual)
+             AND (SELECT pg_catalog.count(*) FROM actual)
+                  =(SELECT pg_catalog.count(*) FROM expected)
+             AND NOT EXISTS (
+               (SELECT version,description,checksum_hex FROM actual WHERE success
+                EXCEPT
+                SELECT version,description,checksum_hex FROM expected)
+               UNION ALL
+               (SELECT version,description,checksum_hex FROM expected
+                EXCEPT
+                SELECT version,description,checksum_hex FROM actual WHERE success)
+             )"#;
 
 #[derive(Debug, PartialEq, Eq)]
 struct MigrationLedgerManifest {
@@ -257,6 +304,9 @@ fn parse_migration_ledger_manifest(source: &str) -> Result<MigrationLedgerManife
     })
 }
 
+/// Pure comparison model used by parser fixtures. Runtime attestation reads
+/// the compiled ledger through `attest_migration_ledger` instead.
+#[cfg(test)]
 fn validate_migration_ledger_source(
     expected: &[(i64, String, String)],
     manifest: &MigrationLedgerManifest,
@@ -290,44 +340,13 @@ fn validate_migration_ledger_source(
 
 async fn attest_migration_ledger(pool: &PgPool) -> Result<()> {
     let expected = parse_migration_ledger_manifest(MIGRATION_LEDGER_MANIFEST_SQL)?;
-    let accepted: bool = sqlx::query_scalar(
-        r#"WITH expected AS (
-             SELECT version,description,checksum_hex
-               FROM pg_catalog.unnest(
-                 $1::pg_catalog.int8[],
-                 $2::pg_catalog.text[],
-                 $3::pg_catalog.text[]
-               ) AS manifest(version,description,checksum_hex)
-           ), actual AS (
-             SELECT version,description,success,
-                    pg_catalog.encode(checksum,'hex') AS checksum_hex
-               FROM public._sqlx_migrations
-           )
-           SELECT NOT EXISTS (
-                    SELECT 1 FROM actual
-                     WHERE NOT success OR version<=0 OR description=''
-                        OR pg_catalog.length(checksum_hex)<>96
-                  )
-             AND (SELECT pg_catalog.count(*) FROM actual)
-                  =(SELECT pg_catalog.count(DISTINCT version) FROM actual)
-             AND (SELECT pg_catalog.count(*) FROM actual)
-                  =(SELECT pg_catalog.count(*) FROM expected)
-             AND NOT EXISTS (
-               (SELECT version,description,checksum_hex FROM actual WHERE success
-                EXCEPT
-                SELECT version,description,checksum_hex FROM expected)
-               UNION ALL
-               (SELECT version,description,checksum_hex FROM expected
-                EXCEPT
-                SELECT version,description,checksum_hex FROM actual WHERE success)
-             )"#,
-    )
-    .bind(&expected.versions)
-    .bind(&expected.descriptions)
-    .bind(&expected.checksum_hex)
-    .fetch_one(pool)
-    .await
-    .context("could not attest the repository migration ledger")?;
+    let accepted: bool = sqlx::query_scalar(MIGRATION_LEDGER_ATTESTATION_SQL)
+        .bind(&expected.versions)
+        .bind(&expected.descriptions)
+        .bind(&expected.checksum_hex)
+        .fetch_one(pool)
+        .await
+        .context("could not attest the repository migration ledger")?;
     anyhow::ensure!(
         accepted,
         "PostgreSQL migration ledger drifted: an expected version/description/SHA-384 row is missing, unknown, failed, duplicated, or tampered"
@@ -1640,5 +1659,17 @@ mod tests {
         assert!(parse_migration_ledger_manifest(duplicate).is_err());
         let short_checksum = "(1,'one',pg_catalog.decode('aa','hex'));";
         assert!(parse_migration_ledger_manifest(short_checksum).is_err());
+    }
+
+    #[test]
+    fn migration_ledger_attestation_aligns_independently_typed_arrays_by_ordinality() {
+        assert!(MIGRATION_LEDGER_ATTESTATION_SQL.contains("version_rows"));
+        assert!(MIGRATION_LEDGER_ATTESTATION_SQL.contains("description_rows"));
+        assert!(MIGRATION_LEDGER_ATTESTATION_SQL.contains("checksum_rows"));
+        assert!(
+            MIGRATION_LEDGER_ATTESTATION_SQL.contains("JOIN description_rows USING(ordinality)")
+        );
+        assert!(MIGRATION_LEDGER_ATTESTATION_SQL.contains("JOIN checksum_rows USING(ordinality)"));
+        assert!(!MIGRATION_LEDGER_ATTESTATION_SQL.contains("int8[],\n                 $2"));
     }
 }

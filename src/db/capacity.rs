@@ -342,36 +342,96 @@ async fn reconcile_allocations(
     .await?;
 
     // Install the requested exact hard budgets before backfilling missing
-    // allocations. Existing persisted placement is never re-hashed. If that
-    // placement does not fit a lower snapshot, fail closed and require a
-    // staged rebalance/limit increase rather than silently moving ownership.
-    for (kind, limit) in configured.values() {
-        for shard in 0..CAPACITY_SHARDS {
-            let hard_budget = shard_budget(limit, shard);
-            let shard = i16::try_from(shard).expect("capacity shard fits SMALLINT");
-            let used: i64 = sqlx::query_scalar(
-                "SELECT used FROM deployment_capacity_shards
-                  WHERE resource_kind=$1 AND shard=$2 FOR UPDATE",
-            )
-            .bind(kind)
-            .bind(shard)
-            .fetch_one(&mut **tx)
-            .await?;
-            anyhow::ensure!(
-                used <= hard_budget,
-                "configured {kind} capacity cannot represent persisted shard {shard}: usage {used}, hard budget {hard_budget}; raise the limit/epoch or perform a staged offline rebalance"
-            );
-            sqlx::query(
-                "UPDATE deployment_capacity_shards SET capacity=$3
-                  WHERE resource_kind=$1 AND shard=$2",
-            )
-            .bind(kind)
-            .bind(shard)
-            .bind(hard_budget)
-            .execute(&mut **tx)
-            .await?;
-        }
+    // allocations. The enclosing reconciliation capability already holds a
+    // table-level authority lock, so 256 sequential SELECT/UPDATE round trips
+    // add latency but no isolation. Derive the complete requested matrix once,
+    // reject the first unrepresentable persisted placement, then replace every
+    // shard budget in one statement. This preserves the exact shard placement
+    // contract while keeping cold starts bounded under parallel deployment.
+    let unrepresentable = sqlx::query(
+        "WITH requested(resource_kind,requested_limit) AS (
+             VALUES
+               ('account'::text,$1::bigint),
+               ('muc_room'::text,$2::bigint),
+               ('live_session'::text,$3::bigint),
+               ('sm_session'::text,$4::bigint)
+         ),
+         desired AS (
+             SELECT requested.resource_kind,
+                    shards.shard::smallint AS shard,
+                    (requested.requested_limit / 64)
+                      + CASE
+                          WHEN shards.shard < (requested.requested_limit % 64)
+                            THEN 1
+                          ELSE 0
+                        END AS hard_budget
+               FROM requested
+               CROSS JOIN generate_series(0,63) AS shards(shard)
+         )
+         SELECT existing.resource_kind,existing.shard,existing.used,desired.hard_budget
+           FROM deployment_capacity_shards existing
+           JOIN desired
+             ON desired.resource_kind=existing.resource_kind
+            AND desired.shard=existing.shard
+          WHERE existing.used > desired.hard_budget
+          ORDER BY existing.resource_kind,existing.shard
+          LIMIT 1",
+    )
+    .bind(configured.accounts)
+    .bind(configured.muc_rooms)
+    .bind(configured.live_sessions)
+    .bind(configured.resumable_sessions)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if let Some(row) = unrepresentable {
+        let kind: String = row.try_get("resource_kind")?;
+        let shard: i16 = row.try_get("shard")?;
+        let used: i64 = row.try_get("used")?;
+        let hard_budget: i64 = row.try_get("hard_budget")?;
+        anyhow::bail!(
+            "configured {kind} capacity cannot represent persisted shard {shard}: usage {used}, hard budget {hard_budget}; raise the limit/epoch or perform a staged offline rebalance"
+        );
     }
+    let expected_shards = i64::try_from(configured.values().len())
+        .expect("deployment capacity resource-kind count fits i64")
+        * CAPACITY_SHARDS;
+    let updated_shards = sqlx::query(
+        "WITH requested(resource_kind,requested_limit) AS (
+             VALUES
+               ('account'::text,$1::bigint),
+               ('muc_room'::text,$2::bigint),
+               ('live_session'::text,$3::bigint),
+               ('sm_session'::text,$4::bigint)
+         ),
+         desired AS (
+             SELECT requested.resource_kind,
+                    shards.shard::smallint AS shard,
+                    (requested.requested_limit / 64)
+                      + CASE
+                          WHEN shards.shard < (requested.requested_limit % 64)
+                            THEN 1
+                          ELSE 0
+                        END AS hard_budget
+               FROM requested
+               CROSS JOIN generate_series(0,63) AS shards(shard)
+         )
+         UPDATE deployment_capacity_shards existing
+            SET capacity=desired.hard_budget
+           FROM desired
+          WHERE existing.resource_kind=desired.resource_kind
+            AND existing.shard=desired.shard",
+    )
+    .bind(configured.accounts)
+    .bind(configured.muc_rooms)
+    .bind(configured.live_sessions)
+    .bind(configured.resumable_sessions)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(
+        updated_shards == u64::try_from(expected_shards).expect("expected shard count is positive"),
+        "deployment capacity shard matrix is incomplete during reconciliation (updated={updated_shards}, expected={expected_shards})"
+    );
 
     for (kind, statement) in [
         ("account", "SELECT u.id FROM users u WHERE NOT EXISTS(SELECT 1 FROM deployment_capacity_allocations a WHERE a.resource_kind='account' AND a.entity_id=u.id) ORDER BY u.id"),

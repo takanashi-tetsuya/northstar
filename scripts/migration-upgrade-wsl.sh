@@ -5,6 +5,15 @@ umask 077
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
 
+# This suite deliberately exercises an upgrade from a historical schema.  A
+# migration can legitimately take longer than a normal unit test, but it must
+# never become opaque to the CI supervisor: stream the Rust test transcript as
+# it is produced and retain it only long enough to verify the exact test
+# result.  The existing EXIT trap owns the temporary transcripts.
+tmp_root="${TMPDIR:-/tmp}"
+tmp_root=${tmp_root%/}
+declare -a migrator_output_files=()
+
 test_database="${XMPP_TEST_DATABASE:-xmpp_test}"
 if [[ "$test_database" != "xmpp_test" ]]; then
   echo "migration upgrade validation is restricted to the dedicated xmpp_test database" >&2
@@ -106,6 +115,7 @@ drop_pre_fix_schema() {
 
 cleanup() {
   local status=$?
+  local output_file=''
   trap - EXIT INT TERM
   if [[ "$pre_fix_created" == "1" ]]; then
     if ! drop_pre_fix_schema; then
@@ -117,6 +127,10 @@ cleanup() {
       status=1
     fi
   fi
+  for output_file in "${migrator_output_files[@]}"; do
+    [[ "$output_file" == "$tmp_root"/northstar-migration-upgrade-cargo.* ]] \
+      && rm -f -- "$output_file" || status=1
+  done
   exit "$status"
 }
 trap cleanup EXIT
@@ -286,16 +300,27 @@ test_name="db::migration_upgrade_test::baseline_0013_upgrades_through_the_real_d
 
 run_migrator() {
   local requested_test_name="$1"
-  local output
-  if ! output="$(cargo test --locked --offline "$requested_test_name" -- --ignored --exact --nocapture 2>&1)"; then
-    printf '%s\n' "$output" >&2
+  local output_file=''
+  local cargo_status=0
+
+  output_file="$(mktemp "$tmp_root/northstar-migration-upgrade-cargo.XXXXXX")"
+  migrator_output_files+=("$output_file")
+  printf 'migration-upgrade phase=rust-test-start test=%s\n' "$requested_test_name" >&2
+  set +e
+  cargo test --locked --offline "$requested_test_name" -- --ignored --exact --nocapture 2>&1 \
+    | tee "$output_file"
+  cargo_status=${PIPESTATUS[0]}
+  set -e
+  if (( cargo_status != 0 )); then
+    printf 'migration-upgrade phase=rust-test-failed test=%s status=%s\n' \
+      "$requested_test_name" "$cargo_status" >&2
     return 1
   fi
-  if ! grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$output"; then
-    printf '%s\n' "$output" >&2
+  if ! grep -Eq 'test result: ok\. 1 passed; 0 failed' "$output_file"; then
     echo "expected exactly one migration upgrade test to run" >&2
     return 1
   fi
+  printf 'migration-upgrade phase=rust-test-finished test=%s\n' "$requested_test_name" >&2
 }
 
 run_migrator "$test_name"

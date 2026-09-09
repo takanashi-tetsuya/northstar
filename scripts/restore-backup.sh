@@ -1482,18 +1482,26 @@ set_target_database_connections() {
   local output_file="$work_dir/database-connections-$enabled.out"
   local expected catalog_value catalog_count
   [[ "$enabled" == true || "$enabled" == false ]] || return 2
+  # The coordinator derives this from `current_database()` and has already
+  # applied this grammar in `discover_target_coordinator_identity`. Repeat it
+  # at the SQL construction boundary so neither an altered caller nor future
+  # control-flow refactor can interpolate an arbitrary database identifier.
+  [[ "$target_database" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || {
+    echo "restore refused an unsafe target database identifier for the connection fence" >&2
+    return 2
+  }
   if [[ "$enabled" == true ]]; then
     expected=t
   else
     expected=f
   fi
   {
-    printf '\\set target_db %s\n' "$target_database"
     printf '%s\n' 'SET synchronous_commit TO on;'
-    # Keep the psql meta-command in a %s argument instead of mixing printf
-    # formatting, shell escaping, and psql parsing. The double slash below
-    # becomes exactly one slash in the emitted SQL, i.e. \gexec.
-    printf '%s\n' "SELECT format('ALTER DATABASE %I WITH ALLOW_CONNECTIONS $enabled', :'target_db') \\gexec"
+    # Use one ordinary SQL statement rather than passing a generated statement
+    # through psql's \gexec meta-command. The identifier is safe to quote only
+    # because the grammar above excludes quotes and every SQL metacharacter.
+    printf 'ALTER DATABASE "%s" WITH ALLOW_CONNECTIONS %s;\n' "$target_database" "$enabled"
+    printf '\\set target_db %s\n' "$target_database"
     printf "%s\n" \
       "SELECT '__NORTHSTAR_ALLOW_CONNECTIONS__' || datallowconn::text FROM pg_catalog.pg_database WHERE datname = :'target_db';"
   } >"$sql_file"

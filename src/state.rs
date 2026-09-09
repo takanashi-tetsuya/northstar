@@ -41,16 +41,18 @@ use zeroize::{Zeroize, Zeroizing};
 const OMEMO_POLL_CONCURRENCY: usize = 4;
 const OMEMO_POLL_IP_REQUESTS_PER_MINUTE: usize = 30;
 const OMEMO_POLL_MAX_ACTIVE_IPS: usize = 65_536;
-/// A committed restart/shutdown generation is a safety boundary, not ordinary
-/// background work. Reserve one runtime-role connection so traffic workers
-/// cannot prevent the watcher from observing it under a saturated main pool.
-const SERVICE_CONTROL_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_millis(500);
+/// Durable runtime policy is a safety boundary, not ordinary background work.
+/// Reserve one runtime-role connection so traffic workers cannot prevent the
+/// process from observing committed administration settings under a saturated
+/// main pool. XEP-0133 uses the same control-plane capability when enabled,
+/// but does not own the capability itself.
+const RUNTIME_CONTROL_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_millis(500);
 
-fn service_control_pool_options(config: &Config) -> PgPoolOptions {
+fn runtime_control_pool_options(config: &Config) -> PgPoolOptions {
     let options = PgPoolOptions::new()
         .max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)
         .min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)
-        .acquire_timeout(SERVICE_CONTROL_POOL_ACQUIRE_TIMEOUT);
+        .acquire_timeout(RUNTIME_CONTROL_POOL_ACQUIRE_TIMEOUT);
     if config.database_allow_unsafe_role_for_development {
         options
     } else {
@@ -1046,13 +1048,13 @@ pub struct AppState {
     /// capability. It cannot consume the primary 32-connection application
     /// pool during a capability flood.
     omemo_recovery_poll_pool: PgPool,
-    /// One reserved runtime-role connection for the optional durable
-    /// restart/shutdown control capability. When XEP-0133 service control is
-    /// disabled, no pool exists and no worker may consume this capability.
-    /// When enabled it remains separate from both the application and command
-    /// pools: an exhausted traffic pool must not hide a committed generation,
-    /// and the command role cannot gain runtime authority by observing it.
-    service_control_pool: Option<PgPool>,
+    /// One reserved runtime-role connection for durable control-plane reads.
+    /// The administration-settings refresh always uses it; XEP-0133 only adds
+    /// an opt-in restart/shutdown watcher. It remains separate from both the
+    /// application and command pools, so exhausted traffic cannot hide a
+    /// committed safety setting and the command role cannot gain runtime
+    /// authority merely by observing it.
+    runtime_control_pool: PgPool,
     api_control: db::ApiControlKeyring,
     /// Opaque REST pagination cursors use purpose-separated subkeys derived
     /// from the same current/previous process secrets as API idempotency.
@@ -2022,25 +2024,21 @@ impl AppState {
             .connect(&config.database_url)
             .await
             .context("could not create isolated OMEMO recovery poll database pool")?;
-        // Do not allocate a database capability for an XEP that is disabled.
-        // Conversely, an enabled service-control capability never reuses the
-        // command pool: its deliberately reduced role must not be widened with
-        // runtime-only authority. The dedicated pool reserves one connection
-        // outside traffic/PubSub/MIX pressure.
-        let service_control_pool = if config.enable_xmpp_service_control {
-            let pool = service_control_pool_options(&config)
-                .connect(&config.database_url)
-                .await
-                .context("could not create isolated service-control database pool")?;
-            if config.database_allow_unsafe_role_for_development {
-                crate::db::attest_development_database_is_loopback(&pool).await?;
-            } else {
-                crate::db::attest_runtime_role(&pool).await?;
-            }
-            Some(pool)
+        // A runtime control plane is required independently of optional XEPs:
+        // registration closure and island-mode changes must remain observable
+        // when normal traffic occupies the primary pool. XEP-0133, when
+        // enabled, reuses this already-attested capability only for its
+        // durable restart/shutdown watcher; it never receives command-pool
+        // authority or a second pool.
+        let runtime_control_pool = runtime_control_pool_options(&config)
+            .connect(&config.database_url)
+            .await
+            .context("could not create isolated runtime-control database pool")?;
+        if config.database_allow_unsafe_role_for_development {
+            crate::db::attest_development_database_is_loopback(&runtime_control_pool).await?;
         } else {
-            None
-        };
+            crate::db::attest_runtime_role(&runtime_control_pool).await?;
+        }
         let sm_authority_schema: String = sqlx::query_scalar("SELECT current_schema()")
             .fetch_one(&pool)
             .await
@@ -2114,7 +2112,7 @@ impl AppState {
             metrics_bearer_token,
             web_admin_gateway_token,
             omemo_recovery_poll_pool,
-            service_control_pool,
+            runtime_control_pool,
             api_control,
             api_cursor,
             upload_service,
@@ -2670,7 +2668,7 @@ impl AppState {
                         let Some(state) = weak.upgrade() else {
                             return Ok(());
                         };
-                        match db::admin_runtime_settings(&state.pool).await {
+                        match db::admin_runtime_settings(&state.runtime_control_pool).await {
                             Ok((island_mode, registration_closed)) => {
                                 let was_island = state.refresh_island_mode(island_mode).await;
                                 state.apply_registration_closed(registration_closed);
@@ -2709,9 +2707,7 @@ impl AppState {
     }
 
     pub fn service_control_available(&self) -> bool {
-        self.config.enable_xmpp_service_control
-            && self.service_control_pool.is_some()
-            && self.service_shutdown.get().is_some()
+        self.config.enable_xmpp_service_control && self.service_shutdown.get().is_some()
     }
 
     fn start_service_control_watcher(state: Arc<Self>) {
@@ -2738,10 +2734,7 @@ impl AppState {
                         let Some(state) = weak.upgrade() else {
                             return Ok(());
                         };
-                        let Some(pool) = state.service_control_pool.as_ref() else {
-                            return Ok(());
-                        };
-                        match db::poll_admin_service_control(pool).await {
+                        match db::poll_admin_service_control(&state.runtime_control_pool).await {
                             Ok(Some(control))
                                 if service_control_applies(state.process_started_at, &control)
                                     && acted != Some(control.generation) =>

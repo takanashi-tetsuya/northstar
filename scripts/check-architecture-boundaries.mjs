@@ -339,7 +339,7 @@ for (const field of [
   'component_credentials',
   'components',
   'bosh',
-  'service_control_pool',
+  'runtime_control_pool',
   's2s_dns_resolver',
   's2s_dnssec_resolver',
   'dialback_verifications',
@@ -364,23 +364,30 @@ if (!/^\s*dialback_secret\s*:\s*Zeroizing<Vec<u8>>\s*,/m.test(appState)) {
 if (!/^\s*fast_token_secret\s*:\s*Arc<Zeroizing<Vec<u8>>>\s*,/m.test(appState)) {
   throw new Error('AppState fast_token_secret must remain private Arc<Zeroizing<Vec<u8>>>');
 }
-const serviceControlPoolConstruction = structBody(state, 'fn service_control_pool_options(');
+const runtimeControlPoolConstruction = structBody(state, 'fn runtime_control_pool_options(');
 for (const invariant of [
   'max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
   'min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
-  'acquire_timeout(SERVICE_CONTROL_POOL_ACQUIRE_TIMEOUT)',
+  'acquire_timeout(RUNTIME_CONTROL_POOL_ACQUIRE_TIMEOUT)',
   'db::pin_public_application_schema(options)',
 ]) {
-  if (!serviceControlPoolConstruction.includes(invariant)) {
-    throw new Error(`service-control pool lost its isolated runtime-pool invariant: ${invariant}`);
+  if (!runtimeControlPoolConstruction.includes(invariant)) {
+    throw new Error(`runtime-control pool lost its isolated runtime-pool invariant: ${invariant}`);
   }
 }
 const serviceControlWatcher = structBody(state, 'fn start_service_control_watcher(');
-if (!/let Some\(pool\) = state\.service_control_pool\.as_ref\(\) else \{\s*return Ok\(\(\)\);\s*\};\s*match db::poll_admin_service_control\(pool\)/s.test(serviceControlWatcher)) {
+if (!/match db::poll_admin_service_control\(&state\.runtime_control_pool\)/s.test(serviceControlWatcher)) {
   throw new Error('service-control watcher must poll through its dedicated runtime pool');
 }
 if (/poll_admin_service_control\(&state\.pool\)/.test(serviceControlWatcher)) {
   throw new Error('service-control watcher must not share the general traffic pool');
+}
+const runtimeAdminRefresh = structBody(state, 'fn start_runtime_admin_setting_refresh(');
+if (!/match db::admin_runtime_settings\(&state\.runtime_control_pool\)/s.test(runtimeAdminRefresh)) {
+  throw new Error('runtime administration refresh must poll through the dedicated control pool');
+}
+if (/admin_runtime_settings\(&state\.pool\)/.test(runtimeAdminRefresh)) {
+  throw new Error('runtime administration refresh must not share the general traffic pool');
 }
 const serviceControlInstallation = structBody(state, 'pub fn install_service_shutdown(');
 if (!/if self\.config\.enable_xmpp_service_control \{\s*Self::start_service_control_watcher\(Arc::clone\(self\)\);\s*\}/s.test(serviceControlInstallation)) {
@@ -395,8 +402,8 @@ for (const invariant of [
     throw new Error(`service-control watcher lost its fail-closed supervision invariant: ${invariant}`);
   }
 }
-if (!responsibilityDocument.includes('| service-control pool | `northstar_runtime` | exactly 1 reserved connection, 500 ms acquire bound |')) {
-  throw new Error('program responsibility model must document the dedicated service-control pool');
+if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtime` | exactly 1 reserved connection, 500 ms acquire bound |')) {
+  throw new Error('program responsibility model must document the dedicated runtime control pool');
 }
 const mixProtocol = read('src/xmpp/protocol/mix.rs');
 const mixProtocolProduction = productionWithoutCfgTestModules(

@@ -1352,6 +1352,35 @@ if grep -Fq 'public.' "$sm_mix_teardown_catalog_migration"; then
 fi
 echo "migration 0138 makes the exact session authority manifest recognize the reviewed SM-to-MIX BEFORE DELETE hook"
 
+# Migration 0140 fixes a multi-row release bug in the upload-capacity ledger.
+# A row-level AFTER DELETE trigger sees all rows removed by the statement, so
+# each physical locator could claim it released the one logical object. The
+# repaired triggers must instead test the last-owner condition before each row
+# disappears, while retaining the same owner-held functions and no public
+# schema fallback.
+upload_projection_release_migration="migrations/0140_upload_projection_release_order.sql"
+[ -f "$upload_projection_release_migration" ] || {
+    echo "upload projection release migration is missing: $upload_projection_release_migration" >&2
+    exit 1
+}
+for required_fragment in \
+    'BEFORE DELETE ON upload_storage_jobs' \
+    'BEFORE DELETE ON upload_cleanup_queue' \
+    'WHERE object_id=OLD.object_id AND id<>OLD.id' \
+    'upload projection delete triggers were not converted to exact BEFORE DELETE authority' \
+    'SECURITY DEFINER SET search_path TO pg_catalog, %I, pg_temp'
+do
+    if ! grep -Fq "$required_fragment" "$upload_projection_release_migration"; then
+        echo "migration 0140 is missing upload projection release invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if grep -Eq 'public\.|AFTER DELETE ON upload_storage_jobs|AFTER DELETE ON upload_cleanup_queue' "$upload_projection_release_migration"; then
+    echo "migration 0140 must use installation-schema-local BEFORE DELETE accounting" >&2
+    exit 1
+fi
+echo "migration 0140 releases a logical upload owner once across multi-row physical deletion"
+
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an
 # existing database, and this repository-side manifest catches the same mistake

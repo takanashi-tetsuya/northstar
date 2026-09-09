@@ -4473,7 +4473,7 @@ def run() -> None:
     # XEP-0045 sends the current subject after self-presence.  Consume that
     # initial-join subject before issuing a tagged rejoin so the assertion
     # below cannot accidentally match the earlier queued stanza.
-    bob.receive_until("<subject>")
+    bob.receive_until("<subject")
     bob.send(
         f"<iq xmlns='jabber:client' type='get' id='muc-occupant-disco' to='{room}'>"
         "<query xmlns='http://jabber.org/protocol/disco#items'>"
@@ -4491,7 +4491,7 @@ def run() -> None:
         f"<presence xmlns='jabber:client' id='muc-full-resync' to='{room}/Bob'>"
         "<x xmlns='http://jabber.org/protocol/muc'><history maxstanzas='0'/></x></presence>"
     )
-    _, resync_frames = bob.receive_until("<subject>")
+    _, resync_frames = bob.receive_until("<subject")
     resync = "".join(resync_frames)
     check(
         f"from='{room}/Alice'" in resync

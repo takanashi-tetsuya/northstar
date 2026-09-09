@@ -11,7 +11,11 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   avoids an ambiguous PL/pgSQL output-column reference, and the replacement
   function is re-pinned to the installation schema. The embedded migration
   ledger, role-attestation count and operations documentation now advance
-  together to the 138-entry `0001`–`0139` chain.
+  together to the 139-entry `0001`–`0140` chain.
+- Added migration `0140` to make the final physical upload projection release
+  its logical retained owner exactly once, including a multi-row deletion.
+  The two capacity-delete triggers now evaluate the final-owner predicate
+  before their row disappears; physical recovery counters remain per locator.
 - Repaired CI fixture topology so administrative integration requests use the
   readiness-published loopback-only management listener, not public HTTP.
   The Redis-only MUC fixture now seeds and verifies the same signed peer

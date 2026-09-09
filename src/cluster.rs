@@ -8439,9 +8439,13 @@ mod tests {
         .unwrap();
         assert_eq!(persisted.role, "participant");
         assert!(persisted.room_non_anonymous);
+        // A policy write is a full serialized-value compare-and-set, not only
+        // an epoch check. `changed` still describes the preceding visitor
+        // state for this exact connection and must not overwrite the newer
+        // participant/non-anonymous policy.
         assert!(matches!(
             first
-                .change_muc_occupant_policy(room, &replacement, "visitor", false)
+                .change_muc_occupant_policy(room, &changed, "visitor", false)
                 .await
                 .unwrap(),
             MucRoleChange::Stale

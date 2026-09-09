@@ -961,13 +961,13 @@ pub async fn audit_upload_capacity_authority(
                ('upload_storage_jobs','upload_job_capacity_insert',
                 'account_upload_storage_job_capacity','account_upload_storage_job_capacity()',5,2),
                ('upload_storage_jobs','upload_job_capacity_delete',
-                'account_upload_storage_job_capacity','account_upload_storage_job_capacity()',9,2),
+                'account_upload_storage_job_capacity','account_upload_storage_job_capacity()',11,2),
                ('upload_storage_jobs','northstar_upload_capacity_nowait_storage_job_insert_delete',
                 'guard_upload_capacity_nowait','guard_upload_capacity_nowait()',15,4),
                ('upload_cleanup_queue','upload_cleanup_capacity_insert',
                 'account_upload_cleanup_capacity','account_upload_cleanup_capacity()',5,2),
                ('upload_cleanup_queue','upload_cleanup_capacity_delete',
-                'account_upload_cleanup_capacity','account_upload_cleanup_capacity()',9,2),
+                'account_upload_cleanup_capacity','account_upload_cleanup_capacity()',11,2),
                ('upload_cleanup_queue','northstar_upload_capacity_nowait_cleanup_insert_delete',
                 'guard_upload_capacity_nowait','guard_upload_capacity_nowait()',15,4),
                ('upload_storage_jobs','upload_storage_job_identity_guard',
@@ -2949,6 +2949,38 @@ mod tests {
             .expect("production upload source before its test module");
         assert!(!runtime_source.contains("begin_bounded_upload_admission"));
         assert!(!runtime_source.contains("finish_retryable_upload_capacity_mutation"));
+    }
+
+    #[test]
+    fn upload_projection_release_migration_uses_predelete_last_owner_cas() {
+        let migration = include_str!("../../migrations/0140_upload_projection_release_order.sql");
+        for trigger in [
+            "DROP TRIGGER upload_job_capacity_delete ON upload_storage_jobs;\nCREATE TRIGGER upload_job_capacity_delete\nBEFORE DELETE ON upload_storage_jobs",
+            "DROP TRIGGER upload_cleanup_capacity_delete ON upload_cleanup_queue;\nCREATE TRIGGER upload_cleanup_capacity_delete\nBEFORE DELETE ON upload_cleanup_queue",
+        ] {
+            assert!(
+                migration.contains(trigger),
+                "upload projection release must make its delete trigger BEFORE DELETE: {trigger}"
+            );
+        }
+        let storage_delete = migration
+            .split("-- This is a BEFORE DELETE trigger.")
+            .nth(1)
+            .and_then(|tail| tail.split("$account_upload_storage_job_capacity$;").next())
+            .expect("storage-job BEFORE DELETE body");
+        assert!(storage_delete.contains("id<>OLD.id"));
+        assert!(storage_delete
+            .contains("recovery_retained_bytes=recovery_retained_bytes-OLD.expected_size"));
+        let cleanup_delete = migration
+            .split("-- `upload_cleanup_queue.object_id` is the primary key")
+            .nth(1)
+            .and_then(|tail| tail.split("$account_upload_cleanup_capacity$;").next())
+            .expect("cleanup BEFORE DELETE body");
+        assert!(cleanup_delete.contains("NOT EXISTS(SELECT 1 FROM upload_storage_jobs"));
+        assert!(cleanup_delete.contains("locator_units*OLD.expected_size"));
+        assert!(migration.contains(
+            "upload projection delete triggers were not converted to exact BEFORE DELETE authority"
+        ));
     }
 
     #[test]

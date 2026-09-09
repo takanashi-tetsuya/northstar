@@ -116,9 +116,12 @@ production baseline; Windows AMD64 artifacts are for development and evaluation.
   admission preserves its existing owner-only, schema-pinned capability while
   using the queue primary-key conflict target unambiguously. Run exact grant
   reconciliation; do not treat this as a stopped-writer boundary.
+- [ ] Apply forward repair migration `0140`; verify batched upload-projection
+  deletion releases one logical retained owner and all physical locators while
+  retaining the exact owner-only `BEFORE DELETE` trigger authority.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 138 migrations from `0001` through the current
-  repository maximum `0139`, with `0021` as the sole intentional gap.
+  identity and verify all 139 migrations from `0001` through the current
+  repository maximum `0140`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

@@ -4498,7 +4498,9 @@ def run() -> None:
         and "id='muc-full-resync'" in resync
         and "code='110'" in resync
         and resync.index(f"from='{room}/Alice'") < resync.index("code='110'")
-        < resync.index("<subject>"),
+        # An empty MUC subject is correctly serialized as <subject/>.  Check
+        # the subject element's start rather than requiring a non-empty body.
+        < resync.index("<subject"),
         "repeated tagged MUC join did not return roster, self-presence, then subject",
     )
     alice_saw_bob, _ = alice.receive_until(f"from='{room}/Bob'")

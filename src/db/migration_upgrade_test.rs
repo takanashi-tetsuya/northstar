@@ -190,7 +190,10 @@ async fn install_0132_predecessor(pool: &sqlx::PgPool) {
         .iter()
         .find(|migration| migration.version == 129)
         .expect("the embedded migration chain must contain 0129");
-    sqlx::query(predecessor.sql.as_ref())
+    // Migration 0129 is a trusted, repository-owned multi-statement DDL
+    // script. `query()` prepares a single statement, so PostgreSQL rejects
+    // the fixture before it can establish the actual 0132 predecessor.
+    sqlx::raw_sql(predecessor.sql.as_ref())
         .execute(pool)
         .await
         .unwrap();

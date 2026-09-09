@@ -121,18 +121,18 @@ hardcoded_public_migration_refs=$(awk '
         single_quote = sprintf("%c", 39)
         double_quote = sprintf("%c", 34)
     }
-    function code_without_sql_comments(line,    output, index, character, following) {
+    function code_without_sql_comments(line,    output, cursor, character, following) {
         output = ""
-        index = 1
-        while (index <= length(line)) {
-            character = substr(line, index, 1)
-            following = substr(line, index + 1, 1)
+        cursor = 1
+        while (cursor <= length(line)) {
+            character = substr(line, cursor, 1)
+            following = substr(line, cursor + 1, 1)
             if (inside_block_comment) {
                 if (character == "*" && following == "/") {
                     inside_block_comment = 0
-                    index += 2
+                    cursor += 2
                 } else {
-                    index++
+                    cursor++
                 }
                 continue
             }
@@ -141,12 +141,12 @@ hardcoded_public_migration_refs=$(awk '
                 if (character == single_quote) {
                     if (following == single_quote) {
                         output = output following
-                        index += 2
+                        cursor += 2
                         continue
                     }
                     inside_single_quote = 0
                 }
-                index++
+                cursor++
                 continue
             }
             if (inside_double_quote) {
@@ -154,7 +154,7 @@ hardcoded_public_migration_refs=$(awk '
                 if (character == double_quote) {
                     inside_double_quote = 0
                 }
-                index++
+                cursor++
                 continue
             }
             if (character == "-" && following == "-") {
@@ -162,7 +162,7 @@ hardcoded_public_migration_refs=$(awk '
             }
             if (character == "/" && following == "*") {
                 inside_block_comment = 1
-                index += 2
+                cursor += 2
                 continue
             }
             output = output character
@@ -171,7 +171,7 @@ hardcoded_public_migration_refs=$(awk '
             } else if (character == double_quote) {
                 inside_double_quote = 1
             }
-            index++
+            cursor++
         }
         return output
     }

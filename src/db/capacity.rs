@@ -745,12 +745,34 @@ pub async fn refresh_live_session_leases(
     Ok(rows.into_iter().collect())
 }
 
-pub async fn cleanup_expired_live_session_leases(pool: &PgPool, limit: i64) -> Result<u64> {
+/// Attempt the deployment-wide lease reaper role without queuing behind an
+/// already-active peer. Session renewal is local and critical; reaping is
+/// shared maintenance and must never make every otherwise idle node compete
+/// for the same cleanup work. The transaction-scoped advisory lock releases
+/// automatically on commit, rollback, or connection loss.
+pub async fn try_cleanup_expired_live_session_leases(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Option<u64>> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL lock_timeout='500ms'")
+        .execute(&mut *tx)
+        .await?;
+    let elected: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(1314079572,4)")
+        .fetch_one(&mut *tx)
+        .await?;
+    if !elected {
+        tx.rollback().await?;
+        return Ok(None);
+    }
     let removed: i64 = sqlx::query_scalar("SELECT northstar_session_cleanup_live($1)")
         .bind(limit.clamp(1, 10_000))
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
-    u64::try_from(removed).context("negative live-session cleanup count")
+    tx.commit().await?;
+    Ok(Some(
+        u64::try_from(removed).context("negative live-session cleanup count")?,
+    ))
 }
 
 pub async fn extend_live_session_lease_in_transaction(
@@ -1120,9 +1142,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            cleanup_expired_live_session_leases(&pool, 10)
+            try_cleanup_expired_live_session_leases(&pool, 10)
                 .await
-                .unwrap(),
+                .unwrap()
+                .expect("an isolated fixture must acquire the reaper role"),
             1
         );
         let live_owner_counter_exists: bool = sqlx::query_scalar(

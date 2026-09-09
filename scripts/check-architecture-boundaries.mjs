@@ -2568,6 +2568,7 @@ function assertExactUniqueInventory(label, actual, expected) {
 const supervisedWorkerContracts = [
   { name: 'abuse-key-deployment-authority', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(ABUSE_KEY_AUTHORITY_POLL_INTERVAL.saturating_mul(2))', draining: false },
   { name: 'deployment-capacity-session-leases', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(capacity_interval.saturating_mul(2))', draining: false },
+  { name: 'deployment-capacity-lease-reaper', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(120))', draining: false },
   { name: 'background-maintenance', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(180))', draining: false },
   { name: 'account-deletion-recovery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(1_200))', draining: false },
   { name: 'upload-storage-reconciliation', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(600))', draining: false },
@@ -2594,6 +2595,7 @@ const supervisedWorkers = supervisedWorkerContracts.map(({ name }) => name);
 const workerResponsibilityEvidence = {
   'abuse-key-deployment-authority': ['src/main.rs', '`main`', '2 ×'],
   'deployment-capacity-session-leases': ['src/main.rs', '`main`', '2 ×'],
+  'deployment-capacity-lease-reaper': ['src/main.rs', '`main`', '120 s'],
   'background-maintenance': ['src/main.rs', '`main`', '180 s'],
   'account-deletion-recovery': ['src/main.rs', '`main`', '1,200 s'],
   'upload-storage-reconciliation': ['src/main.rs', '`main`', '600 s'],

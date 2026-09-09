@@ -390,6 +390,15 @@ async fn main() -> Result<()> {
                                 .filter(|session| session.routable.load(std::sync::atomic::Ordering::Acquire))
                                 .map(|session| (session.connection_id, session.disconnect.clone()))
                                 .collect::<Vec<_>>();
+                            if local.is_empty() {
+                                // This is the local route-renewal worker. An
+                                // idle node owns no lease to renew and must
+                                // not manufacture shared database traffic;
+                                // elected maintenance below reaps expired
+                                // leases for the whole deployment.
+                                heartbeat.ok();
+                                continue;
+                            }
                             let ids = local.iter().map(|(id, _)| *id).collect::<Vec<_>>();
                             let refreshed = tokio::select! {
                                 _ = capacity_cancel.cancelled() => return Ok(()),
@@ -414,15 +423,46 @@ async fn main() -> Result<()> {
                                     disconnect.cancel();
                                 }
                             }
-                            tokio::select! {
-                                _ = capacity_cancel.cancelled() => return Ok(()),
+                            heartbeat.ok();
+                        }
+                    }
+                }
+            }
+        },
+    );
+    let capacity_reaper_state = Arc::clone(&state);
+    let capacity_reaper_cancel = cancel.clone();
+    worker_registry.supervise(
+        "deployment-capacity-lease-reaper",
+        WorkerCriticality::Restartable,
+        WorkerMode::Continuous,
+        Some(std::time::Duration::from_secs(120)),
+        cancel.clone(),
+        move |heartbeat| {
+            let capacity_reaper_state = Arc::clone(&capacity_reaper_state);
+            let capacity_reaper_cancel = capacity_reaper_cancel.clone();
+            async move {
+                let mut interval = tokio::time::interval(capacity_interval);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = capacity_reaper_cancel.cancelled() => return Ok(()),
+                        _ = interval.tick() => {
+                            let result = tokio::select! {
+                                _ = capacity_reaper_cancel.cancelled() => return Ok(()),
                                 result = tokio::time::timeout(
                                     CAPACITY_AUTHORITY_QUERY_TIMEOUT,
-                                    db::cleanup_expired_live_session_leases(&capacity_state.pool, 1024),
+                                    db::try_cleanup_expired_live_session_leases(
+                                        &capacity_reaper_state.pool,
+                                        1024,
+                                    ),
                                 ) => result
-                                    .context("deployment live-session lease cleanup timed out")?
-                                    .context("could not reap expired deployment live-session capacity leases")?,
+                                    .context("deployment live-session lease reaper timed out")?
+                                    .context("could not elect deployment live-session lease reaper")?,
                             };
+                            if let Some(removed) = result {
+                                tracing::debug!(removed, "reaped expired deployment live-session leases");
+                            }
                             heartbeat.ok();
                         }
                     }

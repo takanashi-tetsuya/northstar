@@ -141,7 +141,6 @@ impl OutboundItem {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MixTransportCompletion {
     SocketFenced { connection_id: Uuid },
-    SocketWritten,
     SmPersisted { session_id: uuid::Uuid },
     BoshPersisted { session_id: uuid::Uuid },
 }

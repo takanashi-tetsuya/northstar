@@ -54,7 +54,7 @@ candidate_preparation:
     stream_management: "src/db/sm.rs stores mix_delivery_id and mix_delivery_lease_token with the SM stanza; src/xmpp/protocol/sm.rs owns checkpoint/resume/ACK processing; migration 0136 releases only the matching pre-cascade source lease on SM parent teardown."
     bosh: "src/bosh.rs::record_and_push_item calls MixService::transfer_mix_delivery_to_bosh before retaining the response FIFO and completes only BoshPersisted; response acknowledgement later owns final source handling."
     cluster: "src/cluster.rs validates the signed v13 delivery identity, calls MixService::transfer_mix_delivery_to_cluster before local transport enqueue, and calls release_mix_cluster_delivery only with the exact delivery/node/request identity when no local durable boundary is reached."
-    transport_boundary: "src/outbound.rs::MixTransportHandoff is one-shot; Queue/Redis admission is not a completion. SocketFenced, SmPersisted, and BoshPersisted are distinct boundaries; SocketWritten alone is explicitly insufficient for remote cluster hand-off acceptance."
+    transport_boundary: "src/outbound.rs::MixTransportHandoff is one-shot; Queue/Redis admission is not a completion. SocketFenced, SmPersisted, and BoshPersisted are distinct boundaries; an unfenced SocketWritten completion is unrepresentable."
   ownership_transition_table:
     claimed: "recipient row plus live lease_token; recoverable but not delivered"
     cluster_fenced: "rotated token plus delivery_id/node_id/request_id fence; remote responsibility acquired, not peer confirmation"
@@ -77,7 +77,7 @@ candidate_preparation:
     VH11: "0136 UPDATE joins both delivery_id and mix_delivery_lease_token, so an old teardown cannot match a rotated owner; runtime race proof required"
     VH12: "terminal/source deletion paths are mapped to exact CAS methods; deletion/retry non-resurrection requires runtime evidence"
     VH13: "shared attempt deadline and cancellation-aware database turn are mapped; live shutdown/transport cleanup requires runtime evidence"
-    VH14: "SocketFenced and SocketWritten are explicitly distinct; no end-to-end exactly-once assertion is made"
+    VH14: "SocketFenced is the only direct-writer completion; an unfenced SocketWritten result is unrepresentable, and no end-to-end exactly-once assertion is made"
     VH15: "database CAS is mapped, but external-writer fencing after lease expiry remains a runtime evidence requirement"
     VH16: "claim query scopes strict predecessors by recipient_jid and sequence; multi-transport ordering requires runtime evidence"
     VH17: "route classification maps no target/unknown/unsupported to park rather than acknowledgement; runtime retry/terminal behavior required"

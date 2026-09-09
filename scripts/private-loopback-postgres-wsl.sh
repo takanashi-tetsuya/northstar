@@ -18,6 +18,129 @@ umask 077
 readonly project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$project_dir"
 
+# The fixture's child is intentionally not a descendant with an inherited
+# environment.  Resolve the toolchain path once, then pass only this explicit
+# execution baseline plus the fixture-specific connection-file capabilities.
+readonly child_home="${HOME:?private loopback fixture requires HOME}"
+readonly child_cargo_home="${CARGO_HOME:-$child_home/.cargo}"
+readonly child_rustup_home="${RUSTUP_HOME:-$child_home/.rustup}"
+child_cargo_executable="$(command -v cargo || true)"
+[[ -n "$child_cargo_executable" && -x "$child_cargo_executable" ]] || {
+  echo 'private loopback PostgreSQL fixture requires an executable cargo on PATH' >&2
+  exit 2
+}
+readonly child_cargo_executable
+readonly child_path="${child_cargo_executable%/*}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+declare -a child_environment=()
+
+build_private_child_environment() {
+  local fixture_port=$1
+  local fixture_database=$2
+  local fixture_bootstrap_password_file=$3
+  local fixture_bootstrap_url_file=$4
+  local fixture_migrator_url_file=$5
+  local fixture_runtime_url_file=$6
+  local fixture_command_url_file=$7
+  local listener_enabled=$8
+  local fixture_max_connections=$9
+  local forwarded_variable
+
+  for value in \
+    "$fixture_port" "$fixture_database" "$fixture_bootstrap_password_file" \
+    "$fixture_bootstrap_url_file" "$fixture_migrator_url_file" \
+    "$fixture_runtime_url_file" "$fixture_command_url_file"; do
+    [[ -n "$value" ]] || {
+      echo 'private loopback PostgreSQL fixture cannot construct an incomplete child environment' >&2
+      return 2
+    }
+  done
+
+  child_environment=(
+    "PATH=$child_path"
+    "HOME=$child_home"
+    "CARGO_HOME=$child_cargo_home"
+    "RUSTUP_HOME=$child_rustup_home"
+    NORTHSTAR_PRIVATE_PG_HOST=127.0.0.1
+    "NORTHSTAR_PRIVATE_PG_PORT=$fixture_port"
+    "NORTHSTAR_PRIVATE_PG_DATABASE=$fixture_database"
+    "NORTHSTAR_PRIVATE_PG_BOOTSTRAP_PASSWORD_FILE=$fixture_bootstrap_password_file"
+    "NORTHSTAR_PRIVATE_PG_BOOTSTRAP_DATABASE_URL_FILE=$fixture_bootstrap_url_file"
+    "NORTHSTAR_PRIVATE_PG_MIGRATOR_DATABASE_URL_FILE=$fixture_migrator_url_file"
+    "NORTHSTAR_PRIVATE_PG_RUNTIME_DATABASE_URL_FILE=$fixture_runtime_url_file"
+    "NORTHSTAR_PRIVATE_PG_COMMAND_DATABASE_URL_FILE=$fixture_command_url_file"
+  )
+  # These are the only non-secret caller controls required by the bounded N08
+  # drivers.  DATABASE_URL, PG*, proxy variables, tokens, and every other host
+  # value are deliberately absent because run_private_child_environment uses
+  # env -i below.
+  for forwarded_variable in \
+    CARGO_TARGET_DIR \
+    XMPP_TEST_SYSTEM_TOOLCHAIN \
+    XMPP_TEST_OFFLINE \
+    NORTHSTAR_CI_DIAGNOSTICS_DIR; do
+    if [[ -v "$forwarded_variable" ]]; then
+      child_environment+=("$forwarded_variable=${!forwarded_variable}")
+    fi
+  done
+  if [[ "$listener_enabled" == true ]]; then
+    child_environment+=(
+      NORTHSTAR_LISTENER_STRESS_DATABASE_HOST=127.0.0.1
+      "NORTHSTAR_LISTENER_STRESS_DATABASE_PORT=$fixture_port"
+      "NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS=$fixture_max_connections"
+    )
+  fi
+}
+
+run_private_child_environment() {
+  build_private_child_environment \
+    "$postgres_port" "$database_name" "$bootstrap_password_file" \
+    "$bootstrap_url_file" "$migrator_url_file" "$runtime_url_file" \
+    "$command_url_file" "$with_listener_stress_role" "$max_connections" \
+    || return $?
+  env -i "${child_environment[@]}" "$@"
+}
+
+run_child_environment_self_test() {
+  local observed=''
+  (
+    export NORTHSTAR_N08_PARENT_SENTINEL='parent-only-sentinel'
+    export DATABASE_URL='postgres://must-not-reach-child.invalid/test'
+    export PGHOST='must-not-reach-child.invalid'
+    export HTTPS_PROXY='http://must-not-reach-child.invalid'
+    export CARGO_TARGET_DIR='/tmp/northstar-child-target'
+    export XMPP_TEST_SYSTEM_TOOLCHAIN=true
+    export XMPP_TEST_OFFLINE=true
+    export NORTHSTAR_CI_DIAGNOSTICS_DIR='/tmp/northstar-child-diagnostics'
+    postgres_port=25432
+    database_name=xmpp
+    bootstrap_password_file='/tmp/private-bootstrap-password'
+    bootstrap_url_file='/tmp/private-bootstrap-url'
+    migrator_url_file='/tmp/private-migrator-url'
+    runtime_url_file='/tmp/private-runtime-url'
+    command_url_file='/tmp/private-command-url'
+    with_listener_stress_role=true
+    max_connections=64
+    observed="$(run_private_child_environment bash -c '
+      printf "%s|%s|%s|%s|%s|%s|%s|%s" \
+        "${NORTHSTAR_N08_PARENT_SENTINEL-absent}" \
+        "${DATABASE_URL-absent}" "${PGHOST-absent}" "${HTTPS_PROXY-absent}" \
+        "$CARGO_TARGET_DIR" "$XMPP_TEST_SYSTEM_TOOLCHAIN" \
+        "$NORTHSTAR_PRIVATE_PG_HOST" "$NORTHSTAR_LISTENER_STRESS_DATABASE_PORT"
+    ')"
+    [[ "$observed" == 'absent|absent|absent|absent|/tmp/northstar-child-target|true|127.0.0.1|25432' ]]
+  ) || {
+    echo 'private child environment self-test failed' >&2
+    return 1
+  }
+  printf '%s\n' 'private child environment self-test passed'
+}
+
+if [[ "${1:-}" == '--self-test-child-environment' ]]; then
+  [[ $# -eq 1 ]] || { echo 'self-test accepts no additional arguments' >&2; exit 2; }
+  run_child_environment_self_test
+  exit 0
+fi
+
 usage() {
   cat >&2 <<'EOF'
 usage: scripts/private-loopback-postgres-wsl.sh [--max-connections N] [--with-listener-stress-role] -- COMMAND [ARG ...]
@@ -74,7 +197,7 @@ max_connections=$((10#$max_connections))
   exit 2
 }
 
-for command in bash chmod id install mktemp openssl pg_config psql realpath rm shuf tail; do
+for command in bash cargo chmod dirname id install mktemp openssl pg_config psql realpath rm shuf tail; do
   command -v "$command" >/dev/null || {
     echo "private loopback PostgreSQL fixture requires: $command" >&2
     exit 2
@@ -88,6 +211,43 @@ for command in createdb initdb pg_ctl postgres; do
     exit 2
   }
 done
+
+readonly child_status_file="${NORTHSTAR_PRIVATE_PG_CHILD_STATUS_FILE:-}"
+readonly cleanup_status_file="${NORTHSTAR_PRIVATE_PG_CLEANUP_STATUS_FILE:-}"
+
+private_status_file_is_safe() {
+  local path=$1
+  local kind=$2
+  local resolved=''
+  [[ -n "$path" ]] || return 0
+  resolved="$(realpath -m -- "$path")" || return 1
+  case "$resolved" in
+    "$project_dir"/logs/northstar-n08-2026-09-08/r[0-9][0-9]-*/runs/*/private-fixture-"$kind".status)
+      ;;
+    *) return 1 ;;
+  esac
+  [[ -d "$(dirname -- "$resolved")" && ! -L "$resolved" ]] || return 1
+}
+
+write_private_status() {
+  local path=$1
+  local kind=$2
+  local status=$3
+  [[ -n "$path" ]] || return 0
+  private_status_file_is_safe "$path" "$kind" || return 1
+  [[ "$status" =~ ^[0-9]+$ ]] || return 1
+  install -m 0600 /dev/null "$path"
+  printf '%s\n' "$status" >"$path"
+}
+
+private_status_file_is_safe "$child_status_file" child || {
+  echo 'private loopback PostgreSQL fixture refused an unsafe child status path' >&2
+  exit 2
+}
+private_status_file_is_safe "$cleanup_status_file" cleanup || {
+  echo 'private loopback PostgreSQL fixture refused an unsafe cleanup status path' >&2
+  exit 2
+}
 
 runtime_root="$(mktemp -d /tmp/northstar-private-loopback-pg.XXXXXX)"
 runtime_root="$(realpath -e -- "$runtime_root")"
@@ -126,6 +286,7 @@ cleanup() {
     echo "refusing cleanup of unexpected PostgreSQL fixture: $runtime_root" >&2
     cleanup_status=1
   fi
+  write_private_status "$cleanup_status_file" cleanup "$cleanup_status" || cleanup_status=1
   if ((original_status != 0)); then
     exit "$original_status"
   fi
@@ -248,36 +409,13 @@ fi
 
 echo "private loopback PostgreSQL fixture ready host=127.0.0.1 port=$postgres_port max_connections=$max_connections listener_stress_role=$with_listener_stress_role"
 
-child_environment=(
-  NORTHSTAR_PRIVATE_PG_HOST=127.0.0.1
-  NORTHSTAR_PRIVATE_PG_PORT="$postgres_port"
-  NORTHSTAR_PRIVATE_PG_DATABASE="$database_name"
-  NORTHSTAR_PRIVATE_PG_BOOTSTRAP_PASSWORD_FILE="$bootstrap_password_file"
-  NORTHSTAR_PRIVATE_PG_BOOTSTRAP_DATABASE_URL_FILE="$bootstrap_url_file"
-  NORTHSTAR_PRIVATE_PG_MIGRATOR_DATABASE_URL_FILE="$migrator_url_file"
-  NORTHSTAR_PRIVATE_PG_RUNTIME_DATABASE_URL_FILE="$runtime_url_file"
-  NORTHSTAR_PRIVATE_PG_COMMAND_DATABASE_URL_FILE="$command_url_file"
-)
-# The wrapper intentionally starts the child with a closed environment so a
-# host credential or proxy setting cannot leak into a private fixture.  These
-# four controls are non-secret execution metadata needed by the repository's
-# bounded WSL drivers: they select the already-built target, keep Cargo
-# offline, and place their redacted diagnostics outside the removable runtime
-# directory.  Do not replace this whitelist with `env` passthrough.
-for forwarded_variable in \
-  CARGO_TARGET_DIR \
-  XMPP_TEST_SYSTEM_TOOLCHAIN \
-  XMPP_TEST_OFFLINE \
-  NORTHSTAR_CI_DIAGNOSTICS_DIR; do
-  if [[ -v "$forwarded_variable" ]]; then
-    child_environment+=("$forwarded_variable=${!forwarded_variable}")
-  fi
-done
-if [[ "$with_listener_stress_role" == true ]]; then
-  child_environment+=(
-    NORTHSTAR_LISTENER_STRESS_DATABASE_HOST=127.0.0.1
-    NORTHSTAR_LISTENER_STRESS_DATABASE_PORT="$postgres_port"
-    NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS="$max_connections"
-  )
+if run_private_child_environment "$@"; then
+  child_status=0
+else
+  child_status=$?
 fi
-env "${child_environment[@]}" "$@"
+write_private_status "$child_status_file" child "$child_status" || {
+  echo 'private loopback PostgreSQL fixture could not record the child status' >&2
+  (( child_status == 0 )) && child_status=1
+}
+exit "$child_status"

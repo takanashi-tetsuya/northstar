@@ -205,6 +205,22 @@ pub(crate) type PepOutboxEventKind = db::PepOutboxEventKind;
 pub(crate) type PepOutboxAuthorizationMode = db::PepOutboxAuthorizationMode;
 pub(crate) type PepOutboxSubject = db::PepOutboxSubject;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PepOutboxAuthorizationLockPlan {
+    BlockPolicyOnly,
+    AudienceThenBlockPolicy,
+}
+
+fn pep_outbox_authorization_lock_plan(
+    authorization_mode: PepOutboxAuthorizationMode,
+) -> PepOutboxAuthorizationLockPlan {
+    if authorization_mode == PepOutboxAuthorizationMode::LiveNodeAccess {
+        PepOutboxAuthorizationLockPlan::AudienceThenBlockPolicy
+    } else {
+        PepOutboxAuthorizationLockPlan::BlockPolicyOnly
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct PubSubOutboxInsert {
     inner: db::PubSubOutboxInsert,
@@ -3805,9 +3821,8 @@ impl PubSubService {
         // block policy while delivery owns block policy and waits for
         // audience.  Causal-audience events do not consult a live node policy
         // and therefore intentionally do not take the audience lock.
-        let requires_live_node_access =
-            subject.authorization_mode == PepOutboxAuthorizationMode::LiveNodeAccess;
-        if requires_live_node_access {
+        let lock_plan = pep_outbox_authorization_lock_plan(subject.authorization_mode);
+        if lock_plan == PepOutboxAuthorizationLockPlan::AudienceThenBlockPolicy {
             lock_pep_audience(
                 &mut transaction,
                 subject.sender_account_id,
@@ -3892,7 +3907,7 @@ impl PubSubService {
             }
         }
 
-        if requires_live_node_access {
+        if lock_plan == PepOutboxAuthorizationLockPlan::AudienceThenBlockPolicy {
             let policy = sqlx::query(
                 "SELECT access_model,deliver_notifications,roster_groups_allowed,access_whitelist
                    FROM pep_nodes
@@ -4661,6 +4676,18 @@ mod tests {
         let body = pubsub_event_body(&event).unwrap().unwrap();
         assert_eq!(body.len(), 1_023);
         assert_eq!(body, "a".repeat(1_023));
+    }
+
+    #[test]
+    fn live_pep_authorization_locks_audience_before_block_policy() {
+        assert_eq!(
+            pep_outbox_authorization_lock_plan(PepOutboxAuthorizationMode::LiveNodeAccess),
+            PepOutboxAuthorizationLockPlan::AudienceThenBlockPolicy
+        );
+        assert_eq!(
+            pep_outbox_authorization_lock_plan(PepOutboxAuthorizationMode::CausalAudience),
+            PepOutboxAuthorizationLockPlan::BlockPolicyOnly
+        );
     }
 
     #[test]

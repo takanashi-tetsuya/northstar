@@ -1610,6 +1610,11 @@ pub async fn bind_bosh_transport_response(
 
 /// Transfer durable C2S rows to the exact BOSH response which will carry
 /// them. This commits before the HTTP response bytes are exposed to the peer.
+///
+/// The production BOSH coordinator uses the typed transport variant below so
+/// one response can own both C2S and MIX rows.  This C2S-only surface remains
+/// a test fixture for independently exercising legacy response semantics.
+#[cfg(test)]
 pub async fn bind_bosh_delivery_response(
     pool: &PgPool,
     session_id: Uuid,
@@ -1757,6 +1762,8 @@ pub async fn bind_bosh_delivery_response(
     Ok(())
 }
 
+/// C2S-only test fixture; runtime renewal uses `renew_bosh_transport_fences`.
+#[cfg(test)]
 pub async fn renew_bosh_delivery_fences(
     pool: &PgPool,
     session_id: Uuid,
@@ -1840,6 +1847,10 @@ pub async fn renew_bosh_delivery_fences(
 
 /// Complete all durable messages covered by a valid XEP-0124 client response
 /// acknowledgement. Deleting each offline row cascades its BOSH fence.
+///
+/// This is the C2S-only test fixture. Runtime acknowledgement goes through
+/// the typed transport owner so MIX rows cannot be skipped.
+#[cfg(test)]
 pub async fn acknowledge_bosh_delivery_responses(
     pool: &PgPool,
     session_id: Uuid,
@@ -1897,6 +1908,8 @@ pub async fn acknowledge_bosh_delivery_responses(
     Ok(rows.len())
 }
 
+/// C2S-only test fixture; runtime release uses `release_bosh_transport_fences`.
+#[cfg(test)]
 pub async fn release_bosh_delivery_fences(pool: &PgPool, session_id: Uuid) -> Result<()> {
     sqlx::query("DELETE FROM bosh_delivery_fences WHERE session_id=$1")
         .bind(session_id)

@@ -44,6 +44,9 @@ role_runner="$project_dir/scripts/reconcile-database-roles.sh"
 database_acceptance="$project_dir/scripts/database-role-boundary-db-ci.sh"
 database_acceptance_local="$project_dir/scripts/database-role-boundary-wsl.sh"
 loopback_fixture="$project_dir/scripts/loopback-postgres-ci.sh"
+private_loopback_fixture="$project_dir/scripts/private-loopback-postgres-wsl.sh"
+n08_database_receipt="$project_dir/scripts/n08-db-receipt-wsl.sh"
+n08_loopback_receipt="$project_dir/scripts/n08-loopback-fixture-runner-wsl.sh"
 secret_generator="$project_dir/scripts/create-production-secrets.sh"
 release_preflight="$project_dir/scripts/release-preflight.sh"
 ci_workflow="$project_dir/.github/workflows/ci.yml"
@@ -92,7 +95,8 @@ for file in "$compose" "$init_script" "$grant_policy" "$grant_boundary" "$grant_
   "$stateful_database_manifest" \
   "$restore_runner" "$dump_validator" "$role_runner" \
   "$disaster_fixture" "$message_pow_fixture" "$database_acceptance" "$loopback_fixture" \
-  "$database_acceptance_local" \
+  "$database_acceptance_local" "$private_loopback_fixture" "$n08_database_receipt" \
+  "$n08_loopback_receipt" \
   "$secret_generator" "$release_preflight" \
   "$ci_workflow"; do
   [[ -f "$file" ]] || fail "required policy file is missing: ${file#$project_dir/}"
@@ -385,11 +389,41 @@ for role_ci_contract in \
   'the CI PostgreSQL maintenance database is not the disposable canonical service' \
   'ALTER DATABASE postgres OWNER TO northstar_ci_control;' \
   'failed to restore the disposable CI maintenance database boundary' \
+  "COMMENT ON ROLE northstar_ci_control IS :'database_marker';" \
+  'COMMENT ON ROLE northstar_ci_control IS NULL;' \
   "COMMENT ON ROLE xmpp IS :'database_marker';" \
   'GRANT northstar_runtime TO northstar_ci_stale_grantee WITH ADMIN OPTION;' \
   'role reconciliation retained a protected role membership or delegated grant chain'; do
   require_literal "$database_acceptance" "$role_ci_contract" \
     "isolated role-CI ownership/membership lifecycle is missing: $role_ci_contract"
+done
+for cleanup_marker_contract in \
+  'read_cleanup_marker_state() {' \
+  'mapfile -t marker_lines' \
+  'cleanup_marker_authorizes() {' \
+  '[[ "$control_marked" == 1 ]]' \
+  '--self-test-cleanup-marker'; do
+  require_literal "$database_acceptance" "$cleanup_marker_contract" \
+    "isolated role-CI cleanup marker lifecycle is missing its fail-closed contract: $cleanup_marker_contract"
+done
+for private_fixture_contract in \
+  'env -i "${child_environment[@]}" "$@"' \
+  'run_child_environment_self_test() {' \
+  '--self-test-child-environment' \
+  'NORTHSTAR_PRIVATE_PG_CHILD_STATUS_FILE' \
+  'NORTHSTAR_PRIVATE_PG_CLEANUP_STATUS_FILE'; do
+  require_literal "$private_loopback_fixture" "$private_fixture_contract" \
+    "private N08 fixture lacks an explicit child-environment or lifecycle boundary: $private_fixture_contract"
+done
+for n08_receipt in "$n08_database_receipt" "$n08_loopback_receipt"; do
+  for receipt_contract in \
+    'run_receipt_state_self_test() {' \
+    '--self-test-receipt-state' \
+    'retained_redaction_failed' \
+    'removed_after_verified_redaction'; do
+    require_literal "$n08_receipt" "$receipt_contract" \
+      "N08 private fixture receipt lacks fail-closed evidence handling: ${n08_receipt#$project_dir/}: $receipt_contract"
+  done
 done
 require_literal "$role_runner" '--connection-password-file' \
   'existing-volume reconciliation does not separate connection and bootstrap passwords'

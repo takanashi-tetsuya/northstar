@@ -230,6 +230,11 @@ openssl req -x509 -newkey rsa:3072 -nodes -days 1 \
 chmod 0600 "$runtime_key"
 
 readiness_nonce="$(openssl rand -hex 16)"
+# northstar-runtime-migration-negative-precheck: immutable-ledger-drift
+# DB08 deliberately starts the historical 0137 database once to prove that a
+# runtime cannot publish readiness before the current immutable ledger exists.
+# The bounded rejection assertions immediately below are part of this fixture's
+# contract; DB03 is the sole path that subsequently performs the upgrade.
 env NORTHSTAR_DISABLE_DOTENV=true \
   XMPP_DOMAIN=localhost \
   DATABASE_URL_FILE="$NORTHSTAR_PRIVATE_PG_RUNTIME_DATABASE_URL_FILE" \

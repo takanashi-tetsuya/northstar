@@ -286,9 +286,21 @@ function rustStringLiterals(source) {
 // a variable name, or arbitrary SQL-looking content.
 function isSqlQueryArgument(source, literal) {
   const prefix = source.slice(Math.max(0, literal.start - 512), literal.start);
+  // `query` is intentionally not accepted bare: an in-scope Rust function,
+  // `wire::query`, `fake_query`, and XML builders with query-like names are
+  // not reviewed SQL constructors. The boundary before `sqlx` rejects both
+  // identifier suffixes and another module path, so only the crate-root SQLx
+  // constructor token can exempt its immediate literal argument.
+  const sqlxBoundary = String.raw`(?:^|[^\p{ID_Continue}:])sqlx\s*::\s*`;
   const queryCall =
-    /(?:sqlx::)?(?:query|query_scalar|query_as|query_with|query_scalar_with|query_as_with)(?:\s*::\s*<[^(){};]{0,256}>)?\s*\(\s*$/s;
-  const builderCall = /QueryBuilder(?:\s*::\s*<[^(){};]{0,256}>)?\s*::\s*new\s*\(\s*$/s;
+    new RegExp(
+      `${sqlxBoundary}(?:query|query_scalar|query_as|query_with|query_scalar_with|query_as_with)(?:\\s*::\\s*<[^(){};]{0,256}>)?\\s*\\(\\s*$`,
+      'su',
+    );
+  const builderCall = new RegExp(
+    `${sqlxBoundary}QueryBuilder(?:\\s*::\\s*<[^(){};]{0,256}>)?\\s*::\\s*new\\s*\\(\\s*$`,
+    'su',
+  );
   return queryCall.test(prefix) || builderCall.test(prefix);
 }
 
@@ -329,6 +341,22 @@ fn output(body: &str) {
 `;
 if (findings('self-test.rs', sqlPrefixedXmlSelfTest).length !== 1) {
   throw new Error('outbound XML detector accepted a SQL-prefixed non-query stanza');
+}
+const exactSqlxConstructorSelfTest = String.raw`
+fn query() { sqlx::query("SELECT '<message>'"); }
+fn builder() { sqlx::QueryBuilder::new("SELECT '<presence>'"); }
+`;
+if (findings('self-test.rs', exactSqlxConstructorSelfTest).length !== 0) {
+  throw new Error('outbound XML detector rejected a literal passed to an exact SQLx constructor');
+}
+const queryLookalikeSelfTest = String.raw`
+fn bare() { query("<message>{body}</message>"); }
+fn fake() { fake_query("<message>{body}</message>"); }
+fn wire() { wire::query("<message>{body}</message>"); }
+fn xml() { XmlQueryBuilder::new("<message>{body}</message>"); }
+`;
+if (findings('self-test.rs', queryLookalikeSelfTest).length !== 4) {
+  throw new Error('outbound XML detector exempted a bare, fake, namespaced, or XML query lookalike');
 }
 const mixedSqlAndXmlSelfTest = String.raw`
 fn query() { sqlx::query(r#"WITH chosen AS (SELECT 1) SELECT * FROM chosen"#); }

@@ -44,6 +44,104 @@ fail() {
   exit 1
 }
 
+# The cleanup marker comes from a privileged control query.  Treat it as a
+# small wire protocol, rather than as a best-effort shell split: cleanup may
+# mutate cluster-global roles and databases only after a successful query has
+# returned exactly one six-bit record.  In particular, do not let an erroring
+# query with a stale-looking stdout line authorize teardown.
+read_cleanup_marker_state() {
+  local output_file=$1
+  shift
+  local -a marker_lines=()
+
+  "$@" >"$output_file" || return 1
+  mapfile -t marker_lines <"$output_file"
+  (( ${#marker_lines[@]} == 1 )) || return 1
+  [[ "${marker_lines[0]}" =~ ^[01]:[01]:[01]:[01]:[01]:[01]$ ]] || return 1
+  printf '%s\n' "${marker_lines[0]}"
+}
+
+cleanup_marker_authorizes() {
+  local marker_state=$1
+  local control_marked=''
+  local database_exists=''
+  local database_marked=''
+  local database_owned_by_legacy=''
+  local role_exists=''
+  local role_marked=''
+  local extra=''
+
+  IFS=: read -r control_marked database_exists database_marked \
+    database_owned_by_legacy role_exists role_marked extra <<<"$marker_state"
+  [[ -z "$extra" && "$control_marked" == '1' \
+    && "$database_exists" =~ ^[01]$ && "$database_marked" =~ ^[01]$ \
+    && "$database_owned_by_legacy" =~ ^[01]$ && "$role_exists" =~ ^[01]$ \
+    && "$role_marked" =~ ^[01]$ ]] \
+    || return 1
+
+  # A database may have been transferred away from the legacy owner during
+  # reconciliation, but an existing database must still carry this fixture's
+  # marker unless it remains owned by the explicitly scoped legacy role.
+  # Likewise, an existing legacy role must carry the fixture marker.  Do not
+  # require all six fields to be one: a prior safe cleanup may already have
+  # removed either object.
+  (( database_exists == 0 || database_marked == 1 || database_owned_by_legacy == 1 )) \
+    && (( role_exists == 0 || role_marked == 1 ))
+}
+
+run_cleanup_marker_parser_self_test() {
+  local test_dir=''
+  local output_file=''
+  test_dir="$(mktemp -d "$tmp_root/northstar-cleanup-marker-self-test.XXXXXX")"
+  output_file="$test_dir/marker-state"
+
+  emit_valid_marker() { printf '%s\n' '1:1:1:1:1:1'; }
+  emit_extra_line() { printf '%s\n%s\n' '1:1:1:1:1:1' '0:0:0:0:0:0'; }
+  emit_extra_blank_line() { printf '%s\n\n' '1:1:1:1:1:1'; }
+  emit_trailing_delimiter() { printf '%s\n' '1:1:1:1:1:1:'; }
+  emit_valid_then_fail() { printf '%s\n' '1:1:1:1:1:1'; return 23; }
+
+  if ! read_cleanup_marker_state "$output_file" emit_valid_marker >/dev/null; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker parser rejected the canonical six-field record'
+  fi
+  if read_cleanup_marker_state "$output_file" emit_extra_line >/dev/null; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker parser accepted an extra output line'
+  fi
+  if read_cleanup_marker_state "$output_file" emit_extra_blank_line >/dev/null; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker parser accepted an extra blank output line'
+  fi
+  if read_cleanup_marker_state "$output_file" emit_trailing_delimiter >/dev/null; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker parser accepted a trailing delimiter'
+  fi
+  if read_cleanup_marker_state "$output_file" emit_valid_then_fail >/dev/null; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker parser accepted stdout from a failed query'
+  fi
+  if cleanup_marker_authorizes '0:1:1:1:1:1'; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker authorization accepted a missing or mismatched control marker'
+  fi
+  if cleanup_marker_authorizes '1:1:0:0:1:1'; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker authorization accepted an unmarked non-legacy database'
+  fi
+  if ! cleanup_marker_authorizes '1:1:0:1:1:1'; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker authorization rejected the scoped legacy-owner state'
+  fi
+  rm -rf -- "$test_dir"
+  printf '%s\n' 'cleanup marker parser self-test passed'
+}
+
+if [[ "${1:-}" == '--self-test-cleanup-marker' ]]; then
+  run_cleanup_marker_parser_self_test
+  exit 0
+fi
+
 [[ "${CI:-}" == 'true' && "${NORTHSTAR_DATABASE_ROLE_CI:-}" == 'true' ]] \
   || fail 'refusing destructive test outside an explicitly enabled CI job'
 case "$database_host" in
@@ -89,18 +187,16 @@ psql_as() {
     --username "$role" --dbname "$database_name" "$@"
 }
 
-cleanup() {
-  local original_status=$?
-  local cleanup_status=0
-  local marker_state='f:f'
-
-  trap - EXIT
-  set +e
-  if [[ "$database_is_managed" == true ]]; then
-    marker_state=$(control_psql --dbname=postgres --tuples-only --no-align \
-      --set=expected_marker="$marker" <<'PSQL'
+query_cleanup_marker_state() {
+  control_psql --dbname=postgres --tuples-only --no-align \
+    --set=expected_marker="$marker" <<'PSQL'
 WITH fixture AS (
   SELECT
+    COALESCE((
+      SELECT pg_catalog.shobj_description(control.oid,'pg_authid')=:'expected_marker'
+        FROM pg_catalog.pg_roles AS control
+       WHERE control.rolname='northstar_ci_control'
+    ),false) AS control_marked,
     EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname='xmpp') AS database_exists,
     COALESCE((
       SELECT pg_catalog.shobj_description(database.oid,'pg_database')=:'expected_marker'
@@ -118,17 +214,40 @@ WITH fixture AS (
         FROM pg_catalog.pg_roles AS role WHERE role.rolname='xmpp'
     ),false) AS role_marked
 )
-SELECT (database_exists OR role_exists)::pg_catalog.text || ':' ||
-       (
-         (NOT database_exists AND NOT role_exists)
-         OR (role_exists AND role_marked AND (
-               NOT database_exists OR database_marked OR database_owned_by_legacy
-             ))
-       )::pg_catalog.text
+SELECT CASE WHEN control_marked THEN '1' ELSE '0' END || ':' ||
+       CASE WHEN database_exists THEN '1' ELSE '0' END || ':' ||
+       CASE WHEN database_marked THEN '1' ELSE '0' END || ':' ||
+       CASE WHEN database_owned_by_legacy THEN '1' ELSE '0' END || ':' ||
+       CASE WHEN role_exists THEN '1' ELSE '0' END || ':' ||
+       CASE WHEN role_marked THEN '1' ELSE '0' END
   FROM fixture;
 PSQL
-    )
-    if [[ "$marker_state" == 't:t' ]]; then
+}
+
+cleanup() {
+  local original_status=$?
+  local cleanup_status=0
+  local marker_state=''
+  local control_marked=''
+  local database_exists=''
+  local database_marked=''
+  local database_owned_by_legacy=''
+  local role_exists=''
+  local role_marked=''
+  local marker_state_extra=''
+  local marker_state_file=''
+
+  trap - EXIT
+  set +e
+  if [[ "$database_is_managed" == true ]]; then
+    marker_state_file="$runtime_dir/cleanup-marker-state"
+    if marker_state=$(read_cleanup_marker_state "$marker_state_file" query_cleanup_marker_state); then
+      IFS=: read -r control_marked database_exists database_marked \
+        database_owned_by_legacy role_exists role_marked marker_state_extra <<<"$marker_state"
+    else
+      cleanup_status=1
+    fi
+    if (( cleanup_status == 0 )) && cleanup_marker_authorizes "$marker_state"; then
       if [[ "$phase_fixture_database_created" == true ]]; then
         if control_psql --dbname=postgres \
           --command="DROP DATABASE IF EXISTS northstar_ci_grant_phase_fixture WITH (FORCE);"; then
@@ -203,28 +322,15 @@ DROP ROLE IF EXISTS northstar_bootstrap;
 DROP ROLE IF EXISTS northstar_ci_stale_grantee;
 DROP ROLE IF EXISTS northstar_ci_delegated_grantee;
 DROP ROLE IF EXISTS xmpp;
+-- The controller marker is the cleanup authority.  It is deliberately
+-- cleared last, so a failed teardown remains attributable and retryable.
+COMMENT ON ROLE northstar_ci_control IS NULL;
 PSQL
-    elif [[ "$marker_state" != 'f:t' ]]; then
+    else
       printf '%s\n' \
-        'refusing database cleanup because the isolated CI ownership marker is absent or inconsistent' >&2
+        "refusing database cleanup because the isolated CI control marker is absent or inconsistent (control=${control_marked:-invalid} database_exists=${database_exists:-invalid} database_marked=${database_marked:-invalid} database_owned_by_legacy=${database_owned_by_legacy:-invalid} role_exists=${role_exists:-invalid} role_marked=${role_marked:-invalid})" >&2
       cleanup_status=1
     fi
-  fi
-
-  if [[ -f "${privilege_matrix_file:-}" ]]; then
-    python3 - "${privilege_matrix_file}" "$project_dir/privilege-matrix.json" <<'PY' || true
-import json, sys
-try:
-    records = []
-    with open(sys.argv[1], 'r', encoding='utf-8') as f:
-        for line in f:
-            if line.strip():
-                records.append(json.loads(line.strip()))
-    with open(sys.argv[2], 'w', encoding='utf-8') as f:
-        json.dump({"probes": records, "total": len(records)}, f, indent=2)
-except Exception:
-    pass
-PY
   fi
 
   case "$runtime_dir" in
@@ -451,6 +557,11 @@ SELECT (
           AND NOT privilege.is_grantable
       )=2
   AND pg_catalog.count(*)=5
+  AND (
+    SELECT pg_catalog.shobj_description(control.oid,'pg_authid') IS NULL
+      FROM pg_catalog.pg_roles AS control
+     WHERE control.rolname='northstar_ci_control'
+  )
 )
   FROM pg_catalog.pg_database AS database
   JOIN pg_catalog.pg_roles AS database_owner ON database_owner.oid=database.datdba
@@ -468,7 +579,18 @@ PSQL
 # owner. Password values enter psql only through environment variables.
 export NORTHSTAR_CI_LEGACY_PASSWORD="$legacy_password"
 export NORTHSTAR_CI_DATABASE_MARKER="$marker"
+# The service roles and database are intentionally mutated by the role
+# reconciliation fixture.  Anchor teardown authority on the external control
+# role instead, after proving it is the pristine disposable controller above.
+# Mark before CREATE DATABASE so a lost client acknowledgement still leaves a
+# recoverable ownership record; clear it only after a complete teardown.
 database_is_managed=true
+control_psql --dbname=postgres <<'PSQL'
+\getenv database_marker NORTHSTAR_CI_DATABASE_MARKER
+BEGIN;
+COMMENT ON ROLE northstar_ci_control IS :'database_marker';
+COMMIT;
+PSQL
 control_psql --dbname=postgres <<'PSQL'
 \getenv legacy_password NORTHSTAR_CI_LEGACY_PASSWORD
 \getenv database_marker NORTHSTAR_CI_DATABASE_MARKER

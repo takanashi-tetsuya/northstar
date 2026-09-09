@@ -7468,26 +7468,6 @@ async fn listen_once(
                                 mix_handoff = Some(ClusterMixHandoff::BoshPersisted);
                                 true
                             }
-                            // Direct writers report SocketFenced before bytes
-                            // are sent. SocketWritten is retained only for
-                            // compatibility fixtures and is not an accepted
-                            // remote hand-off because it carries no rotated
-                            // writer token.
-                            Ok(crate::outbound::MixTransportCompletion::SocketWritten) => {
-                                tracing::warn!(
-                                    delivery_id = %remote_source.delivery_id,
-                                    "rejected legacy unfenced remote MIX socket completion"
-                                );
-                                let _ = state
-                                    .mix_service()
-                                    .release_mix_cluster_delivery(
-                                        remote_source,
-                                        &state.cluster.node_id,
-                                        request_id,
-                                    )
-                                    .await;
-                                false
-                            }
                             Err(error) => {
                                 tracing::warn!(
                                     ?error,

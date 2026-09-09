@@ -456,21 +456,27 @@ if (
   throw new Error('MIX outbox work must stay in its claimed delivery or PAM lane');
 }
 const mixOutboxLaneWorker = structBody(mixProtocolProduction, 'async fn run_mix_outbox_lane(');
+const mixOutboxClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
+const mixOutboxClaim = structBody(mixProtocolProduction, 'fn process_mix_outbox_claim(');
 const mixOutboxMaintenance = structBody(mixProtocolProduction, 'fn process_mix_outbox_maintenance(');
 if (
   !/FuturesUnordered\s*::\s*<\s*MixOutboxTask\s*>\s*::\s*new\s*\(\s*\)/.test(
     mixOutboxLaneWorker,
   ) ||
-  !/claim_mix_outbox_work\s*\(\s*&state\s*,\s*&cancel\s*,\s*queue\s*,\s*available\s*\)/.test(
+  !/claim_task\s*=\s*Some\s*\(\s*process_mix_outbox_claim\s*\(/.test(
     mixOutboxLaneWorker,
   ) ||
   !/in_flight\s*\.\s*push\s*\(\s*process_mix_outbox_work\s*\(/.test(mixOutboxLaneWorker) ||
   !/maintenance_task\s*=\s*Some\s*\(\s*process_mix_outbox_maintenance\s*\(/.test(
     mixOutboxLaneWorker,
   ) ||
-  !/next_mix_outbox_progress\s*\(\s*&mut\s+in_flight\s*,\s*&mut\s+maintenance_task\s*\)/.test(
+  !/next_mix_outbox_progress\s*\(\s*&mut\s+in_flight\s*,\s*&mut\s+claim_task\s*,\s*&mut\s+maintenance_task\s*\)/.test(
     mixOutboxLaneWorker,
   ) ||
+  !/claim_mix_outbox_work\s*\(\s*&state\s*,\s*&cancel\s*,\s*queue\s*,\s*available\s*\)/.test(
+    mixOutboxClaim,
+  ) ||
+  !/cancellable_mix_outbox_turn\s*\(\s*cancel\s*,/.test(mixOutboxClaimWork) ||
   !/cancellable_mix_outbox_turn\s*\(\s*&cancel\s*,/.test(mixOutboxMaintenance) ||
   !/maintain_mix_delivery_retention\s*\(\s*\)/.test(mixOutboxMaintenance)
 ) {

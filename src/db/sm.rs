@@ -188,6 +188,9 @@ pub fn peer_ip_matches(policy: SmIpPolicy, expected: IpAddr, actual: IpAddr) -> 
     }
 }
 
+/// Result-only fixture API. Runtime callers require ownership rotations and
+/// therefore use `create_sm_session_with_ownership_resolution` directly.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub async fn create_sm_session(
     pool: &PgPool,
@@ -396,6 +399,9 @@ pub async fn remove_live_sm_muc_memberships(
     )
 }
 
+/// Result-only fixture API. Runtime checkpointing consumes the ownership
+/// outcome from `checkpoint_sm_session_and_acknowledge_with_ownership_resolution`.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub async fn checkpoint_sm_session_and_acknowledge(
     pool: &PgPool,

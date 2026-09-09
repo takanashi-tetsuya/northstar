@@ -35,6 +35,7 @@ xmpp_port=""
 xmpps_port=""
 http_port=""
 http_backend_port=""
+web_admin_port=""
 http_relay_pid=""
 http_relay_port=""
 http_relay_target="$runtime_dir/moderation-http.target"
@@ -204,6 +205,7 @@ start_server() {
     S2S_BIND=127.0.0.1:0 \
     S2S_TLS_BIND=127.0.0.1:0 \
     HTTP_BIND=127.0.0.1:0 \
+    WEB_ADMIN_BIND=127.0.0.1:0 \
     TEST_LISTENER_ACTIVATION=true \
     TEST_READINESS_FILE="$readiness_file" \
     TEST_READINESS_NONCE="$readiness_nonce" \
@@ -245,6 +247,7 @@ start_server() {
   xmpp_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
   xmpps_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
   http_backend_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+  web_admin_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" web-admin)"
   publish_http_target
   http_port="$http_relay_port"
   curl --silent --fail "http://127.0.0.1:$http_backend_port/readyz" >/dev/null
@@ -256,6 +259,7 @@ start_server
 
 export XMPP_TEST_HOST=127.0.0.1
 export XMPP_TEST_HTTP_PORT="$http_port"
+export XMPP_TEST_WEB_ADMIN_PORT="$web_admin_port"
 export XMPP_TEST_CLIENT_PORT="$xmpp_port"
 export XMPP_TEST_XMPPS_PORT="$xmpps_port"
 export XMPP_TEST_DOMAIN=localhost

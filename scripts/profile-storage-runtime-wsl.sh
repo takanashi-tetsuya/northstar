@@ -39,10 +39,7 @@ cleanup() {
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
   fi
-  if [[ -n "$http_relay_pid" ]]; then
-    kill "$http_relay_pid" 2>/dev/null || true
-    wait "$http_relay_pid" 2>/dev/null || true
-  fi
+  stop_http_relay
   if [[ $status -ne 0 && -f "$runtime_dir/server.log" ]]; then
     echo "profile-storage server log after failure:" >&2
     tail -n 200 "$runtime_dir/server.log" >&2 || true
@@ -98,6 +95,19 @@ public_url="https://127.0.0.1:$http_relay_port"
 
 publish_http_target() {
   fixture_publish_relay_target "$http_relay_target" "$http_backend_port"
+}
+
+# The relay is intentionally alive while the two server generations hand off
+# the public HTTP endpoint.  It is nevertheless a fixture-owned listener, so
+# stop and reap it before asserting that this fixture left no listeners behind.
+# Keeping this as one idempotent operation also gives the EXIT trap and the
+# normal success path identical ownership semantics.
+stop_http_relay() {
+  if [[ -n "$http_relay_pid" ]]; then
+    kill "$http_relay_pid" 2>/dev/null || true
+    wait "$http_relay_pid" 2>/dev/null || true
+    http_relay_pid=""
+  fi
 }
 
 assert_advertised_public_url() {
@@ -167,4 +177,5 @@ if (( shutdowns < 2 )); then
   echo "profile-storage server did not complete both graceful shutdowns" >&2
   exit 1
 fi
+stop_http_relay
 fixture_assert_no_listeners || exit 1

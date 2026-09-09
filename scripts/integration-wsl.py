@@ -553,7 +553,7 @@ def endpoint_binding_self_test() -> None:
         status, _ = api("GET", "/readyz")
         raw_status, _, _ = raw_http("GET", "/readyz")
         socket.create_connection = (  # type: ignore[assignment]
-            lambda address, _timeout: (
+            lambda address, timeout: (
                 deadline_addresses.append(address),
                 FakeDeadlineSocket(),
             )[1]

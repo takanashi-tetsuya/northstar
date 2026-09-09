@@ -940,10 +940,10 @@ the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
 For this release the exact manifest contains 140 files from `0001` through
-`0141`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+`0142`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0141`, with the exact SQLx description and SHA-384 checksum, before it
+through `0142`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url` and `command_database_url` secrets; neither identity may
 attempt DDL. Pending, failed, unknown, duplicated, missing or checksum-drifted
@@ -1057,6 +1057,12 @@ installation-schema `SECURITY DEFINER` path and revokes `PUBLIC` execution
 before asserting the catalog state. It introduces no new runtime capability and
 is not a stopped-writer boundary.
 
+Migration `0142` is the matching forward authority hardening companion to
+immutable `0140`. It re-pins both upload-projection capacity trigger functions
+to the exact installation-schema `SECURITY DEFINER` path, revokes `PUBLIC`
+execution, and asserts that catalog state. It introduces no new runtime
+capability and is not a stopped-writer boundary.
+
 Delivery claiming does not await retention cleanup. An expired, unowned head is
 terminal, so the claim query can advance to the next live ordered row; the
 separate bounded maintenance page later records the dead letter and reclaims
@@ -1105,7 +1111,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0141` manifest
+5. run the one-shot migration job through the complete `0001`-`0142` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

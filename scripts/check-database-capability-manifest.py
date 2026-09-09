@@ -47,6 +47,7 @@ MIGRATIONS = {
     "0128": ROOT / "migrations/0128_mix_capacity_authorities.sql",
     "0131": ROOT / "migrations/0131_upload_capacity_nowait.sql",
     "0141": ROOT / "migrations/0141_upload_cleanup_capability_rehardening.sql",
+    "0142": ROOT / "migrations/0142_upload_projection_capacity_rehardening.sql",
 }
 
 # A later migration may replace an existing routine without changing its
@@ -77,6 +78,10 @@ RESECURED_BY_MIGRATION = {
     "0141": {
         "northstar_upload_admit_expired_cleanup()",
     },
+    "0142": {
+        "account_upload_storage_job_capacity()",
+        "account_upload_cleanup_capacity()",
+    },
 }
 
 # A replacement migration may preserve a callable identity while changing its
@@ -86,6 +91,8 @@ RESECURED_BY_MIGRATION = {
 # future-migration exemption for incomplete routine hardening.
 REPLACEMENT_HARDENING_SUCCESSORS = {
     ("0139", "northstar_upload_admit_expired_cleanup()"): "0141",
+    ("0140", "account_upload_storage_job_capacity()"): "0142",
+    ("0140", "account_upload_cleanup_capacity()"): "0142",
 }
 
 ROW = re.compile(

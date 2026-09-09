@@ -122,9 +122,12 @@ production baseline; Windows AMD64 artifacts are for development and evaluation.
 - [ ] Apply forward hardening migration `0141`; verify the existing expired
   cleanup-admission capability has the exact installation-schema
   `SECURITY DEFINER` path and no `PUBLIC` execute privilege.
+- [ ] Apply forward hardening migration `0142`; verify both upload-projection
+  capacity trigger functions have the exact installation-schema
+  `SECURITY DEFINER` path and no `PUBLIC` execute privilege.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 140 migrations from `0001` through the current
-  repository maximum `0141`, with `0021` as the sole intentional gap.
+  identity and verify all 141 migrations from `0001` through the current
+  repository maximum `0142`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

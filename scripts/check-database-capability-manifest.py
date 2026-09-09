@@ -1485,9 +1485,34 @@ for required in (
     if required not in database_ci_text:
         fail(f"database CI omits capability/ACL invariant: {required}")
 
-for image in (GRANT_IMAGE, BACKUP_IMAGE):
-    if "northstar-migration-ledger-manifest.sql" not in read(image):
-        fail(f"{image.relative_to(ROOT)} does not ship the migration ledger manifest")
+image_policy_dependencies = {
+    GRANT_IMAGE: (
+        "reconcile-northstar-grants.sql",
+        "verify-northstar-grant-boundary.sql",
+        "apply-northstar-grants.sql",
+        "northstar-capability-manifest.sql",
+        "northstar-migration-ledger-manifest.sql",
+    ),
+    BACKUP_IMAGE: (
+        # `validate-backup-dump-local.sh` invokes the reconciliation policy as
+        # part of its offline restore boundary check. Keep that runtime
+        # dependency explicit here so an image cannot build successfully while
+        # omitting a file that its entrypoint needs after deployment.
+        "reconcile-northstar-grants.sql",
+        "verify-northstar-grant-boundary.sql",
+        "apply-northstar-grants.sql",
+        "northstar-capability-manifest.sql",
+        "northstar-migration-ledger-manifest.sql",
+    ),
+}
+for image, dependencies in image_policy_dependencies.items():
+    image_text = read(image)
+    for dependency in dependencies:
+        if dependency not in image_text:
+            fail(
+                f"{image.relative_to(ROOT)} does not ship required database "
+                f"policy dependency: {dependency}"
+            )
 
 grant_runner_text = read(GRANT_RUNNER)
 for required in (

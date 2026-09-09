@@ -939,11 +939,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 137 files from `0001` through
-`0138`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 138 files from `0001` through
+`0139`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0138`, with the exact SQLx description and SHA-384 checksum, before it
+through `0139`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url` and `command_database_url` secrets; neither identity may
 attempt DDL. Pending, failed, unknown, duplicated, missing or checksum-drifted
@@ -1037,6 +1037,14 @@ ledger and ACL verification sequence. A mixed cluster protocol version is
 rejected for durable MIX cross-node hand-offs, so roll every participating node
 to the same v13 release before enabling that path.
 
+Migration `0139` is an online forward repair for expired upload cleanup
+admission. Its result-column name is also an `upload_cleanup_queue` key; the
+migration changes conflict handling to name that immutable primary-key
+constraint explicitly, avoiding PL/pgSQL's ambiguous unqualified identifier.
+It retains the existing capability signature, owner, ACL and schema-pinned
+`SECURITY DEFINER` path. Apply it through the normal exact ledger and grant
+reconciliation sequence; it is not a stopped-writer boundary.
+
 Delivery claiming does not await retention cleanup. An expired, unowned head is
 terminal, so the claim query can advance to the next live ordered row; the
 separate bounded maintenance page later records the dead letter and reclaims
@@ -1085,7 +1093,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0138` manifest
+5. run the one-shot migration job through the complete `0001`-`0139` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

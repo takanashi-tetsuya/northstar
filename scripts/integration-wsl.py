@@ -22,6 +22,7 @@ import zlib
 
 HTTP_HOST = os.environ.get("XMPP_TEST_HOST", "127.0.0.1")
 HTTP_PORT = int(os.environ.get("XMPP_TEST_HTTP_PORT", "18080"))
+WEB_ADMIN_PORT = int(os.environ.get("XMPP_TEST_WEB_ADMIN_PORT", "0"))
 METRICS_PORT = int(os.environ.get("XMPP_TEST_METRICS_PORT", str(HTTP_PORT)))
 XMPP_PORT = int(os.environ.get("XMPP_TEST_CLIENT_PORT", "15222"))
 XMPPS_PORT = int(os.environ.get("XMPP_TEST_XMPPS_PORT", "15223"))
@@ -261,6 +262,7 @@ def _deadline_http_api(
     body: bytes | None,
     headers: dict[str, str],
     deadline: float,
+    port: int = HTTP_PORT,
 ) -> tuple[int, str, bytes]:
     """Execute a fixture REST request under one non-extendable deadline.
 
@@ -272,7 +274,7 @@ def _deadline_http_api(
     """
 
     request_headers = {
-        "Host": f"{HTTP_HOST}:{HTTP_PORT}",
+        "Host": f"{HTTP_HOST}:{port}",
         "Connection": "close",
         **headers,
     }
@@ -285,7 +287,7 @@ def _deadline_http_api(
     ).encode() + (body or b"")
 
     with socket.create_connection(
-        (HTTP_HOST, HTTP_PORT), timeout=_remaining_deadline_timeout(deadline, "HTTP connect")
+        (HTTP_HOST, port), timeout=_remaining_deadline_timeout(deadline, "HTTP connect")
     ) as sock:
         sock.settimeout(_remaining_deadline_timeout(deadline, "HTTP request write"))
         sock.sendall(request)
@@ -340,6 +342,7 @@ def api(
     token: str | None = None,
     timeout: float = 10,
     deadline: float | None = None,
+    port: int = HTTP_PORT,
 ):
     check(0 < timeout <= 10, "HTTP API timeout must be greater than zero and no more than ten seconds")
     headers = {}
@@ -350,7 +353,7 @@ def api(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     if deadline is None:
-        connection = http.client.HTTPConnection(HTTP_HOST, HTTP_PORT, timeout=timeout)
+        connection = http.client.HTTPConnection(HTTP_HOST, port, timeout=timeout)
         connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
         raw = response.read()
@@ -358,9 +361,27 @@ def api(
         status = response.status
         connection.close()
     else:
-        status, content_type, raw = _deadline_http_api(method, path, body, headers, deadline)
+        status, content_type, raw = _deadline_http_api(method, path, body, headers, deadline, port)
     result = json.loads(raw) if raw and "json" in content_type else raw.decode()
     return status, result
+
+
+def admin_api(
+    method: str,
+    path: str,
+    payload=None,
+    token: str | None = None,
+    timeout: float = 10,
+):
+    """Call the loopback-only administrator listener selected by readiness.
+
+    Public HTTP intentionally has no administrator routes. Keeping this wrapper
+    separate makes a fixture fail loudly if a launcher forgets to pass the
+    child-owned private listener rather than silently testing public HTTP.
+    """
+
+    check(0 < WEB_ADMIN_PORT <= 65535, "administrator listener was not published by readiness")
+    return api(method, path, payload, token, timeout, port=WEB_ADMIN_PORT)
 
 
 def deadline_io_self_test() -> None:
@@ -458,8 +479,15 @@ def metrics_api():
     return status, body
 
 
-def raw_http(method: str, path: str, body: bytes | None = None, headers=None):
-    connection = http.client.HTTPConnection(HTTP_HOST, HTTP_PORT, timeout=10)
+def raw_http(
+    method: str,
+    path: str,
+    body: bytes | None = None,
+    headers=None,
+    *,
+    port: int = HTTP_PORT,
+):
+    connection = http.client.HTTPConnection(HTTP_HOST, port, timeout=10)
     connection.request(method, path, body=body, headers=headers or {})
     response = connection.getresponse()
     result = response.read()
@@ -467,6 +495,11 @@ def raw_http(method: str, path: str, body: bytes | None = None, headers=None):
     response_headers = {name.lower(): value for name, value in response.getheaders()}
     connection.close()
     return status, response_headers, result
+
+
+def raw_admin_http(method: str, path: str, body: bytes | None = None, headers=None):
+    check(0 < WEB_ADMIN_PORT <= 65535, "administrator listener was not published by readiness")
+    return raw_http(method, path, body, headers, port=WEB_ADMIN_PORT)
 
 
 def admin_operation_request(
@@ -484,7 +517,7 @@ def admin_operation_request(
     }
     if body is not None:
         headers["Content-Type"] = "application/json"
-    status, response_headers, raw = raw_http(method, path, body, headers)
+    status, response_headers, raw = raw_admin_http(method, path, body, headers)
     check(status == 202, f"operation enqueue failed: {status} {raw!r}")
     result = json.loads(raw)
     operation_id = result.get("operation_id")
@@ -496,7 +529,7 @@ def admin_operation_request(
         f"invalid asynchronous operation response: {response_headers} {result}",
     )
     if verify_replay:
-        replay_status, replay_headers, replay_raw = raw_http(method, path, body, headers)
+        replay_status, replay_headers, replay_raw = raw_admin_http(method, path, body, headers)
         check(
             replay_status == status
             and replay_headers.get("location") == location
@@ -510,7 +543,7 @@ def wait_operation(token: str, location: str, expected: str = "succeeded") -> di
     deadline = time.monotonic() + 20
     last = None
     while time.monotonic() < deadline:
-        status, last = api("GET", location, token=token)
+        status, last = admin_api("GET", location, token=token)
         check(status == 200, f"operation lookup failed: {status} {last}")
         if last.get("status") in {"succeeded", "failed", "canceled", "indeterminate"}:
             check(last["status"] == expected, f"operation ended unexpectedly: {last}")
@@ -1642,11 +1675,11 @@ def tcp_sasl_core_conformance() -> None:
     # here made the fixture depend on the random dummy-SCRAM secret. Corrupt
     # stored verifiers are tested separately as a temporary backend failure in
     # the random-schema database suite.
-    status, admin_login = api(
+    status, admin_login = admin_api(
         "POST", "/api/v1/login", {"username": ADMIN, "password": ADMIN_PASSWORD}
     )
     check(status == 200, f"could not authenticate admin for disabled SCRAM probe: {admin_login}")
-    status, user_page = api("GET", "/api/v1/admin/users", token=admin_login["token"])
+    status, user_page = admin_api("GET", "/api/v1/admin/users", token=admin_login["token"])
     check(status == 200, f"could not list users for disabled SCRAM probe: {user_page}")
     bob_id = next(row["id"] for row in user_page["users"] if row["username"] == BOB)
     _, disable_location, _ = admin_operation_request(
@@ -1681,7 +1714,7 @@ def tcp_sasl_core_conformance() -> None:
             "unknown/disabled SCRAM did not finish with one non-enumerating failure shape",
         )
     finally:
-        status, reenabled = api(
+        status, reenabled = admin_api(
             "PATCH",
             f"/api/v1/admin/users/{bob_id}",
             {"disabled": False},
@@ -2530,12 +2563,12 @@ def run() -> None:
     status, me = api("GET", "/api/v1/me", token=alice_token)
     check(status == 200 and me["jid"] == f"{ALICE}@{DOMAIN}", "current-user endpoint failed")
 
-    status, admin_login = api(
+    status, admin_login = admin_api(
         "POST", "/api/v1/login", {"username": ADMIN, "password": ADMIN_PASSWORD}
     )
     check(status == 200 and admin_login["is_admin"], "bootstrap administrator login failed")
     admin_token = admin_login["token"]
-    status, invalid_admin_auth = api(
+    status, invalid_admin_auth = admin_api(
         "GET", "/api/v1/admin/users", token="A" * 64
     )
     check(
@@ -2543,12 +2576,12 @@ def run() -> None:
         and invalid_admin_auth.get("error", {}).get("code") == "unauthorized",
         f"unknown administrator bearer was not treated as unauthenticated: {invalid_admin_auth}",
     )
-    status, non_admin_auth = api("GET", "/api/v1/admin/users", token=alice_token)
+    status, non_admin_auth = admin_api("GET", "/api/v1/admin/users", token=alice_token)
     check(
         status == 403 and non_admin_auth.get("error", {}).get("code") == "forbidden",
         f"valid non-administrator bearer was not forbidden: {non_admin_auth}",
     )
-    status, users = api("GET", "/api/v1/admin/users", token=admin_token)
+    status, users = admin_api("GET", "/api/v1/admin/users", token=admin_token)
     listed_usernames = {entry["username"] for entry in users.get("users", [])}
     check(
         status == 200
@@ -3978,7 +4011,7 @@ def run() -> None:
     # Keep the client XML untouched while the server internally binds the
     # missing recipient to Alice's bare account for authorization, replay and
     # durable C2S projection identity.
-    archive_status, archive_baseline = api(
+    archive_status, archive_baseline = admin_api(
         "GET", "/api/v1/admin/stats", token=admin_token
     )
     check(
@@ -5495,7 +5528,7 @@ def run() -> None:
         f"foreign archive evidence was accepted: {foreign_status} {foreign_result}",
     )
 
-    status, stats = api("GET", "/api/v1/admin/stats", token=admin_token)
+    status, stats = admin_api("GET", "/api/v1/admin/stats", token=admin_token)
     # The self-target is one deduplicated owner row retained as a tombstone, its
     # plaintext retraction action is a separate auditable row, and
     # encrypted-offline plus encrypted-page-two each create sender and recipient
@@ -5556,7 +5589,7 @@ def run() -> None:
         "Prometheus metrics missing",
     )
 
-    status, nuke_disabled = api(
+    status, nuke_disabled = admin_api(
         "POST",
         "/api/v1/admin/nuke",
         {
@@ -5571,7 +5604,7 @@ def run() -> None:
         f"destructive administration was not disabled: {nuke_disabled}",
     )
 
-    status, registration_state = api(
+    status, registration_state = admin_api(
         "POST", "/api/v1/admin/registration", {"enabled": False}, token=admin_token
     )
     check(status == 200 and not registration_state["open_registration"], "admin registration close failed")
@@ -5592,7 +5625,7 @@ def run() -> None:
         "closed registration advertised the IBR2 signup flow or hid authenticated "
         "XEP-0077 account maintenance",
     )
-    status, _ = api(
+    status, _ = admin_api(
         "POST", "/api/v1/admin/registration", {"enabled": True}, token=admin_token
     )
     check(status == 200, "admin registration reopen failed")
@@ -5607,7 +5640,7 @@ def run() -> None:
         "Authorization": f"Bearer {admin_token}", "Content-Type": "application/json",
         "Idempotency-Key": island_key,
     }
-    conflict_status, _, conflict_raw = raw_http(
+    conflict_status, _, conflict_raw = raw_admin_http(
         "POST", "/api/v1/admin/island_mode", b'{"enabled":false}', conflict_headers,
     )
     conflict = json.loads(conflict_raw)
@@ -5623,13 +5656,13 @@ def run() -> None:
     wait_operation(admin_token, island_off_location)
 
     kick_target = XmppWebSocket(BOB, PASSWORD, "admin-kick-target")
-    status, sessions = api("GET", "/api/v1/admin/sessions", token=admin_token)
+    status, sessions = admin_api("GET", "/api/v1/admin/sessions", token=admin_token)
     kick_jid = f"{BOB}@{DOMAIN}/admin-kick-target"
     check(
         status == 200 and isinstance(sessions.get("sessions"), list),
         f"admin session page envelope failed: {sessions}",
     )
-    malformed_status, malformed_headers, malformed_raw = raw_http(
+    malformed_status, malformed_headers, malformed_raw = raw_admin_http(
         "DELETE",
         "/api/v1/admin/sessions/not-a-uuid",
         headers={"Authorization": f"Bearer {admin_token}", "Idempotency-Key": f"bad-uuid-{time.time_ns()}"},
@@ -5650,7 +5683,7 @@ def run() -> None:
     expect_orderly_websocket_close(kick_target, "admin session kick")
 
     kick_operation_id = kick_location.rsplit("/", 1)[1]
-    status, operation_page = api(
+    status, operation_page = admin_api(
         "GET", "/api/v1/admin/operations?limit=10", token=admin_token
     )
     check(
@@ -5658,7 +5691,7 @@ def run() -> None:
         and any(row["id"] == kick_operation_id for row in operation_page.get("items", [])),
         f"operation list did not expose the enqueued kick: {operation_page}",
     )
-    status, filtered_operation_page = api(
+    status, filtered_operation_page = admin_api(
         "GET",
         "/api/v1/admin/operations?status=succeeded&kind=admin.session_kick&limit=10",
         token=admin_token,
@@ -5672,7 +5705,7 @@ def run() -> None:
         "operation list did not bind combined status/kind filters: "
         f"{filtered_operation_page}",
     )
-    status, target_page = api(
+    status, target_page = admin_api(
         "GET", f"/api/v1/admin/operations/{kick_operation_id}/targets?limit=10",
         token=admin_token,
     )
@@ -5686,7 +5719,7 @@ def run() -> None:
         "Authorization": f"Bearer {admin_token}",
         "Idempotency-Key": f"cancel-terminal-{time.time_ns()}",
     }
-    status, first_cancel_headers, first_cancel_body = raw_http(
+    status, first_cancel_headers, first_cancel_body = raw_admin_http(
         "POST", cancel_path, headers=cancel_headers
     )
     cancel_result = json.loads(first_cancel_body)
@@ -5694,7 +5727,7 @@ def run() -> None:
         status == 200 and cancel_result.get("outcome") == "already_terminal",
         f"terminal operation cancel was not safely idempotent: {cancel_result}",
     )
-    replay_status, replay_cancel_headers, replay_cancel_body = raw_http(
+    replay_status, replay_cancel_headers, replay_cancel_body = raw_admin_http(
         "POST", cancel_path, headers=cancel_headers
     )
     check(
@@ -5718,7 +5751,7 @@ def run() -> None:
         "Content-Type": "application/json",
         "Idempotency-Key": f"reconcile-terminal-{time.time_ns()}",
     }
-    status, _, reconcile_raw = raw_http(
+    status, _, reconcile_raw = raw_admin_http(
         "POST", reconcile_path, reconcile_body, reconcile_headers
     )
     reconcile_result = json.loads(reconcile_raw)
@@ -5726,7 +5759,7 @@ def run() -> None:
         status == 409 and reconcile_result.get("error", {}).get("code") == "conflict",
         f"parent reconciliation endpoint was not reachable: {reconcile_result}",
     )
-    status, _, target_reconcile_raw = raw_http(
+    status, _, target_reconcile_raw = raw_admin_http(
         "POST",
         f"/api/v1/admin/operations/{kick_operation_id}/targets/{target_id}/reconcile",
         json.dumps(
@@ -5753,7 +5786,7 @@ def run() -> None:
         "status=Running",
         "kind=admin.private_future_kind",
     ):
-        invalid_status, invalid_body = api(
+        invalid_status, invalid_body = admin_api(
             "GET", f"/api/v1/admin/operations?{invalid_query}", token=admin_token
         )
         check(
@@ -5905,7 +5938,7 @@ def run() -> None:
         "POST", "/api/v1/login", {"username": BOB, "password": rotated_password}
     )
     check(status == 401, "disabled account could authenticate")
-    status, _ = api(
+    status, _ = admin_api(
         "PATCH", f"/api/v1/admin/users/{bob_id}", {"disabled": False}, token=admin_token
     )
     check(status == 200, "administrator could not re-enable the test account")

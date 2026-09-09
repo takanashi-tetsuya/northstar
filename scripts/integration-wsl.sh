@@ -42,6 +42,7 @@ integration_http_relay_target="$runtime_dir/integration-http.target"
 integration_public_url=""
 test_http_backend_port=""
 test_http_port=""
+test_web_admin_port=""
 test_metrics_port=""
 test_client_port=""
 test_xmpps_port=""
@@ -219,6 +220,7 @@ start_server() {
     S2S_BIND="127.0.0.1:0" \
     S2S_TLS_BIND="127.0.0.1:0" \
     HTTP_BIND="127.0.0.1:0" \
+    WEB_ADMIN_BIND="127.0.0.1:0" \
     METRICS_BIND="127.0.0.1:0" \
     TEST_LISTENER_ACTIVATION=true \
     TEST_READINESS_FILE="$readiness_file" \
@@ -259,6 +261,7 @@ start_server() {
   server_pid=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid" || return 1
   test_http_backend_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+  test_web_admin_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" web-admin)"
   test_metrics_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" metrics)"
   test_client_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
   test_xmpps_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
@@ -274,6 +277,7 @@ start_server
 if [[ "${XMPP_TEST_ONLY_JINGLE_GATE:-false}" == "true" ]]; then
   XMPP_TEST_HOST=127.0.0.1 \
   XMPP_TEST_HTTP_PORT="$test_http_port" \
+  XMPP_TEST_WEB_ADMIN_PORT="$test_web_admin_port" \
   XMPP_TEST_CLIENT_PORT="$test_client_port" \
   XMPP_TEST_XMPPS_PORT="$test_xmpps_port" \
   XMPP_TEST_DOMAIN=localhost \
@@ -311,6 +315,7 @@ if [[ "${XMPP_TEST_ONLY_SASL:-false}" == "true" ]]; then
 fi
 XMPP_TEST_HOST=127.0.0.1 \
 XMPP_TEST_HTTP_PORT="$test_http_port" \
+XMPP_TEST_WEB_ADMIN_PORT="$test_web_admin_port" \
 XMPP_TEST_METRICS_PORT="$test_metrics_port" \
 XMPP_TEST_CLIENT_PORT="$test_client_port" \
 XMPP_TEST_XMPPS_PORT="$test_xmpps_port" \
@@ -330,6 +335,7 @@ python3 scripts/integration-wsl.py
 if [[ "${XMPP_TEST_ONLY_SASL:-false}" != "true" && "${XMPP_TEST_ONLY_ATOMIC_REGISTRATION:-false}" != "true" && "${XMPP_TEST_ONLY_MODERN_MESSAGES:-false}" != "true" && "${XMPP_TEST_ONLY_LOGIN_IDEMPOTENCY:-false}" != "true" && "${XMPP_TEST_ONLY_CHALLENGE_CAPACITY:-false}" != "true" ]]; then
   XMPP_TEST_HOST=127.0.0.1 \
   XMPP_TEST_HTTP_PORT="$test_http_port" \
+  XMPP_TEST_WEB_ADMIN_PORT="$test_web_admin_port" \
   XMPP_TEST_CLIENT_PORT="$test_client_port" \
   XMPP_TEST_XMPPS_PORT="$test_xmpps_port" \
   XMPP_TEST_DOMAIN=localhost \
@@ -344,6 +350,7 @@ if [[ "${XMPP_TEST_ONLY_SASL:-false}" != "true" && "${XMPP_TEST_ONLY_ATOMIC_REGI
 
   XMPP_TEST_HOST=127.0.0.1 \
   XMPP_TEST_HTTP_PORT="$test_http_port" \
+  XMPP_TEST_WEB_ADMIN_PORT="$test_web_admin_port" \
   XMPP_TEST_CLIENT_PORT="$test_client_port" \
   XMPP_TEST_XMPPS_PORT="$test_xmpps_port" \
   XMPP_TEST_DOMAIN=localhost \
@@ -358,6 +365,7 @@ if [[ "${XMPP_TEST_ONLY_SASL:-false}" == "true" ]]; then
   start_server
   XMPP_TEST_HOST=127.0.0.1 \
   XMPP_TEST_HTTP_PORT="$test_http_port" \
+  XMPP_TEST_WEB_ADMIN_PORT="$test_web_admin_port" \
   XMPP_TEST_METRICS_PORT="$test_metrics_port" \
   XMPP_TEST_CLIENT_PORT="$test_client_port" \
   XMPP_TEST_XMPPS_PORT="$test_xmpps_port" \

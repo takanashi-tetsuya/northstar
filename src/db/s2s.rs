@@ -714,9 +714,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(federated.len(), 2, "one head from each remote domain");
-        assert!(federated.iter().any(|item| item.stanza.contains("a1")));
-        assert!(federated.iter().any(|item| item.stanza.contains("b1")));
-        assert!(!federated.iter().any(|item| item.stanza.contains("a2")));
+        assert!(federated.iter().any(|item| item.stanza.contains("id='a1'")));
+        assert!(federated.iter().any(|item| item.stanza.contains("id='b1'")));
+        assert!(!federated.iter().any(|item| item.stanza.contains("id='a2'")));
         assert!(!federated
             .iter()
             .any(|item| item.target_domain == "gateway.local.test"));
@@ -800,7 +800,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(retried.len(), 1);
-        assert!(retried[0].stanza.contains("a1"));
+        assert!(retried[0].stanza.contains("id='a1'"));
         assert!(
             complete_s2s_outbox(&pool, retried[0].id, retried[0].lock_token)
                 .await
@@ -810,7 +810,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(successor.len(), 1);
-        assert!(successor[0].stanza.contains("a2"));
+        assert!(successor[0].stanza.contains("id='a2'"));
         assert!(
             complete_s2s_outbox(&pool, successor[0].id, successor[0].lock_token)
                 .await

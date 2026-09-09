@@ -6,6 +6,19 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 ## [0.2.0] - Unreleased
 
+- Added migration `0139` to repair expired upload-cleanup admission without
+  changing its public capability: the queue's named primary-key conflict target
+  avoids an ambiguous PL/pgSQL output-column reference, and the replacement
+  function is re-pinned to the installation schema. The embedded migration
+  ledger, role-attestation count and operations documentation now advance
+  together to the 138-entry `0001`–`0139` chain.
+- Repaired CI fixture topology so administrative integration requests use the
+  readiness-published loopback-only management listener, not public HTTP.
+  The Redis-only MUC fixture now seeds and verifies the same signed peer
+  authority envelope that the production cross-node path requires.
+- Fixed the S2S outbox test's random UUID substring false positive and made the
+  backup image ship every SQL policy file used by its offline dump validator;
+  the static capability gate now guards that image/runtime dependency contract.
 - The complete change set from the previous committed `0.1.0` baseline is
   recorded in the [0.2 development changelog](changelog/v0.2.md).
 - Cargo, Compose, OCI, backup and OpenAPI metadata now identify the current

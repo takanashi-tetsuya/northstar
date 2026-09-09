@@ -8118,6 +8118,38 @@ mod tests {
         }
     }
 
+    /// The Redis-only MUC fixture has no PostgreSQL authority worker.  Seed
+    /// both sides from the same immutable key/instance values that the
+    /// production authority refresh would read, so it verifies the signed
+    /// cross-node publication instead of bypassing it.
+    fn seed_test_peer_authority(receiver: &ClusterManager, sender: &ClusterManager) {
+        let sender_security = sender
+            .security
+            .as_ref()
+            .expect("Redis cluster fixture requires signing identity");
+        let now = Instant::now();
+        receiver.authorized_instances.insert(
+            sender.node_id.clone(),
+            AuthorizedClusterInstance {
+                instance_uuid: sender.connection_uuid,
+                instance_epoch: sender.instance_epoch.load(Ordering::Acquire),
+                signing_key_id: sender_security.current_key_id.clone(),
+                signing_key_epoch: sender_security.key_epoch,
+                valid_until: now + Duration::from_secs(NODE_TTL_SECONDS),
+                refresh_until: now + Duration::from_secs(10),
+            },
+        );
+        receiver.authorized_peer_keys.insert(
+            sender.node_id.clone(),
+            AuthorizedPeerKeys {
+                epoch: sender_security.key_epoch,
+                current_key_id: sender_security.current_key_id.clone(),
+                previous_key_id: None,
+                refresh_until: now + Duration::from_secs(10),
+            },
+        );
+    }
+
     #[tokio::test]
     async fn single_node_muc_rename_requires_the_exact_non_nil_occupancy_epoch() {
         let cluster = ClusterManager::new(None, "example.test", None, None, None, None)
@@ -8202,6 +8234,14 @@ mod tests {
             cluster.touch_node().await.unwrap();
             cluster.note_listener_generation();
         }
+        seed_test_peer_authority(&first, &second);
+        seed_test_peer_authority(&second, &first);
+        let second_channel = second.key(format!("node:{}", second.node_id));
+        let mut second_pubsub = open_pubsub(second.client.as_ref().unwrap()).await.unwrap();
+        subscribe_pubsub(&mut second_pubsub, &second_channel)
+            .await
+            .unwrap();
+        let mut second_messages = second_pubsub.on_message();
         let room = "room@conference.example.test";
         let original_epoch = uuid::Uuid::new_v4();
         let original = rename_occupant(original_epoch, "Old");
@@ -8351,6 +8391,16 @@ mod tests {
             .change_muc_occupant_role(room, &replacement, "visitor")
             .await
             .unwrap();
+        let signed_role_change: String =
+            tokio::time::timeout(REDIS_IO_TIMEOUT, second_messages.next())
+                .await
+                .expect("remote role change publication timed out")
+                .expect("remote role change subscription ended")
+                .get_payload()
+                .unwrap();
+        second
+            .verify_signed_payload(&signed_role_change, &second_channel, Some(&first.node_id))
+            .unwrap();
         assert!(matches!(
             changed,
             MucRoleChange::Changed(ref occupant) if occupant.role == "visitor"
@@ -8362,6 +8412,16 @@ mod tests {
         let policy_changed = first
             .change_muc_occupant_policy(room, &changed, "participant", true)
             .await
+            .unwrap();
+        let signed_policy_change: String =
+            tokio::time::timeout(REDIS_IO_TIMEOUT, second_messages.next())
+                .await
+                .expect("remote policy change publication timed out")
+                .expect("remote policy change subscription ended")
+                .get_payload()
+                .unwrap();
+        second
+            .verify_signed_payload(&signed_policy_change, &second_channel, Some(&first.node_id))
             .unwrap();
         assert!(matches!(
             policy_changed,

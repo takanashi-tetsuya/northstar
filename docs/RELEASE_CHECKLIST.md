@@ -112,9 +112,13 @@ production baseline; Windows AMD64 artifacts are for development and evaluation.
   recipient generation without replacing the fenced claim/lease authority,
   SM/BOSH entries retain typed MIX sources, and cross-node MIX delivery creates
   a node/request fence before reporting socket/SM/BOSH ownership.
+- [ ] Apply forward repair migration `0139`; verify expired-upload cleanup
+  admission preserves its existing owner-only, schema-pinned capability while
+  using the queue primary-key conflict target unambiguously. Run exact grant
+  reconciliation; do not treat this as a stopped-writer boundary.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 137 migrations from `0001` through the current
-  repository maximum `0138`, with `0021` as the sole intentional gap.
+  identity and verify all 138 migrations from `0001` through the current
+  repository maximum `0139`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

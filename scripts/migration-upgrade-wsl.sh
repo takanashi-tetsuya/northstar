@@ -375,11 +375,14 @@ while IFS= read -r migration; do
   fi
 done <<<"$migration_files"
 
-# Exercise the exact 0131 -> 0132 recovery boundary in a second, initially
-# empty schema. The Rust fixture first installs the real chain through 0131,
-# proves the b588 0132 body fails without a ledger row, then applies and
-# repeats the corrected source. It also verifies that a deliberately injected
-# pre-fix checksum is rejected rather than silently rewritten.
+# Exercise the exact 0132 recovery boundary in a second, initially empty
+# schema. The Rust fixture installs the real 0129 predecessor function over
+# its minimal table contract, proves the b588 0132 body fails without a ledger
+# row, then applies and repeats the corrected source. The full immutable
+# 0013-to-current upgrade above remains the separate end-to-end assertion;
+# this focused test must not replay that chain a second time. It also verifies
+# that a deliberately injected pre-fix checksum is rejected rather than
+# silently rewritten.
 if [[ "$(psql_admin --tuples-only --no-align --command \
   "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='$pre_fix_schema')")" == "t" ]]; then
   echo "refusing to reuse existing migration 0132 schema: $pre_fix_schema" >&2
@@ -391,7 +394,6 @@ if [[ "$(psql_named_schema "$pre_fix_schema" --tuples-only --no-align --command 
   echo "PostgreSQL did not select the isolated migration 0132 schema" >&2
   exit 1
 fi
-prepare_immutable_0013_baseline "$pre_fix_schema"
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$pre_fix_schema"
 run_migrator "db::migration_upgrade_test::migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksum_is_enforced"
 drop_pre_fix_schema

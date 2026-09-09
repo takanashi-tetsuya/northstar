@@ -22,6 +22,15 @@ fn migration_0132_current() -> sqlx::migrate::Migration {
         .expect("the embedded migration chain must contain 0132")
 }
 
+fn migration_0132_only(migration: sqlx::migrate::Migration) -> sqlx::migrate::Migrator {
+    sqlx::migrate::Migrator {
+        migrations: Cow::Owned(vec![migration]),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    }
+}
+
 fn migrator_through(version: i64) -> sqlx::migrate::Migrator {
     sqlx::migrate::Migrator {
         migrations: Cow::Owned(
@@ -124,11 +133,7 @@ async fn historical_0137_baseline_is_built_from_the_embedded_migration_chain() {
 }
 
 fn pre_fix_0132_migrator() -> sqlx::migrate::Migrator {
-    let mut migrations = super::MIGRATOR.iter().cloned().collect::<Vec<_>>();
-    let migration = migrations
-        .iter_mut()
-        .find(|migration| migration.version == 132)
-        .expect("the embedded migration chain must contain 0132");
+    let mut migration = migration_0132_current();
     let corrected_arguments = "        migration_schema,\n        migration_schema\n";
     let historical_arguments = "        migration_schema\n";
     let historical_sql = migration
@@ -139,7 +144,7 @@ fn pre_fix_0132_migrator() -> sqlx::migrate::Migrator {
         migration.sql.as_ref(),
         "migration 0132 must retain the corrected two-argument format invocation"
     );
-    *migration = sqlx::migrate::Migration::new(
+    migration = sqlx::migrate::Migration::new(
         migration.version,
         migration.description.clone(),
         migration.migration_type,
@@ -151,12 +156,56 @@ fn pre_fix_0132_migrator() -> sqlx::migrate::Migrator {
         MIGRATION_0132_PRE_FIX_SHA384,
         "the regression fixture must remain the exact b588 pre-fix migration byte stream"
     );
-    sqlx::migrate::Migrator {
-        migrations: Cow::Owned(migrations),
-        ignore_missing: false,
-        locking: true,
-        no_tx: false,
-    }
+    migration_0132_only(migration)
+}
+
+/// Build only the catalog contract that migration 0132 actually consumes.
+/// The full historical 0013-to-current upgrade is covered by its own test;
+/// duplicating it here hides a focused migration regression behind unrelated
+/// replay cost. Applying the exact 0129 source gives this fixture the real
+/// predecessor routine and trigger, rather than a hand-written imitation.
+async fn install_0132_predecessor(pool: &sqlx::PgPool) {
+    sqlx::query(
+        "CREATE TABLE pubsub_nodes(\
+             id UUID PRIMARY KEY,\
+             node_type TEXT NOT NULL,\
+             children_max INTEGER NOT NULL\
+         )",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE pubsub_collection_members(\
+             collection_node_id UUID NOT NULL,\
+             child_node_id UUID NOT NULL,\
+             PRIMARY KEY(collection_node_id,child_node_id)\
+         )",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let predecessor = super::MIGRATOR
+        .iter()
+        .find(|migration| migration.version == 129)
+        .expect("the embedded migration chain must contain 0129");
+    sqlx::query(predecessor.sql.as_ref())
+        .execute(pool)
+        .await
+        .unwrap();
+    let helper_exists: bool = sqlx::query_scalar(
+        "SELECT pg_catalog.to_regprocedure(\
+             pg_catalog.format('%I.check_pubsub_collection_edge()',pg_catalog.current_schema())\
+         ) IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(
+        helper_exists,
+        "the focused 0132 predecessor must install the real 0129 collection-edge helper"
+    );
 }
 
 #[tokio::test]
@@ -665,7 +714,7 @@ async fn baseline_0013_upgrades_through_the_real_domain_migrator() {
 }
 
 #[tokio::test]
-#[ignore = "requires TEST_DATABASE_URL pointing at a disposable random PostgreSQL schema prepared at migration 0013"]
+#[ignore = "requires TEST_DATABASE_URL pointing at a disposable random PostgreSQL schema for the focused migration-0132 predecessor contract"]
 async fn migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksum_is_enforced() {
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("set TEST_DATABASE_URL to the disposable migration-0132 schema");
@@ -679,32 +728,19 @@ async fn migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksu
         .connect(&url)
         .await
         .unwrap();
-    let baseline_state: (i64, Option<i64>, bool) = sqlx::query_as(
-        "SELECT COUNT(*),MAX(version),COALESCE(bool_and(success),FALSE) FROM _sqlx_migrations",
+    let initial_ledger_exists: bool = sqlx::query_scalar(
+        "SELECT pg_catalog.to_regclass(\
+             pg_catalog.format('%I._sqlx_migrations',pg_catalog.current_schema())\
+         ) IS NOT NULL",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(
-        baseline_state,
-        (13, Some(13), true),
-        "the migration 0132 fixture must begin at the immutable 0013 upgrade baseline"
+    assert!(
+        !initial_ledger_exists,
+        "the focused 0132 fixture must not inherit an unrelated migration ledger"
     );
-
-    // Apply the exact real migration chain from the historical 0013 baseline
-    // through 0131. This creates the upgrade state that existed immediately
-    // before the faulty 0132 source was introduced, without inventing a
-    // synthetic ledger entry or reinterpreting pre-0013 installation history.
-    let through_0131 = migrator_through(131);
-    let expected_0131_rows = i64::try_from(through_0131.iter().count()).unwrap();
-    through_0131.run(&pool).await.unwrap();
-    let staged_state: (i64, Option<i64>, bool) = sqlx::query_as(
-        "SELECT COUNT(*),MAX(version),COALESCE(bool_and(success),FALSE) FROM _sqlx_migrations",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(staged_state, (expected_0131_rows, Some(131), true));
+    install_0132_predecessor(&pool).await;
 
     let current_0132 = migration_0132_current();
     assert_eq!(
@@ -742,29 +778,18 @@ async fn migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksu
         "a transactional 0132 failure must not leave a dirty or successful ledger row"
     );
 
-    // The corrected source must then upgrade the real 0131 state, and a
-    // repeated run must be a checksum-validated no-op.
-    super::MIGRATOR.run(&pool).await.unwrap();
-    super::MIGRATOR.run(&pool).await.unwrap();
+    // The corrected source must then upgrade the real 0129 predecessor
+    // contract, and a repeated run must be a checksum-validated no-op.
+    let current = migration_0132_only(current_0132.clone());
+    current.run(&pool).await.unwrap();
+    current.run(&pool).await.unwrap();
     let final_state: (i64, Option<i64>, bool) = sqlx::query_as(
         "SELECT COUNT(*),MAX(version),COALESCE(bool_and(success),FALSE) FROM _sqlx_migrations",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    let current_migration_version = super::MIGRATOR
-        .iter()
-        .map(|migration| migration.version)
-        .max()
-        .expect("the embedded migration ledger is non-empty");
-    assert_eq!(
-        final_state,
-        (
-            i64::try_from(super::MIGRATOR.iter().count()).unwrap(),
-            Some(current_migration_version),
-            true
-        )
-    );
+    assert_eq!(final_state, (1, Some(132), true));
 
     let routine_is_schema_local_invoker: bool = sqlx::query_scalar(
         r#"
@@ -817,7 +842,7 @@ async fn migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksu
         .execute(&pool)
         .await
         .unwrap();
-    let mismatch = super::MIGRATOR.run(&pool).await.unwrap_err();
+    let mismatch = current.run(&pool).await.unwrap_err();
     assert!(
         matches!(mismatch, sqlx::migrate::MigrateError::VersionMismatch(132)),
         "the current migrator must reject a successful 0132 row with the pre-fix checksum: {mismatch}"
@@ -827,5 +852,5 @@ async fn migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksu
         .execute(&pool)
         .await
         .unwrap();
-    super::MIGRATOR.run(&pool).await.unwrap();
+    current.run(&pool).await.unwrap();
 }

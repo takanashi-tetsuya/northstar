@@ -46,6 +46,7 @@ MIGRATIONS = {
     "0127": ROOT / "migrations/0127_sm_resume_authority_notifications.sql",
     "0128": ROOT / "migrations/0128_mix_capacity_authorities.sql",
     "0131": ROOT / "migrations/0131_upload_capacity_nowait.sql",
+    "0141": ROOT / "migrations/0141_upload_cleanup_capability_rehardening.sql",
 }
 
 # A later migration may replace an existing routine without changing its
@@ -73,6 +74,18 @@ RESECURED_BY_MIGRATION = {
         "northstar_upload_delete_owned(uuid,int8,bytea,uuid,uuid)",
         "northstar_upload_capability_catalog_healthy(text)",
     },
+    "0141": {
+        "northstar_upload_admit_expired_cleanup()",
+    },
+}
+
+# A replacement migration may preserve a callable identity while changing its
+# body.  A separate successor can re-establish the identity's complete
+# SECURITY DEFINER contract without rewriting an already-applied migration.
+# This mapping is deliberately exact and versioned: it is not a blanket
+# future-migration exemption for incomplete routine hardening.
+REPLACEMENT_HARDENING_SUCCESSORS = {
+    ("0139", "northstar_upload_admit_expired_cleanup()"): "0141",
 }
 
 ROW = re.compile(
@@ -842,6 +855,25 @@ migration_documents = [
     (migration, read(migration))
     for migration in sorted((ROOT / "migrations").glob("*.sql"))
 ]
+migration_versions = {migration.name.split("_", 1)[0] for migration, _ in migration_documents}
+for (replacement_version, signature), hardening_version in (
+    REPLACEMENT_HARDENING_SUCCESSORS.items()
+):
+    if signature not in manifest_signature_set:
+        fail(
+            "replacement hardening successor names an identity outside the canonical "
+            f"manifest: {signature}"
+        )
+    if replacement_version not in migration_versions or hardening_version not in migration_versions:
+        fail(
+            "replacement hardening successor names a missing migration: "
+            f"{replacement_version}->{hardening_version}"
+        )
+    if int(hardening_version) <= int(replacement_version):
+        fail(
+            "replacement hardening successor must be a strictly later migration: "
+            f"{replacement_version}->{hardening_version}"
+        )
 
 # Runtime relation privileges are a complete positive manifest, not an
 # exception list layered over a broad grant.  Reconstruct the final table set
@@ -1233,6 +1265,12 @@ for migration_index, (migration, text) in enumerate(migration_documents):
                     int(migration.name.split("_", 1)[0]) < 107
                     and proof_index > migration_index
                 )
+                or (
+                    REPLACEMENT_HARDENING_SUCCESSORS.get(
+                        (migration.name.split("_", 1)[0], signature)
+                    )
+                    == migration_documents[proof_index][0].name.split("_", 1)[0]
+                )
             )
         ):
             fail(
@@ -1291,7 +1329,7 @@ for origin, migration in MIGRATIONS.items():
     require_exact(
         f"{migration.name} security loop",
         migration_signatures,
-        by_origin[origin] | resecured,
+        by_origin.get(origin, set()) | resecured,
     )
 
     created_names = set(CREATE_ROUTINE.findall(text))

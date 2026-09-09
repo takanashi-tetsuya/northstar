@@ -1491,9 +1491,11 @@ set_target_database_connections() {
     return 2
   }
   if [[ "$enabled" == true ]]; then
-    expected=t
+    # PostgreSQL renders boolean values through `bool::text` as `true` or
+    # `false`, rather than the psql-specific `t` / `f` display format.
+    expected=true
   else
-    expected=f
+    expected=false
   fi
   {
     printf '%s\n' 'SET synchronous_commit TO on;'

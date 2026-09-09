@@ -411,8 +411,7 @@ jobs:
 
       - name: Test certificate and secret handling
         run: |
-          sudo apt-get update
-          sudo apt-get install -y age
+          bash scripts/ci-install-ubuntu-packages.sh age
           bash scripts/test-certificate-security.sh
           sudo bash scripts/test-secret-security.sh
           bash scripts/test-log-security.sh
@@ -583,7 +582,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client
 
       - name: Reconcile, migrate, and prove workload denials
         env:
@@ -613,7 +612,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client
 
       - name: Run isolated protocol integration
         env:
@@ -650,7 +649,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client
 
       - name: Run the single-node production design envelope
         env:
@@ -682,7 +681,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL and Redis clients
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client redis-server redis-tools
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client redis-server redis-tools
 
       - name: Populate the locked offline dependency cache
         run: cargo fetch --locked
@@ -729,7 +728,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL and Redis clients
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client redis-server redis-tools
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client redis-server redis-tools
 
       - name: Populate the locked offline dependency cache
         run: cargo fetch --locked
@@ -777,7 +776,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client
 
       - name: Populate the locked offline dependency cache
         run: cargo fetch --locked
@@ -821,7 +820,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client
 
       - name: Verify SASL EXTERNAL federation
         env:
@@ -883,7 +882,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL client and listener diagnostic tools
-        run: sudo apt-get update && sudo apt-get install -y iproute2 postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh iproute2 postgresql-client
 
       - name: Populate the locked dependency cache
         run: cargo fetch --locked
@@ -962,7 +961,7 @@ jobs:
       # unused cache and mistake that for cluster-runtime coverage; Redis
       # pressure remains owned by the cluster/MUC fixture work.
       - name: Install PostgreSQL client and listener diagnostic tools
-        run: sudo apt-get update && sudo apt-get install -y iproute2 postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh iproute2 postgresql-client
 
       - name: Populate the locked dependency cache
         run: cargo fetch --locked
@@ -1034,7 +1033,7 @@ jobs:
       # unused cache and mistake that for cluster-runtime coverage; Redis
       # pressure remains owned by the cluster/MUC fixture work.
       - name: Install PostgreSQL client and listener diagnostic tools
-        run: sudo apt-get update && sudo apt-get install -y iproute2 postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh iproute2 postgresql-client
 
       - name: Populate the locked dependency cache
         run: cargo fetch --locked
@@ -1081,7 +1080,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install isolated fixture tools
-        run: sudo apt-get update && sudo apt-get install -y iproute2 postgresql-client util-linux
+        run: bash scripts/ci-install-ubuntu-packages.sh iproute2 postgresql-client util-linux
 
       - name: Build Northstar without privileges
         run: cargo build --locked
@@ -1129,7 +1128,7 @@ jobs:
           persist-credentials: false
 
       - name: Install private PostgreSQL test tools
-        run: sudo apt-get update && sudo apt-get install -y age postgresql postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh age postgresql postgresql-client
 
       - name: Run backup, verification, and restore
         run: >-

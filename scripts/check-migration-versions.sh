@@ -112,8 +112,76 @@ echo "CASE operands cannot terminate PL/pgSQL IF parsing at an inner THEN"
 # Every migration must honor the connection's selected application schema.
 # An explicit public qualifier bypasses isolated test/deployment schemas and
 # can read or mutate an unrelated tenant's historical objects.
-hardcoded_public_migration_refs=$(grep -Ein \
-    '(^|[^[:alnum:]_])public[[:space:]]*\.' migrations/*.sql || true)
+# Scan SQL code rather than raw text. Comments may document the PUBLIC role
+# or an unsafe public-schema example, but they are not executable references.
+# Quoted text remains visible: a dynamic SQL literal that names that schema is
+# still an authority violation.
+hardcoded_public_migration_refs=$(awk '
+    BEGIN {
+        single_quote = sprintf("%c", 39)
+        double_quote = sprintf("%c", 34)
+    }
+    function code_without_sql_comments(line,    output, index, character, following) {
+        output = ""
+        index = 1
+        while (index <= length(line)) {
+            character = substr(line, index, 1)
+            following = substr(line, index + 1, 1)
+            if (inside_block_comment) {
+                if (character == "*" && following == "/") {
+                    inside_block_comment = 0
+                    index += 2
+                } else {
+                    index++
+                }
+                continue
+            }
+            if (inside_single_quote) {
+                output = output character
+                if (character == single_quote) {
+                    if (following == single_quote) {
+                        output = output following
+                        index += 2
+                        continue
+                    }
+                    inside_single_quote = 0
+                }
+                index++
+                continue
+            }
+            if (inside_double_quote) {
+                output = output character
+                if (character == double_quote) {
+                    inside_double_quote = 0
+                }
+                index++
+                continue
+            }
+            if (character == "-" && following == "-") {
+                break
+            }
+            if (character == "/" && following == "*") {
+                inside_block_comment = 1
+                index += 2
+                continue
+            }
+            output = output character
+            if (character == single_quote) {
+                inside_single_quote = 1
+            } else if (character == double_quote) {
+                inside_double_quote = 1
+            }
+            index++
+        }
+        return output
+    }
+    {
+        code = code_without_sql_comments($0)
+        if (code ~ /(^|[^[:alnum:]_])public[[:space:]]*\./) {
+            print FILENAME ":" FNR ":" code
+        }
+    }
+' migrations/*.sql)
 if [ -n "$hardcoded_public_migration_refs" ]; then
     echo "database migrations must not hard-code the public schema:" >&2
     printf '%s\n' "$hardcoded_public_migration_refs" >&2

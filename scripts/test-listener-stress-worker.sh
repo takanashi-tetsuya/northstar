@@ -217,6 +217,12 @@ grep -Fq 'finally:' "$mix_federation_python" \
   || { echo "MIX federation verifier no longer restores caller fixture environment after import failure" >&2; exit 1; }
 python3 "$mix_federation_python" --phase-self-test
 federation_python="$project_dir/scripts/federation-wsl.py"
+integration_python="$project_dir/scripts/integration-wsl.py"
+grep -Fq 'def resolve_http_port(port: int | None)' "$integration_python" \
+  || { echo "integration fixture no longer centralizes late-bound HTTP endpoint resolution" >&2; exit 1; }
+grep -Fq 'def endpoint_binding_self_test()' "$integration_python" \
+  || { echo "integration fixture no longer proves late-bound HTTP endpoint resolution" >&2; exit 1; }
+python3 "$integration_python" --endpoint-binding-self-test
 grep -Fq 'def listener_stress_database_endpoint()' "$federation_python" \
   || { echo "federation verifier no longer independently validates its listener database endpoint" >&2; exit 1; }
 grep -Fq 'host == "127.0.0.1"' "$federation_python" \

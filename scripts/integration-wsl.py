@@ -14,6 +14,7 @@ import re
 import socket
 import ssl
 import struct
+import sys
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -262,7 +263,7 @@ def _deadline_http_api(
     body: bytes | None,
     headers: dict[str, str],
     deadline: float,
-    port: int = HTTP_PORT,
+    port: int | None = None,
 ) -> tuple[int, str, bytes]:
     """Execute a fixture REST request under one non-extendable deadline.
 
@@ -273,6 +274,7 @@ def _deadline_http_api(
     when it supplies an absolute deadline.
     """
 
+    port = resolve_http_port(port)
     request_headers = {
         "Host": f"{HTTP_HOST}:{port}",
         "Connection": "close",
@@ -342,9 +344,10 @@ def api(
     token: str | None = None,
     timeout: float = 10,
     deadline: float | None = None,
-    port: int = HTTP_PORT,
+    port: int | None = None,
 ):
     check(0 < timeout <= 10, "HTTP API timeout must be greater than zero and no more than ten seconds")
+    port = resolve_http_port(port)
     headers = {}
     body = None
     if payload is not None:
@@ -469,6 +472,119 @@ def deadline_io_self_test() -> None:
         raise AssertionError("expired HTTP deadline was accepted")
 
 
+def resolve_http_port(port: int | None) -> int:
+    """Resolve optional HTTP endpoint overrides when a request is made.
+
+    Two-domain fixtures import this module once, then select the currently
+    running child by updating ``HTTP_PORT``.  Python evaluates function
+    defaults during import, so a default of ``HTTP_PORT`` would silently keep
+    using the first child endpoint.  Keeping this resolution in one helper
+    makes that ownership rule explicit for ordinary, raw, and deadline-bound
+    HTTP requests.
+    """
+
+    return HTTP_PORT if port is None else port
+
+
+def endpoint_binding_self_test() -> None:
+    """Prove endpoint selection is late-bound without opening a socket."""
+
+    global HTTP_HOST, HTTP_PORT
+
+    class FakeResponse:
+        status = 204
+
+        def read(self) -> bytes:
+            return b""
+
+        def getheader(self, _name: str, default: str = "") -> str:
+            return default
+
+        def getheaders(self) -> list[tuple[str, str]]:
+            return []
+
+    observed_connections: list[tuple[str, int, float]] = []
+
+    class FakeConnection:
+        def __init__(self, host: str, port: int, timeout: float) -> None:
+            observed_connections.append((host, port, timeout))
+
+        def request(self, *_args, **_kwargs) -> None:
+            return None
+
+        def getresponse(self) -> FakeResponse:
+            return FakeResponse()
+
+        def close(self) -> None:
+            return None
+
+    class FakeDeadlineSocket:
+        def __init__(self) -> None:
+            self.response = bytearray(
+                b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n"
+            )
+
+        def settimeout(self, _value: float) -> None:
+            return None
+
+        def sendall(self, _payload: bytes) -> None:
+            return None
+
+        def recv(self, length: int) -> bytes:
+            result = bytes(self.response[:length])
+            del self.response[:length]
+            return result
+
+        def __enter__(self) -> FakeDeadlineSocket:
+            return self
+
+        def __exit__(self, _kind, _value, _traceback) -> None:
+            return None
+
+    original_host = HTTP_HOST
+    original_port = HTTP_PORT
+    original_connection = http.client.HTTPConnection
+    original_create_connection = socket.create_connection
+    deadline_addresses: list[tuple[str, int]] = []
+    try:
+        HTTP_HOST = "127.0.0.1"
+        HTTP_PORT = 19123
+        http.client.HTTPConnection = FakeConnection  # type: ignore[assignment]
+        status, _ = api("GET", "/readyz")
+        raw_status, _, _ = raw_http("GET", "/readyz")
+        socket.create_connection = (  # type: ignore[assignment]
+            lambda address, _timeout: (
+                deadline_addresses.append(address),
+                FakeDeadlineSocket(),
+            )[1]
+        )
+        deadline_status, _, deadline_body = _deadline_http_api(
+            "GET", "/readyz", None, {}, time.monotonic() + 1
+        )
+        check(status == 204 and raw_status == 204, "endpoint binding fixture did not decode fake HTTP")
+        check(
+            deadline_status == 204 and deadline_body == b"",
+            "deadline HTTP fixture did not decode fake HTTP",
+        )
+        check(
+            observed_connections == [("127.0.0.1", 19123, 10), ("127.0.0.1", 19123, 10)],
+            f"HTTP helpers retained an import-time endpoint: {observed_connections!r}",
+        )
+        check(
+            deadline_addresses == [("127.0.0.1", 19123)],
+            f"deadline HTTP helper retained an import-time endpoint: {deadline_addresses!r}",
+        )
+        check(
+            resolve_http_port(None) == 19123 and resolve_http_port(19124) == 19124,
+            "HTTP port resolver did not preserve explicit or late-bound endpoints",
+        )
+    finally:
+        http.client.HTTPConnection = original_connection  # type: ignore[assignment]
+        socket.create_connection = original_create_connection  # type: ignore[assignment]
+        HTTP_HOST = original_host
+        HTTP_PORT = original_port
+
+
 def metrics_api():
     connection = http.client.HTTPConnection(HTTP_HOST, METRICS_PORT, timeout=10)
     connection.request("GET", "/metrics")
@@ -485,8 +601,9 @@ def raw_http(
     body: bytes | None = None,
     headers=None,
     *,
-    port: int = HTTP_PORT,
+    port: int | None = None,
 ):
+    port = resolve_http_port(port)
     connection = http.client.HTTPConnection(HTTP_HOST, port, timeout=10)
     connection.request(method, path, body=body, headers=headers or {})
     response = connection.getresponse()
@@ -5979,4 +6096,8 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    if sys.argv[1:] == ["--endpoint-binding-self-test"]:
+        endpoint_binding_self_test()
+        print("integration endpoint binding self-test: PASS")
+    else:
+        run()

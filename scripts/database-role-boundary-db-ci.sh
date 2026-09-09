@@ -73,8 +73,12 @@ cleanup_marker_authorizes() {
 
   IFS=: read -r control_marked database_exists database_marked \
     database_owned_by_legacy role_exists role_marked extra <<<"$marker_state"
-  [[ -z "$extra" && "$control_marked" == '1' \
-    && "$database_exists" =~ ^[01]$ && "$database_marked" =~ ^[01]$ \
+  # The controller marker is the root of teardown authority.  Check it
+  # independently before considering the mutable fixture-resource fields, so
+  # the authorization boundary is obvious and cannot be weakened by a later
+  # edit to the resource-state predicate below.
+  [[ "$control_marked" == 1 ]] || return 1
+  [[ -z "$extra" && "$database_exists" =~ ^[01]$ && "$database_marked" =~ ^[01]$ \
     && "$database_owned_by_legacy" =~ ^[01]$ && "$role_exists" =~ ^[01]$ \
     && "$role_marked" =~ ^[01]$ ]] \
     || return 1

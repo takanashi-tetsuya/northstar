@@ -500,6 +500,7 @@ async fn rebuild_account_counters(tx: &mut Transaction<'_, Postgres>) -> Result<
     Ok(())
 }
 
+#[cfg(test)]
 fn shard_budget(limit: i64, shard: i64) -> i64 {
     limit / CAPACITY_SHARDS
         + if shard < limit % CAPACITY_SHARDS {

@@ -82,10 +82,7 @@ cleanup() {
     wait "$server_pid" 2>/dev/null || true
     server_pid=""
   fi
-  if [[ -n "$http_relay_pid" ]]; then
-    kill "$http_relay_pid" 2>/dev/null || true
-    wait "$http_relay_pid" 2>/dev/null || true
-  fi
+  stop_http_relay
   if [[ "$status" -ne 0 && -f "$runtime_dir/server.log" ]]; then
     if log_contains_sensitive_value; then
       echo "moderation runtime log contains sensitive test data; raw failure tail suppressed" >&2
@@ -173,6 +170,18 @@ public_url="http://127.0.0.1:$http_relay_port"
 
 publish_http_target() {
   fixture_publish_relay_target "$http_relay_target" "$http_backend_port"
+}
+
+# The public relay remains live while the fixture owns its advertised URL.
+# Reap it through one idempotent operation on both the success and EXIT paths,
+# so the listener ledger never mistakes the fixture's intentional relay for a
+# leaked server listener.
+stop_http_relay() {
+  if [[ -n "$http_relay_pid" ]]; then
+    kill "$http_relay_pid" 2>/dev/null || true
+    wait "$http_relay_pid" 2>/dev/null || true
+    http_relay_pid=""
+  fi
 }
 
 assert_advertised_public_url() {
@@ -334,5 +343,6 @@ for forbidden_log_value in \
     exit 1
   fi
 done
+stop_http_relay
 fixture_assert_no_listeners || exit 1
 echo "moderation runtime: report, administration, appeal, audit, idempotency, authorization and expiry passed"

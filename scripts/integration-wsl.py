@@ -5775,6 +5775,24 @@ def run() -> None:
     wait_operation(admin_token, island_off_location)
 
     kick_target = XmppWebSocket(BOB, PASSWORD, "admin-kick-target")
+    # A successful legacy Bind reply is deliberately written before its route
+    # becomes visible.  This avoids accepting delivery for a client whose
+    # success frame could not be written, but it also means a separate HTTP
+    # connection has no ordering relationship with that reply.  A ping is an
+    # XMPP-level commit barrier: it can only be handled on the next protocol
+    # turn, after SendManyThenActivate published the exact route incarnation.
+    # Do not replace this with a timing retry or expose staged routes through
+    # the administration API.
+    kick_ready_id = "admin-kick-route-ready"
+    kick_target.send(
+        f"<iq xmlns='jabber:client' type='get' id='{kick_ready_id}'>"
+        "<ping xmlns='urn:xmpp:ping'/></iq>"
+    )
+    kick_ready, _ = kick_target.receive_until(kick_ready_id)
+    check(
+        "type='result'" in kick_ready,
+        f"admin kick target did not cross its XMPP route commit barrier: {kick_ready}",
+    )
     status, sessions = admin_api("GET", "/api/v1/admin/sessions", token=admin_token)
     kick_jid = f"{BOB}@{DOMAIN}/admin-kick-target"
     check(

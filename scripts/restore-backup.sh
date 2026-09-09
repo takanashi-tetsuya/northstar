@@ -1490,8 +1490,10 @@ set_target_database_connections() {
   {
     printf '\\set target_db %s\n' "$target_database"
     printf '%s\n' 'SET synchronous_commit TO on;'
-    printf "SELECT format('ALTER DATABASE %%I WITH ALLOW_CONNECTIONS %s', :'target_db') \\\\gexec\n" \
-      "$enabled"
+    # Keep the psql meta-command in a %s argument instead of mixing printf
+    # formatting, shell escaping, and psql parsing. The double slash below
+    # becomes exactly one slash in the emitted SQL, i.e. \gexec.
+    printf '%s\n' "SELECT format('ALTER DATABASE %I WITH ALLOW_CONNECTIONS $enabled', :'target_db') \\gexec"
     printf "%s\n" \
       "SELECT '__NORTHSTAR_ALLOW_CONNECTIONS__' || datallowconn::text FROM pg_catalog.pg_database WHERE datname = :'target_db';"
   } >"$sql_file"

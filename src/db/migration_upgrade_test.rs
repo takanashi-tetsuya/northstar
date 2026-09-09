@@ -665,7 +665,7 @@ async fn baseline_0013_upgrades_through_the_real_domain_migrator() {
 }
 
 #[tokio::test]
-#[ignore = "requires TEST_DATABASE_URL pointing at a disposable empty PostgreSQL schema"]
+#[ignore = "requires TEST_DATABASE_URL pointing at a disposable random PostgreSQL schema prepared at migration 0013"]
 async fn migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksum_is_enforced() {
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("set TEST_DATABASE_URL to the disposable migration-0132 schema");
@@ -679,20 +679,22 @@ async fn migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksu
         .connect(&url)
         .await
         .unwrap();
-    let existing_relations: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema()",
+    let baseline_state: (i64, Option<i64>, bool) = sqlx::query_as(
+        "SELECT COUNT(*),MAX(version),COALESCE(bool_and(success),FALSE) FROM _sqlx_migrations",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
     assert_eq!(
-        existing_relations, 0,
-        "the migration 0132 fixture must begin with an empty isolated schema"
+        baseline_state,
+        (13, Some(13), true),
+        "the migration 0132 fixture must begin at the immutable 0013 upgrade baseline"
     );
 
-    // Apply the exact real migration chain through 0131. This creates the
-    // upgrade state that existed immediately before the faulty 0132 source was
-    // introduced, without inventing a synthetic ledger entry.
+    // Apply the exact real migration chain from the historical 0013 baseline
+    // through 0131. This creates the upgrade state that existed immediately
+    // before the faulty 0132 source was introduced, without inventing a
+    // synthetic ledger entry or reinterpreting pre-0013 installation history.
     let through_0131 = migrator_through(131);
     let expected_0131_rows = i64::try_from(through_0131.iter().count()).unwrap();
     through_0131.run(&pool).await.unwrap();

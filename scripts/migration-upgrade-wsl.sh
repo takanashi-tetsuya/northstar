@@ -77,10 +77,57 @@ psql_admin() {
     psql "${database_args[@]}" "$@"
 }
 
-psql_schema() {
+psql_named_schema() {
+  local schema_name="$1"
+  shift
+  [[ "$schema_name" == "$test_schema" || "$schema_name" == "$pre_fix_schema" ]] || {
+    echo "refusing an unexpected migration fixture schema" >&2
+    return 2
+  }
   PGPASSWORD=xmpp-test-password \
-    PGOPTIONS="-c search_path=$test_schema -c client_min_messages=warning" \
+    PGOPTIONS="-c search_path=$schema_name -c client_min_messages=warning" \
     psql "${database_args[@]}" "$@"
+}
+
+psql_schema() {
+  psql_named_schema "$test_schema" "$@"
+}
+
+prepare_immutable_0013_baseline() {
+  local schema_name="$1"
+  local migration filename version_text version stem description checksum baseline_state
+  psql_named_schema "$schema_name" >/dev/null <<'SQL'
+CREATE TABLE _sqlx_migrations (
+    version BIGINT PRIMARY KEY,
+    description TEXT NOT NULL,
+    installed_on TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    success BOOLEAN NOT NULL,
+    checksum BYTEA NOT NULL,
+    execution_time BIGINT NOT NULL
+);
+SQL
+
+  while IFS= read -r migration; do
+    [[ -n "$migration" ]] || continue
+    filename="${migration##*/}"
+    version_text="${filename%%_*}"
+    version="$((10#$version_text))"
+    stem="${filename%.sql}"
+    description="${stem#*_}"
+    description="${description//_/ }"
+    checksum="$(sha384sum "$migration" | awk '{print $1}')"
+    psql_named_schema "$schema_name" --single-transaction --file "$migration" >/dev/null
+    psql_named_schema "$schema_name" --command \
+      "INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES($version,'$description',TRUE,decode('$checksum','hex'),0)" \
+      >/dev/null
+  done <<<"$manifest_paths"
+
+  baseline_state="$(psql_named_schema "$schema_name" --tuples-only --no-align --command \
+    "SELECT COUNT(*) || '|' || MIN(version) || '|' || MAX(version) || '|' || bool_and(success) FROM _sqlx_migrations")"
+  if [[ "$baseline_state" != "13|1|13|true" ]]; then
+    echo "failed to prepare the exact SQLx 0013 baseline: $baseline_state" >&2
+    return 1
+  fi
 }
 
 drop_test_schema() {
@@ -154,39 +201,7 @@ if [[ "$(psql_schema --tuples-only --no-align --command 'SELECT current_schema()
   echo "PostgreSQL did not select the isolated migration schema" >&2
   exit 1
 fi
-
-psql_schema >/dev/null <<'SQL'
-CREATE TABLE _sqlx_migrations (
-    version BIGINT PRIMARY KEY,
-    description TEXT NOT NULL,
-    installed_on TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    success BOOLEAN NOT NULL,
-    checksum BYTEA NOT NULL,
-    execution_time BIGINT NOT NULL
-);
-SQL
-
-while IFS= read -r migration; do
-  [[ -n "$migration" ]] || continue
-  filename="${migration##*/}"
-  version_text="${filename%%_*}"
-  version="$((10#$version_text))"
-  stem="${filename%.sql}"
-  description="${stem#*_}"
-  description="${description//_/ }"
-  checksum="$(sha384sum "$migration" | awk '{print $1}')"
-  psql_schema --single-transaction --file "$migration" >/dev/null
-  psql_schema --command \
-    "INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES($version,'$description',TRUE,decode('$checksum','hex'),0)" \
-    >/dev/null
-done <<<"$manifest_paths"
-
-baseline_state="$(psql_schema --tuples-only --no-align --command \
-  "SELECT COUNT(*) || '|' || MIN(version) || '|' || MAX(version) || '|' || bool_and(success) FROM _sqlx_migrations")"
-if [[ "$baseline_state" != "13|1|13|true" ]]; then
-  echo "failed to prepare the exact SQLx 0013 baseline: $baseline_state" >&2
-  exit 1
-fi
+prepare_immutable_0013_baseline "$test_schema"
 
 psql_schema >/dev/null <<'SQL'
 INSERT INTO users(id,username,password_hash,display_name,is_admin)
@@ -372,6 +387,11 @@ if [[ "$(psql_admin --tuples-only --no-align --command \
 fi
 psql_admin --command "CREATE SCHEMA \"$pre_fix_schema\" AUTHORIZATION xmpp_test" >/dev/null
 pre_fix_created=1
+if [[ "$(psql_named_schema "$pre_fix_schema" --tuples-only --no-align --command 'SELECT current_schema()')" != "$pre_fix_schema" ]]; then
+  echo "PostgreSQL did not select the isolated migration 0132 schema" >&2
+  exit 1
+fi
+prepare_immutable_0013_baseline "$pre_fix_schema"
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$pre_fix_schema"
 run_migrator "db::migration_upgrade_test::migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksum_is_enforced"
 drop_pre_fix_schema

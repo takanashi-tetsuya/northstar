@@ -79,6 +79,12 @@ for fixture_driver in "$project_dir/scripts/federation-wsl.sh" "$project_dir/scr
   grep -Fq 'database_url_b="postgres://xmpp_test:xmpp-test-password@$database_host:$database_port/' "$fixture_driver" \
     || { echo "listener stress worker no longer applies its endpoint override to database B: $fixture_driver" >&2; exit 1; }
 done
+federation_driver="$project_dir/scripts/federation-wsl.sh"
+# Every independently launched federation server owns every enabled listener.
+# In particular, administration is enabled by default, so relying on its
+# inherited default can make two fixture children contend for a host port.
+[[ "$(grep -Fc 'WEB_ADMIN_BIND=127.0.0.1:0' "$federation_driver")" == "2" ]] \
+  || { echo "federation fixture does not give both child servers an owned ephemeral administration listener" >&2; exit 1; }
 mix_federation_driver="$project_dir/scripts/mix-federation-runtime-wsl.sh"
 listener_helper="$project_dir/scripts/lib/test-listener-readiness.sh"
 grep -Fq 'run_mix_federation_phase()' "$mix_federation_driver" \

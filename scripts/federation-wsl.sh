@@ -249,7 +249,7 @@ start_a() {
   rm -f -- "$readiness_file" "$target_a_s2s" "$target_a_http"
   env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
     DATABASE_URL="$database_url_a" \
-    XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 \
+    XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 WEB_ADMIN_BIND=127.0.0.1:0 \
     S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
     TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
     PUBLIC_URL="http://127.0.0.1:$relay_a_http_port" UPLOAD_DIR="$upload_a" \
@@ -283,7 +283,7 @@ start_b() {
   rm -f -- "$readiness_file" "$target_b_s2s_tls" "$target_b_http"
   env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=remote.localhost \
     DATABASE_URL="$database_url_b" \
-    XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 \
+    XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 WEB_ADMIN_BIND=127.0.0.1:0 \
     S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
     TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
     PUBLIC_URL="http://127.0.0.1:$relay_b_http_port" UPLOAD_DIR="$upload_b" \

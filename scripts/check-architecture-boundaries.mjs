@@ -376,11 +376,15 @@ for (const invariant of [
   }
 }
 const serviceControlWatcher = structBody(state, 'fn start_service_control_watcher(');
-if (!/poll_admin_service_control\(&state\.service_control_pool\)/.test(serviceControlWatcher)) {
+if (!/let Some\(pool\) = state\.service_control_pool\.as_ref\(\) else \{\s*return Ok\(\(\)\);\s*\};\s*match db::poll_admin_service_control\(pool\)/s.test(serviceControlWatcher)) {
   throw new Error('service-control watcher must poll through its dedicated runtime pool');
 }
 if (/poll_admin_service_control\(&state\.pool\)/.test(serviceControlWatcher)) {
   throw new Error('service-control watcher must not share the general traffic pool');
+}
+const serviceControlInstallation = structBody(state, 'pub fn install_service_shutdown(');
+if (!/if self\.config\.enable_xmpp_service_control \{\s*Self::start_service_control_watcher\(Arc::clone\(self\)\);\s*\}/s.test(serviceControlInstallation)) {
+  throw new Error('disabled XEP-0133 service control must not start a database watcher');
 }
 for (const invariant of [
   'crate::workers::WorkerCriticality::Critical',

@@ -274,15 +274,18 @@ async fn main() -> Result<()> {
     db::verify_schema(&pool, &config.domain)
         .await
         .context("database schema verification failed")?;
-    tokio::time::timeout(
-        CAPACITY_AUTHORITY_QUERY_TIMEOUT,
-        db::reconcile_deployment_capacity(
-            &pool,
-            db::DeploymentCapacityConfiguration::from_config(&config)?,
-        ),
+    // Startup reconciliation owns a PostgreSQL advisory lock with its own
+    // transaction-local 30-second bound. Do not wrap that authoritative
+    // serialization in the much shorter runtime lease-I/O budget: a peer may
+    // be legitimately committing the same epoch while this process has not
+    // yet received CPU time. The database lock remains fail-closed and is
+    // released automatically if its owner dies.
+    db::reconcile_deployment_capacity(
+        &pool,
+        db::DeploymentCapacityConfiguration::from_config(&config)?,
     )
     .await
-    .context("deployment-wide capacity authority reconciliation timed out")??;
+    .context("could not establish deployment-wide capacity authority")?;
     if !config.scram_sha1_enabled {
         let removed = db::clear_scram_sha1_credentials(&pool).await?;
         if removed > 0 {

@@ -115,7 +115,23 @@ pub async fn reconcile_deployment_capacity(
         sessions_per_account: current.try_get("sessions_per_account_limit")?,
         resumable_sessions: current.try_get("resumable_session_limit")?,
     };
-    validate_authority_transition(current_configuration, configured)?;
+    let reconciliation_required =
+        authority_reconciliation_required(current_configuration, configured)?;
+    if !reconciliation_required
+        && deployment_capacity_authority_is_consistent(&mut tx, configured).await?
+    {
+        // A peer has already committed this exact authority epoch and its
+        // immutable ledgers still agree with the live entities. Do not turn
+        // every process start into a global repair write: runtime mutations
+        // maintain these ledgers atomically, while any detected divergence
+        // below deliberately takes the slower recovery path.
+        tx.commit().await?;
+        return Ok(());
+    }
+
+    // Only bootstrap, a deliberate epoch transition, or an audited divergence
+    // reaches the repair-only lock. This preserves the recovery authority
+    // without making ordinary peer startup serialize the full deployment.
 
     let counts: (i64, i64, i64, i64) = sqlx::query_as(
         "SELECT (SELECT COUNT(*) FROM users),
@@ -305,6 +321,94 @@ fn validate_authority_transition(
         );
     }
     Ok(())
+}
+
+fn authority_reconciliation_required(
+    current: DeploymentCapacityConfiguration,
+    configured: DeploymentCapacityConfiguration,
+) -> Result<bool> {
+    validate_authority_transition(current, configured)?;
+    Ok(current != configured)
+}
+
+/// Check the durable projections that ordinary runtime mutations keep atomic.
+/// The caller already owns the deployment advisory gate, so a false result is
+/// safe to hand to the repair-only path below. This query intentionally has no
+/// side effects: healthy peers may verify a committed epoch without rewriting
+/// allocation placement, counters, or the capacity-limit timestamp.
+async fn deployment_capacity_authority_is_consistent(
+    tx: &mut Transaction<'_, Postgres>,
+    configured: DeploymentCapacityConfiguration,
+) -> Result<bool> {
+    sqlx::query_scalar(
+        "WITH requested(resource_kind,requested_limit) AS (\
+             VALUES\
+               ('account'::text,$1::bigint),\
+               ('muc_room'::text,$2::bigint),\
+               ('live_session'::text,$3::bigint),\
+               ('sm_session'::text,$4::bigint)\
+         ), expected_shards AS (\
+             SELECT requested.resource_kind,shards.shard::smallint AS shard,\
+                    (requested.requested_limit / 64)\
+                      + CASE WHEN shards.shard < (requested.requested_limit % 64)\
+                             THEN 1 ELSE 0 END AS capacity\
+               FROM requested CROSS JOIN generate_series(0,63) AS shards(shard)\
+         ), expected_entities(resource_kind,entity_id) AS (\
+             SELECT 'account'::text,id FROM users\
+             UNION ALL\
+             SELECT 'muc_room'::text,id FROM muc_rooms WHERE destroyed_at IS NULL\
+             UNION ALL\
+             SELECT 'live_session'::text,lease_id FROM deployment_session_leases\
+             UNION ALL\
+             SELECT 'sm_session'::text,id FROM sm_resume_sessions\
+         ), actual_entities(resource_kind,entity_id) AS (\
+             SELECT resource_kind,entity_id FROM deployment_capacity_allocations\
+         ), expected_counters(resource_kind,owner_id,used) AS (\
+             SELECT 'muc_room'::text,owner_id,COUNT(*)::bigint FROM muc_rooms\
+              WHERE destroyed_at IS NULL AND owner_id IS NOT NULL GROUP BY owner_id\
+             UNION ALL\
+             SELECT 'live_session'::text,user_id,COUNT(*)::bigint\
+               FROM deployment_session_leases GROUP BY user_id\
+             UNION ALL\
+             SELECT 'sm_session'::text,user_id,COUNT(*)::bigint\
+               FROM sm_resume_sessions GROUP BY user_id\
+         ), actual_counters(resource_kind,owner_id,used) AS (\
+             SELECT resource_kind,owner_id,used FROM deployment_account_capacity\
+              WHERE resource_kind IN ('muc_room','live_session','sm_session')\
+         )\
+         SELECT (SELECT COUNT(*)=256 FROM deployment_capacity_shards)\
+            AND NOT EXISTS(\
+                SELECT 1 FROM expected_shards expected\
+                 FULL OUTER JOIN deployment_capacity_shards actual\
+                   ON actual.resource_kind=expected.resource_kind\
+                  AND actual.shard=expected.shard\
+                 WHERE actual.resource_kind IS NULL OR expected.resource_kind IS NULL\
+                    OR actual.capacity<>expected.capacity\
+            )\
+            AND NOT EXISTS(\
+                SELECT 1 FROM deployment_capacity_shards shard\
+                 WHERE shard.used<>(\
+                    SELECT COUNT(*) FROM deployment_capacity_allocations allocation\
+                     WHERE allocation.resource_kind=shard.resource_kind\
+                       AND allocation.shard=shard.shard\
+                 )\
+            )\
+            AND NOT EXISTS(SELECT 1 FROM expected_entities EXCEPT SELECT 1 FROM actual_entities)\
+            AND NOT EXISTS(SELECT 1 FROM actual_entities EXCEPT SELECT 1 FROM expected_entities)\
+            AND NOT EXISTS(\
+                SELECT 1 FROM deployment_session_leases\
+                 WHERE lease_until<=clock_timestamp()\
+            )\
+            AND NOT EXISTS(SELECT 1 FROM expected_counters EXCEPT SELECT 1 FROM actual_counters)\
+            AND NOT EXISTS(SELECT 1 FROM actual_counters EXCEPT SELECT 1 FROM expected_counters)",
+    )
+    .bind(configured.accounts)
+    .bind(configured.muc_rooms)
+    .bind(configured.live_sessions)
+    .bind(configured.resumable_sessions)
+    .fetch_one(&mut **tx)
+    .await
+    .context("could not audit deployment capacity authority")
 }
 
 async fn reconcile_allocations(
@@ -763,6 +867,8 @@ mod tests {
             resumable_sessions: 200,
         };
         assert!(validate_authority_transition(current, current).is_ok());
+        assert!(!authority_reconciliation_required(current, current)
+            .expect("an unchanged committed epoch must take the audit path"));
         assert!(validate_authority_transition(
             current,
             DeploymentCapacityConfiguration {
@@ -772,6 +878,15 @@ mod tests {
             }
         )
         .is_ok());
+        assert!(authority_reconciliation_required(
+            current,
+            DeploymentCapacityConfiguration {
+                epoch: 8,
+                accounts: 101,
+                ..current
+            }
+        )
+        .expect("the next epoch is a recovery transition"));
         assert!(validate_authority_transition(
             current,
             DeploymentCapacityConfiguration {
@@ -809,6 +924,14 @@ mod tests {
         )
         .is_ok());
         assert!(validate_authority_transition(bootstrap, current).is_err());
+        assert!(authority_reconciliation_required(
+            bootstrap,
+            DeploymentCapacityConfiguration {
+                epoch: 1,
+                ..current
+            }
+        )
+        .expect("bootstrap must reconcile its first committed epoch"));
     }
 
     #[test]

@@ -40,10 +40,7 @@ cleanup() {
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
   fi
-  if [[ -n "$http_relay_pid" ]]; then
-    kill "$http_relay_pid" 2>/dev/null || true
-    wait "$http_relay_pid" 2>/dev/null || true
-  fi
+  stop_http_relay
   if [[ $status -ne 0 && -f "$runtime_dir/server.log" ]]; then
     echo "OMEMO runtime server log after failure:" >&2
     tail -n 240 "$runtime_dir/server.log" >&2 || true
@@ -99,6 +96,17 @@ public_url="https://127.0.0.1:$http_relay_port"
 
 publish_http_target() {
   fixture_publish_relay_target "$http_relay_target" "$http_backend_port"
+}
+
+# The relay stays live only while the two server generations hand off their
+# public endpoint. It is a fixture-owned listener and must be reaped before
+# the successful-path leak assertion, just as it is on every EXIT path.
+stop_http_relay() {
+  if [[ -n "$http_relay_pid" ]]; then
+    kill "$http_relay_pid" 2>/dev/null || true
+    wait "$http_relay_pid" 2>/dev/null || true
+    http_relay_pid=""
+  fi
 }
 
 assert_advertised_public_url() {
@@ -203,5 +211,6 @@ if (( shutdowns < 2 )); then
   echo "OMEMO runtime server did not complete both graceful shutdowns" >&2
   exit 1
 fi
+stop_http_relay
 fixture_assert_no_listeners || exit 1
 echo "OMEMO runtime: strict PEP/envelope validation, live/Carbons/CSI/MUC/offline/MAM/restart/revocation and no-plaintext DB evidence passed"

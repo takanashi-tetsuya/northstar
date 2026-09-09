@@ -53,6 +53,14 @@ esac
 worker_timeout_seconds="${NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS:-900}"
 database_max_connections="${NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS:-2}"
 database_min_connections="${NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS:-0}"
+# This is an entry contract, deliberately checked before resolving/building a
+# binary or touching the disposable PostgreSQL fixture.  The runtime manifest
+# remains authoritative: `load_runtime_connection_budget` below rejects a
+# build whose published limits diverge from these bounds.  Keeping this early
+# guard explicit gives invalid profiles a deterministic, side-effect-free
+# failure path.
+readonly listener_stress_primary_pool_min=2
+readonly listener_stress_primary_pool_max=60
 # Filled from `xmpp-server --runtime-connection-budget` before any fixture
 # database work begins.
 runtime_auxiliary_connections=""
@@ -80,6 +88,12 @@ rounds=$((10#$rounds))
 pairs=$((10#$pairs))
 database_max_connections=$((10#$database_max_connections))
 database_min_connections=$((10#$database_min_connections))
+((database_max_connections >= listener_stress_primary_pool_min \
+   && database_max_connections <= listener_stress_primary_pool_max \
+   && database_min_connections <= database_max_connections)) || {
+  echo "NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS must be ${listener_stress_primary_pool_min} through ${listener_stress_primary_pool_max}, and DATABASE_MIN_CONNECTIONS must not exceed it" >&2
+  exit 2
+}
 readonly stress_child_count=$((pairs * 2))
 
 effective_cpu_count() {
@@ -1514,6 +1528,13 @@ print("|".join(str(document[key]) for key in (
   runtime_primary_min_connections=$((10#$primary_min))
   runtime_primary_max_connections=$((10#$primary_max))
   runtime_auxiliary_connections=$((10#$auxiliary))
+  ((runtime_primary_min_connections == listener_stress_primary_pool_min \
+     && runtime_primary_max_connections == listener_stress_primary_pool_max)) || {
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase=preflight-runtime-budget
+    record_parent_diagnostic "phase=preflight-runtime-budget status=entry_contract_diverged manifest_min=$runtime_primary_min_connections manifest_max=$runtime_primary_max_connections"
+    echo "listener stress rejected a runtime connection budget that diverges from its 2 through 60 entry contract" >&2
+    return 1
+  }
   ((database_max_connections >= runtime_primary_min_connections \
      && database_max_connections <= runtime_primary_max_connections \
      && database_min_connections <= database_max_connections)) || {

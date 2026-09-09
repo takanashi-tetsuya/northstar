@@ -341,18 +341,18 @@ async fn deployment_capacity_authority_is_consistent(
     configured: DeploymentCapacityConfiguration,
 ) -> Result<bool> {
     sqlx::query_scalar(
-        "WITH requested(resource_kind,requested_limit) AS (\
+        "WITH requested_limits(resource_kind,requested_limit) AS (\
              VALUES\
                ('account'::text,$1::bigint),\
                ('muc_room'::text,$2::bigint),\
                ('live_session'::text,$3::bigint),\
                ('sm_session'::text,$4::bigint)\
          ), expected_shards AS (\
-             SELECT requested.resource_kind,shards.shard::smallint AS shard,\
-                    (requested.requested_limit / 64)\
-                      + CASE WHEN shards.shard < (requested.requested_limit % 64)\
+             SELECT requested_limits.resource_kind,shards.shard::smallint AS shard,\
+                    (requested_limits.requested_limit / 64)\
+                      + CASE WHEN shards.shard < (requested_limits.requested_limit % 64)\
                              THEN 1 ELSE 0 END AS capacity\
-               FROM requested CROSS JOIN generate_series(0,63) AS shards(shard)\
+               FROM requested_limits CROSS JOIN generate_series(0,63) AS shards(shard)\
          ), expected_entities(resource_kind,entity_id) AS (\
              SELECT 'account'::text,id FROM users\
              UNION ALL\
@@ -453,7 +453,7 @@ async fn reconcile_allocations(
     // shard budget in one statement. This preserves the exact shard placement
     // contract while keeping cold starts bounded under parallel deployment.
     let unrepresentable = sqlx::query(
-        "WITH requested(resource_kind,requested_limit) AS (
+        "WITH requested_limits(resource_kind,requested_limit) AS (
              VALUES
                ('account'::text,$1::bigint),
                ('muc_room'::text,$2::bigint),
@@ -461,15 +461,15 @@ async fn reconcile_allocations(
                ('sm_session'::text,$4::bigint)
          ),
          desired AS (
-             SELECT requested.resource_kind,
+             SELECT requested_limits.resource_kind,
                     shards.shard::smallint AS shard,
-                    (requested.requested_limit / 64)
+                    (requested_limits.requested_limit / 64)
                       + CASE
-                          WHEN shards.shard < (requested.requested_limit % 64)
+                          WHEN shards.shard < (requested_limits.requested_limit % 64)
                             THEN 1
                           ELSE 0
                         END AS hard_budget
-               FROM requested
+               FROM requested_limits
                CROSS JOIN generate_series(0,63) AS shards(shard)
          )
          SELECT existing.resource_kind,existing.shard,existing.used,desired.hard_budget
@@ -500,7 +500,7 @@ async fn reconcile_allocations(
         .expect("deployment capacity resource-kind count fits i64")
         * CAPACITY_SHARDS;
     let updated_shards = sqlx::query(
-        "WITH requested(resource_kind,requested_limit) AS (
+        "WITH requested_limits(resource_kind,requested_limit) AS (
              VALUES
                ('account'::text,$1::bigint),
                ('muc_room'::text,$2::bigint),
@@ -508,15 +508,15 @@ async fn reconcile_allocations(
                ('sm_session'::text,$4::bigint)
          ),
          desired AS (
-             SELECT requested.resource_kind,
+             SELECT requested_limits.resource_kind,
                     shards.shard::smallint AS shard,
-                    (requested.requested_limit / 64)
+                    (requested_limits.requested_limit / 64)
                       + CASE
-                          WHEN shards.shard < (requested.requested_limit % 64)
+                          WHEN shards.shard < (requested_limits.requested_limit % 64)
                             THEN 1
                           ELSE 0
                         END AS hard_budget
-               FROM requested
+               FROM requested_limits
                CROSS JOIN generate_series(0,63) AS shards(shard)
          )
          UPDATE deployment_capacity_shards existing

@@ -773,7 +773,7 @@ append_mix_federation_dead_letter_detail() {
   # form, and `last_error` is reduced to a coarse class plus a correlation
   # fingerprint.  In particular, never select `stanza_template`, a JID,
   # channel name, raw error text, or any client-controlled XML.
-  local database_name detail_snapshot status
+  local database_name="$1" detail_snapshot status
   private_database_name_is_valid "$database_name" || return 1
   detail_snapshot="$runtime_dir/mix-federation-authority-dead-letter-detail-${database_name}.raw.log"
   if fixture_database_psql "$database_name" --tuples-only --no-align \

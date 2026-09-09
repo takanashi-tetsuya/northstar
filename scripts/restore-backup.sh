@@ -1509,7 +1509,12 @@ set_target_database_connections() {
   catalog_value="$(sed -n 's/^__NORTHSTAR_ALLOW_CONNECTIONS__//p' "$output_file")"
   catalog_count="$(awk 'index($0, "__NORTHSTAR_ALLOW_CONNECTIONS__") == 1 { count += 1 } END { print count + 0 }' "$output_file")"
   if [[ "$catalog_count" != 1 || "$catalog_value" != "$expected" ]]; then
-    echo "database connection fence did not converge to ALLOW_CONNECTIONS=$enabled" >&2
+    # This record contains only the expected single-bit catalog result and
+    # the number/value of marked rows.  It is safe to emit and makes a failed
+    # restore fence diagnosable without disclosing a connection URL, target
+    # data, or the SQL transcript used to control PostgreSQL.
+    printf 'database connection fence did not converge to ALLOW_CONNECTIONS=%s (expected=%s marker_rows=%s marker_value=%q)\n' \
+      "$enabled" "$expected" "$catalog_count" "$catalog_value" >&2
     return 1
   fi
 }

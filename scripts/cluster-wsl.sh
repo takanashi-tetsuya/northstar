@@ -595,6 +595,16 @@ start_b
 # The protocol driver deliberately reaches node-specific public origins via
 # the stable relays.  It retains the exact dynamically published XMPP and
 # metrics addresses because those are internal node-specific test surfaces.
+# Both the initial MUC lease checks and the later fault probes use the same
+# owned Redis endpoint and verified client identity.
+redis_probe_env=(
+  "NORTHSTAR_CLUSTER_REDIS_PORT=$redis_required_tls_port"
+  "NORTHSTAR_CLUSTER_REDIS_PASSWORD=$redis_password"
+  "NORTHSTAR_CLUSTER_REDIS_CA=$redis_tmp/redis-ca.crt"
+  "NORTHSTAR_CLUSTER_REDIS_CERT=$redis_tmp/redis-client.crt"
+  "NORTHSTAR_CLUSTER_REDIS_KEY=$redis_tmp/redis-client.key"
+)
+env "${redis_probe_env[@]}" \
 NORTHSTAR_CLUSTER_HTTP_A="$relay_a_http_port" NORTHSTAR_CLUSTER_HTTP_B="$relay_b_http_port" \
 NORTHSTAR_CLUSTER_XMPP_A="$xmpp_a" NORTHSTAR_CLUSTER_XMPP_B="$xmpp_b" \
 NORTHSTAR_CLUSTER_METRICS_A="$metrics_a" NORTHSTAR_CLUSTER_METRICS_B="$metrics_b" \
@@ -603,16 +613,13 @@ python3 scripts/cluster-wsl.py
 wait "$pid_a" || true
 pid_a=""
 start_a
+env "${redis_probe_env[@]}" \
 NORTHSTAR_CLUSTER_HTTP_A="$relay_a_http_port" NORTHSTAR_CLUSTER_HTTP_B="$relay_b_http_port" \
 NORTHSTAR_CLUSTER_XMPP_A="$xmpp_a" NORTHSTAR_CLUSTER_XMPP_B="$xmpp_b" \
 NORTHSTAR_CLUSTER_METRICS_A="$metrics_a" NORTHSTAR_CLUSTER_METRICS_B="$metrics_b" \
 NORTHSTAR_CLUSTER_PID_A="$pid_a" NORTHSTAR_CLUSTER_REDIS_PID="$redis_pid" \
 NORTHSTAR_CLUSTER_PID_B="$pid_b" \
 NORTHSTAR_CLUSTER_NODE_B_PRIVATE_KEY_DER="$redis_tmp/node-b.pkcs8.der" \
-NORTHSTAR_CLUSTER_REDIS_PORT="$redis_required_tls_port" NORTHSTAR_CLUSTER_REDIS_PASSWORD="$redis_password" \
-NORTHSTAR_CLUSTER_REDIS_CA="$redis_tmp/redis-ca.crt" \
-NORTHSTAR_CLUSTER_REDIS_CERT="$redis_tmp/redis-client.crt" \
-NORTHSTAR_CLUSTER_REDIS_KEY="$redis_tmp/redis-client.key" \
 NORTHSTAR_CLUSTER_LOG_B="$redis_tmp/cluster-b.log" \
 NORTHSTAR_CLUSTER_SCHEMA="$schema" \
 python3 scripts/cluster-wsl.py faults

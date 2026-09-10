@@ -2,8 +2,7 @@
 
 use libfuzzer_sys::fuzz_target;
 
-#[path = "../../src/xmpp/framing.rs"]
-pub mod framing;
+pub use northstar_xml_framing as framing;
 
 mod xmpp {
     pub use crate::framing;
@@ -17,7 +16,8 @@ const MAX_INPUT: usize = 1_048_576;
 
 fn exercise_websocket_stream(input: &str, selector: usize) {
     let mut complete_framer = framing::XmlEntityFramer::default();
-    if let Ok(frame) = transport_parsing::take_websocket_frame(input, &mut complete_framer, MAX_INPUT)
+    if let Ok(frame) =
+        transport_parsing::take_websocket_frame(input, &mut complete_framer, MAX_INPUT)
     {
         let _ = transport_parsing::websocket_has_invalid_stream_header_namespace(&frame);
         let _ = transport_parsing::websocket_close_has_content(&frame);

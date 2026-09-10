@@ -118,9 +118,36 @@ jobs:
             echo "Dry run for $commit; no GHCR package or GitHub Release will be published." >>"$GITHUB_STEP_SUMMARY"
           fi
 
+  release-qualification:
+    name: Qualify exact release commit
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+
+      - name: Require signed main tag and successful exact-commit CI
+        if: needs.prepare.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: node scripts/verify-release-ci.mjs
+
+      - name: Record build-only qualification for non-tag runs
+        if: needs.prepare.outputs.publish != 'true'
+        run: echo 'Build-only run; release CI qualification is required before publication.' >> "$GITHUB_STEP_SUMMARY"
+
   build-binaries:
     name: Build ${{ matrix.label }} package
-    needs: prepare
+    needs: [prepare, release-qualification]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -273,11 +300,12 @@ jobs:
   publish-images:
     name: Publish ${{ matrix.image }} image
     if: needs.prepare.outputs.publish == 'true'
-    needs: prepare
+    needs: [prepare, release-qualification, build-binaries]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
+      actions: read
       packages: write
       id-token: write
       attestations: write
@@ -298,6 +326,13 @@ jobs:
           ref: ${{ needs.prepare.outputs.commit }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Revalidate current release evidence before publishing images
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: node scripts/verify-release-ci.mjs
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -453,6 +488,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      actions: read
     steps:
       - name: Re-check immutable release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -466,6 +502,13 @@ jobs:
         with:
           name: verified-release-assets-${{ needs.prepare.outputs.version }}
           path: dist
+
+      - name: Revalidate release evidence before preparing the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: node scripts/verify-release-ci.mjs
 
       - name: Create or update draft and upload assets
         shell: bash

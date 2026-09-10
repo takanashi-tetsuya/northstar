@@ -1,9 +1,18 @@
 # Experimental same-domain clustering
 
-Northstar's supported baseline remains one application process plus PostgreSQL.
+Northstar's supported baseline has one core session authority plus PostgreSQL;
+[maintenance may run in its own process](SUBSERVERS.md).
 Setting `REDIS_URL`/`REDIS_URL_FILE` opts into an **Experimental** same-domain
 control plane. It is not a production scaling claim. Redis is ephemeral routing
 transport; PostgreSQL is the durable and security authority.
+
+The subserver topology requires one archive-retention owner per database
+schema. When upgrading an existing experimental cluster, change all but one
+combined server to `serve core`, or use core nodes and one `serve maintenance`
+process. Multiple old no-argument/`serve standalone` processes now conflict at
+startup. The cluster fixture uses one explicit standalone owner and one core
+peer, including on restart. Redis identity and aggregate connection budgets
+remain mandatory and are separate from the single-core subserver budget.
 
 No cluster signing configuration is required in single-node mode. Redis mode
 fails startup unless every node has a stable, unique `CLUSTER_NODE_ID`, a

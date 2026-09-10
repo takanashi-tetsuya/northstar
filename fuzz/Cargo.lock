@@ -612,28 +612,100 @@ dependencies = [
 ]
 
 [[package]]
+name = "northstar-auth-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "base64",
+ "hmac",
+ "northstar-xmpp-types",
+ "pbkdf2",
+ "rand",
+ "sha1",
+ "sha2",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "northstar-fuzz"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "argon2",
  "axum",
  "base64",
  "futures",
- "hmac",
- "idna",
  "libfuzzer-sys",
- "pbkdf2",
- "precis-profiles",
- "rand",
+ "northstar-auth-core",
+ "northstar-xep-0060",
+ "northstar-xep-0198",
+ "northstar-xep-0313",
+ "northstar-xml-framing",
+ "northstar-xmpp-types",
  "roxmltree",
  "serde",
- "serde_json",
- "sha1",
- "sha2",
- "thiserror",
  "uuid",
- "zeroize",
+]
+
+[[package]]
+name = "northstar-xep-0059"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0060"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0198"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-core",
+ "roxmltree",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-0313"
+version = "0.1.0"
+dependencies = [
+ "northstar-xep-0059",
+ "northstar-xep-core",
+ "northstar-xmpp-types",
+ "roxmltree",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xep-core"
+version = "0.1.0"
+
+[[package]]
+name = "northstar-xml-framing"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "thiserror",
+]
+
+[[package]]
+name = "northstar-xmpp-types"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "idna",
+ "precis-profiles",
 ]
 
 [[package]]

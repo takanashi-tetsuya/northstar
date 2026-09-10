@@ -1,9 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-
-#[path = "../../src/xmpp/framing.rs"]
-mod framing;
+use northstar_xml_framing as framing;
 
 const MAX_INPUT: usize = 1_048_576;
 

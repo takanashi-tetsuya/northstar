@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readSubserverSources, verifySubserverBoundaries } from './check-subserver-boundaries.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -367,7 +368,7 @@ const runtimeControlPoolConstruction = structBody(state, 'fn runtime_control_poo
 for (const invariant of [
   'max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
   'min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
-  'acquire_timeout(RUNTIME_CONTROL_POOL_ACQUIRE_TIMEOUT)',
+  'acquire_timeout(attempt_budget)',
   'db::pin_public_application_schema(options)',
 ]) {
   if (!runtimeControlPoolConstruction.includes(invariant)) {
@@ -394,12 +395,13 @@ if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(|fn start_ser
 }
 const runtimeControlReservation = structBody(state, 'pub(crate) async fn reserve_runtime_control_connection(');
 for (const invariant of [
-  'runtime_control_pool_options(config)',
+  'runtime_control_pool_options(config, attempt_budget)',
   '.connect(&config.database_url)',
   'attest_development_database_is_loopback',
   'attest_runtime_role',
   'RUNTIME_CONTROL_STARTUP_RETRY_BUDGET',
-  'runtime_control_startup_retry_delay',
+  'runtime_control_startup_connect(deadline,',
+  'tokio::time::timeout_at(deadline,',
 ]) {
   if (!runtimeControlReservation.includes(invariant)) {
     throw new Error(`runtime-control startup reservation lost required invariant: ${invariant}`);
@@ -408,8 +410,24 @@ for (const invariant of [
 if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/s.test(runtimeControlReservation)) {
   throw new Error('runtime-control startup reservation must retain its one dedicated connection');
 }
-if (!/Err\(sqlx::Error::PoolTimedOut\)\s+if\s+Instant::now\(\)\s*<\s*retry_deadline/s.test(runtimeControlReservation)) {
-  throw new Error('runtime-control startup may retry only the bounded pool-timeout admission case');
+const runtimeControlAdmission = structBody(state, 'async fn runtime_control_startup_connect<');
+for (const invariant of [
+  'tokio::time::timeout_at(deadline,',
+  'deadline.saturating_duration_since(tokio::time::Instant::now())',
+  'remaining.min(RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET)',
+  'tokio::time::timeout(attempt_budget, connect(attempt_budget))',
+  'runtime_control_startup_retry_delay(attempts, std::process::id())',
+  '.min(remaining)',
+  'Err(sqlx::Error::PoolTimedOut) =>',
+  'Err(error) => return Err(error)',
+]) {
+  if (!runtimeControlAdmission.replace(/\s+/g, '').includes(invariant.replace(/\s+/g, ''))) {
+    throw new Error(`runtime-control startup lost a bounded admission invariant: ${invariant}`);
+  }
+}
+if (!/const RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(3\)/.test(state)
+    || !/const RUNTIME_CONTROL_STARTUP_RETRY_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(15\)/.test(state)) {
+  throw new Error('runtime-control cold handshake remains at most 3 s within one absolute 15 s admission budget');
 }
 const appStateConstruction = structBody(state, 'pub async fn new(');
 if (!/pub async fn new\([\s\S]*?runtime_control_connection\s*:\s*PoolConnection<Postgres>/.test(state)) {
@@ -432,7 +450,7 @@ if (!/self\.service_shutdown\s*\.set\(cancel\)/s.test(serviceControlInstallation
 for (const invariant of [
   'state.config.enable_xmpp_service_control',
   'state.service_shutdown.get().is_some()',
-  'heartbeat.error(error)',
+  'report_runtime_control_health(&heartbeat, observed_database, first_error)',
 ]) {
   if (!runtimeControlRefresh.includes(invariant)) {
     throw new Error(`runtime control coordinator lost a fail-closed XEP-0133 invariant: ${invariant}`);
@@ -441,7 +459,7 @@ for (const invariant of [
 if (!/service_control_applies\(\s*state\.process_started_at,\s*&control\s*,?\s*\)/s.test(runtimeControlRefresh)) {
   throw new Error('runtime control coordinator must retain the XEP-0133 process/generation authority check');
 }
-if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtime` | exactly 1 reserved connection; 500 ms per-attempt cold-start bound plus a 15 s jittered `PoolTimedOut` admission window before traffic startup |')) {
+if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtime` | exactly 1 reserved connection; at most 3 s per initial handshake within one absolute 15 s admission deadline, including jitter, role attestation and reservation |')) {
   throw new Error('program responsibility model must document the dedicated runtime control pool');
 }
 const mixProtocol = read('src/xmpp/protocol/mix.rs');
@@ -2699,12 +2717,17 @@ while (pendingResponsibilitySources.length > 0) {
     }
   }
 }
-const productionRustSource = productionRustSources.map(({ source }) => source).join('\n');
-const workerRegistrationMatches = [
-  ...productionRustSource.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g),
-];
-const composedWorkers = workerRegistrationMatches.map((match) => match[2]);
-assertExactUniqueInventory('supervised-worker', composedWorkers, supervisedWorkers);
+// Maintenance is an independently selected process role. Qualify only that
+// reviewed composition root; a duplicate in any other source still fails.
+// The companion gate proves the explicit standalone guard, early maintenance
+// return and exact maintenance capability/worker inventory before this allow.
+verifySubserverBoundaries(readSubserverSources());
+const roleIdentity = (relative, name) => relative === 'src/subservers.rs' ? `maintenance/${name}` : name;
+const composedWorkers = productionRustSources.flatMap(({ relative, source }) =>
+  [...source.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g)]
+    .map((match) => roleIdentity(relative, match[2])),
+);
+assertExactUniqueInventory('supervised-worker', composedWorkers, [...supervisedWorkers, 'maintenance/archive-retention']);
 for (const contract of supervisedWorkerContracts) {
   const [expectedSource, documentedOwner, documentedWatchdog] =
     workerResponsibilityEvidence[contract.name] ?? [];
@@ -2763,14 +2786,12 @@ for (const contract of supervisedWorkerContracts) {
     }
   }
 }
-const healthObservers = [
-  ...productionRustSource.matchAll(/\.register_observer\(\s*"([^"]+)"/g),
-].map((match) => match[1]);
-if (healthObservers.length !== 1 || healthObservers[0] !== 'session-cleanup') {
-  throw new Error(
-    `production health-observer inventory differs from the reviewed responsibility model: ${healthObservers.join(', ')}`,
-  );
-}
+const healthObservers = productionRustSources.flatMap(({ relative, source }) =>
+  [...source.matchAll(/\.register_observer\(\s*"([^"]+)"/g)]
+    .map((match) => roleIdentity(relative, match[1])),
+);
+assertExactUniqueInventory('health-observer', healthObservers,
+  ['session-cleanup', 'maintenance/maintenance-ownership']);
 const sessionCleanupRow = responsibilityDocument
   .split(/\r?\n/)
   .find((line) => line.includes('| `session-cleanup` |'));

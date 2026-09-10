@@ -23,6 +23,15 @@ if [[ ! "$schema" =~ ^cluster_it_[0-9a-f]{12,48}$ ]]; then
   echo "XMPP_TEST_SCHEMA must use the isolated cluster_it_ prefix followed by 12-48 lowercase hexadecimal characters" >&2
   exit 2
 fi
+# Keep both shell and Python psql probes on the same disposable endpoint as
+# the server URL. A separate loopback port permits a private fixture without
+# touching an existing service on PostgreSQL's conventional port.
+database_port="${NORTHSTAR_CLUSTER_DATABASE_PORT:-5432}"
+if ! [[ "$database_port" =~ ^[1-9][0-9]{0,4}$ ]] || ((10#$database_port > 65535)); then
+  echo "NORTHSTAR_CLUSTER_DATABASE_PORT must be an integer from 1 through 65535" >&2
+  exit 2
+fi
+export PGPORT="$database_port"
 redis_tmp="$(mktemp -d /tmp/northstar-redis.XXXXXX)"
 chmod 700 "$redis_tmp"
 if [[ "$(stat -c '%a' "$redis_tmp")" != "700" ]]; then
@@ -68,7 +77,7 @@ cleanup() {
     if [[ -n "$pid" ]]; then wait "$pid" 2>/dev/null || true; fi
   done
   if (( exit_code != 0 )); then
-    for log in "$redis_tmp/cluster-a.log" "$redis_tmp/cluster-b.log" \
+    for log in "$redis_tmp/cluster-a.log" "$redis_tmp/cluster-b.log" "$redis_tmp/cluster-optional.log" \
       "$redis_tmp/cluster-redis.log" "$redis_tmp/redis-required-mtls.log" \
       "$redis_tmp/redis-optional-mtls.log" "$redis_tmp/cluster-a-http-relay.log" \
       "$redis_tmp/cluster-b-http-relay.log" "$redis_tmp/cluster-probe-http-relay.log"; do
@@ -129,7 +138,7 @@ if [[ "${NORTHSTAR_CLUSTER_SKIP_BUILD:-false}" != "true" ]]; then
 fi
 binary="$CARGO_TARGET_DIR/debug/rust-xmpp-server"
 [[ -x "$binary" ]] || { echo "cluster runtime binary is missing: $binary" >&2; exit 1; }
-cluster_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema"
+cluster_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:$database_port/xmpp_test?options=-csearch_path%3D$schema"
 env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=cluster.localhost \
   MIGRATOR_DATABASE_URL="$cluster_database_url" "$binary" migrate
 openssl req -x509 -newkey rsa:3072 -nodes -days 1 -subj "/CN=cluster.localhost" \
@@ -208,7 +217,7 @@ chmod 600 "$redis_tmp/redis.conf"
 redis_pid=$!
 
 for _ in $(seq 1 100); do
-  if REDISCLI_AUTH="$redis_password" "$redis_cli" --socket "$redis_socket" \
+  if REDISCLI_AUTH="$redis_password" "$redis_cli" -s "$redis_socket" \
     --user northstar ping 2>/dev/null | grep -q PONG; then
     break
   fi
@@ -219,7 +228,7 @@ for _ in $(seq 1 100); do
   fi
   sleep 0.05
 done
-REDISCLI_AUTH="$redis_password" "$redis_cli" --socket "$redis_socket" \
+REDISCLI_AUTH="$redis_password" "$redis_cli" -s "$redis_socket" \
   --user northstar ping | grep -q PONG
 [[ -S "$redis_socket" ]] || {
   echo "cluster Redis readiness succeeded without a Unix-domain socket: $redis_socket" >&2
@@ -291,11 +300,10 @@ echo "Redis ACL and optional/required mTLS endpoint configuration probes passed"
 node scripts/generate-cluster-signing-key.mjs \
   "$redis_tmp/node-a.pkcs8.b64" "$redis_tmp/node-a.public.b64" >/dev/null
 node scripts/generate-cluster-signing-key.mjs \
-  "$redis_tmp/node-b.pkcs8.b64" "$redis_tmp/node-b.public.b64" >/dev/null
+  "$redis_tmp/node-b.pkcs8.b64" "$redis_tmp/node-b.public.b64" "$redis_tmp/node-b.pkcs8.der" >/dev/null
 node scripts/generate-cluster-signing-key.mjs \
   "$redis_tmp/node-probe.pkcs8.b64" "$redis_tmp/node-probe.public.b64" >/dev/null
-node -e 'const fs=require("node:fs"); fs.writeFileSync(process.argv[2], Buffer.from(fs.readFileSync(process.argv[1], "utf8").trim(), "base64url"), {mode: 0o600, flag: "wx"});' \
-  "$redis_tmp/node-b.pkcs8.b64" "$redis_tmp/node-b.pkcs8.der"
+
 cluster_public_a="$(tr -d '\r\n' <"$redis_tmp/node-a.public.b64")"
 cluster_public_b="$(tr -d '\r\n' <"$redis_tmp/node-b.public.b64")"
 cluster_kinds='["ack","direct_delivery","blocking_presence","presence_probe","session_teardown","account_generation_teardown","user_agent_replacement","sm_session_teardown","sm_muc_teardown","muc_broadcast","muc_private","muc_presence","muc_nickname_change","muc_role_change","muc_evict","muc_destroy","muc_operation_wake"]'
@@ -375,8 +383,24 @@ fixture_start_tcp_relay "$project_dir" "$redis_tmp" cluster-b cluster-b-http-rel
 fixture_start_tcp_relay "$project_dir" "$redis_tmp" cluster-probe cluster-probe-http-relay \
   "$target_probe_http" "$redis_tmp/cluster-probe-http-relay.log" relay_probe_http_pid relay_probe_http_port
 
+# Listener publication proves socket ownership; dependency health can still
+# be completing its first observation. Keep both checks within one original
+# 15-second startup budget, and preserve the final response on failure.
+wait_cluster_http_ready() {
+  local pid="$1" port="$2" deadline="$3" status response="$redis_tmp/ready-$1-$2.body"
+  while ((SECONDS < deadline)) && kill -0 "$pid" 2>/dev/null; do
+    status="$(curl --silent --show-error --max-time 1 --output "$response" --write-out '%{http_code}' \
+      "http://127.0.0.1:$port/readyz")" || status=transport-failed
+    if [[ "$status" == 200 ]] && ((SECONDS < deadline)); then return 0; fi
+    sleep 0.05
+  done
+  echo "cluster HTTP readiness failed within startup budget: pid=$pid port=$port status=${status:-not-observed}" >&2
+  if [[ -f "$response" ]]; then head -c 2048 "$response" >&2; printf '\n' >&2; fi
+  return 1
+}
+
 start_optional_cluster_probe() {
-  local readiness_file="$redis_tmp/cluster-optional.ready.json" readiness_nonce optional_http
+  local readiness_file="$redis_tmp/cluster-optional.ready.json" readiness_nonce optional_http startup_deadline=$((SECONDS + 15))
   readiness_nonce="$(openssl rand -hex 16)"
   rm -f -- "$readiness_file"
   retire_relay_target "$target_probe_http"
@@ -395,8 +419,8 @@ start_optional_cluster_probe() {
   fi
   optional_http="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)" || return 1
   publish_relay_target "$target_probe_http" "$optional_http"
-  curl --silent --fail "http://127.0.0.1:$optional_http/readyz" >/dev/null
-  curl --silent --fail "http://127.0.0.1:$relay_probe_http_port/readyz" >/dev/null
+  wait_cluster_http_ready "$optional_pid" "$optional_http" "$startup_deadline"
+  wait_cluster_http_ready "$optional_pid" "$relay_probe_http_port" "$startup_deadline"
 }
 
 start_optional_cluster_probe
@@ -489,8 +513,11 @@ xmpp_b=""
 metrics_a=""
 metrics_b=""
 
+# Experimental clustering fixture: A is the single retention owner and B is
+# explicitly core-only. Restart functions preserve these process roles. The
+# supported deployment remains one core plus one maintenance process.
 start_a() {
-  local readiness_file="$redis_tmp/cluster-a.ready.json" readiness_nonce
+  local readiness_file="$redis_tmp/cluster-a.ready.json" readiness_nonce startup_deadline=$((SECONDS + 15))
   readiness_nonce="$(openssl rand -hex 16)"
   rm -f -- "$readiness_file"
   retire_relay_target "$target_a_http"
@@ -502,7 +529,7 @@ start_a() {
     HTTP_BIND=127.0.0.1:0 WEB_ADMIN_BIND=127.0.0.1:0 S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
     TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
     PUBLIC_URL="http://127.0.0.1:$relay_a_http_port" UPLOAD_DIR="$redis_tmp/cluster-a" \
-    "$binary" >"$redis_tmp/cluster-a.log" 2>&1 &
+    "$binary" serve standalone >"$redis_tmp/cluster-a.log" 2>&1 &
   pid_a=$!
   if ! fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_a"; then
     cat "$redis_tmp/cluster-a.log" >&2 || true
@@ -512,12 +539,12 @@ start_a() {
   xmpp_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)" || return 1
   metrics_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" metrics)" || return 1
   publish_relay_target "$target_a_http" "$http_a"
-  curl --silent --fail "http://127.0.0.1:$http_a/readyz" >/dev/null
-  curl --silent --fail "http://127.0.0.1:$relay_a_http_port/readyz" >/dev/null
+  wait_cluster_http_ready "$pid_a" "$http_a" "$startup_deadline"
+  wait_cluster_http_ready "$pid_a" "$relay_a_http_port" "$startup_deadline"
 }
 
 start_b() {
-  local readiness_file="$redis_tmp/cluster-b.ready.json" readiness_nonce
+  local readiness_file="$redis_tmp/cluster-b.ready.json" readiness_nonce startup_deadline=$((SECONDS + 15))
   readiness_nonce="$(openssl rand -hex 16)"
   rm -f -- "$readiness_file"
   retire_relay_target "$target_b_http"
@@ -529,7 +556,7 @@ start_b() {
     HTTP_BIND=127.0.0.1:0 WEB_ADMIN_BIND=127.0.0.1:0 S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
     TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
     PUBLIC_URL="http://127.0.0.1:$relay_b_http_port" UPLOAD_DIR="$redis_tmp/cluster-b" \
-    "$binary" >"$redis_tmp/cluster-b.log" 2>&1 &
+    "$binary" serve core >"$redis_tmp/cluster-b.log" 2>&1 &
   pid_b=$!
   if ! fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_b"; then
     cat "$redis_tmp/cluster-b.log" >&2 || true
@@ -539,8 +566,8 @@ start_b() {
   xmpp_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)" || return 1
   metrics_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" metrics)" || return 1
   publish_relay_target "$target_b_http" "$http_b"
-  curl --silent --fail "http://127.0.0.1:$http_b/readyz" >/dev/null
-  curl --silent --fail "http://127.0.0.1:$relay_b_http_port/readyz" >/dev/null
+  wait_cluster_http_ready "$pid_b" "$http_b" "$startup_deadline"
+  wait_cluster_http_ready "$pid_b" "$relay_b_http_port" "$startup_deadline"
 }
 
 start_a

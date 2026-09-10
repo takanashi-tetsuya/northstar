@@ -103,6 +103,10 @@ cleanup() {
   if (( exit_code != 0 )); then
     for log in "$log_a" "$log_b" "$runtime_dir/relay-a-s2s.log" "$runtime_dir/relay-b-s2s-tls.log" "$runtime_dir/relay-a-http.log" "$runtime_dir/relay-b-http.log"; do
       if [[ -f "$log" ]]; then
+        # Preserve startup evidence before frequent worker debug messages can
+        # push a missing-readiness failure out of the bounded ending excerpt.
+        echo "--- $(basename "$log") (first 60 lines) ---" >&2
+        head -n 60 "$log" >&2 || true
         echo "--- $(basename "$log") (last 120 lines) ---" >&2
         tail -n 120 "$log" >&2 || true
       fi
@@ -162,7 +166,7 @@ if [[ "$fixture_preprovisioned" != true ]]; then
   done
 fi
 
-mkdir -p "$cert_dir" "$upload_a" "$upload_b"
+mkdir -p "$cert_dir" "$upload_a" "$upload_b" "$runtime_dir/logs-a" "$runtime_dir/logs-b"
 openssl req -x509 -newkey rsa:3072 -nodes -days 1 -subj "/CN=Northstar Federation Test CA" \
   -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
   -addext "keyUsage=critical,keyCertSign,cRLSign" \
@@ -204,6 +208,8 @@ openssl rand -base64 -out "$runtime_dir/dummy-scram-b.secret" 48
 chmod 600 "$runtime_dir/fast-token-a.secret" "$runtime_dir/fast-token-b.secret" \
   "$runtime_dir/dummy-scram-a.secret" "$runtime_dir/dummy-scram-b.secret"
 
+fixture_stress_phase_barrier "$project_dir" prepared
+
 # The relays are child-owned ephemeral listeners with the standard readiness
 # record.  They make peer addresses available to the two server startup
 # configurations without reserving, releasing, and re-binding a numeric port.
@@ -244,15 +250,16 @@ if [[ "$fixture_preprovisioned" != true ]]; then
 fi
 
 start_a() {
-  local readiness_file="$runtime_dir/a.ready.json" readiness_nonce
+  local readiness_file="$runtime_dir/a.ready.json" readiness_nonce startup_deadline
   readiness_nonce="$(openssl rand -hex 16)"
   rm -f -- "$readiness_file" "$target_a_s2s" "$target_a_http"
+  startup_deadline="$(fixture_startup_deadline "$project_dir")"
   env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
     DATABASE_URL="$database_url_a" \
     XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 WEB_ADMIN_BIND=127.0.0.1:0 \
     S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
     TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
-    PUBLIC_URL="http://127.0.0.1:$relay_a_http_port" UPLOAD_DIR="$upload_a" \
+    PUBLIC_URL="http://127.0.0.1:$relay_a_http_port" UPLOAD_DIR="$upload_a" LOG_DIR="$runtime_dir/logs-a" \
     TLS_CERT_PATH="$cert_dir/federation-a.crt" TLS_KEY_PATH="$cert_dir/federation-a.key" \
     OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=true REGISTRATION_RATE_PER_HOUR=20 \
     API_CONTROL_ALLOW_EPHEMERAL=true ABUSE_STATE_ALLOW_EPHEMERAL=true \
@@ -263,7 +270,7 @@ start_a() {
     FEDERATION_EXTRA_ROOT_CERT_PATH="$cert_dir/federation-ca.crt" LOG_FORMAT=json RUST_LOG=rust_xmpp_server=debug \
     "$binary" >"$log_a" 2>&1 &
   pid_a=$!
-  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_a" || return 1
+  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_a" "$startup_deadline" || return 1
   http_a_backend="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
   xmpp_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
   xmpps_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
@@ -272,21 +279,22 @@ start_a() {
   fixture_publish_relay_target "$target_a_s2s" "$s2s_a"
   fixture_publish_relay_target "$target_a_http" "$http_a_backend"
   http_a="$relay_a_http_port"
-  curl --silent --fail "http://127.0.0.1:$http_a_backend/readyz" >/dev/null
-  curl --silent --fail "http://127.0.0.1:$http_a/readyz" >/dev/null
+  fixture_wait_for_http_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_a" "$startup_deadline" \
+    "http://127.0.0.1:$http_a_backend/readyz" "http://127.0.0.1:$http_a/readyz" || return 1
   fixture_assert_public_url "$http_a" "http://127.0.0.1:$relay_a_http_port"
 }
 
 start_b() {
-  local readiness_file="$runtime_dir/b.ready.json" readiness_nonce
+  local readiness_file="$runtime_dir/b.ready.json" readiness_nonce startup_deadline
   readiness_nonce="$(openssl rand -hex 16)"
   rm -f -- "$readiness_file" "$target_b_s2s_tls" "$target_b_http"
+  startup_deadline="$(fixture_startup_deadline "$project_dir")"
   env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=remote.localhost \
     DATABASE_URL="$database_url_b" \
     XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 WEB_ADMIN_BIND=127.0.0.1:0 \
     S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
     TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
-    PUBLIC_URL="http://127.0.0.1:$relay_b_http_port" UPLOAD_DIR="$upload_b" \
+    PUBLIC_URL="http://127.0.0.1:$relay_b_http_port" UPLOAD_DIR="$upload_b" LOG_DIR="$runtime_dir/logs-b" \
     TLS_CERT_PATH="$cert_dir/federation-b.crt" TLS_KEY_PATH="$cert_dir/federation-b.key" \
     OPEN_REGISTRATION=true REQUIRE_ENCRYPTED_ARCHIVE=true REGISTRATION_RATE_PER_HOUR=20 \
     API_CONTROL_ALLOW_EPHEMERAL=true ABUSE_STATE_ALLOW_EPHEMERAL=true \
@@ -297,7 +305,7 @@ start_b() {
     FEDERATION_EXTRA_ROOT_CERT_PATH="$cert_dir/federation-ca.crt" LOG_FORMAT=json RUST_LOG=rust_xmpp_server=debug \
     "$binary" >"$log_b" 2>&1 &
   pid_b=$!
-  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_b" || return 1
+  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_b" "$startup_deadline" || return 1
   http_b_backend="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
   xmpp_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
   xmpps_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
@@ -306,8 +314,8 @@ start_b() {
   fixture_publish_relay_target "$target_b_s2s_tls" "$s2s_tls_b"
   fixture_publish_relay_target "$target_b_http" "$http_b_backend"
   http_b="$relay_b_http_port"
-  curl --silent --fail "http://127.0.0.1:$http_b_backend/readyz" >/dev/null
-  curl --silent --fail "http://127.0.0.1:$http_b/readyz" >/dev/null
+  fixture_wait_for_http_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_b" "$startup_deadline" \
+    "http://127.0.0.1:$http_b_backend/readyz" "http://127.0.0.1:$http_b/readyz" || return 1
   fixture_assert_public_url "$http_b" "http://127.0.0.1:$relay_b_http_port"
 }
 
@@ -316,6 +324,10 @@ start_b() {
 # listener ownership.
 start_a
 start_b
+
+# Keep transport probes and credential setup outside every other pair's
+# cold-start window; all pairs still execute their full protocol matrix.
+fixture_stress_phase_barrier "$project_dir" live
 
 FEDERATION_TEST_CERT_DIR="$cert_dir" \
 FEDERATION_TEST_EXTERNAL="${S2S_SASL_EXTERNAL_ENABLED:-true}" \

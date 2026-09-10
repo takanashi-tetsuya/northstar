@@ -16,6 +16,7 @@ import select
 import subprocess
 import sys
 import time
+import tempfile
 import urllib.error
 import urllib.request
 import uuid
@@ -281,22 +282,29 @@ def signed_ack_envelope(request: dict, payload: dict) -> str:
         "payload": payload,
     }
     unsigned = json.dumps(envelope, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    signature = subprocess.run(
-        [
-            "openssl",
-            "pkeyutl",
-            "-sign",
-            "-rawin",
-            "-inkey",
-            NODE_B_PRIVATE_KEY_DER,
-            "-keyform",
-            "DER",
-        ],
-        input=unsigned,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=True,
-    ).stdout
+    # Ed25519 is an OpenSSL one-shot operation: its input size must be
+    # available before signing. A stdin pipe cannot provide that size.
+    with tempfile.NamedTemporaryFile(prefix="northstar-cluster-signing-") as message:
+        message.write(unsigned)
+        message.flush()
+        signature = subprocess.run(
+            [
+                "openssl",
+                "pkeyutl",
+                "-sign",
+                "-rawin",
+                "-inkey",
+                NODE_B_PRIVATE_KEY_DER,
+                "-keyform",
+                "DER",
+                "-in",
+                message.name,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=10,
+        ).stdout
     envelope["signature"] = b64url(signature)
     return json.dumps(envelope, separators=(",", ":"), ensure_ascii=False)
 

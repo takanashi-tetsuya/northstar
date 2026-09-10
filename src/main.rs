@@ -26,6 +26,7 @@ mod s2s;
 mod services;
 mod state;
 mod storage;
+mod subservers;
 mod test_activation;
 mod tls;
 mod transport_parsing;
@@ -185,6 +186,15 @@ fn install_crypto_provider() -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if matches!(arguments.first().map(String::as_str), Some("--help" | "-h")) {
+        anyhow::ensure!(arguments.len() == 1, "usage: xmpp-server --help");
+        println!("Northstar XMPP server\n\n  xmpp-server serve core         Start protocol/session/administration server\n  xmpp-server serve maintenance  Start isolated archive maintenance server\n  xmpp-server serve standalone   Start the compatible combined server (default)\n  xmpp-server --subservers       Show process responsibility inventory\n  xmpp-server migrate           Apply migrations with explicit migrator credentials\n  xmpp-server --healthcheck [IP:PORT]\n  xmpp-server --version");
+        return Ok(());
+    }
+    if arguments.first().map(String::as_str) == Some("--subservers") {
+        anyhow::ensure!(arguments.len() == 1, "usage: xmpp-server --subservers");
+        return subservers::print_inventory();
+    }
     if matches!(
         arguments.first().map(String::as_str),
         Some("--version" | "-V")
@@ -223,7 +233,11 @@ async fn main() -> Result<()> {
     // Hermetic integration/deployment environments can explicitly prevent a
     // developer .env file in the working directory from filling unset secret
     // variables. Normal foreground startup keeps the convenient default.
-    if std::env::var("NORTHSTAR_DISABLE_DOTENV").as_deref() != Ok("true") {
+    // Maintenance has a separate configuration boundary: never populate its
+    // environment from a core .env file containing protocol/signing secrets.
+    if arguments != ["serve", "maintenance"]
+        && std::env::var("NORTHSTAR_DISABLE_DOTENV").as_deref() != Ok("true")
+    {
         dotenvy::dotenv().ok();
     }
     if let Some(outcome) = identity_audit::maybe_run(&arguments).await? {
@@ -240,8 +254,25 @@ async fn main() -> Result<()> {
         }
         return run_migrations().await;
     }
+    let process_role = if arguments.first().map(String::as_str) == Some("pie") {
+        subservers::ProcessRole::Standalone
+    } else {
+        subservers::ProcessRole::parse(&arguments)?
+    };
+    if process_role == subservers::ProcessRole::Maintenance {
+        return subservers::run_maintenance().await;
+    }
     let config = Config::from_env()?;
     let _log_guard = init_logging(&config)?;
+    if process_role == subservers::ProcessRole::Core {
+        anyhow::ensure!(config.database_max_connections <= subservers::MAX_CORE_PRIMARY_CONNECTIONS,
+            "core subserver DATABASE_MAX_CONNECTIONS must be at most {}, reserving shared-role capacity for maintenance",
+            subservers::MAX_CORE_PRIMARY_CONNECTIONS);
+        tracing::info!(
+            role = "core",
+            "core subserver selected; archive retention is owned by the maintenance process"
+        );
+    }
     if config.invitation_policy_disabled_with_web_client {
         tracing::warn!(
             open_registration = config.open_registration,
@@ -255,7 +286,13 @@ async fn main() -> Result<()> {
     // every startup database operation.  Runtime policy and service-control
     // authority must survive a cold-start cohort that would otherwise fill
     // the traffic pool before it can establish its own isolated connection.
-    let runtime_control_connection = state::reserve_runtime_control_connection(&config).await?;
+    let mut runtime_control_connection = state::reserve_runtime_control_connection(&config).await?;
+    if process_role.embeds_retention() {
+        // Retention ownership shares this already-reserved physical session;
+        // it consumes no primary-pool slot. Its existing critical supervisor
+        // cancels this process if the exact connection stops making progress.
+        subservers::claim_maintenance_on_connection(&mut runtime_control_connection).await?;
+    }
     let pool_options = PgPoolOptions::new()
         .max_connections(config.database_max_connections)
         .min_connections(config.database_min_connections);
@@ -635,27 +672,29 @@ async fn main() -> Result<()> {
         );
     }
 
-    let retention_state = Arc::clone(&state);
-    let retention_cancel = cancel.clone();
-    let retention_max_silence = std::time::Duration::from_secs(
-        state
-            .config
-            .retention_cleanup_interval_seconds
-            .saturating_mul(2)
-            .saturating_add(60),
-    );
-    worker_registry.supervise(
-        "archive-retention",
-        WorkerCriticality::Restartable,
-        WorkerMode::Continuous,
-        Some(retention_max_silence),
-        cancel.clone(),
-        move |heartbeat| {
-            let retention_state = Arc::clone(&retention_state);
-            let retention_cancel = retention_cancel.clone();
-            async move { retention::serve(retention_state, retention_cancel, heartbeat).await }
-        },
-    );
+    if process_role.embeds_retention() {
+        let retention_state = Arc::clone(&state);
+        let retention_cancel = cancel.clone();
+        let retention_max_silence = std::time::Duration::from_secs(
+            state
+                .config
+                .retention_cleanup_interval_seconds
+                .saturating_mul(2)
+                .saturating_add(60),
+        );
+        worker_registry.supervise(
+            "archive-retention",
+            WorkerCriticality::Restartable,
+            WorkerMode::Continuous,
+            Some(retention_max_silence),
+            cancel.clone(),
+            move |heartbeat| {
+                let retention_state = Arc::clone(&retention_state);
+                let retention_cancel = retention_cancel.clone();
+                async move { retention::serve(retention_state, retention_cancel, heartbeat).await }
+            },
+        );
+    }
 
     // Listener ownership belongs to this process before any service task is
     // spawned. Test fixtures can therefore use `127.0.0.1:0` and consume a

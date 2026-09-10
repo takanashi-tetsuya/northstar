@@ -14,6 +14,10 @@ Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 [正式維運手冊](docs/PRODUCTION_OPERATIONS.md)及
 [貢獻指南](CONTRIBUTING.md)。
 
+同一個程式可分別啟動核心與維護子伺服器，以獨立行程共用 PostgreSQL。
+核心統一管理連線、工作階段與訊息投遞；維護行程只載入資料庫與保留期限設定。
+請參閱[子伺服器權責與部署](docs/SUBSERVERS.md)，包含切換、回復與目前的權限限制。
+
 ## 如何使用
 
 ### 發行套件

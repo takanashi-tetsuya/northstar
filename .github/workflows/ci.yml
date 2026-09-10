@@ -44,6 +44,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Check independent fuzz workspace formatting
+        run: cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+
   rust-check:
     name: Rust compile checks
     runs-on: ubuntu-latest
@@ -61,6 +64,9 @@ jobs:
 
       - name: Check all targets
         run: cargo check --workspace --all-targets --all-features --locked
+
+      - name: Compile every parser fuzz target without executing fuzz inputs
+        run: cargo check --manifest-path fuzz/Cargo.toml --bins --locked
 
   rust-test:
     name: Rust test
@@ -384,6 +390,14 @@ jobs:
           node scripts/check-session-lifecycle-boundary.mjs
           node scripts/check-documentation-consistency.mjs
           node scripts/check-outbound-xml-construction.mjs
+          node scripts/check-parser-fuzz-coverage.mjs
+          node scripts/test-parser-fuzz-coverage.mjs
+          node scripts/check-ci-required.mjs --workflow-only
+          node --test scripts/test-ci-release-gates.mjs
+          node scripts/check-subserver-boundaries.mjs
+          node --test scripts/test-subserver-boundaries.mjs
+          node --test scripts/test-cluster-signing-key.mjs
+          python3 scripts/test-cluster-signing-envelope.py
           node scripts/check-stateful-database-ci.mjs
           node scripts/omemo-security-tests.mjs
           node scripts/check-i18n.mjs
@@ -405,6 +419,7 @@ jobs:
           bash scripts/check-github-ci-run.sh
           bash scripts/test-github-ci-supervisor.sh
           bash scripts/test-listener-stress-worker.sh
+          python3 scripts/test-listener-stress-phases.py
           bash scripts/test-stateful-database-ci.sh
           bash scripts/check-database-role-boundaries.sh
           bash scripts/test-postgres-client-wrapper.sh
@@ -435,6 +450,7 @@ jobs:
             prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac \
             check rules /etc/northstar-monitoring/alerts.yml
           docker compose -f docker-compose.yml -f deploy/docker-compose.components.yml config --quiet
+          docker compose -f docker-compose.yml -f deploy/docker-compose.subservers.yml config --quiet
           docker compose -f docker-compose.yml -f deploy/docker-compose.backup-security.yml config --quiet
           docker compose -f docker-compose.yml -f deploy/docker-compose.backup-security.yml -f deploy/docker-compose.backup-age.yml config --quiet
           release_config="$(mktemp)"
@@ -581,8 +597,8 @@ jobs:
         with:
           toolchain: 1.97.1
 
-      - name: Install PostgreSQL client
-        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client
+      - name: Install PostgreSQL server and client fixture tools
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql postgresql-client
 
       - name: Reconcile, migrate, and prove workload denials
         env:
@@ -592,6 +608,11 @@ jobs:
           PGHOST: 127.0.0.1
           PGPORT: "5432"
         run: bash scripts/database-role-boundary-db-ci.sh
+
+      - name: Prove independent maintenance authority on a private PostgreSQL cluster
+        run: >-
+          python3 scripts/maintenance-subserver-wsl.py
+          --server "$GITHUB_WORKSPACE/target/debug/rust-xmpp-server"
 
   protocol-integration:
     name: PostgreSQL protocol integration
@@ -1134,3 +1155,45 @@ jobs:
         run: >-
           bash scripts/github-ci-run.sh "Disaster-recovery drill"
           bash scripts/backup-restore-wsl.sh
+
+  ci-required:
+    name: CI required
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - rust-fmt
+      - rust-check
+      - rust-test
+      - rust-clippy
+      - rust-build
+      - rust-quality
+      - contracts-quality
+      - contracts-compatibility
+      - dependency-audit
+      - dependency-policy
+      - protocol-fuzz
+      - web-static
+      - container-build
+      - database-role-boundary
+      - protocol-integration
+      - production-envelope
+      - heavy-runtime-envelope
+      - stateful-database-integration
+      - mix-integration
+      - federation-integration
+      - listener-readiness-stress-smoke
+      - listener-readiness-stress-regular
+      - listener-readiness-stress-scheduled
+      - xep0487-integration
+      - disaster-recovery
+    steps:
+      - name: Check out the evaluated source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Require every applicable job to succeed
+        env:
+          CI_REQUIRED_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/check-ci-required.mjs

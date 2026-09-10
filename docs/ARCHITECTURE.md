@@ -4,6 +4,12 @@ This document maps the current implementation to its security and persistence
 boundaries. Protocol support claims belong in [../XEP_MATRIX.md](../XEP_MATRIX.md);
 operational procedures belong in [PRODUCTION_OPERATIONS.md](PRODUCTION_OPERATIONS.md).
 
+The binary supports combined operation or independent core and maintenance
+processes over shared PostgreSQL. [Subserver ownership](SUBSERVERS.md) specifies
+their exact capabilities, health boundaries and deployment lifecycle. Core
+retains all live-session authority; maintenance receives only retention policy,
+a bounded database pool and metrics.
+
 ## Module map
 
 ```mermaid

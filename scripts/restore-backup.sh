@@ -20,6 +20,7 @@ security_policy="${BACKUP_SECURITY_POLICY:-production}"
 max_upload_object_bytes="${RESTORE_MAX_UPLOAD_OBJECT_BYTES:-1073741824}"
 max_upload_total_bytes="${RESTORE_MAX_UPLOAD_TOTAL_BYTES:-68719476736}"
 reserve_free_bytes="${RESTORE_RESERVE_FREE_BYTES:-1073741824}"
+session_response_timeout_seconds="${RESTORE_SESSION_RESPONSE_TIMEOUT_SECONDS:-300}"
 maintenance_lock_key=735559096281326101
 grant_boundary_sql="$project_dir/deploy/postgres-init/lib/verify-northstar-grant-boundary.sql"
 grant_apply_sql="$project_dir/deploy/postgres-init/lib/apply-northstar-grants.sql"
@@ -52,6 +53,9 @@ Options:
   --max-upload-total-bytes N     Maximum expanded bytes for all objects
   --reserve-free-bytes N         Free-space reserve on every working filesystem
   --development-insecure-legacy  Explicitly permit legacy/unsigned development restore
+
+RESTORE_SESSION_RESPONSE_TIMEOUT_SECONDS bounds each database response wait
+(default 300, maximum 3600 seconds). Expiry is never proof of commit or rollback.
 EOF
 }
 
@@ -149,6 +153,9 @@ for numeric_setting in max_upload_object_bytes max_upload_total_bytes reserve_fr
 done
 (( max_upload_object_bytes > 0 && max_upload_total_bytes > 0 )) \
   || { echo "restore upload byte limits must be positive" >&2; exit 2; }
+[[ "$session_response_timeout_seconds" =~ ^[1-9][0-9]{0,3}$ ]] \
+  && (( session_response_timeout_seconds <= 3600 )) \
+  || { echo "RESTORE_SESSION_RESPONSE_TIMEOUT_SECONDS must be between 1 and 3600" >&2; exit 2; }
 
 test_fail_after_moves="${NORTHSTAR_RESTORE_TEST_FAIL_AFTER_UPLOAD_MOVES:-0}"
 test_fail_point="${NORTHSTAR_RESTORE_TEST_FAIL_POINT:-}"
@@ -1062,13 +1069,22 @@ psql_session_command() {
 
 psql_session_wait_token() {
   local session_out="$1" token="$2" output_file="$3" line
-  while IFS= read -r line <&"$session_out"; do
+  local deadline=$((SECONDS + session_response_timeout_seconds)) remaining
+  while true; do
+    remaining=$((deadline - SECONDS))
+    if (( remaining <= 0 )); then
+      echo "restore database response timed out; transaction outcome remains unproven (${output_file##*/})" >&2
+      return 1
+    fi
+    if ! IFS= read -r -t "$remaining" line <&"$session_out"; then
+      echo "restore database response ended or timed out before its completion marker (${output_file##*/}); transaction outcome remains unproven" >&2
+      return 1
+    fi
     if [[ "$line" == "$token" ]]; then
       return 0
     fi
-    printf '%s\n' "$line" >>"$output_file"
+    printf '%s\n' "$line" >>"$output_file" || return 1
   done
-  return 1
 }
 
 control_session_command() {
@@ -1151,7 +1167,7 @@ wait_for_restore_transaction_barrier() {
     printf "%s\n" \
       "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(:'restore_barrier_key', 0));"
     if [[ -n "$transaction_xid" ]]; then
-      printf "SELECT '%s' || COALESCE(pg_catalog.pg_xact_status((:'restore_xid')::pg_catalog.xid8), '__TOO_OLD__);\n" \
+      printf "SELECT '%s' || COALESCE(pg_catalog.pg_xact_status((:'restore_xid')::pg_catalog.xid8), '__TOO_OLD__');\n" \
         "$status_prefix"
     fi
     printf '%s\n' 'COMMIT;'
@@ -2211,7 +2227,9 @@ rollback_dump="$rollback_set/database-before.dump"
 # owns only the hard connection fence. The coordinator also arbitrates each
 # replacement XID after its transaction-local barrier; neither fence is
 # represented as an application-writer lock.
+echo 'restore phase=database-authority-preflight' >&2
 establish_restore_database_authorities
+echo 'restore phase=rollback-snapshot' >&2
 run_pg_client_without_parent_fds pg_dump --format=custom --compress=9 --no-owner --no-acl \
   --file="$rollback_dump"
 chmod 0600 "$rollback_dump"
@@ -2228,6 +2246,7 @@ journal_append state Prepared
 # crash leaves the target unavailable rather than exposing a half-switched data
 # plane.
 start_compensation_worker
+echo 'restore phase=connection-fence' >&2
 activate_target_database_fence
 release_primary_policy_lock_after_fence
 verify_manifest_objects "$old_manifest" "$resolved_upload" "${cutover_dir##*/}" \
@@ -2236,11 +2255,13 @@ journal_append state BackupVerified
 compensation_required=true
 journal_append database-switch-intent
 replacement_committed=false
+echo 'restore phase=database-replacement' >&2
 if ! replace_database_from_dump "$payload_dir/database.dump" restored exact \
   "$primary_worker_in" "$primary_worker_out" incoming; then
   false
 fi
 journal_append database-switch-done
+echo 'restore phase=database-replacement-verified' >&2
 journal_append state RestoreApplied
 journal_append state RolesReconciled
 
@@ -2344,6 +2365,9 @@ trap 'exit 143' TERM
 # the terminal-state guard below is the only path that may reopen connections.
 release_target_database_fence
 close_db_sessions
+# Record completion while the journal still exists. Deleting its cutover
+# directory first turns a successful, reopened restore into an exit-1 result.
+journal_append state Completed || preserve_work=true
 if [[ "$preserve_work" != true ]]; then
   remove_cutover_dir
   remove_work_dir
@@ -2351,7 +2375,6 @@ else
   echo "restore committed, but journal cleanup was retained for operator inspection: $cutover_dir" >&2
 fi
 compensation_required=false
-journal_append state Completed
 trap - ERR EXIT INT TERM
 
 echo "restore complete: database and $resolved_upload"

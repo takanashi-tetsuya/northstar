@@ -1137,6 +1137,7 @@ struct ClusterHealth {
     state: AtomicU8,
     listener_generation: AtomicU64,
     required_listener_generation: AtomicU64,
+    listener_rotation_epoch: AtomicU64,
     failure_since: Mutex<Option<Instant>>,
     authentication_failures: AtomicU64,
     replay_rejections: AtomicU64,
@@ -1151,6 +1152,7 @@ impl ClusterHealth {
             state: AtomicU8::new(CLUSTER_DISABLED),
             listener_generation: AtomicU64::new(0),
             required_listener_generation: AtomicU64::new(0),
+            listener_rotation_epoch: AtomicU64::new(0),
             failure_since: Mutex::new(None),
             authentication_failures: AtomicU64::new(0),
             replay_rejections: AtomicU64::new(0),
@@ -1160,11 +1162,33 @@ impl ClusterHealth {
         }
     }
 
+    fn next_listener_generation(&self) -> u64 {
+        self.listener_generation
+            .load(Ordering::Acquire)
+            .saturating_add(1)
+    }
+
+    fn begin_listener_attempt(&self) -> (u64, u64) {
+        let _transition = self
+            .failure_since
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (
+            self.next_listener_generation(),
+            self.listener_rotation_epoch.load(Ordering::Acquire),
+        )
+    }
+
+    fn listener_requires_rotation(&self, candidate_generation: u64) -> bool {
+        candidate_generation < self.required_listener_generation.load(Ordering::Acquire)
+    }
+
     fn enabled() -> Self {
         Self {
             state: AtomicU8::new(CLUSTER_RECONCILING),
             listener_generation: AtomicU64::new(0),
             required_listener_generation: AtomicU64::new(1),
+            listener_rotation_epoch: AtomicU64::new(0),
             failure_since: Mutex::new(Some(Instant::now())),
             authentication_failures: AtomicU64::new(0),
             replay_rejections: AtomicU64::new(0),
@@ -1667,11 +1691,7 @@ impl ClusterManager {
     }
 
     pub fn begin_shutdown(&self) {
-        if self.is_enabled() {
-            self.health
-                .state
-                .store(CLUSTER_SHUTDOWN_REQUIRED, Ordering::Release);
-        }
+        self.require_shutdown();
     }
 
     /// Wait for every already-admitted signed publication to complete and
@@ -1749,6 +1769,16 @@ impl ClusterManager {
         if !self.is_enabled() {
             return;
         }
+        // Serialize the failure fence with complete_reconciliation's generation
+        // check and healthy commit, so an older completion cannot hide failure.
+        let mut since = self
+            .health
+            .failure_since
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.health.state.load(Ordering::Acquire) == CLUSTER_SHUTDOWN_REQUIRED {
+            return;
+        }
         let degraded = match self.failure_policy() {
             Some(crate::cluster_security::ClusterFailurePolicy::DurableDirectOnly) => {
                 CLUSTER_DURABLE_DIRECT_ONLY
@@ -1769,22 +1799,33 @@ impl ClusterManager {
         self.health
             .required_listener_generation
             .fetch_max(next_listener, Ordering::AcqRel);
+        self.health
+            .listener_rotation_epoch
+            .fetch_add(1, Ordering::AcqRel);
         self.listener_rotation.notify_waiters();
+        if since.is_none() {
+            *since = Some(Instant::now());
+        }
+        drop(since);
+        tracing::error!(?error, ?class, policy = ?self.failure_policy(), "cluster control plane entered a degraded state");
+    }
+
+    fn confirm_listener_generation(&self, generation: u64, rotation_epoch: u64) -> Result<()> {
         let mut since = self
             .health
             .failure_since
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if since.is_none() {
-            *since = Some(Instant::now());
-        }
-        tracing::error!(?error, ?class, policy = ?self.failure_policy(), "cluster control plane entered a degraded state");
-    }
-
-    fn note_listener_generation(&self) {
+        anyhow::ensure!(
+            self.health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED
+                && self.health.listener_rotation_epoch.load(Ordering::Acquire) == rotation_epoch
+                && generation == self.health.next_listener_generation()
+                && !self.health.listener_requires_rotation(generation),
+            "Redis PubSub listener rotation was requested before self-loop confirmation"
+        );
         self.health
             .listener_generation
-            .fetch_add(1, Ordering::AcqRel);
+            .store(generation, Ordering::Release);
         // Startup has no pre-existing local sessions or MUC occupants: State
         // already reconciled PostgreSQL key/instance authority and activate()
         // acquired the Redis node lease. The first subscribed listener is the
@@ -1793,19 +1834,58 @@ impl ClusterManager {
         if self.health.state.load(Ordering::Acquire) == CLUSTER_RECONCILING
             && self.health.degraded_transitions.load(Ordering::Acquire) == 0
         {
-            let _ = self.complete_reconciliation();
+            self.complete_reconciliation_locked(&mut since, rotation_epoch)?;
         }
+        Ok(())
     }
 
-    fn begin_reconciliation(&self) {
+    #[cfg(test)]
+    fn note_listener_generation(&self) {
+        let (generation, rotation_epoch) = self.health.begin_listener_attempt();
+        self.confirm_listener_generation(generation, rotation_epoch)
+            .unwrap();
+    }
+
+    fn begin_reconciliation(&self) -> Result<u64> {
+        let _transition = self
+            .health
+            .failure_since
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        anyhow::ensure!(
+            self.health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED,
+            "cluster shutdown is required; reconciliation cannot begin"
+        );
         if self.is_enabled() {
             self.health
                 .state
                 .store(CLUSTER_RECONCILING, Ordering::Release);
         }
+        Ok(self.health.listener_rotation_epoch.load(Ordering::Acquire))
     }
 
-    fn complete_reconciliation(&self) -> Result<()> {
+    fn complete_reconciliation(&self, rotation_epoch: u64) -> Result<()> {
+        let mut since = self
+            .health
+            .failure_since
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.complete_reconciliation_locked(&mut since, rotation_epoch)
+    }
+
+    fn complete_reconciliation_locked(
+        &self,
+        since: &mut std::sync::MutexGuard<'_, Option<Instant>>,
+        rotation_epoch: u64,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED,
+            "cluster shutdown is required; reconciliation cannot restore readiness"
+        );
+        anyhow::ensure!(
+            self.health.listener_rotation_epoch.load(Ordering::Acquire) == rotation_epoch,
+            "cluster control-plane failure invalidated this reconciliation attempt"
+        );
         anyhow::ensure!(
             self.health.listener_generation.load(Ordering::Acquire)
                 >= self
@@ -1815,11 +1895,7 @@ impl ClusterManager {
             "cluster PubSub listener generation has not been re-established"
         );
         self.health.state.store(CLUSTER_HEALTHY, Ordering::Release);
-        *self
-            .health
-            .failure_since
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        **since = None;
         Ok(())
     }
 
@@ -1838,6 +1914,11 @@ impl ClusterManager {
 
     fn require_shutdown(&self) {
         if self.is_enabled() {
+            let _transition = self
+                .health
+                .failure_since
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             self.health
                 .state
                 .store(CLUSTER_SHUTDOWN_REQUIRED, Ordering::Release);
@@ -5226,10 +5307,11 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
     if !state.cluster.is_enabled() {
         return Ok(());
     }
-    let reconcile = state.cluster.readiness_error().is_some();
-    if reconcile {
-        state.cluster.begin_reconciliation();
-    }
+    let reconciliation_epoch = if state.cluster.readiness_error().is_some() {
+        Some(state.cluster.begin_reconciliation()?)
+    } else {
+        None
+    };
     // PostgreSQL instance authority is refreshed before Redis ownership. A
     // recovered listener cannot make this node ready while its view of peer
     // process epochs is stale.
@@ -5372,12 +5454,12 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
             tracing::warn!(?error, %room, "could not reconcile Redis MUC room soft-state");
         }
     }
-    if reconcile {
+    if let Some(rotation_epoch) = reconciliation_epoch {
         anyhow::ensure!(
             muc_soft_state_errors == 0,
             "Redis MUC soft-state reconciliation failed for {muc_soft_state_errors} authoritative occupancies"
         );
-        state.cluster.complete_reconciliation()?;
+        state.cluster.complete_reconciliation(rotation_epoch)?;
     }
     Ok(())
 }
@@ -6166,6 +6248,13 @@ async fn listen_once(
         .client
         .as_ref()
         .context("Redis listener started without a configured Redis client")?;
+    // Register before any setup await: repeated failures can request rotation
+    // without increasing the required generation again, so a fresh notified()
+    // inside the loop could miss their notify_waiters() call.
+    let rotation = state.cluster.listener_rotation.notified();
+    tokio::pin!(rotation);
+    rotation.as_mut().enable();
+    let (candidate_generation, rotation_epoch) = state.cluster.health.begin_listener_attempt();
     let mut redis_setup_timer = Some(state.metrics.redis_operation_duration_seconds.start_timer());
     let mut pubsub_conn = open_pubsub(client).await?;
     let channel = state.cluster.key(format!("node:{}", state.cluster.node_id));
@@ -6198,16 +6287,13 @@ async fn listen_once(
     }
 
     loop {
+        // This connection must be allowed to receive its initial self-loop
+        // before publishing its generation. Comparing the last completed
+        // generation here would reject every startup and recovery attempt.
         if state
             .cluster
             .health
-            .listener_generation
-            .load(Ordering::Acquire)
-            < state
-                .cluster
-                .health
-                .required_listener_generation
-                .load(Ordering::Acquire)
+            .listener_requires_rotation(candidate_generation)
         {
             anyhow::bail!("Redis PubSub listener rotation was requested");
         }
@@ -6216,8 +6302,9 @@ async fn listen_once(
             .map(|(_, deadline, _)| *deadline)
             .unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(86_400));
         let input = tokio::select! {
+            biased;
             _ = cancel.cancelled() => return Ok(()),
-            _ = state.cluster.listener_rotation.notified() => {
+            _ = &mut rotation => {
                 anyhow::bail!("Redis PubSub listener rotation was requested");
             }
             _ = liveness.tick() => ListenerInput::ProbeDue,
@@ -6260,7 +6347,9 @@ async fn listen_once(
             {
                 let (_, _, establishing) = pending_probe.take().expect("probe was present");
                 if establishing {
-                    state.cluster.note_listener_generation();
+                    state
+                        .cluster
+                        .confirm_listener_generation(candidate_generation, rotation_epoch)?;
                     drop(redis_setup_timer.take());
                 }
                 heartbeat.ok();
@@ -6271,6 +6360,15 @@ async fn listen_once(
             received_channel == channel,
             "Redis PubSub listener received an unexpected channel"
         );
+        if pending_probe
+            .as_ref()
+            .is_some_and(|(_, _, establishing)| *establishing)
+        {
+            // Do not consume signature replay records or execute node commands
+            // until this subscription has proved its own publish/receive path.
+            // Durable deliveries remain eligible for their normal retry.
+            continue;
+        }
         let envelope = match state
             .cluster
             .verify_signed_payload_persisted(&payload, &channel, None)
@@ -7711,6 +7809,180 @@ mod tests {
             pending_ack_slots: Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_CLUSTER_ACKS)),
             pending_acks: Arc::new(dashmap::DashMap::new()),
         }
+    }
+
+    fn listener_health_manager() -> ClusterManager {
+        let namespace = "listener-health.test";
+        let (_, security) = crate::cluster_security::test_configuration_pair(namespace);
+        let mut manager = verification_manager(namespace, security);
+        // A lazy, unused pool enables the health policy without opening Redis.
+        let client = redis::Client::open("redis://127.0.0.1:1").unwrap();
+        manager.pool =
+            Some(cluster_pool_builder().build_unchecked(RedisConnectionManager { client }));
+        manager.health = Arc::new(ClusterHealth::enabled());
+        manager
+    }
+
+    #[tokio::test]
+    async fn listener_generation_requires_proof_at_startup_and_after_failure() {
+        let manager = listener_health_manager();
+        let initial = manager.health.next_listener_generation();
+        assert_eq!(initial, 1);
+        assert!(!manager.health.listener_requires_rotation(initial));
+        assert!(manager.complete_reconciliation(0).is_err());
+        assert!(manager.readiness_error().is_some());
+
+        // Only the successfully matched initial self-loop publishes this.
+        manager.note_listener_generation();
+        assert!(manager.readiness_error().is_none());
+        manager.record_listener_failure(&anyhow::anyhow!("lost initial subscription"));
+        assert!(manager.health.listener_requires_rotation(initial));
+        assert!(manager.readiness_error().is_some());
+
+        let replacement = manager.health.next_listener_generation();
+        assert_eq!(replacement, initial + 1);
+        assert!(!manager.health.listener_requires_rotation(replacement));
+        let recovery_epoch = manager.begin_reconciliation().unwrap();
+        assert!(manager.complete_reconciliation(recovery_epoch).is_err());
+        manager.note_listener_generation();
+        // A recovery also needs maintenance reconciliation, unlike startup.
+        assert!(manager.readiness_error().is_some());
+        manager.complete_reconciliation(recovery_epoch).unwrap();
+        assert!(manager.readiness_error().is_none());
+
+        // A concurrent later failure must fence even the proven replacement.
+        manager.record_listener_failure(&anyhow::anyhow!("lost replacement subscription"));
+        assert!(manager.health.listener_requires_rotation(replacement));
+        assert!(manager.complete_reconciliation(recovery_epoch).is_err());
+        assert!(manager.readiness_error().is_some());
+    }
+
+    #[tokio::test]
+    async fn listener_rotation_during_setup_is_retained_without_generation_increment() {
+        let manager = listener_health_manager();
+        let rotation = manager.listener_rotation.notified();
+        tokio::pin!(rotation);
+        rotation.as_mut().enable();
+        let candidate = manager.health.next_listener_generation();
+        // Both failures happen during setup, before the listener first polls.
+        manager.record_listener_failure(&anyhow::anyhow!("setup authority failure"));
+        manager.record_listener_failure(&anyhow::anyhow!("repeated setup failure"));
+        assert_eq!(candidate, 1);
+        assert!(!manager.health.listener_requires_rotation(candidate));
+        assert_eq!(
+            manager.health.listener_generation.load(Ordering::Acquire),
+            0
+        );
+        tokio::time::timeout(Duration::from_millis(100), &mut rotation)
+            .await
+            .expect("setup lost the requested rotation because its generation was unchanged");
+        assert!(manager.readiness_error().is_some());
+    }
+
+    #[tokio::test]
+    async fn listener_selected_probe_cannot_confirm_after_same_generation_failure() {
+        let manager = listener_health_manager();
+        let (candidate, epoch) = manager.health.begin_listener_attempt();
+        // Insert the failure after stream.next selected the initial probe but
+        // before confirmation. The required generation stays at one.
+        manager.record_listener_failure(&anyhow::anyhow!("failure after probe selection"));
+        assert!(!manager.health.listener_requires_rotation(candidate));
+        assert!(manager
+            .confirm_listener_generation(candidate, epoch)
+            .is_err());
+        assert_eq!(
+            manager.health.listener_generation.load(Ordering::Acquire),
+            0
+        );
+        assert!(manager.complete_reconciliation(epoch).is_err());
+
+        let (replacement, replacement_epoch) = manager.health.begin_listener_attempt();
+        assert_eq!(replacement, candidate);
+        assert_ne!(replacement_epoch, epoch);
+        manager
+            .confirm_listener_generation(replacement, replacement_epoch)
+            .unwrap();
+        assert!(manager.readiness_error().is_some());
+        let reconciliation_epoch = manager.begin_reconciliation().unwrap();
+        manager
+            .complete_reconciliation(reconciliation_epoch)
+            .unwrap();
+        assert!(manager.readiness_error().is_none());
+        assert!(manager
+            .confirm_listener_generation(replacement, replacement_epoch)
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn reconciliation_cannot_borrow_a_new_probe_after_an_intervening_failure() {
+        let manager = listener_health_manager();
+        manager.note_listener_generation();
+        manager.record_listener_failure(&anyhow::anyhow!("first failure"));
+        let stale_epoch = manager.begin_reconciliation().unwrap();
+        manager.record_listener_failure(&anyhow::anyhow!("failure during authority refresh"));
+        manager.note_listener_generation();
+        assert!(manager.complete_reconciliation(stale_epoch).is_err());
+        assert!(manager.readiness_error().is_some());
+
+        let fresh_epoch = manager.begin_reconciliation().unwrap();
+        manager.complete_reconciliation(fresh_epoch).unwrap();
+        assert!(manager.readiness_error().is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_is_terminal_for_every_cluster_health_transition() {
+        for shutdown in [
+            ClusterManager::begin_shutdown,
+            ClusterManager::require_shutdown,
+        ] {
+            let manager = listener_health_manager();
+            manager.note_listener_generation();
+            let reconciliation_epoch = manager.begin_reconciliation().unwrap();
+            shutdown(&manager);
+            manager.record_listener_failure(&anyhow::anyhow!("failure after shutdown"));
+            assert!(manager.begin_reconciliation().is_err());
+            let (candidate, epoch) = manager.health.begin_listener_attempt();
+            assert!(manager
+                .confirm_listener_generation(candidate, epoch)
+                .is_err());
+            assert!(manager
+                .complete_reconciliation(reconciliation_epoch)
+                .is_err());
+            assert_eq!(
+                manager.health.state.load(Ordering::Acquire),
+                CLUSTER_SHUTDOWN_REQUIRED
+            );
+            assert!(manager.readiness_error().is_some());
+            assert!(manager.admit(ClusterOperation::DurableDirect).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn health_transition_lock_orders_failure_after_healthy_commit() {
+        let manager = listener_health_manager();
+        manager.note_listener_generation();
+        let epoch = manager.begin_reconciliation().unwrap();
+        let mut transition = manager.health.failure_since.lock().unwrap();
+        let ready = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                ready.wait();
+                manager.record_listener_failure(&anyhow::anyhow!("failure racing with commit"));
+            });
+            // Use the same guard and actual commit implementation as production.
+            manager
+                .complete_reconciliation_locked(&mut transition, epoch)
+                .unwrap();
+            ready.wait();
+            drop(transition);
+            worker.join().unwrap();
+        });
+        assert_eq!(
+            manager.health.state.load(Ordering::Acquire),
+            CLUSTER_FAIL_CLOSED
+        );
+        assert!(manager.complete_reconciliation(epoch).is_err());
+        assert!(manager.readiness_error().is_some());
     }
 
     #[test]

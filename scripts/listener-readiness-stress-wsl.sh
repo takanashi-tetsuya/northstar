@@ -97,11 +97,11 @@ database_min_connections=$((10#$database_min_connections))
 readonly stress_child_count=$((pairs * 2))
 
 effective_cpu_count() {
-  # Respect a cgroup CPU quota when one exists. `nproc` alone reports the host
-  # topology inside some CI containers and would recreate the oversubscription
-  # this resource contract is meant to prevent.
+  # nproc respects the process affinity/cpuset; getconf reports the whole
+  # machine even when this fixture is assigned fewer CPUs. Also clamp by a
+  # cgroup quota, which need not match the number of allowed processors.
   local host_count quota period quota_count v1_quota v1_period
-  host_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || printf '1')"
+  host_count="$(env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')"
   [[ "$host_count" =~ ^[1-9][0-9]*$ ]] || host_count=1
   quota_count="$host_count"
   if [[ -r /sys/fs/cgroup/cpu.max ]]; then
@@ -218,6 +218,8 @@ mix_login_slot_dir=""
 mix_phase_dir=""
 mix_phase_run_nonce=""
 mix_phase_round=""
+startup_phase_dir=""
+startup_phase_nonce=""
 
 # Every stress worker must own two independent database states: one for each
 # federated domain.  Applying the normal migrator from 50 workers would be
@@ -296,8 +298,6 @@ record_parent_diagnostic() {
 }
 
 initialize_mix_federation_login_slots() {
-  [[ "$fixture" == mix-federation ]] || return 0
-
   local slot index resolved_slot_dir expected_slot
   mix_login_slot_dir="$runtime_dir/mix-federation-login-slots"
   mkdir --mode=0700 -- "$mix_login_slot_dir" || return 1
@@ -1300,7 +1300,14 @@ reap_workers() {
 
 start_stress_worker() {
   local round="$1" pair="$2" log_file="$3" database_a="$4" database_b="$5" control_file worker_pid worker_group candidate_pgid candidate_sid
-  local -a fixture_environment=()
+  local -a fixture_environment=(
+    "NORTHSTAR_LISTENER_STRESS_PHASE_DIR=$startup_phase_dir"
+    "NORTHSTAR_LISTENER_STRESS_PHASE_NONCE=$startup_phase_nonce"
+    "NORTHSTAR_LISTENER_STRESS_PHASE_ROUND=$round"
+    "NORTHSTAR_LISTENER_STRESS_PHASE_PAIR=$pair"
+    "NORTHSTAR_MIX_FEDERATION_LOGIN_SLOT_DIR=$mix_login_slot_dir"
+    "NORTHSTAR_MIX_FEDERATION_LOGIN_SLOT_COUNT=$login_slot_count"
+  )
   private_database_name_is_valid "$database_a" && private_database_name_is_valid "$database_b" || {
     echo "listener stress worker received an invalid private database name" >&2
     return 1
@@ -1312,8 +1319,6 @@ start_stress_worker() {
       return 1
     }
     fixture_environment+=(
-      "NORTHSTAR_MIX_FEDERATION_LOGIN_SLOT_DIR=$mix_login_slot_dir"
-      "NORTHSTAR_MIX_FEDERATION_LOGIN_SLOT_COUNT=$login_slot_count"
       "NORTHSTAR_MIX_FEDERATION_PHASE_CONTROL_DIR=$mix_phase_dir"
       "NORTHSTAR_MIX_FEDERATION_PHASE_RUN_NONCE=$mix_phase_run_nonce"
       "NORTHSTAR_MIX_FEDERATION_PHASE_ROUND=$mix_phase_round"
@@ -1604,6 +1609,11 @@ for ((round = 1; round <= rounds; round++)); do
     echo "listener stress could not initialize its parent-owned MIX setup barrier: round=$round" >&2
     exit 1
   fi
+  startup_phase_dir="$runtime_dir/startup-phase-r$round"
+  startup_phase_nonce="$(openssl rand -hex 32)"
+  run_parent_phase "fixture-preparation-init-r$round" \
+    python3 "$project_dir/scripts/listener-stress-phases.py" init \
+    "$startup_phase_dir" "$startup_phase_nonce" "$round" "$pairs" "$$"
   for ((pair = 1; pair <= pairs; pair++)); do
     log="$runtime_dir/${fixture}.round-${round}.pair-${pair}.log"
     round_logs+=("$log")
@@ -1621,6 +1631,21 @@ for ((round = 1; round <= rounds; round++)); do
   # Exit through the scoped parent cleanup instead of falling into `wait`.
   if ((failed != 0)); then
     exit 1
+  fi
+  # Release all 50 pairs together only after their independent RSA material
+  # exists. Key generation cannot consume CPU inside another server's bounded
+  # startup admission, 15 s readiness budget, or 5 s worker heartbeat window.
+  run_parent_phase "fixture-preparation-release-r$round" \
+    python3 "$project_dir/scripts/listener-stress-phases.py" release \
+    "$startup_phase_dir" "$startup_phase_nonce" "$round" prepared \
+    "$worker_timeout_seconds" "${workers[@]}"
+  record_parent_diagnostic "phase=fixture-preparation round=$round status=released pairs=$pairs"
+  if [[ "$fixture" == federation ]]; then
+    run_parent_phase "federation-live-release-r$round" \
+      python3 "$project_dir/scripts/listener-stress-phases.py" release \
+      "$startup_phase_dir" "$startup_phase_nonce" "$round" live \
+      "$worker_timeout_seconds" "${workers[@]}"
+    record_parent_diagnostic "phase=federation-live-barrier round=$round status=released pairs=$pairs"
   fi
   if ! await_mix_federation_setup_barrier "${#workers[@]}"; then
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=mix-federation-setup-barrier

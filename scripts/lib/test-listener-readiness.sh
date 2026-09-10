@@ -64,8 +64,44 @@ fixture_register_readiness_ports() {
 # ledger rather than a transient subshell copy.
 fixture_wait_for_readiness() {
   local project_dir="$1" record_path="$2" nonce="$3" pid="$4"
-  FIXTURE_READINESS_OUTPUT="$(python3 "$project_dir/scripts/wait-test-readiness.py" "$record_path" "$nonce" "$pid" 15)" || return 1
+  local -a arguments=("$record_path" "$nonce" "$pid" 15)
+  [[ -z "${5:-}" ]] || arguments+=(--deadline "$5")
+  FIXTURE_READINESS_OUTPUT="$(python3 "$project_dir/scripts/wait-test-readiness.py" "${arguments[@]}")" || return 1
   fixture_register_readiness_ports "$FIXTURE_READINESS_OUTPUT" "$pid"
+}
+
+# The caller obtains this before spawning the server, then gives the same
+# absolute monotonic deadline to both socket ownership and HTTP health checks.
+fixture_startup_deadline() {
+  python3 "$1/scripts/wait-test-readiness.py" --startup-deadline
+}
+
+fixture_wait_for_http_readiness() {
+  local project_dir="$1"
+  shift
+  python3 "$project_dir/scripts/wait-test-readiness.py" --http-ready "$@"
+}
+
+# Certificate generation is fixture preparation, not Northstar cold start.
+# In the 50-pair matrix every private certificate must be ready before any
+# child starts its bounded startup/heartbeat clocks. Standalone runs are a no-op.
+fixture_stress_phase_barrier() {
+  local project_dir="$1" phase="$2"
+  if [[ -z "${NORTHSTAR_LISTENER_STRESS_PHASE_DIR:-}" ]]; then
+    [[ -z "${NORTHSTAR_LISTENER_STRESS_PHASE_NONCE:-}" \
+       && -z "${NORTHSTAR_LISTENER_STRESS_PHASE_ROUND:-}" \
+       && -z "${NORTHSTAR_LISTENER_STRESS_PHASE_PAIR:-}" ]] || {
+      echo "listener stress phase configuration must be set together" >&2
+      return 1
+    }
+    return 0
+  fi
+  python3 "$project_dir/scripts/listener-stress-phases.py" worker \
+    "$NORTHSTAR_LISTENER_STRESS_PHASE_DIR" \
+    "${NORTHSTAR_LISTENER_STRESS_PHASE_NONCE:?missing phase nonce}" \
+    "${NORTHSTAR_LISTENER_STRESS_PHASE_ROUND:?missing phase round}" \
+    "$phase" "${NORTHSTAR_LISTENER_STRESS_PHASE_PAIR:?missing phase pair}" \
+    "${NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS:-900}"
 }
 
 fixture_port_is_listening() {

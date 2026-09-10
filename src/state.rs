@@ -47,18 +47,21 @@ const OMEMO_POLL_MAX_ACTIVE_IPS: usize = 65_536;
 /// process from observing committed administration settings under a saturated
 /// main pool. XEP-0133 uses the same control-plane capability when enabled,
 /// but does not own the capability itself.
-const RUNTIME_CONTROL_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_millis(500);
+// This is an initial connection/SCRAM handshake budget, not the runtime
+// policy polling interval. Repeatedly cancelling half-second handshakes under
+// a cold-start cohort can prevent any of them from reaching authentication.
+const RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET: Duration = Duration::from_secs(3);
 /// A process has no traffic listeners while this bounded admission window is
 /// active.  It exists specifically to de-correlate a cold-start cohort from a
 /// short, per-attempt pool deadline; it is not a runtime worker retry policy.
 const RUNTIME_CONTROL_STARTUP_RETRY_BUDGET: Duration = Duration::from_secs(15);
 const RUNTIME_CONTROL_STARTUP_RETRY_MAX_DELAY: Duration = Duration::from_millis(500);
 
-fn runtime_control_pool_options(config: &Config) -> PgPoolOptions {
+fn runtime_control_pool_options(config: &Config, attempt_budget: Duration) -> PgPoolOptions {
     let options = PgPoolOptions::new()
         .max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)
         .min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)
-        .acquire_timeout(RUNTIME_CONTROL_POOL_ACQUIRE_TIMEOUT);
+        .acquire_timeout(attempt_budget);
     if config.database_allow_unsafe_role_for_development {
         options
     } else {
@@ -83,6 +86,257 @@ fn runtime_control_startup_retry_delay(attempt: u32, process_id: u32) -> Duratio
     )
 }
 
+async fn runtime_control_startup_connect<T, Connect, ConnectFuture>(
+    deadline: tokio::time::Instant,
+    mut connect: Connect,
+) -> anyhow::Result<T>
+where
+    Connect: FnMut(Duration) -> ConnectFuture,
+    ConnectFuture: std::future::Future<Output = Result<T, sqlx::Error>>,
+{
+    let mut attempts = 0_u32;
+    let admission = tokio::time::timeout_at(deadline, async {
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(sqlx::Error::PoolTimedOut);
+            }
+            let attempt_budget = remaining.min(RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET);
+            attempts = attempts.saturating_add(1);
+            let result = tokio::time::timeout(attempt_budget, connect(attempt_budget))
+                .await
+                .unwrap_or(Err(sqlx::Error::PoolTimedOut));
+            match result {
+                Ok(pool) => return Ok(pool),
+                Err(sqlx::Error::PoolTimedOut) => {
+                    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                    let delay = runtime_control_startup_retry_delay(attempts, std::process::id())
+                        .min(remaining);
+                    tokio::time::sleep(delay).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })
+    .await
+    .unwrap_or(Err(sqlx::Error::PoolTimedOut));
+    admission.with_context(|| {
+        format!("could not create isolated runtime-control database pool after {attempts} bounded startup admission attempts")
+    })
+}
+
+#[cfg(test)]
+mod runtime_control_startup_tests {
+    use super::runtime_control_startup_connect;
+    use std::sync::{
+        atomic::{AtomicBool, AtomicU32, Ordering},
+        Arc,
+    };
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn slow_initial_handshake_finishes_without_half_second_cancellation() {
+        let attempts = AtomicU32::new(0);
+        let result = runtime_control_startup_connect(
+            tokio::time::Instant::now() + Duration::from_secs(15),
+            |budget| {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                assert!(budget > Duration::from_millis(500));
+                assert!(budget <= Duration::from_secs(3));
+                async {
+                    tokio::time::sleep(Duration::from_millis(750)).await;
+                    Ok(7_u32)
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, 7);
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn remaining_admission_budget_cancels_an_incomplete_handshake() {
+        struct CancellationWitness(Arc<AtomicBool>);
+        impl Drop for CancellationWitness {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let attempts = AtomicU32::new(0);
+        let result: anyhow::Result<()> = runtime_control_startup_connect(
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            |budget| {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                assert!(budget <= Duration::from_secs(1));
+                let witness = CancellationWitness(Arc::clone(&cancelled));
+                async move {
+                    let _witness = witness;
+                    std::future::pending().await
+                }
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(cancelled.load(Ordering::Relaxed));
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn admission_retries_pool_timeouts_but_never_authentication_or_protocol_errors() {
+        let attempts = AtomicU32::new(0);
+        runtime_control_startup_connect(
+            tokio::time::Instant::now() + Duration::from_secs(2),
+            |_| {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    if attempt == 0 {
+                        Err(sqlx::Error::PoolTimedOut)
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+        attempts.store(0, Ordering::Relaxed);
+        let result: anyhow::Result<()> = runtime_control_startup_connect(
+            tokio::time::Instant::now() + Duration::from_secs(2),
+            |_| {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                async {
+                    Err(sqlx::Error::Protocol(
+                        "fixture authentication rejected".into(),
+                    ))
+                }
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn expired_admission_never_starts_a_new_connection() {
+        let result: anyhow::Result<()> = runtime_control_startup_connect(
+            tokio::time::Instant::now() - Duration::from_millis(1),
+            |_| async { panic!("connection was attempted after its admission deadline") },
+        )
+        .await;
+        assert!(result.is_err());
+    }
+}
+
+fn report_runtime_control_health(
+    heartbeat: &crate::workers::WorkerHeartbeat,
+    observed_database: bool,
+    error: Option<anyhow::Error>,
+) {
+    if let Some(error) = error {
+        heartbeat.error(error);
+    } else if observed_database {
+        heartbeat.ok();
+    } else {
+        // With XEP-0133 control disabled, alternate ticks perform no query.
+        // They prove scheduler liveness only, never database/ownership health.
+        // Clearing an error here would let a dead reserved connection alternate
+        // error/ok forever, concealing loss of the standalone retention lock.
+        heartbeat.pulse();
+    }
+}
+
+#[cfg(test)]
+mod runtime_control_health_tests {
+    use super::report_runtime_control_health;
+    use crate::workers::{WorkerCriticality, WorkerMode, WorkerRegistry};
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn idle_ticks_cannot_reset_a_broken_control_connection() {
+        let workers = WorkerRegistry::new();
+        let cancel = CancellationToken::new();
+        workers.supervise(
+            "test-runtime-control-loss",
+            WorkerCriticality::Critical,
+            WorkerMode::Continuous,
+            None,
+            cancel.clone(),
+            |heartbeat| async move {
+                for _ in 0..3 {
+                    report_runtime_control_health(
+                        &heartbeat,
+                        true,
+                        Some(anyhow::anyhow!("fixture connection closed")),
+                    );
+                    report_runtime_control_health(&heartbeat, false, None);
+                }
+                std::future::pending().await
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(2), cancel.cancelled())
+            .await
+            .expect("idle ticks concealed a broken reserved connection");
+        assert!(workers.critical_failure().is_some());
+        assert!(workers
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await
+            .is_clean());
+    }
+
+    #[tokio::test]
+    async fn successful_database_reads_can_restore_control_health() {
+        let workers = WorkerRegistry::new();
+        let cancel = CancellationToken::new();
+        let (complete, mut observed) = tokio::sync::mpsc::channel(1);
+        workers.supervise(
+            "test-runtime-control-recovery",
+            WorkerCriticality::Critical,
+            WorkerMode::Continuous,
+            None,
+            cancel.clone(),
+            move |heartbeat| {
+                let complete = complete.clone();
+                async move {
+                    for _ in 0..2 {
+                        report_runtime_control_health(
+                            &heartbeat,
+                            true,
+                            Some(anyhow::anyhow!("fixture query failed")),
+                        );
+                        report_runtime_control_health(&heartbeat, false, None);
+                    }
+                    report_runtime_control_health(&heartbeat, true, None);
+                    for _ in 0..2 {
+                        report_runtime_control_health(
+                            &heartbeat,
+                            true,
+                            Some(anyhow::anyhow!("fixture query failed")),
+                        );
+                        report_runtime_control_health(&heartbeat, false, None);
+                    }
+                    let _ = complete.send(()).await;
+                    std::future::pending().await
+                }
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(2), observed.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!cancel.is_cancelled());
+        assert!(workers.readiness_error().is_none());
+        cancel.cancel();
+        assert!(workers
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await
+            .is_clean());
+    }
+}
+
 /// Establish the one process-owned control-plane connection before the
 /// traffic pool or any startup reconciliation can take database capacity.
 ///
@@ -93,38 +347,28 @@ fn runtime_control_startup_retry_delay(attempt: u32, process_id: u32) -> Duratio
 pub(crate) async fn reserve_runtime_control_connection(
     config: &Config,
 ) -> anyhow::Result<PoolConnection<Postgres>> {
-    let retry_deadline = Instant::now() + RUNTIME_CONTROL_STARTUP_RETRY_BUDGET;
-    let mut attempts = 0_u32;
-    let runtime_control_pool = loop {
-        attempts = attempts.saturating_add(1);
-        match runtime_control_pool_options(config)
-            .connect(&config.database_url)
-            .await
-        {
-            Ok(pool) => break pool,
-            Err(sqlx::Error::PoolTimedOut) if Instant::now() < retry_deadline => {
-                tokio::time::sleep(runtime_control_startup_retry_delay(
-                    attempts,
-                    std::process::id(),
-                ))
-                .await;
-            }
-            Err(error) => {
-                return Err(anyhow::Error::new(error).context(format!(
-                    "could not create isolated runtime-control database pool after {attempts} bounded startup admission attempts"
-                )));
-            }
+    let deadline = tokio::time::Instant::now() + RUNTIME_CONTROL_STARTUP_RETRY_BUDGET;
+    let runtime_control_pool = runtime_control_startup_connect(deadline, |attempt_budget| {
+        runtime_control_pool_options(config, attempt_budget).connect(&config.database_url)
+    })
+    .await?;
+    // Attestation and final ownership transfer share the same absolute startup
+    // deadline. A completed handshake alone never authorizes serving traffic.
+    tokio::time::timeout_at(deadline, async {
+        if config.database_allow_unsafe_role_for_development {
+            crate::db::attest_development_database_is_loopback(&runtime_control_pool).await?;
+        } else {
+            crate::db::attest_runtime_role(&runtime_control_pool).await?;
         }
-    };
-    if config.database_allow_unsafe_role_for_development {
-        crate::db::attest_development_database_is_loopback(&runtime_control_pool).await?;
-    } else {
-        crate::db::attest_runtime_role(&runtime_control_pool).await?;
-    }
-    runtime_control_pool
-        .acquire()
-        .await
-        .context("could not reserve the runtime-control database connection")
+        runtime_control_pool
+            .acquire()
+            .await
+            .context("could not reserve the runtime-control database connection")
+    })
+    .await
+    .context(
+        "runtime-control role attestation/reservation exceeded its startup admission deadline",
+    )?
 }
 
 fn admit_omemo_poll_ip_window(window: &mut VecDeque<Instant>, now: Instant) -> bool {
@@ -2682,7 +2926,9 @@ impl AppState {
                         };
 
                         let mut first_error = None;
+                        let mut observed_database = false;
                         if refresh_policy {
+                            observed_database = true;
                             match db::runtime_control_snapshot(&mut connection).await {
                                 Ok((island_mode, registration_closed, blacklist, whitelist)) => {
                                     let was_island = state.refresh_island_mode(island_mode).await;
@@ -2708,6 +2954,7 @@ impl AppState {
                         if state.config.enable_xmpp_service_control
                             && state.service_shutdown.get().is_some()
                         {
+                            observed_database = true;
                             match db::poll_admin_service_control(&mut connection).await {
                                 Ok(Some(control))
                                     if service_control_applies(
@@ -2740,11 +2987,7 @@ impl AppState {
                             }
                         }
 
-                        if let Some(error) = first_error {
-                            heartbeat.error(error);
-                        } else {
-                            heartbeat.ok();
-                        }
+                        report_runtime_control_health(&heartbeat, observed_database, first_error);
                         refresh_policy = !refresh_policy;
                     }
                 }

@@ -105,6 +105,11 @@ pub(crate) struct PubSubService {
     domain: String,
     service_jid: String,
     mutation_admission: Arc<PubSubMutationAdmission>,
+    /// Shared admission for short, background durable-outbox database turns.
+    /// Foreground XEP-0060 mutations retain their own transaction admission;
+    /// a delayed notification must not exhaust that foreground budget.
+    durable_outbox_database_admission:
+        crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
 }
 
 /// Pure renderer invoked while the authoritative subscription transaction is
@@ -896,7 +901,24 @@ fn db_outbox(entries: &[PubSubOutboxInsert]) -> Vec<db::PubSubOutboxInsert> {
 }
 
 impl PubSubService {
+    #[cfg(test)]
     pub(crate) fn new(pool: PgPool, domain: &str) -> Self {
+        let durable_outbox_database_admission =
+            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
+                pool.options().get_max_connections(),
+            );
+        Self::new_with_durable_outbox_database_admission(
+            pool,
+            domain,
+            durable_outbox_database_admission,
+        )
+    }
+
+    pub(crate) fn new_with_durable_outbox_database_admission(
+        pool: PgPool,
+        domain: &str,
+        durable_outbox_database_admission: crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
+    ) -> Self {
         let mutation_admission = Arc::new(PubSubMutationAdmission::new(
             pool.options().get_max_connections() as usize,
         ));
@@ -905,6 +927,7 @@ impl PubSubService {
             domain: domain.to_owned(),
             service_jid: format!("pubsub.{domain}"),
             mutation_admission,
+            durable_outbox_database_admission,
         }
     }
 
@@ -927,6 +950,10 @@ impl PubSubService {
 
     async fn begin_mutation(&self) -> Result<Transaction<'_, Postgres>> {
         db::pubsub::begin_bounded_pubsub_mutation(&self.pool).await
+    }
+
+    async fn durable_outbox_database_turn(&self) -> tokio::sync::OwnedSemaphorePermit {
+        self.durable_outbox_database_admission.acquire().await
     }
 
     pub(crate) fn default_pep_node_config(node: &str) -> PepNodeConfig {
@@ -2633,6 +2660,20 @@ impl PubSubService {
             .map(Into::into))
     }
 
+    /// Read only for a claimed digest projection.  Keep it under the durable
+    /// outbox capability rather than allowing a background worker to race
+    /// foreground XEP-0060 traffic for an unbounded primary-pool checkout.
+    pub(crate) async fn outbox_get_subscription(
+        &self,
+        node_id: Uuid,
+        jid: &str,
+    ) -> Result<Option<PubSubSubscription>> {
+        let _database_turn = self.durable_outbox_database_turn().await;
+        Ok(db::get_subscription(&self.pool, node_id, jid)
+            .await?
+            .map(Into::into))
+    }
+
     pub(crate) async fn get_owner_jids(&self, node_id: Uuid) -> Result<Vec<String>> {
         db::get_owner_jids(&self.pool, node_id).await
     }
@@ -3750,6 +3791,7 @@ impl PubSubService {
             return Ok(drop_unverifiable());
         }
 
+        let _database_turn = self.durable_outbox_database_turn().await;
         let mut transaction = self.begin_mutation().await?;
         let mut account_ids = vec![subject.sender_account_id];
         if let Some(recipient_id) = subject.recipient_account_id {
@@ -3991,6 +4033,7 @@ impl PubSubService {
         &self,
         limit: i64,
     ) -> Result<Vec<ClaimedPubSubOutboxDelivery>> {
+        let _database_turn = self.durable_outbox_database_turn().await;
         Ok(db::claim_pubsub_outbox(&self.pool, limit)
             .await?
             .into_iter()
@@ -4003,6 +4046,7 @@ impl PubSubService {
         delivery_id: Uuid,
         lease_token: Uuid,
     ) -> Result<bool> {
+        let _database_turn = self.durable_outbox_database_turn().await;
         db::acknowledge_pubsub_outbox(&self.pool, delivery_id, lease_token).await
     }
 
@@ -4011,6 +4055,7 @@ impl PubSubService {
         delivery_id: Uuid,
         lease_token: Uuid,
     ) -> Result<bool> {
+        let _database_turn = self.durable_outbox_database_turn().await;
         db::renew_pubsub_outbox_lease(&self.pool, delivery_id, lease_token).await
     }
 
@@ -4019,6 +4064,7 @@ impl PubSubService {
         item: &ClaimedPubSubOutboxDelivery,
         error: &str,
     ) -> Result<PubSubOutboxFailureDisposition> {
+        let _database_turn = self.durable_outbox_database_turn().await;
         Ok(db::retry_pubsub_outbox(&self.pool, &item.inner, error)
             .await?
             .into())
@@ -4031,6 +4077,7 @@ impl PubSubService {
         reason: &str,
         error: &str,
     ) -> Result<PubSubOutboxFailureDisposition> {
+        let _database_turn = self.durable_outbox_database_turn().await;
         Ok(
             db::dead_letter_pubsub_outbox(&self.pool, delivery_id, lease_token, reason, error)
                 .await?
@@ -4039,18 +4086,22 @@ impl PubSubService {
     }
 
     pub(crate) async fn expire_pubsub_outbox(&self, limit: i64) -> Result<u64> {
+        let _database_turn = self.durable_outbox_database_turn().await;
         db::expire_pubsub_outbox(&self.pool, limit).await
     }
 
     pub(crate) async fn cleanup_pubsub_dead_letters(&self, limit: i64) -> Result<u64> {
+        let _database_turn = self.durable_outbox_database_turn().await;
         db::cleanup_pubsub_dead_letters(&self.pool, limit).await
     }
 
     pub(crate) async fn cleanup_idle_pubsub_event_streams(&self, limit: i64) -> Result<u64> {
+        let _database_turn = self.durable_outbox_database_turn().await;
         db::cleanup_idle_pubsub_event_streams(&self.pool, limit).await
     }
 
     pub(crate) async fn pubsub_outbox_snapshot(&self) -> Result<PubSubOutboxSnapshot> {
+        let _database_turn = self.durable_outbox_database_turn().await;
         Ok(db::pubsub_outbox_snapshot(&self.pool).await?.into())
     }
 
@@ -4063,10 +4114,10 @@ impl PubSubService {
         frequency_ms: i32,
         show_values: &[String],
     ) -> Result<()> {
-        let node_key = node_id.to_string();
-        let _permit = self
-            .admit_mutation(&[subscriber_jid, &node_key], false)
-            .await?;
+        // This is a projection of an already-committed outbox row, not a
+        // client mutation. It must not occupy the foreground PubSub mutation
+        // admission while delivery workers recover under a small pool.
+        let _database_turn = self.durable_outbox_database_turn().await;
         db::enqueue_pubsub_digest_snapshot(
             &self.pool,
             source_delivery_id,
@@ -4098,6 +4149,7 @@ impl PubSubService {
         &self,
         limit: i64,
     ) -> Result<Vec<DuePubSubDigest>> {
+        let _database_turn = self.durable_outbox_database_turn().await;
         Ok(db::claim_due_pubsub_digests(&self.pool, limit)
             .await?
             .into_iter()
@@ -4106,14 +4158,17 @@ impl PubSubService {
     }
 
     pub(crate) async fn release_pubsub_digests(&self, ids: &[Uuid]) -> Result<()> {
+        let _database_turn = self.durable_outbox_database_turn().await;
         db::release_pubsub_digests(&self.pool, ids).await
     }
 
     pub(crate) async fn acknowledge_pubsub_digests(&self, ids: &[Uuid]) -> Result<()> {
+        let _database_turn = self.durable_outbox_database_turn().await;
         db::acknowledge_pubsub_digests(&self.pool, ids).await
     }
 
     pub(crate) async fn cleanup_expired_subscriptions(&self, limit: i64) -> Result<u64> {
+        let _database_turn = self.durable_outbox_database_turn().await;
         db::cleanup_expired_subscriptions(&self.pool, limit).await
     }
 }
@@ -4666,6 +4721,30 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn injected_durable_outbox_admission_stays_separate_from_foreground_mutations() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect_lazy("postgres://unused:unused@localhost/unused")
+            .expect("a lazy test pool does not connect");
+        let durable =
+            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2);
+        let service = PubSubService::new_with_durable_outbox_database_admission(
+            pool,
+            "example.test",
+            durable.clone(),
+        );
+
+        assert!(service
+            .durable_outbox_database_admission
+            .shares_with(&durable));
+        assert_eq!(
+            service.mutation_admission.available_transaction_permits(),
+            1,
+            "the foreground mutation budget remains independently available"
+        );
+    }
 
     #[test]
     fn atom_event_body_limit_never_splits_a_utf8_character() {

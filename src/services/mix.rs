@@ -12,7 +12,7 @@ use northstar_xml_builder::XmlElement;
 use sqlx::PgPool;
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use tokio::sync::{watch, Mutex, MutexGuard, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{watch, Mutex, MutexGuard, OwnedSemaphorePermit};
 use uuid::Uuid;
 
 // XEP-0369 node identifiers owned by the application boundary.  The repository
@@ -834,17 +834,11 @@ pub(crate) struct MixService {
     /// so one process contributes at most one waiter to the cross-process
     /// singleton authority while unrelated database work retains pool access.
     pam_capacity_admission: Arc<Mutex<()>>,
-    /// Clone-shared FIFO admission gate for durable MIX outbox database work.
-    ///
-    /// Delivery workers intentionally release this gate before any local or
-    /// federated network I/O.  They take it only around the short database
-    /// claims, lease changes, completion writes, dead-letter operations, and
-    /// related maintenance pages below.  This prevents a burst of completed
-    /// external deliveries from filling the primary `PgPool` with same-process
-    /// waiters while PostgreSQL serializes their durable authority work.  Its
-    /// permit count is the service-owned background budget, leaving at least
-    /// one primary-pool connection available for foreground work.
-    outbox_db_admission: Arc<Semaphore>,
+    /// Application-owned admission for short durable outbox database turns.
+    /// The same capability is shared with PubSub and clustered MUC delivery;
+    /// no individual XEP worker can independently consume the primary pool's
+    /// foreground reserve.
+    outbox_db_admission: crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
     /// Shared cross-process/listener wake broker for the durable delivery
     /// lane. It carries no stanza data and is not a second delivery authority.
     /// MIX-PAM has a distinct eligibility model and deliberately retains its
@@ -862,6 +856,7 @@ macro_rules! delegate {
 }
 
 impl MixService {
+    #[cfg(test)]
     pub(crate) fn new(
         pool: PgPool,
         message_identity: MixMessageContentKeyring,
@@ -869,8 +864,25 @@ impl MixService {
         primary_pool_max_connections: u32,
         schema: String,
     ) -> Result<Self> {
-        let outbox_background_budget =
-            Self::outbox_background_budget_for_primary_pool(primary_pool_max_connections);
+        Self::new_with_outbox_database_admission(
+            pool,
+            message_identity,
+            retraction_identity,
+            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
+                primary_pool_max_connections,
+            ),
+            schema,
+        )
+    }
+
+    pub(crate) fn new_with_outbox_database_admission(
+        pool: PgPool,
+        message_identity: MixMessageContentKeyring,
+        retraction_identity: MixRetractionContentKeyring,
+        outbox_db_admission: crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
+        schema: String,
+    ) -> Result<Self> {
+        let outbox_background_budget = outbox_db_admission.capacity();
         Ok(Self {
             pool,
             message_identity,
@@ -878,7 +890,7 @@ impl MixService {
             outbox_background_budget,
             delivery_admission: Arc::new(Mutex::new(())),
             pam_capacity_admission: Arc::new(Mutex::new(())),
-            outbox_db_admission: Arc::new(Semaphore::new(outbox_background_budget)),
+            outbox_db_admission,
             delivery_wake: MixDeliveryWakeBroker::new(schema)?,
         })
     }
@@ -890,14 +902,6 @@ impl MixService {
         self.outbox_background_budget
     }
 
-    fn outbox_background_budget_for_primary_pool(primary_pool_max_connections: u32) -> usize {
-        const MAX_BACKGROUND_CONCURRENCY: usize = 16;
-        let capacity = primary_pool_max_connections as usize;
-        capacity
-            .saturating_sub(1)
-            .clamp(1, MAX_BACKGROUND_CONCURRENCY)
-    }
-
     async fn delivery_admission_guard(&self) -> MutexGuard<'_, ()> {
         self.delivery_admission.lock().await
     }
@@ -907,11 +911,7 @@ impl MixService {
     }
 
     async fn outbox_db_admission_guard(&self) -> OwnedSemaphorePermit {
-        self.outbox_db_admission
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("MIX service owns every outbox DB admission handle")
+        self.outbox_db_admission.acquire().await
     }
 
     /// Subscribe one durable MIX worker lane before it evaluates its next
@@ -3483,19 +3483,28 @@ mod tests {
         // A one-connection configuration has no spare foreground slot, so it
         // retains a single durable worker. At two connections, the listener
         // stress profile gets one background worker and one foreground slot.
-        assert_eq!(MixService::outbox_background_budget_for_primary_pool(1), 1);
-        assert_eq!(MixService::outbox_background_budget_for_primary_pool(2), 1);
-        assert_eq!(MixService::outbox_background_budget_for_primary_pool(3), 2);
         assert_eq!(
-            MixService::outbox_background_budget_for_primary_pool(17),
+            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(1),
+            1
+        );
+        assert_eq!(
+            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(2),
+            1
+        );
+        assert_eq!(
+            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(3),
+            2
+        );
+        assert_eq!(
+            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(17),
             16
         );
         assert_eq!(
-            MixService::outbox_background_budget_for_primary_pool(32),
+            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(32),
             16
         );
         assert_eq!(
-            MixService::outbox_background_budget_for_primary_pool(u32::MAX),
+            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::capacity_for_primary_pool(u32::MAX),
             16
         );
     }
@@ -3612,10 +3621,9 @@ mod tests {
         assert_eq!(service.outbox_db_admission.available_permits(), 1);
         let first = service.clone();
         let second = service.clone();
-        assert!(Arc::ptr_eq(
-            &service.outbox_db_admission,
-            &first.outbox_db_admission
-        ));
+        assert!(service
+            .outbox_db_admission
+            .shares_with(&first.outbox_db_admission));
 
         let held = service.outbox_db_admission_guard().await;
         let (ready_tx, mut ready_rx) = tokio::sync::mpsc::unbounded_channel();

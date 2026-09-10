@@ -389,6 +389,13 @@ if (!/match db::admin_runtime_settings\(&state\.runtime_control_pool\)/s.test(ru
 if (/admin_runtime_settings\(&state\.pool\)/.test(runtimeAdminRefresh)) {
   throw new Error('runtime administration refresh must not share the general traffic pool');
 }
+const federationPolicyRefresh = structBody(state, 'fn start_runtime_federation_policy_refresh(');
+if (!/match db::federation_runtime_rules\(&state\.runtime_control_pool\)/s.test(federationPolicyRefresh)) {
+  throw new Error('federation policy refresh must poll through the dedicated control pool');
+}
+if (/federation_runtime_rules\(&state\.pool\)/.test(federationPolicyRefresh)) {
+  throw new Error('federation policy refresh must not share the general traffic pool');
+}
 const serviceControlInstallation = structBody(state, 'pub fn install_service_shutdown(');
 if (!/if self\.config\.enable_xmpp_service_control \{\s*Self::start_service_control_watcher\(Arc::clone\(self\)\);\s*\}/s.test(serviceControlInstallation)) {
   throw new Error('disabled XEP-0133 service control must not start a database watcher');
@@ -774,7 +781,7 @@ const mixServiceProduction = productionWithoutCfgTestModules(
 const mixServiceDefinition = structBody(mixServiceProduction, 'pub(crate) struct MixService');
 if (
   !/^\s*outbox_background_budget\s*:\s*usize\s*,?\s*$/m.test(mixServiceDefinition) ||
-  !/^\s*outbox_db_admission\s*:\s*Arc\s*<\s*Semaphore\s*>\s*,?\s*$/m.test(
+  !/^\s*outbox_db_admission\s*:\s*crate\s*::\s*services\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*,?\s*$/m.test(
     mixServiceDefinition,
   ) ||
   /^\s*pub(?:\(crate\))?\s+outbox_(?:background_budget|db_admission)\s*:/m.test(
@@ -782,7 +789,7 @@ if (
   )
 ) {
   throw new Error(
-    'MixService must privately own its typed outbox budget and clone-shared Arc<Semaphore> DB gate',
+    'MixService must privately retain its typed outbox budget and application-owned DB admission capability',
   );
 }
 if (
@@ -790,18 +797,21 @@ if (
     mixServiceProduction,
   )
 ) {
-  throw new Error('MixService must clone the shared outbox DB admission gate instead of replacing it');
+  throw new Error('MixService must clone the shared durable-outbox admission instead of replacing it');
 }
-const mixServiceConstructor = structBody(mixServiceProduction, 'pub(crate) fn new(');
+const mixServiceConstructor = structBody(
+  mixServiceProduction,
+  'pub(crate) fn new_with_outbox_database_admission(',
+);
 if (
-  !/let\s+outbox_background_budget\s*=\s*Self\s*::\s*outbox_background_budget_for_primary_pool\s*\(\s*primary_pool_max_connections\s*\)\s*;/.test(
+  !/let\s+outbox_background_budget\s*=\s*outbox_db_admission\s*\.\s*capacity\s*\(\s*\)\s*;/.test(
     mixServiceConstructor,
   ) ||
-  !/outbox_db_admission\s*:\s*Arc\s*::\s*new\s*\(\s*Semaphore\s*::\s*new\s*\(\s*outbox_background_budget\s*\)\s*\)/.test(
+  !/outbox_db_admission\s*,/.test(
     mixServiceConstructor,
   )
 ) {
-  throw new Error('MixService DB admission permits must be constructed from its typed outbox budget');
+  throw new Error('MixService must derive its outbox budget from the injected application admission');
 }
 if (
   !/pub\s*\(crate\)\s+const\s+fn\s+outbox_background_budget\s*\(\s*&self\s*\)\s*->\s*usize/.test(
@@ -810,16 +820,13 @@ if (
 ) {
   throw new Error('MIX protocol scheduling must consume the service-owned typed outbox budget');
 }
-const mixOutboxBudgetCalculation = structBody(
-  mixServiceProduction,
-  'fn outbox_background_budget_for_primary_pool(',
-);
+const durableOutboxAdmission = read('src/services/durable_outbox.rs');
 if (
-  !/capacity\s*\.\s*saturating_sub\s*\(\s*1\s*\)\s*\.\s*clamp\s*\(\s*1\s*,\s*MAX_BACKGROUND_CONCURRENCY\s*\)/s.test(
-    mixOutboxBudgetCalculation,
+  !/primary_pool_max_connections\s+as\s+usize[\s\S]*?\.\s*saturating_sub\s*\(\s*1\s*\)[\s\S]*?\.\s*clamp\s*\(\s*1\s*,\s*MAX_BACKGROUND_DATABASE_TURNS\s*\)/s.test(
+    durableOutboxAdmission,
   )
 ) {
-  throw new Error('MIX outbox budget must reserve one primary-pool connection for foreground work');
+  throw new Error('durable outbox admission must reserve one primary-pool connection for foreground work');
 }
 if (
   !/async\s+fn\s+outbox_db_admission_guard\s*\(\s*&self\s*\)\s*->\s*OwnedSemaphorePermit/.test(
@@ -834,11 +841,33 @@ const mixOutboxDbAdmissionGuard = structBody(
   'async fn outbox_db_admission_guard(',
 );
 if (
-  !/self\s*\.\s*outbox_db_admission\s*\.\s*clone\s*\(\s*\)\s*\.\s*acquire_owned\s*\(\s*\)\s*\.\s*await/.test(
+  !/self\s*\.\s*outbox_db_admission\s*\.\s*acquire\s*\(\s*\)\s*\.\s*await/.test(
     mixOutboxDbAdmissionGuard,
   )
 ) {
-  throw new Error('MIX outbox DB admission must acquire an owned permit from the clone-shared semaphore');
+  throw new Error('MIX outbox DB admission must acquire an owned permit from the shared capability');
+}
+const stateOutboxAdmission = structBody(state, 'pub struct AppState');
+if (
+  !/^\s*durable_outbox_database_admission\s*:\s*crate\s*::\s*services\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*,?$/m.test(
+    stateOutboxAdmission,
+  ) ||
+  /^\s*pub(?:\(crate\))?\s+durable_outbox_database_admission\s*:/m.test(stateOutboxAdmission)
+) {
+  throw new Error('AppState must privately own the shared durable-outbox database admission');
+}
+if (
+  !/let\s+durable_outbox_database_admission\s*=\s*crate\s*::\s*services\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*::\s*for_primary_pool\s*\(\s*config\s*\.\s*database_max_connections\s*,?\s*\)/s.test(
+    state,
+  ) ||
+  !/PubSubService\s*::\s*new_with_durable_outbox_database_admission[\s\S]*?durable_outbox_database_admission\s*\.\s*clone\s*\(\s*\)/.test(
+    state,
+  ) ||
+  !/MixService\s*::\s*new_with_outbox_database_admission[\s\S]*?durable_outbox_database_admission\s*\.\s*clone\s*\(\s*\)/.test(
+    state,
+  )
+) {
+  throw new Error('AppState must inject one durable-outbox admission into PubSub and MIX services');
 }
 
 // The only code that can hold this private owned permit is a reviewed service

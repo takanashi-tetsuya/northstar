@@ -1055,6 +1055,11 @@ pub struct AppState {
     /// committed safety setting and the command role cannot gain runtime
     /// authority merely by observing it.
     runtime_control_pool: PgPool,
+    /// Clone-shared permission for short MIX, PubSub and clustered-MUC
+    /// durable-outbox database turns. It preserves a primary-pool foreground
+    /// reserve without giving protocol handlers raw pool access.
+    durable_outbox_database_admission:
+        crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
     api_control: db::ApiControlKeyring,
     /// Opaque REST pagination cursors use purpose-separated subkeys derived
     /// from the same current/previous process secrets as API idempotency.
@@ -1925,9 +1930,14 @@ impl AppState {
         let retraction_content_identity = abuse.personal_retraction_content_keyring();
         let mix_message_content_identity = abuse.mix_message_content_keyring();
         let mix_retraction_content_identity = abuse.mix_retraction_content_keyring();
-        // MIX receives the configured primary-pool capacity as a narrow
-        // scheduling input.  The protocol never inspects raw PgPool options.
-        let mix_primary_pool_max_connections = config.database_max_connections;
+        // Durable outbox workers share one application-owned admission
+        // capability. This leaves a primary-pool connection for foreground
+        // protocol traffic even during simultaneous MIX, PubSub and MUC
+        // recovery.
+        let durable_outbox_database_admission =
+            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
+                config.database_max_connections,
+            );
         let message_service = crate::services::messaging::MessageService::new(
             pool.clone(),
             message_content_identity,
@@ -1964,7 +1974,11 @@ impl AppState {
                 config.scram_sha1_enabled,
             );
         let pubsub_service =
-            crate::services::pubsub::PubSubService::new(pool.clone(), &config.domain);
+            crate::services::pubsub::PubSubService::new_with_durable_outbox_database_admission(
+                pool.clone(),
+                &config.domain,
+                durable_outbox_database_admission.clone(),
+            );
         let profile_service = crate::services::profile::ProfileService::with_mutation_admission(
             pool.clone(),
             config.domain.clone(),
@@ -2057,11 +2071,11 @@ impl AppState {
         // dedicated PostgreSQL listener attests below.  It never trusts a
         // notification as delivery authority; schema matching only prevents
         // a shared database's unrelated schema from creating local scan load.
-        let mix_service = crate::services::mix::MixService::new(
+        let mix_service = crate::services::mix::MixService::new_with_outbox_database_admission(
             pool.clone(),
             mix_message_content_identity,
             mix_retraction_content_identity,
-            mix_primary_pool_max_connections,
+            durable_outbox_database_admission.clone(),
             sm_authority_schema,
         )?;
         config.raw.database_url.zeroize();
@@ -2113,6 +2127,7 @@ impl AppState {
             web_admin_gateway_token,
             omemo_recovery_poll_pool,
             runtime_control_pool,
+            durable_outbox_database_admission,
             api_control,
             api_cursor,
             upload_service,
@@ -2393,6 +2408,10 @@ impl AppState {
         &self.mix_service
     }
 
+    pub(crate) async fn durable_outbox_database_turn(&self) -> OwnedSemaphorePermit {
+        self.durable_outbox_database_admission.acquire().await
+    }
+
     pub(crate) fn extdisco_service(&self) -> &crate::services::extdisco::ExtDiscoService {
         &self.extdisco_service
     }
@@ -2591,7 +2610,7 @@ impl AppState {
                         let Some(state) = weak.upgrade() else {
                             return Ok(());
                         };
-                        match db::federation_runtime_rules(&state.pool).await {
+                        match db::federation_runtime_rules(&state.runtime_control_pool).await {
                             Ok((blacklist, whitelist)) => {
                                 state.replace_runtime_federation_cache(blacklist, whitelist);
                                 heartbeat.ok();

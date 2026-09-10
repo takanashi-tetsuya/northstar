@@ -5528,20 +5528,26 @@ async fn run_muc_outbox_delivery(
             _ = poll.tick() => {},
             _ = state.cluster.wait_for_muc_outbox_wake() => {},
         }
-        crate::db::expire_cluster_muc_occupancies(&state.pool, 32).await?;
-        crate::db::dead_letter_expired_cluster_muc_outbox(&state.pool, 256).await?;
+        {
+            let _database_turn = state.durable_outbox_database_turn().await;
+            crate::db::expire_cluster_muc_occupancies(&state.pool, 32).await?;
+            crate::db::dead_letter_expired_cluster_muc_outbox(&state.pool, 256).await?;
+        }
         let pass_started = Instant::now();
         'batches: for _ in 0..MUC_OUTBOX_MAX_BATCHES_PER_PASS {
             if cancel.is_cancelled() || pass_started.elapsed() >= MUC_OUTBOX_PASS_BUDGET {
                 break;
             }
-            let deliveries = crate::db::claim_cluster_muc_outbox(
-                &state.pool,
-                &state.cluster.node_id,
-                MUC_OUTBOX_BATCH_SIZE,
-                Duration::from_secs(30),
-            )
-            .await?;
+            let deliveries = {
+                let _database_turn = state.durable_outbox_database_turn().await;
+                crate::db::claim_cluster_muc_outbox(
+                    &state.pool,
+                    &state.cluster.node_id,
+                    MUC_OUTBOX_BATCH_SIZE,
+                    Duration::from_secs(30),
+                )
+                .await?
+            };
             if deliveries.is_empty() {
                 break;
             }
@@ -5561,13 +5567,17 @@ async fn run_muc_outbox_delivery(
                 .and_then(std::convert::identity);
                 match outcome {
                     Ok(()) => {
-                        anyhow::ensure!(
+                        let acknowledged = {
+                            let _database_turn = state.durable_outbox_database_turn().await;
                             crate::db::ack_cluster_muc_outbox(
                                 &state.pool,
                                 delivery.delivery_id,
                                 delivery.claim_token,
                             )
-                            .await?,
+                            .await?
+                        };
+                        anyhow::ensure!(
+                            acknowledged,
                             "cluster MUC outbox ACK lost its exact claim lease"
                         );
                         state
@@ -5583,12 +5593,15 @@ async fn run_muc_outbox_delivery(
                             event_id=%delivery.event_id,
                             "cluster MUC audience delivery will retry with the same stable event ID"
                         );
-                        crate::db::retry_cluster_muc_outbox(
-                            &state.pool,
-                            &delivery,
-                            &error.to_string(),
-                        )
-                        .await?;
+                        {
+                            let _database_turn = state.durable_outbox_database_turn().await;
+                            crate::db::retry_cluster_muc_outbox(
+                                &state.pool,
+                                &delivery,
+                                &error.to_string(),
+                            )
+                            .await?;
+                        }
                         state
                             .metrics
                             .cluster_muc_outbox_retries_total
@@ -5598,16 +5611,25 @@ async fn run_muc_outbox_delivery(
                 heartbeat.ok();
             }
         }
-        crate::db::cleanup_cluster_muc_dead_letters(&state.pool, 256).await?;
+        {
+            let _database_turn = state.durable_outbox_database_turn().await;
+            crate::db::cleanup_cluster_muc_dead_letters(&state.pool, 256).await?;
+        }
         if Instant::now() >= next_history_cleanup {
             // Ninety days is the bounded online idempotency/recovery horizon
             // for experimental clustered room-control events. Active legal
             // holds and outstanding delivery projections make the database
             // cleanup fail closed or skip the protected incarnation.
-            crate::db::cleanup_cluster_muc_history(&state.pool, 90, 256).await?;
+            {
+                let _database_turn = state.durable_outbox_database_turn().await;
+                crate::db::cleanup_cluster_muc_history(&state.pool, 90, 256).await?;
+            }
             next_history_cleanup = Instant::now() + Duration::from_secs(60);
         }
-        let snapshot = crate::db::cluster_muc_outbox_snapshot(&state.pool).await?;
+        let snapshot = {
+            let _database_turn = state.durable_outbox_database_turn().await;
+            crate::db::cluster_muc_outbox_snapshot(&state.pool).await?
+        };
         state.metrics.cluster_muc_outbox_queued.store(
             snapshot.queued_rows.max(0) as u64,
             std::sync::atomic::Ordering::Relaxed,
@@ -5778,9 +5800,12 @@ async fn deliver_cluster_muc_event(
             && payload["event_sequence"].as_i64() == Some(delivery.event_sequence),
         "cluster MUC outbox payload identity is not exactly bound"
     );
-    let context = crate::db::cluster_muc_event_context(&state.pool, delivery.operation_id)
-        .await?
-        .context("cluster MUC outbox operation is missing")?;
+    let context = {
+        let _database_turn = state.durable_outbox_database_turn().await;
+        crate::db::cluster_muc_event_context(&state.pool, delivery.operation_id)
+            .await?
+            .context("cluster MUC outbox operation is missing")?
+    };
     anyhow::ensure!(
         context.room_epoch == delivery.room_epoch,
         "cluster MUC outbox room epoch is stale"
@@ -5819,10 +5844,16 @@ async fn deliver_cluster_muc_event(
         // is written to the socket. Reconstruct only an endpoint from the
         // immutable outbox audience tuple; never revive membership or trust a
         // Redis nickname cache. The stable event ID remains the retry key.
-        let snapshot =
-            crate::db::cluster_muc_delivery_recipient_snapshot(&state.pool, delivery).await?;
+        let snapshot = {
+            let _database_turn = state.durable_outbox_database_turn().await;
+            crate::db::cluster_muc_delivery_recipient_snapshot(&state.pool, delivery).await?
+        };
         let Some(snapshot) = snapshot else {
-            if crate::db::cluster_muc_delivery_audience_is_current(&state.pool, delivery).await? {
+            let audience_is_current = {
+                let _database_turn = state.durable_outbox_database_turn().await;
+                crate::db::cluster_muc_delivery_audience_is_current(&state.pool, delivery).await?
+            };
+            if audience_is_current {
                 anyhow::bail!("authoritative MUC audience snapshot disappeared");
             }
             return Ok(());
@@ -6088,14 +6119,17 @@ async fn deliver_cluster_muc_event(
         let ordinal =
             i32::try_from(ordinal).context("MUC event has too many stanza projections")?;
         let stable_item_id = format!("{}:{ordinal}", delivery.event_id);
-        if crate::db::cluster_muc_delivery_item_completed(
-            &state.pool,
-            delivery.delivery_id,
-            ordinal,
-            &stable_item_id,
-        )
-        .await?
-        {
+        let completed = {
+            let _database_turn = state.durable_outbox_database_turn().await;
+            crate::db::cluster_muc_delivery_item_completed(
+                &state.pool,
+                delivery.delivery_id,
+                ordinal,
+                &stable_item_id,
+            )
+            .await?
+        };
+        if completed {
             continue;
         }
         anyhow::ensure!(
@@ -6104,14 +6138,18 @@ async fn deliver_cluster_muc_event(
                 .await?,
             "exact MUC audience transport did not reach a durable ownership/write boundary"
         );
-        anyhow::ensure!(
+        let completed = {
+            let _database_turn = state.durable_outbox_database_turn().await;
             crate::db::complete_cluster_muc_delivery_item(
                 &state.pool,
                 delivery,
                 ordinal,
                 &stable_item_id,
             )
-            .await?,
+            .await?
+        };
+        anyhow::ensure!(
+            completed,
             "cluster MUC delivery item lost its stable ordinal identity"
         );
     }

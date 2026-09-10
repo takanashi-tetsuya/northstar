@@ -2509,7 +2509,7 @@ pub(crate) async fn deliver_due_pubsub_digests(state: &AppState) -> Result<usize
         } else {
             state
                 .pubsub_service()
-                .get_subscription(digest.subscription_node_id, &digest.subscriber_jid)
+                .outbox_get_subscription(digest.subscription_node_id, &digest.subscriber_jid)
                 .await?
                 .filter(|subscription| subscription.deliver && subscription.is_active())
                 .map(|subscription| subscription.show_values)

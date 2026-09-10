@@ -341,66 +341,66 @@ async fn deployment_capacity_authority_is_consistent(
     configured: DeploymentCapacityConfiguration,
 ) -> Result<bool> {
     sqlx::query_scalar(
-        "WITH requested_limits(resource_kind,requested_limit) AS (\
-             VALUES\
-               ('account'::text,$1::bigint),\
-               ('muc_room'::text,$2::bigint),\
-               ('live_session'::text,$3::bigint),\
-               ('sm_session'::text,$4::bigint)\
-         ), expected_shards AS (\
-             SELECT requested_limits.resource_kind,shards.shard::smallint AS shard,\
-                    (requested_limits.requested_limit / 64)\
-                      + CASE WHEN shards.shard < (requested_limits.requested_limit % 64)\
-                             THEN 1 ELSE 0 END AS capacity\
-               FROM requested_limits CROSS JOIN generate_series(0,63) AS shards(shard)\
-         ), expected_entities(resource_kind,entity_id) AS (\
-             SELECT 'account'::text,id FROM users\
-             UNION ALL\
-             SELECT 'muc_room'::text,id FROM muc_rooms WHERE destroyed_at IS NULL\
-             UNION ALL\
-             SELECT 'live_session'::text,lease_id FROM deployment_session_leases\
-             UNION ALL\
-             SELECT 'sm_session'::text,id FROM sm_resume_sessions\
-         ), actual_entities(resource_kind,entity_id) AS (\
-             SELECT resource_kind,entity_id FROM deployment_capacity_allocations\
-         ), expected_counters(resource_kind,owner_id,used) AS (\
-             SELECT 'muc_room'::text,owner_id,COUNT(*)::bigint FROM muc_rooms\
-              WHERE destroyed_at IS NULL AND owner_id IS NOT NULL GROUP BY owner_id\
-             UNION ALL\
-             SELECT 'live_session'::text,user_id,COUNT(*)::bigint\
-               FROM deployment_session_leases GROUP BY user_id\
-             UNION ALL\
-             SELECT 'sm_session'::text,user_id,COUNT(*)::bigint\
-               FROM sm_resume_sessions GROUP BY user_id\
-         ), actual_counters(resource_kind,owner_id,used) AS (\
-             SELECT resource_kind,owner_id,used FROM deployment_account_capacity\
-              WHERE resource_kind IN ('muc_room','live_session','sm_session')\
-         )\
-         SELECT (SELECT COUNT(*)=256 FROM deployment_capacity_shards)\
-            AND NOT EXISTS(\
-                SELECT 1 FROM expected_shards expected\
-                 FULL OUTER JOIN deployment_capacity_shards actual\
-                   ON actual.resource_kind=expected.resource_kind\
-                  AND actual.shard=expected.shard\
-                 WHERE actual.resource_kind IS NULL OR expected.resource_kind IS NULL\
-                    OR actual.capacity<>expected.capacity\
-            )\
-            AND NOT EXISTS(\
-                SELECT 1 FROM deployment_capacity_shards shard\
-                 WHERE shard.used<>(\
-                    SELECT COUNT(*) FROM deployment_capacity_allocations allocation\
-                     WHERE allocation.resource_kind=shard.resource_kind\
-                       AND allocation.shard=shard.shard\
-                 )\
-            )\
-            AND NOT EXISTS(SELECT 1 FROM expected_entities EXCEPT SELECT 1 FROM actual_entities)\
-            AND NOT EXISTS(SELECT 1 FROM actual_entities EXCEPT SELECT 1 FROM expected_entities)\
-            AND NOT EXISTS(\
-                SELECT 1 FROM deployment_session_leases\
-                 WHERE lease_until<=clock_timestamp()\
-            )\
-            AND NOT EXISTS(SELECT 1 FROM expected_counters EXCEPT SELECT 1 FROM actual_counters)\
-            AND NOT EXISTS(SELECT 1 FROM actual_counters EXCEPT SELECT 1 FROM expected_counters)",
+        r#"WITH requested_limits(resource_kind, requested_limit) AS (
+               VALUES
+                 ('account'::text, $1::bigint),
+                 ('muc_room'::text, $2::bigint),
+                 ('live_session'::text, $3::bigint),
+                 ('sm_session'::text, $4::bigint)
+           ), expected_shards AS (
+               SELECT requested_limits.resource_kind, shards.shard::smallint AS shard,
+                      (requested_limits.requested_limit / 64)
+                        + CASE WHEN shards.shard < (requested_limits.requested_limit % 64)
+                               THEN 1 ELSE 0 END AS capacity
+                 FROM requested_limits CROSS JOIN generate_series(0, 63) AS shards(shard)
+           ), expected_entities(resource_kind, entity_id) AS (
+               SELECT 'account'::text, id FROM users
+               UNION ALL
+               SELECT 'muc_room'::text, id FROM muc_rooms WHERE destroyed_at IS NULL
+               UNION ALL
+               SELECT 'live_session'::text, lease_id FROM deployment_session_leases
+               UNION ALL
+               SELECT 'sm_session'::text, id FROM sm_resume_sessions
+           ), actual_entities(resource_kind, entity_id) AS (
+               SELECT resource_kind, entity_id FROM deployment_capacity_allocations
+           ), expected_counters(resource_kind, owner_id, used) AS (
+               SELECT 'muc_room'::text, owner_id, COUNT(*)::bigint FROM muc_rooms
+                WHERE destroyed_at IS NULL AND owner_id IS NOT NULL GROUP BY owner_id
+               UNION ALL
+               SELECT 'live_session'::text, user_id, COUNT(*)::bigint
+                 FROM deployment_session_leases GROUP BY user_id
+               UNION ALL
+               SELECT 'sm_session'::text, user_id, COUNT(*)::bigint
+                 FROM sm_resume_sessions GROUP BY user_id
+           ), actual_counters(resource_kind, owner_id, used) AS (
+               SELECT resource_kind, owner_id, used FROM deployment_account_capacity
+                WHERE resource_kind IN ('muc_room', 'live_session', 'sm_session')
+           )
+           SELECT (SELECT COUNT(*) = 256 FROM deployment_capacity_shards)
+              AND NOT EXISTS(
+                  SELECT 1 FROM expected_shards expected
+                   FULL OUTER JOIN deployment_capacity_shards actual
+                     ON actual.resource_kind = expected.resource_kind
+                    AND actual.shard = expected.shard
+                   WHERE actual.resource_kind IS NULL OR expected.resource_kind IS NULL
+                      OR actual.capacity <> expected.capacity
+              )
+              AND NOT EXISTS(
+                  SELECT 1 FROM deployment_capacity_shards shard
+                   WHERE shard.used <> (
+                      SELECT COUNT(*) FROM deployment_capacity_allocations allocation
+                       WHERE allocation.resource_kind = shard.resource_kind
+                         AND allocation.shard = shard.shard
+                   )
+              )
+              AND NOT EXISTS(SELECT 1 FROM expected_entities EXCEPT SELECT 1 FROM actual_entities)
+              AND NOT EXISTS(SELECT 1 FROM actual_entities EXCEPT SELECT 1 FROM expected_entities)
+              AND NOT EXISTS(
+                  SELECT 1 FROM deployment_session_leases
+                   WHERE lease_until <= clock_timestamp()
+              )
+              AND NOT EXISTS(SELECT 1 FROM expected_counters EXCEPT SELECT 1 FROM actual_counters)
+              AND NOT EXISTS(SELECT 1 FROM actual_counters EXCEPT SELECT 1 FROM expected_counters)"#,
     )
     .bind(configured.accounts)
     .bind(configured.muc_rooms)

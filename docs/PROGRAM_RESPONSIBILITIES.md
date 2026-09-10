@@ -103,7 +103,7 @@ server receives only the read-only readiness handle, registry and metrics.
 The production source gate fixes this capability inventory. Maintenance uses
 three connections at most; the core primary-pool cap is derived from the
 existing runtime-role limit minus four auxiliary core connections and three
-maintenance connections (currently 57). The overlay defaults to 56.
+maintenance connections (currently 57). The overlay retains the core default of 32.
 
 Every retention entry point claims the same database/schema-scoped PostgreSQL
 session advisory lock before activating work. Standalone retains the lock on

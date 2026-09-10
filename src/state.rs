@@ -2606,11 +2606,15 @@ impl AppState {
             move |heartbeat| {
                 let weak = weak.clone();
                 async move {
-                    // Refresh both committed policy snapshots in one ordered
-                    // turn. This is intentionally sequential: the runtime
-                    // control pool has exactly one reserved connection.
-                    let mut interval = tokio::time::interval(Duration::from_secs(1));
+                    // This coordinator is the sole owner of the one reserved
+                    // control-plane connection. It serializes committed
+                    // administration, federation, and (when enabled) service
+                    // control reads instead of allowing its own workers to
+                    // contend for that connection.
+                    let mut interval = tokio::time::interval(Duration::from_millis(500));
                     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    let mut refresh_policy = true;
+                    let mut acted_service_control = None;
                     loop {
                         interval.tick().await;
                         let Some(state) = weak.upgrade() else {
@@ -2618,36 +2622,74 @@ impl AppState {
                         };
 
                         let mut first_error = None;
-                        match db::admin_runtime_settings(&state.runtime_control_pool).await {
-                            Ok((island_mode, registration_closed)) => {
-                                let was_island = state.refresh_island_mode(island_mode).await;
-                                state.apply_registration_closed(registration_closed);
-                                if island_mode && !was_island {
-                                    state
-                                        .s2s_connection_registry()
-                                        .clear_outbound_for_island_mode();
+                        if refresh_policy {
+                            match db::admin_runtime_settings(&state.runtime_control_pool).await {
+                                Ok((island_mode, registration_closed)) => {
+                                    let was_island = state.refresh_island_mode(island_mode).await;
+                                    state.apply_registration_closed(registration_closed);
+                                    if island_mode && !was_island {
+                                        state
+                                            .s2s_connection_registry()
+                                            .clear_outbound_for_island_mode();
+                                    }
+                                }
+                                Err(error) => {
+                                    tracing::error!(
+                                        ?error,
+                                        "could not refresh durable administration settings"
+                                    );
+                                    first_error = Some(error);
                                 }
                             }
-                            Err(error) => {
-                                tracing::error!(
-                                    ?error,
-                                    "could not refresh durable administration settings"
-                                );
-                                first_error = Some(error);
+
+                            match db::federation_runtime_rules(&state.runtime_control_pool).await {
+                                Ok((blacklist, whitelist)) => {
+                                    state.replace_runtime_federation_cache(blacklist, whitelist);
+                                }
+                                Err(error) => {
+                                    tracing::error!(
+                                        ?error,
+                                        "could not refresh durable federation policy"
+                                    );
+                                    if first_error.is_none() {
+                                        first_error = Some(error);
+                                    }
+                                }
                             }
                         }
 
-                        match db::federation_runtime_rules(&state.runtime_control_pool).await {
-                            Ok((blacklist, whitelist)) => {
-                                state.replace_runtime_federation_cache(blacklist, whitelist);
-                            }
-                            Err(error) => {
-                                tracing::error!(
-                                    ?error,
-                                    "could not refresh durable federation policy"
-                                );
-                                if first_error.is_none() {
-                                    first_error = Some(error);
+                        if state.config.enable_xmpp_service_control
+                            && state.service_shutdown.get().is_some()
+                        {
+                            match db::poll_admin_service_control(&state.runtime_control_pool).await
+                            {
+                                Ok(Some(control))
+                                    if service_control_applies(
+                                        state.process_started_at,
+                                        &control,
+                                    ) && acted_service_control != Some(control.generation) =>
+                                {
+                                    acted_service_control = Some(control.generation);
+                                    tracing::warn!(
+                                        operation = %control.action,
+                                        generation = %control.generation,
+                                        execute_at = %control.execute_at,
+                                        expires_at = %control.expires_at,
+                                        "executing durable cluster-wide service control"
+                                    );
+                                    if let Some(shutdown) = state.service_shutdown.get() {
+                                        shutdown.cancel();
+                                    }
+                                }
+                                Ok(_) => {}
+                                Err(error) => {
+                                    tracing::error!(
+                                        ?error,
+                                        "could not poll durable cluster-wide service control"
+                                    );
+                                    if first_error.is_none() {
+                                        first_error = Some(error);
+                                    }
                                 }
                             }
                         }
@@ -2657,6 +2699,7 @@ impl AppState {
                         } else {
                             heartbeat.ok();
                         }
+                        refresh_policy = !refresh_policy;
                     }
                 }
             },
@@ -2710,71 +2753,11 @@ impl AppState {
         self.service_shutdown
             .set(cancel)
             .map_err(|_| anyhow::anyhow!("service shutdown control was already installed"))?;
-        if self.config.enable_xmpp_service_control {
-            Self::start_service_control_watcher(Arc::clone(self));
-        }
         Ok(())
     }
 
     pub fn service_control_available(&self) -> bool {
         self.config.enable_xmpp_service_control && self.service_shutdown.get().is_some()
-    }
-
-    fn start_service_control_watcher(state: Arc<Self>) {
-        let weak = Arc::downgrade(&state);
-        let cancel = state
-            .service_shutdown
-            .get()
-            .expect("service shutdown installed before watcher")
-            .clone();
-        state.worker_registry().supervise(
-            "service-control-watcher",
-            crate::workers::WorkerCriticality::Critical,
-            crate::workers::WorkerMode::Continuous,
-            Some(Duration::from_secs(3)),
-            cancel,
-            move |heartbeat| {
-                let weak = weak.clone();
-                async move {
-                    let mut interval = tokio::time::interval(Duration::from_millis(500));
-                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                    let mut acted = None;
-                    loop {
-                        interval.tick().await;
-                        let Some(state) = weak.upgrade() else {
-                            return Ok(());
-                        };
-                        match db::poll_admin_service_control(&state.runtime_control_pool).await {
-                            Ok(Some(control))
-                                if service_control_applies(state.process_started_at, &control)
-                                    && acted != Some(control.generation) =>
-                            {
-                                acted = Some(control.generation);
-                                tracing::warn!(
-                                    operation = %control.action,
-                                    generation = %control.generation,
-                                    execute_at = %control.execute_at,
-                                    expires_at = %control.expires_at,
-                                    "executing durable cluster-wide service control"
-                                );
-                                if let Some(shutdown) = state.service_shutdown.get() {
-                                    shutdown.cancel();
-                                }
-                                heartbeat.ok();
-                            }
-                            Ok(_) => heartbeat.ok(),
-                            Err(error) => {
-                                heartbeat.error(&error);
-                                tracing::error!(
-                                    ?error,
-                                    "could not poll durable cluster-wide service control"
-                                );
-                            }
-                        }
-                    }
-                }
-            },
-        );
     }
 
     pub fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {

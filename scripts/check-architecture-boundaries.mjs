@@ -375,17 +375,11 @@ for (const invariant of [
     throw new Error(`runtime-control pool lost its isolated runtime-pool invariant: ${invariant}`);
   }
 }
-const serviceControlWatcher = structBody(state, 'fn start_service_control_watcher(');
-if (!/match db::poll_admin_service_control\(&state\.runtime_control_pool\)/s.test(serviceControlWatcher)) {
-  throw new Error('service-control watcher must poll through its dedicated runtime pool');
-}
-if (/poll_admin_service_control\(&state\.pool\)/.test(serviceControlWatcher)) {
-  throw new Error('service-control watcher must not share the general traffic pool');
-}
 const runtimeControlRefresh = structBody(state, 'fn start_runtime_control_refresh(');
 for (const [call, description] of [
   ['admin_runtime_settings', 'runtime administration refresh'],
   ['federation_runtime_rules', 'federation policy refresh'],
+  ['poll_admin_service_control', 'XEP-0133 service-control refresh'],
 ]) {
   if (!new RegExp(`match db::${call}\\(&state\\.runtime_control_pool\\)`, 's').test(runtimeControlRefresh)) {
     throw new Error(`${description} must poll through the dedicated control pool`);
@@ -395,26 +389,29 @@ for (const [call, description] of [
   }
 }
 if (!/"runtime-control-refresh"/.test(runtimeControlRefresh)) {
-  throw new Error('runtime policy snapshots must share one supervised control-plane worker');
+  throw new Error('runtime control reads must share one supervised control-plane worker');
 }
-if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(/.test(state)) {
-  throw new Error('independent runtime policy refresh workers can contend for the one-connection control pool');
+if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(|fn start_service_control_watcher\(/.test(state)) {
+  throw new Error('independent runtime control workers can contend for the one-connection control pool');
 }
 if (!/Self::start_runtime_control_refresh\(Arc::clone\(&state\), worker_cancel\);/.test(state)) {
   throw new Error('AppState must start the coordinated runtime-control refresh worker');
 }
 const serviceControlInstallation = structBody(state, 'pub fn install_service_shutdown(');
-if (!/if self\.config\.enable_xmpp_service_control \{\s*Self::start_service_control_watcher\(Arc::clone\(self\)\);\s*\}/s.test(serviceControlInstallation)) {
-  throw new Error('disabled XEP-0133 service control must not start a database watcher');
+if (!/self\.service_shutdown\s*\.set\(cancel\)/s.test(serviceControlInstallation)) {
+  throw new Error('XEP-0133 service control must install the shutdown authority before the coordinator polls it');
 }
 for (const invariant of [
-  'crate::workers::WorkerCriticality::Critical',
-  'Some(Duration::from_secs(3))',
-  'heartbeat.error(&error)',
+  'state.config.enable_xmpp_service_control',
+  'state.service_shutdown.get().is_some()',
+  'heartbeat.error(error)',
 ]) {
-  if (!serviceControlWatcher.includes(invariant)) {
-    throw new Error(`service-control watcher lost its fail-closed supervision invariant: ${invariant}`);
+  if (!runtimeControlRefresh.includes(invariant)) {
+    throw new Error(`runtime control coordinator lost a fail-closed XEP-0133 invariant: ${invariant}`);
   }
+}
+if (!/service_control_applies\(\s*state\.process_started_at,\s*&control\s*,?\s*\)/s.test(runtimeControlRefresh)) {
+  throw new Error('runtime control coordinator must retain the XEP-0133 process/generation authority check');
 }
 if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtime` | exactly 1 reserved connection, 500 ms acquire bound |')) {
   throw new Error('program responsibility model must document the dedicated runtime control pool');
@@ -2616,7 +2613,6 @@ const supervisedWorkerContracts = [
   { name: 'cluster-muc-outbox', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: false },
   { name: 'locked-muc-expiry', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(20))', draining: false },
   { name: 'runtime-control-refresh', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(5))', draining: false },
-  { name: 'service-control-watcher', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(3))', draining: false },
   { name: 'sm-authority-listener', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(15))', draining: false },
   { name: 'sm-suspension-recovery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: true },
   { name: 'caps-side-effects', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(60))', draining: true },
@@ -2642,7 +2638,6 @@ const workerResponsibilityEvidence = {
   'cluster-muc-outbox': ['src/cluster.rs', 'unconditionally registered', '30 s'],
   'locked-muc-expiry': ['src/state.rs', '`AppState` MUC startup', '20 s'],
   'runtime-control-refresh': ['src/state.rs', '`AppState` runtime-control startup', '5 s'],
-  'service-control-watcher': ['src/state.rs', '`AppState` service-control startup', '3 s'],
   'sm-authority-listener': ['src/services/sm.rs', '`SmService` startup', '15 s'],
   'sm-suspension-recovery': ['src/services/session_cleanup.rs', 'session-cleanup service startup', '30 s'],
   'caps-side-effects': ['src/xmpp/protocol/caps.rs', 'Caps subsystem startup', '60 s'],

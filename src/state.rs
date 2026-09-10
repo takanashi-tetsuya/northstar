@@ -56,6 +56,10 @@ const RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET: Duration = Duration::from_
 /// short, per-attempt pool deadline; it is not a runtime worker retry policy.
 const RUNTIME_CONTROL_STARTUP_RETRY_BUDGET: Duration = Duration::from_secs(15);
 const RUNTIME_CONTROL_STARTUP_RETRY_MAX_DELAY: Duration = Duration::from_millis(500);
+// Auxiliary pools retain their two-second acquisition policy while serving.
+// Only initial handshakes may retry, within one shared admission window.
+const AUXILIARY_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(2);
+const AUXILIARY_POOL_STARTUP_BUDGET: Duration = Duration::from_secs(15);
 
 fn runtime_control_pool_options(config: &Config, attempt_budget: Duration) -> PgPoolOptions {
     let options = PgPoolOptions::new()
@@ -88,6 +92,25 @@ fn runtime_control_startup_retry_delay(attempt: u32, process_id: u32) -> Duratio
 
 async fn runtime_control_startup_connect<T, Connect, ConnectFuture>(
     deadline: tokio::time::Instant,
+    connect: Connect,
+) -> anyhow::Result<T>
+where
+    Connect: FnMut(Duration) -> ConnectFuture,
+    ConnectFuture: std::future::Future<Output = Result<T, sqlx::Error>>,
+{
+    startup_database_connect(
+        deadline,
+        RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET,
+        "runtime-control",
+        connect,
+    )
+    .await
+}
+
+async fn startup_database_connect<T, Connect, ConnectFuture>(
+    deadline: tokio::time::Instant,
+    attempt_limit: Duration,
+    pool_name: &'static str,
     mut connect: Connect,
 ) -> anyhow::Result<T>
 where
@@ -101,7 +124,7 @@ where
             if remaining.is_zero() {
                 return Err(sqlx::Error::PoolTimedOut);
             }
-            let attempt_budget = remaining.min(RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET);
+            let attempt_budget = remaining.min(attempt_limit);
             attempts = attempts.saturating_add(1);
             let result = tokio::time::timeout(attempt_budget, connect(attempt_budget))
                 .await
@@ -121,13 +144,13 @@ where
     .await
     .unwrap_or(Err(sqlx::Error::PoolTimedOut));
     admission.with_context(|| {
-        format!("could not create isolated runtime-control database pool after {attempts} bounded startup admission attempts")
+        format!("could not create isolated {pool_name} database pool after {attempts} bounded startup admission attempts")
     })
 }
 
 #[cfg(test)]
 mod runtime_control_startup_tests {
-    use super::runtime_control_startup_connect;
+    use super::{runtime_control_startup_connect, startup_database_connect};
     use std::sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
         Arc,
@@ -227,6 +250,54 @@ mod runtime_control_startup_tests {
         )
         .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn auxiliary_pools_share_the_remaining_deadline_and_cancel_inflight_connect() {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        startup_database_connect(deadline, Duration::from_secs(2), "command", |_| async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let result: anyhow::Result<()> =
+            startup_database_connect(deadline, Duration::from_secs(2), "OMEMO", |budget| {
+                assert!(budget < Duration::from_secs(2));
+                std::future::pending()
+            })
+            .await;
+        assert!(result.unwrap_err().to_string().contains("OMEMO"));
+        let result: anyhow::Result<()> =
+            startup_database_connect(deadline, Duration::from_secs(2), "command", |_| async {
+                panic!("a later pool must not reset an exhausted shared deadline")
+            })
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn auxiliary_pool_retry_preserves_its_acquisition_limit() {
+        let attempts = AtomicU32::new(0);
+        startup_database_connect(
+            tokio::time::Instant::now() + Duration::from_secs(15),
+            Duration::from_secs(2),
+            "OMEMO",
+            |budget| {
+                assert_eq!(budget, Duration::from_secs(2));
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    if attempt == 0 {
+                        Err(sqlx::Error::PoolTimedOut)
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
     }
 }
 
@@ -2309,6 +2380,7 @@ impl AppState {
             config.pep_max_nodes_per_account,
             config.pep_max_storage_bytes_per_account,
         );
+        let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;
         let command_pool = match config.admin_command_pool_mode {
             // The explicit loopback-only exception has no independent
             // PostgreSQL principal.  A second PgPool with the same unsafe
@@ -2320,29 +2392,48 @@ impl AppState {
                     PgPoolOptions::new()
                         .max_connections(4)
                         .min_connections(0)
-                        .acquire_timeout(Duration::from_secs(2)),
+                        .acquire_timeout(AUXILIARY_POOL_ACQUIRE_TIMEOUT),
                 );
-                let command_pool = command_pool_options
-                    .connect(&config.admin_command_database_url)
-                    .await
-                    .context("could not create bounded XEP-0133 command database pool")?;
-                crate::db::attest_admin_command_role(&command_pool).await?;
+                let command_pool = startup_database_connect(
+                    auxiliary_pool_deadline,
+                    AUXILIARY_POOL_ACQUIRE_TIMEOUT,
+                    "XEP-0133 command",
+                    |_| {
+                        command_pool_options
+                            .clone()
+                            .connect(&config.admin_command_database_url)
+                    },
+                )
+                .await?;
+                tokio::time::timeout_at(auxiliary_pool_deadline, async {
+                    crate::db::attest_admin_command_role(&command_pool).await?;
+                    anyhow::Ok(())
+                })
+                .await
+                .context("command role attestation exceeded its startup admission deadline")??;
                 command_pool
             }
         };
         let omemo_recovery_pool_options = PgPoolOptions::new()
             .max_connections(OMEMO_RECOVERY_POOL_MAX_CONNECTIONS)
             .min_connections(0)
-            .acquire_timeout(Duration::from_secs(2));
+            .acquire_timeout(AUXILIARY_POOL_ACQUIRE_TIMEOUT);
         let omemo_recovery_pool_options = if config.database_allow_unsafe_role_for_development {
             omemo_recovery_pool_options
         } else {
             crate::db::pin_public_application_schema(omemo_recovery_pool_options)
         };
-        let omemo_recovery_poll_pool = omemo_recovery_pool_options
-            .connect(&config.database_url)
-            .await
-            .context("could not create isolated OMEMO recovery poll database pool")?;
+        let omemo_recovery_poll_pool = startup_database_connect(
+            auxiliary_pool_deadline,
+            AUXILIARY_POOL_ACQUIRE_TIMEOUT,
+            "OMEMO recovery poll",
+            |_| {
+                omemo_recovery_pool_options
+                    .clone()
+                    .connect(&config.database_url)
+            },
+        )
+        .await?;
         let sm_authority_schema: String = sqlx::query_scalar("SELECT current_schema()")
             .fetch_one(&pool)
             .await

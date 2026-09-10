@@ -17,7 +17,7 @@ import sys
 import time
 
 
-PHASES = ("prepared", "live")
+PHASES = ("prepared", "live", "transport")
 POLL_SECONDS = 0.025
 
 
@@ -36,6 +36,20 @@ def process_alive(pid: int) -> bool:
         return True
     except ProcessLookupError:
         return False
+
+
+def belongs_to_worker(pid: int, leader: int) -> bool:
+    """Check the actual publisher's ancestry, including nested supervisors."""
+    for _ in range(64):
+        if pid == leader:
+            return True
+        if pid <= 1:
+            return False
+        try:
+            pid = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return False
+    return False
 
 
 def read_record(file: Path) -> dict:
@@ -104,7 +118,19 @@ def ready_record(config: dict, phase: str, pair: int, pid: int) -> dict:
     return {**config, "phase": phase, "pair": pair, "pid": pid}
 
 
-def all_prepared(directory: Path, config: dict, phase: str) -> bool:
+def require_previous_release(directory: Path, config: dict, phase: str) -> None:
+    previous = {"live": "prepared", "transport": "live"}.get(phase)
+    if previous is None:
+        return
+    try:
+        record = read_record(directory / f"{previous}-release.json")
+    except FileNotFoundError as error:
+        raise ValueError("previous fixture phase has not been released") from error
+    if record != {**config, "phase": previous, "released": True}:
+        raise ValueError("previous phase release identity does not match")
+
+
+def all_prepared(directory: Path, config: dict, phase: str, leaders: list[int] | None = None) -> bool:
     complete = True
     for pair in range(1, config["pairs"] + 1):
         file = directory / f"{phase}-{pair}.json"
@@ -118,6 +144,8 @@ def all_prepared(directory: Path, config: dict, phase: str) -> bool:
             raise ValueError("phase readiness identity does not match")
         if not process_alive(pid):
             raise ValueError("fixture exited before phase release")
+        if leaders is not None and not belongs_to_worker(pid, leaders[pair - 1]):
+            raise ValueError("phase publisher does not belong to its assigned worker")
     return complete
 
 
@@ -125,6 +153,7 @@ def worker(directory: Path, nonce: str, round_number: int, phase: str, pair: int
     config = configuration(directory, nonce, round_number)
     if phase not in PHASES or not 1 <= pair <= config["pairs"]:
         raise ValueError("worker phase or pair is outside this round")
+    require_previous_release(directory, config, phase)
     publish(directory / f"{phase}-{pair}.json", ready_record(config, phase, pair, os.getpid()))
     release = {**config, "phase": phase, "released": True}
     deadline = time.monotonic() + timeout
@@ -144,16 +173,36 @@ def release(directory: Path, nonce: str, round_number: int, phase: str, timeout:
     config = configuration(directory, nonce, round_number)
     if phase not in PHASES or len(leaders) != config["pairs"] or len(set(leaders)) != len(leaders):
         raise ValueError("phase release requires every distinct worker leader")
+    require_previous_release(directory, config, phase)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not all(process_alive(pid) for pid in leaders):
             raise ValueError("worker leader exited before phase release")
-        if all_prepared(directory, config, phase):
+        if all_prepared(directory, config, phase, leaders):
             publish(directory / f"{phase}-release.json", {**config, "phase": phase, "released": True})
             print(f"listener stress phase={phase} round={round_number} pairs={config['pairs']} released")
             return
         time.sleep(POLL_SECONDS)
     raise TimeoutError("not every fixture reached the parent phase barrier")
+
+
+def wait_for_fixture_phase(phase: str) -> None:
+    """Join a phase from the live Python fixture, without an extra publisher."""
+    if phase not in PHASES:
+        raise ValueError("unknown fixture phase")
+    names = ("DIR", "NONCE", "ROUND", "PAIR")
+    values = [os.environ.get("NORTHSTAR_LISTENER_STRESS_PHASE_" + name, "") for name in names]
+    if not any(values):
+        return
+    if not all(values):
+        raise ValueError("listener stress phase configuration must be set together")
+    directory, nonce, raw_round, raw_pair = values
+    timeout = positive(os.environ.get("NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS", "900"))
+    if timeout > 7200:
+        raise ValueError("fixture phase timeout exceeds the worker budget limit")
+    # This wait remains inside the original github-ci-run supervisor's total
+    # budget. It never holds an authentication slot or starts its I/O clock.
+    worker(Path(directory), nonce, positive(raw_round), phase, positive(raw_pair), timeout)
 
 
 def main(argv: list[str]) -> None:

@@ -33,6 +33,13 @@ assert admission_spec.loader is not None
 admission_spec.loader.exec_module(stress_admission)
 stress_admission.LOGIN_SLOT_CONFIGURATION = stress_admission.login_slot_configuration_from_environment()
 
+phase_spec = importlib.util.spec_from_file_location(
+    "northstar_federation_stress_phases", ROOT / "listener-stress-phases.py"
+)
+stress_phases = importlib.util.module_from_spec(phase_spec)
+assert phase_spec.loader is not None
+phase_spec.loader.exec_module(stress_phases)
+
 PASSWORD = "federation-password-123"
 ALICE = "alice_fed"
 BOB = "bob_fed"
@@ -716,6 +723,10 @@ def run() -> None:
     verify_c2s_transport_boundaries()
     verify_s2s_transport_boundaries()
     verify_s2s_authentication_boundaries()
+    # Every pair completes the original concurrent transport probes before a
+    # faster pair begins password work. This process publishes its own PID
+    # and stays alive at the barrier, before taking any authentication slot.
+    stress_phases.wait_for_fixture_phase("transport")
     endpoint(
         required_test_port("FEDERATION_TEST_HTTP_PORT_A"),
         required_test_port("FEDERATION_TEST_CLIENT_PORT_A"),

@@ -1647,6 +1647,11 @@ for ((round = 1; round <= rounds; round++)); do
       "$startup_phase_dir" "$startup_phase_nonce" "$round" live \
       "$worker_timeout_seconds" "${workers[@]}"
     record_parent_diagnostic "phase=federation-live-barrier round=$round status=released pairs=$pairs"
+    run_parent_phase "federation-transport-release-r$round" \
+      python3 "$project_dir/scripts/listener-stress-phases.py" release \
+      "$startup_phase_dir" "$startup_phase_nonce" "$round" transport \
+      "$worker_timeout_seconds" "${workers[@]}"
+    record_parent_diagnostic "phase=federation-transport-barrier round=$round status=released pairs=$pairs"
   fi
   if ! await_mix_federation_setup_barrier "${#workers[@]}"; then
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=mix-federation-setup-barrier

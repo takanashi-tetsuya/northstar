@@ -99,6 +99,15 @@ pool remains 32. These budgets assume one core and one maintenance process.
 This topology does not authorize running several independent core replicas
 against the same domain: their live session state is not distributed.
 
+Core reserves its runtime-control connection within one 15-second admission
+window, including role attestation. Later, the command and OMEMO recovery pools
+share a separate 15-second startup window, including command-role attestation.
+Only connection-pool timeouts may retry; authentication and attestation failures
+abort startup. These auxiliary pools keep their two-second acquisition limit
+while serving. The windows bound those initialization phases, not all startup
+work; the listener fixture independently retains its total 15-second readiness
+deadline.
+
 The loopback-only maintenance endpoint provides `/healthz`, `/readyz` and
 `/metrics`. Readiness requires a completed successful cleanup pass, healthy
 supervised workers and the database ownership connection. It is false during

@@ -410,11 +410,15 @@ for (const invariant of [
 if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/s.test(runtimeControlReservation)) {
   throw new Error('runtime-control startup reservation must retain its one dedicated connection');
 }
-const runtimeControlAdmission = structBody(state, 'async fn runtime_control_startup_connect<');
+const runtimeControlConnect = structBody(state, 'async fn runtime_control_startup_connect<');
+if (!/startup_database_connect\(\s*deadline,\s*RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET,/.test(runtimeControlConnect)) {
+  throw new Error('runtime-control must use bounded startup admission with its handshake limit');
+}
+const runtimeControlAdmission = structBody(state, 'async fn startup_database_connect<');
 for (const invariant of [
   'tokio::time::timeout_at(deadline,',
   'deadline.saturating_duration_since(tokio::time::Instant::now())',
-  'remaining.min(RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET)',
+  'remaining.min(attempt_limit)',
   'tokio::time::timeout(attempt_budget, connect(attempt_budget))',
   'runtime_control_startup_retry_delay(attempts, std::process::id())',
   '.min(remaining)',
@@ -590,6 +594,21 @@ if (
   throw new Error('MIX must retain a regression test proving slow delivery cannot head-of-line block PAM');
 }
 const commandPoolConstruction = structBody(state, 'pub async fn new(');
+for (const invariant of [
+  'let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;',
+  'startup_database_connect( auxiliary_pool_deadline, AUXILIARY_POOL_ACQUIRE_TIMEOUT, "XEP-0133 command",',
+  'startup_database_connect( auxiliary_pool_deadline, AUXILIARY_POOL_ACQUIRE_TIMEOUT, "OMEMO recovery poll",',
+  'tokio::time::timeout_at(auxiliary_pool_deadline,',
+]) {
+  if (!commandPoolConstruction.replace(/\s+/g, '').includes(invariant.replace(/\s+/g, ''))) {
+    throw new Error(`auxiliary pools must share bounded startup admission: ${invariant}`);
+  }
+}
+if (countMatches(commandPoolConstruction, /\.acquire_timeout\(AUXILIARY_POOL_ACQUIRE_TIMEOUT\)/g) !== 2
+    || !/const AUXILIARY_POOL_ACQUIRE_TIMEOUT:\s*Duration\s*=\s*Duration::from_secs\(2\)/.test(state)
+    || !/const AUXILIARY_POOL_STARTUP_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(15\)/.test(state)) {
+  throw new Error('auxiliary pools retain a 2 s acquisition policy within a shared 15 s startup window');
+}
 const commandPoolModeMatch = structBody(
   commandPoolConstruction,
   'let command_pool = match config.admin_command_pool_mode',

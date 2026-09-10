@@ -50,8 +50,14 @@ fixture synchronization and identity checks without starting Northstar.
 listeners and separate log directories. All pairs finish certificate, secret,
 binary/database preparation and all four relay readiness checks before any
 server starts. Relay readiness does not depend on a server target, avoiding a
-dependency cycle at this barrier. Federation also waits for both
-servers in every pair to be ready before protocol activity. MIX retains its
+dependency cycle at this barrier. Federation waits for both servers in every
+pair to be ready before protocol activity, then for all pairs to finish the
+four transport-boundary probe groups before registration and password work.
+Those probes keep their original order, assertions and cross-pair concurrency;
+the waiting Python process holds no authentication slot. Its phase record is
+bound to the round, nonce, pair and actual PID, whose ancestry must reach the
+assigned worker leader. Phase releases enforce preparation → live → transport.
+MIX retains its
 signed all-pair setup barrier. Both families share the fixture's bounded
 authentication admission lanes, with CPU sizing based on process affinity and
 cgroup quota. A failed or missing pair fails the round; preparation never

@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -41,10 +42,10 @@ class PhaseTests(unittest.TestCase):
         phases.initialize(self.directory, self.nonce, 1, 2, os.getpid())
         self.config = phases.configuration(self.directory, self.nonce, 1)
 
-    def spawn_worker(self, pair):
+    def spawn_worker(self, pair, phase="prepared"):
         process = subprocess.Popen([
             sys.executable, str(ROOT / "listener-stress-phases.py"), "worker",
-            str(self.directory), self.nonce, "1", "prepared", str(pair), "5",
+            str(self.directory), self.nonce, "1", phase, str(pair), "5",
         ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         def cleanup():
@@ -54,7 +55,7 @@ class PhaseTests(unittest.TestCase):
 
         self.addCleanup(cleanup)
         deadline = time.monotonic() + 5
-        while not (self.directory / f"prepared-{pair}.json").exists():
+        while not (self.directory / f"{phase}-{pair}.json").exists():
             self.assertIsNone(process.poll(), "fixture exited while waiting for its barrier")
             if time.monotonic() >= deadline:
                 self.fail("fixture did not publish its small local preparation record")
@@ -99,6 +100,141 @@ class PhaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "only be published once"):
             phases.publish(self.directory / "round.json", {})
 
+    def mark_live_release(self):
+        for phase in ("prepared", "live"):
+            phases.publish(self.directory / f"{phase}-release.json", {
+                **self.config, "phase": phase, "released": True,
+            })
+
+    def test_transport_rejects_out_of_order_and_wrong_release_identity(self):
+        for phase in ("live", "transport"):
+            with self.subTest(phase=phase), self.assertRaisesRegex(ValueError, "previous fixture phase"):
+                phases.worker(self.directory, self.nonce, 1, phase, 1, 1)
+            self.assertFalse((self.directory / f"{phase}-1.json").exists())
+        with self.assertRaisesRegex(ValueError, "previous fixture phase"):
+            phases.release(self.directory, self.nonce, 1, "transport", 1, [os.getpid(), os.getppid()])
+        phases.publish(self.directory / "live-release.json", {
+            **self.config, "nonce": "b" * 64, "phase": "live", "released": True,
+        })
+        with self.assertRaisesRegex(ValueError, "release identity"):
+            phases.worker(self.directory, self.nonce, 1, "transport", 1, 1)
+        self.assertFalse((self.directory / "transport-1.json").exists())
+
+    def test_transport_rejects_swapped_workers_and_dead_leader(self):
+        self.mark_live_release()
+        first = self.spawn_worker(1, "transport")
+        second = self.spawn_worker(2, "transport")
+        with self.assertRaisesRegex(ValueError, "assigned worker"):
+            phases.release(self.directory, self.nonce, 1, "transport", 1, [second.pid, first.pid])
+        self.assertFalse((self.directory / "transport-release.json").exists())
+        second.terminate()
+        second.communicate(timeout=3)
+        with self.assertRaisesRegex(ValueError, "worker leader exited"):
+            phases.release(self.directory, self.nonce, 1, "transport", 1, [first.pid, second.pid])
+        self.assertFalse((self.directory / "transport-release.json").exists())
+
+    def test_python_phase_environment_is_all_or_none(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(phases, "worker") as wait:
+            phases.wait_for_fixture_phase("transport")
+            wait.assert_not_called()
+        environment = {"NORTHSTAR_LISTENER_STRESS_PHASE_DIR": str(self.directory)}
+        with patch.dict(os.environ, environment, clear=True), self.assertRaisesRegex(ValueError, "set together"):
+            phases.wait_for_fixture_phase("transport")
+        environment.update({
+            "NORTHSTAR_LISTENER_STRESS_PHASE_NONCE": self.nonce,
+            "NORTHSTAR_LISTENER_STRESS_PHASE_ROUND": "1",
+            "NORTHSTAR_LISTENER_STRESS_PHASE_PAIR": "2",
+        })
+        with patch.dict(os.environ, environment, clear=True), patch.object(phases, "worker") as wait:
+            phases.wait_for_fixture_phase("transport")
+            wait.assert_called_once_with(self.directory, self.nonce, 1, "transport", 2, 900)
+
+    def test_faster_transport_pair_cannot_register_before_slower_probes_finish(self):
+        self.mark_live_release()
+        slow_probe_release = Path(self.temporary.name) / "finish-slow-probe"
+        probe_names = [
+            "verify_starttls_failure_boundary", "verify_c2s_transport_boundaries",
+            "verify_s2s_transport_boundaries", "verify_s2s_authentication_boundaries",
+        ]
+        program = r'''
+import importlib.util, os, pathlib, sys, time
+root, trace_path, slow_release = map(pathlib.Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location("federation_transport_regression", root / "federation-wsl.py")
+federation = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(federation)
+def trace(message):
+    with trace_path.open("a") as output:
+        output.write(message + "\n")
+def probe(name):
+    def run_probe():
+        trace(name)
+        if name == "verify_s2s_authentication_boundaries" and os.environ["NORTHSTAR_LISTENER_STRESS_PHASE_PAIR"] == "2":
+            deadline = time.monotonic() + 5
+            while not slow_release.exists():
+                if time.monotonic() >= deadline:
+                    raise AssertionError("slow probe was never released")
+                time.sleep(0.01)
+    return run_probe
+for name in ("verify_starttls_failure_boundary", "verify_c2s_transport_boundaries", "verify_s2s_transport_boundaries", "verify_s2s_authentication_boundaries"):
+    setattr(federation, name, probe(name))
+def premature_authentication():
+    raise AssertionError("authentication started before transport release")
+federation.stress_admission.fixture_phase_auth_admission = premature_authentication
+federation.stress_admission.authentication_attempt = premature_authentication
+federation.endpoint = lambda *_: None
+federation.required_test_port = lambda _: 40123
+federation.fixture.wait_ready = lambda: None
+def register(_username):
+    trace("register")
+    raise SystemExit(0)
+federation.register = register
+federation.run()
+'''
+        workers = []
+        traces = []
+        try:
+            for pair in (1, 2):
+                trace = Path(self.temporary.name) / f"pair-{pair}.trace"
+                traces.append(trace)
+                environment = {**os.environ,
+                    "NORTHSTAR_LISTENER_STRESS_PHASE_DIR": str(self.directory),
+                    "NORTHSTAR_LISTENER_STRESS_PHASE_NONCE": self.nonce,
+                    "NORTHSTAR_LISTENER_STRESS_PHASE_ROUND": "1",
+                    "NORTHSTAR_LISTENER_STRESS_PHASE_PAIR": str(pair),
+                    "NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS": "5",
+                }
+                # Keep a real outer worker alive around the Python publisher,
+                # mirroring the nested CI supervisor's ancestry relationship.
+                workers.append(subprocess.Popen([
+                    "bash", "-c", '"$@" & wait "$!"', "fixture-worker",
+                    sys.executable, "-c", program, str(ROOT), str(trace), str(slow_probe_release),
+                ], env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, start_new_session=True))
+            deadline = time.monotonic() + 5
+            while not (self.directory / "transport-1.json").exists():
+                self.assertIsNone(workers[0].poll())
+                if time.monotonic() >= deadline:
+                    self.fail("faster fixture did not reach transport barrier")
+                time.sleep(0.01)
+            self.assertEqual(traces[0].read_text().splitlines(), probe_names)
+            self.assertFalse((self.directory / "transport-2.json").exists())
+            self.assertFalse(phases.all_prepared(self.directory, self.config, "transport", [worker.pid for worker in workers]))
+            self.assertIsNone(workers[0].poll())
+            slow_probe_release.touch()
+            phases.release(self.directory, self.nonce, 1, "transport", 5, [worker.pid for worker in workers])
+            for worker, trace in zip(workers, traces):
+                _, error = worker.communicate(timeout=5)
+                self.assertEqual(worker.returncode, 0, error)
+                self.assertEqual(trace.read_text().splitlines(), [*probe_names, "register"])
+        finally:
+            for worker in workers:
+                try:
+                    os.killpg(worker.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            for worker in workers:
+                worker.communicate(timeout=5)
+
     def test_fixture_preparation_precedes_server_startup(self):
         for name in ("federation-wsl.sh", "mix-federation-runtime-wsl.sh"):
             source = (ROOT / name).read_text()
@@ -123,6 +259,8 @@ class PhaseTests(unittest.TestCase):
         self.assertIn('regular) [[ -n "$rounds" ]] || rounds=20', driver)
         self.assertIn('pairs="50"', driver)
         self.assertLess(driver.index('"fixture-preparation-release-r$round"'), driver.index('"federation-live-release-r$round"'))
+        self.assertLess(driver.index('"federation-live-release-r$round"'), driver.index('"federation-transport-release-r$round"'))
+        self.assertLess(driver.index('"federation-transport-release-r$round"'), driver.index('if ! await_mix_federation_setup_barrier'))
 
     def test_all_pair_relays_prepare_without_server_targets(self):
         relays = []

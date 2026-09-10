@@ -1386,6 +1386,23 @@ impl AppState {
         if let Some(mut password) = config.raw.bootstrap_admin_password.take() {
             password.zeroize();
         }
+        // Reserve durable control-plane authority before any optional service,
+        // migration-derived audit, or traffic-adjacent pool can participate in
+        // startup. A cold-start cohort must not be able to consume all fixture
+        // connections before a process establishes its safety boundary.
+        let runtime_control_pool = runtime_control_pool_options(&config)
+            .connect(&config.database_url)
+            .await
+            .context("could not create isolated runtime-control database pool")?;
+        if config.database_allow_unsafe_role_for_development {
+            crate::db::attest_development_database_is_loopback(&runtime_control_pool).await?;
+        } else {
+            crate::db::attest_runtime_role(&runtime_control_pool).await?;
+        }
+        let runtime_control_connection = runtime_control_pool
+            .acquire()
+            .await
+            .context("could not reserve the runtime-control database connection")?;
         let metrics_bearer_token = config.metrics_bearer_token.take();
         let web_admin_gateway_token = config.web_admin_gateway_token.take();
         let component_credentials: Arc<[crate::config::ComponentCredential]> =
@@ -2032,28 +2049,6 @@ impl AppState {
             .connect(&config.database_url)
             .await
             .context("could not create isolated OMEMO recovery poll database pool")?;
-        // A runtime control plane is required independently of optional XEPs:
-        // registration closure and island-mode changes must remain observable
-        // when normal traffic occupies the primary pool. XEP-0133, when
-        // enabled, reuses this already-attested capability only for its
-        // durable restart/shutdown watcher; it never receives command-pool
-        // authority or a second pool.
-        let runtime_control_pool = runtime_control_pool_options(&config)
-            .connect(&config.database_url)
-            .await
-            .context("could not create isolated runtime-control database pool")?;
-        if config.database_allow_unsafe_role_for_development {
-            crate::db::attest_development_database_is_loopback(&runtime_control_pool).await?;
-        } else {
-            crate::db::attest_runtime_role(&runtime_control_pool).await?;
-        }
-        // Reserve the control-plane connection before this process can accept
-        // work. The sole coordinator holds it for its lifetime, so runtime
-        // policy reads cannot race an acquire under a cold-start surge.
-        let runtime_control_connection = runtime_control_pool
-            .acquire()
-            .await
-            .context("could not reserve the runtime-control database connection")?;
         let sm_authority_schema: String = sqlx::query_scalar("SELECT current_schema()")
             .fetch_one(&pool)
             .await

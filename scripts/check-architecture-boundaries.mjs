@@ -395,6 +395,12 @@ if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(|fn start_ser
 if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/.test(state)) {
   throw new Error('AppState must reserve its runtime-control connection before worker activation');
 }
+const appStateConstruction = structBody(state, 'pub async fn new(');
+const runtimeControlReservation = appStateConstruction.indexOf('let runtime_control_pool = runtime_control_pool_options(&config)');
+const firstStartupAudit = appStateConstruction.indexOf('db::audit_mix_delivery_capacity_ledger(&pool)');
+if (runtimeControlReservation < 0 || firstStartupAudit < 0 || runtimeControlReservation > firstStartupAudit) {
+  throw new Error('runtime-control authority must be reserved before traffic-adjacent startup audits');
+}
 if (!/Self::start_runtime_control_refresh\(\s*Arc::clone\(&state\),\s*runtime_control_connection,\s*worker_cancel,\s*\);/s.test(state)) {
   throw new Error('AppState must transfer the reserved connection to the coordinated runtime-control worker');
 }

@@ -61,6 +61,31 @@ fn runtime_control_pool_options(config: &Config) -> PgPoolOptions {
     }
 }
 
+/// Establish the one process-owned control-plane connection before the
+/// traffic pool or any startup reconciliation can take database capacity.
+///
+/// Keeping this at the application boundary makes the ordering explicit:
+/// `main` owns startup sequencing, while [`AppState`] only owns the connection
+/// after startup transfers it into the coordinated runtime worker.  The
+/// connection remains separate from traffic for its whole lifetime.
+pub(crate) async fn reserve_runtime_control_connection(
+    config: &Config,
+) -> anyhow::Result<PoolConnection<Postgres>> {
+    let runtime_control_pool = runtime_control_pool_options(config)
+        .connect(&config.database_url)
+        .await
+        .context("could not create isolated runtime-control database pool")?;
+    if config.database_allow_unsafe_role_for_development {
+        crate::db::attest_development_database_is_loopback(&runtime_control_pool).await?;
+    } else {
+        crate::db::attest_runtime_role(&runtime_control_pool).await?;
+    }
+    runtime_control_pool
+        .acquire()
+        .await
+        .context("could not reserve the runtime-control database connection")
+}
+
 fn admit_omemo_poll_ip_window(window: &mut VecDeque<Instant>, now: Instant) -> bool {
     let cutoff = now.checked_sub(Duration::from_secs(60)).unwrap_or(now);
     while window.front().is_some_and(|seen| *seen <= cutoff) {
@@ -1379,6 +1404,7 @@ impl AppState {
         pool: PgPool,
         federation: FederationRouter,
         components: crate::components::ComponentRegistry,
+        runtime_control_connection: PoolConnection<Postgres>,
         worker_cancel: CancellationToken,
     ) -> anyhow::Result<Arc<Self>> {
         // This one-shot credential was consumed by ensure_bootstrap_admin
@@ -1386,23 +1412,6 @@ impl AppState {
         if let Some(mut password) = config.raw.bootstrap_admin_password.take() {
             password.zeroize();
         }
-        // Reserve durable control-plane authority before any optional service,
-        // migration-derived audit, or traffic-adjacent pool can participate in
-        // startup. A cold-start cohort must not be able to consume all fixture
-        // connections before a process establishes its safety boundary.
-        let runtime_control_pool = runtime_control_pool_options(&config)
-            .connect(&config.database_url)
-            .await
-            .context("could not create isolated runtime-control database pool")?;
-        if config.database_allow_unsafe_role_for_development {
-            crate::db::attest_development_database_is_loopback(&runtime_control_pool).await?;
-        } else {
-            crate::db::attest_runtime_role(&runtime_control_pool).await?;
-        }
-        let runtime_control_connection = runtime_control_pool
-            .acquire()
-            .await
-            .context("could not reserve the runtime-control database connection")?;
         let metrics_bearer_token = config.metrics_bearer_token.take();
         let web_admin_gateway_token = config.web_admin_gateway_token.take();
         let component_credentials: Arc<[crate::config::ComponentCredential]> =

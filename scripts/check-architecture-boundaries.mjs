@@ -392,14 +392,30 @@ if (!/"runtime-control-refresh"/.test(runtimeControlRefresh)) {
 if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(|fn start_service_control_watcher\(/.test(state)) {
   throw new Error('independent runtime control workers can contend for the one-connection control pool');
 }
-if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/.test(state)) {
-  throw new Error('AppState must reserve its runtime-control connection before worker activation');
+const runtimeControlReservation = structBody(state, 'pub(crate) async fn reserve_runtime_control_connection(');
+for (const invariant of [
+  'runtime_control_pool_options(config)',
+  '.connect(&config.database_url)',
+  'attest_development_database_is_loopback',
+  'attest_runtime_role',
+]) {
+  if (!runtimeControlReservation.includes(invariant)) {
+    throw new Error(`runtime-control startup reservation lost required invariant: ${invariant}`);
+  }
+}
+if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/s.test(runtimeControlReservation)) {
+  throw new Error('runtime-control startup reservation must retain its one dedicated connection');
 }
 const appStateConstruction = structBody(state, 'pub async fn new(');
-const runtimeControlReservation = appStateConstruction.indexOf('let runtime_control_pool = runtime_control_pool_options(&config)');
-const firstStartupAudit = appStateConstruction.indexOf('db::audit_mix_delivery_capacity_ledger(&pool)');
-if (runtimeControlReservation < 0 || firstStartupAudit < 0 || runtimeControlReservation > firstStartupAudit) {
-  throw new Error('runtime-control authority must be reserved before traffic-adjacent startup audits');
+if (!/pub async fn new\([\s\S]*?runtime_control_connection\s*:\s*PoolConnection<Postgres>/.test(state)) {
+  throw new Error('AppState must receive the already-reserved runtime-control connection');
+}
+const runtimeMain = structBody(mainSource, 'async fn main()');
+const mainRuntimeControlReservation = runtimeMain.indexOf('state::reserve_runtime_control_connection(&config).await?');
+const mainPrimaryPoolConstruction = runtimeMain.indexOf('let pool_options = PgPoolOptions::new()');
+if (mainRuntimeControlReservation < 0 || mainPrimaryPoolConstruction < 0
+    || mainRuntimeControlReservation > mainPrimaryPoolConstruction) {
+  throw new Error('main must reserve runtime-control authority before constructing the traffic pool');
 }
 if (!/Self::start_runtime_control_refresh\(\s*Arc::clone\(&state\),\s*runtime_control_connection,\s*worker_cancel,\s*\);/s.test(state)) {
   throw new Error('AppState must transfer the reserved connection to the coordinated runtime-control worker');
@@ -2644,7 +2660,7 @@ const workerResponsibilityEvidence = {
   'cluster-failure-policy': ['src/main.rs', '`main`, cluster only', '15 s'],
   'cluster-muc-outbox': ['src/cluster.rs', 'unconditionally registered', '30 s'],
   'locked-muc-expiry': ['src/state.rs', '`AppState` MUC startup', '20 s'],
-  'runtime-control-refresh': ['src/state.rs', '`AppState` runtime-control startup', '5 s'],
+  'runtime-control-refresh': ['src/state.rs', 'process startup reserves the connection', '5 s'],
   'sm-authority-listener': ['src/services/sm.rs', '`SmService` startup', '15 s'],
   'sm-suspension-recovery': ['src/services/session_cleanup.rs', 'session-cleanup service startup', '30 s'],
   'caps-side-effects': ['src/xmpp/protocol/caps.rs', 'Caps subsystem startup', '60 s'],

@@ -251,6 +251,11 @@ async fn main() -> Result<()> {
     if arguments.first().map(String::as_str) == Some("pie") {
         return pie::run(&config, &arguments[1..]).await;
     }
+    // This reservation deliberately precedes primary-pool construction and
+    // every startup database operation.  Runtime policy and service-control
+    // authority must survive a cold-start cohort that would otherwise fill
+    // the traffic pool before it can establish its own isolated connection.
+    let runtime_control_connection = state::reserve_runtime_control_connection(&config).await?;
     let pool_options = PgPoolOptions::new()
         .max_connections(config.database_max_connections)
         .min_connections(config.database_min_connections);
@@ -297,7 +302,15 @@ async fn main() -> Result<()> {
     let (federation, federation_rx) =
         s2s::FederationRouter::channel(pool.clone(), &config, components.clone());
     let cancel = CancellationToken::new();
-    let state = AppState::new(config, pool, federation, components, cancel.clone()).await?;
+    let state = AppState::new(
+        config,
+        pool,
+        federation,
+        components,
+        runtime_control_connection,
+        cancel.clone(),
+    )
+    .await?;
     state.install_service_shutdown(cancel.clone())?;
 
     let worker_registry = Arc::clone(state.worker_registry());

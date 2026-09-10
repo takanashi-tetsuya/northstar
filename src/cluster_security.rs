@@ -20,7 +20,8 @@ use zeroize::Zeroizing;
 pub const SIGNED_PROTOCOL_VERSION: u16 = 8;
 const ENVELOPE_LIFETIME_SECONDS: i64 = 10;
 pub(crate) const CLOCK_SKEW_SECONDS: i64 = 5;
-const MAX_PEERS: usize = 128;
+pub(crate) const MAX_PEERS: usize = 128;
+pub(crate) const MAX_NODE_ID_BYTES: usize = 128;
 const MAX_ALLOWED_KINDS: usize = 32;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -414,7 +415,7 @@ fn decode_public_key(value: &str) -> Result<[u8; 32]> {
 
 fn validate_node_id(node_id: &str) -> Result<()> {
     anyhow::ensure!(
-        (1..=128).contains(&node_id.len())
+        (1..=MAX_NODE_ID_BYTES).contains(&node_id.len())
             && node_id
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')),

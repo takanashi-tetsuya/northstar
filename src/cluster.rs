@@ -4822,7 +4822,44 @@ impl ClusterManager {
         let room = crate::jid::canonicalize_bare(room_jid)?;
         let mut conn = pool.get().await?;
         let key = self.key(format!("muc_nodes:{room}"));
-        Ok(conn.smembers(&key).await?)
+        // Fan-out only examines bounded node hints. Full occupant/index
+        // reconciliation belongs to maintenance and explicit room reads.
+        // The allowlist excludes this process, hence the extra local slot.
+        let script = redis::Script::new(
+            r#"
+            if redis.call('scard', KEYS[1]) > tonumber(ARGV[2]) then
+                return redis.error_reply('MUC routing node hint limit exceeded')
+            end
+            local nodes = redis.call('smembers', KEYS[1])
+            for _, node in ipairs(nodes) do
+                if #node == 0 or #node > tonumber(ARGV[3]) then
+                    return redis.error_reply('MUC routing node hint has an invalid length')
+                end
+            end
+            local active = {}
+            local stale = {}
+            for _, node in ipairs(nodes) do
+                if redis.call('get', ARGV[1] .. node .. ':alive') then
+                    table.insert(active, node)
+                else
+                    table.insert(stale, node)
+                end
+            end
+            for _, node in ipairs(stale) do
+                redis.call('srem', KEYS[1], node)
+            end
+            return active
+            "#,
+        );
+        let mut nodes: Vec<String> = script
+            .key(key)
+            .arg(self.key("node:".to_owned()))
+            .arg(crate::cluster_security::MAX_PEERS + 1)
+            .arg(crate::cluster_security::MAX_NODE_ID_BYTES)
+            .invoke_async(&mut *conn)
+            .await?;
+        nodes.sort_unstable();
+        Ok(nodes)
     }
 
     pub async fn send_to_muc(&self, room_jid: &str, stanza: &str) -> Result<()> {
@@ -4927,15 +4964,36 @@ impl ClusterManager {
             "real_sender": real_sender,
         });
         let mut conn = pool.get().await?;
+        self.publish_muc_fan_out(&mut conn, nodes, payload).await
+    }
+
+    async fn publish_muc_fan_out(
+        &self,
+        conn: &mut redis::aio::MultiplexedConnection,
+        nodes: Vec<String>,
+        payload: serde_json::Value,
+    ) -> Result<()> {
+        let mut first_error = None;
         for node_id in nodes {
             if node_id != self.node_id {
                 let channel = self.key(format!("node:{node_id}"));
-                let _ = self
-                    .publish_signed(&mut conn, &node_id, &channel, payload.clone())
-                    .await?;
+                // A destination-specific authority error must not suppress
+                // other recipients. Each attempt still uses publish_signed's
+                // admission gate: global degradation remains fail-closed.
+                if let Err(error) = self
+                    .publish_signed(conn, &node_id, &channel, payload.clone())
+                    .await
+                {
+                    first_error.get_or_insert_with(|| {
+                        error.context(format!("MUC volatile fan-out to node {node_id} failed"))
+                    });
+                }
             }
         }
-        Ok(())
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     pub async fn send_muc_private_from(
@@ -7967,6 +8025,10 @@ async fn listen_once(
 mod listener_continuation_tests;
 
 #[cfg(test)]
+#[path = "cluster_muc_routing_tests.rs"]
+mod muc_routing_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -8724,7 +8786,10 @@ mod tests {
         assert_eq!(delivery_privacy_peer(&ambiguous, true), None);
     }
 
-    fn rename_occupant(epoch: uuid::Uuid, nick: &str) -> crate::state::SerializableMucOccupant {
+    pub(super) fn rename_occupant(
+        epoch: uuid::Uuid,
+        nick: &str,
+    ) -> crate::state::SerializableMucOccupant {
         crate::state::SerializableMucOccupant {
             full_jid: "alice@example.test/Phone".to_owned(),
             room_jid: "room@conference.example.test".to_owned(),
@@ -8745,7 +8810,7 @@ mod tests {
     /// both sides from the same immutable key/instance values that the
     /// production authority refresh would read, so it verifies the signed
     /// cross-node publication instead of bypassing it.
-    fn seed_test_peer_authority(receiver: &ClusterManager, sender: &ClusterManager) {
+    pub(super) fn seed_test_peer_authority(receiver: &ClusterManager, sender: &ClusterManager) {
         let sender_security = sender
             .security
             .as_ref()

@@ -163,5 +163,6 @@ cargo test --locked --offline db::cluster_muc::tests:: -- --nocapture
 cargo test --locked --offline \
   cluster::tests::redis_muc_nickname_and_voice_mutations_reject_conflicts_and_aba \
   -- --ignored --nocapture
+cargo test --locked --offline cluster::muc_routing_tests:: -- --ignored --nocapture
 
 echo "CLU-MUC static fences and pure state models passed; run scripts/cluster-wsl.sh for the disposable PostgreSQL/two-node Redis outage matrix"

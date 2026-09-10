@@ -209,7 +209,7 @@ save ""
 appendonly no
 protected-mode yes
 user default off
-user northstar on >$redis_password ~northstar:cluster.localhost:* &northstar:cluster.localhost:* +ping +time +get +set +setex +expire +ttl +exists +del +sadd +srem +smembers +zadd +zrem +zrangebyscore +zremrangebyscore +scan +publish +subscribe +unsubscribe +psubscribe +punsubscribe +eval +evalsha +script|load +hget +hset +hdel +hexists +hlen +hvals +hgetall +hkeys +hincrby
+user northstar on >$redis_password ~northstar:cluster.localhost:* &northstar:cluster.localhost:* +ping +time +get +set +setex +expire +ttl +exists +del +sadd +srem +smembers +scard +zadd +zrem +zrangebyscore +zremrangebyscore +scan +publish +subscribe +unsubscribe +psubscribe +punsubscribe +eval +evalsha +script|load +hget +hset +hdel +hexists +hlen +hvals +hgetall +hkeys +hincrby
 EOF
 chmod 600 "$redis_tmp/redis.conf"
 
@@ -274,6 +274,30 @@ chmod 600 "$redis_tmp/redis.url"
 REDISCLI_AUTH="$redis_password" "$redis_cli" --tls --cacert "$redis_tmp/redis-ca.crt" \
   --cert "$redis_tmp/redis-client.crt" --key "$redis_tmp/redis-client.key" \
   --user northstar -h localhost -p "$redis_required_tls_port" ping | grep -q PONG
+REDISCLI_AUTH="$redis_password" "$redis_cli" --raw --tls \
+  --cacert "$redis_tmp/redis-ca.crt" --cert "$redis_tmp/redis-client.crt" \
+  --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_required_tls_port" \
+  sadd northstar:cluster.localhost:muc_nodes:acl-probe scoped-node | grep -qx '1'
+cardinality="$(REDISCLI_AUTH="$redis_password" "$redis_cli" --raw --tls \
+  --cacert "$redis_tmp/redis-ca.crt" --cert "$redis_tmp/redis-client.crt" \
+  --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_required_tls_port" \
+  scard northstar:cluster.localhost:muc_nodes:acl-probe)"
+if [[ "$cardinality" != "1" ]]; then
+  echo "Redis ACL did not permit the namespaced MUC cardinality probe" >&2
+  exit 1
+fi
+REDISCLI_AUTH="$redis_password" "$redis_cli" --raw --tls \
+  --cacert "$redis_tmp/redis-ca.crt" --cert "$redis_tmp/redis-client.crt" \
+  --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_required_tls_port" \
+  del northstar:cluster.localhost:muc_nodes:acl-probe | grep -qx '1'
+outside_namespace="$(REDISCLI_AUTH="$redis_password" "$redis_cli" --raw --tls \
+  --cacert "$redis_tmp/redis-ca.crt" --cert "$redis_tmp/redis-client.crt" \
+  --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_required_tls_port" \
+  scard northstar:outside.localhost:muc_nodes:acl-probe 2>&1 || true)"
+if ! grep -q 'NOPERM' <<<"$outside_namespace"; then
+  echo "Redis ACL allowed a cardinality probe outside the fixture namespace" >&2
+  exit 1
+fi
 unauthorized="$(REDISCLI_AUTH="$redis_password" "$redis_cli" --tls \
   --cacert "$redis_tmp/redis-ca.crt" --cert "$redis_tmp/redis-client.crt" \
   --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_required_tls_port" \

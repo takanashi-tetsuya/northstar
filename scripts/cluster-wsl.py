@@ -570,8 +570,8 @@ def run() -> None:
 
     # Redis is a bounded, disposable MUC routing projection. Every live exact
     # occupant refresh must keep all three companion keys leased, while a
-    # crashed node embedded in a still-active room must be pruned rather than
-    # retained forever by the other node's sliding lease.
+    # crashed node must not block healthy-node fan-out, and a room read must
+    # remove its occupants instead of renewing them behind a live room lease.
     muc_prefix = f"northstar:{DOMAIN}"
     occupants_key = f"{muc_prefix}:muc_occupants:{room}"
     owners_key = f"{muc_prefix}:muc_occupant_nodes:{room}"
@@ -590,6 +590,20 @@ def run() -> None:
         "<body>prune crashed Redis owner</body></message>"
     )
     alice_a.receive_until("cluster-muc-prune")
+    # Volatile fan-out only filters bounded node hints. An explicit room read
+    # owns the full occupant/index sweep, independently of stanza delivery.
+    bob_b.send(
+        f"<iq xmlns='jabber:client' type='get' id='cluster-muc-prune-read' to='{room}'>"
+        "<query xmlns='http://jabber.org/protocol/disco#items'/></iq>"
+    )
+    room_items, _ = bob_b.receive_until("cluster-muc-prune-read")
+    fixture.check(
+        "type='result'" in room_items
+        and f"{room}/Alice" in room_items
+        and f"{room}/Bob" in room_items
+        and f"{room}/Ghost" not in room_items,
+        "explicit MUC room read did not reconcile the stale occupant projection",
+    )
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         if redis_cli("hexists", occupants_key, "Ghost") == "0":
@@ -599,7 +613,7 @@ def run() -> None:
         redis_cli("hexists", occupants_key, "Ghost") == "0"
         and redis_cli("hexists", owners_key, "Ghost") == "0"
         and "crashed-node" not in redis_cli("smembers", nodes_key).splitlines(),
-        "live room renewal retained a crashed-node MUC soft-state member",
+        "explicit room read retained a crashed-node MUC soft-state member",
     )
 
     cleanup_room = f"soft-state-cleanup@conference.{DOMAIN}"

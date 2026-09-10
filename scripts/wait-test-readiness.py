@@ -8,16 +8,22 @@ This program rejects stale, forged, partial, or mismatched records instead of
 turning a port number into an unsafe bind-close-launch lease.
 """
 
+import sys
+import time
+
+STARTUP_WINDOW_SECONDS = 15
+
+# The parent asks for this clock value before launching each server. Avoid
+# loading record, HTTP and self-test dependencies for this clock-only command.
+if __name__ == "__main__" and sys.argv[1:] == ["--startup-deadline"]:
+    print(time.monotonic() + STARTUP_WINDOW_SECONDS)
+    sys.exit(0)
+
 import json
 import math
 import os
 import re
-import socket
 import stat
-import sys
-import tempfile
-import time
-from urllib.parse import urlsplit
 
 
 NONCE = re.compile(r"^[0-9a-f]{16,128}$")
@@ -69,7 +75,7 @@ def require_live_child(pid):
 
 def startup_deadline(raw):
     deadline = float(raw)
-    if not math.isfinite(deadline) or deadline > time.monotonic() + 15:
+    if not math.isfinite(deadline) or deadline > time.monotonic() + STARTUP_WINDOW_SECONDS:
         fail("startup deadline must fit the original 15 second window")
     return deadline
 
@@ -117,6 +123,8 @@ def wait_for_record(path, nonce, pid, timeout, deadline=None):
 
 
 def readiness_address(url):
+    from urllib.parse import urlsplit
+
     parsed = urlsplit(url)
     if (parsed.scheme != "http" or parsed.hostname != "127.0.0.1"
             or parsed.username is not None or parsed.password is not None
@@ -128,6 +136,8 @@ def readiness_address(url):
 
 def probe_http_readiness(url, deadline):
     """Read a bounded close-delimited reply under one absolute I/O deadline."""
+    import socket
+
     address = readiness_address(url)
 
     def remaining():
@@ -209,6 +219,8 @@ def wait_for_http_readiness(path, nonce, pid, deadline, urls):
 
 
 def self_test():
+    import tempfile
+
     nonce = "0123456789abcdef"
     pid = os.getpid()
     with tempfile.TemporaryDirectory(prefix="northstar-readiness-test-") as directory:
@@ -236,7 +248,7 @@ def main(argv):
         self_test()
         return 0
     if argv == ["--startup-deadline"]:
-        print(time.monotonic() + 15)
+        print(time.monotonic() + STARTUP_WINDOW_SECONDS)
         return 0
     if argv[:1] == ["--http-ready"]:
         try:

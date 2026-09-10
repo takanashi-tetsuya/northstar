@@ -72,10 +72,10 @@ fn runtime_control_startup_retry_delay(attempt: u32, process_id: u32) -> Duratio
     // A process-local deterministic spread avoids another synchronized
     // connection wave without introducing shared startup state or a random
     // source into the authority boundary.
-    let jitter_millis = (u64::from(process_id)
+    let jitter_millis = u64::from(process_id)
         .wrapping_mul(0x9e37_79b9)
         .wrapping_add(u64::from(attempt).wrapping_mul(0x85eb_ca6b))
-        % 97) as u64;
+        % 97;
     Duration::from_millis(
         exponential_millis
             .saturating_add(jitter_millis)

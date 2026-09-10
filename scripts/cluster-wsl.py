@@ -20,6 +20,10 @@ import tempfile
 import urllib.error
 import urllib.request
 import uuid
+from collections import deque
+from html import escape
+import xml.etree.ElementTree as ET
+from xml.parsers import expat
 
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -76,6 +80,214 @@ def repository_cluster_protocol_version() -> str:
 
 
 CLUSTER_PROTOCOL_VERSION = repository_cluster_protocol_version()
+
+SM_NAMESPACE = "urn:xmpp:sm:3"
+SASL2_NAMESPACE = "urn:xmpp:sasl:2"
+STREAM_NAMESPACE = "http://etherx.jabber.org/streams"
+
+
+def split_protocol_elements(frame: str) -> list[str]:
+    """Keep original XML spelling while preserving every coframed element.
+
+    SASL2 sends success and features without restarting the stream. A resumed
+    response may also share a WebSocket frame with replayed stanzas. Parsing
+    each top-level element avoids dropping either sibling or rewriting the
+    quote/namespace spelling used by the existing fixture's assertions.
+    """
+
+    if len(frame.encode("utf-8")) > 2 * 1024 * 1024:
+        raise RuntimeError("cluster protocol frame exceeds the fixture byte limit")
+    raw = (f"<fixture xmlns:stream='{STREAM_NAMESPACE}'>" + frame + "</fixture>").encode()
+    parser = expat.ParserCreate()
+    depth = 0
+    start = 0
+    self_closing = False
+    elements = []
+
+    def reject_declaration(*_arguments):
+        raise ValueError("XML declarations are not protocol elements")
+
+    def on_start(_name, _attributes):
+        nonlocal depth, start, self_closing
+        if depth == 1:
+            start = parser.CurrentByteIndex
+            opening = re.match(br"<(?:[^>\"']|\"[^\"]*\"|'[^']*')*>" , raw[start:])
+            if opening is None:
+                raise ValueError("missing element opening tag")
+            self_closing = opening.group().endswith(b"/>")
+        depth += 1
+
+    def on_end(_name):
+        nonlocal depth
+        depth -= 1
+        if depth == 1:
+            end = parser.CurrentByteIndex
+            if not self_closing:
+                end = raw.index(b">", end) + 1
+            elements.append(raw[start:end].decode("utf-8"))
+            if len(elements) > 256:
+                raise ValueError("too many protocol elements")
+
+    def on_text(value):
+        if depth == 1 and value.strip():
+            raise ValueError("text outside protocol elements")
+
+    parser.StartElementHandler = on_start
+    parser.EndElementHandler = on_end
+    parser.CharacterDataHandler = on_text
+    parser.StartDoctypeDeclHandler = reject_declaration
+    parser.EntityDeclHandler = reject_declaration
+    parser.ProcessingInstructionHandler = reject_declaration
+    try:
+        parser.Parse(raw, True)
+        if not elements:
+            raise ValueError("no protocol elements")
+    except (expat.ExpatError, ValueError, UnicodeError):
+        # Never attach the received frame: SM IDs are bearer credentials.
+        raise RuntimeError("invalid cluster protocol XML frame") from None
+    return elements
+
+
+def protocol_element(frame: str) -> ET.Element:
+    try:
+        root = ET.fromstring(f"<fixture xmlns:stream='{STREAM_NAMESPACE}'>{frame}</fixture>")
+        if len(root) != 1:
+            raise ValueError("expected one protocol element")
+        return root[0]
+    except (ET.ParseError, ValueError):
+        raise RuntimeError("invalid cluster protocol XML element") from None
+
+
+class DeviceXmppWebSocket(fixture.XmppWebSocket):
+    """Local SASL2 adapter retaining the fixture's exact RFC 6120 resource.
+
+    A stable authenticated user-agent makes SM resumable under the production
+    same-device default. No Bind2, inline SM, or replacement presence is sent.
+    All protocol reads retain the constructor's existing ten-second budget.
+    """
+
+    def __init__(self, username, password, resource, *, device_id, resume=None):
+        try:
+            parsed_device = uuid.UUID(device_id)
+            if parsed_device.int == 0 or str(parsed_device) != device_id:
+                raise ValueError("noncanonical device ID")
+        except (ValueError, AttributeError, TypeError):
+            raise RuntimeError("cluster device ID must be a canonical non-nil UUID") from None
+        self.device_id = device_id
+        self._protocol_frames = deque()
+        super().__init__(username, password, resource, resume=resume)
+
+    def receive(self, timeout=10):
+        if not self._protocol_frames:
+            self._protocol_frames.extend(split_protocol_elements(super().receive(timeout)))
+        return self._protocol_frames.popleft()
+
+    def receive_until(self, marker, timeout=10):
+        # The shared fixture includes raw received frames in error messages.
+        # This client can queue SM bearer IDs, including unexpected duplicates,
+        # so preserve success semantics while reporting only a safe count.
+        fixture.check(timeout > 0, "cluster receive timeout must be positive")
+        deadline = time.monotonic() + timeout
+        frames = []
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"cluster protocol marker timed out; frames_received={len(frames)}")
+            try:
+                frame = self.receive(remaining)
+            except TimeoutError:
+                raise TimeoutError(f"cluster protocol marker timed out; frames_received={len(frames)}") from None
+            except (EOFError, ConnectionError, OSError):
+                raise EOFError(f"cluster protocol marker connection closed; frames_received={len(frames)}") from None
+            frames.append(frame)
+            if marker in frame:
+                return frame, frames
+
+    def _wait_element(self, tag, phase):
+        deadline = time.monotonic() + 10
+        if self._construction_deadline is not None:
+            deadline = min(deadline, self._construction_deadline)
+        while time.monotonic() < deadline:
+            try:
+                element = protocol_element(self.receive(deadline - time.monotonic()))
+            except (OSError, EOFError, RuntimeError, ValueError):
+                raise RuntimeError(f"cluster {phase} did not return valid protocol XML") from None
+            if element.tag == tag:
+                return element
+            if element.tag in {
+                f"{{{SASL2_NAMESPACE}}}failure",
+                f"{{{SM_NAMESPACE}}}failed",
+                f"{{{STREAM_NAMESPACE}}}error",
+            }:
+                raise RuntimeError(f"cluster {phase} was rejected")
+        raise RuntimeError(f"cluster {phase} exceeded its original protocol deadline")
+
+    def login(self, resume=None, expect_bind_conflict=False, initial_presence=True):
+        fixture.check(not expect_bind_conflict, "device client has no expected bind-conflict mode")
+        self.send(
+            f"<open xmlns='urn:ietf:params:xml:ns:xmpp-framing' to='{DOMAIN}' "
+            f"from='{escape(self.username, quote=True)}@{DOMAIN}' version='1.0'/>"
+        )
+        features = self._wait_element(f"{{{STREAM_NAMESPACE}}}features", "SASL2 advertisement")
+        fixture.check(
+            features.find(f"{{{SASL2_NAMESPACE}}}authentication") is not None,
+            "cluster WebSocket did not advertise SASL2",
+        )
+        encoded = base64.b64encode(f"\0{self.username}\0{self.password}".encode()).decode()
+        self.send(
+            f"<authenticate xmlns='{SASL2_NAMESPACE}' mechanism='PLAIN'>"
+            f"<initial-response>{encoded}</initial-response>"
+            f"<user-agent id='{self.device_id}'>"
+            "<software>Northstar cluster fixture</software></user-agent></authenticate>"
+        )
+        self._wait_element(f"{{{SASL2_NAMESPACE}}}success", "SASL2 authentication")
+        features = self._wait_element(f"{{{STREAM_NAMESPACE}}}features", "post-SASL2 features")
+        fixture.check(
+            features.find(f"{{{SM_NAMESPACE}}}sm") is not None,
+            "cluster WebSocket did not advertise SM after SASL2",
+        )
+        if resume is not None:
+            previous_id, handled = resume
+            fixture.check(type(handled) is int and 0 <= handled <= 0xFFFFFFFF, "invalid SM handled count")
+            self.send(
+                f"<resume xmlns='{SM_NAMESPACE}' previd='{escape(previous_id, quote=True)}' h='{handled}'/>"
+            )
+            resumed = self._wait_element(f"{{{SM_NAMESPACE}}}resumed", "same-device SM resume")
+            matches = resumed.get("previd") == previous_id
+            print(f"cluster SM resume: namespace_matches=True previous_id_matches={matches}")
+            fixture.check(matches, "cluster same-device SM resume returned a different identifier")
+            return
+        bind_id = f"bind-{self.resource}"
+        self.send(
+            f"<iq xmlns='jabber:client' type='set' id='{escape(bind_id, quote=True)}'>"
+            "<bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'>"
+            f"<resource>{escape(self.resource)}</resource></bind></iq>"
+        )
+        reply = self._wait_element("{jabber:client}iq", "exact-resource binding")
+        jid = reply.find("{urn:ietf:params:xml:ns:xmpp-bind}bind/{urn:ietf:params:xml:ns:xmpp-bind}jid")
+        fixture.check(
+            reply.get("id") == bind_id and reply.get("type") == "result"
+            and jid is not None and jid.text == f"{self.username}@{DOMAIN}/{self.resource}",
+            "cluster SASL2 client did not bind the exact requested full JID",
+        )
+        if initial_presence:
+            self.send("<presence xmlns='jabber:client'/>")
+
+    def enable_resumption(self):
+        self.send(f"<enable xmlns='{SM_NAMESPACE}' resume='true'/>")
+        enabled = self._wait_element(f"{{{SM_NAMESPACE}}}enabled", "SM enable")
+        resume_id = enabled.get("id")
+        resume_value = enabled.get("resume")
+        diagnostic_resume = resume_value if resume_value in {"true", "false", "1", "0"} else "missing-or-invalid"
+        print(
+            "cluster SM enable: namespace_matches=True "
+            f"id_present={bool(resume_id)} resume={diagnostic_resume}"
+        )
+        fixture.check(
+            bool(resume_id) and resume_value in {"true", "1"},
+            "cluster MUC stream did not enable resumable SM for its authenticated device",
+        )
+        return resume_id
 
 
 def redis_cli(*arguments: str, input_bytes: bytes | None = None) -> str:
@@ -372,7 +584,8 @@ def run() -> None:
         expect_bind_conflict=True,
     )
     duplicate.close()
-    bob_b = fixture.XmppWebSocket(BOB, PASSWORD, "bob-node-b")
+    bob_device_id = str(uuid.uuid4())
+    bob_b = DeviceXmppWebSocket(BOB, PASSWORD, "bob-node-b", device_id=bob_device_id)
     alice_b = fixture.XmppWebSocket(ALICE, PASSWORD, "alice-node-b")
     alice_b.send(
         "<iq xmlns='jabber:client' type='set' id='cluster-carbons'>"
@@ -720,20 +933,14 @@ def run() -> None:
         "members-only configuration did not evict the remote-node non-member",
     )
 
-    bob_b.send("<enable xmlns='urn:xmpp:sm:3' resume='true'/>")
-    enabled, _ = bob_b.receive_until("<enabled ")
-    resume_match = re.search(r"id='([^']+)'", enabled)
-    fixture.check(
-        resume_match is not None and "resume='true'" in enabled,
-        "cluster MUC stream did not enable resumable SM",
-    )
-    resume_id = resume_match.group(1)
+    resume_id = bob_b.enable_resumption()
     bob_b.abort()
     endpoint(HTTP_B, XMPP_B)
-    bob_b = fixture.XmppWebSocket(
+    bob_b = DeviceXmppWebSocket(
         BOB,
         PASSWORD,
         "ignored-after-muc-resume",
+        device_id=bob_device_id,
         resume=(resume_id, 0),
     )
     bob_b.send(

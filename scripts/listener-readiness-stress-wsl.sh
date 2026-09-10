@@ -1632,9 +1632,10 @@ for ((round = 1; round <= rounds; round++)); do
   if ((failed != 0)); then
     exit 1
   fi
-  # Release all 50 pairs together only after their independent RSA material
-  # exists. Key generation cannot consume CPU inside another server's bounded
-  # startup admission, 15 s readiness budget, or 5 s worker heartbeat window.
+  # Release all 50 pairs together after certificates, binary/database setup
+  # and all four relays per pair are ready. Relay interpreter startup and key
+  # generation cannot compete with another server's bounded startup admission,
+  # 15 s readiness budget, or 5 s worker heartbeat window.
   run_parent_phase "fixture-preparation-release-r$round" \
     python3 "$project_dir/scripts/listener-stress-phases.py" release \
     "$startup_phase_dir" "$startup_phase_nonce" "$round" prepared \

@@ -104,7 +104,12 @@ class PhaseTests(unittest.TestCase):
             source = (ROOT / name).read_text()
             gate = source.index('fixture_stress_phase_barrier "$project_dir" prepared')
             self.assertLess(source.rindex("openssl req"), gate, name)
-            self.assertLess(gate, source.index("fixture_start_tcp_relay"), name)
+            self.assertEqual(source.count('fixture_stress_phase_barrier "$project_dir" prepared'), 1, name)
+            self.assertEqual(source.count('fixture_start_tcp_relay "$project_dir"'), 4, name)
+            self.assertLess(source.rindex('fixture_start_tcp_relay "$project_dir"'), gate, name)
+            self.assertLess(source.index('[[ -x "$binary" ]]'), gate, name)
+            self.assertLess(source.rindex('"$binary" migrate'), gate, name)
+            self.assertLess(gate, source.index("\nstart_a\n"), name)
             # Hundreds of fixture processes must not share the maintainer's
             # default repository log file (or its cross-filesystem writer).
             for side in ("a", "b"):
@@ -118,6 +123,35 @@ class PhaseTests(unittest.TestCase):
         self.assertIn('regular) [[ -n "$rounds" ]] || rounds=20', driver)
         self.assertIn('pairs="50"', driver)
         self.assertLess(driver.index('"fixture-preparation-release-r$round"'), driver.index('"federation-live-release-r$round"'))
+
+    def test_all_pair_relays_prepare_without_server_targets(self):
+        relays = []
+        try:
+            for pair in (1, 2):
+                for index in range(4):
+                    record = Path(self.temporary.name) / f"relay-{pair}-{index}.json"
+                    target = Path(self.temporary.name) / f"server-{pair}-{index}.target"
+                    relay = subprocess.Popen([
+                        sys.executable, str(ROOT / "test-listener-relay.py"),
+                        "--readiness-file", str(record), "--nonce", self.nonce,
+                        "--purpose", f"relay-{pair}-{index}", "--target-file", str(target),
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                    relays.append(relay)
+                    listeners = readiness.wait_for_record(record, self.nonce, relay.pid, 5)
+                    self.assertIn(f"relay-{pair}-{index}", listeners)
+                    self.assertFalse(target.exists(), "relay readiness must precede its server target")
+            workers = [self.spawn_worker(pair) for pair in (1, 2)]
+            phases.release(self.directory, self.nonce, 1, "prepared", 2, [worker.pid for worker in workers])
+            for worker in workers:
+                _, error = worker.communicate(timeout=3)
+                self.assertEqual(worker.returncode, 0, error)
+            self.assertTrue(all(relay.poll() is None for relay in relays))
+        finally:
+            for relay in relays:
+                if relay.poll() is None:
+                    relay.terminate()
+            for relay in relays:
+                relay.communicate(timeout=5)
 
     def test_cpu_budget_observes_process_affinity(self):
         allowed = sorted(os.sched_getaffinity(0))
@@ -133,6 +167,34 @@ class PhaseTests(unittest.TestCase):
         )
         self.assertGreaterEqual(int(observed), 1)
         self.assertLessEqual(int(observed), len(selected))
+
+    def test_private_log_check_drains_large_child_environment(self):
+        source = (ROOT / "mix-federation-runtime-wsl.sh").read_text()
+        function = "fixture_assert_private_log_dir() {" + source.split(
+            "fixture_assert_private_log_dir() {", 1
+        )[1].split("\n}", 1)[0] + "\n}"
+        runtime = Path(self.temporary.name) / "runtime"
+        log_directory = runtime / "logs-a"
+        log_directory.mkdir(parents=True)
+        (log_directory / "server.log.test").write_text("fixture startup\n")
+        # GitHub's environment can exceed a pipe buffer. Put the exact match
+        # before a large tail so an early-exit consumer exposes SIGPIPE under
+        # pipefail, without importing or printing any real CI credentials.
+        padding = {f"FIXTURE_PADDING_{index}": "x" * 32000 for index in range(20)}
+        for configured, expected_status in ((str(log_directory), 0), (str(log_directory) + "-wrong", 1)):
+            with self.subTest(correct_directory=expected_status == 0):
+                child = subprocess.Popen(["sleep", "30"], env={"LOG_DIR": configured, **padding})
+                try:
+                    result = subprocess.run([
+                        "bash", "-c", "set -euo pipefail\n" + function
+                        + '\nruntime_dir="$1"\nfixture_assert_private_log_dir a "$2"',
+                        "fixture-log-check", str(runtime), str(child.pid),
+                    ], capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, expected_status, result.stderr)
+                    self.assertEqual(result.stdout, "")
+                finally:
+                    child.terminate()
+                    child.wait(timeout=5)
 
 
 class AuthenticationTests(unittest.TestCase):

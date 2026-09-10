@@ -274,8 +274,6 @@ for side in a b; do
     "$runtime_dir/fast-token-$side.secret" "$runtime_dir/dummy-scram-$side.secret"
 done
 
-fixture_stress_phase_barrier "$project_dir" prepared
-
 # Both Northstar children own their own ephemeral S2S listeners.  Their
 # startup-only federation DNS overrides point at relay children which have
 # already published a nonce-bound endpoint; each relay then forwards to the
@@ -405,7 +403,9 @@ fixture_assert_private_log_dir() {
     echo "MIX federation child log directory escapes fixture runtime: $resolved_log_dir" >&2
     return 1
   }
-  tr '\0' '\n' <"/proc/$pid/environ" | grep -Fxq "LOG_DIR=$log_dir" || {
+  # Consume the full environment: grep -q can close a large CI environment
+  # pipe early, making tr's SIGPIPE look like a missing field under pipefail.
+  tr '\0' '\n' <"/proc/$pid/environ" | grep -Fx -- "LOG_DIR=$log_dir" >/dev/null || {
     echo "MIX federation child did not inherit its fixture-private LOG_DIR: $side" >&2
     return 1
   }
@@ -425,6 +425,10 @@ fixture_assert_private_log_dir() {
   return 1
 }
 
+# Every pair has its certificates, migrated databases and four live relays
+# before any Northstar startup deadline begins. Relay readiness never waits
+# for a server target, so preparation has no dependency on the later release.
+fixture_stress_phase_barrier "$project_dir" prepared
 start_a
 start_b
 echo "MIX federation schemas: $schema_a $schema_b"

@@ -82,9 +82,9 @@ fixture_wait_for_http_readiness() {
   python3 "$project_dir/scripts/wait-test-readiness.py" --http-ready "$@"
 }
 
-# Certificate generation is fixture preparation, not Northstar cold start.
-# In the 50-pair matrix every private certificate must be ready before any
-# child starts its bounded startup/heartbeat clocks. Standalone runs are a no-op.
+# Certificates, binary/database preparation and child-owned relay readiness
+# all precede Northstar cold start. Every pair finishes those steps before any
+# server starts its bounded startup/heartbeat clocks. Standalone runs are a no-op.
 fixture_stress_phase_barrier() {
   local project_dir="$1" phase="$2"
   if [[ -z "${NORTHSTAR_LISTENER_STRESS_PHASE_DIR:-}" ]]; then

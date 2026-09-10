@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep fixture key generation and credential setup outside concurrent startup.
+"""Keep fixture preparation and credential setup outside concurrent startup.
 
 Only the listener-stress parent creates/releases a private per-round barrier.
 No server deadline, worker count, or protocol assertion is changed here.

@@ -47,8 +47,10 @@ fixture synchronization and identity checks without starting Northstar.
 
 `listener-readiness-stress-wsl.sh` keeps the regular 20 × 50 and scheduled
 100 × 50 matrices. Each pair owns two migrated database copies, certificates,
-listeners and separate log directories. All pairs finish certificate and
-secret preparation before any server starts; Federation also waits for both
+listeners and separate log directories. All pairs finish certificate, secret,
+binary/database preparation and all four relay readiness checks before any
+server starts. Relay readiness does not depend on a server target, avoiding a
+dependency cycle at this barrier. Federation also waits for both
 servers in every pair to be ready before protocol activity. MIX retains its
 signed all-pair setup barrier. Both families share the fixture's bounded
 authentication admission lanes, with CPU sizing based on process affinity and

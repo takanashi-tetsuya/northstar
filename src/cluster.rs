@@ -1133,6 +1133,12 @@ const CLUSTER_FAIL_CLOSED: u8 = 3;
 const CLUSTER_DURABLE_DIRECT_ONLY: u8 = 4;
 const CLUSTER_SHUTDOWN_REQUIRED: u8 = 5;
 
+#[derive(Debug, Eq, PartialEq)]
+enum ReconciliationOutcome {
+    Complete,
+    WaitingForInitialListener,
+}
+
 struct ClusterHealth {
     state: AtomicU8,
     listener_generation: AtomicU64,
@@ -1834,7 +1840,11 @@ impl ClusterManager {
         if self.health.state.load(Ordering::Acquire) == CLUSTER_RECONCILING
             && self.health.degraded_transitions.load(Ordering::Acquire) == 0
         {
-            self.complete_reconciliation_locked(&mut since, rotation_epoch)?;
+            let outcome = self.complete_reconciliation_locked(&mut since, rotation_epoch)?;
+            anyhow::ensure!(
+                outcome == ReconciliationOutcome::Complete,
+                "confirmed initial listener did not complete startup reconciliation"
+            );
         }
         Ok(())
     }
@@ -1864,7 +1874,7 @@ impl ClusterManager {
         Ok(self.health.listener_rotation_epoch.load(Ordering::Acquire))
     }
 
-    fn complete_reconciliation(&self, rotation_epoch: u64) -> Result<()> {
+    fn complete_reconciliation(&self, rotation_epoch: u64) -> Result<ReconciliationOutcome> {
         let mut since = self
             .health
             .failure_since
@@ -1877,7 +1887,7 @@ impl ClusterManager {
         &self,
         since: &mut std::sync::MutexGuard<'_, Option<Instant>>,
         rotation_epoch: u64,
-    ) -> Result<()> {
+    ) -> Result<ReconciliationOutcome> {
         anyhow::ensure!(
             self.health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED,
             "cluster shutdown is required; reconciliation cannot restore readiness"
@@ -1886,6 +1896,23 @@ impl ClusterManager {
             self.health.listener_rotation_epoch.load(Ordering::Acquire) == rotation_epoch,
             "cluster control-plane failure invalidated this reconciliation attempt"
         );
+        // The first maintenance pass can finish its successful authority I/O
+        // before the listener receives its initial self-loop. This is still
+        // startup, not a Redis failure: forcing rotation here invalidates that
+        // pending proof and prevents its normal empty-state readiness commit.
+        // Keep the original failure timer and not-ready state until proof.
+        if self.health.state.load(Ordering::Acquire) == CLUSTER_RECONCILING
+            && self.health.listener_generation.load(Ordering::Acquire) == 0
+            && self
+                .health
+                .required_listener_generation
+                .load(Ordering::Acquire)
+                == 1
+            && rotation_epoch == 0
+            && self.health.degraded_transitions.load(Ordering::Acquire) == 0
+        {
+            return Ok(ReconciliationOutcome::WaitingForInitialListener);
+        }
         anyhow::ensure!(
             self.health.listener_generation.load(Ordering::Acquire)
                 >= self
@@ -1896,7 +1923,7 @@ impl ClusterManager {
         );
         self.health.state.store(CLUSTER_HEALTHY, Ordering::Release);
         **since = None;
-        Ok(())
+        Ok(ReconciliationOutcome::Complete)
     }
 
     fn safety_lease_expired(&self) -> bool {
@@ -5459,7 +5486,13 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
             muc_soft_state_errors == 0,
             "Redis MUC soft-state reconciliation failed for {muc_soft_state_errors} authoritative occupancies"
         );
-        state.cluster.complete_reconciliation(rotation_epoch)?;
+        if state.cluster.complete_reconciliation(rotation_epoch)?
+            == ReconciliationOutcome::WaitingForInitialListener
+        {
+            // Every database/Redis operation above succeeded. The independent
+            // cluster readiness gate stays closed until the first self-loop.
+            tracing::debug!("cluster authority reconciled; awaiting initial listener self-loop");
+        }
     }
     Ok(())
 }
@@ -7829,7 +7862,10 @@ mod tests {
         let initial = manager.health.next_listener_generation();
         assert_eq!(initial, 1);
         assert!(!manager.health.listener_requires_rotation(initial));
-        assert!(manager.complete_reconciliation(0).is_err());
+        assert_eq!(
+            manager.complete_reconciliation(0).unwrap(),
+            ReconciliationOutcome::WaitingForInitialListener
+        );
         assert!(manager.readiness_error().is_some());
 
         // Only the successfully matched initial self-loop publishes this.
@@ -7847,7 +7883,10 @@ mod tests {
         manager.note_listener_generation();
         // A recovery also needs maintenance reconciliation, unlike startup.
         assert!(manager.readiness_error().is_some());
-        manager.complete_reconciliation(recovery_epoch).unwrap();
+        assert_eq!(
+            manager.complete_reconciliation(recovery_epoch).unwrap(),
+            ReconciliationOutcome::Complete
+        );
         assert!(manager.readiness_error().is_none());
 
         // A concurrent later failure must fence even the proven replacement.
@@ -7855,6 +7894,55 @@ mod tests {
         assert!(manager.health.listener_requires_rotation(replacement));
         assert!(manager.complete_reconciliation(recovery_epoch).is_err());
         assert!(manager.readiness_error().is_some());
+    }
+
+    #[tokio::test]
+    async fn maintenance_before_initial_probe_waits_without_invalidating_the_subscription() {
+        let manager = listener_health_manager();
+        let (candidate, listener_epoch) = manager.health.begin_listener_attempt();
+        let initial_timer = *manager.health.failure_since.lock().unwrap();
+        assert!(initial_timer.is_some());
+        for _ in 0..2 {
+            // All maintenance I/O has succeeded, but its listener has not yet
+            // received the initial self-loop. Repeating this order is benign.
+            let maintenance_epoch = manager.begin_reconciliation().unwrap();
+            assert_eq!(
+                manager.complete_reconciliation(maintenance_epoch).unwrap(),
+                ReconciliationOutcome::WaitingForInitialListener
+            );
+            assert!(manager.readiness_error().is_some());
+            assert_eq!(
+                manager.health.listener_generation.load(Ordering::Acquire),
+                0
+            );
+            assert_eq!(
+                manager
+                    .health
+                    .listener_rotation_epoch
+                    .load(Ordering::Acquire),
+                listener_epoch
+            );
+            assert_eq!(
+                manager.health.degraded_transitions.load(Ordering::Acquire),
+                0
+            );
+            assert_eq!(*manager.health.failure_since.lock().unwrap(), initial_timer);
+        }
+        manager
+            .confirm_listener_generation(candidate, listener_epoch)
+            .unwrap();
+        assert!(manager.readiness_error().is_none());
+        assert!(manager.health.failure_since.lock().unwrap().is_none());
+
+        // Once a real failure has happened, an unproved subscription is no
+        // longer the benign initial wait even if completed/required stay 0/1.
+        let failed_manager = listener_health_manager();
+        failed_manager.record_listener_failure(&anyhow::anyhow!("real startup Redis failure"));
+        let failure_epoch = failed_manager.begin_reconciliation().unwrap();
+        assert!(failed_manager
+            .complete_reconciliation(failure_epoch)
+            .is_err());
+        assert!(failed_manager.readiness_error().is_some());
     }
 
     #[tokio::test]
@@ -7904,9 +7992,12 @@ mod tests {
             .unwrap();
         assert!(manager.readiness_error().is_some());
         let reconciliation_epoch = manager.begin_reconciliation().unwrap();
-        manager
-            .complete_reconciliation(reconciliation_epoch)
-            .unwrap();
+        assert_eq!(
+            manager
+                .complete_reconciliation(reconciliation_epoch)
+                .unwrap(),
+            ReconciliationOutcome::Complete
+        );
         assert!(manager.readiness_error().is_none());
         assert!(manager
             .confirm_listener_generation(replacement, replacement_epoch)
@@ -7925,7 +8016,10 @@ mod tests {
         assert!(manager.readiness_error().is_some());
 
         let fresh_epoch = manager.begin_reconciliation().unwrap();
-        manager.complete_reconciliation(fresh_epoch).unwrap();
+        assert_eq!(
+            manager.complete_reconciliation(fresh_epoch).unwrap(),
+            ReconciliationOutcome::Complete
+        );
         assert!(manager.readiness_error().is_none());
     }
 
@@ -7970,9 +8064,12 @@ mod tests {
                 manager.record_listener_failure(&anyhow::anyhow!("failure racing with commit"));
             });
             // Use the same guard and actual commit implementation as production.
-            manager
-                .complete_reconciliation_locked(&mut transition, epoch)
-                .unwrap();
+            assert_eq!(
+                manager
+                    .complete_reconciliation_locked(&mut transition, epoch)
+                    .unwrap(),
+                ReconciliationOutcome::Complete
+            );
             ready.wait();
             drop(transition);
             worker.join().unwrap();

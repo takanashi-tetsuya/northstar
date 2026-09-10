@@ -29,6 +29,7 @@ from pathlib import Path
 
 
 STOP = threading.Event()
+OBSERVATION_LOCK = threading.Lock()
 
 
 def publish_readiness(path: Path, nonce: str, purpose: str, port: int) -> None:
@@ -111,11 +112,25 @@ def serve_connection(raw_client: socket.socket, context: ssl.SSLContext, unix_so
                         upstream_to_client.join()
                 finally:
                     upstream.close()
-        except (ssl.SSLError, OSError):
+        except ssl.SSLError as error:
             # Missing or untrusted client certificates are expected negative
-            # test cases.  The owning fixture asserts them at the protocol
-            # boundary without treating an individual rejected connection as
-            # a relay crash.
+            # cases. Emit only fixed OpenSSL reason identifiers, never the
+            # exception text, peer data, certificates, or application bytes.
+            reason = getattr(error, "reason", "OTHER_TLS_ERROR")
+            if reason not in {
+                "SSLV3_ALERT_BAD_CERTIFICATE", "TLSV1_ALERT_UNKNOWN_CA",
+                "CERTIFICATE_VERIFY_FAILED", "PEER_DID_NOT_RETURN_A_CERTIFICATE",
+            }:
+                reason = "OTHER_TLS_ERROR"
+            verify_code = getattr(error, "verify_code", None)
+            with OBSERVATION_LOCK:
+                print(json.dumps({
+                    "event": "redis_tls_handshake_rejected",
+                    "reason": reason,
+                    "verify_code": verify_code if isinstance(verify_code, int) else None,
+                }, separators=(",", ":")), flush=True)
+            return
+        except OSError:
             return
 
 

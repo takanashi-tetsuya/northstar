@@ -208,8 +208,6 @@ openssl rand -base64 -out "$runtime_dir/dummy-scram-b.secret" 48
 chmod 600 "$runtime_dir/fast-token-a.secret" "$runtime_dir/fast-token-b.secret" \
   "$runtime_dir/dummy-scram-a.secret" "$runtime_dir/dummy-scram-b.secret"
 
-fixture_stress_phase_barrier "$project_dir" prepared
-
 # The relays are child-owned ephemeral listeners with the standard readiness
 # record.  They make peer addresses available to the two server startup
 # configurations without reserving, releasing, and re-binding a numeric port.
@@ -322,6 +320,7 @@ start_b() {
 # Confirm each independently migrated runtime after its own authenticated
 # readiness handoff.  No polling loop treats an assumed numeric port as
 # listener ownership.
+fixture_stress_phase_barrier "$project_dir" prepared
 start_a
 start_b
 

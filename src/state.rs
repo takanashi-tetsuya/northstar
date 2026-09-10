@@ -2225,8 +2225,11 @@ impl AppState {
         );
         crate::cluster::start_muc_outbox_delivery(Arc::clone(&state), worker_cancel.clone());
         Self::start_locked_muc_expiry(Arc::clone(&state), worker_cancel.clone());
-        Self::start_runtime_federation_policy_refresh(Arc::clone(&state), worker_cancel.clone());
-        Self::start_runtime_admin_setting_refresh(Arc::clone(&state), worker_cancel);
+        // Both durable policy snapshots deliberately share the single reserved
+        // control-plane connection.  They must therefore be refreshed by one
+        // sequential worker: two independently supervised workers can turn a
+        // CPU-saturated process into its own connection-pool contention.
+        Self::start_runtime_control_refresh(Arc::clone(&state), worker_cancel);
         Ok(state)
     }
 
@@ -2592,36 +2595,67 @@ impl AppState {
         );
     }
 
-    fn start_runtime_federation_policy_refresh(state: Arc<Self>, cancel: CancellationToken) {
+    fn start_runtime_control_refresh(state: Arc<Self>, cancel: CancellationToken) {
         let weak = Arc::downgrade(&state);
         state.worker_registry().supervise(
-            "federation-policy-refresh",
+            "runtime-control-refresh",
             crate::workers::WorkerCriticality::Critical,
             crate::workers::WorkerMode::Continuous,
-            Some(Duration::from_secs(10)),
+            Some(Duration::from_secs(5)),
             cancel,
             move |heartbeat| {
                 let weak = weak.clone();
                 async move {
-                    let mut interval = tokio::time::interval(Duration::from_secs(2));
+                    // Refresh both committed policy snapshots in one ordered
+                    // turn. This is intentionally sequential: the runtime
+                    // control pool has exactly one reserved connection.
+                    let mut interval = tokio::time::interval(Duration::from_secs(1));
                     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                     loop {
                         interval.tick().await;
                         let Some(state) = weak.upgrade() else {
                             return Ok(());
                         };
+
+                        let mut first_error = None;
+                        match db::admin_runtime_settings(&state.runtime_control_pool).await {
+                            Ok((island_mode, registration_closed)) => {
+                                let was_island = state.refresh_island_mode(island_mode).await;
+                                state.apply_registration_closed(registration_closed);
+                                if island_mode && !was_island {
+                                    state
+                                        .s2s_connection_registry()
+                                        .clear_outbound_for_island_mode();
+                                }
+                            }
+                            Err(error) => {
+                                tracing::error!(
+                                    ?error,
+                                    "could not refresh durable administration settings"
+                                );
+                                first_error = Some(error);
+                            }
+                        }
+
                         match db::federation_runtime_rules(&state.runtime_control_pool).await {
                             Ok((blacklist, whitelist)) => {
                                 state.replace_runtime_federation_cache(blacklist, whitelist);
-                                heartbeat.ok();
                             }
                             Err(error) => {
-                                heartbeat.error(&error);
                                 tracing::error!(
                                     ?error,
                                     "could not refresh durable federation policy"
                                 );
+                                if first_error.is_none() {
+                                    first_error = Some(error);
+                                }
                             }
+                        }
+
+                        if let Some(error) = first_error {
+                            heartbeat.error(error);
+                        } else {
+                            heartbeat.ok();
                         }
                     }
                 }
@@ -2667,49 +2701,6 @@ impl AppState {
                 blacklist: blacklist.into_iter().collect(),
                 whitelist: whitelist.into_iter().collect(),
             }));
-    }
-
-    fn start_runtime_admin_setting_refresh(state: Arc<Self>, cancel: CancellationToken) {
-        let weak = Arc::downgrade(&state);
-        state.worker_registry().supervise(
-            "administration-setting-refresh",
-            crate::workers::WorkerCriticality::Critical,
-            crate::workers::WorkerMode::Continuous,
-            Some(Duration::from_secs(5)),
-            cancel,
-            move |heartbeat| {
-                let weak = weak.clone();
-                async move {
-                    let mut interval = tokio::time::interval(Duration::from_secs(1));
-                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                    loop {
-                        interval.tick().await;
-                        let Some(state) = weak.upgrade() else {
-                            return Ok(());
-                        };
-                        match db::admin_runtime_settings(&state.runtime_control_pool).await {
-                            Ok((island_mode, registration_closed)) => {
-                                let was_island = state.refresh_island_mode(island_mode).await;
-                                state.apply_registration_closed(registration_closed);
-                                if island_mode && !was_island {
-                                    state
-                                        .s2s_connection_registry()
-                                        .clear_outbound_for_island_mode();
-                                }
-                                heartbeat.ok();
-                            }
-                            Err(error) => {
-                                heartbeat.error(&error);
-                                tracing::error!(
-                                    ?error,
-                                    "could not refresh durable administration settings"
-                                );
-                            }
-                        }
-                    }
-                }
-            },
-        );
     }
 
     pub fn install_service_shutdown(

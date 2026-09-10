@@ -382,19 +382,26 @@ if (!/match db::poll_admin_service_control\(&state\.runtime_control_pool\)/s.tes
 if (/poll_admin_service_control\(&state\.pool\)/.test(serviceControlWatcher)) {
   throw new Error('service-control watcher must not share the general traffic pool');
 }
-const runtimeAdminRefresh = structBody(state, 'fn start_runtime_admin_setting_refresh(');
-if (!/match db::admin_runtime_settings\(&state\.runtime_control_pool\)/s.test(runtimeAdminRefresh)) {
-  throw new Error('runtime administration refresh must poll through the dedicated control pool');
+const runtimeControlRefresh = structBody(state, 'fn start_runtime_control_refresh(');
+for (const [call, description] of [
+  ['admin_runtime_settings', 'runtime administration refresh'],
+  ['federation_runtime_rules', 'federation policy refresh'],
+]) {
+  if (!new RegExp(`match db::${call}\\(&state\\.runtime_control_pool\\)`, 's').test(runtimeControlRefresh)) {
+    throw new Error(`${description} must poll through the dedicated control pool`);
+  }
+  if (new RegExp(`${call}\\(&state\\.pool\\)`).test(runtimeControlRefresh)) {
+    throw new Error(`${description} must not share the general traffic pool`);
+  }
 }
-if (/admin_runtime_settings\(&state\.pool\)/.test(runtimeAdminRefresh)) {
-  throw new Error('runtime administration refresh must not share the general traffic pool');
+if (!/"runtime-control-refresh"/.test(runtimeControlRefresh)) {
+  throw new Error('runtime policy snapshots must share one supervised control-plane worker');
 }
-const federationPolicyRefresh = structBody(state, 'fn start_runtime_federation_policy_refresh(');
-if (!/match db::federation_runtime_rules\(&state\.runtime_control_pool\)/s.test(federationPolicyRefresh)) {
-  throw new Error('federation policy refresh must poll through the dedicated control pool');
+if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(/.test(state)) {
+  throw new Error('independent runtime policy refresh workers can contend for the one-connection control pool');
 }
-if (/federation_runtime_rules\(&state\.pool\)/.test(federationPolicyRefresh)) {
-  throw new Error('federation policy refresh must not share the general traffic pool');
+if (!/Self::start_runtime_control_refresh\(Arc::clone\(&state\), worker_cancel\);/.test(state)) {
+  throw new Error('AppState must start the coordinated runtime-control refresh worker');
 }
 const serviceControlInstallation = structBody(state, 'pub fn install_service_shutdown(');
 if (!/if self\.config\.enable_xmpp_service_control \{\s*Self::start_service_control_watcher\(Arc::clone\(self\)\);\s*\}/s.test(serviceControlInstallation)) {
@@ -2608,8 +2615,7 @@ const supervisedWorkerContracts = [
   { name: 'cluster-failure-policy', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(15))', draining: false },
   { name: 'cluster-muc-outbox', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: false },
   { name: 'locked-muc-expiry', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(20))', draining: false },
-  { name: 'federation-policy-refresh', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(10))', draining: false },
-  { name: 'administration-setting-refresh', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(5))', draining: false },
+  { name: 'runtime-control-refresh', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(5))', draining: false },
   { name: 'service-control-watcher', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(3))', draining: false },
   { name: 'sm-authority-listener', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(15))', draining: false },
   { name: 'sm-suspension-recovery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: true },
@@ -2635,8 +2641,7 @@ const workerResponsibilityEvidence = {
   'cluster-failure-policy': ['src/main.rs', '`main`, cluster only', '15 s'],
   'cluster-muc-outbox': ['src/cluster.rs', 'unconditionally registered', '30 s'],
   'locked-muc-expiry': ['src/state.rs', '`AppState` MUC startup', '20 s'],
-  'federation-policy-refresh': ['src/state.rs', '`AppState` federation startup', '10 s'],
-  'administration-setting-refresh': ['src/state.rs', '`AppState` administration startup', '5 s'],
+  'runtime-control-refresh': ['src/state.rs', '`AppState` runtime-control startup', '5 s'],
   'service-control-watcher': ['src/state.rs', '`AppState` service-control startup', '3 s'],
   'sm-authority-listener': ['src/services/sm.rs', '`SmService` startup', '15 s'],
   'sm-suspension-recovery': ['src/services/session_cleanup.rs', 'session-cleanup service startup', '30 s'],

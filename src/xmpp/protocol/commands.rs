@@ -2473,11 +2473,13 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let fired = db::poll_admin_service_control(&pool)
+        let mut control_connection = pool.acquire().await.unwrap();
+        let mut observer_control_connection = observer_pool.acquire().await.unwrap();
+        let fired = db::poll_admin_service_control(&mut control_connection)
             .await
             .unwrap()
             .unwrap();
-        let observed = db::poll_admin_service_control(&observer_pool)
+        let observed = db::poll_admin_service_control(&mut observer_control_connection)
             .await
             .unwrap()
             .unwrap();

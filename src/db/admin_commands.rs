@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use sqlx::{PgPool, Row};
+use sqlx::{Acquire, PgConnection, PgPool, Row};
 use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::HashSet;
@@ -1445,10 +1445,9 @@ pub async fn complete_admin_service_message_claim(
         == 1)
 }
 
-pub async fn federation_runtime_rules(pool: &PgPool) -> Result<(Vec<String>, Vec<String>)> {
-    let rows = sqlx::query("SELECT kind,domain FROM federation_runtime_rules ORDER BY kind,domain")
-        .fetch_all(pool)
-        .await?;
+fn federation_runtime_rules_from_rows(
+    rows: Vec<sqlx::postgres::PgRow>,
+) -> (Vec<String>, Vec<String>) {
     let mut blacklist = Vec::new();
     let mut whitelist = Vec::new();
     for row in rows {
@@ -1460,7 +1459,14 @@ pub async fn federation_runtime_rules(pool: &PgPool) -> Result<(Vec<String>, Vec
             whitelist.push(domain);
         }
     }
-    Ok((blacklist, whitelist))
+    (blacklist, whitelist)
+}
+
+pub async fn federation_runtime_rules(pool: &PgPool) -> Result<(Vec<String>, Vec<String>)> {
+    let rows = sqlx::query("SELECT kind,domain FROM federation_runtime_rules ORDER BY kind,domain")
+        .fetch_all(pool)
+        .await?;
+    Ok(federation_runtime_rules_from_rows(rows))
 }
 
 #[cfg(test)]
@@ -1629,10 +1635,7 @@ pub async fn initialize_admin_runtime_settings(
     Ok(())
 }
 
-pub async fn admin_runtime_settings(pool: &PgPool) -> Result<(bool, bool)> {
-    let rows = sqlx::query("SELECT key,enabled FROM admin_runtime_settings ORDER BY key")
-        .fetch_all(pool)
-        .await?;
+fn admin_runtime_settings_from_rows(rows: Vec<sqlx::postgres::PgRow>) -> Result<(bool, bool)> {
     let mut island_mode = None;
     let mut registration_closed = None;
     for row in rows {
@@ -1646,6 +1649,31 @@ pub async fn admin_runtime_settings(pool: &PgPool) -> Result<(bool, bool)> {
         island_mode.context("island_mode runtime setting is missing")?,
         registration_closed.context("registration_closed runtime setting is missing")?,
     ))
+}
+
+pub async fn admin_runtime_settings(pool: &PgPool) -> Result<(bool, bool)> {
+    let rows = sqlx::query("SELECT key,enabled FROM admin_runtime_settings ORDER BY key")
+        .fetch_all(pool)
+        .await?;
+    admin_runtime_settings_from_rows(rows)
+}
+
+/// Read the complete runtime control-plane projection over the caller's
+/// already-reserved connection. This deliberately avoids a second pool
+/// acquisition between administration and federation observations.
+pub async fn runtime_control_snapshot(
+    connection: &mut PgConnection,
+) -> Result<(bool, bool, Vec<String>, Vec<String>)> {
+    let settings = sqlx::query("SELECT key,enabled FROM admin_runtime_settings ORDER BY key")
+        .fetch_all(&mut *connection)
+        .await?;
+    let (island_mode, registration_closed) = admin_runtime_settings_from_rows(settings)?;
+    let rules =
+        sqlx::query("SELECT kind,domain FROM federation_runtime_rules ORDER BY kind,domain")
+            .fetch_all(&mut *connection)
+            .await?;
+    let (blacklist, whitelist) = federation_runtime_rules_from_rows(rules);
+    Ok((island_mode, registration_closed, blacklist, whitelist))
 }
 
 #[cfg(test)]
@@ -1957,9 +1985,11 @@ pub async fn apply_admin_service_control_command(
 /// Return an active control generation, atomically advancing it to `fired`
 /// when its PostgreSQL-clock deadline has arrived.  Every node polls this row;
 /// only processes whose start time predates `fired_at` act on it.
-pub async fn poll_admin_service_control(pool: &PgPool) -> Result<Option<DurableServiceControl>> {
+pub async fn poll_admin_service_control(
+    connection: &mut PgConnection,
+) -> Result<Option<DurableServiceControl>> {
     tokio::time::timeout(SERVICE_CONTROL_POLL_TIMEOUT, async {
-        let mut transaction = pool.begin().await?;
+        let mut transaction = connection.begin().await?;
         sqlx::query("SELECT pg_catalog.set_config('lock_timeout',$1,TRUE)")
             .bind(SERVICE_CONTROL_LOCK_TIMEOUT)
             .execute(&mut *transaction)
@@ -2082,8 +2112,11 @@ mod boundary_tests {
         // Saturating the traffic pool must not prevent the separate
         // service-control connection from reading durable authority.
         let traffic_lease = traffic_pool.acquire().await.unwrap();
+        let mut control_connection = control_pool.acquire().await.unwrap();
         assert!(
-            poll_admin_service_control(&control_pool).await.is_ok(),
+            poll_admin_service_control(&mut control_connection)
+                .await
+                .is_ok(),
             "a traffic-pool stall must not make service control unavailable"
         );
         drop(traffic_lease);
@@ -2111,7 +2144,7 @@ mod boundary_tests {
             .unwrap();
 
         let started = Instant::now();
-        let locked = poll_admin_service_control(&control_pool).await;
+        let locked = poll_admin_service_control(&mut control_connection).await;
         assert!(
             locked.is_err(),
             "a locked control row must not be treated as healthy"
@@ -2122,7 +2155,7 @@ mod boundary_tests {
         );
         lock.rollback().await.unwrap();
         assert!(
-            poll_admin_service_control(&control_pool)
+            poll_admin_service_control(&mut control_connection)
                 .await
                 .unwrap()
                 .is_none(),

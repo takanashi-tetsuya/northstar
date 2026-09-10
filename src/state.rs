@@ -20,8 +20,9 @@ use hickory_resolver::{
 };
 use sha2::{Digest, Sha256};
 use sqlx::{
+    pool::PoolConnection,
     postgres::{PgConnectOptions, PgPoolOptions},
-    PgPool,
+    PgPool, Postgres,
 };
 use std::{
     collections::{HashSet, VecDeque},
@@ -1048,13 +1049,6 @@ pub struct AppState {
     /// capability. It cannot consume the primary 32-connection application
     /// pool during a capability flood.
     omemo_recovery_poll_pool: PgPool,
-    /// One reserved runtime-role connection for durable control-plane reads.
-    /// The administration-settings refresh always uses it; XEP-0133 only adds
-    /// an opt-in restart/shutdown watcher. It remains separate from both the
-    /// application and command pools, so exhausted traffic cannot hide a
-    /// committed safety setting and the command role cannot gain runtime
-    /// authority merely by observing it.
-    runtime_control_pool: PgPool,
     /// Clone-shared permission for short MIX, PubSub and clustered-MUC
     /// durable-outbox database turns. It preserves a primary-pool foreground
     /// reserve without giving protocol handlers raw pool access.
@@ -2053,6 +2047,13 @@ impl AppState {
         } else {
             crate::db::attest_runtime_role(&runtime_control_pool).await?;
         }
+        // Reserve the control-plane connection before this process can accept
+        // work. The sole coordinator holds it for its lifetime, so runtime
+        // policy reads cannot race an acquire under a cold-start surge.
+        let runtime_control_connection = runtime_control_pool
+            .acquire()
+            .await
+            .context("could not reserve the runtime-control database connection")?;
         let sm_authority_schema: String = sqlx::query_scalar("SELECT current_schema()")
             .fetch_one(&pool)
             .await
@@ -2126,7 +2127,6 @@ impl AppState {
             metrics_bearer_token,
             web_admin_gateway_token,
             omemo_recovery_poll_pool,
-            runtime_control_pool,
             durable_outbox_database_admission,
             api_control,
             api_cursor,
@@ -2229,7 +2229,11 @@ impl AppState {
         // control-plane connection.  They must therefore be refreshed by one
         // sequential worker: two independently supervised workers can turn a
         // CPU-saturated process into its own connection-pool contention.
-        Self::start_runtime_control_refresh(Arc::clone(&state), worker_cancel);
+        Self::start_runtime_control_refresh(
+            Arc::clone(&state),
+            runtime_control_connection,
+            worker_cancel,
+        );
         Ok(state)
     }
 
@@ -2595,8 +2599,13 @@ impl AppState {
         );
     }
 
-    fn start_runtime_control_refresh(state: Arc<Self>, cancel: CancellationToken) {
+    fn start_runtime_control_refresh(
+        state: Arc<Self>,
+        connection: PoolConnection<Postgres>,
+        cancel: CancellationToken,
+    ) {
         let weak = Arc::downgrade(&state);
+        let connection = Arc::new(tokio::sync::Mutex::new(Some(connection)));
         state.worker_registry().supervise(
             "runtime-control-refresh",
             crate::workers::WorkerCriticality::Critical,
@@ -2605,7 +2614,13 @@ impl AppState {
             cancel,
             move |heartbeat| {
                 let weak = weak.clone();
+                let connection = Arc::clone(&connection);
                 async move {
+                    let mut connection = connection.lock().await.take().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "runtime-control coordinator was restarted after its reserved connection ended"
+                        )
+                    })?;
                     // This coordinator is the sole owner of the one reserved
                     // control-plane connection. It serializes committed
                     // administration, federation, and (when enabled) service
@@ -2623,8 +2638,8 @@ impl AppState {
 
                         let mut first_error = None;
                         if refresh_policy {
-                            match db::admin_runtime_settings(&state.runtime_control_pool).await {
-                                Ok((island_mode, registration_closed)) => {
+                            match db::runtime_control_snapshot(&mut connection).await {
+                                Ok((island_mode, registration_closed, blacklist, whitelist)) => {
                                     let was_island = state.refresh_island_mode(island_mode).await;
                                     state.apply_registration_closed(registration_closed);
                                     if island_mode && !was_island {
@@ -2632,6 +2647,7 @@ impl AppState {
                                             .s2s_connection_registry()
                                             .clear_outbound_for_island_mode();
                                     }
+                                    state.replace_runtime_federation_cache(blacklist, whitelist);
                                 }
                                 Err(error) => {
                                     tracing::error!(
@@ -2642,27 +2658,12 @@ impl AppState {
                                 }
                             }
 
-                            match db::federation_runtime_rules(&state.runtime_control_pool).await {
-                                Ok((blacklist, whitelist)) => {
-                                    state.replace_runtime_federation_cache(blacklist, whitelist);
-                                }
-                                Err(error) => {
-                                    tracing::error!(
-                                        ?error,
-                                        "could not refresh durable federation policy"
-                                    );
-                                    if first_error.is_none() {
-                                        first_error = Some(error);
-                                    }
-                                }
-                            }
                         }
 
                         if state.config.enable_xmpp_service_control
                             && state.service_shutdown.get().is_some()
                         {
-                            match db::poll_admin_service_control(&state.runtime_control_pool).await
-                            {
+                            match db::poll_admin_service_control(&mut connection).await {
                                 Ok(Some(control))
                                     if service_control_applies(
                                         state.process_started_at,

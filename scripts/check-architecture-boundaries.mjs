@@ -339,7 +339,6 @@ for (const field of [
   'component_credentials',
   'components',
   'bosh',
-  'runtime_control_pool',
   's2s_dns_resolver',
   's2s_dnssec_resolver',
   'dialback_verifications',
@@ -377,15 +376,14 @@ for (const invariant of [
 }
 const runtimeControlRefresh = structBody(state, 'fn start_runtime_control_refresh(');
 for (const [call, description] of [
-  ['admin_runtime_settings', 'runtime administration refresh'],
-  ['federation_runtime_rules', 'federation policy refresh'],
+  ['runtime_control_snapshot', 'runtime administration and federation refresh'],
   ['poll_admin_service_control', 'XEP-0133 service-control refresh'],
 ]) {
-  if (!new RegExp(`match db::${call}\\(&state\\.runtime_control_pool\\)`, 's').test(runtimeControlRefresh)) {
-    throw new Error(`${description} must poll through the dedicated control pool`);
+  if (!new RegExp(`match db::${call}\\(&mut connection\\)`, 's').test(runtimeControlRefresh)) {
+    throw new Error(`${description} must use the coordinator-owned control connection`);
   }
-  if (new RegExp(`${call}\\(&state\\.pool\\)`).test(runtimeControlRefresh)) {
-    throw new Error(`${description} must not share the general traffic pool`);
+  if (new RegExp(`${call}\\(&state\\.(?:pool|runtime_control_pool)\\)`).test(runtimeControlRefresh)) {
+    throw new Error(`${description} must not acquire from a traffic or shared control pool`);
   }
 }
 if (!/"runtime-control-refresh"/.test(runtimeControlRefresh)) {
@@ -394,8 +392,11 @@ if (!/"runtime-control-refresh"/.test(runtimeControlRefresh)) {
 if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(|fn start_service_control_watcher\(/.test(state)) {
   throw new Error('independent runtime control workers can contend for the one-connection control pool');
 }
-if (!/Self::start_runtime_control_refresh\(Arc::clone\(&state\), worker_cancel\);/.test(state)) {
-  throw new Error('AppState must start the coordinated runtime-control refresh worker');
+if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/.test(state)) {
+  throw new Error('AppState must reserve its runtime-control connection before worker activation');
+}
+if (!/Self::start_runtime_control_refresh\(\s*Arc::clone\(&state\),\s*runtime_control_connection,\s*worker_cancel,\s*\);/s.test(state)) {
+  throw new Error('AppState must transfer the reserved connection to the coordinated runtime-control worker');
 }
 const serviceControlInstallation = structBody(state, 'pub fn install_service_shutdown(');
 if (!/self\.service_shutdown\s*\.set\(cancel\)/s.test(serviceControlInstallation)) {

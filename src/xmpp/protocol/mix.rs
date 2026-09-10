@@ -83,6 +83,44 @@ enum MixOutboxQueue {
     PamResult,
 }
 
+/// Only delivery has a retained commit/reconnect wake. Its empty recovery
+/// scans may back off to one second; PAM retains the fixed 250 ms cadence.
+struct MixClaimSchedule {
+    next_claim: tokio::time::Instant,
+    empty_delay: Duration,
+    max_empty_delay: Duration,
+}
+
+impl MixClaimSchedule {
+    const BASE_DELAY: Duration = Duration::from_millis(250);
+
+    fn starting_at(queue: MixOutboxQueue, now: tokio::time::Instant) -> Self {
+        Self {
+            next_claim: now,
+            empty_delay: Self::BASE_DELAY,
+            max_empty_delay: match queue {
+                MixOutboxQueue::Delivery => Duration::from_secs(1),
+                MixOutboxQueue::PamResult => Self::BASE_DELAY,
+            },
+        }
+    }
+
+    fn record_claim(&mut self, now: tokio::time::Instant, has_work: bool) {
+        if has_work {
+            self.empty_delay = Self::BASE_DELAY;
+        }
+        self.next_claim = now + self.empty_delay;
+        if !has_work {
+            self.empty_delay = (self.empty_delay * 2).min(self.max_empty_delay);
+        }
+    }
+
+    fn record_progress(&mut self, now: tokio::time::Instant) {
+        self.empty_delay = Self::BASE_DELAY;
+        self.next_claim = now;
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct MixMaintenanceSchedule {
     next_deadline: tokio::time::Instant,
@@ -3117,11 +3155,12 @@ async fn run_mix_outbox_lane(
     // Install the retained receiver before the first claim.  Any committed
     // recipient INSERT/DELETE that races a later wait remains observable, and
     // the delivery lane therefore does not rely on Tokio timer scheduling for
-    // prompt progress.  The 250 ms scan below remains the durable recovery
-    // path across PostgreSQL listener outages and process crashes.
+    // prompt progress. Empty delivery scans back off from 250 ms to at most
+    // one second, retaining durable recovery across listener outages, expired
+    // leases and retry deadlines. PAM has no such wake and stays at 250 ms.
     let mut delivery_wake = matches!(queue, MixOutboxQueue::Delivery)
         .then(|| state.mix_service().subscribe_delivery_wake());
-    let mut next_claim = tokio::time::Instant::now();
+    let mut claim_schedule = MixClaimSchedule::starting_at(queue, tokio::time::Instant::now());
     // Startup must first make already-committed user delivery eligible.
     // Retention work is important but cannot be allowed to put a maintenance
     // page ahead of the first claimed live MIX event on a small pool.
@@ -3155,7 +3194,7 @@ async fn run_mix_outbox_lane(
             && claim_task.is_none()
             && maintenance_task.is_none()
             && in_flight.len() < concurrency
-            && tokio::time::Instant::now() >= next_claim
+            && tokio::time::Instant::now() >= claim_schedule.next_claim
         {
             let available = concurrency - in_flight.len();
             claim_task = Some(process_mix_outbox_claim(
@@ -3188,7 +3227,7 @@ async fn run_mix_outbox_lane(
                         // A finished row has released one lane slot. Claim again
                         // in the next loop turn instead of imposing the idle
                         // recovery cadence on an already-known backlog.
-                        next_claim = tokio::time::Instant::now();
+                        claim_schedule.record_progress(tokio::time::Instant::now());
                         if let Err(error) = outcome {
                             // A claimed row retains its fenced lease and is retried
                             // by the row-level completion path; one recipient must
@@ -3203,6 +3242,7 @@ async fn run_mix_outbox_lane(
                     MixOutboxProgress::Claim(outcome) => {
                         match outcome {
                             Ok(claimed) => {
+                                claim_schedule.record_claim(tokio::time::Instant::now(), !claimed.is_empty());
                                 for work in claimed {
                                     in_flight.push(process_mix_outbox_work(
                                         Arc::clone(&state),
@@ -3211,8 +3251,6 @@ async fn run_mix_outbox_lane(
                                     ));
                                 }
                                 debug_assert!(in_flight.len() <= concurrency);
-                                next_claim = tokio::time::Instant::now()
-                                    + Duration::from_millis(250);
                                 // An empty claim still completed one bounded,
                                 // authoritative database turn.
                                 healthy_progress = true;
@@ -3252,7 +3290,7 @@ async fn run_mix_outbox_lane(
                     // asks the lane to run the normal fenced PostgreSQL
                     // claim immediately instead of waiting for its recovery
                     // scan.
-                    next_claim = tokio::time::Instant::now();
+                    claim_schedule.record_progress(tokio::time::Instant::now());
                 } else {
                     terminal_error = Some(anyhow::anyhow!(
                         "MIX delivery wake broker unexpectedly closed"
@@ -3261,7 +3299,7 @@ async fn run_mix_outbox_lane(
                     cancel.cancel();
                 }
             }
-            _ = tokio::time::sleep_until(next_claim), if accepting && claim_task.is_none() && maintenance_task.is_none() && in_flight.len() < concurrency => {}
+            _ = tokio::time::sleep_until(claim_schedule.next_claim), if accepting && claim_task.is_none() && maintenance_task.is_none() && in_flight.len() < concurrency => {}
         }
         if healthy_progress {
             heartbeat.ok();
@@ -7662,6 +7700,64 @@ pub(crate) async fn federated_mix_presence(
 mod tests {
     use super::*;
     use crate::services::mix::MamRsmPage;
+
+    #[tokio::test]
+    async fn delivery_idle_scan_stays_bounded_and_retained_commits_bypass_backoff() {
+        let broker = crate::services::mix::MixDeliveryWakeBroker::for_test();
+        let mut wake = Some(broker.subscribe());
+        let mut now = tokio::time::Instant::now();
+        let mut schedule = MixClaimSchedule::starting_at(MixOutboxQueue::Delivery, now);
+        assert_eq!(schedule.next_claim, now);
+        for delay_ms in [250, 500, 1000, 1000, 1000] {
+            schedule.record_claim(now, false);
+            assert_eq!(schedule.next_claim - now, Duration::from_millis(delay_ms));
+            now = schedule.next_claim;
+        }
+        // A commit races the worker's next wait. The retained generation must
+        // win without waiting for the recovery timer or trusting the payload
+        // as permission to deliver; the next step is a fresh database claim.
+        now = tokio::time::Instant::now();
+        schedule.record_claim(now, false);
+        broker.publish_local_commit();
+        tokio::select! {
+            biased;
+            open = wait_for_mix_delivery_wake(&mut wake) => {
+                assert!(open);
+                schedule.record_progress(now);
+            }
+            _ = tokio::time::sleep_until(schedule.next_claim) => {
+                panic!("retained commit waited for the idle recovery timer")
+            }
+        }
+        assert_eq!(schedule.next_claim, now);
+        schedule.record_claim(now, false);
+        assert_eq!(schedule.next_claim - now, MixClaimSchedule::BASE_DELAY);
+    }
+
+    #[test]
+    fn actual_delivery_work_restores_the_fast_claim_cadence() {
+        let now = tokio::time::Instant::now();
+        let mut schedule = MixClaimSchedule::starting_at(MixOutboxQueue::Delivery, now);
+        for _ in 0..5 {
+            schedule.record_claim(now, false);
+        }
+        schedule.record_claim(now, true);
+        assert_eq!(schedule.next_claim - now, MixClaimSchedule::BASE_DELAY);
+        schedule.record_progress(now);
+        assert_eq!(schedule.next_claim, now);
+        schedule.record_claim(now, false);
+        assert_eq!(schedule.next_claim - now, MixClaimSchedule::BASE_DELAY);
+    }
+
+    #[test]
+    fn pam_without_a_commit_wake_keeps_its_original_scan_latency() {
+        let now = tokio::time::Instant::now();
+        let mut schedule = MixClaimSchedule::starting_at(MixOutboxQueue::PamResult, now);
+        for _ in 0..100 {
+            schedule.record_claim(now, false);
+            assert_eq!(schedule.next_claim - now, Duration::from_millis(250));
+        }
+    }
 
     #[tokio::test]
     async fn durable_local_mix_delivery_requires_transport_ownership_and_closes_failed_routes() {

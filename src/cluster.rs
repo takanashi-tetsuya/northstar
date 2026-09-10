@@ -1,11 +1,11 @@
 use crate::state::AppState;
 use anyhow::{Context, Result};
 use bb8::Pool;
-use futures::StreamExt;
+use futures::{future::BoxFuture, FutureExt, StreamExt};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -83,6 +83,7 @@ const MAX_DELIVERY_ACK_BYTES: usize = 4096;
 const MAX_CLUSTER_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
 const MAX_DELIVERY_EXCLUSIONS: usize = 16;
 const MAX_PENDING_CLUSTER_ACKS: usize = 4096;
+const MAX_LISTENER_CONTINUATIONS: usize = 16;
 const MUC_OUTBOX_MAX_BATCHES_PER_PASS: usize = 4;
 const MUC_OUTBOX_BATCH_SIZE: i64 = 16;
 const MUC_OUTBOX_PASS_BUDGET: Duration = Duration::from_secs(20);
@@ -2075,6 +2076,23 @@ impl ClusterManager {
             security.peers().as_ref(),
             chrono::Utc::now().timestamp(),
         )?;
+        self.validate_verified_envelope(&envelope)?;
+        if remember_replay {
+            self.remember_envelope_replay(&envelope)?;
+        }
+        Ok(envelope)
+    }
+
+    fn validate_verified_envelope(
+        &self,
+        envelope: &crate::cluster_security::SignedClusterEnvelope,
+    ) -> Result<()> {
+        let security = self
+            .security
+            .as_ref()
+            .context("cluster verifier is not configured")?;
+        envelope
+            .current_verification_key(security.peers().as_ref(), chrono::Utc::now().timestamp())?;
         anyhow::ensure!(
             envelope.destination_connection_uuid == self.connection_uuid
                 && envelope.destination_connection_epoch
@@ -2106,10 +2124,7 @@ impl ClusterManager {
             ),
             "cluster source process instance lease is stale or mismatched"
         );
-        if remember_replay {
-            self.remember_envelope_replay(&envelope)?;
-        }
-        Ok(envelope)
+        Ok(())
     }
 
     fn remember_envelope_replay(
@@ -3376,6 +3391,9 @@ impl ClusterManager {
             let receivers = self
                 .publish_signed(&mut conn, node_id, &channel, payload)
                 .await?;
+            // ACK publication needs the same bounded pool. Keep only the
+            // pending registration while waiting for the remote receipt.
+            drop(conn);
             if receivers == 0 {
                 let error = anyhow::anyhow!("cluster control had no subscriber");
                 self.record_control_plane_failure(&error);
@@ -3639,6 +3657,7 @@ impl ClusterManager {
             let receivers = self
                 .publish_signed(&mut conn, node_id, &channel, payload)
                 .await?;
+            drop(conn);
             if receivers == 0 {
                 self.record_control_plane_failure(&anyhow::anyhow!(
                     "cluster delivery had no authoritative subscriber"
@@ -6271,6 +6290,178 @@ async fn deliver_cluster_muc_event(
     Ok(())
 }
 
+#[derive(Default)]
+struct ListenerContinuations {
+    pending: VecDeque<BoxFuture<'static, Result<()>>>,
+}
+
+impl ListenerContinuations {
+    fn push(
+        &mut self,
+        work: impl std::future::Future<Output = Result<()>> + Send + 'static,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.pending.len() < MAX_LISTENER_CONTINUATIONS,
+            "Redis listener response continuation capacity exceeded"
+        );
+        self.pending.push_back(work.boxed());
+        Ok(())
+    }
+
+    async fn next(&mut self) -> Option<Result<()>> {
+        // Poll only the first response batch, preserving remote presence
+        // transition order. Cancelling this wait leaves that batch in place.
+        let result = self.pending.front_mut()?.await;
+        self.pending.pop_front();
+        Some(result)
+    }
+}
+
+struct ListenerResponse {
+    node_id: String,
+    recipient: String,
+    stanza: String,
+    presence_authority: Option<ClusterPresenceAuthority>,
+}
+
+#[derive(Default)]
+struct ListenerResponses {
+    items: Vec<ListenerResponse>,
+    bytes: usize,
+}
+
+impl ListenerResponses {
+    fn push(&mut self, response: ListenerResponse) -> Result<()> {
+        let bytes = self
+            .bytes
+            .saturating_add(response.node_id.len())
+            .saturating_add(response.recipient.len())
+            .saturating_add(response.stanza.len());
+        anyhow::ensure!(
+            self.items.len() < MAX_PENDING_CLUSTER_ACKS && bytes <= MAX_CLUSTER_PAYLOAD_BYTES,
+            "Redis listener response batch exceeded its count or byte budget"
+        );
+        self.items.push(response);
+        self.bytes = bytes;
+        Ok(())
+    }
+}
+
+struct ListenerCommandAuthority {
+    generation: u64,
+    rotation_epoch: u64,
+    envelope: crate::cluster_security::SignedClusterEnvelope,
+}
+
+impl ListenerCommandAuthority {
+    fn validate(&self, cluster: &ClusterManager) -> Result<()> {
+        validate_listener_generation(cluster, self.generation, self.rotation_epoch)?;
+        // Recheck expiry and current source key/process authority after deferred
+        // work. Replay admission already happened once in the reader.
+        cluster.validate_verified_envelope(&self.envelope)?;
+        Ok(())
+    }
+}
+
+fn validate_listener_generation(
+    cluster: &ClusterManager,
+    generation: u64,
+    rotation_epoch: u64,
+) -> Result<()> {
+    let _transition = cluster
+        .health
+        .failure_since
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    anyhow::ensure!(
+        cluster.health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED
+            && cluster
+                .health
+                .listener_rotation_epoch
+                .load(Ordering::Acquire)
+                == rotation_epoch
+            && cluster.health.listener_generation.load(Ordering::Acquire) == generation
+            && !cluster.health.listener_requires_rotation(generation),
+        "Redis listener response belongs to a retired listener generation"
+    );
+    Ok(())
+}
+
+async fn publish_listener_ack(
+    cluster: &ClusterManager,
+    source_node: &str,
+    ack: NodeDeliveryAck,
+    authority: &ListenerCommandAuthority,
+) -> Result<()> {
+    if let Some(pool) = &cluster.pool {
+        let mut conn = pool.get().await?;
+        authority.validate(cluster)?;
+        let ack_channel = cluster.key(format!("node:{source_node}"));
+        cluster
+            .publish_signed(
+                &mut conn,
+                source_node,
+                &ack_channel,
+                serde_json::to_value(ack)?,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+async fn complete_listener_responses(
+    state: Arc<AppState>,
+    authority: ListenerCommandAuthority,
+    responses: ListenerResponses,
+    source_node: String,
+    mut ack: Option<NodeDeliveryAck>,
+) -> Result<()> {
+    for response in responses.items {
+        authority.validate(&state.cluster)?;
+        let result = if let Some(presence_authority) = response.presence_authority {
+            state
+                .cluster
+                .send_to_node_current_presence_replay(
+                    &response.node_id,
+                    &response.recipient,
+                    &response.stanza,
+                    presence_authority,
+                )
+                .await
+        } else {
+            state
+                .cluster
+                .send_to_node_available_presence(
+                    &response.node_id,
+                    &response.recipient,
+                    &response.stanza,
+                )
+                .await
+        };
+        match result {
+            Ok(accepted) => {
+                if let Some(ack) = &mut ack {
+                    ack.delivered += usize::from(accepted);
+                }
+            }
+            Err(error) => {
+                if response.presence_authority.is_some() {
+                    state
+                        .metrics
+                        .cluster_presence_probe_failures_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                return Err(error.context("cluster listener remote presence response failed"));
+            }
+        }
+    }
+    authority.validate(&state.cluster)?;
+    if let Some(ack) = ack {
+        publish_listener_ack(&state.cluster, &source_node, ack, &authority).await?;
+    }
+    Ok(())
+}
+
 async fn listen_once(
     state: Arc<AppState>,
     cancel: CancellationToken,
@@ -6312,11 +6503,15 @@ async fn listen_once(
         Duration::from_secs(15),
     );
     liveness.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // No spawned tasks: dropping this listener synchronously drops every
+    // outstanding receipt registration before a replacement listener starts.
+    let mut continuations = ListenerContinuations::default();
 
     enum ListenerInput {
         ProbeDue,
         ProbeTimedOut,
         Message(Option<redis::Msg>),
+        ResponseComplete(Option<Result<()>>),
     }
 
     loop {
@@ -6340,6 +6535,7 @@ async fn listen_once(
             _ = &mut rotation => {
                 anyhow::bail!("Redis PubSub listener rotation was requested");
             }
+            result = continuations.next(), if !continuations.pending.is_empty() => ListenerInput::ResponseComplete(result),
             _ = liveness.tick() => ListenerInput::ProbeDue,
             _ = tokio::time::sleep_until(probe_deadline), if pending_probe.is_some() => {
                 ListenerInput::ProbeTimedOut
@@ -6347,6 +6543,10 @@ async fn listen_once(
             message = stream.next() => ListenerInput::Message(message),
         };
         let message = match input {
+            ListenerInput::ResponseComplete(result) => {
+                result.context("Redis listener response set ended unexpectedly")??;
+                continue;
+            }
             ListenerInput::ProbeDue => {
                 anyhow::ensure!(
                     pending_probe.is_none(),
@@ -6415,16 +6615,20 @@ async fn listen_once(
         };
         let protocol_version = envelope.version;
         let envelope_kind = envelope.kind;
-        let source_node = envelope.source_node;
-        let json = envelope.payload;
+        let source_node = envelope.source_node.clone();
+        validate_listener_generation(&state.cluster, candidate_generation, rotation_epoch)?;
         if envelope_kind == crate::cluster_security::ClusterCommandKind::Ack {
-            if !state.cluster.dispatch_pending_ack(&source_node, json) {
+            if !state
+                .cluster
+                .dispatch_pending_ack(&source_node, envelope.payload)
+            {
                 state.cluster.note_authentication_failure(&anyhow::anyhow!(
                     "cluster acknowledgement had no exact pending request"
                 ));
             }
             continue;
         }
+        let json = &envelope.payload;
         let Some(target) = json["target"].as_str() else {
             continue;
         };
@@ -6437,6 +6641,7 @@ async fn listen_once(
         let mut control_processed = None;
         let mut control_outcome = None;
         let mut acknowledged_delivery = None;
+        let mut responses = ListenerResponses::default();
         let is_muc = json["muc_broadcast"].as_bool().unwrap_or(false);
         let is_muc_presence = json["muc_presence"].as_bool().unwrap_or(false);
         let is_muc_nickname_change = json["muc_nickname_change"].as_bool().unwrap_or(false);
@@ -6616,7 +6821,7 @@ async fn listen_once(
                 .as_str()
                 .and_then(|recipient| crate::jid::canonicalize(recipient).ok());
             let availability_only = json["availability_only"].as_bool().unwrap_or(false);
-            let authority = match presence_authority(&json) {
+            let authority = match presence_authority(json) {
                 Ok(Some(authority)) => Some(authority),
                 Ok(None) => {
                     state.cluster.note_authentication_failure(&anyhow::anyhow!(
@@ -6654,7 +6859,7 @@ async fn listen_once(
                     .avatar_hash(authority.owner_id)
                     .await
                     .ok();
-                let mut responses = Vec::new();
+                let mut presences = Vec::new();
                 for (owner_full, session) in state.session_entries_for(&owner) {
                     if session.user_id != authority.owner_id
                         || session.auth_generation != authority.owner_auth_generation
@@ -6727,11 +6932,11 @@ async fn listen_once(
                                 .finish()
                             })
                     };
-                    responses.push(presence);
+                    presences.push(presence);
                 }
 
                 let mut processed = true;
-                for presence in responses {
+                for presence in presences {
                     for (_, recipient_session) in state
                         .session_entries_for(&recipient)
                         .into_iter()
@@ -6761,23 +6966,12 @@ async fn listen_once(
                                 if node_id == state.cluster.node_id {
                                     continue;
                                 }
-                                match state
-                                    .cluster
-                                    .send_to_node_current_presence_replay(
-                                        &node_id, &recipient, &presence, authority,
-                                    )
-                                    .await
-                                {
-                                    Ok(accepted) => delivered += usize::from(accepted),
-                                    Err(error) => {
-                                        processed = false;
-                                        state
-                                            .metrics
-                                            .cluster_presence_probe_failures_total
-                                            .fetch_add(1, Ordering::Relaxed);
-                                        tracing::warn!(?error, %owner, %recipient, %node_id, "cross-node initial-presence response failed");
-                                    }
-                                }
+                                responses.push(ListenerResponse {
+                                    node_id,
+                                    recipient: recipient.clone(),
+                                    stanza: presence.clone(),
+                                    presence_authority: Some(authority),
+                                })?;
                             }
                         }
                         Err(error) => {
@@ -6819,14 +7013,22 @@ async fn listen_once(
                         .collect::<Option<Vec<_>>>()
                 });
             if let (Some(owner), Some(targets), Some(patterns)) = (owner, targets, patterns) {
-                crate::xmpp::protocol::blocking::deliver_blocking_presence_change(
+                crate::xmpp::protocol::blocking::deliver_blocking_presence_change_with_remote(
                     &state,
                     &owner,
                     &targets,
                     &patterns,
                     json["available"].as_bool().unwrap_or(false),
+                    |node_id, recipient, stanza| {
+                        std::future::ready(responses.push(ListenerResponse {
+                            node_id,
+                            recipient,
+                            stanza,
+                            presence_authority: None,
+                        }))
+                    },
                 )
-                .await;
+                .await?;
             }
         } else if is_sm_muc_teardown {
             let parsed = json["sm_session_id"]
@@ -7085,7 +7287,7 @@ async fn listen_once(
                 );
                 continue;
             }
-            let parsed_presence_authority = match presence_authority(&json) {
+            let parsed_presence_authority = match presence_authority(json) {
                 Ok(authority) => authority,
                 Err(error) => {
                     state.cluster.note_authentication_failure(&error);
@@ -7152,7 +7354,7 @@ async fn listen_once(
             let (resolved_message_delivery, direct_delivery_contract_valid) = if !is_muc
                 && !is_muc_private
             {
-                match requested_node_message_delivery(&json, is_message_stanza) {
+                match requested_node_message_delivery(json, is_message_stanza) {
                     Ok(Some(request)) => {
                         match resolve_node_message_delivery(&state.pool, request, stanza, target)
                             .await
@@ -7339,8 +7541,8 @@ async fn listen_once(
                         Some(serde_json::Value::Bool(value)) => *value,
                         Some(_) => continue,
                     };
-                let exclude_jids = delivery_exclusions(&json);
-                let Ok(carbon_muc_scope) = delivery_carbon_muc_scope(&json) else {
+                let exclude_jids = delivery_exclusions(json);
+                let Ok(carbon_muc_scope) = delivery_carbon_muc_scope(json) else {
                     continue;
                 };
                 let primary_one_to_one = json["primary_one_to_one"].as_bool().unwrap_or(false);
@@ -7714,41 +7916,55 @@ async fn listen_once(
             }
         }
 
-        if let Some(request_id) = json["request_id"].as_str() {
-            if uuid::Uuid::parse_str(request_id).is_err() {
-                continue;
-            }
-            if let Some(pool) = &state.cluster.pool {
-                let mut conn = pool.get().await?;
-                let ack_channel = state.cluster.key(format!("node:{source_node}"));
-                if let Some(nonce) = json["ack_nonce"]
+        let ack = json["request_id"]
+            .as_str()
+            .filter(|request_id| uuid::Uuid::parse_str(request_id).is_ok())
+            .zip(
+                json["ack_nonce"]
                     .as_str()
-                    .filter(|nonce| (32..=128).contains(&nonce.len()))
-                {
-                    let ack = NodeDeliveryAck {
-                        request_id: request_id.to_owned(),
-                        nonce: nonce.to_owned(),
-                        node_id: state.cluster.node_id.clone(),
-                        delivered,
-                        accepted_full_jid,
-                        mix_supported,
-                        mix_unsupported,
-                        mix_unknown,
-                        control_processed,
-                        control_outcome,
-                        delivery: acknowledged_delivery,
-                        mix_handoff,
-                    };
-                    let ack_payload = serde_json::to_value(&ack)?;
-                    let _ = state
-                        .cluster
-                        .publish_signed(&mut conn, &source_node, &ack_channel, ack_payload)
-                        .await?;
-                }
+                    .filter(|nonce| (32..=128).contains(&nonce.len())),
+            )
+            .map(|(request_id, nonce)| NodeDeliveryAck {
+                request_id: request_id.to_owned(),
+                nonce: nonce.to_owned(),
+                node_id: state.cluster.node_id.clone(),
+                delivered,
+                accepted_full_jid,
+                mix_supported,
+                mix_unsupported,
+                mix_unknown,
+                control_processed,
+                control_outcome,
+                delivery: acknowledged_delivery,
+                mix_handoff,
+            });
+        let authority = ListenerCommandAuthority {
+            generation: candidate_generation,
+            rotation_epoch,
+            envelope,
+        };
+        if responses.items.is_empty() {
+            if let Some(ack) = ack {
+                publish_listener_ack(&state.cluster, &source_node, ack, &authority).await?;
             }
+        } else {
+            // Only remote receipt waits leave the sequential command turn.
+            // Both peers can therefore execute each other's leaf deliveries
+            // even when they simultaneously handle presence probes.
+            continuations.push(complete_listener_responses(
+                state.clone(),
+                authority,
+                responses,
+                source_node,
+                ack,
+            ))?;
         }
     }
 }
+
+#[cfg(test)]
+#[path = "cluster_listener_continuation_tests.rs"]
+mod listener_continuation_tests;
 
 #[cfg(test)]
 mod tests {
@@ -7815,7 +8031,7 @@ mod tests {
         ));
     }
 
-    fn verification_manager(
+    pub(super) fn verification_manager(
         namespace: &str,
         security: Arc<crate::cluster_security::ClusterSecurityConfig>,
     ) -> ClusterManager {
@@ -7844,7 +8060,7 @@ mod tests {
         }
     }
 
-    fn listener_health_manager() -> ClusterManager {
+    pub(super) fn listener_health_manager() -> ClusterManager {
         let namespace = "listener-health.test";
         let (_, security) = crate::cluster_security::test_configuration_pair(namespace);
         let mut manager = verification_manager(namespace, security);

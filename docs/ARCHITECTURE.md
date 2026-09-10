@@ -10,6 +10,16 @@ their exact capabilities, health boundaries and deployment lifecycle. Core
 retains all live-session authority; maintenance receives only retention policy,
 a bounded database pool and metrics.
 
+Durable MIX delivery uses retained PostgreSQL commit and reconnect notifications
+to request a fresh authorized claim. Consecutive empty claims schedule recovery
+scans after 250 ms, 500 ms, then at most one second. A notification or completed
+delivery restores immediate claiming; newly claimed work restores the fast
+cadence. A missed notification, lease expiry or timed retry can therefore add
+up to 750 ms of discovery delay compared with the previous fixed 250 ms scan.
+PAM results have no dedicated commit notification and retain their fixed 250 ms
+scan. Database-turn deadlines, lease fences and worker health requirements are
+unchanged; an idle timer alone never marks a worker healthy.
+
 ## Module map
 
 ```mermaid

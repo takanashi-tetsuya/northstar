@@ -735,6 +735,11 @@ pub(crate) struct MixDeliveryWakeBroker {
 }
 
 impl MixDeliveryWakeBroker {
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Arc<Self> {
+        Self::new("public".to_owned()).expect("test wake schema is valid")
+    }
+
     fn new(schema: String) -> Result<Arc<Self>> {
         anyhow::ensure!(
             !schema.is_empty()

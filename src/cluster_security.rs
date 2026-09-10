@@ -576,13 +576,7 @@ impl SignedClusterEnvelope {
                 "cluster source mismatch"
             );
         }
-        anyhow::ensure!(
-            self.expires_at > self.issued_at
-                && self.expires_at.saturating_sub(self.issued_at) <= ENVELOPE_LIFETIME_SECONDS
-                && self.issued_at <= now.saturating_add(CLOCK_SKEW_SECONDS)
-                && self.expires_at >= now.saturating_sub(CLOCK_SKEW_SECONDS),
-            "cluster envelope is outside its validity window"
-        );
+        let public_key = self.current_verification_key(peers, now)?;
         anyhow::ensure!(
             uuid::Uuid::parse_str(&self.event_id).is_ok(),
             "cluster event ID is invalid"
@@ -612,6 +606,29 @@ impl SignedClusterEnvelope {
             infer_kind(&self.payload)? == self.kind,
             "cluster command kind does not match its payload"
         );
+        let signature = URL_SAFE_NO_PAD
+            .decode(&self.signature)
+            .context("cluster signature is not base64url")?;
+        UnparsedPublicKey::new(&ED25519, public_key)
+            .verify(&self.signing_bytes()?, &signature)
+            .map_err(|_| anyhow::anyhow!("cluster Ed25519 signature verification failed"))?;
+        Ok(())
+    }
+
+    /// Recheck mutable authorization for an envelope whose immutable contents
+    /// and signature have already passed `verify`. Key IDs bind the public key.
+    pub(crate) fn current_verification_key(
+        &self,
+        peers: &HashMap<String, PeerVerifier>,
+        now: i64,
+    ) -> Result<[u8; 32]> {
+        anyhow::ensure!(
+            self.expires_at > self.issued_at
+                && self.expires_at.saturating_sub(self.issued_at) <= ENVELOPE_LIFETIME_SECONDS
+                && self.issued_at <= now.saturating_add(CLOCK_SKEW_SECONDS)
+                && self.expires_at >= now.saturating_sub(CLOCK_SKEW_SECONDS),
+            "cluster envelope is outside its validity window"
+        );
         let peer = peers
             .get(&self.source_node)
             .context("cluster source node is not allowlisted")?;
@@ -626,13 +643,7 @@ impl SignedClusterEnvelope {
         let public_key = peer
             .key(&self.key_id, self.key_epoch)
             .context("cluster signing key ID or epoch is not authorized")?;
-        let signature = URL_SAFE_NO_PAD
-            .decode(&self.signature)
-            .context("cluster signature is not base64url")?;
-        UnparsedPublicKey::new(&ED25519, public_key)
-            .verify(&self.signing_bytes()?, &signature)
-            .map_err(|_| anyhow::anyhow!("cluster Ed25519 signature verification failed"))?;
-        Ok(())
+        Ok(*public_key)
     }
 
     fn signing_bytes(&self) -> Result<Vec<u8>> {

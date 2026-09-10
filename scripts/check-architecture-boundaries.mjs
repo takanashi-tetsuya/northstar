@@ -398,6 +398,8 @@ for (const invariant of [
   '.connect(&config.database_url)',
   'attest_development_database_is_loopback',
   'attest_runtime_role',
+  'RUNTIME_CONTROL_STARTUP_RETRY_BUDGET',
+  'runtime_control_startup_retry_delay',
 ]) {
   if (!runtimeControlReservation.includes(invariant)) {
     throw new Error(`runtime-control startup reservation lost required invariant: ${invariant}`);
@@ -405,6 +407,9 @@ for (const invariant of [
 }
 if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/s.test(runtimeControlReservation)) {
   throw new Error('runtime-control startup reservation must retain its one dedicated connection');
+}
+if (!/Err\(sqlx::Error::PoolTimedOut\)\s+if\s+Instant::now\(\)\s*<\s*retry_deadline/s.test(runtimeControlReservation)) {
+  throw new Error('runtime-control startup may retry only the bounded pool-timeout admission case');
 }
 const appStateConstruction = structBody(state, 'pub async fn new(');
 if (!/pub async fn new\([\s\S]*?runtime_control_connection\s*:\s*PoolConnection<Postgres>/.test(state)) {
@@ -436,7 +441,7 @@ for (const invariant of [
 if (!/service_control_applies\(\s*state\.process_started_at,\s*&control\s*,?\s*\)/s.test(runtimeControlRefresh)) {
   throw new Error('runtime control coordinator must retain the XEP-0133 process/generation authority check');
 }
-if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtime` | exactly 1 reserved connection, 500 ms acquire bound |')) {
+if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtime` | exactly 1 reserved connection; 500 ms per-attempt cold-start bound plus a 15 s jittered `PoolTimedOut` admission window before traffic startup |')) {
   throw new Error('program responsibility model must document the dedicated runtime control pool');
 }
 const mixProtocol = read('src/xmpp/protocol/mix.rs');

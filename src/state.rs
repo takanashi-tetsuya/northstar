@@ -48,6 +48,11 @@ const OMEMO_POLL_MAX_ACTIVE_IPS: usize = 65_536;
 /// main pool. XEP-0133 uses the same control-plane capability when enabled,
 /// but does not own the capability itself.
 const RUNTIME_CONTROL_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_millis(500);
+/// A process has no traffic listeners while this bounded admission window is
+/// active.  It exists specifically to de-correlate a cold-start cohort from a
+/// short, per-attempt pool deadline; it is not a runtime worker retry policy.
+const RUNTIME_CONTROL_STARTUP_RETRY_BUDGET: Duration = Duration::from_secs(15);
+const RUNTIME_CONTROL_STARTUP_RETRY_MAX_DELAY: Duration = Duration::from_millis(500);
 
 fn runtime_control_pool_options(config: &Config) -> PgPoolOptions {
     let options = PgPoolOptions::new()
@@ -61,6 +66,23 @@ fn runtime_control_pool_options(config: &Config) -> PgPoolOptions {
     }
 }
 
+fn runtime_control_startup_retry_delay(attempt: u32, process_id: u32) -> Duration {
+    let exponent = attempt.saturating_sub(1).min(5);
+    let exponential_millis = 10_u64.saturating_mul(1_u64 << exponent);
+    // A process-local deterministic spread avoids another synchronized
+    // connection wave without introducing shared startup state or a random
+    // source into the authority boundary.
+    let jitter_millis = (u64::from(process_id)
+        .wrapping_mul(0x9e37_79b9)
+        .wrapping_add(u64::from(attempt).wrapping_mul(0x85eb_ca6b))
+        % 97) as u64;
+    Duration::from_millis(
+        exponential_millis
+            .saturating_add(jitter_millis)
+            .min(RUNTIME_CONTROL_STARTUP_RETRY_MAX_DELAY.as_millis() as u64),
+    )
+}
+
 /// Establish the one process-owned control-plane connection before the
 /// traffic pool or any startup reconciliation can take database capacity.
 ///
@@ -71,10 +93,29 @@ fn runtime_control_pool_options(config: &Config) -> PgPoolOptions {
 pub(crate) async fn reserve_runtime_control_connection(
     config: &Config,
 ) -> anyhow::Result<PoolConnection<Postgres>> {
-    let runtime_control_pool = runtime_control_pool_options(config)
-        .connect(&config.database_url)
-        .await
-        .context("could not create isolated runtime-control database pool")?;
+    let retry_deadline = Instant::now() + RUNTIME_CONTROL_STARTUP_RETRY_BUDGET;
+    let mut attempts = 0_u32;
+    let runtime_control_pool = loop {
+        attempts = attempts.saturating_add(1);
+        match runtime_control_pool_options(config)
+            .connect(&config.database_url)
+            .await
+        {
+            Ok(pool) => break pool,
+            Err(sqlx::Error::PoolTimedOut) if Instant::now() < retry_deadline => {
+                tokio::time::sleep(runtime_control_startup_retry_delay(
+                    attempts,
+                    std::process::id(),
+                ))
+                .await;
+            }
+            Err(error) => {
+                return Err(anyhow::Error::new(error).context(format!(
+                    "could not create isolated runtime-control database pool after {attempts} bounded startup admission attempts"
+                )));
+            }
+        }
+    };
     if config.database_allow_unsafe_role_for_development {
         crate::db::attest_development_database_is_loopback(&runtime_control_pool).await?;
     } else {
@@ -5622,20 +5663,39 @@ mod session_key_tests {
         encode_api_control_entropy, ephemeral_api_control_secret, federation_rule_matches,
         insert_restored_muc_occupant, muc_actor_identity_matches, muc_departure_identity_matches,
         muc_suspended_teardown_identity_matches, promote_suspended_muc_buffer,
-        seal_suspended_muc_buffer, service_control_applies, session_lookup,
-        snapshot_suspended_muc_buffer_for_resume, staged_route_activation_allowed,
+        runtime_control_startup_retry_delay, seal_suspended_muc_buffer, service_control_applies,
+        session_lookup, snapshot_suspended_muc_buffer_for_resume, staged_route_activation_allowed,
         suspended_muc_resume_actor_matches, suspended_occupant_is_created,
         transfer_muc_suffix_to_checkpoint, FederationWritePolicy, JoinedMucMembership, MucOccupant,
         MucOccupantEndpoint, RouteIncarnationSignal, SerializableMucOccupant, SessionLookup,
         StagedRouteActivationCheck, StagedRouteIdentity, SuspendedMucBuffer, SuspendedMucEndpoint,
         SuspendedMucPhase, SuspendedMucRoute,
     };
-    use std::collections::VecDeque;
+    use std::collections::{BTreeSet, VecDeque};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
     };
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn runtime_control_startup_backoff_is_bounded_and_decorrelates_processes() {
+        let first = runtime_control_startup_retry_delay(1, 17);
+        assert!(first >= Duration::from_millis(10));
+        assert!(first <= Duration::from_millis(500));
+
+        let saturated = runtime_control_startup_retry_delay(128, 17);
+        assert!(saturated <= Duration::from_millis(500));
+        assert!(saturated >= first);
+
+        let delays = (10_u32..110)
+            .map(|process_id| runtime_control_startup_retry_delay(3, process_id))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            delays.len() > 16,
+            "a cold-start cohort must not retry in one synchronized wave"
+        );
+    }
 
     #[test]
     fn route_removal_signal_retains_the_exact_terminal_state_for_late_subscribers() {

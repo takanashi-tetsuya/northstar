@@ -346,7 +346,7 @@ common_env=(
   FAST_TOKEN_SECRET_FILE="$redis_tmp/fast_token_secret"
   DUMMY_SCRAM_SECRET_FILE="$redis_tmp/dummy_scram_secret"
   LOG_FORMAT=json
-  RUST_LOG=rust_xmpp_server=info,rust_xmpp_server::cluster=debug,rust_xmpp_server::xmpp::protocol::messaging=debug,rust_xmpp_server::db::replay=debug
+  RUST_LOG=rust_xmpp_server=info,rust_xmpp_server::cluster=debug,rust_xmpp_server::xmpp=debug,rust_xmpp_server::xmpp::protocol=info,rust_xmpp_server::xmpp::protocol::messaging=debug,rust_xmpp_server::db::replay=debug
 )
 
 # PUBLIC_URL is consumed while each node starts, before that node can publish

@@ -158,6 +158,17 @@ impl ClusterMucPrincipal {
     }
 }
 
+// Actor and occupancy addresses may contain a resource. Project the parsed
+// address structurally; parse_bare/canonicalize_bare deliberately reject a
+// resource and remain required for the authenticated principal itself.
+fn muc_address_bare_jid(address: &str) -> Result<String> {
+    Ok(crate::jid::CanonicalJid::parse(address)?.bare())
+}
+
+fn muc_principal_owns_address(address: &str, principal: &ClusterMucPrincipal) -> Result<bool> {
+    Ok(muc_address_bare_jid(address)? == principal.bare_jid())
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ClusterMucOccupancy {
     pub room_id: Uuid,
@@ -948,7 +959,7 @@ pub async fn claim_cluster_muc_occupancy(
         "MUC full JID must be canonical"
     );
     anyhow::ensure!(
-        crate::jid::canonicalize_bare(&full_jid)? == request.principal.bare_jid(),
+        muc_principal_owns_address(&full_jid, &request.principal)?,
         "MUC full JID does not belong to the authorized principal"
     );
     let lease_seconds = validate_lease(request.lease)?;
@@ -1507,7 +1518,7 @@ pub async fn transition_cluster_muc_occupancy(
         "new_connection_epoch": new_connection_epoch,
         "sm_session_id": sm_session_id,
     });
-    let actor_bare_jid = crate::jid::canonicalize_bare(&target.full_jid)?;
+    let actor_bare_jid = muc_address_bare_jid(&target.full_jid)?;
     insert_operation_and_outbox(
         &mut tx,
         OperationRecord {
@@ -1861,7 +1872,7 @@ async fn mutate_cluster_muc_affiliation_in_tx(
     );
     let actor_full_jid = crate::jid::canonicalize(actor_full_jid)?;
     anyhow::ensure!(
-        crate::jid::canonicalize_bare(&actor_full_jid)? == actor.bare_jid(),
+        muc_principal_owns_address(&actor_full_jid, actor)?,
         "MUC affiliation actor does not own the authenticated full JID"
     );
     let (action, reserved_nick) = match mutation {
@@ -2336,7 +2347,7 @@ pub async fn update_cluster_muc_config(
     principal.validate()?;
     let actor_full_jid = crate::jid::canonicalize(actor_full_jid)?;
     anyhow::ensure!(
-        crate::jid::canonicalize_bare(&actor_full_jid)? == principal.bare_jid(),
+        muc_principal_owns_address(&actor_full_jid, principal)?,
         "MUC configuration actor does not belong to the authorized principal"
     );
     let digest = request_digest(&json!({
@@ -2778,7 +2789,7 @@ pub async fn apply_cluster_muc_affiliations_batch(
     actor.validate()?;
     let actor_full_jid = crate::jid::canonicalize(actor_full_jid)?;
     anyhow::ensure!(
-        crate::jid::canonicalize_bare(&actor_full_jid)? == actor.bare_jid(),
+        muc_principal_owns_address(&actor_full_jid, actor)?,
         "MUC affiliation actor does not own the authenticated full JID"
     );
     if changes.is_empty() {
@@ -4888,6 +4899,68 @@ mod delivery_handoff_schema_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_addresses_keep_the_authenticated_muc_account() {
+        let principal = ClusterMucPrincipal::Local {
+            user_id: Uuid::new_v4(),
+            bare_jid: "alice@example.test".into(),
+        };
+        principal.validate().unwrap();
+        for address in [
+            "alice@example.test/desktop",
+            "alice@example.test/desktop/other@example.test",
+        ] {
+            assert_eq!(muc_address_bare_jid(address).unwrap(), "alice@example.test");
+            assert!(muc_principal_owns_address(address, &principal).unwrap());
+        }
+    }
+
+    #[test]
+    fn a_muc_resource_cannot_impersonate_another_principal() {
+        let principal = ClusterMucPrincipal::Federated {
+            bare_jid: "alice@example.test".into(),
+            authenticated_domain: "example.test".into(),
+        };
+        principal.validate().unwrap();
+        for address in [
+            "bob@example.test/alice@example.test",
+            "alice@other.example/desktop",
+        ] {
+            assert!(!muc_principal_owns_address(address, &principal).unwrap());
+        }
+    }
+
+    #[test]
+    fn actor_projection_preserves_existing_bare_address_inputs() {
+        let principal = ClusterMucPrincipal::Local {
+            user_id: Uuid::new_v4(),
+            bare_jid: "alice@example.test".into(),
+        };
+        assert!(muc_principal_owns_address("alice@example.test", &principal).unwrap());
+        assert_eq!(
+            muc_address_bare_jid("alice@example.test").unwrap(),
+            "alice@example.test"
+        );
+    }
+
+    #[test]
+    fn muc_actor_projection_still_rejects_malformed_addresses() {
+        for address in ["", "alice@example.test/", "alice@example.test/\n"] {
+            assert!(muc_address_bare_jid(address).is_err());
+        }
+    }
+
+    #[test]
+    fn authenticated_muc_principals_still_require_strict_bare_jids() {
+        let principal = ClusterMucPrincipal::Local {
+            user_id: Uuid::new_v4(),
+            bare_jid: "alice@example.test/desktop".into(),
+        };
+        assert!(principal.validate().is_err());
+        assert!(!muc_principal_owns_address("alice@example.test/desktop", &principal).unwrap());
+        assert!(crate::jid::canonicalize_bare("alice@example.test/desktop").is_err());
+    }
 
     fn occupancy(nick: &str, incarnation: Uuid, connection: Uuid) -> ClusterMucOccupancy {
         ClusterMucOccupancy {

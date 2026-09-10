@@ -415,6 +415,7 @@ jobs:
           python3 scripts/test-redis-tls-unix-relay.py --self-test
           python3 scripts/test-cluster-tls-rejection.py --self-test
           python3 scripts/test-cluster-sm-client.py
+          python3 scripts/test-cluster-fault-observations.py
           bash scripts/test-listener-readiness.sh
           python3 scripts/xep0487-socket-activation.py --self-test
           python3 scripts/check-github-ci-summary.py

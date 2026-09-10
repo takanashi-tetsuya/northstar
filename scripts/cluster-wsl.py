@@ -433,13 +433,58 @@ def offline_account_snapshot(username: str) -> str:
     return result.stdout.strip()
 
 
-def metric_value(port: int, name: str) -> int:
+def metric_value(port: int, name: str, timeout: float = 3) -> int:
     fixture.check(port > 0, "cluster metrics listener is not configured")
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=3) as response:
+    fixture.check(timeout > 0, "cluster metrics observation deadline elapsed")
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=timeout) as response:
         body = response.read().decode("utf-8", "strict")
     match = re.search(rf"^{re.escape(name)} ([0-9]+)$", body, re.MULTILINE)
     fixture.check(match is not None, f"cluster metric is missing: {name}")
     return int(match.group(1))
+
+
+def authentication_rejection_since(log_path: pathlib.Path, offset: int) -> bool:
+    """Observe this injection's bounded node-B log suffix, never an old event."""
+    fixture.check(type(offset) is int and offset >= 0, "invalid cluster log observation offset")
+    try:
+        with log_path.open("rb") as log:
+            log.seek(0, os.SEEK_END)
+            fixture.check(log.tell() >= offset, "cluster rejection log was truncated during observation")
+            log.seek(offset)
+            suffix = log.read(256 * 1024 + 1)
+    except OSError:
+        raise RuntimeError("could not read the node-B rejection observation") from None
+    fixture.check(len(suffix) <= 256 * 1024, "cluster rejection observation exceeded its byte bound")
+    # Leave an incomplete final line unconsumed. A later poll reads the same
+    # suffix and may only accept it once the logger has completed the JSON row.
+    complete, _separator, _partial = suffix.rpartition(b"\n")
+    for line in complete.splitlines():
+        try:
+            event = json.loads(line)
+        except (ValueError, UnicodeError):
+            continue
+        if not isinstance(event, dict) or not isinstance(event.get("fields"), dict):
+            continue
+        fields = event["fields"]
+        if (
+            event.get("target") == "rust_xmpp_server::cluster"
+            and fields.get("message") == "rejected unauthenticated cluster protocol envelope"
+            and fields.get("error") == "cluster envelope is oversized"
+        ):
+            return True
+    return False
+
+
+def wait_for_authentication_rejection(
+    log_path: pathlib.Path, offset: int, deadline: float
+) -> bool:
+    while time.monotonic() < deadline:
+        if authentication_rejection_since(log_path, offset):
+            return time.monotonic() <= deadline
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.05, remaining))
+    return False
 
 
 def subscriber_envelope(process: subprocess.Popen[bytes], timeout: float = 5) -> dict:
@@ -1250,18 +1295,34 @@ def run_faults() -> None:
     authentication_failures_before = metric_value(
         METRICS_B, "xmpp_cluster_authentication_failures_total"
     )
+    rejection_log = pathlib.Path(LOG_B)
+    rejection_offset = rejection_log.stat().st_size
+    injected_at = time.monotonic()
     redis_cli("-x", "publish", bob_channel, input_bytes=b"x" * (2 * 1024 * 1024 + 1))
-    deadline = time.monotonic() + 3
-    while (
-        time.monotonic() < deadline
-        and metric_value(METRICS_B, "xmpp_cluster_authentication_failures_total")
-        <= authentication_failures_before
-    ):
-        time.sleep(0.05)
     fixture.check(
-        metric_value(METRICS_B, "xmpp_cluster_authentication_failures_total")
-        > authentication_failures_before,
-        "node B did not reject the oversized Redis envelope",
+        wait_for_authentication_rejection(rejection_log, rejection_offset, injected_at + 3),
+        "node B did not reject the oversized Redis envelope within the original three-second window",
+    )
+    # The metrics endpoint intentionally caches complete scrapes for five
+    # seconds. Keep the security action's three-second deadline above, then
+    # separately verify its counter after that existing cache can expire.
+    metrics_deadline = injected_at + 5 + 3
+    counter_updated = False
+    while (remaining := metrics_deadline - time.monotonic()) > 0:
+        observed_counter = metric_value(
+            METRICS_B,
+            "xmpp_cluster_authentication_failures_total",
+            timeout=min(3, remaining),
+        )
+        if observed_counter > authentication_failures_before:
+            counter_updated = time.monotonic() <= metrics_deadline
+            break
+        remaining = metrics_deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.05, remaining))
+    fixture.check(
+        counter_updated,
+        "node B rejected the oversized envelope but its refreshed authentication counter did not advance",
     )
     alice_a.send(
         f"<message xmlns='jabber:client' to='{bob_full}' type='chat' id='after-oversize'>"

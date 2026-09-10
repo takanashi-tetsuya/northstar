@@ -1172,7 +1172,10 @@ for required_source_fragment in \
     'let mut delivery_wake = matches!(queue, MixOutboxQueue::Delivery)' \
     'subscribe_delivery_wake()' \
     'wait_for_mix_delivery_wake(&mut delivery_wake)' \
-    'next_claim = tokio::time::Instant::now();'
+    'claim_schedule.record_progress(tokio::time::Instant::now());' \
+    'fn record_progress(&mut self, now: tokio::time::Instant)' \
+    'self.next_claim = now;' \
+    'self.empty_delay = Self::BASE_DELAY;'
 do
     if ! grep -Fq "$required_source_fragment" src/xmpp/protocol/mix.rs; then
         echo "MIX durable delivery lane is missing lossless wake invariant: $required_source_fragment" >&2

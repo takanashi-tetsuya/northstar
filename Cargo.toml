@@ -196,3 +196,12 @@ northstar-protocol-runtime = { path = "crates/northstar-protocol-runtime" }
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Capacity fixtures use optimized runtime code while retaining development
+# assertions and overflow checks. Ordinary builds/tests keep their profiles.
+[profile.runtime-test]
+inherits = "dev"
+opt-level = 2
+debug-assertions = true
+overflow-checks = true
+panic = "unwind"

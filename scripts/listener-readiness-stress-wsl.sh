@@ -16,6 +16,10 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$project_dir/target-wsl}"
 fi
 cd "$project_dir"
+source "$project_dir/scripts/lib/runtime-test-profile.sh"
+# This capacity lane always measures optimized code with development checks.
+# Child fixtures receive the exact same profile; ordinary integrations use dev.
+fixture_select_runtime_profile runtime-test
 
 mode="regular"
 fixture="federation"
@@ -1301,6 +1305,7 @@ reap_workers() {
 start_stress_worker() {
   local round="$1" pair="$2" log_file="$3" database_a="$4" database_b="$5" control_file worker_pid worker_group candidate_pgid candidate_sid
   local -a fixture_environment=(
+    "NORTHSTAR_RUNTIME_TEST_PROFILE=$fixture_cargo_profile"
     "NORTHSTAR_LISTENER_STRESS_PHASE_DIR=$startup_phase_dir"
     "NORTHSTAR_LISTENER_STRESS_PHASE_NONCE=$startup_phase_nonce"
     "NORTHSTAR_LISTENER_STRESS_PHASE_ROUND=$round"
@@ -1443,11 +1448,13 @@ resolve_current_build_binary() {
   # fingerprints make a successful build authoritative even when the file was
   # already up to date; there is no fallback to an unrelated/default target
   # directory or a previously discovered executable.
-  cargo_args=(--locked)
+  run_parent_phase preflight-profile python3 "$project_dir/scripts/check-runtime-test-profile.py" \
+    --manifest "$project_dir/Cargo.toml" --check-environment || return 1
+  cargo_args=(--locked --profile "$fixture_cargo_profile" --message-format=json-render-diagnostics)
   [[ "${XMPP_TEST_OFFLINE:-true}" == false ]] || cargo_args+=(--offline)
   run_parent_phase preflight-build cargo build "${cargo_args[@]}" --bin rust-xmpp-server || return 1
 
-  candidate="$configured_target_dir/debug/rust-xmpp-server"
+  candidate="$configured_target_dir/$fixture_cargo_profile_directory/rust-xmpp-server"
   if [[ ! -f "$candidate" || ! -x "$candidate" ]]; then
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=preflight-binary
     record_parent_diagnostic "phase=preflight-binary status=missing_or_not_executable"
@@ -1461,14 +1468,17 @@ resolve_current_build_binary() {
     echo "listener stress could not resolve its current build output" >&2
     return 1
   fi
-  if [[ "$resolved_binary" != "$resolved_target_dir/debug/rust-xmpp-server" ]]; then
+  if [[ "$resolved_binary" != "$resolved_target_dir/$fixture_cargo_profile_directory/rust-xmpp-server" ]]; then
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=preflight-binary
     record_parent_diagnostic "phase=preflight-binary status=resolved_outside_expected_target"
     echo "listener stress refused a binary resolved outside CARGO_TARGET_DIR" >&2
     return 1
   fi
+  run_parent_phase preflight-build-profile python3 "$project_dir/scripts/check-runtime-test-profile.py" \
+    --build-log "$runtime_dir/parent-preflight-build.raw.log" \
+    --binary "$resolved_binary" --source "$project_dir/src/main.rs" || return 1
   binary="$resolved_binary"
-  record_parent_diagnostic "phase=preflight-binary status=validated target_directory=$resolved_target_dir"
+  record_parent_diagnostic "phase=preflight-binary status=validated profile=$fixture_cargo_profile opt_level=2 debug_assertions=true overflow_checks=true target_directory=$resolved_target_dir"
 }
 
 load_runtime_connection_budget() {

@@ -14,6 +14,8 @@ fi
 target_dir="${CARGO_TARGET_DIR:-$project_dir/target}"
 cd "$project_dir"
 source "$project_dir/scripts/lib/test-listener-readiness.sh"
+source "$project_dir/scripts/lib/runtime-test-profile.sh"
+fixture_select_runtime_profile "${NORTHSTAR_RUNTIME_TEST_PROFILE:-dev}"
 
 stress_database_a="${NORTHSTAR_LISTENER_STRESS_DATABASE_A:-}"
 stress_database_b="${NORTHSTAR_LISTENER_STRESS_DATABASE_B:-}"
@@ -224,14 +226,14 @@ fixture_start_tcp_relay "$project_dir" "$runtime_dir" a-http relay-a-http "$targ
 fixture_start_tcp_relay "$project_dir" "$runtime_dir" b-http relay-b-http "$target_b_http" \
   "$runtime_dir/relay-b-http.log" relay_b_http_pid relay_b_http_port
 
-cargo_args=(--locked)
+cargo_args=(--locked --profile "$fixture_cargo_profile")
 if [[ "${XMPP_TEST_OFFLINE:-true}" != "false" ]]; then
   cargo_args+=(--offline)
 fi
 if [[ "${NORTHSTAR_FEDERATION_SKIP_BUILD:-false}" != true ]]; then
   cargo build "${cargo_args[@]}"
 fi
-binary="$target_dir/debug/rust-xmpp-server"
+binary="$target_dir/$fixture_cargo_profile_directory/rust-xmpp-server"
 [[ -x "$binary" ]] || { echo "federation runtime binary is missing: $binary" >&2; exit 1; }
 database_url_a="postgres://xmpp_test:xmpp-test-password@$database_host:$database_port/$database_name_a?options=-csearch_path%3D$schema_a"
 database_url_b="postgres://xmpp_test:xmpp-test-password@$database_host:$database_port/$database_name_b?options=-csearch_path%3D$schema_b"

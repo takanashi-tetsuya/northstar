@@ -64,6 +64,22 @@ cgroup quota. A failed or missing pair fails the round; preparation never
 extends the worker supervisor or a server's readiness deadline. Smaller local
 runs diagnose failures and do not replace evidence from the complete CI matrix.
 
+Capacity runs explicitly build the `runtime-test` Cargo profile and use
+`$CARGO_TARGET_DIR/runtime-test/rust-xmpp-server`. This profile inherits `dev`,
+uses optimization level 2, and keeps debug assertions, integer overflow checks
+and panic unwinding. Ordinary unit tests and direct federation integrations
+retain their existing debug builds. The parent passes
+`NORTHSTAR_RUNTIME_TEST_PROFILE=runtime-test` to both child fixtures; they never
+fall back to a binary in `debug`. Before any fixture database work, the parent
+checks the manifest, refuses external compiler/profile overrides, and verifies
+Cargo's current artifact path, workspace source and effective optimization and
+assertion settings. The runtime connection-budget manifest is still read from
+that same binary. These runs keep password costs, protocol assertions, the
+15 second startup and 900 second worker deadlines, and the full pair matrices.
+An optimized run is capacity evidence for its recorded host and profile, not
+a production throughput guarantee. `test-runtime-test-profile.py` checks this
+contract without building or starting the server.
+
 For the two federation fixtures, a server's nonce-bound listener record and
 healthy HTTP responses from its backend and relay share one monotonic 15 second
 startup deadline. Bound sockets alone do not establish HTTP readiness. Startup

@@ -29,6 +29,10 @@ pub struct OutboundItem {
     /// at durable SM/BOSH ownership or after a non-SM socket write, never when
     /// the stanza merely enters the bounded process channel.
     pub transport_receipt: Option<mpsc::UnboundedSender<()>>,
+    /// Process-local shutdown notification completion. TCP/WS confirm only
+    /// after their write succeeds; BOSH waits for the client's response ACK.
+    /// SM persistence alone never confirms this signal or stores it for replay.
+    pub(crate) transport_write_receipt: Option<mpsc::UnboundedSender<()>>,
     /// Process-wide transient SM replay reservation. BOSH attaches the same
     /// shared hold to every control/replay fragment until the corresponding
     /// HTTP response body is completed or discarded. Ordinary routed stanzas
@@ -44,6 +48,7 @@ impl OutboundItem {
             durable_source: None,
             mix_handoff: None,
             transport_receipt: None,
+            transport_write_receipt: None,
             transient_sm_capacity: None,
         }
     }
@@ -54,6 +59,7 @@ impl OutboundItem {
             durable_source: Some(TransportOwnershipSource::C2s(delivery)),
             mix_handoff: None,
             transport_receipt: None,
+            transport_write_receipt: None,
             transient_sm_capacity: None,
         }
     }
@@ -69,6 +75,7 @@ impl OutboundItem {
                 durable_source: Some(TransportOwnershipSource::Mix(delivery)),
                 mix_handoff: Some(handoff),
                 transport_receipt: None,
+                transport_write_receipt: None,
                 transient_sm_capacity: None,
             },
             receiver,
@@ -106,7 +113,18 @@ impl OutboundItem {
             durable_source: None,
             mix_handoff: None,
             transport_receipt: Some(receipt),
+            transport_write_receipt: None,
             transient_sm_capacity: None,
+        }
+    }
+
+    pub(crate) fn with_transport_write_receipt(
+        stanza: String,
+        receipt: mpsc::UnboundedSender<()>,
+    ) -> Self {
+        Self {
+            transport_write_receipt: Some(receipt),
+            ..Self::plain(stanza)
         }
     }
 
@@ -119,12 +137,19 @@ impl OutboundItem {
             durable_source: None,
             mix_handoff: None,
             transport_receipt: None,
+            transport_write_receipt: None,
             transient_sm_capacity: Some(capacity),
         }
     }
 
     pub fn confirm_transport_ownership(&self) {
         if let Some(receipt) = &self.transport_receipt {
+            let _ = receipt.send(());
+        }
+    }
+
+    pub(crate) fn confirm_transport_write(&self) {
+        if let Some(receipt) = &self.transport_write_receipt {
             let _ = receipt.send(());
         }
     }
@@ -338,16 +363,29 @@ impl OutboundSender {
         stanza: String,
         receipt: mpsc::UnboundedSender<()>,
     ) -> Result<(), mpsc::error::TrySendError<String>> {
-        match self.try_send_item(OutboundItem::with_transport_receipt(stanza, receipt)) {
+        self.try_send_receipted_item(OutboundItem::with_transport_receipt(stanza, receipt))
+    }
+
+    pub(crate) fn try_send_with_transport_write_receipt(
+        &self,
+        stanza: String,
+        receipt: mpsc::UnboundedSender<()>,
+    ) -> Result<(), mpsc::error::TrySendError<String>> {
+        self.try_send_receipted_item(OutboundItem::with_transport_write_receipt(stanza, receipt))
+    }
+
+    fn try_send_receipted_item(
+        &self,
+        item: OutboundItem,
+    ) -> Result<(), mpsc::error::TrySendError<String>> {
+        match self.try_send_item(item) {
             Ok(()) => Ok(()),
             Err(mpsc::error::TrySendError::Full(item)) => {
-                // A transport receipt represents a durable policy/outbox
-                // boundary just like `DurableDelivery`: the database item is
-                // still pending until this exact stanza becomes recoverable
-                // or reaches the socket.  If the bounded queue is full, a
-                // later stanza must not overtake that pending item on the same
-                // stream.  Latch the transport closed and let reconnect/replay
-                // restore the authoritative order.
+                // A receipted item cannot be silently skipped in stream order.
+                // Durable policy/outbox items retain their database recovery;
+                // a volatile shutdown notification instead remains explicitly
+                // unconfirmed. In both cases close an overloaded transport so
+                // later stanzas cannot overtake the rejected item.
                 self.backpressure_disconnect.cancel();
                 Err(mpsc::error::TrySendError::Full(item.stanza))
             }

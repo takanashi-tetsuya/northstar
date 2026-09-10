@@ -1072,6 +1072,24 @@ def run() -> None:
         "<x xmlns='jabber:x:data' type='submit'/></query></iq>"
     )
     alice_a.receive_until("shutdown-room-instant")
+    # Exercise the stronger write boundary: SM ownership alone and inactive
+    # CSI deferral must not make a shutdown notice disappear before close.
+    alice_a.send("<enable xmlns='urn:xmpp:sm:3' resume='false'/>")
+    shutdown_sm, _ = alice_a.receive_until("<enabled ")
+    shutdown_sm_element = protocol_element(shutdown_sm)
+    fixture.check(
+        shutdown_sm_element.tag == f"{{{SM_NAMESPACE}}}enabled"
+        and shutdown_sm_element.get("resume") in {"false", "0"}
+        and shutdown_sm_element.get("id") is None,
+        "shutdown fixture did not enable non-resumable stream management",
+    )
+    alice_a.send("<inactive xmlns='urn:xmpp:csi:0'/>")
+    alice_a.send(
+        "<iq xmlns='jabber:client' type='get' id='shutdown-csi-barrier'>"
+        "<ping xmlns='urn:xmpp:ping'/></iq>"
+    )
+    shutdown_barrier, _ = alice_a.receive_until("shutdown-csi-barrier")
+    fixture.check("type='result'" in shutdown_barrier, "shutdown CSI barrier did not complete")
     server_a_pid = int(os.environ["NORTHSTAR_CLUSTER_PID_A"])
     os.kill(server_a_pid, signal.SIGTERM)
     # One connection can occupy several rooms; graceful shutdown emits 332

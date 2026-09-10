@@ -361,11 +361,21 @@ secret authority.
 
 ### Shutdown and failure
 
-1. Stop new admission and mark readiness unhealthy.
-2. Cancel listeners and connection acceptance, then request supervised workers
-   and actors to quiesce through their owned cancellation path.
-3. Publish/retire cluster route and lease state according to the component's
-   fence rules; never infer durable completion from task disappearance.
+1. Close the connection-actor admission gate. Readiness checks this live gate
+   independently of its database cache, including after an in-flight probe.
+2. On SIGTERM or SIGINT, allow up to two seconds for local MUC shutdown
+   notifications, with at most 16 notification futures in flight. TCP confirms
+   write and flush completion, WebSocket confirms its flushed frame send, and
+   BOSH waits for the client's response RID acknowledgement. These separate,
+   process-local completions do not mean application processing; neither
+   channel admission nor SM persistence can confirm them. Slow or unavailable
+   endpoints may close without a confirmed notification. Existing global
+   cancellation, including administrator shutdown, skips this window; a
+   critical cancellation or service-task exit interrupts it immediately.
+3. Cancel actors, listeners and workers through their owned cancellation
+   paths, then quiesce signed cluster publication and release instance
+   authority according to its fence rules. Never infer durable completion
+   from task disappearance.
 4. Join listeners, workers and connection actors within the configured shutdown
    budget. A critical task exit before shutdown remains process-fatal.
 5. PostgreSQL transactions roll back on lost owners; durable claims, outboxes,

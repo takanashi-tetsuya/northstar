@@ -163,7 +163,7 @@ pub async fn ready(
         return Err(AppError::Unavailable(error.into()));
     }
     if let Some(snapshot) = endpoint.cached().await {
-        return readiness_response(snapshot);
+        return runtime_readiness_response(&endpoint.app, snapshot);
     }
     let permit = tokio::time::timeout(READINESS_GATE_WAIT, endpoint.gate.acquire())
         .await
@@ -178,15 +178,18 @@ pub async fn ready(
     }
     if let Some(snapshot) = endpoint.cached().await {
         drop(permit);
-        return readiness_response(snapshot);
+        return runtime_readiness_response(&endpoint.app, snapshot);
     }
     let snapshot = probe_readiness(&endpoint.app).await;
     *endpoint.cache.lock().await = Some((Instant::now(), snapshot.clone()));
     drop(permit);
-    readiness_response(snapshot)
+    runtime_readiness_response(&endpoint.app, snapshot)
 }
 
 fn current_runtime_readiness_error(state: &AppState) -> Option<&'static str> {
+    if !state.connection_actors().is_accepting() {
+        return Some("connection admission is closed");
+    }
     if !state.sm_memory_governor().is_ready() {
         return Some("XEP-0198 memory or recovery capacity is not ready");
     }
@@ -200,6 +203,18 @@ fn current_runtime_readiness_error(state: &AppState) -> Option<&'static str> {
         return Some("background workers are not ready");
     }
     None
+}
+
+fn runtime_readiness_response(
+    state: &AppState,
+    snapshot: ReadinessSnapshot,
+) -> Result<&'static str, AppError> {
+    // Admission can close while awaiting either the cache mutex or the
+    // database. Every response rechecks live authority after its last await.
+    if let Some(error) = current_runtime_readiness_error(state) {
+        return Err(AppError::Unavailable(error.into()));
+    }
+    readiness_response(snapshot)
 }
 
 fn readiness_response(snapshot: ReadinessSnapshot) -> Result<&'static str, AppError> {
@@ -1309,7 +1324,21 @@ mod tests {
                 .matches("current_runtime_readiness_error(&endpoint.app)")
                 .count(),
             2,
-            "runtime health must be checked both before and after waiting for the gate"
+            "runtime health must be checked before and after waiting for the gate"
+        );
+        assert_eq!(
+            ready
+                .matches("runtime_readiness_response(&endpoint.app, snapshot)")
+                .count(),
+            3,
+            "both cached responses and the completed probe must recheck live authority"
+        );
+        assert!(
+            ready
+                .rfind("runtime_readiness_response(&endpoint.app, snapshot)")
+                .unwrap()
+                > ready.find("probe_readiness(&endpoint.app).await").unwrap(),
+            "a database probe started before shutdown cannot restore readiness"
         );
     }
 

@@ -865,26 +865,51 @@ async fn main() -> Result<()> {
     test_activation::publish_if_enabled(&state.config, &listener_addresses, std::process::id())?;
 
     let mut shutdown_error = None;
-    tokio::select! {
+    let graceful_signal = tokio::select! {
         biased;
         _ = cancel.cancelled() => {
             shutdown_error = worker_registry
                 .critical_failure()
                 .map(anyhow::Error::msg);
+            false
         },
         _ = api::shutdown_signal() => {
             tracing::info!("shutdown signal received; stopping listeners and draining HTTP requests");
+            true
         },
         result = service_tasks.join_next() => {
             shutdown_error = Some(unexpected_service_task_exit(result));
+            false
         },
-    }
+    };
 
     // Close connection admission before signalling any child. Every accepted
     // transport is now owned by the bounded registry and must finalize before
     // the abort-and-reap deadline below.
-    shutdown_state.connection_actors().begin_shutdown();
+    shutdown_state.connection_actors().close_admission();
+    if graceful_signal {
+        match await_shutdown_notifications(
+            &cancel,
+            &mut service_tasks,
+            shutdown_state.notify_muc_system_shutdown(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(2),
+        )
+        .await
+        {
+            Ok(Some(notified_muc_occupants)) if notified_muc_occupants > 0 => {
+                tracing::info!(notified_muc_occupants, "confirmed XEP-0045 shutdown notification transport writes or BOSH response acknowledgements");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                shutdown_error.get_or_insert(error);
+            }
+        }
+        if let Some(error) = worker_registry.critical_failure() {
+            shutdown_error.get_or_insert_with(|| anyhow::Error::msg(error));
+        }
+    }
     shutdown_state.cluster.begin_shutdown();
+    shutdown_state.connection_actors().begin_shutdown();
     cancel.cancel();
     match tokio::time::timeout(
         std::time::Duration::from_secs(15),
@@ -908,14 +933,6 @@ async fn main() -> Result<()> {
             "signed cluster publications did not drain; leaving the instance fenced until its database lease expires"
         ),
     }
-    let notified_muc_occupants = shutdown_state.notify_muc_system_shutdown().await;
-    if notified_muc_occupants > 0 {
-        tracing::info!(
-            notified_muc_occupants,
-            "sent XEP-0045 system-shutdown presence"
-        );
-    }
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     let (worker_report, service_report, connection_report) = tokio::join!(
         worker_registry.shutdown_and_join(&cancel, SERVICE_TASK_DRAIN_TIMEOUT),
         drain_service_tasks(&mut service_tasks, SERVICE_TASK_DRAIN_TIMEOUT),
@@ -946,6 +963,9 @@ async fn main() -> Result<()> {
         "shutdown complete"
     );
 
+    if let Some(error) = worker_registry.critical_failure() {
+        shutdown_error.get_or_insert_with(|| anyhow::Error::msg(error));
+    }
     match shutdown_error {
         Some(error) => Err(error),
         None => Ok(()),
@@ -1026,6 +1046,35 @@ fn unexpected_service_task_exit(
         None => anyhow::anyhow!("every service task exited unexpectedly"),
     }
 }
+
+async fn await_shutdown_notifications<F>(
+    cancel: &CancellationToken,
+    tasks: &mut JoinSet<ServiceTaskExit>,
+    notifications: F,
+    deadline: tokio::time::Instant,
+) -> anyhow::Result<Option<usize>>
+where
+    F: std::future::Future<Output = usize>,
+{
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Ok(None),
+        result = tasks.join_next() => Err(unexpected_service_task_exit(result)),
+        result = tokio::time::timeout_at(deadline, notifications) => {
+            match result {
+                Ok(confirmed) => Ok(Some(confirmed)),
+                Err(_) => {
+                    tracing::warn!("MUC shutdown notification window expired; unconfirmed endpoints will close without a write guarantee");
+                    Ok(None)
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "shutdown_notification_tests.rs"]
+mod shutdown_notification_tests;
 
 async fn drain_service_tasks(
     tasks: &mut JoinSet<ServiceTaskExit>,

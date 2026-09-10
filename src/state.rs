@@ -61,6 +61,22 @@ const RUNTIME_CONTROL_STARTUP_RETRY_MAX_DELAY: Duration = Duration::from_millis(
 const AUXILIARY_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(2);
 const AUXILIARY_POOL_STARTUP_BUDGET: Duration = Duration::from_secs(15);
 
+/// Fixed concurrency keeps one slow transport from blocking other shutdown
+/// notices without spawning tasks or increasing the root's total deadline.
+pub(crate) async fn count_shutdown_notification_completions<I, F>(notifications: I) -> usize
+where
+    I: IntoIterator<Item = F>,
+    F: std::future::Future<Output = bool>,
+{
+    use futures::StreamExt;
+    futures::stream::iter(notifications)
+        .buffer_unordered(16)
+        .fold(0, |confirmed, written| async move {
+            confirmed + usize::from(written)
+        })
+        .await
+}
+
 fn runtime_control_pool_options(config: &Config, attempt_budget: Duration) -> PgPoolOptions {
     let options = PgPoolOptions::new()
         .max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)
@@ -1036,6 +1052,29 @@ fn append_suspended_muc_suffix_to_snapshot(
 }
 
 impl SuspendedMucEndpoint {
+    fn try_send_live_write_notification(
+        &self,
+        stanza: String,
+        receipt: tokio::sync::mpsc::UnboundedSender<()>,
+    ) -> anyhow::Result<bool> {
+        let route = self
+            .route
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let SuspendedMucRoute::Live(sender) = &*route else {
+            // A write-only completion cannot transfer into durable or volatile
+            // SM storage, nor cross a concurrent Live-to-Transitioning fence.
+            return Ok(false);
+        };
+        match sender.try_send_with_transport_write_receipt(stanza, receipt) {
+            Ok(()) => Ok(true),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Ok(false),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                anyhow::bail!("live SM shutdown recipient queue is full")
+            }
+        }
+    }
+
     #[cfg(test)]
     pub fn new(sm_session_id: uuid::Uuid) -> Self {
         Self::new_collecting(sm_session_id, 0, 0)
@@ -3363,7 +3402,7 @@ impl AppState {
     }
 
     pub async fn deliver_to_muc_occupant(&self, occupant: &MucOccupant, stanza: String) -> bool {
-        self.deliver_to_muc_occupant_inner(occupant, stanza, None)
+        self.deliver_to_muc_occupant_inner(occupant, stanza, None, None)
             .await
     }
 
@@ -3378,7 +3417,7 @@ impl AppState {
     ) -> anyhow::Result<bool> {
         let (receipt, mut received) = tokio::sync::mpsc::unbounded_channel();
         let accepted = self
-            .deliver_to_muc_occupant_inner(occupant, stanza, Some(receipt))
+            .deliver_to_muc_occupant_inner(occupant, stanza, Some(receipt), None)
             .await;
         if !accepted {
             return Ok(false);
@@ -3405,6 +3444,7 @@ impl AppState {
         occupant: &MucOccupant,
         stanza: String,
         receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+        write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) -> bool {
         let senders = roxmltree::Document::parse(&stanza)
             .ok()
@@ -3441,12 +3481,17 @@ impl AppState {
                 return false;
             }
         }
-        self.deliver_to_muc_occupant_unchecked_result_with_receipt(occupant, stanza, receipt)
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(?error, "failed to deliver a MUC stanza");
-                false
-            })
+        self.deliver_to_muc_occupant_unchecked_result_with_receipt(
+            occupant,
+            stanza,
+            receipt,
+            write_receipt,
+        )
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(?error, "failed to deliver a MUC stanza");
+            false
+        })
     }
 
     /// Rebuild only the delivery endpoint for an immutable clustered MUC
@@ -3564,7 +3609,7 @@ impl AppState {
         occupant: &MucOccupant,
         stanza: String,
     ) -> anyhow::Result<bool> {
-        self.deliver_to_muc_occupant_unchecked_result_with_receipt(occupant, stanza, None)
+        self.deliver_to_muc_occupant_unchecked_result_with_receipt(occupant, stanza, None, None)
             .await
     }
 
@@ -3573,6 +3618,7 @@ impl AppState {
         occupant: &MucOccupant,
         stanza: String,
         receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+        write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) -> anyhow::Result<bool> {
         // Installing the session gate precedes the per-room endpoint swaps.
         // Consulting it first makes that multi-entry transition atomic from
@@ -3659,12 +3705,39 @@ impl AppState {
                 }
             }
         }
+        if write_receipt.is_some() {
+            let membership = JoinedMucMembership {
+                nick: occupant.nick.clone(),
+                cluster_epoch: occupant.cluster_epoch,
+            };
+            if self
+                .validated_local_muc_occupant(
+                    &occupant.full_jid,
+                    occupant.connection_id,
+                    &occupant.room_jid,
+                    &membership,
+                )
+                .is_none()
+            {
+                return Ok(false);
+            }
+        }
         if let Some(suspended) = session_gate {
             return self
-                .deliver_to_suspended_muc_endpoint(&suspended, stanza, receipt)
+                .deliver_to_suspended_muc_endpoint(&suspended, stanza, receipt, write_receipt)
                 .await;
         }
         match &occupant.endpoint {
+            MucOccupantEndpoint::Local(sender) if write_receipt.is_some() => {
+                let receipt = write_receipt.expect("write receipt was present");
+                match sender.try_send_with_transport_write_receipt(stanza, receipt) {
+                    Ok(()) => Ok(true),
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Ok(false),
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        anyhow::bail!("local MUC shutdown recipient queue is full")
+                    }
+                }
+            }
             MucOccupantEndpoint::Local(sender) => match receipt {
                 Some(receipt) => match sender.try_send_with_transport_receipt(stanza, receipt) {
                     Ok(()) => Ok(true),
@@ -3682,7 +3755,7 @@ impl AppState {
                 },
             },
             MucOccupantEndpoint::Suspended(suspended) => {
-                self.deliver_to_suspended_muc_endpoint(suspended, stanza, receipt)
+                self.deliver_to_suspended_muc_endpoint(suspended, stanza, receipt, None)
                     .await
             }
             MucOccupantEndpoint::Federated {
@@ -3708,7 +3781,11 @@ impl AppState {
         suspended: &Arc<SuspendedMucEndpoint>,
         stanza: String,
         receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+        write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) -> anyhow::Result<bool> {
+        if let Some(receipt) = write_receipt {
+            return suspended.try_send_live_write_notification(stanza, receipt);
+        }
         let mut stanza = Some(stanza);
         let mut receipt = receipt;
         let volatile_source_id = uuid::Uuid::new_v4();
@@ -4568,18 +4645,18 @@ impl AppState {
         Ok(delivered)
     }
 
-    /// Give every locally-owned MUC endpoint the XEP-0045 system-shutdown
-    /// status before listener cancellation tears transports down. One self
-    /// unavailable per occupancy avoids an O(n²) room broadcast during the
-    /// bounded graceful-shutdown window.
+    /// Give live locally-owned MUC endpoints XEP-0045 system-shutdown status.
+    /// Count only completed TCP/WS writes or BOSH client response ACKs; SM
+    /// persistence alone cannot satisfy this process-local completion. The
+    /// root supervises the whole loop under one bounded, cancellable window.
     pub async fn notify_muc_system_shutdown(&self) -> usize {
         let occupants = self
             .muc_occupants
             .iter()
+            .filter(|entry| matches!(&entry.value().endpoint, MucOccupantEndpoint::Local(_)))
             .map(|entry| entry.value().clone())
             .collect::<Vec<_>>();
-        let mut delivered = 0;
-        for occupant in occupants {
+        count_shutdown_notification_completions(occupants.into_iter().map(|occupant| async move {
             let serialized = SerializableMucOccupant::from(&occupant);
             let stanza = crate::xmpp::xml_util::muc_presence_stanza_with_status(
                 &serialized,
@@ -4593,9 +4670,12 @@ impl AppState {
                 None,
                 None,
             );
-            delivered += usize::from(self.deliver_to_muc_occupant(&occupant, stanza).await);
-        }
-        delivered
+            let (receipt, mut received) = tokio::sync::mpsc::unbounded_channel();
+            self.deliver_to_muc_occupant_inner(&occupant, stanza, None, Some(receipt))
+                .await
+                && received.recv().await.is_some()
+        }))
+        .await
     }
 
     pub fn suspend_local_muc_occupants(
@@ -6029,6 +6109,60 @@ mod session_key_tests {
             delays.len() > 16,
             "a cold-start cohort must not retry in one synchronized wave"
         );
+    }
+
+    #[test]
+    fn live_sm_shutdown_write_receipt_does_not_cross_the_suspension_fence() {
+        let (sender, mut outbound) = tokio::sync::mpsc::channel(2);
+        let endpoint = SuspendedMucEndpoint::new_live(
+            uuid::Uuid::new_v4(),
+            crate::outbound::OutboundSender::new(sender),
+        );
+        let (receipt, mut completion) = tokio::sync::mpsc::unbounded_channel();
+        assert!(endpoint
+            .try_send_live_write_notification("<presence/>".to_owned(), receipt)
+            .unwrap());
+        let item = outbound.try_recv().unwrap();
+        item.confirm_transport_ownership();
+        assert!(matches!(
+            completion.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        item.confirm_transport_write();
+        assert_eq!(completion.try_recv(), Ok(()));
+
+        begin_suspended_muc_route_transition(&endpoint, 0, 0);
+        let (receipt, mut completion) = tokio::sync::mpsc::unbounded_channel();
+        assert!(!endpoint
+            .try_send_live_write_notification("<presence/>".to_owned(), receipt)
+            .unwrap());
+        assert!(matches!(
+            completion.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
+        assert!(matches!(
+            outbound.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
+        assert_eq!(endpoint.buffer.try_lock().unwrap().bytes, 0);
+    }
+
+    #[test]
+    fn suspended_sm_shutdown_write_receipt_is_never_persisted_or_confirmed() {
+        for endpoint in [
+            SuspendedMucEndpoint::new_collecting(uuid::Uuid::new_v4(), 0, 0),
+            SuspendedMucEndpoint::new_durable(uuid::Uuid::new_v4()),
+        ] {
+            let (receipt, mut completion) = tokio::sync::mpsc::unbounded_channel();
+            assert!(!endpoint
+                .try_send_live_write_notification("<presence/>".to_owned(), receipt)
+                .unwrap());
+            assert!(matches!(
+                completion.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+            ));
+            assert!(endpoint.buffer.try_lock().unwrap().stanzas.is_empty());
+        }
     }
 
     #[test]

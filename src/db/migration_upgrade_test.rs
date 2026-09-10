@@ -771,6 +771,24 @@ async fn migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksu
             .contains("too few arguments for format()"),
         "the reconstructed pre-fix migration failed for an unexpected reason: {pre_fix_error}"
     );
+
+    // SQLx takes the migration advisory lock at session scope.  The fixture
+    // intentionally exercises a failed migration, and SQLx's error path is
+    // not a contract that a pool-managed session has already released that
+    // lock before a subsequent migrator acquires another connection.  Close
+    // this dedicated failure-verification pool before testing recovery: doing
+    // so releases only its own PostgreSQL sessions, while the isolated schema
+    // and the failed ledger state remain available for the assertions below.
+    //
+    // Keeping the recovery run in the same pool can make the test wait on its
+    // own failed predecessor forever, which turns a migration-integrity check
+    // into a suite timeout rather than a deterministic recovery assertion.
+    pool.close().await;
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
     let failed_attempt_rows: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE version=132")
             .fetch_one(&pool)

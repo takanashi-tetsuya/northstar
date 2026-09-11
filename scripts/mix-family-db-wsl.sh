@@ -60,6 +60,24 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
 
+run_exact_ignored() {
+  local test_name="$1" output
+  output="$(TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+    cargo test --locked --offline "$test_name" \
+    -- --ignored --exact --nocapture --test-threads=1 2>&1)" || {
+    printf '%s\n' "$output"
+    return 1
+  }
+  printf '%s\n' "$output"
+  grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$output" || {
+    echo "expected exactly one ignored MIX test to execute: $test_name" >&2
+    return 1
+  }
+}
+
+run_exact_ignored \
+  db::mix::pam_durability_integration_tests::pam_restart_and_result_claims_preserve_authority_and_token_fencing
+
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline \
   db::mix::mam_integration_tests::mix_anon_misc_permissions_are_atomic_and_private \

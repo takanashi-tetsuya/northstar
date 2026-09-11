@@ -8205,6 +8205,9 @@ pub async fn reconcile_expired_remote_pam(
 }
 
 pub async fn claim_pam_results(pool: &PgPool, limit: i64) -> Result<Vec<ClaimedPamResult>> {
+    // Keep the ordered statements in separate autocommit transactions while
+    // avoiding a second pool checkout between expiry cleanup and claiming.
+    let mut connection = pool.acquire().await?;
     sqlx::query(
         "WITH expired AS (
              SELECT operation_id FROM mix_pam_operations
@@ -8220,7 +8223,7 @@ pub async fn claim_pam_results(pool: &PgPool, limit: i64) -> Result<Vec<ClaimedP
                 lease_token=NULL,lease_until=NULL,updated_at=clock_timestamp()
            FROM expired WHERE operation.operation_id=expired.operation_id",
     )
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
     let rows = sqlx::query(
         "WITH candidates AS (
@@ -8256,8 +8259,9 @@ pub async fn claim_pam_results(pool: &PgPool, limit: i64) -> Result<Vec<ClaimedP
     )
     .bind(limit.clamp(1, 64))
     .bind(MIX_PAM_RESULT_LEASE_SECONDS)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
+    drop(connection);
     Ok(rows
         .into_iter()
         .map(|row| ClaimedPamResult {

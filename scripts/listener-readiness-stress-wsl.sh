@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Exercise the migrated child-owned listener fixtures under deliberate parallel
-# startup pressure.  This is an explicit W5 stress target, not a substitute
-# for the normal protocol suites: every worker runs a complete two-node MIX or
-# federation fixture and records its own isolated transcript.  Each worker is
-# privately process-group supervised; an expired worker is a failure, never a
-# reason to retry, serialize, or quietly skip part of the prescribed matrix.
+# runtime pressure after CPU-bounded cold-start batches. Every worker still
+# runs a complete two-node MIX or federation fixture, and all pairs are live
+# before business release. This does not claim simultaneous whole-fleet cold
+# start capacity. Each worker is privately process-group supervised; failure
+# never retries a worker or removes a pair from the prescribed matrix.
 
 set -euo pipefail
 
@@ -133,6 +133,7 @@ effective_cpu_count() {
 # unchanged.  Passing the value explicitly also prevents an ambient shell
 # setting from silently changing the matrix's resource contract.
 effective_cpu_count="$(effective_cpu_count)"
+startup_pair_limit="$(python3 "$project_dir/scripts/listener-stress-phases.py" --startup-pair-concurrency "$effective_cpu_count" "$pairs")"
 readonly scheduler_reserved_cpus=$(((effective_cpu_count + 3) / 4))
 available_scheduler_cpus=$((effective_cpu_count - scheduler_reserved_cpus))
 ((available_scheduler_cpus >= 1)) || available_scheduler_cpus=1
@@ -1579,8 +1580,8 @@ resolve_current_build_binary
 load_runtime_connection_budget
 assert_private_database_fixture
 assert_fixture_connection_capacity
-record_parent_diagnostic "phase=preflight-resource-profile status=selected profile=$resource_profile effective_cpu_count=$effective_cpu_count tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count fixture_max_connections=$fixture_actual_max_connections"
-echo "listener stress profile: resource_profile=$resource_profile worker_timeout_seconds=$worker_timeout_seconds database_max_connections=$database_max_connections database_min_connections=$database_min_connections runtime_auxiliary_connections=$runtime_auxiliary_connections runtime_connections_per_child=$runtime_connections_per_child stress_child_count=$stress_child_count fixture_control_connections_per_pair=$fixture_control_connections_per_pair fixture_control_connections=$fixture_control_connections required_fixture_connections=$required_fixture_connections fixture_max_connections=$fixture_actual_max_connections effective_cpu_count=$effective_cpu_count scheduler_reserved_cpus=$scheduler_reserved_cpus tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count"
+record_parent_diagnostic "phase=preflight-resource-profile status=selected profile=$resource_profile effective_cpu_count=$effective_cpu_count tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count fixture_max_connections=$fixture_actual_max_connections startup_pair_limit=$startup_pair_limit"
+echo "listener stress profile: resource_profile=$resource_profile worker_timeout_seconds=$worker_timeout_seconds database_max_connections=$database_max_connections database_min_connections=$database_min_connections runtime_auxiliary_connections=$runtime_auxiliary_connections runtime_connections_per_child=$runtime_connections_per_child stress_child_count=$stress_child_count fixture_control_connections_per_pair=$fixture_control_connections_per_pair fixture_control_connections=$fixture_control_connections required_fixture_connections=$required_fixture_connections fixture_max_connections=$fixture_actual_max_connections effective_cpu_count=$effective_cpu_count scheduler_reserved_cpus=$scheduler_reserved_cpus tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count startup_pair_limit=$startup_pair_limit"
 if ! initialize_mix_federation_login_slots; then
   [[ -n "$parent_failure_phase" ]] || parent_failure_phase=mix-federation-login-slots
   record_parent_diagnostic "phase=mix-federation-login-slots status=failed"
@@ -1623,7 +1624,7 @@ for ((round = 1; round <= rounds; round++)); do
   startup_phase_nonce="$(openssl rand -hex 32)"
   run_parent_phase "fixture-preparation-init-r$round" \
     python3 "$project_dir/scripts/listener-stress-phases.py" init \
-    "$startup_phase_dir" "$startup_phase_nonce" "$round" "$pairs" "$$"
+    "$startup_phase_dir" "$startup_phase_nonce" "$round" "$pairs" "$$" "$startup_pair_limit"
   for ((pair = 1; pair <= pairs; pair++)); do
     log="$runtime_dir/${fixture}.round-${round}.pair-${pair}.log"
     round_logs+=("$log")
@@ -1642,21 +1643,21 @@ for ((round = 1; round <= rounds; round++)); do
   if ((failed != 0)); then
     exit 1
   fi
-  # Release all 50 pairs together after certificates, binary/database setup
-  # and all four relays per pair are ready. Relay interpreter startup and key
-  # generation cannot compete with another server's bounded startup admission,
-  # 15 s readiness budget, or 5 s worker heartbeat window.
+  # Prepare every pair first, then admit CPU-bounded batches of cold starts.
+  # Each pair keeps its startup slot through both A and B nonce/HTTP readiness.
+  # Earlier live children remain supervised while later batches start; only
+  # the all-pair live barrier below permits transport or business work.
   run_parent_phase "fixture-preparation-release-r$round" \
     python3 "$project_dir/scripts/listener-stress-phases.py" release \
     "$startup_phase_dir" "$startup_phase_nonce" "$round" prepared \
     "$worker_timeout_seconds" "${workers[@]}"
   record_parent_diagnostic "phase=fixture-preparation round=$round status=released pairs=$pairs"
+  run_parent_phase "all-pair-live-release-r$round" \
+    python3 "$project_dir/scripts/listener-stress-phases.py" release \
+    "$startup_phase_dir" "$startup_phase_nonce" "$round" live \
+    "$worker_timeout_seconds" "${workers[@]}"
+  record_parent_diagnostic "phase=all-pair-live-barrier fixture=$fixture round=$round status=released pairs=$pairs children=$stress_child_count startup_pair_limit=$startup_pair_limit"
   if [[ "$fixture" == federation ]]; then
-    run_parent_phase "federation-live-release-r$round" \
-      python3 "$project_dir/scripts/listener-stress-phases.py" release \
-      "$startup_phase_dir" "$startup_phase_nonce" "$round" live \
-      "$worker_timeout_seconds" "${workers[@]}"
-    record_parent_diagnostic "phase=federation-live-barrier round=$round status=released pairs=$pairs"
     run_parent_phase "federation-transport-release-r$round" \
       python3 "$project_dir/scripts/listener-stress-phases.py" release \
       "$startup_phase_dir" "$startup_phase_nonce" "$round" transport \

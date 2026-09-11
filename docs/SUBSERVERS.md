@@ -126,6 +126,31 @@ In Compose, probe it inside the maintenance container; it has no host port.
 Metrics describe this process and are not a cluster-wide total. The existing
 core Prometheus target does not automatically include maintenance metrics.
 
+## Listener and readiness CI coverage
+
+The Federation and MIX federation fixtures first prepare every pair, then start
+pairs in batches sized from the runner's effective CPU capacity. At most
+`min(pairs, max(1, effective_cpus / 2 rounded down), 4)` pairs start at once;
+a four-CPU runner therefore starts two pairs per batch. Within each pair, A
+must pass readiness before B starts. The next batch waits until every server
+in the current batch has passed its nonce-bound listener and HTTP readiness
+checks. Startup permissions are bound to the run, round and pair.
+
+Each process retains its 15-second readiness deadline from its actual startup.
+Queueing is included in the existing 900-second worker deadline. Earlier
+batches remain running while later batches start. The coordinator checks the
+recorded process identities and liveness, including earlier batches, before
+advancing and before releasing all pairs into the concurrent business tests.
+A dead server fails the round; neither startup nor a failed round is retried.
+
+Regular CI still runs 20 rounds of 50 pairs, with all 100 servers live before
+concurrent protocol work begins. The scheduled matrix runs 100 rounds of the
+same 50-pair workload. Smoke tests retain the one-pair and two-pair cases.
+This validates concurrent operation and bounded startup on the available
+runner; it does not claim that all 50 pairs can cold-start simultaneously.
+The startup scheduler's failure paths are also checked independently of a
+database using controlled child processes.
+
 ## Switch and recover
 
 1. Record the current configuration and backup according to the operations

@@ -43,8 +43,24 @@ class PhaseTests(unittest.TestCase):
         self.config = phases.configuration(self.directory, self.nonce, 1)
 
     def spawn_worker(self, pair, phase="prepared"):
+        # In production the outer worker survives preparation and starts its
+        # servers. Keep this tiny publisher alive until all same-batch permits
+        # exist too, so a fast pair cannot look like a dead production leader.
+        program = r'''
+import json, pathlib, runpy, sys, time
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+if sys.argv[5] == "prepared":
+    directory = pathlib.Path(sys.argv[2])
+    pairs = json.loads((directory / "round.json").read_text())["pairs"]
+    deadline = time.monotonic() + 3
+    while not all((directory / f"prepared-start-{pair}.json").exists() for pair in range(1, pairs + 1)):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("other prepared test workers were not admitted")
+        time.sleep(0.01)
+'''
         process = subprocess.Popen([
-            sys.executable, str(ROOT / "listener-stress-phases.py"), "worker",
+            sys.executable, "-c", program, str(ROOT / "listener-stress-phases.py"), "worker",
             str(self.directory), self.nonce, "1", phase, str(pair), "5",
         ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
@@ -258,8 +274,8 @@ federation.run()
         driver = (ROOT / "listener-readiness-stress-wsl.sh").read_text()
         self.assertIn('regular) [[ -n "$rounds" ]] || rounds=20', driver)
         self.assertIn('pairs="50"', driver)
-        self.assertLess(driver.index('"fixture-preparation-release-r$round"'), driver.index('"federation-live-release-r$round"'))
-        self.assertLess(driver.index('"federation-live-release-r$round"'), driver.index('"federation-transport-release-r$round"'))
+        self.assertLess(driver.index('"fixture-preparation-release-r$round"'), driver.index('"all-pair-live-release-r$round"'))
+        self.assertLess(driver.index('"all-pair-live-release-r$round"'), driver.index('"federation-transport-release-r$round"'))
         self.assertLess(driver.index('"federation-transport-release-r$round"'), driver.index('if ! await_mix_federation_setup_barrier'))
 
     def test_all_pair_relays_prepare_without_server_targets(self):

@@ -87,6 +87,7 @@ fixture_wait_for_http_readiness() {
 # server starts its bounded startup/heartbeat clocks. Standalone runs are a no-op.
 fixture_stress_phase_barrier() {
   local project_dir="$1" phase="$2"
+  shift 2
   if [[ -z "${NORTHSTAR_LISTENER_STRESS_PHASE_DIR:-}" ]]; then
     [[ -z "${NORTHSTAR_LISTENER_STRESS_PHASE_NONCE:-}" \
        && -z "${NORTHSTAR_LISTENER_STRESS_PHASE_ROUND:-}" \
@@ -101,7 +102,7 @@ fixture_stress_phase_barrier() {
     "${NORTHSTAR_LISTENER_STRESS_PHASE_NONCE:?missing phase nonce}" \
     "${NORTHSTAR_LISTENER_STRESS_PHASE_ROUND:?missing phase round}" \
     "$phase" "${NORTHSTAR_LISTENER_STRESS_PHASE_PAIR:?missing phase pair}" \
-    "${NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS:-900}"
+    "${NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS:-900}" "$@"
 }
 
 fixture_port_is_listening() {

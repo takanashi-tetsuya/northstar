@@ -426,6 +426,7 @@ jobs:
           bash scripts/test-github-ci-supervisor.sh
           bash scripts/test-listener-stress-worker.sh
           python3 scripts/test-listener-stress-phases.py
+          python3 scripts/test-listener-startup-scheduler.py
           python3 scripts/check-runtime-test-profile.py --manifest Cargo.toml
           python3 scripts/test-runtime-test-profile.py
           bash scripts/test-stateful-database-ci.sh

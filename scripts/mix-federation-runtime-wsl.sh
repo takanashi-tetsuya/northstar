@@ -433,6 +433,7 @@ fixture_assert_private_log_dir() {
 fixture_stress_phase_barrier "$project_dir" prepared
 start_a
 start_b
+fixture_stress_phase_barrier "$project_dir" live "$pid_a" "$pid_b"
 echo "MIX federation schemas: $schema_a $schema_b"
 echo "MIX federation ports: http=$http_a,$http_b s2s-tls=$s2s_tls_a,$s2s_tls_b pids=$pid_a,$pid_b"
 publish_setup_barrier_ready_and_wait

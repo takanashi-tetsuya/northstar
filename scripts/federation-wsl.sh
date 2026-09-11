@@ -328,7 +328,7 @@ start_b
 
 # Keep transport probes and credential setup outside every other pair's
 # cold-start window; all pairs still execute their full protocol matrix.
-fixture_stress_phase_barrier "$project_dir" live
+fixture_stress_phase_barrier "$project_dir" live "$pid_a" "$pid_b"
 
 FEDERATION_TEST_CERT_DIR="$cert_dir" \
 FEDERATION_TEST_EXTERNAL="${S2S_SASL_EXTERNAL_ENABLED:-true}" \

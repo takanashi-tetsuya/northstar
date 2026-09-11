@@ -12,6 +12,7 @@ import re
 import signal
 import socket
 import json
+import math
 import select
 import subprocess
 import sys
@@ -21,6 +22,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections import deque
+from contextlib import contextmanager
 from html import escape
 import xml.etree.ElementTree as ET
 from xml.parsers import expat
@@ -290,7 +292,7 @@ class DeviceXmppWebSocket(fixture.XmppWebSocket):
         return resume_id
 
 
-def redis_cli(*arguments: str, input_bytes: bytes | None = None) -> str:
+def redis_cli(*arguments: str, input_bytes: bytes | None = None, timeout: float | None = None) -> str:
     environment = dict(os.environ)
     environment["REDISCLI_AUTH"] = REDIS_PASSWORD
     result = subprocess.run(
@@ -317,6 +319,7 @@ def redis_cli(*arguments: str, input_bytes: bytes | None = None) -> str:
         stderr=subprocess.PIPE,
         check=True,
         env=environment,
+        timeout=timeout,
     )
     return result.stdout.decode("utf-8", "strict").strip()
 
@@ -487,6 +490,107 @@ def wait_for_authentication_rejection(
     return False
 
 
+def version_skew_probe_stanza(full_jid: str, stanza_id: str) -> str:
+    # Version incompatibility is tested as a volatile route failure. Ordinary
+    # chat is durably accepted before routing and intentionally may go offline.
+    return (
+        f"<message xmlns='jabber:client' to='{escape(full_jid, quote=True)}' "
+        f"type='chat' id='{escape(stanza_id, quote=True)}'>"
+        "<body>incompatible peer contract must fail</body>"
+        "<no-store xmlns='urn:xmpp:hints'/></message>"
+    )
+
+
+@contextmanager
+def paused_node_for_ack(pid: int):
+    """Isolate one ACK request without suspending real watchdogs across recovery."""
+    fixture.check(type(pid) is int and pid > 1, "invalid ACK fixture process")
+    fixture.check(signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0), "ACK fixture already has an active alarm")
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    deadline = time.monotonic() + 3
+
+    def expired(_signum, _frame):
+        raise TimeoutError("cluster ACK pause exceeded its three-second budget")
+
+    signal.signal(signal.SIGALRM, expired)
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            expired(None, None)
+        signal.setitimer(signal.ITIMER_REAL, remaining)
+        os.kill(pid, signal.SIGSTOP)
+        while True:
+            status = pathlib.Path(f"/proc/{pid}/status").read_text()
+            if re.search(r"^State:\s+T\b", status, re.MULTILINE):
+                break
+            if time.monotonic() >= deadline:
+                expired(None, None)
+            time.sleep(0.001)
+        if time.monotonic() >= deadline:
+            expired(None, None)
+        yield
+        if time.monotonic() > deadline:
+            expired(None, None)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        try:
+            os.kill(pid, signal.SIGCONT)
+        finally:
+            signal.signal(signal.SIGALRM, previous_handler)
+
+
+def validate_ack_probe_request(envelope: dict, target: str, stanza_id: str, previous: dict | None = None) -> dict:
+    payload = envelope.get("payload")
+    fixture.check(isinstance(payload, dict), "ACK probe did not observe a delivery payload")
+    fixture.check(
+        payload.get("protocol_version") == CLUSTER_PROTOCOL_VERSION
+        and payload.get("delivery") == {"reliability": "volatile"}
+        and payload.get("target") == target,
+        "ACK probe observed the wrong delivery contract or exact target",
+    )
+    try:
+        stanza = ET.fromstring(payload.get("stanza", ""))
+    except (ET.ParseError, TypeError):
+        raise AssertionError("ACK probe observed an invalid stanza") from None
+    fixture.check(
+        stanza.tag == "{jabber:client}message"
+        and stanza.get("id") == stanza_id
+        and stanza.get("to") == target,
+        "ACK probe observed a different message",
+    )
+    for field in ("request_id", "ack_nonce"):
+        fixture.check(isinstance(payload.get(field), str) and bool(payload[field]), "ACK probe lacks a correlation identity")
+        if previous is not None:
+            fixture.check(payload[field] != previous[field], "ACK probe reused a previous correlation identity")
+    return payload
+
+
+def wait_for_cluster_recovery(ports: tuple[int, ...], deadline: float) -> bool:
+    """Require both live authorities in one poll, within the original recovery budget."""
+    fixture.check(bool(ports) and all(port > 0 for port in ports), "cluster recovery listeners are not configured")
+    while time.monotonic() < deadline:
+        ready = True
+        for port in ports:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/readyz", timeout=min(2, remaining)
+                ) as response:
+                    ready = ready and response.status == 200
+            except (OSError, urllib.error.URLError):
+                ready = False
+            if time.monotonic() > deadline:
+                return False
+        if ready:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.25, remaining))
+    return False
+
+
 def subscriber_envelope(process: subprocess.Popen[bytes], timeout: float = 5) -> dict:
     assert process.stdout is not None
     ready, _, _ = select.select([process.stdout], [], [], timeout)
@@ -566,7 +670,7 @@ def signed_ack_envelope(request: dict, payload: dict) -> str:
     return json.dumps(envelope, separators=(",", ":"), ensure_ascii=False)
 
 
-def database_scalar(command: str) -> str:
+def database_scalar(command: str, timeout: float | None = None) -> str:
     fixture.check(
         re.fullmatch(r"[a-z_][a-z0-9_]*", SCHEMA) is not None,
         "cluster PostgreSQL schema is missing or invalid",
@@ -597,8 +701,149 @@ def database_scalar(command: str) -> str:
         check=True,
         env=environment,
         text=True,
+        timeout=timeout,
     )
     return result.stdout.strip()
+
+
+def read_takeover_authority(full_jid: str) -> dict:
+    """Capture the exact killed resource's durable owners on the fixture endpoint."""
+    jid_literal = full_jid.replace("'", "''")
+    result = json.loads(database_scalar(
+        "WITH observed AS MATERIALIZED (SELECT clock_timestamp() AS now_at) "
+        "SELECT json_build_object("
+        "'database',current_database(),'schema',current_schema(),"
+        "'host',host(inet_server_addr()),'port',inet_server_port(),"
+        "'namespace',route.namespace,'full_jid',route.full_jid,"
+        "'node',route.owner_node_id,'instance',route.owner_instance_uuid,"
+        "'epoch',route.owner_instance_epoch,'connection',route.connection_uuid,"
+        "'database_observed_at',EXTRACT(EPOCH FROM observed.now_at),"
+        "'live_expires_at',EXTRACT(EPOCH FROM lease.lease_until),"
+        "'process_expires_at',EXTRACT(EPOCH FROM instance.lease_until),"
+        "'live_remaining',EXTRACT(EPOCH FROM (lease.lease_until-observed.now_at)),"
+        "'process_remaining',EXTRACT(EPOCH FROM (instance.lease_until-observed.now_at))) "
+        "FROM cluster_session_routes route "
+        "JOIN deployment_session_leases lease ON lease.full_jid=route.full_jid "
+        " AND lease.connection_id=route.connection_uuid "
+        "JOIN cluster_node_instances instance ON instance.xmpp_domain=route.namespace "
+        " AND instance.node_id=route.owner_node_id "
+        " AND instance.instance_uuid=route.owner_instance_uuid "
+        " AND instance.instance_epoch=route.owner_instance_epoch "
+        "CROSS JOIN observed "
+        f"WHERE route.namespace='{DOMAIN}' AND route.full_jid='{jid_literal}' "
+        "AND route.claim_proof_kind='lease'",
+        timeout=3,
+    ))
+    validate_takeover_authority(result, full_jid)
+    return result
+
+
+def validate_takeover_authority(snapshot: dict, full_jid: str) -> None:
+    expected_port = os.environ.get("PGPORT", "")
+    if not re.fullmatch(r"[0-9]{1,5}", expected_port) or not 1 <= int(expected_port) <= 65535:
+        raise AssertionError("takeover PostgreSQL endpoint is not explicit")
+    if not isinstance(snapshot, dict) or any(snapshot.get(key) != value for key, value in {
+        "database": "xmpp_test", "schema": SCHEMA, "host": "127.0.0.1",
+        "port": int(expected_port), "namespace": DOMAIN,
+        "full_jid": full_jid, "node": "node-a",
+    }.items()):
+        raise AssertionError("takeover authority identity or endpoint mismatch")
+    for field in ("instance", "connection"):
+        value = snapshot.get(field)
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f-]{36}", value):
+            raise AssertionError("takeover authority UUID is invalid")
+        parsed = uuid.UUID(value)
+        if str(parsed) != value or parsed.int == 0:
+            raise AssertionError("takeover authority UUID is invalid")
+    epoch = snapshot.get("epoch")
+    if type(epoch) is not int or not 1 <= epoch <= 2**63 - 1:
+        raise AssertionError("takeover process epoch is invalid")
+    for field, maximum in (("live_remaining", 120), ("process_remaining", 90)):
+        remaining = snapshot.get(field)
+        if type(remaining) not in (int, float) or not math.isfinite(remaining) or not 0 < remaining <= maximum:
+            raise AssertionError("takeover authority remaining lease is outside the production fixture bounds")
+    # Keep the fresh-binding crash case. Waiting for an old session instead
+    # would conceal the original 105-second test budget's mismatch with the
+    # independent 120-second deployment lease.
+    if snapshot["live_remaining"] <= 105:
+        raise AssertionError("takeover did not capture the newly bound live lease")
+    for field in ("database_observed_at", "live_expires_at", "process_expires_at"):
+        value = snapshot.get(field)
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise AssertionError("takeover database-clock expiry snapshot is invalid")
+    for prefix in ("live", "process"):
+        delta = snapshot[f"{prefix}_expires_at"] - snapshot["database_observed_at"]
+        if abs(delta - snapshot[f"{prefix}_remaining"]) > 0.001:
+            raise AssertionError("takeover database-clock expiry snapshot is inconsistent")
+
+
+def takeover_expiry_deadline(snapshot: dict, redis_ttl: int, killed_at: float, snapshot_started_at: float) -> float:
+    if type(redis_ttl) is not int or not 1 < redis_ttl <= 90:
+        raise AssertionError("crashed node did not have its production Redis liveness TTL")
+    if not all(math.isfinite(value) for value in (killed_at, snapshot_started_at)) or not killed_at <= snapshot_started_at <= killed_at + 15:
+        raise AssertionError("takeover authority snapshot exceeded the observation budget")
+    remaining = max(snapshot["live_remaining"], snapshot["process_remaining"], redis_ttl)
+    # The old fixed 105 seconds covered only Redis/process TTL=90. The exact
+    # newly bound live-session authority lasts up to 120 seconds independently.
+    # Keep the original 15-second observation margin, with one absolute hard
+    # ceiling measured from SIGKILL; no poll or failed bind renews this budget.
+    # Anchor before the PostgreSQL query, conservatively excluding the query
+    # duration from the remaining lease budget. Database timestamps below are
+    # a separate clock used to prove that both original deadlines really pass.
+    return min(killed_at + 135, snapshot_started_at + remaining + 15)
+
+
+def takeover_authorities_expired(snapshot: dict, timeout: float) -> bool:
+    jid_literal = snapshot["full_jid"].replace("'", "''")
+    result = json.loads(database_scalar(
+        "WITH observed AS MATERIALIZED (SELECT clock_timestamp() AS now_at) "
+        "SELECT json_build_object("
+        "'original_deadlines_elapsed',"
+        f"observed.now_at>=to_timestamp({snapshot['live_expires_at']}) "
+        f"AND observed.now_at>=to_timestamp({snapshot['process_expires_at']}),"
+        "'identity_matches',NOT EXISTS(SELECT 1 FROM deployment_session_leases "
+        f"WHERE full_jid='{jid_literal}' AND connection_id<>'{snapshot['connection']}'::UUID) "
+        "AND NOT EXISTS(SELECT 1 FROM cluster_node_instances "
+        f"WHERE xmpp_domain='{DOMAIN}' AND node_id='node-a' "
+        f"AND (instance_uuid<>'{snapshot['instance']}'::UUID OR instance_epoch<>{snapshot['epoch']})),"
+        "'live_active',EXISTS(SELECT 1 FROM deployment_session_leases "
+        f"WHERE full_jid='{jid_literal}' AND connection_id='{snapshot['connection']}'::UUID "
+        "AND lease_until>observed.now_at),"
+        "'process_active',EXISTS(SELECT 1 FROM cluster_node_instances "
+        f"WHERE xmpp_domain='{DOMAIN}' AND node_id='node-a' "
+        f"AND instance_uuid='{snapshot['instance']}'::UUID AND instance_epoch={snapshot['epoch']} "
+        "AND lease_until>observed.now_at)) FROM observed",
+        timeout=timeout,
+    ))
+    if not isinstance(result, dict) or any(type(result.get(field)) is not bool for field in (
+        "original_deadlines_elapsed", "identity_matches", "live_active", "process_active",
+    )):
+        raise AssertionError("takeover expiry observation is malformed")
+    if not result["identity_matches"]:
+        raise AssertionError("takeover authority was replaced during natural expiry observation")
+    # Even an absent original row cannot manufacture natural expiry before
+    # its captured database-clock deadline. Any new owner remains an error.
+    return result["original_deadlines_elapsed"] and not result["live_active"] and not result["process_active"]
+
+
+def wait_for_takeover_expiry(snapshot: dict, alive_key: str, deadline: float) -> bool:
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        alive = redis_cli("exists", alive_key, timeout=min(2, remaining))
+        if alive not in {"0", "1"}:
+            raise AssertionError("takeover Redis liveness observation is malformed")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        expired = takeover_authorities_expired(snapshot, min(2, remaining))
+        if time.monotonic() >= deadline:
+            return False
+        if alive == "0" and expired:
+            return True
+        time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+    return False
 
 
 def endpoint(http_port: int, xmpp_port: int) -> None:
@@ -1344,11 +1589,7 @@ def run_faults() -> None:
     # Mixed application versions fail closed in both directions. New wire
     # semantics must never be published to a node which could ignore them.
     redis_cli("set", bob_alive, newer_cluster_protocol_version, "EX", "90")
-    alice_a.send(
-        f"<message xmlns='jabber:client' to='{bob_full}' type='chat' id='newer-peer-version'>"
-        "<body>unknown peer contract must fail</body>"
-        "<no-store xmlns='urn:xmpp:hints'/></message>"
-    )
+    alice_a.send(version_skew_probe_stanza(bob_full, "newer-peer-version"))
     newer_rejected, _ = alice_a.receive_until("newer-peer-version", timeout=6)
     fixture.check(
         "type='error'" in newer_rejected and "service-unavailable" in newer_rejected,
@@ -1356,10 +1597,7 @@ def run_faults() -> None:
     )
     expect_no_frame(bob_b, "newer-peer-version")
     redis_cli("set", bob_alive, older_cluster_protocol_version, "EX", "90")
-    alice_a.send(
-        f"<message xmlns='jabber:client' to='{bob_full}' type='chat' id='legacy-peer-version'>"
-        "<body>peer version 9</body></message>"
-    )
+    alice_a.send(version_skew_probe_stanza(bob_full, "legacy-peer-version"))
     legacy_rejected, _ = alice_a.receive_until("legacy-peer-version", timeout=6)
     fixture.check(
         "type='error'" in legacy_rejected and "service-unavailable" in legacy_rejected,
@@ -1431,114 +1669,98 @@ def run_faults() -> None:
     )
     fixture.check(claim == "claimed", f"fake exact route claim failed: {claim}")
     subscriber = redis_subscriber(fake_channel)
-    os.kill(PID_B, signal.SIGSTOP)
     try:
-        alice_a.send(
-            f"<message xmlns='jabber:client' to='{fake_full}' type='normal' id='forged-ack'>"
-            "<body>must not reach the live resource</body>"
-            "<no-store xmlns='urn:xmpp:hints'/></message>"
-        )
-        request_envelope = subscriber_envelope(subscriber)
-        request = request_envelope["payload"]
-        fixture.check(
-            request.get("protocol_version") == CLUSTER_PROTOCOL_VERSION
-            and request.get("delivery") == {"reliability": "volatile"},
-            f"cluster no-store envelope omitted its volatile current contract: {request}",
-        )
-        request_id = request["request_id"]
-        nonce = request["ack_nonce"]
-        ack_channel = f"{prefix}:node:{request_envelope['source_node']}"
-        invalid_acks = (
-            {
-                "request_id": "stale-request",
-                "nonce": nonce,
-                "node_id": fake_node,
-                "delivered": 1,
-                "accepted_full_jid": fake_full,
-                "delivery": request["delivery"],
-            },
-            {
-                "request_id": request_id,
-                "nonce": "wrong-nonce",
-                "node_id": fake_node,
-                "delivered": 1,
-                "accepted_full_jid": fake_full,
-                "delivery": request["delivery"],
-            },
-            {
-                "request_id": request_id,
-                "nonce": nonce,
-                "node_id": "wrong-node",
-                "delivered": 1,
-                "accepted_full_jid": fake_full,
-                "delivery": request["delivery"],
-            },
-        )
-        for ack in invalid_acks:
+        with paused_node_for_ack(PID_B):
+            alice_a.send(
+                f"<message xmlns='jabber:client' to='{fake_full}' type='normal' id='forged-ack'>"
+                "<body>must not reach the live resource</body>"
+                "<no-store xmlns='urn:xmpp:hints'/></message>"
+            )
+            request_envelope = subscriber_envelope(subscriber)
+            request = validate_ack_probe_request(request_envelope, fake_full, "forged-ack")
+            request_id = request["request_id"]
+            nonce = request["ack_nonce"]
+            ack_channel = f"{prefix}:node:{request_envelope['source_node']}"
+            invalid_acks = (
+                {
+                    "request_id": "stale-request",
+                    "nonce": nonce,
+                    "node_id": fake_node,
+                    "delivered": 1,
+                    "accepted_full_jid": fake_full,
+                    "delivery": request["delivery"],
+                },
+                {
+                    "request_id": request_id,
+                    "nonce": "wrong-nonce",
+                    "node_id": fake_node,
+                    "delivered": 1,
+                    "accepted_full_jid": fake_full,
+                    "delivery": request["delivery"],
+                },
+                {
+                    "request_id": request_id,
+                    "nonce": nonce,
+                    "node_id": "wrong-node",
+                    "delivered": 1,
+                    "accepted_full_jid": fake_full,
+                    "delivery": request["delivery"],
+                },
+            )
+            for ack in invalid_acks:
+                redis_cli(
+                    "publish",
+                    ack_channel,
+                    signed_ack_envelope(request_envelope, ack),
+                )
+            oversized_ack = dict(invalid_acks[-1])
+            oversized_ack["request_id"] = str(uuid.uuid4())
+            oversized_ack["padding"] = "x" * 4097
             redis_cli(
                 "publish",
                 ack_channel,
-                signed_ack_envelope(request_envelope, ack),
+                signed_ack_envelope(request_envelope, oversized_ack),
             )
-        oversized_ack = dict(invalid_acks[-1])
-        oversized_ack["request_id"] = str(uuid.uuid4())
-        oversized_ack["padding"] = "x" * 4097
-        redis_cli(
-            "publish",
-            ack_channel,
-            signed_ack_envelope(request_envelope, oversized_ack),
-        )
-        rejected, _ = alice_a.receive_until("forged-ack", timeout=5)
-        fixture.check(
-            "type='error'" in rejected and "service-unavailable" in rejected,
-            f"invalid cluster ACKs did not fail the exact route: {rejected}",
-        )
+            rejected, _ = alice_a.receive_until("forged-ack", timeout=5)
+            fixture.check(
+                "type='error'" in rejected and "service-unavailable" in rejected,
+                f"invalid cluster ACKs did not fail the exact route: {rejected}",
+            )
         expect_no_frame(bob_b, "forged-ack")
         deadline = time.monotonic() + 40
-        node_a_ready = False
-        while time.monotonic() < deadline:
-            try:
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{HTTP_A}/readyz", timeout=2
-                ) as response:
-                    node_a_ready = response.status == 200
-            except (OSError, urllib.error.URLError):
-                node_a_ready = False
-            if node_a_ready:
-                break
-            time.sleep(0.25)
         fixture.check(
-            node_a_ready,
-            "node A did not rotate/reconcile after the invalid ACK timeout",
+            wait_for_cluster_recovery((HTTP_A, HTTP_B), deadline),
+            "cluster nodes did not rotate/reconcile after the invalid ACK timeout",
         )
 
         # A valid negative ACK is deliberately duplicated. It can end the
         # request once, but it cannot manufacture a positive delivery.
-        alice_a.send(
-            f"<message xmlns='jabber:client' to='{fake_full}' type='normal' id='duplicate-ack'>"
-            "<body>duplicate negative acknowledgement</body>"
-            "<no-store xmlns='urn:xmpp:hints'/></message>"
-        )
-        duplicate_envelope = subscriber_envelope(subscriber)
-        duplicate_request = duplicate_envelope["payload"]
-        negative_ack = {
-            "request_id": duplicate_request["request_id"],
-            "nonce": duplicate_request["ack_nonce"],
-            "node_id": fake_node,
-            "delivered": 0,
-            "accepted_full_jid": None,
-            "delivery": duplicate_request["delivery"],
-        }
-        duplicate_channel = f"{prefix}:node:{duplicate_envelope['source_node']}"
-        signed_negative = signed_ack_envelope(duplicate_envelope, negative_ack)
-        redis_cli("publish", duplicate_channel, signed_negative)
-        redis_cli("publish", duplicate_channel, signed_negative)
-        duplicate_rejected, _ = alice_a.receive_until("duplicate-ack", timeout=5)
-        fixture.check(
-            "type='error'" in duplicate_rejected
-            and "service-unavailable" in duplicate_rejected,
-            f"duplicate negative ACK did not fail the exact route: {duplicate_rejected}",
-        )
+        with paused_node_for_ack(PID_B):
+            alice_a.send(
+                f"<message xmlns='jabber:client' to='{fake_full}' type='normal' id='duplicate-ack'>"
+                "<body>duplicate negative acknowledgement</body>"
+                "<no-store xmlns='urn:xmpp:hints'/></message>"
+            )
+            duplicate_envelope = subscriber_envelope(subscriber)
+            duplicate_request = validate_ack_probe_request(duplicate_envelope, fake_full, "duplicate-ack", request)
+            negative_ack = {
+                "request_id": duplicate_request["request_id"],
+                "nonce": duplicate_request["ack_nonce"],
+                "node_id": fake_node,
+                "delivered": 0,
+                "accepted_full_jid": None,
+                "delivery": duplicate_request["delivery"],
+            }
+            duplicate_channel = f"{prefix}:node:{duplicate_envelope['source_node']}"
+            signed_negative = signed_ack_envelope(duplicate_envelope, negative_ack)
+            redis_cli("publish", duplicate_channel, signed_negative)
+            redis_cli("publish", duplicate_channel, signed_negative)
+            duplicate_rejected, _ = alice_a.receive_until("duplicate-ack", timeout=5)
+            fixture.check(
+                "type='error'" in duplicate_rejected
+                and "service-unavailable" in duplicate_rejected,
+                f"duplicate negative ACK did not fail the exact route: {duplicate_rejected}",
+            )
         expect_no_frame(bob_b, "duplicate-ack")
     finally:
         database_scalar(
@@ -1550,18 +1772,25 @@ def run_faults() -> None:
             "DELETE FROM deployment_session_leases "
             f"WHERE connection_id='{fake_connection}'::UUID"
         )
-        os.kill(PID_B, signal.SIGCONT)
         subscriber.terminate()
         subscriber.wait(timeout=5)
 
+    # A late response to a completed fault request can rotate either listener.
+    # Reuse the same absolute recovery budget, then send one fresh message.
+    # A message accepted durably while routing is unavailable is legitimately
+    # offline; it does not prove that the current route has recovered.
+    fixture.check(
+        wait_for_cluster_recovery((HTTP_A, HTTP_B), deadline),
+        "cluster nodes did not recover before the fresh correlated delivery probe",
+    )
     alice_a.send(
         f"<message xmlns='jabber:client' to='{bob_full}' type='chat' id='after-forged-acks'>"
         "<body>real correlated acknowledgement restored</body></message>"
     )
     bob_b.receive_until("after-forged-acks")
 
-    # Kill node A without cleanup and wait for both its PostgreSQL process
-    # authority and disposable Redis lease to expire naturally.  The same
+    # Kill node A without cleanup and wait for its exact PostgreSQL live lease,
+    # process authority and disposable Redis lease to expire naturally. The same
     # exact resource must then be claimable on node B.  The test deliberately
     # does not edit either authority, so it covers the production ABA fence.
     endpoint(HTTP_A, XMPP_A)
@@ -1569,17 +1798,21 @@ def run_faults() -> None:
     takeover_full = f"{ALICE}@{DOMAIN}/ttl-takeover"
     takeover_route = f"{prefix}:session:{takeover_full}"
     takeover_owner = redis_cli("get", takeover_route)
-    fixture.check(bool(takeover_owner), "takeover route was not registered on node A")
+    fixture.check(takeover_owner == "node-a", "takeover route was not registered on node A")
+    killed_at = time.monotonic()
     os.kill(int(os.environ["NORTHSTAR_CLUSTER_PID_A"]), signal.SIGKILL)
+    snapshot_started_at = time.monotonic()
+    takeover_authority = read_takeover_authority(takeover_full)
     takeover_alive = f"{prefix}:node:{takeover_owner}:alive"
-    original_ttl = int(redis_cli("ttl", takeover_alive))
-    fixture.check(original_ttl > 1, "crashed node did not have a real liveness TTL")
-    deadline = time.monotonic() + 105
-    while time.monotonic() < deadline and redis_cli("exists", takeover_alive) != "0":
-        time.sleep(0.1)
+    original_ttl = int(redis_cli("ttl", takeover_alive, timeout=3))
     fixture.check(
-        redis_cli("exists", takeover_alive) == "0",
-        "crashed node liveness lease did not expire within its production TTL",
+        time.monotonic() < killed_at + 15,
+        "takeover authority snapshot exceeded the observation budget",
+    )
+    deadline = takeover_expiry_deadline(takeover_authority, original_ttl, killed_at, snapshot_started_at)
+    fixture.check(
+        wait_for_takeover_expiry(takeover_authority, takeover_alive, deadline),
+        "crashed node live/process/Redis authority did not expire within its production lease budget",
     )
     endpoint(HTTP_B, XMPP_B)
     takeover_b = fixture.XmppWebSocket(ALICE, PASSWORD, "ttl-takeover")

@@ -471,128 +471,222 @@ const mixProtocolProduction = productionWithoutCfgTestModules(
   mixProtocol,
   'src/xmpp/protocol/mix.rs',
 );
-const mixOutboxQueue = structBody(mixProtocolProduction, 'enum MixOutboxQueue');
-for (const lane of ['Delivery', 'PamResult']) {
-  if (!new RegExp(`^\\s*${lane}\\s*,?\\s*$`, 'm').test(mixOutboxQueue)) {
-    throw new Error(`MIX outbox must retain an independent ${lane} lane`);
+export function verifyMixOutboxLifecycle(mixProtocol) {
+  // Match executable source shape rather than comments, string descriptions or
+  // cfg(test) examples. This uses the same bounded masking convention as the
+  // subserver source gate, not a general Rust parser.
+  const mixProtocolProduction = productionWithoutCfgTestModules(
+    mixProtocol, 'src/xmpp/protocol/mix.rs',
+  ).replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"/g,
+    (text) => text.replace(/[^\r\n]/g, ' '));
+  const mixOutboxQueue = structBody(mixProtocolProduction, 'enum MixOutboxQueue');
+  for (const lane of ['Delivery', 'PamResult']) {
+    if (!new RegExp(`^\\s*${lane}\\s*,?\\s*$`, 'm').test(mixOutboxQueue)) {
+      throw new Error(`MIX outbox must retain an independent ${lane} lane`);
+    }
   }
-}
-if (!/const\s+PAM_RESULT_MAX_CONCURRENCY\s*:\s*usize\s*=\s*2\s*;/.test(mixProtocolProduction)) {
-  throw new Error('MIX PAM-result lane must remain capped at two concurrent deliveries');
-}
-const mixLaneBudgets = structBody(mixProtocolProduction, 'const fn mix_outbox_lane_budgets(');
-if (
-  !/let\s+pam_budget\s*=\s*if\s+background_budget\s*<\s*PAM_RESULT_MAX_CONCURRENCY\s*\{\s*background_budget\s*\}\s*else\s*\{\s*PAM_RESULT_MAX_CONCURRENCY\s*\};/s.test(
-    mixLaneBudgets,
-  ) ||
-  !/\(\s*background_budget\s*,\s*pam_budget\s*\)/.test(mixLaneBudgets)
-) {
-  throw new Error(
-    'MIX outbox lane budgets must give delivery the typed budget and PAM its independent cap',
+  if (!/const\s+PAM_RESULT_MAX_CONCURRENCY\s*:\s*usize\s*=\s*2\s*;/.test(mixProtocolProduction)) {
+    throw new Error('MIX PAM-result lane must remain capped at two concurrent deliveries');
+  }
+  const mixLaneBudgets = structBody(mixProtocolProduction, 'const fn mix_outbox_lane_budgets(');
+  if (
+    !/let\s+pam_budget\s*=\s*if\s+background_budget\s*<\s*PAM_RESULT_MAX_CONCURRENCY\s*\{\s*background_budget\s*\}\s*else\s*\{\s*PAM_RESULT_MAX_CONCURRENCY\s*\};/s.test(
+      mixLaneBudgets,
+    ) ||
+    !/\(\s*background_budget\s*,\s*pam_budget\s*\)/.test(mixLaneBudgets)
+  ) {
+    throw new Error(
+      'MIX outbox lane budgets must give delivery the typed budget and PAM its independent cap',
+    );
+  }
+  const mixClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
+  const mixClaimArmMarkers = [
+    'MixOutboxQueue::Delivery =>',
+    'MixOutboxQueue::PamResult =>',
+  ];
+  const mixDeliveryClaimArm = matchArm(
+    mixClaimWork,
+    mixClaimArmMarkers,
+    'MixOutboxQueue::Delivery =>',
+    'MIX outbox claim',
   );
+  const mixPamClaimArm = matchArm(
+    mixClaimWork,
+    mixClaimArmMarkers,
+    'MixOutboxQueue::PamResult =>',
+    'MIX outbox claim',
+  );
+  if (
+    !/\.claim_mix_deliveries\s*\(/.test(mixDeliveryClaimArm) ||
+    /\.claim_pam_results\s*\(/.test(mixDeliveryClaimArm) ||
+    !/\.claim_pam_results\s*\(/.test(mixPamClaimArm) ||
+    /\.claim_mix_deliveries\s*\(/.test(mixPamClaimArm)
+  ) {
+    throw new Error('MIX delivery and PAM lanes must claim only their own durable work; no fallback');
+  }
+  const mixProcessWork = structBody(mixProtocolProduction, 'fn process_mix_outbox_work(');
+  if (
+    !/MixOutboxWork\s*::\s*Delivery\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*Delivery\s*,[\s\S]*?process_claimed_mix_delivery\s*\(/.test(
+      mixProcessWork,
+    ) ||
+    !/MixOutboxWork\s*::\s*PamResult\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*PamResult\s*,[\s\S]*?process_claimed_pam_result\s*\(/.test(
+      mixProcessWork,
+    )
+  ) {
+    throw new Error('MIX outbox work must stay in its claimed delivery or PAM lane');
+  }
+  const mixOutboxLaneWorker = structBody(mixProtocolProduction, 'async fn run_mix_outbox_lane(');
+  const mixOutboxClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
+  const mixOutboxClaim = structBody(mixProtocolProduction, 'fn process_mix_outbox_claim(');
+  const mixOutboxMaintenance = structBody(mixProtocolProduction, 'fn process_mix_outbox_maintenance(');
+  if (
+    !/FuturesUnordered\s*::\s*<\s*MixOutboxTask\s*>\s*::\s*new\s*\(\s*\)/.test(
+      mixOutboxLaneWorker,
+    ) ||
+    !/claim_task\s*=\s*Some\s*\(\s*process_mix_outbox_claim\s*\(/.test(
+      mixOutboxLaneWorker,
+    ) ||
+    !/in_flight\s*\.\s*push\s*\(\s*process_mix_outbox_work\s*\(/.test(mixOutboxLaneWorker) ||
+    !/maintenance_task\s*=\s*Some\s*\(\s*process_mix_outbox_maintenance\s*\(/.test(
+      mixOutboxLaneWorker,
+    ) ||
+    !/next_mix_outbox_progress\s*\(\s*&mut\s+in_flight\s*,\s*&mut\s+claim_task\s*,\s*&mut\s+maintenance_task\s*\)/.test(
+      mixOutboxLaneWorker,
+    ) ||
+    !/claim_mix_outbox_work\s*\(\s*&state\s*,\s*&stop_claiming\s*,\s*&cancel\s*,\s*queue\s*,\s*available\s*,?\s*\)/.test(
+      mixOutboxClaim,
+    ) ||
+    countMatches(mixOutboxClaimWork, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 2 ||
+    countMatches(mixDeliveryClaimArm, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 1 ||
+    countMatches(mixPamClaimArm, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 1 ||
+    !/cancellable_mix_outbox_turn\s*\(\s*&cancel\s*,/.test(mixOutboxMaintenance) ||
+    !/maintain_mix_delivery_retention\s*\(\s*\)/.test(mixOutboxMaintenance)
+  ) {
+    throw new Error('each MIX outbox lane must keep claims and maintenance independently bounded, cancellation-aware, and jointly polled');
+  }
+  const joinMixOutboxLanes = structBody(mixProtocolProduction, 'async fn join_mix_outbox_lanes');
+  if (
+    !/tokio\s*::\s*select!/.test(joinMixOutboxLanes) ||
+    !/lane_cancel\s*\.\s*cancel\s*\(\s*\)/.test(joinMixOutboxLanes) ||
+    !/pam\s*\.\s*await/.test(joinMixOutboxLanes) ||
+    !/delivery\s*\.\s*await/.test(joinMixOutboxLanes)
+  ) {
+    throw new Error('MIX lane join must cancel and drain its peer before surfacing a terminal lane result');
+  }
+  const startMixOutbox = structBody(mixProtocolProduction, 'pub(crate) fn start_mix_delivery_outbox(');
+  const deliveryLaneStart = startMixOutbox.search(/let\s+delivery\s*=\s*run_mix_outbox_lane\s*\(/);
+  const pamLaneStart = startMixOutbox.search(/let\s+pam\s*=\s*run_mix_outbox_lane\s*\(/);
+  const laneJoin = startMixOutbox.search(/join_mix_outbox_lanes\s*\(\s*cancel\s*,\s*lane_cancel\s*,\s*delivery\s*,\s*pam\s*,?\s*\)\s*\.\s*await/);
+  if (deliveryLaneStart < 0 || pamLaneStart < 0 || laneJoin < 0 || deliveryLaneStart > pamLaneStart) {
+    throw new Error('MIX outbox startup must construct delivery and PAM lanes before joining them');
+  }
+  const deliveryLaneStartBody = startMixOutbox.slice(deliveryLaneStart, pamLaneStart);
+  const pamLaneStartBody = startMixOutbox.slice(pamLaneStart, laneJoin);
+  if (
+    !deliveryLaneStartBody.includes('MixOutboxQueue::Delivery') ||
+    !deliveryLaneStartBody.includes('delivery_budget') ||
+    deliveryLaneStartBody.includes('MixOutboxQueue::PamResult') ||
+    !pamLaneStartBody.includes('MixOutboxQueue::PamResult') ||
+    !pamLaneStartBody.includes('pam_budget') ||
+    pamLaneStartBody.includes('MixOutboxQueue::Delivery') ||
+    /\b(?:delivery|pam)\s*\.\s*await\b/.test(startMixOutbox)
+  ) {
+    throw new Error('MIX outbox lanes must start separately without delivery/PAM fallback or head-of-line blocking');
+  }
+  const mixNoHolTest = structBody(
+    mixProtocol,
+    'async fn pam_lane_starts_while_a_delivery_lane_waits_on_external_io(',
+  );
+  if (
+    !mixNoHolTest.includes('join_mix_outbox_lanes(') ||
+    !/timeout\s*\([\s\S]*?pam_started_rx\s*\)/.test(mixNoHolTest)
+  ) {
+    throw new Error('MIX must retain a regression test proving slow delivery cannot head-of-line block PAM');
+  }
+
+  // Source-shape checks complement the Rust race tests; they do not prove Rust
+  // semantics. Inspect production bodies, never test fixtures or comment text.
+  const compact = (source) => source.replace(/\s+/g, '').replace(/,\)/g, ')');
+  const requireMix = (condition, message) => {
+    if (!condition) throw new Error('MIX lifecycle boundary: ' + message);
+  };
+  for (const [name, seconds] of [
+    ['MIX_OUTBOX_DRAIN_GRACE', 14],
+    ['MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE', 5],
+    ['MIX_OUTBOX_ATTEMPT_DEADLINE', 20],
+  ]) {
+    requireMix(compact(mixProtocolProduction).includes(
+      'const' + name + ':Duration=Duration::from_secs(' + seconds + ');'),
+    'keep the reviewed ' + name + ' deadline');
+  }
+  const claimAdmission = compact(structBody(mixProtocolProduction, 'async fn drainable_mix_outbox_claim<'));
+  requireMix(claimAdmission ===
+    'ifstop_claiming.is_cancelled(){returnOk(Vec::new());}cancellable_mix_outbox_turn(cancel,claim).await',
+  'claim admission must stop before polling and preserve only hard cancellation after the claim begins');
+  const claimTurn = compact(structBody(mixProtocolProduction, 'async fn cancellable_mix_outbox_turn<'));
+  requireMix(claimTurn ===
+    'bounded_mix_outbox_turn(cancel,tokio::time::Instant::now()+MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE,turn).await',
+  'claims must retain their five-second bounded hard-cancellation turn');
+  const boundedTurn = compact(structBody(mixProtocolProduction, 'async fn bounded_mix_outbox_turn<'));
+  requireMix(boundedTurn.includes('ifcancel.is_cancelled(){returnErr(MixOutboxShutdown.into());}') &&
+    boundedTurn.includes('tokio::select!{biased;_=cancel.cancelled()=>Err(MixOutboxShutdown.into()),') &&
+    boundedTurn.includes('_=tokio::time::sleep_until(deadline)=>Err(MixOutboxDeadlineElapsed.into()),') &&
+    boundedTurn.includes('result=turn=>result'),
+  'bounded turns must prioritize hard cancellation and retain the original absolute deadline');
+  const lane = compact(mixOutboxLaneWorker);
+  requireMix(lane.includes('ifaccepting&&(stop_claiming.is_cancelled()||cancel.is_cancelled()){accepting=false;}') &&
+    lane.includes('_=stop_claiming.cancelled(),ifaccepting=>{accepting=false;}') &&
+    lane.includes('_=cancel.cancelled(),ifaccepting=>{accepting=false;}'),
+  'lane admission must close for either parent stop or hard cancellation');
+  requireMix(lane.includes('ifaccepting&&claim_task.is_none()&&maintenance_task.is_none()&&in_flight.len()<concurrency&&tokio::time::Instant::now()>=claim_schedule.next_claim{') &&
+    lane.includes('process_mix_outbox_claim(Arc::clone(&state),stop_claiming.clone(),cancel.clone(),queue,available)') &&
+    lane.includes('process_mix_outbox_work(Arc::clone(&state),work,cancel.clone())'),
+  'new claims require open bounded admission; pending claims and work keep the independent hard token');
+  requireMix(lane.includes('if!accepting{maintenance_task.take();}') &&
+    lane.includes('if!accepting&&in_flight.is_empty()&&claim_task.is_none(){returnmatchterminal_error{') &&
+    !/(?:claim_task|in_flight)\s*\.\s*(?:take|clear)\s*\(/.test(mixOutboxLaneWorker) &&
+    !/claim_task[\s\S]*?\.as_mut\(\)[\s\S]*?\.await/.test(mixOutboxLaneWorker),
+  'graceful drain must retain claimed work and claim responses while dropping maintenance');
+  const progress = compact(structBody(mixProtocolProduction, 'async fn next_mix_outbox_progress('));
+  requireMix(progress.includes('tokio::select!{biased;') &&
+    progress.includes('in_flight.next(),if!in_flight.is_empty()=>') &&
+    progress.includes('},ifclaim.is_some()=>{claim.take();MixOutboxProgress::Claim(outcome)') &&
+    progress.includes('},ifmaintenance.is_some()=>{maintenance.take();MixOutboxProgress::Maintenance(outcome)'),
+  'claim, maintenance and owned delivery must remain jointly polled');
+  for (const [finished, peer] of [['delivery', 'pam'], ['pam', 'delivery']]) {
+    const branch = compact(structBody(joinMixOutboxLanes, finished + '_result = &mut ' + finished + ' =>'));
+    const expected = 'if' + finished + '_result.is_err()||!stop_claiming.is_cancelled(){lane_cancel.cancel();}' +
+      'let' + peer + '_result=' + peer + '.await;' + finished + '_result?;' + peer + '_result';
+    requireMix(branch === expected,
+      finished + ' lane must preserve a normal stopped peer and hard-cancel errors or unexpected exits');
+  }
+  requireMix(countMatches(joinMixOutboxLanes, /lane_cancel\s*\.\s*cancel\s*\(/g) === 2,
+    'peer hard cancellation belongs only to the two guarded join branches');
+  const startup = compact(startMixOutbox);
+  const attemptFactory = structBody(startMixOutbox, 'move |heartbeat|');
+  const attemptBody = compact(structBody(attemptFactory, 'async move'));
+  const freshTokenOffset = attemptBody.indexOf('letlane_cancel=tokio_util::sync::CancellationToken::new();');
+  requireMix(freshTokenOffset >= 0 && freshTokenOffset < attemptBody.indexOf('run_mix_outbox_lane('),
+    'every supervised attempt must construct its own independent hard token before starting lanes');
+  requireMix(startup.includes('letlane_cancel=tokio_util::sync::CancellationToken::new();') &&
+    !/\.child_token\s*\(/.test(startMixOutbox) &&
+    startup.includes('run_mix_outbox_lane(Arc::clone(&state),cancel.clone(),lane_cancel.clone(),MixOutboxQueue::Delivery,delivery_budget,true,heartbeat.clone())') &&
+    startup.includes('run_mix_outbox_lane(state,cancel.clone(),lane_cancel.clone(),MixOutboxQueue::PamResult,pam_budget,false,heartbeat)') &&
+    startup.includes('join_mix_outbox_lanes(cancel,lane_cancel,delivery,pam).await'),
+  'production lanes must share a fresh independent hard token and receive the parent stop separately');
+  requireMix(startup.includes('registry.supervise_draining(,crate::workers::WorkerCriticality::Restartable,crate::workers::WorkerMode::Continuous,Some(Duration::from_secs(30)),MIX_OUTBOX_DRAIN_GRACE,cancel.clone(),'),
+  'supervisor must enforce the existing 14-second whole-worker drain');
+  for (const name of ['process_claimed_mix_delivery', 'process_claimed_pam_result']) {
+    const attempt = compact(structBody(mixProtocolProduction, 'async fn ' + name + '('));
+    requireMix(attempt.includes('letattempt_deadline=tokio::time::Instant::now()+MIX_OUTBOX_ATTEMPT_DEADLINE;') &&
+      attempt.includes('bounded_mix_outbox_turn(&cancel,attempt_deadline,'),
+    name + ' must share its original attempt deadline with final durable transitions');
+  }
+
 }
-const mixClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
-const mixClaimArmMarkers = [
-  'MixOutboxQueue::Delivery =>',
-  'MixOutboxQueue::PamResult =>',
-];
-const mixDeliveryClaimArm = matchArm(
-  mixClaimWork,
-  mixClaimArmMarkers,
-  'MixOutboxQueue::Delivery =>',
-  'MIX outbox claim',
-);
-const mixPamClaimArm = matchArm(
-  mixClaimWork,
-  mixClaimArmMarkers,
-  'MixOutboxQueue::PamResult =>',
-  'MIX outbox claim',
-);
-if (
-  !/\.claim_mix_deliveries\s*\(/.test(mixDeliveryClaimArm) ||
-  /\.claim_pam_results\s*\(/.test(mixDeliveryClaimArm) ||
-  !/\.claim_pam_results\s*\(/.test(mixPamClaimArm) ||
-  /\.claim_mix_deliveries\s*\(/.test(mixPamClaimArm)
-) {
-  throw new Error('MIX delivery and PAM lanes must claim only their own durable work; no fallback');
-}
-const mixProcessWork = structBody(mixProtocolProduction, 'fn process_mix_outbox_work(');
-if (
-  !/MixOutboxWork\s*::\s*Delivery\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*Delivery\s*,[\s\S]*?process_claimed_mix_delivery\s*\(/.test(
-    mixProcessWork,
-  ) ||
-  !/MixOutboxWork\s*::\s*PamResult\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*PamResult\s*,[\s\S]*?process_claimed_pam_result\s*\(/.test(
-    mixProcessWork,
-  )
-) {
-  throw new Error('MIX outbox work must stay in its claimed delivery or PAM lane');
-}
-const mixOutboxLaneWorker = structBody(mixProtocolProduction, 'async fn run_mix_outbox_lane(');
-const mixOutboxClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
-const mixOutboxClaim = structBody(mixProtocolProduction, 'fn process_mix_outbox_claim(');
-const mixOutboxMaintenance = structBody(mixProtocolProduction, 'fn process_mix_outbox_maintenance(');
-if (
-  !/FuturesUnordered\s*::\s*<\s*MixOutboxTask\s*>\s*::\s*new\s*\(\s*\)/.test(
-    mixOutboxLaneWorker,
-  ) ||
-  !/claim_task\s*=\s*Some\s*\(\s*process_mix_outbox_claim\s*\(/.test(
-    mixOutboxLaneWorker,
-  ) ||
-  !/in_flight\s*\.\s*push\s*\(\s*process_mix_outbox_work\s*\(/.test(mixOutboxLaneWorker) ||
-  !/maintenance_task\s*=\s*Some\s*\(\s*process_mix_outbox_maintenance\s*\(/.test(
-    mixOutboxLaneWorker,
-  ) ||
-  !/next_mix_outbox_progress\s*\(\s*&mut\s+in_flight\s*,\s*&mut\s+claim_task\s*,\s*&mut\s+maintenance_task\s*\)/.test(
-    mixOutboxLaneWorker,
-  ) ||
-  !/claim_mix_outbox_work\s*\(\s*&state\s*,\s*&cancel\s*,\s*queue\s*,\s*available\s*\)/.test(
-    mixOutboxClaim,
-  ) ||
-  !/cancellable_mix_outbox_turn\s*\(\s*cancel\s*,/.test(mixOutboxClaimWork) ||
-  !/cancellable_mix_outbox_turn\s*\(\s*&cancel\s*,/.test(mixOutboxMaintenance) ||
-  !/maintain_mix_delivery_retention\s*\(\s*\)/.test(mixOutboxMaintenance)
-) {
-  throw new Error('each MIX outbox lane must keep claims and maintenance independently bounded, cancellation-aware, and jointly polled');
-}
-const joinMixOutboxLanes = structBody(mixProtocolProduction, 'async fn join_mix_outbox_lanes');
-if (
-  !/tokio\s*::\s*select!/.test(joinMixOutboxLanes) ||
-  !/lane_cancel\s*\.\s*cancel\s*\(\s*\)/.test(joinMixOutboxLanes) ||
-  !/pam\s*\.\s*await/.test(joinMixOutboxLanes) ||
-  !/delivery\s*\.\s*await/.test(joinMixOutboxLanes)
-) {
-  throw new Error('MIX lane join must cancel and drain its peer before surfacing a terminal lane result');
-}
-const startMixOutbox = structBody(mixProtocolProduction, 'pub(crate) fn start_mix_delivery_outbox(');
-const deliveryLaneStart = startMixOutbox.indexOf('let delivery = run_mix_outbox_lane(');
-const pamLaneStart = startMixOutbox.indexOf('let pam = run_mix_outbox_lane(');
-const laneJoin = startMixOutbox.indexOf('join_mix_outbox_lanes(lane_cancel, delivery, pam).await');
-if (deliveryLaneStart < 0 || pamLaneStart < 0 || laneJoin < 0 || deliveryLaneStart > pamLaneStart) {
-  throw new Error('MIX outbox startup must construct delivery and PAM lanes before joining them');
-}
-const deliveryLaneStartBody = startMixOutbox.slice(deliveryLaneStart, pamLaneStart);
-const pamLaneStartBody = startMixOutbox.slice(pamLaneStart, laneJoin);
-if (
-  !deliveryLaneStartBody.includes('MixOutboxQueue::Delivery') ||
-  !deliveryLaneStartBody.includes('delivery_budget') ||
-  deliveryLaneStartBody.includes('MixOutboxQueue::PamResult') ||
-  !pamLaneStartBody.includes('MixOutboxQueue::PamResult') ||
-  !pamLaneStartBody.includes('pam_budget') ||
-  pamLaneStartBody.includes('MixOutboxQueue::Delivery') ||
-  /\b(?:delivery|pam)\s*\.\s*await\b/.test(startMixOutbox)
-) {
-  throw new Error('MIX outbox lanes must start separately without delivery/PAM fallback or head-of-line blocking');
-}
-const mixNoHolTest = structBody(
-  mixProtocol,
-  'async fn pam_lane_starts_while_a_delivery_lane_waits_on_external_io(',
-);
-if (
-  !mixNoHolTest.includes('join_mix_outbox_lanes(') ||
-  !/timeout\s*\([\s\S]*?pam_started_rx\s*\)/.test(mixNoHolTest)
-) {
-  throw new Error('MIX must retain a regression test proving slow delivery cannot head-of-line block PAM');
-}
+
+verifyMixOutboxLifecycle(mixProtocol);
+
 const commandPoolConstruction = structBody(state, 'pub async fn new(');
 for (const invariant of [
   'let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;',

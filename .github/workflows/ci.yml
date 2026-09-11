@@ -389,6 +389,7 @@ jobs:
           node scripts/check-tracked-sensitive-files.mjs --include-untracked
           node scripts/check-runtime-migration-boundary.mjs
           node scripts/check-architecture-boundaries.mjs
+          node --test scripts/test-mix-outbox-boundaries.mjs
           node scripts/check-session-lifecycle-boundary.mjs
           node scripts/check-documentation-consistency.mjs
           node scripts/check-outbound-xml-construction.mjs

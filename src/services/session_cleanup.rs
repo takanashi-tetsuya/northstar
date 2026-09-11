@@ -43,6 +43,7 @@ pub(crate) enum SessionSmCleanup {
 
 pub(crate) struct SessionCleanupPlan {
     pub(crate) connection_id: Uuid,
+    pub(crate) may_own_live_session: bool,
     pub(crate) mix_presence_gate: Arc<tokio::sync::Mutex<()>>,
     pub(crate) account: Option<SessionCleanupAccount>,
     pub(crate) registered_key: Option<String>,
@@ -407,6 +408,7 @@ impl SmSuspensionRecoveryQueue {
 
 pub(crate) struct QuiescedSessionCleanup {
     connection_id: Uuid,
+    may_own_live_session: bool,
     mix_presence_gate: Arc<tokio::sync::Mutex<()>>,
     account: Option<SessionCleanupAccount>,
     registered_key: Option<String>,
@@ -439,6 +441,7 @@ pub(crate) struct CleanupFailure {
 #[derive(Debug, Default)]
 pub(crate) struct CleanupReport {
     pub(crate) failures: Vec<CleanupFailure>,
+    completed_steps: usize,
 }
 
 impl CleanupReport {
@@ -451,6 +454,70 @@ impl CleanupReport {
             operation,
             recovery,
         });
+    }
+
+    fn completed(&mut self) {
+        self.completed_steps += 1;
+    }
+
+    fn observe(&self, registry: &crate::workers::WorkerRegistry) {
+        if !self.is_clean() {
+            registry.observer_error(
+                "session-cleanup",
+                format!("{} bounded cleanup steps failed", self.failures.len()),
+            );
+        } else if self.completed_steps > 0 {
+            // Closing a transport that owned no durable or projected state
+            // cannot demonstrate recovery from an earlier cleanup failure.
+            registry.observer_ok("session-cleanup");
+        }
+    }
+}
+
+/// Keep the exact release future completely unpolled for transports that
+/// never attempted a lease, and for streams whose lease was suspended.
+async fn finish_live_session_release(
+    may_own: bool,
+    suspended: bool,
+    release: impl std::future::Future<Output = ()>,
+) {
+    if may_own && !suspended {
+        release.await;
+    }
+}
+
+async fn run_cleanup_step<T>(
+    deadline: Instant,
+    operation: &'static str,
+    recovery: CleanupRecovery,
+    future: impl std::future::Future<Output = Result<T>>,
+    report: &mut CleanupReport,
+) -> Option<T> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        report.failed(operation, recovery);
+        tracing::warn!(
+            operation,
+            ?recovery,
+            "session cleanup total budget exhausted"
+        );
+        return None;
+    }
+    match tokio::time::timeout(remaining.min(CLEANUP_STEP_BUDGET), future).await {
+        Ok(Ok(value)) => {
+            report.completed();
+            Some(value)
+        }
+        Ok(Err(error)) => {
+            report.failed(operation, recovery);
+            tracing::warn!(?error, operation, ?recovery, "session cleanup step failed");
+            None
+        }
+        Err(_) => {
+            report.failed(operation, recovery);
+            tracing::warn!(operation, ?recovery, "session cleanup step timed out");
+            None
+        }
     }
 }
 
@@ -654,6 +721,7 @@ impl SessionCleanupService {
 
         QuiescedSessionCleanup {
             connection_id: plan.connection_id,
+            may_own_live_session: plan.may_own_live_session,
             mix_presence_gate: plan.mix_presence_gate,
             account: plan.account,
             registered_key: plan.registered_key,
@@ -933,7 +1001,7 @@ impl SessionCleanupService {
         // lease until its unavailable projection has completed (or entered
         // the documented recovery path), so a new bind cannot be followed by
         // stale cleanup from the connection it replaced.
-        if !suspended {
+        finish_live_session_release(work.may_own_live_session, suspended, async {
             let _ = self
                 .step(
                     deadline,
@@ -945,7 +1013,8 @@ impl SessionCleanupService {
                     &mut report,
                 )
                 .await;
-        }
+        })
+        .await;
 
         self.complete_report(report)
     }
@@ -993,13 +1062,8 @@ impl SessionCleanupService {
                 failures = ?report.failures,
                 "C2S session cleanup completed with recoverable debt"
             );
-            self.state.worker_registry().observer_error(
-                "session-cleanup",
-                format!("{} bounded cleanup steps failed", report.failures.len()),
-            );
-        } else {
-            self.state.worker_registry().observer_ok("session-cleanup");
         }
+        report.observe(self.state.worker_registry());
         report
     }
 
@@ -1011,29 +1075,7 @@ impl SessionCleanupService {
         future: impl std::future::Future<Output = Result<T>>,
         report: &mut CleanupReport,
     ) -> Option<T> {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            report.failed(operation, recovery);
-            tracing::warn!(
-                operation,
-                ?recovery,
-                "session cleanup total budget exhausted"
-            );
-            return None;
-        }
-        match tokio::time::timeout(remaining.min(CLEANUP_STEP_BUDGET), future).await {
-            Ok(Ok(value)) => Some(value),
-            Ok(Err(error)) => {
-                report.failed(operation, recovery);
-                tracing::warn!(?error, operation, ?recovery, "session cleanup step failed");
-                None
-            }
-            Err(_) => {
-                report.failed(operation, recovery);
-                tracing::warn!(operation, ?recovery, "session cleanup step timed out");
-                None
-            }
-        }
+        run_cleanup_step(deadline, operation, recovery, future, report).await
     }
 
     async fn cleanup_muc_departures(
@@ -1187,9 +1229,142 @@ impl SessionCleanupService {
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionCleanupAccount, SmSuspensionRecoveryQueue, SuspensionRecoveryWork};
+    use super::{
+        finish_live_session_release, run_cleanup_step, CleanupRecovery, CleanupReport,
+        SessionCleanupAccount, SmSuspensionRecoveryQueue, SuspensionRecoveryWork,
+    };
     use std::sync::Arc;
     use uuid::Uuid;
+
+    fn cleanup_observer() -> Arc<crate::workers::WorkerRegistry> {
+        let registry = crate::workers::WorkerRegistry::new();
+        registry.register_observer(
+            "session-cleanup",
+            crate::workers::WorkerCriticality::Restartable,
+        );
+        registry
+    }
+
+    #[test]
+    fn empty_reports_neither_interrupt_consecutive_errors_nor_heal_cleanup_debt() {
+        let registry = cleanup_observer();
+        let mut failed = CleanupReport::default();
+        failed.failed("release-live-session", CleanupRecovery::LeaseOrEpoch);
+        for attempt in 1..=3 {
+            failed.observe(&registry);
+            CleanupReport::default().observe(&registry);
+            assert_eq!(registry.readiness_error().is_some(), attempt == 3);
+        }
+        for _ in 0..10 {
+            CleanupReport::default().observe(&registry);
+        }
+        assert!(registry.readiness_error().is_some());
+    }
+
+    #[tokio::test]
+    async fn only_completed_steps_without_failures_can_restore_cleanup_health() {
+        let registry = cleanup_observer();
+        let mut mixed = CleanupReport::default();
+        assert_eq!(
+            run_cleanup_step(
+                tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+                "clear-active-privacy",
+                CleanupRecovery::LeaseOrEpoch,
+                async { Ok(()) },
+                &mut mixed,
+            )
+            .await,
+            Some(())
+        );
+        mixed.failed("release-live-session", CleanupRecovery::LeaseOrEpoch);
+        for _ in 0..3 {
+            mixed.observe(&registry);
+        }
+        assert!(
+            registry.readiness_error().is_some(),
+            "success must not hide another failed step"
+        );
+        let mut recovered = CleanupReport::default();
+        assert_eq!(
+            run_cleanup_step(
+                tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+                "release-live-session",
+                CleanupRecovery::LeaseOrEpoch,
+                async { Ok(true) },
+                &mut recovered,
+            )
+            .await,
+            Some(true)
+        );
+        recovered.observe(&registry);
+        assert!(registry.readiness_error().is_none());
+    }
+
+    #[tokio::test]
+    async fn unowned_or_suspended_cleanup_never_polls_the_exact_database_release() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgresql://localhost/unused_cleanup_test")
+            .unwrap();
+        pool.close().await;
+        let registry = cleanup_observer();
+        for _ in 0..3 {
+            registry.observer_error("session-cleanup", "existing real cleanup debt");
+        }
+        // A closed pool would reject every real acquire. The same lazy
+        // release boundary used by finish must leave it entirely untouched.
+        for (may_own, suspended) in [(false, false), (false, true), (true, true)] {
+            let polled = std::cell::Cell::new(false);
+            let mut report = CleanupReport::default();
+            finish_live_session_release(may_own, suspended, async {
+                let _ = run_cleanup_step(
+                    tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+                    "release-live-session",
+                    CleanupRecovery::LeaseOrEpoch,
+                    async {
+                        polled.set(true);
+                        crate::db::release_live_session(&pool, Uuid::new_v4()).await
+                    },
+                    &mut report,
+                )
+                .await;
+            })
+            .await;
+            assert!(!polled.get());
+            assert!(report.is_clean());
+            assert_eq!(report.completed_steps, 0);
+            report.observe(&registry);
+            assert!(
+                registry.readiness_error().is_some(),
+                "no-op cleanup cannot erase prior debt"
+            );
+        }
+        let polled = std::cell::Cell::new(false);
+        let mut owned = CleanupReport::default();
+        finish_live_session_release(true, false, async {
+            let _ = run_cleanup_step(
+                tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+                "release-live-session",
+                CleanupRecovery::LeaseOrEpoch,
+                async {
+                    polled.set(true);
+                    crate::db::release_live_session(&pool, Uuid::new_v4()).await
+                },
+                &mut owned,
+            )
+            .await;
+        })
+        .await;
+        assert!(
+            polled.get(),
+            "attempted ownership must still execute exact release"
+        );
+        assert!(
+            !owned.is_clean(),
+            "a real database failure must remain observable"
+        );
+        assert_eq!(owned.failures[0].operation, "release-live-session");
+        assert_eq!(owned.completed_steps, 0);
+    }
 
     fn queue() -> Arc<SmSuspensionRecoveryQueue> {
         let metrics = Arc::new(crate::services::sm_capacity::SmCapacityMetrics::default());

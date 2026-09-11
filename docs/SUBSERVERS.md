@@ -36,6 +36,21 @@ lifecycle and private health. `src/retention.rs` receives only a retention
 policy, database pool and metrics. Retention SQL belongs to `src/db/retention.rs`.
 Application services and protocol handlers remain outside that dependency path.
 
+Core tracks whether a connection has ever attempted to reserve or receive a
+live-session lease or binding claim. It records that possibility before the
+first database write can occur and keeps it after errors or local state resets.
+A connection that never attempted either operation needs no database lease
+release. Such an empty cleanup does not clear earlier cleanup health failures.
+SM suspension and replacement keep their existing exact-owner cleanup rules.
+
+When core shuts down, MIX stops taking new work and gives already-started claims
+and deliveries the existing 14-second drain window. A normally completed lane
+does not cancel its draining peer. Database turns and delivery attempts retain
+their deadlines. An uncertain completion or forced stop retains the untransferred
+claim's 90-second lease. Ownership already transferred to a direct socket, SM,
+BOSH or another node follows that transport's existing token fences and recovery
+lifetime. Direct sockets use a separate 30-second write fence.
+
 ## Run from source
 
 Complete the normal [database role and migration setup](DATABASE_ROLES.md)

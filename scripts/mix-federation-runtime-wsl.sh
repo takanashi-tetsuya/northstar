@@ -234,7 +234,7 @@ cleanup() {
   # This keeps a cleanup-only ownership failure explainable rather than
   # suppressing logs because the original business phase happened to pass.
   if [[ $status -ne 0 ]]; then
-    for log in "$runtime_dir/a.log" "$runtime_dir/b.log" "$runtime_dir/relay-a.log" "$runtime_dir/relay-b.log" "$runtime_dir/relay-a-http.log" "$runtime_dir/relay-b-http.log"; do [[ ! -f "$log" ]] || { echo "--- $log ---" >&2; tail -n 200 "$log" >&2; }; done
+    for log in "$runtime_dir/a.log" "$runtime_dir/b-before-restart.log" "$runtime_dir/b.log" "$runtime_dir/relay-a.log" "$runtime_dir/relay-b.log" "$runtime_dir/relay-a-http.log" "$runtime_dir/relay-b-http.log"; do [[ ! -f "$log" ]] || { echo "--- $log ---" >&2; tail -n 200 "$log" >&2; }; done
   fi
   case "$runtime_dir" in
     /tmp/northstar-mix-fed.*) rm -rf -- "$runtime_dir" ;;
@@ -441,6 +441,9 @@ echo "MIX federation ports: http=$http_a,$http_b s2s-tls=$s2s_tls_a,$s2s_tls_b p
 publish_setup_barrier_ready_and_wait
 run_mix_federation_phase setup
 fixture_stop_child "$pid_b" "B before durable enqueue"
+# Retain the stopped incarnation's bounded diagnostic tail. Starting B again
+# opens b.log for truncation; preserve the earlier worker and shutdown evidence.
+mv -- "$runtime_dir/b.log" "$runtime_dir/b-before-restart.log"
 fixture_forget_listener_owner "$pid_b"
 pid_b=""
 run_mix_federation_phase enqueue

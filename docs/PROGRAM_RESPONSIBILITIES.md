@@ -219,12 +219,12 @@ inputs. They use the same registry and shutdown token; being registered outside
 
 | Worker/observer name | Registration owner | Criticality / mode | Stall watchdog | Shutdown | Owned recovery/work | Forbidden shortcut |
 | --- | --- | --- | --- | --- | --- | --- |
-| `session-cleanup` | `AppState` observer registration | restartable health observer; **no task/factory** | none | not applicable | synchronous per-session cleanup reports success/error into readiness | describing it as a restartable loop or hiding repeated cleanup errors |
+| `session-cleanup` | `AppState` observer registration | restartable health observer; **no task/factory** | none | not applicable | bounded per-session cleanup reports errors or actual successful work into readiness; an empty report is neutral | describing it as a restartable loop or hiding repeated cleanup errors |
 | `sm-authority-listener` | `SmService` startup | restartable / continuous | 15 s, fed by a 5 s liveness tick even when LISTEN is quiet | immediate | consume durable SM authority and schema-only MIX delivery wake hints; each consumer reclaims its own fenced row/generation | treating notification silence as failure or a notification as authority without the durable generation |
 | `sm-suspension-recovery` | session-cleanup service startup | restartable / continuous | 30 s | drain up to 5 s | recover suspended SM/MUC endpoint teardown and replay ownership | dropping a claimed suffix on cancellation |
 | `caps-side-effects` | Caps subsystem startup | restartable / continuous | 60 s | bounded `CAPS_EFFECT_DRAIN_GRACE` | execute pending verified capability/PEP/MIX effects with no-lost-wakeup rescan | declaring work complete because a bounded hint queue filled |
 | `mix-iq-relay-expiry` | MIX protocol capability startup | restartable / continuous | 10 s | immediate | expire exact pending IQ relays and route generations | expiring a replacement relay by stale timer identity |
-| `mix-delivery-outbox` | MIX capability startup | restartable / continuous | 30 s | bounded `MIX_OUTBOX_DRAIN_GRACE` | claim and deliver durable MIX event outbox rows through independent delivery and PAM-result lanes; every background database turn races cancellation and an abandoned fenced lease recovers by expiry | treating live fan-out as outbox acknowledgement, allowing a slow delivery lane to delay PAM results, or waiting indefinitely for a database turn during shutdown |
+| `mix-delivery-outbox` | MIX capability startup | restartable / continuous | 30 s | bounded `MIX_OUTBOX_DRAIN_GRACE` | claim and deliver durable MIX event outbox rows through independent delivery and PAM-result lanes; shutdown stops new claims and drains already-started bounded work for up to 14 s; hard cancellation or an unknown completion retains the fenced lease until expiry | treating live fan-out as outbox acknowledgement, allowing a slow delivery lane to delay PAM results, or waiting indefinitely for a database turn during shutdown |
 | `mix-presence-recovery` | MIX capability startup | restartable / one-shot | 90 s | immediate | rebuild eligible MIX presence after startup | running indefinitely or inventing participants absent durable authority |
 | `pubsub-digest-delivery` | PubSub capability startup | restartable / continuous | 5 s | immediate | deliver due digest batches from durable queue state | losing work when an in-memory wake is dropped |
 | `pubsub-event-outbox-delivery` | PubSub capability startup | restartable / continuous | 30 s | immediate | deliver/retry durable PubSub/PEP mutation events | publishing before the mutation/outbox transaction commits |
@@ -500,18 +500,23 @@ delivery receives the service's typed background budget and PAM results are
 capped at two concurrent attempts. Both lanes use the same private,
 clone-shared `Arc<Semaphore>` only for short repository claims, lease changes,
 completion writes and maintenance pages. A delivery claim does not run
-retention cleanup first: an expired head without an active lease or
-SM/BOSH/cluster owner is terminal and cannot delay a live successor; the
-separate supervised maintenance page records its dead letter and reclaims
-orphan state. The permit count equals that typed outbox budget and is released
+retention cleanup first. An expired head without an active lease or
+SM/BOSH/cluster owner becomes eligible for bounded retention; the separate
+supervised maintenance page records its dead letter and removes it before a
+live successor can advance. That page also reclaims orphan state. The permit
+count equals the typed outbox budget and is released
 before any local transport, cluster or federation I/O, so a slow external
 delivery cannot hold a database slot or head-of-line block a PAM result. A
 newly started delivery lane claims due user work before its first maintenance
-page. Each semaphore, pool and query wait races the
-worker's child cancellation token; on cancellation the atomic claimed row is
-left fenced for normal lease-expiry recovery rather than keeping shutdown
-blocked behind an unavailable database. If either lane ends, it cancels and
-drains the peer before the supervisor observes the original result.
+page. Claim and maintenance turns retain their five-second deadlines. Each
+claimed attempt keeps one 20-second budget across its effect, lease renewal and
+final database transition. Normal shutdown stops new claims and lets already-started
+work drain within the existing 14-second window; a normally completed lane does
+not cancel its draining peer. Each in-progress wait still races the independent
+hard-cancellation token. An abnormal lane exit hard-cancels its peer before the
+supervisor observes the original result. A hard cancellation or unknown completion
+leaves any still-owned claim fenced for normal lease-expiry recovery, rather than
+keeping shutdown blocked behind an unavailable database.
 
 Cluster recipient lookup is Redis-backed route authority, not a PostgreSQL
 outbox turn. It therefore has its own bounded Redis deadline and never holds a

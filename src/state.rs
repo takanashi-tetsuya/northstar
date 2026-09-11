@@ -1576,6 +1576,13 @@ impl FederationWritePolicy {
     }
 
     async fn refresh(&self, enabled: bool) -> bool {
+        // An unchanged observation linearizes at this acquire load. It must
+        // not wait behind a socket write merely to publish the same value.
+        // Actual transitions still drain and fence writes under the gate.
+        let previous = self.island_mode.load(Ordering::Acquire);
+        if previous == enabled {
+            return previous;
+        }
         let _write_guard = self.gate.write().await;
         self.island_mode.swap(enabled, Ordering::AcqRel)
     }
@@ -1963,8 +1970,9 @@ impl AppState {
     }
 
     /// Refresh the cached island-mode value and return the previous value.
-    /// The exclusive delivery guard waits for any in-flight stanza write and
-    /// blocks queued writers until they can observe the new policy.
+    /// Unchanged observations do not wait for socket writes. Actual changes
+    /// take the exclusive delivery guard, drain in-flight stanza writes, and
+    /// fence queued writers until they can observe the new policy.
     async fn refresh_island_mode(&self, enabled: bool) -> bool {
         self.federation_write_policy.refresh(enabled).await
     }
@@ -6445,6 +6453,94 @@ mod session_key_tests {
             *late.borrow(),
             "subscribing after compare-and-remove must not lose the terminal event"
         );
+    }
+
+    #[tokio::test]
+    async fn unchanged_island_refresh_does_not_wait_for_held_read_guard() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        for enabled in [false, true] {
+            let policy = FederationWritePolicy::new(enabled);
+            let held_read = if enabled {
+                // A raw reader also proves the true no-op does not acquire
+                // the exclusive gate; delivery itself is already forbidden.
+                policy.gate.read().await
+            } else {
+                policy.permit().await.expect("federation starts enabled")
+            };
+            let mut refresh = std::pin::pin!(policy.refresh(enabled));
+            let mut context = Context::from_waker(Waker::noop());
+            assert_eq!(refresh.as_mut().poll(&mut context), Poll::Ready(enabled));
+            assert_eq!(policy.enabled(), enabled);
+            drop(held_read);
+        }
+    }
+
+    #[tokio::test]
+    async fn island_refresh_transition_fences_queued_delivery_despite_concurrent_noop() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        let policy = FederationWritePolicy::new(false);
+        let held_read = policy.permit().await.expect("federation starts enabled");
+        let mut transition = std::pin::pin!(policy.refresh(true));
+        let mut queued_delivery = std::pin::pin!(policy.permit());
+        let mut context = Context::from_waker(Waker::noop());
+        assert_eq!(transition.as_mut().poll(&mut context), Poll::Pending);
+        assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
+
+        let mut unchanged = std::pin::pin!(policy.refresh(false));
+        assert_eq!(unchanged.as_mut().poll(&mut context), Poll::Ready(false));
+        assert!(!policy.enabled());
+        assert_eq!(transition.as_mut().poll(&mut context), Poll::Pending);
+        assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
+
+        drop(held_read);
+        assert_eq!(transition.as_mut().poll(&mut context), Poll::Ready(false));
+        assert!(policy.enabled());
+        assert!(matches!(
+            queued_delivery.as_mut().poll(&mut context),
+            Poll::Ready(None)
+        ));
+    }
+
+    #[tokio::test]
+    async fn island_refresh_reopening_waits_for_gate_and_returns_locked_previous_value() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        for concurrent_apply in [false, true] {
+            let policy = FederationWritePolicy::new(true);
+            let held_read = policy.gate.read().await;
+            let mut earlier_apply = std::pin::pin!(policy.apply(false));
+            let mut context = Context::from_waker(Waker::noop());
+            if concurrent_apply {
+                assert_eq!(earlier_apply.as_mut().poll(&mut context), Poll::Pending);
+            }
+            let mut transition = std::pin::pin!(policy.refresh(false));
+            let mut queued_delivery = std::pin::pin!(policy.permit());
+            assert_eq!(transition.as_mut().poll(&mut context), Poll::Pending);
+            assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
+            assert!(policy.enabled());
+
+            drop(held_read);
+            if concurrent_apply {
+                assert_eq!(earlier_apply.as_mut().poll(&mut context), Poll::Ready(()));
+                assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
+            }
+            // The slow path returns the swap's value after the exclusive
+            // wait, including when an earlier apply changed the initial read.
+            assert_eq!(
+                transition.as_mut().poll(&mut context),
+                Poll::Ready(!concurrent_apply)
+            );
+            assert!(!policy.enabled());
+            assert!(matches!(
+                queued_delivery.as_mut().poll(&mut context),
+                Poll::Ready(Some(_))
+            ));
+        }
     }
 
     #[tokio::test]

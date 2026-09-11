@@ -482,6 +482,8 @@ The runtime control coordinator records its fixed in-flight phase and monotonic
 elapsed time when a stalled attempt is dropped before process cancellation.
 Normal shutdown suppresses that warning. This observation neither reports a
 heartbeat nor changes the five-second fail-closed supervision boundary.
+An unchanged federation setting does not wait for socket writes; a real policy
+change retains the exclusive delivery fence.
 
 ## Failure ownership matrix
 

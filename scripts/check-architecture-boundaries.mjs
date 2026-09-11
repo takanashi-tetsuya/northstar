@@ -403,9 +403,14 @@ if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(|fn start_ser
   throw new Error('independent runtime control workers can contend for the one-connection control pool');
 }
 const runtimeControlReservation = structBody(state, 'pub(crate) async fn reserve_runtime_control_connection(');
+const runtimeControlConnectOptions = structBody(state, 'fn runtime_control_connect_options(');
+if (runtimeControlConnectOptions.replace(/\s+/g, '') !== 'Ok(database_url.parse::<PgConnectOptions>()?.application_name("northstar-runtime-control"))') {
+  throw new Error('runtime-control connection identity must only label the original parsed database URL');
+}
 for (const invariant of [
   'runtime_control_pool_options(config, attempt_budget)',
-  '.connect(&config.database_url)',
+  'let connect_options = runtime_control_connect_options(&config.database_url)?;',
+  '.connect_with(connect_options.clone())',
   'attest_development_database_is_loopback',
   'attest_runtime_role',
   'RUNTIME_CONTROL_STARTUP_RETRY_BUDGET',

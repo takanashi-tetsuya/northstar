@@ -89,6 +89,12 @@ fn runtime_control_pool_options(config: &Config, attempt_budget: Duration) -> Pg
     }
 }
 
+fn runtime_control_connect_options(database_url: &str) -> Result<PgConnectOptions, sqlx::Error> {
+    Ok(database_url
+        .parse::<PgConnectOptions>()?
+        .application_name("northstar-runtime-control"))
+}
+
 fn runtime_control_startup_retry_delay(attempt: u32, process_id: u32) -> Duration {
     let exponent = attempt.saturating_sub(1).min(5);
     let exponential_millis = 10_u64.saturating_mul(1_u64 << exponent);
@@ -166,12 +172,40 @@ where
 
 #[cfg(test)]
 mod runtime_control_startup_tests {
-    use super::{runtime_control_startup_connect, startup_database_connect};
+    use super::{
+        runtime_control_connect_options, runtime_control_startup_connect, startup_database_connect,
+    };
     use std::sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
         Arc,
     };
     use std::time::Duration;
+
+    #[test]
+    fn control_connection_identification_preserves_url_transport_and_schema_options() {
+        let url = "postgres://fixture_user@127.0.0.1:6543/fixture_db?sslmode=verify-full&application_name=caller-name&options=-csearch_path%3Dfixture_schema%2Cpublic%20-cstatement_timeout%3D5000";
+        let original = url.parse::<sqlx::postgres::PgConnectOptions>().unwrap();
+        let control = runtime_control_connect_options(url).unwrap();
+        assert_eq!(
+            control.get_application_name(),
+            Some("northstar-runtime-control")
+        );
+        assert_eq!(original.get_application_name(), Some("caller-name"));
+        assert_eq!(control.get_host(), original.get_host());
+        assert_eq!(control.get_port(), original.get_port());
+        assert_eq!(control.get_username(), original.get_username());
+        assert_eq!(control.get_database(), original.get_database());
+        assert!(matches!(
+            control.get_ssl_mode(),
+            sqlx::postgres::PgSslMode::VerifyFull
+        ));
+        assert_eq!(control.get_options(), original.get_options());
+        assert_eq!(
+            control.get_options(),
+            Some("-csearch_path=fixture_schema,public -cstatement_timeout=5000")
+        );
+        assert!(runtime_control_connect_options("not a database URL").is_err());
+    }
 
     #[tokio::test]
     async fn slow_initial_handshake_finishes_without_half_second_cancellation() {
@@ -666,8 +700,9 @@ pub(crate) async fn reserve_runtime_control_connection(
     config: &Config,
 ) -> anyhow::Result<PoolConnection<Postgres>> {
     let deadline = tokio::time::Instant::now() + RUNTIME_CONTROL_STARTUP_RETRY_BUDGET;
+    let connect_options = runtime_control_connect_options(&config.database_url)?;
     let runtime_control_pool = runtime_control_startup_connect(deadline, |attempt_budget| {
-        runtime_control_pool_options(config, attempt_budget).connect(&config.database_url)
+        runtime_control_pool_options(config, attempt_budget).connect_with(connect_options.clone())
     })
     .await?;
     // Attestation and final ownership transfer share the same absolute startup

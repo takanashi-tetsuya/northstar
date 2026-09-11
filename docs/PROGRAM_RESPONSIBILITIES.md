@@ -480,8 +480,14 @@ delivery, rotate a lease, bypass federation policy or change the configured
 
 The runtime control coordinator records its fixed in-flight phase and monotonic
 elapsed time when a stalled attempt is dropped before process cancellation.
-Normal shutdown suppresses that warning. This observation neither reports a
-heartbeat nor changes the five-second fail-closed supervision boundary.
+This observation neither reports a heartbeat nor changes the five-second
+fail-closed supervision boundary.
+Its reserved PostgreSQL connection uses the fixed application name
+`northstar-runtime-control`, preserving the original connection options and
+connection budget. On heartbeat expiry, the existing watchdog also records
+`watchdog_tick_delay_ms`, the delay between its scheduled tick and observation.
+The phase duration includes client polling and network waits; it does not
+measure PostgreSQL execution time. Normal shutdown suppresses both warnings.
 An unchanged federation setting does not wait for socket writes; a real policy
 change retains the exclusive delivery fence.
 

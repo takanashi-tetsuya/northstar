@@ -51,6 +51,13 @@ claim's 90-second lease. Ownership already transferred to a direct socket, SM,
 BOSH or another node follows that transport's existing token fences and recovery
 lifetime. Direct sockets use a separate 30-second write fence.
 
+An authenticated bidirectional federation connection can wake one matching
+queued S2S head whose previous connection failure is still in backoff. Core
+owns this single-use connection hint; PostgreSQL retains queue order, attempt
+and lease authority. A pending send keeps its lease until its normal failure
+transition completes. Disconnected or replaced streams cannot reuse the hint,
+and delivery still checks the current federation policy.
+
 ## Run from source
 
 Complete the normal [database role and migration setup](DATABASE_ROLES.md)

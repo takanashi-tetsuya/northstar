@@ -1025,10 +1025,19 @@ async fn drive_authenticated_inbound(
             .s2s_connection_registry()
             .register_bidirectional_if_vacant(
                 route_key.clone(),
-                BidiS2sSession::new(connection_id, local_domain.clone(), sender),
+                BidiS2sSession::new(
+                    connection_id,
+                    local_domain.clone(),
+                    sender,
+                    disconnect.clone(),
+                ),
             ) {
             Ok(()) => {
                 tracing::debug!(peer_domain = %domain, %local_domain, "XEP-0288 bidirectional S2S stream enabled");
+                // The authenticated registry owns a single scoped recovery
+                // hint. Wake dispatch after publication; no database wait may
+                // prevent this stream from entering its receive/write loop.
+                state.federation.wake_outbox();
                 true
             }
             Err(session) => {
@@ -1044,6 +1053,7 @@ async fn drive_authenticated_inbound(
             connection_id,
             local_domain.clone(),
             sender,
+            disconnect.clone(),
         ));
         false
     };

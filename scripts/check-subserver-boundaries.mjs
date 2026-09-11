@@ -54,11 +54,11 @@ export function verifySubserverBoundaries({ main, subservers, retention, state, 
     [...coordinator.matchAll(/observed_database = true;/g)].length === 2,
   'control coordinator must report exactly its two actual database-read paths through the reviewed health function');
   for (const [declaration, query] of [
-    ['if refresh_policy', 'db::runtime_control_snapshot(&mut connection)'],
-    ['if state.config.enable_xmpp_service_control', 'db::poll_admin_service_control(&mut connection)'],
+    ['if refresh_policy', /db::runtime_control_snapshot\(\s*&mut connection,\s*\|phase\|\s*\{\s*diagnostics\.database_read\(phase\)\s*\}\s*,?\)/],
+    ['if state.config.enable_xmpp_service_control', /db::poll_admin_service_control\(\s*&mut connection\s*\)/],
   ]) {
     const read = body(coordinator, declaration);
-    requireBoundary(read.includes('observed_database = true;') && read.includes(query),
+    requireBoundary(read.includes('observed_database = true;') && query.test(codeOnly(read)),
       'control coordinator must tie health observation to a read of its exact reserved connection');
   }
   const subserverCode = codeOnly(subservers);

@@ -380,12 +380,21 @@ for (const [call, description] of [
   ['runtime_control_snapshot', 'runtime administration and federation refresh'],
   ['poll_admin_service_control', 'XEP-0133 service-control refresh'],
 ]) {
-  if (!new RegExp(`match db::${call}\\(&mut connection\\)`, 's').test(runtimeControlRefresh)) {
+  const observer = call === 'runtime_control_snapshot'
+    ? String.raw`\s*,\s*\|phase\|\s*\{\s*diagnostics\.database_read\(phase\)\s*\}\s*,?`
+    : '';
+  if (!new RegExp(`match db::${call}\\(\\s*&mut connection${observer}\\s*\\)`, 's').test(runtimeControlRefresh)) {
     throw new Error(`${description} must use the coordinator-owned control connection`);
   }
   if (new RegExp(`${call}\\(&state\\.(?:pool|runtime_control_pool)\\)`).test(runtimeControlRefresh)) {
     throw new Error(`${description} must not acquire from a traffic or shared control pool`);
   }
+}
+if ((runtimeControlRefresh.match(/let\s+max_silence\s*=/g) ?? []).length !== 1
+    || !/let max_silence = Duration::from_secs\(5\);/.test(runtimeControlRefresh)
+    || !/"runtime-control-refresh",\s*crate::workers::WorkerCriticality::Critical,\s*crate::workers::WorkerMode::Continuous,\s*Some\(max_silence\),/s.test(runtimeControlRefresh)
+    || !/RuntimeControlDiagnostics::new\(diagnostic_cancel,\s*max_silence\)/s.test(runtimeControlRefresh)) {
+  throw new Error('runtime-control diagnostics and supervision must share the unchanged five-second silence bound');
 }
 if (!/"runtime-control-refresh"/.test(runtimeControlRefresh)) {
   throw new Error('runtime control reads must share one supervised control-plane worker');
@@ -2771,7 +2780,7 @@ const supervisedWorkerContracts = [
   { name: 'cluster-failure-policy', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(15))', draining: false },
   { name: 'cluster-muc-outbox', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: false },
   { name: 'locked-muc-expiry', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(20))', draining: false },
-  { name: 'runtime-control-refresh', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(5))', draining: false },
+  { name: 'runtime-control-refresh', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(max_silence)', draining: false },
   { name: 'sm-authority-listener', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(15))', draining: false },
   { name: 'sm-suspension-recovery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: true },
   { name: 'caps-side-effects', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(60))', draining: true },

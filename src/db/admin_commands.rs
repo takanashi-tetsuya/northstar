@@ -1658,16 +1658,26 @@ pub async fn admin_runtime_settings(pool: &PgPool) -> Result<(bool, bool)> {
     admin_runtime_settings_from_rows(rows)
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum RuntimeControlReadPhase {
+    Settings,
+    Rules,
+}
+
 /// Read the complete runtime control-plane projection over the caller's
 /// already-reserved connection. This deliberately avoids a second pool
 /// acquisition between administration and federation observations.
-pub async fn runtime_control_snapshot(
+/// The observer records only which fixed read is in flight; it performs no I/O.
+pub(crate) async fn runtime_control_snapshot(
     connection: &mut PgConnection,
+    mut read_phase: impl FnMut(RuntimeControlReadPhase),
 ) -> Result<(bool, bool, Vec<String>, Vec<String>)> {
+    read_phase(RuntimeControlReadPhase::Settings);
     let settings = sqlx::query("SELECT key,enabled FROM admin_runtime_settings ORDER BY key")
         .fetch_all(&mut *connection)
         .await?;
     let (island_mode, registration_closed) = admin_runtime_settings_from_rows(settings)?;
+    read_phase(RuntimeControlReadPhase::Rules);
     let rules =
         sqlx::query("SELECT kind,domain FROM federation_runtime_rules ORDER BY kind,domain")
             .fetch_all(&mut *connection)

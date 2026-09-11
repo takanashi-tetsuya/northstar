@@ -560,6 +560,16 @@ append_runtime_log_tails() {
     tail -c 32768 -- "$log" >>"$parent_diagnostic_raw" || true
     printf '\n' >>"$parent_diagnostic_raw" || true
   done
+
+  # A delayed S2S head can hide every successor from the normal claim scan.
+  # Preserve the separate, content-free head view after the worker tails;
+  # its producer selects at most 32 heads in each of four private databases.
+  for log in "$runtime_dir"/mix-federation-authority-s2s-head-detail-*.raw.log; do
+    [[ -f "$log" && ! -L "$log" ]] || continue
+    record_parent_diagnostic "--- mix_federation_s2s_fifo_head_detail=$(basename "$log") retained_tail ---"
+    tail -c 16384 -- "$log" >>"$parent_diagnostic_raw" || true
+    printf '\n' >>"$parent_diagnostic_raw" || true
+  done
 }
 
 append_mix_federation_database_snapshots() {
@@ -665,6 +675,7 @@ append_mix_federation_database_snapshots() {
       if (( detail_database_count < detail_database_limit )); then
         append_mix_federation_recipient_claim_detail "$database_name" "$own_domain"
         append_mix_federation_dead_letter_detail "$database_name"
+        append_mix_federation_s2s_fifo_head_detail "$database_name"
         detail_database_count=$((detail_database_count + 1))
       fi
     fi
@@ -683,6 +694,7 @@ append_mix_federation_database_snapshots() {
       esac
       append_mix_federation_recipient_claim_detail "$database_name" "$own_domain"
       append_mix_federation_dead_letter_detail "$database_name"
+      append_mix_federation_s2s_fifo_head_detail "$database_name"
       detail_database_count=$((detail_database_count + 1))
     done
     record_parent_diagnostic "mix_federation_claim_detail_selection=fallback_unattributed databases=$detail_database_count"
@@ -837,6 +849,56 @@ append_mix_federation_dead_letter_detail() {
   else
     status=$?
     record_parent_diagnostic "mix_federation_dead_letter_detail database=$database_name status=query_failed exit_status=$status"
+    tail -c 4096 -- "$detail_snapshot" >>"$parent_diagnostic_raw" || true
+    printf '\n' >>"$parent_diagnostic_raw" || true
+  fi
+}
+
+append_mix_federation_s2s_fifo_head_detail() {
+  # Run only for the same bounded database selection as the MIX details.
+  # This independent read-only query cannot suppress those other snapshots.
+  # Never select a stanza, raw domain/JID, error, or token into its output.
+  local database_name="$1" detail_snapshot status
+  private_database_name_is_valid "$database_name" || return 1
+  detail_snapshot="$runtime_dir/mix-federation-authority-s2s-head-detail-${database_name}.raw.log"
+  if PGCONNECT_TIMEOUT=5 \
+    PGOPTIONS='-c statement_timeout=5000 -c lock_timeout=2000 -c default_transaction_read_only=on' \
+    fixture_database_psql "$database_name" --no-psqlrc --tuples-only --no-align \
+    --field-separator='|' --command "
+      WITH snapshot_clock AS MATERIALIZED (SELECT clock_timestamp() AS now_at),
+      heads AS (
+        SELECT DISTINCT ON (queued.target_domain)
+               queued.target_domain,queued.id,queued.enqueue_sequence,
+               queued.attempt_count,queued.next_attempt_at,
+               queued.lock_token,queued.locked_until,
+               count(*) OVER (PARTITION BY queued.target_domain) - 1 AS successor_count
+          FROM s2s_outbox queued
+          CROSS JOIN snapshot_clock clock
+         WHERE queued.expires_at > clock.now_at
+         ORDER BY queued.target_domain,queued.enqueue_sequence
+         LIMIT 32
+      )
+      SELECT 's2s_fifo_head_detail_v1',
+             substr(md5(head.target_domain),1,16),substr(md5(head.id::text),1,16),
+             head.enqueue_sequence,head.attempt_count,
+             (head.next_attempt_at <= clock.now_at) AS retry_due,
+             CEIL(GREATEST(0,EXTRACT(EPOCH FROM (head.next_attempt_at - clock.now_at))))::bigint
+               AS seconds_until_due,
+             CASE WHEN head.lock_token IS NULL AND head.locked_until > clock.now_at THEN 'time_only'
+                  WHEN head.lock_token IS NULL THEN 'none'
+                  WHEN head.locked_until > clock.now_at THEN 'active'
+                  ELSE 'expired' END AS lease_state,
+             head.successor_count
+        FROM heads head
+        CROSS JOIN snapshot_clock clock
+       ORDER BY head.target_domain,head.enqueue_sequence;
+    " >"$detail_snapshot" 2>&1; then
+    record_parent_diagnostic "--- mix_federation_s2s_fifo_head_detail database=$database_name bounded ---"
+    tail -c 16384 -- "$detail_snapshot" >>"$parent_diagnostic_raw" || true
+    printf '\n' >>"$parent_diagnostic_raw" || true
+  else
+    status=$?
+    record_parent_diagnostic "mix_federation_s2s_fifo_head_detail database=$database_name status=query_failed exit_status=$status"
     tail -c 4096 -- "$detail_snapshot" >>"$parent_diagnostic_raw" || true
     printf '\n' >>"$parent_diagnostic_raw" || true
   fi

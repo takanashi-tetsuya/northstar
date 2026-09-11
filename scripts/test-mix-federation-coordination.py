@@ -462,5 +462,207 @@ class PersistentParentTests(CoordinationCase):
         self.assert_all_released()
 
 
+@unittest.skipUnless(sys.platform == "linux", "requires Linux atomic phase records")
+class SetupEntryTests(CoordinationCase):
+    def entry_child(self, pair=1, *, barrier=True, overrides=None, phase="setup-entry"):
+        # Run the real CLI dispatcher and runtime imports in another interpreter.
+        # Only business setup is replaced: no server, database or network exists.
+        program = """
+import http.client, importlib.util, json, os, socket, sys
+spec = importlib.util.spec_from_file_location('mix_setup_entry_test', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+def forbid_io(event, arguments):
+    if event in {'socket.connect', 'socket.bind', 'subprocess.Popen'}:
+        raise AssertionError('setup entry performed I/O before business release: ' + event)
+sys.addaudithook(forbid_io)
+initialize = module.initialize_runtime
+def observed_initialize():
+    initialize()
+    print(json.dumps({
+        'event': 'loaded', 'pid': os.getpid(),
+        'separate_modules': module.A is not module.B,
+        'domains': [module.A.DOMAIN, module.B.DOMAIN],
+        'ports': [module.A.HTTP_PORT, module.B.HTTP_PORT],
+        'separate_function_globals': (
+            module.A.api.__globals__ is vars(module.A)
+            and module.B.api.__globals__ is vars(module.B)
+        ),
+    }), flush=True)
+def observed_setup():
+    print(json.dumps({'event': 'setup', 'pid': os.getpid()}), flush=True)
+module.initialize_runtime = observed_initialize
+module.setup = observed_setup
+sys.exit(module.main(sys.argv[2:]))
+"""
+        environment = {
+            key: value for key, value in os.environ.items()
+            if not key.startswith(("XMPP_TEST_", "NORTHSTAR_MIX_FEDERATION_", "MIX_FED_HTTP_"))
+        }
+        environment.update({"MIX_FED_HTTP_A": "12341", "MIX_FED_HTTP_B": "12342"})
+        if barrier:
+            environment.update({
+                mix.PHASE_CONTROL_DIRECTORY_ENV: str(self.directory),
+                mix.PHASE_RUN_NONCE_ENV: self.nonce,
+                mix.PHASE_ROUND_ENV: "1",
+                mix.PHASE_PAIR_ENV: str(pair),
+            })
+        for name, value in (overrides or {}).items():
+            if value is None:
+                environment.pop(name, None)
+            else:
+                environment[name] = value
+        child = subprocess.Popen(
+            [sys.executable, "-I", "-B", "-c", program, str(ROOT / "mix-federation-runtime-wsl.py"), phase],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, bufsize=0,
+        )
+
+        def cleanup():
+            if child.poll() is None:
+                child.kill()
+            child.communicate(timeout=5)
+
+        self.addCleanup(cleanup)
+        return child
+
+    def output_line(self, child):
+        self.assertTrue(select.select([child.stdout], [], [], 5)[0], "entry did not report its phase")
+        raw = child.stdout.readline()
+        self.assertTrue(raw, "entry exited before reporting its phase")
+        return raw.decode().strip()
+
+    def assert_loaded(self, record, child):
+        self.assertEqual(record, {
+            "event": "loaded", "pid": child.pid,
+            "separate_modules": True,
+            "domains": ["localhost", "remote.localhost"],
+            "ports": [12341, 12342],
+            "separate_function_globals": True,
+        })
+
+    def assert_waiting(self, child, pair):
+        self.assert_loaded(json.loads(self.output_line(child)), child)
+        self.assertEqual(self.output_line(child), f"MIX federation setup barrier: pair={pair} ready")
+        record = self.assert_signed(self.directory / f"ready-r001-p{pair:03d}.json", pair)
+        self.assertEqual(record["servers"], ["a", "b"])
+        self.assertIsNone(child.poll())
+        self.assertFalse(select.select([child.stdout], [], [], 0.05)[0], "setup ran before signed release")
+
+    def assert_setup_once(self, child, pair):
+        output, error = child.communicate(timeout=5)
+        self.assertEqual(child.returncode, 0, error.decode()[-1500:])
+        lines = output.decode().splitlines()
+        self.assertEqual(len(lines), 2, lines)
+        self.assertEqual(lines[0], f"MIX federation setup barrier: pair={pair} released")
+        self.assertEqual(json.loads(lines[1]), {"event": "setup", "pid": child.pid})
+
+    def test_cli_loads_both_isolated_modules_then_waits_for_all_pairs_and_sets_up_once(self):
+        first = self.entry_child(1)
+        self.assert_waiting(first, 1)
+        with self.assertRaisesRegex(RuntimeError, "incomplete"):
+            mix.parent_release_phase(str(self.directory), self.nonce, 1, 2)
+        self.assert_no_release()
+        second = self.entry_child(2)
+        self.assert_waiting(second, 2)
+        mix.parent_release_phase(str(self.directory), self.nonce, 1, 2)
+        for pair, child in enumerate((first, second), 1):
+            self.assert_setup_once(child, pair)
+
+    def test_standalone_entry_and_legacy_setup_each_initialize_and_execute_once(self):
+        for phase in ("setup-entry", "setup"):
+            with self.subTest(phase=phase):
+                child = self.entry_child(barrier=False, phase=phase)
+                output, error = child.communicate(timeout=5)
+                self.assertEqual(child.returncode, 0, error.decode()[-1500:])
+                lines = output.decode().splitlines()
+                self.assertEqual(len(lines), 2, lines)
+                self.assert_loaded(json.loads(lines[0]), child)
+                self.assertEqual(json.loads(lines[1]), {"event": "setup", "pid": child.pid})
+        self.assertEqual(list(self.directory.glob("ready-*.json")), [])
+        self.assert_no_release()
+
+    def test_runtime_import_failure_cannot_publish_readiness_or_run_setup(self):
+        child = self.entry_child(overrides={"MIX_FED_HTTP_B": "invalid"})
+        output, error = child.communicate(timeout=5)
+        self.assertNotEqual(child.returncode, 0)
+        self.assertIn("MIX_FED_HTTP_B", error.decode())
+        self.assertEqual(output, b"")
+        self.assertEqual(list(self.directory.glob("ready-*.json")), [])
+        self.assert_no_release()
+
+    def test_ready_publication_failure_propagates_after_import_without_running_setup(self):
+        (self.directory / "pair-001.key").unlink()
+        child = self.entry_child()
+        output, error = child.communicate(timeout=5)
+        self.assertNotEqual(child.returncode, 0)
+        self.assertIn("FileNotFoundError", error.decode())
+        lines = output.decode().splitlines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assert_loaded(json.loads(lines[0]), child)
+        self.assertEqual(list(self.directory.glob("ready-*.json")), [])
+        self.assert_no_release()
+
+    def test_partial_barrier_environment_is_rejected_before_runtime_import(self):
+        child = self.entry_child(overrides={mix.PHASE_PAIR_ENV: None})
+        output, error = child.communicate(timeout=5)
+        self.assertNotEqual(child.returncode, 0)
+        self.assertIn("must be set together", error.decode())
+        self.assertEqual(output, b"")
+        self.assertEqual(list(self.directory.glob("ready-*.json")), [])
+        self.assert_no_release()
+
+    def test_invalid_signature_identity_or_release_file_metadata_never_runs_setup(self):
+        configuration = self.configurations[0]
+        for defect, expected_error in (("signature", "signature"), ("identity", "identity"),
+                                       ("metadata", "metadata")):
+            with self.subTest(defect=defect):
+                child = self.entry_child()
+                self.assert_waiting(child, 1)
+                payload = mix._phase_payload(configuration, "release")
+                if defect == "identity":
+                    payload["run_nonce"] = "f" * 64
+                record = mix._signed_record(mix._read_phase_key(configuration), payload)
+                if defect == "signature":
+                    record["signature"] = "0" * 64
+                name = "release-r001-p001.json"
+                target = self.directory / name
+                if defect == "metadata":
+                    # Publish the complete contents with forbidden mode from the
+                    # start; no valid release is visible before this rejection.
+                    temporary = self.directory / ".invalid-release"
+                    temporary.write_text(json.dumps(record), encoding="utf-8")
+                    temporary.chmod(0o644)
+                    temporary.replace(target)
+                else:
+                    mix._write_phase_record(str(self.directory), name, record, replace=False)
+                output, error = child.communicate(timeout=5)
+                self.assertNotEqual(child.returncode, 0)
+                self.assertIn(expected_error, error.decode())
+                self.assertEqual(output, b"")
+                target.unlink()
+
+    def test_parent_cli_deadline_leaves_waiting_entry_without_release_or_business_work(self):
+        child = self.entry_child()
+        self.assert_waiting(child, 1)
+        missing_pair_leader, _ = self.child(0)
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "mix-federation-runtime-wsl.py"),
+             "--phase-parent-await-release", str(self.directory), self.nonce, "1", "2", "1",
+             str(child.pid), str(missing_pair_leader.pid)],
+            capture_output=True, text=True, timeout=5,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("deadline expired", result.stderr)
+        self.assert_no_release()
+        self.assertIsNone(child.poll())
+        # The fixture supervisor owns cancellation after its shared deadline;
+        # the entry must remain quiescent, with no independent fallback release.
+        child.terminate()
+        output, _error = child.communicate(timeout=5)
+        self.assertNotEqual(child.returncode, 0)
+        self.assertEqual(output, b"")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -466,6 +466,23 @@ into protocol or API handlers.
 | cluster soft state | Redis envelopes, route hints and local node observations | signed envelope plus PostgreSQL lease revalidation | discard/rebuild from PostgreSQL and live connections | Redis delivery/order is not consensus or durable truth |
 | endpoint-only secret state | OMEMO identity/session keys and device trust | browser/client device | client export/transfer/recovery only | server archive or account password cannot reconstruct it |
 
+A newly authenticated bidirectional S2S stream contributes one process-local
+retry hint for its exact canonical local/remote domain pair and connection
+incarnation. The registry binds that hint to the observed FIFO head and attempt,
+retains it while that same attempt still owns a lease, and consumes it before
+any conditional retry write. Revocation, replacement, changed work, an already
+due head or a mismatched stanza direction cannot reuse the hint. Observation
+and mutation share one five-second turn budget; a failed or uncertain write
+falls back to ordinary durable retry. PostgreSQL alone changes the retry date
+of an unleased, unexpired, unchanged FIFO head. This does not acknowledge
+delivery, rotate a lease, bypass federation policy or change the configured
+120-second S2S lease and exponential retry defaults.
+
+The runtime control coordinator records its fixed in-flight phase and monotonic
+elapsed time when a stalled attempt is dropped before process cancellation.
+Normal shutdown suppresses that warning. This observation neither reports a
+heartbeat nor changes the five-second fail-closed supervision boundary.
+
 ## Failure ownership matrix
 
 | Failure point | Component that detects it | Component that decides recovery | Durable evidence | Required terminal behavior |

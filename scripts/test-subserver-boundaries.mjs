@@ -54,3 +54,12 @@ rejectsMutation('successful database reads are distinguished from idle ticks', '
 rejectsMutation('coordinator must use the reviewed error-preserving health report', 'state',
   'report_runtime_control_health(&heartbeat, observed_database, first_error);',
   'heartbeat.ok();', /control coordinator/);
+rejectsMutation('instrumented settings reads still use the reserved connection', 'state',
+  'db::runtime_control_snapshot(&mut connection, |phase| {',
+  'db::runtime_control_snapshot(&state.pool, |phase| {', /exact reserved connection/);
+rejectsMutation('control read instrumentation cannot silently drop its phase observation', 'state',
+  'diagnostics.database_read(phase)',
+  'drop(phase)', /exact reserved connection/);
+rejectsMutation('control phase observation cannot report speculative success', 'state',
+  'diagnostics.database_read(phase)',
+  'heartbeat.ok(); diagnostics.database_read(phase)', /control coordinator/);

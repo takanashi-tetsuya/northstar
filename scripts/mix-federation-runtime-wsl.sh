@@ -182,14 +182,6 @@ publish_listener_ledger() {
   python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --listener-ledger-record "${entries[@]}"
 }
 
-publish_setup_barrier_ready_and_wait() {
-  [[ "$phase_barrier_enabled" == true ]] || return 0
-  python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --phase-publish-ready
-  echo "MIX federation setup barrier: pair=$phase_pair ready"
-  python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --phase-await-release
-  echo "MIX federation setup barrier: pair=$phase_pair released"
-}
-
 cleanup() {
   status=$?
   trap - EXIT INT TERM
@@ -438,8 +430,9 @@ publish_listener_ledger
 fixture_stress_phase_barrier "$project_dir" live "$pid_a" "$pid_b"
 echo "MIX federation schemas: $schema_a $schema_b"
 echo "MIX federation ports: http=$http_a,$http_b s2s-tls=$s2s_tls_a,$s2s_tls_b pids=$pid_a,$pid_b"
-publish_setup_barrier_ready_and_wait
-run_mix_federation_phase setup
+# One interpreter loads both domain modules, publishes signed readiness,
+# waits for the existing parent release, and executes setup exactly once.
+run_mix_federation_phase setup-entry
 fixture_stop_child "$pid_b" "B before durable enqueue"
 # Retain the stopped incarnation's bounded diagnostic tail. Starting B again
 # opens b.log for truncation; preserve the earlier worker and shutdown evidence.

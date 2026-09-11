@@ -1138,6 +1138,23 @@ def initialize_runtime() -> None:
     )
 
 
+def setup_entry() -> None:
+    """Prepare both domain modules before the parent releases business work."""
+
+    configuration = phase_barrier_configuration_from_environment()
+    # The shell enters only after the shared all-live barrier. Imports perform
+    # no transport or credential work; publishing readiness afterwards keeps
+    # their cost out of the simultaneous business release. A and B retain
+    # separate module globals for their different domains and relay ports.
+    initialize_runtime()
+    if configuration is not None:
+        publish_phase_ready(configuration)
+        print(f"MIX federation setup barrier: pair={configuration.pair} ready", flush=True)
+        await_phase_release(configuration)
+        print(f"MIX federation setup barrier: pair={configuration.pair} released", flush=True)
+    setup()
+
+
 class Inbox:
     def __init__(self, client: object):
         self.client = client
@@ -1820,6 +1837,9 @@ def main(argv: list[str]) -> int:
             raise RuntimeError("MIX federation listener ledger requires parent barrier variables")
         record_listener_ledger(configuration, argv[1:])
         return 0
+    if argv == ["setup-entry"]:
+        setup_entry()
+        return 0
     phases = {"setup": setup, "enqueue": enqueue, "finish": finish}
     if len(argv) != 1 or argv[0] not in phases:
         raise RuntimeError(
@@ -1829,7 +1849,7 @@ def main(argv: list[str]) -> int:
             "--phase-parent-release DIRECTORY NONCE ROUND PAIRS|"
             "--phase-parent-await-release DIRECTORY NONCE ROUND PAIRS TIMEOUT LEADERS...|"
             "--listener-ledger-record PURPOSE=PID:PORT...|"
-            "--listener-ledger-verify DIRECTORY NONCE ROUND PAIRS|setup|enqueue|finish]"
+            "--listener-ledger-verify DIRECTORY NONCE ROUND PAIRS|setup-entry|setup|enqueue|finish]"
         )
     initialize_runtime()
     phases[argv[0]]()

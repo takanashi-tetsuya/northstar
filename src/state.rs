@@ -317,6 +317,112 @@ mod runtime_control_startup_tests {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeControlPhase {
+    Idle,
+    SettingsRead,
+    RulesRead,
+    PolicyApply,
+    ServiceControlRead,
+}
+
+impl RuntimeControlPhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::SettingsRead => "settings-read",
+            Self::RulesRead => "rules-read",
+            Self::PolicyApply => "policy-apply",
+            Self::ServiceControlRead => "service-control-read",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeControlStall {
+    phase: RuntimeControlPhase,
+    phase_elapsed: Duration,
+    heartbeat_elapsed: Duration,
+}
+
+/// Observation only: a stalled attempt is dropped before its supervisor sets
+/// the root cancellation token. Normal root shutdown must not produce a warning.
+struct RuntimeControlDiagnostics {
+    phase: RuntimeControlPhase,
+    phase_started: tokio::time::Instant,
+    last_reported: tokio::time::Instant,
+    max_silence: Duration,
+    root_cancel: CancellationToken,
+    #[cfg(test)]
+    captured: Option<Arc<std::sync::Mutex<Vec<RuntimeControlStall>>>>,
+}
+
+impl RuntimeControlDiagnostics {
+    fn new(root_cancel: CancellationToken, max_silence: Duration) -> Self {
+        let now = tokio::time::Instant::now();
+        Self {
+            phase: RuntimeControlPhase::Idle,
+            phase_started: now,
+            last_reported: now,
+            max_silence,
+            root_cancel,
+            #[cfg(test)]
+            captured: None,
+        }
+    }
+
+    fn enter(&mut self, phase: RuntimeControlPhase) {
+        self.phase = phase;
+        self.phase_started = tokio::time::Instant::now();
+    }
+
+    fn database_read(&mut self, phase: db::RuntimeControlReadPhase) {
+        self.enter(match phase {
+            db::RuntimeControlReadPhase::Settings => RuntimeControlPhase::SettingsRead,
+            db::RuntimeControlReadPhase::Rules => RuntimeControlPhase::RulesRead,
+        });
+    }
+
+    /// Call only after the existing heartbeat report; this changes no health.
+    fn reported(&mut self) {
+        let now = tokio::time::Instant::now();
+        self.last_reported = now;
+        self.phase = RuntimeControlPhase::Idle;
+        self.phase_started = now;
+    }
+
+    fn stalled(&self) -> Option<RuntimeControlStall> {
+        if self.root_cancel.is_cancelled() {
+            return None;
+        }
+        let now = tokio::time::Instant::now();
+        let heartbeat_elapsed = now.saturating_duration_since(self.last_reported);
+        (heartbeat_elapsed > self.max_silence).then(|| RuntimeControlStall {
+            phase: self.phase,
+            phase_elapsed: now.saturating_duration_since(self.phase_started),
+            heartbeat_elapsed,
+        })
+    }
+}
+
+impl Drop for RuntimeControlDiagnostics {
+    fn drop(&mut self) {
+        let Some(stall) = self.stalled() else {
+            return;
+        };
+        tracing::warn!(
+            phase = stall.phase.label(),
+            phase_elapsed_ms = stall.phase_elapsed.as_millis() as u64,
+            heartbeat_elapsed_ms = stall.heartbeat_elapsed.as_millis() as u64,
+            "runtime-control attempt dropped after heartbeat silence"
+        );
+        #[cfg(test)]
+        if let Some(captured) = &self.captured {
+            captured.lock().unwrap().push(stall);
+        }
+    }
+}
+
 fn report_runtime_control_health(
     heartbeat: &crate::workers::WorkerHeartbeat,
     observed_database: bool,
@@ -421,6 +527,131 @@ mod runtime_control_health_tests {
             .shutdown_and_join(&cancel, Duration::from_secs(1))
             .await
             .is_clean());
+    }
+
+    fn diagnostic_guard(
+        root_cancel: CancellationToken,
+    ) -> (
+        super::RuntimeControlDiagnostics,
+        std::sync::Arc<std::sync::Mutex<Vec<super::RuntimeControlStall>>>,
+    ) {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut guard = super::RuntimeControlDiagnostics::new(root_cancel, Duration::from_secs(5));
+        guard.captured = Some(std::sync::Arc::clone(&captured));
+        (guard, captured)
+    }
+
+    #[tokio::test]
+    async fn dropped_pending_control_turn_reports_its_actual_phase() {
+        use super::RuntimeControlPhase;
+        for phase in [
+            RuntimeControlPhase::SettingsRead,
+            RuntimeControlPhase::RulesRead,
+            RuntimeControlPhase::PolicyApply,
+            RuntimeControlPhase::Idle,
+            RuntimeControlPhase::ServiceControlRead,
+        ] {
+            let (mut guard, captured) = diagnostic_guard(CancellationToken::new());
+            let (entered, observed) = tokio::sync::oneshot::channel();
+            let task = tokio::spawn(async move {
+                match phase {
+                    RuntimeControlPhase::SettingsRead => {
+                        guard.database_read(crate::db::RuntimeControlReadPhase::Settings);
+                    }
+                    RuntimeControlPhase::RulesRead => {
+                        guard.database_read(crate::db::RuntimeControlReadPhase::Rules);
+                    }
+                    other => guard.enter(other),
+                }
+                guard.phase_started -= Duration::from_secs(6);
+                guard.last_reported -= Duration::from_secs(6);
+                entered.send(()).unwrap();
+                std::future::pending::<()>().await;
+                drop(guard);
+            });
+            observed.await.unwrap();
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            let reports = captured.lock().unwrap();
+            assert_eq!(reports.len(), 1);
+            assert_eq!(reports[0].phase, phase);
+            assert!(reports[0].phase_elapsed >= Duration::from_secs(6));
+            assert!(reports[0].heartbeat_elapsed >= Duration::from_secs(6));
+        }
+    }
+
+    #[tokio::test]
+    async fn normal_shutdown_drops_a_stalled_control_turn_without_warning() {
+        let root_cancel = CancellationToken::new();
+        let (mut guard, captured) = diagnostic_guard(root_cancel.clone());
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            guard.database_read(crate::db::RuntimeControlReadPhase::Rules);
+            guard.phase_started -= Duration::from_secs(6);
+            guard.last_reported -= Duration::from_secs(6);
+            entered.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(guard);
+        });
+        observed.await.unwrap();
+        root_cancel.cancel();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(captured.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn short_control_phases_do_not_reset_total_heartbeat_silence() {
+        let (mut guard, captured) = diagnostic_guard(CancellationToken::new());
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let (next_phase, continue_turn) = tokio::sync::oneshot::channel();
+        let (changed, change_observed) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            guard.database_read(crate::db::RuntimeControlReadPhase::Settings);
+            guard.last_reported -= Duration::from_secs(6);
+            entered.send(()).unwrap();
+            continue_turn.await.unwrap();
+            guard.database_read(crate::db::RuntimeControlReadPhase::Rules);
+            guard.phase_started -= Duration::from_secs(2);
+            changed.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(guard);
+        });
+        observed.await.unwrap();
+        next_phase.send(()).unwrap();
+        change_observed.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let reports = captured.lock().unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].phase, super::RuntimeControlPhase::RulesRead);
+        assert!(reports[0].phase_elapsed >= Duration::from_secs(2));
+        assert!(reports[0].heartbeat_elapsed >= Duration::from_secs(6));
+        assert!(reports[0].heartbeat_elapsed > reports[0].phase_elapsed);
+    }
+
+    #[tokio::test]
+    async fn an_existing_health_report_resets_only_the_diagnostic_clock() {
+        let (mut guard, captured) = diagnostic_guard(CancellationToken::new());
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let (report, continue_turn) = tokio::sync::oneshot::channel();
+        let (reported, report_observed) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            guard.database_read(crate::db::RuntimeControlReadPhase::Settings);
+            guard.last_reported -= Duration::from_secs(6);
+            entered.send(()).unwrap();
+            continue_turn.await.unwrap();
+            guard.reported();
+            reported.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(guard);
+        });
+        observed.await.unwrap();
+        report.send(()).unwrap();
+        report_observed.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(captured.lock().unwrap().is_empty());
     }
 }
 
@@ -3050,16 +3281,21 @@ impl AppState {
     ) {
         let weak = Arc::downgrade(&state);
         let connection = Arc::new(tokio::sync::Mutex::new(Some(connection)));
+        let max_silence = Duration::from_secs(5);
+        let diagnostic_cancel = cancel.clone();
         state.worker_registry().supervise(
             "runtime-control-refresh",
             crate::workers::WorkerCriticality::Critical,
             crate::workers::WorkerMode::Continuous,
-            Some(Duration::from_secs(5)),
+            Some(max_silence),
             cancel,
             move |heartbeat| {
                 let weak = weak.clone();
                 let connection = Arc::clone(&connection);
+                let diagnostic_cancel = diagnostic_cancel.clone();
                 async move {
+                    let mut diagnostics =
+                        RuntimeControlDiagnostics::new(diagnostic_cancel, max_silence);
                     let mut connection = connection.lock().await.take().ok_or_else(|| {
                         anyhow::anyhow!(
                             "runtime-control coordinator was restarted after its reserved connection ended"
@@ -3084,8 +3320,13 @@ impl AppState {
                         let mut observed_database = false;
                         if refresh_policy {
                             observed_database = true;
-                            match db::runtime_control_snapshot(&mut connection).await {
+                            match db::runtime_control_snapshot(&mut connection, |phase| {
+                                diagnostics.database_read(phase)
+                            })
+                            .await
+                            {
                                 Ok((island_mode, registration_closed, blacklist, whitelist)) => {
+                                    diagnostics.enter(RuntimeControlPhase::PolicyApply);
                                     let was_island = state.refresh_island_mode(island_mode).await;
                                     state.apply_registration_closed(registration_closed);
                                     if island_mode && !was_island {
@@ -3110,6 +3351,7 @@ impl AppState {
                             && state.service_shutdown.get().is_some()
                         {
                             observed_database = true;
+                            diagnostics.enter(RuntimeControlPhase::ServiceControlRead);
                             match db::poll_admin_service_control(&mut connection).await {
                                 Ok(Some(control))
                                     if service_control_applies(
@@ -3143,6 +3385,7 @@ impl AppState {
                         }
 
                         report_runtime_control_health(&heartbeat, observed_database, first_error);
+                        diagnostics.reported();
                         refresh_policy = !refresh_policy;
                     }
                 }

@@ -237,10 +237,6 @@ async fn probe_readiness(state: &AppState) -> ReadinessSnapshot {
     let persistence_probe = async {
         if let Some(identity) = state.abuse_key_deployment() {
             crate::db::validate_abuse_key_deployment(&state.pool, identity).await?;
-        } else {
-            sqlx::query_scalar::<_, i32>("SELECT 1")
-                .fetch_one(&state.pool)
-                .await?;
         }
         if let Some(identity) = state.cluster.key_authority_identity() {
             crate::db::validate_cluster_key_deployment(&state.pool, &identity).await?;
@@ -249,6 +245,8 @@ async fn probe_readiness(state: &AppState) -> ReadinessSnapshot {
                 .validate_instance_authority(&state.pool)
                 .await?;
         }
+        // This unconditional authority query also proves database connectivity.
+        // A separate ping would add another pool wait to the same probe budget.
         let cleanup = crate::db::admin_session_cleanup_snapshot(&state.pool).await?;
         anyhow::ensure!(
             admin_session_cleanup_ready(&cleanup),

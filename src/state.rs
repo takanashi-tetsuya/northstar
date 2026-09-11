@@ -1488,6 +1488,7 @@ pub struct AppState {
     upload_storage_namespace_sha256: [u8; 32],
     upload_authority_generation: UploadAuthorityGeneration,
     upload_safety_gate: Arc<UploadSafetyGate>,
+    upload_startup_audits: crate::upload_worker::StartupAuditHandoff,
     pub federation: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.
@@ -1864,6 +1865,7 @@ impl AppState {
         db::audit_mix_pam_operation_capacity(&pool)
             .await
             .context("MIX-PAM operation capacity authority failed startup audit")?;
+        let upload_startup_audits;
         let (upload_safety_gate, upload_namespace, upload_authority_generation, upload_store) =
             if config.upload_mode.keeps_storage_runtime() {
                 let upload_safety_gate = UploadSafetyGate::new();
@@ -1890,6 +1892,7 @@ impl AppState {
                     namespace: namespace_generation,
                     capacity_policy: capacity_policy_generation,
                 };
+                let authority_audit_started_at = tokio::time::Instant::now();
                 let authority_audit = db::audit_upload_capacity_authority(
                     &pool,
                     config.upload_storage_max_pending_jobs,
@@ -1908,6 +1911,7 @@ impl AppState {
                         authority_audit.violation_count()
                     );
                 }
+                let ledger_audit_started_at = tokio::time::Instant::now();
                 let capacity_reconciliation = db::reconcile_upload_capacity_ledger(&pool)
                     .await
                     .context("could not reconcile upload capacity facts before storage startup")?;
@@ -1953,25 +1957,27 @@ impl AppState {
                             tokio::time::Instant::now() + Duration::from_secs(30);
                         for (object_id, claim_token) in startup_stages {
                             let remaining = startup_cleanup_deadline
-                        .checked_duration_since(tokio::time::Instant::now())
-                        .context(
-                            "upload staging reconciliation exceeded its startup time budget",
-                        )?;
+                            .checked_duration_since(tokio::time::Instant::now())
+                            .context(
+                                "upload staging reconciliation exceeded its startup time budget",
+                            )?;
                             if tokio::time::timeout(
-                        remaining,
-                        db::upload_claim_is_live(&pool, object_id, claim_token),
-                    )
-                    .await
-                    .context("upload staging lease verification exceeded its startup time budget")?
-                    .context("failed to verify an upload staging lease")?
-                    {
-                        continue;
-                    }
-                            let remaining = startup_cleanup_deadline
-                        .checked_duration_since(tokio::time::Instant::now())
+                            remaining,
+                            db::upload_claim_is_live(&pool, object_id, claim_token),
+                        )
+                        .await
                         .context(
-                            "upload staging reconciliation exceeded its startup time budget",
-                        )?;
+                            "upload staging lease verification exceeded its startup time budget",
+                        )?
+                        .context("failed to verify an upload staging lease")?
+                        {
+                            continue;
+                        }
+                            let remaining = startup_cleanup_deadline
+                            .checked_duration_since(tokio::time::Instant::now())
+                            .context(
+                                "upload staging reconciliation exceeded its startup time budget",
+                            )?;
                             if tokio::time::timeout(
                                 remaining,
                                 guarded.abort(
@@ -2027,6 +2033,17 @@ impl AppState {
                     }
                     _ => unreachable!("upload backend was validated by Config"),
                 };
+                upload_startup_audits =
+                    crate::upload_worker::StartupAuditHandoff::after_successful_audits(
+                        upload_authority_generation,
+                        [
+                            config.upload_storage_max_pending_jobs,
+                            config.upload_storage_max_retained_files,
+                            config.upload_storage_max_retained_bytes,
+                        ],
+                        authority_audit_started_at,
+                        ledger_audit_started_at,
+                    );
                 (
                     upload_safety_gate,
                     upload_namespace,
@@ -2049,6 +2066,7 @@ impl AppState {
                 tracing::info!(
                     "upload capability disabled; skipping storage authority, object-store and reconciliation initialization"
                 );
+                upload_startup_audits = crate::upload_worker::StartupAuditHandoff::default();
                 (
                     UploadSafetyGate::disabled(),
                     [0_u8; 32],
@@ -2554,6 +2572,7 @@ impl AppState {
             upload_storage_namespace_sha256: upload_namespace,
             upload_authority_generation,
             upload_safety_gate,
+            upload_startup_audits,
             federation,
             component_credentials,
             components,
@@ -2814,6 +2833,12 @@ impl AppState {
 
     pub(crate) fn upload_safety_gate(&self) -> &Arc<UploadSafetyGate> {
         &self.upload_safety_gate
+    }
+
+    pub(crate) fn take_upload_startup_audits(
+        &self,
+    ) -> Option<crate::upload_worker::SuccessfulStartupAudits> {
+        self.upload_startup_audits.take()
     }
 
     pub(crate) fn upload_service(&self) -> &crate::services::upload::UploadService {

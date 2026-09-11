@@ -1,3 +1,4 @@
+use crate::services::upload_safety::{UploadAuthorityGeneration, UploadIoClass, UploadSafetyGate};
 use crate::{db, state::AppState, workers::WorkerHeartbeat};
 use anyhow::{Context, Result};
 use futures::{stream, StreamExt};
@@ -14,6 +15,77 @@ const CAPACITY_LEDGER_AUDIT_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const CAPACITY_LEDGER_AUDIT_DEGRADED_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const CAPACITY_LEDGER_AUDIT_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
+pub(crate) struct SuccessfulStartupAudits {
+    generation: UploadAuthorityGeneration,
+    capacity_limits: [i64; 3],
+    authority_started_at: tokio::time::Instant,
+    ledger_started_at: tokio::time::Instant,
+}
+
+/// One AppState may hand its successful startup observations to one worker
+/// attempt. This stores no reusable health verdict: subsequent attempts and
+/// invalidated gates must perform the ordinary database audits immediately.
+#[derive(Default)]
+pub(crate) struct StartupAuditHandoff {
+    evidence: std::sync::Mutex<Option<SuccessfulStartupAudits>>,
+}
+
+impl StartupAuditHandoff {
+    pub(crate) fn after_successful_audits(
+        generation: UploadAuthorityGeneration,
+        capacity_limits: [i64; 3],
+        authority_started_at: tokio::time::Instant,
+        ledger_started_at: tokio::time::Instant,
+    ) -> Self {
+        Self {
+            evidence: std::sync::Mutex::new(Some(SuccessfulStartupAudits {
+                generation,
+                capacity_limits,
+                authority_started_at,
+                ledger_started_at,
+            })),
+        }
+    }
+
+    pub(crate) fn take(&self) -> Option<SuccessfulStartupAudits> {
+        match self.evidence.lock() {
+            Ok(mut evidence) => evidence.take(),
+            Err(poisoned) => {
+                poisoned.into_inner().take();
+                None
+            }
+        }
+    }
+}
+
+impl SuccessfulStartupAudits {
+    fn deadlines(
+        self,
+        generation: UploadAuthorityGeneration,
+        capacity_limits: [i64; 3],
+        safety_gate: &UploadSafetyGate,
+        now: tokio::time::Instant,
+    ) -> (tokio::time::Instant, tokio::time::Instant) {
+        // NewWrite is permitted only by a Healthy gate with this exact
+        // generation. The gate checks both under the same snapshot lock.
+        if self.generation != generation
+            || self.capacity_limits != capacity_limits
+            || !safety_gate.permits_generation(UploadIoClass::NewWrite, generation)
+            || self.authority_started_at > self.ledger_started_at
+            || self.ledger_started_at > now
+        {
+            return (now, now);
+        }
+        // Anchor to each database observation's START, including pool wait and
+        // query/commit time. Later AppState initialization or worker scheduling
+        // must never grant the old observation a fresh 60-second/hour lifetime.
+        (
+            self.authority_started_at + CAPACITY_AUTHORITY_AUDIT_INTERVAL,
+            self.ledger_started_at + CAPACITY_LEDGER_AUDIT_INTERVAL,
+        )
+    }
+}
+
 pub async fn serve(
     state: Arc<AppState>,
     cancel: CancellationToken,
@@ -22,11 +94,15 @@ pub async fn serve(
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut credential_ticks = 0_u8;
+    let mut startup_audits = state.take_upload_startup_audits();
     let mut next_capacity_authority_audit = tokio::time::Instant::now();
+    let mut next_capacity_ledger_audit = next_capacity_authority_audit;
     let mut capacity_authority_violations = 0_u64;
-    let mut next_capacity_ledger_audit = tokio::time::Instant::now();
     let mut capacity_ledger_mismatches = 0_u64;
     loop {
+        // Consume even if the first probe fails or this attempt is cancelled.
+        // A later loop or worker restart must not revive old startup evidence.
+        let startup_audits = startup_audits.take();
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {}
@@ -82,6 +158,18 @@ pub async fn serve(
                 continue;
             }
         };
+        if let Some(audits) = startup_audits.filter(|_| !recovery_draining) {
+            (next_capacity_authority_audit, next_capacity_ledger_audit) = audits.deadlines(
+                authority_generation,
+                [
+                    state.config.upload_storage_max_pending_jobs,
+                    state.config.upload_storage_max_retained_files,
+                    state.config.upload_storage_max_retained_bytes,
+                ],
+                state.upload_safety_gate(),
+                tokio::time::Instant::now(),
+            );
+        }
         if tokio::time::Instant::now() >= next_capacity_authority_audit {
             match db::audit_upload_capacity_authority(
                 &state.pool,
@@ -899,6 +987,198 @@ async fn process_cleanup_job(
 
 #[cfg(test)]
 mod tests {
+    use super::{Duration, StartupAuditHandoff, UploadAuthorityGeneration, UploadSafetyGate};
+    use tokio::time::Instant;
+
+    const STARTUP_GENERATION: UploadAuthorityGeneration = UploadAuthorityGeneration {
+        namespace: 7,
+        capacity_policy: 11,
+    };
+    const STARTUP_LIMITS: [i64; 3] = [16, 32, 1024];
+
+    fn successful_startup(start: Instant) -> StartupAuditHandoff {
+        StartupAuditHandoff::after_successful_audits(
+            STARTUP_GENERATION,
+            STARTUP_LIMITS,
+            start,
+            start + Duration::from_secs(7),
+        )
+    }
+
+    fn healthy_gate() -> std::sync::Arc<UploadSafetyGate> {
+        let gate = UploadSafetyGate::new();
+        gate.establish(STARTUP_GENERATION, false);
+        gate
+    }
+
+    #[test]
+    fn startup_audit_deadlines_include_startup_and_first_probe_time() {
+        let start = Instant::now();
+        let handoff = successful_startup(start);
+        let first_probe_completed = start + Duration::from_secs(23);
+        let deadlines = handoff.take().expect("startup proof").deadlines(
+            STARTUP_GENERATION,
+            STARTUP_LIMITS,
+            &healthy_gate(),
+            first_probe_completed,
+        );
+        assert_eq!(deadlines.0, start + Duration::from_secs(60));
+        assert_eq!(deadlines.1, start + Duration::from_secs(3607));
+        assert!(
+            handoff.take().is_none(),
+            "a restarted worker must audit again"
+        );
+    }
+
+    #[test]
+    fn startup_audits_expire_independently_at_the_original_boundaries() {
+        let start = Instant::now();
+        for elapsed in [59, 60, 3606, 3607, 7200] {
+            let now = start + Duration::from_secs(elapsed);
+            let (authority, ledger) = successful_startup(start)
+                .take()
+                .expect("startup proof")
+                .deadlines(STARTUP_GENERATION, STARTUP_LIMITS, &healthy_gate(), now);
+            assert_eq!(now >= authority, elapsed >= 60);
+            assert_eq!(now >= ledger, elapsed >= 3607);
+        }
+    }
+
+    #[test]
+    fn startup_evidence_cannot_cross_generation_or_policy_limits() {
+        let start = Instant::now();
+        let now = start + Duration::from_secs(23);
+        let mut cases = vec![
+            (UploadAuthorityGeneration::new(8, 11), STARTUP_LIMITS),
+            (UploadAuthorityGeneration::new(7, 12), STARTUP_LIMITS),
+        ];
+        for index in 0..STARTUP_LIMITS.len() {
+            let mut changed_limits = STARTUP_LIMITS;
+            changed_limits[index] += 1;
+            cases.push((STARTUP_GENERATION, changed_limits));
+        }
+        for (generation, limits) in cases {
+            let gate = UploadSafetyGate::new();
+            gate.establish(generation, false);
+            assert_eq!(
+                successful_startup(start)
+                    .take()
+                    .expect("startup proof")
+                    .deadlines(generation, limits, &gate, now,),
+                (now, now),
+            );
+        }
+        let gate = UploadSafetyGate::new();
+        gate.establish(UploadAuthorityGeneration::new(7, 12), false);
+        assert_eq!(
+            successful_startup(start)
+                .take()
+                .expect("startup proof")
+                .deadlines(STARTUP_GENERATION, STARTUP_LIMITS, &gate, now,),
+            (now, now),
+            "the current gate generation must also match",
+        );
+    }
+
+    #[test]
+    fn startup_evidence_requires_a_still_healthy_gate_after_the_probe() {
+        let start = Instant::now();
+        let now = start + Duration::from_secs(23);
+        let gates = [
+            UploadSafetyGate::new(),
+            UploadSafetyGate::disabled(),
+            healthy_gate(),
+            healthy_gate(),
+            healthy_gate(),
+            healthy_gate(),
+        ];
+        gates[2].establish(STARTUP_GENERATION, true);
+        gates[3].mark_namespace_unsafe("changed during first probe");
+        gates[4].mark_capacity_authority_unsafe("first probe failed");
+        gates[5].mark_ledger_mismatch("ledger invalidated during first probe");
+        for gate in gates {
+            assert_eq!(
+                successful_startup(start)
+                    .take()
+                    .expect("startup proof")
+                    .deadlines(STARTUP_GENERATION, STARTUP_LIMITS, &gate, now,),
+                (now, now),
+            );
+        }
+    }
+
+    #[test]
+    fn discarded_first_attempt_cannot_reuse_startup_evidence_after_recovery() {
+        let handoff = successful_startup(Instant::now());
+        let gate = healthy_gate();
+        {
+            let _first_attempt = handoff.take().expect("startup proof");
+            gate.mark_capacity_authority_unsafe("first namespace/policy probe failed");
+            // A failed first probe or cancellation drops the taken evidence without
+            // converting it into deadlines. Re-establishing health cannot restore it.
+        }
+        gate.establish(STARTUP_GENERATION, false);
+        assert!(handoff.take().is_none());
+        assert!(StartupAuditHandoff::default().take().is_none());
+    }
+
+    #[test]
+    fn concurrent_workers_cannot_share_startup_evidence() {
+        let handoff = std::sync::Arc::new(successful_startup(Instant::now()));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let attempts: Vec<_> = (0..8)
+            .map(|_| {
+                let handoff = std::sync::Arc::clone(&handoff);
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    usize::from(handoff.take().is_some())
+                })
+            })
+            .collect();
+        let proofs: usize = attempts
+            .into_iter()
+            .map(|attempt| attempt.join().expect("worker attempt"))
+            .sum();
+        assert_eq!(proofs, 1);
+        assert!(handoff.take().is_none());
+    }
+
+    #[test]
+    fn startup_evidence_rejects_future_or_reversed_observation_times() {
+        let start = Instant::now();
+        let now = start + Duration::from_secs(23);
+        for (authority, ledger) in [(now, start), (start, now + Duration::from_secs(1))] {
+            let handoff = StartupAuditHandoff::after_successful_audits(
+                STARTUP_GENERATION,
+                STARTUP_LIMITS,
+                authority,
+                ledger,
+            );
+            assert_eq!(
+                handoff.take().expect("startup proof").deadlines(
+                    STARTUP_GENERATION,
+                    STARTUP_LIMITS,
+                    &healthy_gate(),
+                    now,
+                ),
+                (now, now),
+            );
+            assert!(handoff.take().is_none());
+        }
+    }
+
+    #[test]
+    fn poisoned_startup_handoff_discards_evidence() {
+        let handoff = successful_startup(Instant::now());
+        let result = std::panic::catch_unwind(|| {
+            let _guard = handoff.evidence.lock().expect("unpoisoned handoff");
+            panic!("interrupt startup evidence transfer");
+        });
+        assert!(result.is_err());
+        assert!(handoff.take().is_none());
+        assert!(handoff.take().is_none());
+    }
     #[test]
     fn storage_operation_timeout_is_bounded() {
         assert!(super::STORAGE_OPERATION_TIMEOUT.as_secs() <= 300);

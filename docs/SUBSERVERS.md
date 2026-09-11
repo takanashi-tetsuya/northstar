@@ -108,6 +108,15 @@ while serving. The windows bound those initialization phases, not all startup
 work; the listener fixture independently retains its total 15-second readiness
 deadline.
 
+Core owns upload authority and capacity auditing. Startup completes both audits
+before accepting traffic. Its first upload worker may use those successful
+observations once, scheduling the next catalog audit from the original audit
+start plus 60 seconds and the next ledger audit from its start plus one hour.
+The five-second namespace and policy probe still runs immediately. An expired
+observation triggers its audit immediately; a failed initial probe, invalidated
+safety gate, or worker restart requires fresh audits. This replaces duplicate
+startup audits without granting their results a new lifetime at worker startup.
+
 The loopback-only maintenance endpoint provides `/healthz`, `/readyz` and
 `/metrics`. Readiness requires a completed successful cleanup pass, healthy
 supervised workers and the database ownership connection. It is false during

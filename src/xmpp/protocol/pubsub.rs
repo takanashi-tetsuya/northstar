@@ -2584,7 +2584,6 @@ pub(crate) fn start_pubsub_digest_delivery(
             async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(1));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                let mut lease_cleanup_ticks = 0_u8;
                 loop {
                     interval.tick().await;
                     if let Err(error) = deliver_due_pubsub_digests(&state).await {
@@ -2595,21 +2594,6 @@ pub(crate) fn start_pubsub_digest_delivery(
                         );
                     } else {
                         heartbeat.ok();
-                    }
-                    lease_cleanup_ticks = lease_cleanup_ticks.wrapping_add(1);
-                    if lease_cleanup_ticks >= 60 {
-                        lease_cleanup_ticks = 0;
-                        if let Err(error) = state
-                            .pubsub_service()
-                            .cleanup_expired_subscriptions(1_000)
-                            .await
-                        {
-                            heartbeat.error(&error);
-                            tracing::error!(
-                                ?error,
-                                "failed to clean expired PubSub subscription leases"
-                            );
-                        }
                     }
                 }
             }

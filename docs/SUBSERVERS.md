@@ -11,7 +11,7 @@ from this deployment and remain prototypes.
 | Process | Command | Owns | Inputs |
 | --- | --- | --- | --- |
 | Core | `xmpp-server serve core` | Client and federation transports, live sessions, message admission and delivery, public HTTP, administration, durable operation processing, session recovery, upload storage | Existing core configuration and secrets |
-| Maintenance | `xmpp-server serve maintenance` | Archive/offline retention, completed retraction retention, expired audit and governance artifacts | Runtime database credential, domain, numeric retention policy |
+| Maintenance | `xmpp-server serve maintenance` | Archive/offline retention, completed retraction retention, expired audit and governance artifacts, physical PubSub subscription cleanup | Runtime database credential, domain, numeric retention policy |
 | Combined compatibility mode | `xmpp-server serve standalone` or no arguments | Both responsibility groups in one process | Existing core configuration and secrets |
 
 ```mermaid
@@ -34,7 +34,10 @@ TLS/signing keys, mount uploads, or read the core `.env` file.
 `src/subservers.rs` owns command selection, maintenance configuration, process
 lifecycle and private health. `src/retention.rs` receives only a retention
 policy, database pool and metrics. Retention SQL belongs to `src/db/retention.rs`.
-Application services and protocol handlers remain outside that dependency path.
+`src/subscription_cleanup.rs` owns physical subscription cleanup with only the
+existing pool, narrow counters and independent readiness; its SQL remains in
+`src/db/pubsub.rs`. Application services and protocol handlers remain outside
+these maintenance dependency paths.
 
 Core tracks whether a connection has ever attempted to reserve or receive a
 live-session lease or binding claim. It records that possibility before the
@@ -138,12 +141,23 @@ The five-second namespace and policy probe still runs immediately. An expired
 observation triggers its audit immediately; a failed initial probe, invalidated
 safety gate, or worker restart requires fresh audits. This replaces duplicate
 startup audits without granting their results a new lifetime at worker startup.
+A failed catalog or ledger read immediately closes upload writes and readiness.
+Until the existing retry (15 seconds for the catalog, 60 seconds for the ledger),
+waiting ticks only pulse liveness: they neither recount that cached error nor
+clear preceding failures. Three actual consecutive read failures still stop the
+critical worker. Confirmed catalog violations and ledger mismatches retain their
+per-tick terminal behavior, including while the other audit is waiting. Each
+tick reports at most one of these audit errors. A clean result from one audit
+alone cannot restore writes or clear health. Writes resume at the complete
+authority-check boundary; worker health clears only after the remaining
+reconciliation work also succeeds.
 
 The loopback-only maintenance endpoint provides `/healthz`, `/readyz` and
-`/metrics`. Readiness requires a completed successful cleanup pass, healthy
-supervised workers and the database ownership connection. It is false during
-a pending pass, after any cleanup failure, and until a successful pass restores
-health. Requests have fixed concurrency, size and time bounds.
+`/metrics`. Readiness requires independently completed successful archive and
+subscription cleanup passes, healthy supervised workers and the database
+ownership connection. It is false during either pending pass, after either
+cleanup fails, and until that worker completes a successful pass. One worker's
+success cannot clear the other's failure. Requests have fixed concurrency, size and time bounds.
 In Compose, probe it inside the maintenance container; it has no host port.
 Metrics describe this process and are not a cluster-wide total. The existing
 core Prometheus target does not automatically include maintenance metrics.
@@ -209,11 +223,28 @@ briefly finish after ownership loss. Retention continues to use bounded,
 idempotent database deletion and row locking. Do not use this mechanism as
 permission to overlap deployments with different retention policies.
 
-Maintenance failure removes automatic expiry until it recovers; core retains
+Maintenance failure pauses automatic cleanup until it recovers; core retains
 its own health signal and continues serving existing traffic. Alert on both
 services. Restore operations must stop **both** processes, follow the existing
 database/host fences, and restart maintenance and core only after recovery
 authority is verified.
+
+## Subscription cleanup ownership
+
+Physical PubSub subscription cleanup runs in maintenance, or under the same
+maintenance ownership claim in standalone mode. Core does not register this
+worker. Expiration remains an authorization predicate in the repository, so
+waiting for physical deletion does not extend an expired subscription's access.
+Existing immutable event snapshots retain their delivery authority.
+
+The worker starts immediately and then runs every 60 seconds. Each pass keeps
+the existing 1,000-row batch limit and SQL timeouts, with a 40-second deadline
+covering acquisition, both deletion statements and commit. Its independent
+110-second silence watchdog covers the interval, pass and scheduling margin.
+Cancellation or an incomplete pass leaves its readiness false. Cleanup uses the
+existing maintenance pool; it neither acquires the shared delivery turn nor
+runs inside the five-second digest delivery worker. Pool and database-role
+connection limits remain unchanged.
 
 ## Security boundary and remaining work
 

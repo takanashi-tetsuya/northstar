@@ -451,7 +451,11 @@ const appStateConstruction = structBody(state, 'pub async fn new(');
 if (!/pub async fn new\([\s\S]*?runtime_control_connection\s*:\s*PoolConnection<Postgres>/.test(state)) {
   throw new Error('AppState must receive the already-reserved runtime-control connection');
 }
-const runtimeMain = structBody(mainSource, 'async fn main()');
+const terminalMain = structBody(mainSource, 'async fn main()');
+if (terminalMain.replace(/\s+/g, '') !== 'logging::report_result(run().await)') {
+  throw new Error('main must report its final result through the bounded console owner');
+}
+const runtimeMain = structBody(mainSource, 'async fn run()');
 const mainRuntimeControlReservation = runtimeMain.indexOf('state::reserve_runtime_control_connection(&config).await?');
 const mainPrimaryPoolConstruction = runtimeMain.indexOf('let pool_options = PgPoolOptions::new()');
 if (mainRuntimeControlReservation < 0 || mainPrimaryPoolConstruction < 0
@@ -2779,6 +2783,7 @@ const supervisedWorkerContracts = [
   { name: 'account-deletion-recovery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(1_200))', draining: false },
   { name: 'upload-storage-reconciliation', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(600))', draining: false },
   { name: 'archive-retention', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(retention_max_silence)', draining: false },
+  { name: 'pubsub-subscription-cleanup', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(subscription_cleanup::MAX_SILENCE)', draining: false },
   { name: 'admin-session-cleanup', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(90))', draining: false },
   { name: 'redis-pubsub', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(45))', draining: false },
   { name: 'cluster-maintenance', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(90))', draining: false },
@@ -2804,6 +2809,7 @@ const workerResponsibilityEvidence = {
   'account-deletion-recovery': ['src/main.rs', '`main`', '1,200 s'],
   'upload-storage-reconciliation': ['src/main.rs', '`main`', '600 s'],
   'archive-retention': ['src/main.rs', '`main`', 'derived retention'],
+  'pubsub-subscription-cleanup': ['src/main.rs', '`main`, standalone only', '110 s'],
   'admin-session-cleanup': ['src/main.rs', '`main`', '90 s'],
   'redis-pubsub': ['src/main.rs', '`main`, cluster only', '45 s'],
   'cluster-maintenance': ['src/main.rs', '`main`, cluster only', '90 s'],
@@ -2822,11 +2828,12 @@ const workerResponsibilityEvidence = {
 };
 const workerDocumentBehaviorEvidence = {
   'abuse-key-deployment-authority': ['first returned validation error/timeout'],
-  'upload-storage-reconciliation': ['three consecutive DB/provider/backlog reports'],
+  'upload-storage-reconciliation': ['three consecutive DB/provider/backlog reports', 'waiting ticks only pulse'],
   'cluster-maintenance': ['authentication or user-agent login generation'],
   'cluster-failure-policy': ['any terminal attempt or silence cancels'],
   'cluster-muc-outbox': ['in every mode', 'single-node PostgreSQL maintenance'],
   'sm-authority-listener': ['5 s liveness tick'],
+  'pubsub-subscription-cleanup': ['60 s', '40 s', '1,000', 'delivery'],
 };
 const productionRustSources = [];
 const pendingResponsibilitySources = [path.join(root, 'src')];
@@ -2854,7 +2861,8 @@ const composedWorkers = productionRustSources.flatMap(({ relative, source }) =>
   [...source.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g)]
     .map((match) => roleIdentity(relative, match[2])),
 );
-assertExactUniqueInventory('supervised-worker', composedWorkers, [...supervisedWorkers, 'maintenance/archive-retention']);
+assertExactUniqueInventory('supervised-worker', composedWorkers, [...supervisedWorkers,
+  'maintenance/archive-retention', 'maintenance/pubsub-subscription-cleanup']);
 for (const contract of supervisedWorkerContracts) {
   const [expectedSource, documentedOwner, documentedWatchdog] =
     workerResponsibilityEvidence[contract.name] ?? [];

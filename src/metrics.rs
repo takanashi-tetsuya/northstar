@@ -2,6 +2,13 @@ use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+/// Independently shared metrics for physical subscription cleanup.
+#[derive(Default)]
+pub struct SubscriptionCleanupMetrics {
+    pub deleted_total: AtomicU64,
+    pub failures_total: AtomicU64,
+}
+
 const DURATION_BUCKETS_MICROS: [u64; 14] = [
     500, 1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000,
     2_500_000, 5_000_000, 10_000_000,
@@ -247,6 +254,7 @@ pub struct Metrics {
     pub audit_export_operations_total: AtomicU64,
     pub audit_export_operation_failures_total: AtomicU64,
     pub retention_cleanup_failures_total: AtomicU64,
+    pub subscription_cleanup: std::sync::Arc<SubscriptionCleanupMetrics>,
     pub tls_reload_failures_total: AtomicU64,
     pub tls_revocation_rechecks_total: AtomicU64,
     pub tls_revocation_recheck_inconclusive_total: AtomicU64,
@@ -432,6 +440,10 @@ impl Metrics {
                 "xmpp_audit_export_operation_failures_total {}\n",
                 "# TYPE xmpp_retention_cleanup_failures_total counter\n",
                 "xmpp_retention_cleanup_failures_total {}\n",
+                "# TYPE xmpp_pubsub_subscription_cleanup_deleted_total counter\n",
+                "xmpp_pubsub_subscription_cleanup_deleted_total {}\n",
+                "# TYPE xmpp_pubsub_subscription_cleanup_failures_total counter\n",
+                "xmpp_pubsub_subscription_cleanup_failures_total {}\n",
                 "# TYPE xmpp_tls_reload_failures_total counter\n",
                 "xmpp_tls_reload_failures_total {}\n",
                 "# TYPE xmpp_tls_revocation_rechecks_total counter\n",
@@ -543,6 +555,8 @@ impl Metrics {
             read(&self.audit_export_operations_total),
             read(&self.audit_export_operation_failures_total),
             read(&self.retention_cleanup_failures_total),
+            read(&self.subscription_cleanup.deleted_total),
+            read(&self.subscription_cleanup.failures_total),
             read(&self.tls_reload_failures_total),
             read(&self.tls_revocation_rechecks_total),
             read(&self.tls_revocation_recheck_inconclusive_total),

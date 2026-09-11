@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = { main: 'src/main.rs', subservers: 'src/subservers.rs', retention: 'src/retention.rs',
+  subscriptionCleanup: 'src/subscription_cleanup.rs',
+  pubsubProtocol: 'src/xmpp/protocol/pubsub.rs', pubsubService: 'src/services/pubsub.rs',
   state: 'src/state.rs',
   cluster: 'scripts/cluster-wsl.sh', responsibility: 'docs/PROGRAM_RESPONSIBILITIES.md' };
 
@@ -41,7 +43,7 @@ export function readSubserverSources() {
   return Object.fromEntries(Object.entries(files).map(([name, file]) => [name, fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
-export function verifySubserverBoundaries({ main, subservers, retention, state, cluster, responsibility }) {
+export function verifySubserverBoundaries({ main, subservers, retention, subscriptionCleanup, pubsubProtocol, pubsubService, state, cluster, responsibility }) {
   // Alternate control ticks can legitimately perform no SQL. They must not
   // reset a lost advisory-lock session's consecutive database error count.
   const report = codeOnly(body(state, 'fn report_runtime_control_health(')).replace(/\s+/g, '');
@@ -72,13 +74,38 @@ export function verifySubserverBoundaries({ main, subservers, retention, state, 
     'audit_log_retention_days', 'retention_cleanup_batch_size', 'retention_cleanup_interval_seconds',
   ]);
   exactFields(retention, 'struct RetentionContext', ['pool', 'policy', 'metrics', 'readiness']);
+  exactFields(subscriptionCleanup, 'struct SubscriptionCleanupContext', ['pool', 'metrics', 'readiness']);
+  // Mask only the known test module and retain later production items.
+  const testStart = subscriptionCleanup.indexOf('#[cfg(test)]');
+  requireBoundary(testStart >= 0 && /^#\[cfg\(test\)\]\s*mod tests\s*\{/.test(subscriptionCleanup.slice(testStart)),
+    'subscription cleanup test module boundary changed');
+  const testBody = body(subscriptionCleanup.slice(testStart), 'mod tests');
+  const testEnd = subscriptionCleanup.indexOf(testBody, testStart) + testBody.length + 1;
+  const subscriptionProduction = subscriptionCleanup.slice(0, testStart) + subscriptionCleanup.slice(testEnd);
+  const subscriptionCode = codeOnly(subscriptionProduction);
+  requireBoundary(!/\b(?:AppState|Config|Keyring|KeyRing|FederationRouter|PgPoolOptions|PgConnection)\b|crate\s*::\s*(?:state|s2s|xmpp|auth)\s*::/.test(subscriptionCode),
+    'subscription cleanup must retain its narrow existing-pool authority');
+  for (const [name, seconds] of [['CLEANUP_INTERVAL', 60], ['CLEANUP_BUDGET', 40], ['MAX_SILENCE', 110]]) {
+    requireBoundary(new RegExp(`const ${name}: Duration = Duration::from_secs\\(${seconds}\\)`).test(subscriptionCode),
+      `subscription cleanup lost its independent ${name} budget`);
+  }
+  requireBoundary(/const CLEANUP_BATCH_SIZE: i64 = 1_?000/.test(subscriptionCode),
+    'subscription cleanup must retain its bounded batch size');
+  requireBoundary(!/\bcleanup_expired_subscriptions\s*\(/.test(codeOnly(pubsubProtocol) + codeOnly(pubsubService)),
+    'physical subscription cleanup cannot reacquire delivery-worker or shared-outbox authority');
+  const cleanupPass = codeOnly(body(subscriptionProduction, 'async fn run_once_with'));
+  requireBoundary(cleanupPass.includes('tokio::time::timeout_at(deadline, async { cleanup().await })') &&
+    cleanupPass.includes('readiness.begin_pass()') && cleanupPass.includes('cancel.cancelled()'),
+    'subscription cleanup must enforce a cancellation-aware total pass deadline before publishing health');
+  requireBoundary(codeOnly(body(subscriptionProduction, 'async fn serve_with')).includes('Instant::now() + CLEANUP_BUDGET'),
+    'subscription cleanup must apply its reviewed budget to each pass');
   exactFields(retention, 'struct RetentionPolicy', ['mam_retention_days', 'muc_mam_retention_days',
     'offline_message_ttl_days', 'audit_log_retention_days', 'retention_cleanup_batch_size', 'retention_cleanup_interval_seconds']);
   requireBoundary(/self\.maintenance_bind\.ip\(\)\.is_loopback\(\)/.test(subservers) &&
     /self\.maintenance_bind\.port\(\)\s*!=\s*0/.test(subservers), 'maintenance config must reject public or unowned binds');
   const health = body(subservers, 'async fn private_health(');
   for (const marker of ['listener.local_addr()?.ip().is_loopback()', 'Semaphore::new(16)',
-    '[0u8; 4096]', 'Duration::from_secs(2)', 'connections.shutdown().await', 'workers.readiness_error().is_none()', 'retention_readiness.is_ready()']) {
+    '[0u8; 4096]', 'Duration::from_secs(2)', 'connections.shutdown().await', 'workers.readiness_error().is_none()', 'retention_readiness.is_ready()', 'subscription_readiness.is_ready()']) {
     requireBoundary(health.replace(/\s+/g, '').includes(marker.replace(/\s+/g, '')), `private health lost bounded local authority: ${marker}`);
   }
   requireBoundary(!health.includes('error.to_string()'), 'private health cannot return internal failure details');
@@ -116,11 +143,18 @@ export function verifySubserverBoundaries({ main, subservers, retention, state, 
     .map((match) => body(main.slice(match.index), 'if process_role.embeds_retention()'));
   requireBoundary(guardedRegistrations.filter((block) => block.includes('"archive-retention"') &&
     block.includes('retention::serve(')).length === 1, 'standalone retention worker must have one explicit role guard');
+  requireBoundary(guardedRegistrations.filter((block) => block.includes('"pubsub-subscription-cleanup"') &&
+    block.includes('subscription_cleanup::serve_context(')).length === 1 &&
+    [...main.matchAll(/\.supervise\(\s*"pubsub-subscription-cleanup"/g)].length === 1,
+  'standalone subscription cleanup must have one explicit role guard');
   const workers = [...subservers.matchAll(/\.supervise(?:_draining)?\(\s*"([^"]+)"/g)].map((match) => match[1]);
-  requireBoundary(JSON.stringify(workers) === JSON.stringify(['archive-retention']),
+  requireBoundary(JSON.stringify(workers) === JSON.stringify(['archive-retention', 'pubsub-subscription-cleanup']),
     'maintenance may supervise only its declared retention worker');
   requireBoundary(/"archive-retention",\s*WorkerCriticality::Restartable,\s*WorkerMode::Continuous,\s*Some\(silence\)/.test(run),
     'maintenance retention must retain its restart/readiness/watchdog contract');
+  requireBoundary(/"pubsub-subscription-cleanup",\s*WorkerCriticality::Restartable,\s*WorkerMode::Continuous,\s*Some\((?:crate::)?subscription_cleanup::MAX_SILENCE\)/.test(run) &&
+    run.includes('subscription_cleanup::serve_context('),
+    'maintenance subscription cleanup must retain its independent restart/readiness/watchdog contract');
   const observers = [...subservers.matchAll(/\.register_observer\(\s*"([^"]+)"/g)].map((match) => match[1]);
   requireBoundary(JSON.stringify(observers) === JSON.stringify(['maintenance-ownership']),
     'maintenance ownership health must have one explicit observer');
@@ -135,12 +169,13 @@ export function verifySubserverBoundaries({ main, subservers, retention, state, 
   requireBoundary(cluster.includes('"$binary" serve standalone >"$redis_tmp/cluster-a.log"') &&
     cluster.includes('"$binary" serve core >"$redis_tmp/cluster-b.log"'),
   'experimental cluster startup/restart must retain one archive owner and a core-only peer');
-  for (const marker of ['`serve maintenance`', '`maintenance/archive-retention`', '`maintenance-ownership`',
+  for (const marker of ['`serve maintenance`', '`maintenance/archive-retention`', '`maintenance/pubsub-subscription-cleanup`', '`maintenance-ownership`',
     'bounded overlap', 'shared PostgreSQL runtime role']) {
     requireBoundary(responsibility.includes(marker), `responsibility document lacks ${marker}`);
   }
   for (const [name, markers] of [
     ['maintenance/archive-retention', ['`serve maintenance`', 'restartable / continuous', '2 × retention interval + 60 s', '| immediate |']],
+    ['maintenance/pubsub-subscription-cleanup', ['`serve maintenance`', 'restartable / continuous', '110 s', '40 s', '60 s', '| immediate |']],
     ['maintenance-ownership', ['`serve maintenance`', 'critical health observer', '**no task/factory**', '5 s', '3 s']],
   ]) {
     const row = responsibility.split(/\r?\n/).find((line) => line.includes(`| \`${name}\` |`));

@@ -90,16 +90,18 @@ its Compose overlay. These are independent OS processes; domain services under
 
 | Command | Owns | Inputs and secret authority | Excluded capability |
 | --- | --- | --- | --- |
-| no command or `serve standalone` | compatible combined server and one embedded archive-retention worker | general runtime configuration and existing core secrets | cannot coexist with another retention owner for the same database/schema |
-| `serve core` | existing public listeners, sessions, routing, administration and remaining core workers | general runtime configuration and existing core secrets | does not register archive retention |
-| `serve maintenance` | archive/audit/offline retention and loopback health only | database connection, domain, bounded retention policy; skips `.env` and does not load core signing/keyring configuration | no `AppState`, public listener, session or routing authority |
+| no command or `serve standalone` | compatible combined server with embedded archive and subscription cleanup workers | general runtime configuration and existing core secrets | cannot coexist with another retention owner for the same database/schema |
+| `serve core` | existing public listeners, sessions, routing, administration and remaining core workers | general runtime configuration and existing core secrets | does not register archive or subscription cleanup |
+| `serve maintenance` | archive/audit/offline retention, physical PubSub subscription cleanup and loopback health | database connection, domain, bounded retention policy; skips `.env` and does not load core signing/keyring configuration | no `AppState`, public listener, session or routing authority |
 
 Supported split deployment runs one core and one maintenance process against a
 shared PostgreSQL runtime role. This is process/secret separation, while the
 runtime credential retains the existing broad database grants. It is not
-per-domain database privilege isolation. The maintenance context holds only a
-pool, immutable retention policy, metrics and a readiness handle. Its health
-server receives only the read-only readiness handle, registry and metrics.
+per-domain database privilege isolation. The archive context holds only a
+pool, immutable retention policy, metrics and a readiness handle. The separate
+subscription cleanup context holds the same existing pool, narrow counters and
+its own readiness handle. Its health server receives only the two read-only
+readiness handles, registry and metrics.
 The production source gate fixes this capability inventory. Maintenance uses
 three connections at most; the core primary-pool cap is derived from the
 existing runtime-role limit minus four auxiliary core connections and three
@@ -111,7 +113,7 @@ its already reserved runtime-control connection, without reserving another
 primary-pool slot. Maintenance holds one of its three connections. Both close
 the physical session when ownership ends. Maintenance probes that exact session
 every five seconds with a three-second query deadline; loss cancels and joins
-its worker. Standalone uses the existing critical runtime-control coordinator:
+both cleanup workers. Standalone uses the existing critical runtime-control coordinator:
 idle ticks only pulse liveness and cannot clear preceding database failures.
 
 This is bounded detection and cancellation, with possible **bounded overlap**
@@ -125,10 +127,12 @@ fixture is not an additional supported deployment topology.
 | Process-qualified worker/observer | Registration owner | Criticality / mode | Stall watchdog | Shutdown | Owned work and health |
 | --- | --- | --- | --- | --- | --- |
 | `maintenance/archive-retention` | `serve maintenance` | restartable / continuous | 2 × retention interval + 60 s | immediate | bounded archive/audit/offline cleanup; readiness requires a complete successful pass and drops at the first failed or incomplete pass |
+| `maintenance/pubsub-subscription-cleanup` | `serve maintenance` | restartable / continuous | 110 s | immediate | physical expired-subscription cleanup every 60 s, with a 40 s total pass budget and 1,000-row batches; readiness drops during a pending or failed pass and only its own successful pass restores it |
 | `maintenance-ownership` | `serve maintenance` main loop | critical health observer; **no task/factory** | none; exact locked-session probe every 5 s with 3 s deadline | immediate | first probe failure cancels the process; no pool-substituted ownership check |
 
 Maintenance exposes only loopback `/healthz`, `/readyz` and `/metrics`; readiness
-does not query PostgreSQL or disclose failure details. Its listener caps active
+requires both independently successful cleanup passes and healthy supervision.
+It does not query PostgreSQL or disclose failure details. Its listener caps active
 connections at 16, headers at 4 KiB and each request at two seconds. Cancellation
 closes the listener and joins/aborts every accepted connection.
 
@@ -206,8 +210,9 @@ shutdown and request/body-sidecar lifetimes.
 | `deployment-capacity-lease-reaper` | `main` | restartable / continuous | 120 s | immediate | elect one transaction-scoped PostgreSQL advisory-lock holder to reap expired deployment session leases | a busy peer causes a no-op election result; unexpected database failure degrades readiness and retries without cancelling healthy local routes |
 | `background-maintenance` | `main` | restartable / continuous | 180 s | immediate | bounded expiry/cleanup for sessions, FAST, SM, admin and auxiliary state | readiness degrades and the guardian rebuilds the attempt with backoff |
 | `account-deletion-recovery` | `main` | restartable / continuous | 1,200 s | immediate | resume fenced account deletion, SM teardown and storage reconciliation | readiness degrades and the durable claim is retried by a rebuilt attempt |
-| `upload-storage-reconciliation` | `main` | critical / continuous | 600 s | immediate | reconcile slot/object/cleanup authority and storage namespace | proven authority drift, watchdog expiry, or the critical business-health error threshold (currently three consecutive DB/provider/backlog reports) cancels the service; an individual transient report marks health before object I/O |
+| `upload-storage-reconciliation` | `main` | critical / continuous | 600 s | immediate | reconcile slot/object/cleanup authority and storage namespace | proven authority drift, watchdog expiry, or the critical business-health error threshold (currently three consecutive DB/provider/backlog reports) cancels the service; a catalog or ledger read error closes upload writes and readiness; waiting ticks only pulse liveness until the respective 15 s or 60 s retry; they neither recount nor clear failures; confirmed violations retain per-tick termination even when the other audit is waiting |
 | `archive-retention` | `main`, standalone only | restartable / continuous | derived retention maximum-silence interval | immediate | after startup ownership claim, apply archive lifecycle policy in bounded batches | readiness degrades and the claim-safe attempt restarts; core explicitly omits this registration |
+| `pubsub-subscription-cleanup` | `main`, standalone only | restartable / continuous | 110 s | immediate | after the shared startup ownership claim, physically clean expired subscriptions every 60 s with a 40 s total pass budget and 1,000-row batches, independently of delivery admission | registry health follows the restartable-worker policy; core omits this registration and logical expiration checks remain in force |
 | `admin-session-cleanup` | `main` | critical / continuous | 90 s | immediate | revoke credential generations and exact live connections | failure or silence cancels the service rather than delaying security revocation |
 | `redis-pubsub` | `main`, cluster only | restartable / continuous | 45 s | immediate | receive authenticated route/control hints | cluster readiness degrades and the listener restarts; Redis never becomes durable authority |
 | `cluster-maintenance` | `main`, cluster only | restartable / continuous | 90 s | immediate | renew/reconcile PostgreSQL node/route leases and disconnect sessions whose authentication or user-agent login generation is stale | cluster readiness degrades and lease-safe work restarts; failure also removes this secondary credential-revocation reconciliation path |
@@ -226,7 +231,7 @@ inputs. They use the same registry and shutdown token; being registered outside
 | `mix-iq-relay-expiry` | MIX protocol capability startup | restartable / continuous | 10 s | immediate | expire exact pending IQ relays and route generations | expiring a replacement relay by stale timer identity |
 | `mix-delivery-outbox` | MIX capability startup | restartable / continuous | 30 s | bounded `MIX_OUTBOX_DRAIN_GRACE` | claim and deliver durable MIX event outbox rows through independent delivery and PAM-result lanes; shutdown stops new claims and drains already-started bounded work for up to 14 s; hard cancellation or an unknown completion retains the fenced lease until expiry | treating live fan-out as outbox acknowledgement, allowing a slow delivery lane to delay PAM results, or waiting indefinitely for a database turn during shutdown |
 | `mix-presence-recovery` | MIX capability startup | restartable / one-shot | 90 s | immediate | rebuild eligible MIX presence after startup | running indefinitely or inventing participants absent durable authority |
-| `pubsub-digest-delivery` | PubSub capability startup | restartable / continuous | 5 s | immediate | deliver due digest batches from durable queue state | losing work when an in-memory wake is dropped |
+| `pubsub-digest-delivery` | PubSub capability startup | restartable / continuous | 5 s | immediate | deliver due digest batches from durable queue state | losing work when an in-memory wake is dropped or reclaiming physical subscription cleanup inside the five-second delivery worker |
 | `pubsub-event-outbox-delivery` | PubSub capability startup | restartable / continuous | 30 s | immediate | deliver/retry durable PubSub/PEP mutation events | publishing before the mutation/outbox transaction commits |
 | `cluster-muc-outbox` | cluster MUC startup, unconditionally registered | restartable / continuous | 30 s | immediate | in every mode expire/recover PostgreSQL MUC occupancy, dead-letter/history and metric state; with clustering also bridge durable MUC outbox events to authenticated cluster delivery | making Redis publication the durable completion record or skipping single-node PostgreSQL maintenance |
 | `locked-muc-expiry` | `AppState` MUC startup | restartable / continuous | 20 s | immediate | expire locked empty-room creation windows | deleting an occupied/replacement room from a stale observation |

@@ -63,6 +63,14 @@ impl RetentionReadiness {
         self.ready.load(Ordering::Acquire)
     }
 
+    pub(crate) fn begin_pass(&self) {
+        self.ready.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn complete_pass(&self) {
+        self.ready.store(true, Ordering::Release);
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(ready: bool) -> Self {
         let health = Self::default();

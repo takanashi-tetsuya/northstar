@@ -12,15 +12,21 @@ function rejectsMutation(name, file, before, after, expected) {
   });
 }
 
-test('reviewed compositions have one role-qualified archive worker each', () => {
+test('reviewed compositions have exact role-qualified maintenance workers', () => {
   assert.deepEqual(verifySubserverBoundaries(baseline), {
-    maintenanceWorkers: ['archive-retention'], maintenanceObservers: ['maintenance-ownership'],
+    maintenanceWorkers: ['archive-retention', 'pubsub-subscription-cleanup'], maintenanceObservers: ['maintenance-ownership'],
   });
 });
 test('comments and string descriptions do not grant core capabilities', () => {
   verifySubserverBoundaries({ ...baseline,
     subservers: `${baseline.subservers}\n// AppState and Keyring are forbidden\nconst DESCRIPTION: &str = "Config::from_env()";\n`,
   });
+});
+
+test('subscription cleanup authority after tests stays checked', () => {
+  assert.throws(() => verifySubserverBoundaries({ ...baseline,
+    subscriptionCleanup: `${baseline.subscriptionCleanup}\nuse crate::state::AppState;\n`,
+  }), /narrow existing-pool/);
 });
 
 rejectsMutation('reject core state authority', 'subservers', 'use std::', 'use crate::state::AppState;\nuse std::', /core state/);
@@ -34,6 +40,16 @@ rejectsMutation('reject unbounded health concurrency', 'subservers', 'Semaphore:
 rejectsMutation('reject increased health header budget', 'subservers', '[0u8; 4096]', '[0u8; 65536]', /bounded local authority/);
 rejectsMutation('reject increased request deadline', 'subservers', 'Duration::from_secs(2)', 'Duration::from_secs(200)', /bounded local authority/);
 rejectsMutation('readiness requires a successful retention pass', 'subservers', 'retention_readiness.is_ready()', 'true', /bounded local authority/);
+rejectsMutation('readiness requires successful subscription cleanup', 'subservers', 'subscription_readiness.is_ready()', 'true', /bounded local authority/);
+rejectsMutation('subscription cleanup cannot gain core state', 'subscriptionCleanup', 'struct SubscriptionCleanupContext {', 'struct SubscriptionCleanupContext {\n state: AppState,', /capability inventory/);
+rejectsMutation('subscription cleanup cannot allocate another pool', 'subscriptionCleanup', 'use std::', 'use sqlx::postgres::PgPoolOptions;\nuse std::', /narrow existing-pool/);
+rejectsMutation('subscription cleanup keeps its total execution budget', 'subscriptionCleanup', 'Duration::from_secs(40)', 'Duration::from_secs(5)', /CLEANUP_BUDGET/);
+rejectsMutation('subscription cleanup keeps the physical cleanup cadence', 'subscriptionCleanup', 'Duration::from_secs(60)', 'Duration::from_secs(3600)', /CLEANUP_INTERVAL/);
+rejectsMutation('physical cleanup cannot return to digest delivery', 'pubsubProtocol', 'let mut interval = tokio::time::interval(Duration::from_secs(1));', 'cleanup_expired_subscriptions(&state.pool, 1000).await;\nlet mut interval = tokio::time::interval(Duration::from_secs(1));', /delivery-worker/);
+rejectsMutation('subscription cleanup cannot skip its actual deadline', 'subscriptionCleanup', 'tokio::time::timeout_at(deadline, async { cleanup().await })', 'unbounded_cleanup(async { cleanup().await })', /total pass deadline/);
+rejectsMutation('subscription cleanup cannot publish stale success during a pass', 'subscriptionCleanup', 'readiness.begin_pass();', 'readiness.complete_pass();', /total pass deadline/);
+rejectsMutation('maintenance cleanup watchdog keeps its own budget', 'subservers', 'Some(crate::subscription_cleanup::MAX_SILENCE)', 'Some(Duration::from_secs(5))', /independent restart/);
+rejectsMutation('subscription cleanup cannot silently increase batch size', 'subscriptionCleanup', 'CLEANUP_BATCH_SIZE: i64 = 1_000', 'CLEANUP_BATCH_SIZE: i64 = 100_000', /batch size/);
 rejectsMutation('readiness also requires worker health', 'subservers', 'workers.readiness_error().is_none()', 'true', /bounded local authority/);
 rejectsMutation('reap health connections on cancellation', 'subservers', 'connections.shutdown().await', 'drop(connections)', /bounded local authority/);
 rejectsMutation('reject raw health error disclosure', 'subservers', 'let permits =', 'let detail = error.to_string();\nlet permits =', /failure details/);

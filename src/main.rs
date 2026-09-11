@@ -15,6 +15,7 @@ mod db;
 mod error;
 mod identity_audit;
 mod jid;
+mod logging;
 mod mam_pubsub_parsing;
 mod metrics;
 mod operation_runtime;
@@ -26,6 +27,7 @@ mod s2s;
 mod services;
 mod state;
 mod storage;
+mod subscription_cleanup;
 mod subservers;
 mod test_activation;
 mod tls;
@@ -184,11 +186,15 @@ fn install_crypto_provider() -> Result<()> {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> std::process::ExitCode {
+    logging::report_result(run().await)
+}
+
+async fn run() -> Result<()> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
     if matches!(arguments.first().map(String::as_str), Some("--help" | "-h")) {
         anyhow::ensure!(arguments.len() == 1, "usage: xmpp-server --help");
-        println!("Northstar XMPP server\n\n  xmpp-server serve core         Start protocol/session/administration server\n  xmpp-server serve maintenance  Start isolated archive maintenance server\n  xmpp-server serve standalone   Start the compatible combined server (default)\n  xmpp-server --subservers       Show process responsibility inventory\n  xmpp-server migrate           Apply migrations with explicit migrator credentials\n  xmpp-server --healthcheck [IP:PORT]\n  xmpp-server --version");
+        println!("Northstar XMPP server\n\n  xmpp-server serve core         Start protocol/session/administration server\n  xmpp-server serve maintenance  Start isolated retention and subscription maintenance server\n  xmpp-server serve standalone   Start the compatible combined server (default)\n  xmpp-server --subservers       Show process responsibility inventory\n  xmpp-server migrate           Apply migrations with explicit migrator credentials\n  xmpp-server --healthcheck [IP:PORT]\n  xmpp-server --version");
         return Ok(());
     }
     if arguments.first().map(String::as_str) == Some("--subservers") {
@@ -692,6 +698,25 @@ async fn main() -> Result<()> {
                 let retention_state = Arc::clone(&retention_state);
                 let retention_cancel = retention_cancel.clone();
                 async move { retention::serve(retention_state, retention_cancel, heartbeat).await }
+            },
+        );
+        let subscriptions = Arc::new(subscription_cleanup::SubscriptionCleanupContext::new(
+            state.pool.clone(),
+            Arc::clone(&state.metrics.subscription_cleanup),
+        ));
+        let subscription_cancel = cancel.clone();
+        worker_registry.supervise(
+            "pubsub-subscription-cleanup",
+            WorkerCriticality::Restartable,
+            WorkerMode::Continuous,
+            Some(subscription_cleanup::MAX_SILENCE),
+            cancel.clone(),
+            move |heartbeat| {
+                subscription_cleanup::serve_context(
+                    Arc::clone(&subscriptions),
+                    subscription_cancel.clone(),
+                    heartbeat,
+                )
             },
         );
     }
@@ -1203,7 +1228,7 @@ async fn container_healthcheck(address: &str) -> Result<()> {
     }
 }
 
-fn init_logging(config: &Config) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
+fn init_logging(config: &Config) -> Result<logging::LogGuards> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let rotation = match config.log_rotation.to_lowercase().as_str() {
@@ -1220,7 +1245,9 @@ fn init_logging(config: &Config) -> Result<Option<tracing_appender::non_blocking
         .build(&config.log_dir)
         .context("failed to build rolling file appender")?;
 
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
+    let (console, console_guard) = logging::console(std::io::stderr());
+    let guards = logging::LogGuards::new(vec![file_guard, console_guard]);
 
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
@@ -1232,7 +1259,7 @@ fn init_logging(config: &Config) -> Result<Option<tracing_appender::non_blocking
             .with_ansi(false);
         let console_layer = tracing_subscriber::fmt::layer()
             .json()
-            .with_writer(std::io::stderr)
+            .with_writer(console)
             .with_ansi(false);
         tracing_subscriber::registry()
             .with(filter)
@@ -1243,7 +1270,7 @@ fn init_logging(config: &Config) -> Result<Option<tracing_appender::non_blocking
         let file_layer = tracing_subscriber::fmt::layer()
             .with_writer(non_blocking)
             .with_ansi(false);
-        let console_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+        let console_layer = tracing_subscriber::fmt::layer().with_writer(console);
         tracing_subscriber::registry()
             .with(filter)
             .with(file_layer)
@@ -1251,7 +1278,7 @@ fn init_logging(config: &Config) -> Result<Option<tracing_appender::non_blocking
             .init();
     }
 
-    Ok(Some(guard))
+    Ok(guards)
 }
 
 #[cfg(test)]

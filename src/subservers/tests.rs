@@ -7,6 +7,7 @@ mod health_regressions {
         address: SocketAddr,
         workers: Arc<WorkerRegistry>,
         readiness: RetentionReadiness,
+        subscription_readiness: RetentionReadiness,
         cancel: CancellationToken,
         task: Option<JoinHandle<Result<()>>>,
     }
@@ -18,17 +19,20 @@ mod health_regressions {
             let workers = WorkerRegistry::new();
             let cancel = CancellationToken::new();
             let readiness = RetentionReadiness::for_test(true);
+            let subscription_readiness = RetentionReadiness::for_test(true);
             let task = tokio::spawn(private_health(
                 listener,
                 Arc::clone(&workers),
                 Arc::new(Metrics::default()),
                 readiness.clone(),
+                subscription_readiness.clone(),
                 cancel.clone(),
             ));
             Self {
                 address,
                 workers,
                 readiness,
+                subscription_readiness,
                 cancel,
                 task: Some(task),
             }
@@ -67,6 +71,32 @@ mod health_regressions {
                 task.abort();
             }
         }
+    }
+
+    #[tokio::test]
+    async fn private_health_requires_both_independent_cleanup_passes() {
+        let fixture = HealthFixture::start().await;
+        for (archive, subscriptions, expected) in [
+            (false, false, "503 Service Unavailable"),
+            (true, false, "503 Service Unavailable"),
+            (false, true, "503 Service Unavailable"),
+            (true, true, "200 OK"),
+            (false, true, "503 Service Unavailable"),
+            (true, false, "503 Service Unavailable"),
+        ] {
+            fixture.readiness.set_for_test(archive);
+            fixture.subscription_readiness.set_for_test(subscriptions);
+            response_body(
+                &fixture.request(b"GET /readyz HTTP/1.1\r\n\r\n").await,
+                expected,
+            );
+        }
+        // Neither cleanup readiness is a liveness or administration authority.
+        response_body(
+            &fixture.request(b"GET /healthz HTTP/1.1\r\n\r\n").await,
+            "200 OK",
+        );
+        fixture.stop().await;
     }
 
     fn response_body(response: &[u8], status: &str) -> String {

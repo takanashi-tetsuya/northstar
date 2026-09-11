@@ -15,6 +15,184 @@ const CAPACITY_LEDGER_AUDIT_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const CAPACITY_LEDGER_AUDIT_DEGRADED_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const CAPACITY_LEDGER_AUDIT_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CapacityAuditProof {
+    Proven,
+    ReadUnavailable,
+    ViolationObserved,
+}
+
+impl CapacityAuditProof {
+    fn read_unavailable(&mut self) {
+        if *self != Self::ViolationObserved {
+            *self = Self::ReadUnavailable;
+        }
+    }
+
+    fn report_blocked(
+        self,
+        heartbeat: &WorkerHeartbeat,
+        audit_observed: bool,
+        failure: &'static str,
+    ) -> bool {
+        if self == Self::Proven {
+            return false;
+        }
+        if self == Self::ReadUnavailable && !audit_observed {
+            // The first failure already closed admission/readiness. Waiting
+            // proves nothing new, so it must neither count nor clear errors.
+            heartbeat.pulse();
+        } else {
+            // Real errors still reach the ordinary three-error limit. A
+            // positively observed violation retains its per-tick escalation.
+            heartbeat.error(failure);
+        }
+        true
+    }
+}
+
+/// Keep failed observations distinct from ticks waiting for their retry.
+/// The process-wide gate, not this scheduling state, authorizes object I/O.
+struct CapacityAuthorityAuditProgress {
+    next_audit: tokio::time::Instant,
+    violations: u64,
+    proof: CapacityAuditProof,
+}
+
+impl CapacityAuthorityAuditProgress {
+    fn new(now: tokio::time::Instant) -> Self {
+        Self {
+            next_audit: now,
+            violations: 0,
+            proof: CapacityAuditProof::Proven,
+        }
+    }
+
+    async fn audit_if_due<A, F>(
+        &mut self,
+        gate: &UploadSafetyGate,
+        mut now: impl FnMut() -> tokio::time::Instant,
+        audit: A,
+    ) -> Option<Result<db::UploadCapacityAuthorityAudit>>
+    where
+        A: FnOnce() -> F,
+        F: std::future::Future<Output = Result<db::UploadCapacityAuthorityAudit>>,
+    {
+        if now() < self.next_audit {
+            return None;
+        }
+        let result = audit().await;
+        match &result {
+            Ok(audit) => {
+                self.violations = audit.violation_count();
+                self.next_audit = now() + CAPACITY_AUTHORITY_AUDIT_INTERVAL;
+                self.proof = if self.violations == 0 {
+                    CapacityAuditProof::Proven
+                } else {
+                    gate.mark_capacity_authority_unsafe(
+                        "upload catalog or ACL authority audit failed",
+                    );
+                    CapacityAuditProof::ViolationObserved
+                };
+                // A successful catalog read alone cannot reopen the gate:
+                // the caller must also prove the ledger and immutable tuple.
+            }
+            Err(_) => {
+                gate.mark_capacity_authority_unsafe(
+                    "upload catalog or ACL authority could not be proved",
+                );
+                self.violations = self.violations.max(1);
+                self.next_audit = now() + CAPACITY_AUTHORITY_AUDIT_RETRY_INTERVAL;
+                self.proof.read_unavailable();
+            }
+        }
+        Some(result)
+    }
+
+    fn report_blocked_before_ledger(
+        &self,
+        ledger: &CapacityLedgerAuditProgress,
+        heartbeat: &WorkerHeartbeat,
+        audit_observed: bool,
+    ) -> bool {
+        if self.proof == CapacityAuditProof::ReadUnavailable
+            && !audit_observed
+            && ledger.proof == CapacityAuditProof::ViolationObserved
+        {
+            // A catalog retry wait must not hide a previously proved ledger
+            // violation. Report once, without changing either audit deadline.
+            return ledger.report_blocked(heartbeat, false);
+        }
+        self.proof.report_blocked(
+            heartbeat,
+            audit_observed,
+            "upload capacity enforcement authority is unproven",
+        )
+    }
+}
+
+struct CapacityLedgerAuditProgress {
+    next_audit: tokio::time::Instant,
+    mismatches: u64,
+    proof: CapacityAuditProof,
+}
+
+impl CapacityLedgerAuditProgress {
+    fn new(now: tokio::time::Instant) -> Self {
+        Self {
+            next_audit: now,
+            mismatches: 0,
+            proof: CapacityAuditProof::Proven,
+        }
+    }
+
+    async fn audit_if_due<A, F>(
+        &mut self,
+        gate: &UploadSafetyGate,
+        mut now: impl FnMut() -> tokio::time::Instant,
+        audit: A,
+    ) -> Option<Result<db::UploadCapacityReconciliation>>
+    where
+        A: FnOnce() -> F,
+        F: std::future::Future<Output = Result<db::UploadCapacityReconciliation>>,
+    {
+        if now() < self.next_audit {
+            return None;
+        }
+        let result = audit().await;
+        match &result {
+            Ok(audit) => {
+                self.mismatches = audit.mismatch_count();
+                if self.mismatches == 0 {
+                    self.next_audit = now() + CAPACITY_LEDGER_AUDIT_INTERVAL;
+                    self.proof = CapacityAuditProof::Proven;
+                } else {
+                    gate.mark_ledger_mismatch("upload capacity ledger differs from durable facts");
+                    self.next_audit = now() + CAPACITY_LEDGER_AUDIT_DEGRADED_INTERVAL;
+                    self.proof = CapacityAuditProof::ViolationObserved;
+                }
+                // Only the caller's complete authority/probe boundary may
+                // reopen the gate; a successful read does not prove all work.
+            }
+            Err(_) => {
+                gate.mark_ledger_mismatch("upload capacity ledger consistency could not be proved");
+                self.mismatches = self.mismatches.max(1);
+                self.next_audit = now() + CAPACITY_LEDGER_AUDIT_RETRY_INTERVAL;
+                self.proof.read_unavailable();
+            }
+        }
+        Some(result)
+    }
+
+    fn report_blocked(&self, heartbeat: &WorkerHeartbeat, audit_observed: bool) -> bool {
+        self.proof.report_blocked(
+            heartbeat,
+            audit_observed,
+            "upload capacity ledger does not match durable row facts",
+        )
+    }
+}
+
 pub(crate) struct SuccessfulStartupAudits {
     generation: UploadAuthorityGeneration,
     capacity_limits: [i64; 3],
@@ -95,10 +273,10 @@ pub async fn serve(
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut credential_ticks = 0_u8;
     let mut startup_audits = state.take_upload_startup_audits();
-    let mut next_capacity_authority_audit = tokio::time::Instant::now();
-    let mut next_capacity_ledger_audit = next_capacity_authority_audit;
-    let mut capacity_authority_violations = 0_u64;
-    let mut capacity_ledger_mismatches = 0_u64;
+    let mut capacity_authority_audit =
+        CapacityAuthorityAuditProgress::new(tokio::time::Instant::now());
+    let mut capacity_ledger_audit =
+        CapacityLedgerAuditProgress::new(capacity_authority_audit.next_audit);
     loop {
         // Consume even if the first probe fails or this attempt is cancelled.
         // A later loop or worker restart must not revive old startup evidence.
@@ -159,7 +337,10 @@ pub async fn serve(
             }
         };
         if let Some(audits) = startup_audits.filter(|_| !recovery_draining) {
-            (next_capacity_authority_audit, next_capacity_ledger_audit) = audits.deadlines(
+            (
+                capacity_authority_audit.next_audit,
+                capacity_ledger_audit.next_audit,
+            ) = audits.deadlines(
                 authority_generation,
                 [
                     state.config.upload_storage_max_pending_jobs,
@@ -170,27 +351,30 @@ pub async fn serve(
                 tokio::time::Instant::now(),
             );
         }
-        if tokio::time::Instant::now() >= next_capacity_authority_audit {
-            match db::audit_upload_capacity_authority(
-                &state.pool,
-                state.config.upload_storage_max_pending_jobs,
-                state.config.upload_storage_max_retained_files,
-                state.config.upload_storage_max_retained_bytes,
+        let authority_observation = capacity_authority_audit
+            .audit_if_due(
+                state.upload_safety_gate(),
+                tokio::time::Instant::now,
+                || {
+                    db::audit_upload_capacity_authority(
+                        &state.pool,
+                        state.config.upload_storage_max_pending_jobs,
+                        state.config.upload_storage_max_retained_files,
+                        state.config.upload_storage_max_retained_bytes,
+                    )
+                },
             )
-            .await
-            {
+            .await;
+        let authority_audited = authority_observation.is_some();
+        if let Some(observation) = authority_observation {
+            let capacity_authority_violations = capacity_authority_audit.violations;
+            state
+                .metrics
+                .upload_storage_capacity_authority_violations
+                .store(capacity_authority_violations, Ordering::Relaxed);
+            match observation {
                 Ok(audit) => {
-                    capacity_authority_violations = audit.violation_count();
-                    state
-                        .metrics
-                        .upload_storage_capacity_authority_violations
-                        .store(capacity_authority_violations, Ordering::Relaxed);
-                    next_capacity_authority_audit =
-                        tokio::time::Instant::now() + CAPACITY_AUTHORITY_AUDIT_INTERVAL;
                     if capacity_authority_violations > 0 {
-                        state.upload_safety_gate().mark_capacity_authority_unsafe(
-                            "upload catalog or ACL authority audit failed",
-                        );
                         note_reconciliation_failure(&state);
                         tracing::error!(
                             capacity_authority_violations,
@@ -204,16 +388,6 @@ pub async fn serve(
                     }
                 }
                 Err(error) => {
-                    state.upload_safety_gate().mark_capacity_authority_unsafe(
-                        "upload catalog or ACL authority could not be proved",
-                    );
-                    capacity_authority_violations = capacity_authority_violations.max(1);
-                    state
-                        .metrics
-                        .upload_storage_capacity_authority_violations
-                        .store(capacity_authority_violations, Ordering::Relaxed);
-                    next_capacity_authority_audit =
-                        tokio::time::Instant::now() + CAPACITY_AUTHORITY_AUDIT_RETRY_INTERVAL;
                     note_reconciliation_failure(&state);
                     tracing::error!(
                         ?error,
@@ -222,27 +396,30 @@ pub async fn serve(
                 }
             }
         }
-        if capacity_authority_violations > 0 {
-            heartbeat.error("upload capacity enforcement authority is unproven");
+        if capacity_authority_audit.report_blocked_before_ledger(
+            &capacity_ledger_audit,
+            &heartbeat,
+            authority_audited,
+        ) {
             continue;
         }
-        if tokio::time::Instant::now() >= next_capacity_ledger_audit {
-            match db::reconcile_upload_capacity_ledger(&state.pool).await {
+        let ledger_observation = capacity_ledger_audit
+            .audit_if_due(
+                state.upload_safety_gate(),
+                tokio::time::Instant::now,
+                || db::reconcile_upload_capacity_ledger(&state.pool),
+            )
+            .await;
+        let ledger_audited = ledger_observation.is_some();
+        if let Some(observation) = ledger_observation {
+            let capacity_ledger_mismatches = capacity_ledger_audit.mismatches;
+            state
+                .metrics
+                .upload_storage_capacity_ledger_mismatches
+                .store(capacity_ledger_mismatches, Ordering::Relaxed);
+            match observation {
                 Ok(audit) => {
-                    capacity_ledger_mismatches = audit.mismatch_count();
-                    state
-                        .metrics
-                        .upload_storage_capacity_ledger_mismatches
-                        .store(capacity_ledger_mismatches, Ordering::Relaxed);
-                    if capacity_ledger_mismatches == 0 {
-                        next_capacity_ledger_audit =
-                            tokio::time::Instant::now() + CAPACITY_LEDGER_AUDIT_INTERVAL;
-                    } else {
-                        state.upload_safety_gate().mark_ledger_mismatch(
-                            "upload capacity ledger differs from durable facts",
-                        );
-                        next_capacity_ledger_audit =
-                            tokio::time::Instant::now() + CAPACITY_LEDGER_AUDIT_DEGRADED_INTERVAL;
+                    if capacity_ledger_mismatches > 0 {
                         note_reconciliation_failure(&state);
                         tracing::error!(
                             capacity_ledger_mismatches,
@@ -275,23 +452,12 @@ pub async fn serve(
                     }
                 }
                 Err(error) => {
-                    state.upload_safety_gate().mark_ledger_mismatch(
-                        "upload capacity ledger consistency could not be proved",
-                    );
-                    capacity_ledger_mismatches = capacity_ledger_mismatches.max(1);
-                    state
-                        .metrics
-                        .upload_storage_capacity_ledger_mismatches
-                        .store(capacity_ledger_mismatches, Ordering::Relaxed);
-                    next_capacity_ledger_audit =
-                        tokio::time::Instant::now() + CAPACITY_LEDGER_AUDIT_RETRY_INTERVAL;
                     note_reconciliation_failure(&state);
                     tracing::error!(?error, "could not prove upload capacity ledger consistency");
                 }
             }
         }
-        if capacity_ledger_mismatches > 0 {
-            heartbeat.error("upload capacity ledger does not match durable row facts");
+        if capacity_ledger_audit.report_blocked(&heartbeat, ledger_audited) {
             continue;
         }
         state
@@ -1009,6 +1175,566 @@ mod tests {
         let gate = UploadSafetyGate::new();
         gate.establish(STARTUP_GENERATION, false);
         gate
+    }
+
+    #[derive(Clone, Copy)]
+    enum AuditKind {
+        Catalog,
+        Ledger,
+        Both(AuditResult),
+    }
+
+    #[derive(Clone, Copy)]
+    enum AuditResult {
+        Unavailable,
+        Clean,
+        Violation,
+    }
+
+    struct AuditStep {
+        calls: usize,
+        worker_ready: bool,
+        blocked: bool,
+        gate_before_completion: crate::services::upload_safety::UploadSafetyState,
+        gate_after_completion: crate::services::upload_safety::UploadSafetyState,
+        next_audit: Duration,
+    }
+
+    fn reconciliation(mismatch: bool) -> crate::db::UploadCapacityReconciliation {
+        crate::db::UploadCapacityReconciliation {
+            ledger_retained_files: 1,
+            fact_retained_files: if mismatch { 2 } else { 1 },
+            ledger_retained_bytes: 2,
+            fact_retained_bytes: 2,
+            ledger_pending_jobs: 3,
+            fact_pending_jobs: 3,
+            ledger_storage_jobs_pending: 1,
+            fact_storage_jobs_pending: 1,
+            ledger_cleanup_jobs_pending: 2,
+            fact_cleanup_jobs_pending: 2,
+            ledger_cleanup_obligation_debt: 4,
+            fact_cleanup_obligation_debt: 4,
+            ledger_recovery_retained_files: 5,
+            fact_recovery_retained_files: 5,
+            ledger_recovery_retained_bytes: 6,
+            fact_recovery_retained_bytes: 6,
+            ledger_legacy_overcommit_draining: false,
+            fact_legacy_overcommit_draining: false,
+            ledger_recovery_overcommit_draining: false,
+            fact_recovery_overcommit_draining: false,
+            projection_size_conflicts: 0,
+        }
+    }
+
+    async fn catalog_scenario(
+        steps: Vec<(u64, AuditResult, bool)>,
+    ) -> (
+        Vec<AuditStep>,
+        std::sync::Arc<crate::workers::WorkerRegistry>,
+        tokio_util::sync::CancellationToken,
+    ) {
+        capacity_scenario(
+            steps
+                .into_iter()
+                .map(|(at, result, complete)| (AuditKind::Catalog, at, result, complete))
+                .collect(),
+        )
+        .await
+    }
+
+    async fn ledger_scenario(
+        steps: Vec<(u64, AuditResult, bool)>,
+    ) -> (
+        Vec<AuditStep>,
+        std::sync::Arc<crate::workers::WorkerRegistry>,
+        tokio_util::sync::CancellationToken,
+    ) {
+        capacity_scenario(
+            steps
+                .into_iter()
+                .map(|(at, result, complete)| (AuditKind::Ledger, at, result, complete))
+                .collect(),
+        )
+        .await
+    }
+
+    // Drive the production audit schedulers inside a real critical worker.
+    // Only the database observation and monotonic clock are controlled; gate
+    // transitions, heartbeat reporting and the three-error supervisor are real.
+    async fn capacity_scenario(
+        steps: Vec<(AuditKind, u64, AuditResult, bool)>,
+    ) -> (
+        Vec<AuditStep>,
+        std::sync::Arc<crate::workers::WorkerRegistry>,
+        tokio_util::sync::CancellationToken,
+    ) {
+        use crate::workers::{WorkerCriticality, WorkerMode, WorkerRegistry};
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let registry = WorkerRegistry::new();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let gate = healthy_gate();
+        let start = Instant::now();
+        let count = steps.len();
+        let steps = Arc::new(steps);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (sent, mut received) = tokio::sync::mpsc::channel(count);
+        let observed_registry = Arc::clone(&registry);
+        registry.supervise(
+            "test-upload-capacity-audit",
+            WorkerCriticality::Critical,
+            WorkerMode::Continuous,
+            Some(Duration::from_secs(600)),
+            cancel.clone(),
+            move |heartbeat| {
+                let steps = Arc::clone(&steps);
+                let calls = Arc::clone(&calls);
+                let gate = Arc::clone(&gate);
+                let sent = sent.clone();
+                let observed_registry = Arc::clone(&observed_registry);
+                async move {
+                    let mut authority = super::CapacityAuthorityAuditProgress::new(start);
+                    let mut ledger = super::CapacityLedgerAuditProgress::new(start);
+                    let existing = gate
+                        .permit(crate::services::upload_safety::UploadIoClass::Promotion)
+                        .unwrap();
+                    for &(kind, milliseconds, result, complete_safe_work) in steps.iter() {
+                        let now = start + Duration::from_millis(milliseconds);
+                        let mut blocked = false;
+                        let mut next_audit = authority.next_audit;
+                        if matches!(kind, AuditKind::Catalog | AuditKind::Both(_)) {
+                            let observation = authority
+                                .audit_if_due(
+                                    &gate,
+                                    || now,
+                                    || async {
+                                        calls.fetch_add(1, Ordering::SeqCst);
+                                        match result {
+                                            AuditResult::Unavailable => {
+                                                anyhow::bail!("injected catalog statement timeout")
+                                            }
+                                            AuditResult::Clean => Ok(
+                                                crate::db::UploadCapacityAuthorityAudit::default(),
+                                            ),
+                                            AuditResult::Violation => {
+                                                Ok(crate::db::UploadCapacityAuthorityAudit {
+                                                    trigger_authority_violations: 1,
+                                                    ..Default::default()
+                                                })
+                                            }
+                                        }
+                                    },
+                                )
+                                .await;
+                            blocked = authority.report_blocked_before_ledger(
+                                &ledger,
+                                &heartbeat,
+                                observation.is_some(),
+                            );
+                            next_audit = authority.next_audit;
+                        }
+                        // Preserve the production catalog -> early continue ->
+                        // ledger order, including when both are due this tick.
+                        if !blocked {
+                            let ledger_result = match kind {
+                                AuditKind::Catalog => None,
+                                AuditKind::Ledger => Some(result),
+                                AuditKind::Both(result) => Some(result),
+                            };
+                            if let Some(result) = ledger_result {
+                                let observation = ledger
+                                    .audit_if_due(
+                                        &gate,
+                                        || now,
+                                        || async {
+                                            calls.fetch_add(1, Ordering::SeqCst);
+                                            match result {
+                                                AuditResult::Unavailable => anyhow::bail!(
+                                                    "injected ledger statement timeout"
+                                                ),
+                                                AuditResult::Clean => Ok(reconciliation(false)),
+                                                AuditResult::Violation => Ok(reconciliation(true)),
+                                            }
+                                        },
+                                    )
+                                    .await;
+                                blocked = ledger.report_blocked(&heartbeat, observation.is_some());
+                                next_audit = ledger.next_audit;
+                            }
+                        }
+                        let gate_before_completion = gate.state();
+                        if blocked {
+                            for class in [
+                                super::UploadIoClass::NewWrite,
+                                super::UploadIoClass::Promotion,
+                                super::UploadIoClass::Recovery,
+                                super::UploadIoClass::CredentialRefresh,
+                            ] {
+                                assert!(gate.permit(class).is_err());
+                            }
+                            assert!(existing.ensure_current().is_err());
+                            // Immutable committed reads retain their existing
+                            // capacity-failure exception.
+                            assert!(gate.permit(super::UploadIoClass::Read).is_ok());
+                        }
+                        if complete_safe_work {
+                            assert!(!blocked);
+                            assert_eq!(authority.proof, super::CapacityAuditProof::Proven);
+                            assert_eq!(ledger.proof, super::CapacityAuditProof::Proven);
+                            // The unchanged caller only does this after its
+                            // immutable tuple, ledger and remaining work pass.
+                            gate.establish(STARTUP_GENERATION, false);
+                            heartbeat.ok();
+                        }
+                        sent.send(AuditStep {
+                            calls: calls.load(Ordering::SeqCst),
+                            worker_ready: observed_registry.readiness_error().is_none(),
+                            blocked,
+                            gate_before_completion,
+                            gate_after_completion: gate.state(),
+                            next_audit: next_audit.duration_since(start),
+                        })
+                        .await
+                        .unwrap();
+                        tokio::task::yield_now().await;
+                    }
+                    std::future::pending::<anyhow::Result<()>>().await
+                }
+            },
+        );
+        let mut observations = Vec::new();
+        for _ in 0..count {
+            observations.push(
+                tokio::time::timeout(Duration::from_secs(1), received.recv())
+                    .await
+                    .expect("catalog step must not block")
+                    .expect("worker stopped before the expected observation"),
+            );
+        }
+        (observations, registry, cancel)
+    }
+
+    #[tokio::test]
+    async fn one_failed_catalog_read_stays_closed_without_recounting_wait_ticks() {
+        use crate::services::upload_safety::UploadSafetyState;
+        let steps = [0, 0, 1000, 5000, 10000, 14999]
+            .into_iter()
+            .map(|at| (at, AuditResult::Unavailable, false))
+            .collect();
+        let (observations, registry, cancel) = catalog_scenario(steps).await;
+        for observation in observations {
+            assert_eq!(observation.calls, 1);
+            assert!(observation.blocked);
+            assert_eq!(observation.next_audit, Duration::from_secs(15));
+            assert_eq!(
+                observation.gate_after_completion,
+                UploadSafetyState::CapacityAuthorityUnsafe
+            );
+        }
+        assert!(!cancel.is_cancelled());
+        assert!(registry.critical_failure().is_none());
+        registry
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn waiting_pulses_preserve_three_real_catalog_failures_as_terminal() {
+        let steps = [0, 5000, 10000, 15000, 20000, 29999, 30000]
+            .into_iter()
+            .map(|at| (at, AuditResult::Unavailable, false))
+            .collect();
+        let (observations, registry, cancel) = catalog_scenario(steps).await;
+        assert_eq!(
+            observations
+                .iter()
+                .map(|step| step.calls)
+                .collect::<Vec<_>>(),
+            [1, 1, 1, 2, 2, 2, 3]
+        );
+        assert!(observations.iter().all(|step| step.blocked));
+        tokio::time::timeout(Duration::from_secs(1), cancel.cancelled())
+            .await
+            .expect("only the third real failed observation must terminate the worker");
+        assert!(registry
+            .critical_failure()
+            .unwrap()
+            .contains("3 consecutive business-health errors: upload capacity enforcement authority is unproven"));
+        registry
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn clean_catalog_observation_requires_the_remaining_success_boundary_to_reopen() {
+        use crate::services::upload_safety::UploadSafetyState;
+        let (observations, registry, cancel) = catalog_scenario(vec![
+            (0, AuditResult::Unavailable, false),
+            (15000, AuditResult::Clean, false),
+            (15001, AuditResult::Clean, true),
+            (75000, AuditResult::Unavailable, false),
+            (90000, AuditResult::Unavailable, false),
+        ])
+        .await;
+        assert!(!observations[1].blocked);
+        assert_eq!(observations[1].next_audit, Duration::from_secs(75));
+        assert_eq!(
+            observations[1].gate_before_completion,
+            UploadSafetyState::CapacityAuthorityUnsafe
+        );
+        assert_eq!(
+            observations[1].gate_after_completion,
+            UploadSafetyState::CapacityAuthorityUnsafe
+        );
+        assert_eq!(observations[2].calls, 2);
+        assert_eq!(
+            observations[2].gate_after_completion,
+            UploadSafetyState::Healthy
+        );
+        assert_eq!(observations[4].calls, 4);
+        assert!(observations[4].blocked);
+        // The full successful boundary reset the first error; the following
+        // two real failures must not be mistaken for three.
+        assert!(!cancel.is_cancelled());
+        assert!(registry.critical_failure().is_none());
+        registry
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn observed_catalog_violations_keep_the_existing_per_tick_terminal_rule() {
+        for steps in [
+            vec![
+                (0, AuditResult::Violation, false),
+                (5000, AuditResult::Clean, false),
+                (10000, AuditResult::Clean, false),
+            ],
+            vec![
+                (0, AuditResult::Violation, false),
+                (60000, AuditResult::Unavailable, false),
+                (60001, AuditResult::Clean, false),
+            ],
+        ] {
+            let (observations, registry, cancel) = catalog_scenario(steps).await;
+            assert!(observations.iter().all(|step| step.blocked));
+            tokio::time::timeout(Duration::from_secs(1), cancel.cancelled())
+                .await
+                .expect("a proved violation must retain the original terminal behavior");
+            assert!(registry.critical_failure().is_some());
+            registry
+                .shutdown_and_join(&cancel, Duration::from_secs(1))
+                .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn one_failed_ledger_read_stays_closed_without_recounting_wait_ticks() {
+        use crate::services::upload_safety::UploadSafetyState;
+        let steps = [0, 0, 1000, 5000, 15000, 30000, 59999]
+            .into_iter()
+            .map(|at| (at, AuditResult::Unavailable, false))
+            .collect();
+        let (observations, registry, cancel) = ledger_scenario(steps).await;
+        for observation in observations {
+            assert_eq!(observation.calls, 1);
+            assert!(observation.blocked);
+            assert_eq!(observation.next_audit, Duration::from_secs(60));
+            assert_eq!(
+                observation.gate_after_completion,
+                UploadSafetyState::LedgerMismatch
+            );
+        }
+        assert!(!cancel.is_cancelled());
+        assert!(registry.critical_failure().is_none());
+        registry
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn waiting_pulses_preserve_three_real_ledger_failures_as_terminal() {
+        let steps = [0, 5000, 59999, 60000, 65000, 119999, 120000]
+            .into_iter()
+            .map(|at| (at, AuditResult::Unavailable, false))
+            .collect();
+        let (observations, registry, cancel) = ledger_scenario(steps).await;
+        assert_eq!(
+            observations
+                .iter()
+                .map(|step| step.calls)
+                .collect::<Vec<_>>(),
+            [1, 1, 1, 2, 2, 2, 3]
+        );
+        assert!(observations.iter().all(|step| step.blocked));
+        tokio::time::timeout(Duration::from_secs(1), cancel.cancelled())
+            .await
+            .expect("only the third real failed observation must terminate the worker");
+        assert!(registry
+            .critical_failure()
+            .unwrap()
+            .contains("3 consecutive business-health errors: upload capacity ledger does not match durable row facts"));
+        registry
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn clean_ledger_observation_requires_the_remaining_success_boundary_to_reopen() {
+        use crate::services::upload_safety::UploadSafetyState;
+        let (observations, registry, cancel) = ledger_scenario(vec![
+            (0, AuditResult::Unavailable, false),
+            (60000, AuditResult::Clean, false),
+            (60001, AuditResult::Clean, true),
+            (3660000, AuditResult::Unavailable, false),
+            (3720000, AuditResult::Unavailable, false),
+        ])
+        .await;
+        assert!(!observations[1].blocked);
+        assert_eq!(observations[1].next_audit, Duration::from_secs(3660));
+        assert_eq!(
+            observations[1].gate_before_completion,
+            UploadSafetyState::LedgerMismatch
+        );
+        assert_eq!(
+            observations[1].gate_after_completion,
+            UploadSafetyState::LedgerMismatch
+        );
+        assert_eq!(observations[2].calls, 2);
+        assert_eq!(
+            observations[2].gate_after_completion,
+            UploadSafetyState::Healthy
+        );
+        assert_eq!(observations[4].calls, 4);
+        assert!(observations[4].blocked);
+        // The full successful boundary reset the first error; the following
+        // two real failures must not be mistaken for three.
+        assert!(!cancel.is_cancelled());
+        assert!(registry.critical_failure().is_none());
+        registry
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn observed_ledger_violations_keep_the_existing_per_tick_terminal_rule() {
+        for steps in [
+            vec![
+                (0, AuditResult::Violation, false),
+                (5000, AuditResult::Clean, false),
+                (10000, AuditResult::Clean, false),
+            ],
+            vec![
+                (0, AuditResult::Violation, false),
+                (300000, AuditResult::Unavailable, false),
+                (300001, AuditResult::Clean, false),
+            ],
+        ] {
+            let (observations, registry, cancel) = ledger_scenario(steps).await;
+            assert!(observations.iter().all(|step| step.blocked));
+            tokio::time::timeout(Duration::from_secs(1), cancel.cancelled())
+                .await
+                .expect("a proved violation must retain the original terminal behavior");
+            assert!(registry.critical_failure().is_some());
+            registry
+                .shutdown_and_join(&cancel, Duration::from_secs(1))
+                .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_waits_preserve_a_previous_ledger_failure_and_independent_retry_deadlines() {
+        let (observations, registry, cancel) = capacity_scenario(vec![
+            (AuditKind::Ledger, 0, AuditResult::Unavailable, false),
+            (AuditKind::Catalog, 0, AuditResult::Unavailable, false),
+            (AuditKind::Catalog, 5000, AuditResult::Clean, false),
+            (AuditKind::Catalog, 14999, AuditResult::Clean, false),
+            (AuditKind::Catalog, 15000, AuditResult::Clean, false),
+            (AuditKind::Ledger, 15001, AuditResult::Clean, false),
+            (AuditKind::Ledger, 60000, AuditResult::Unavailable, false),
+        ])
+        .await;
+        assert_eq!(
+            observations
+                .iter()
+                .map(|step| step.calls)
+                .collect::<Vec<_>>(),
+            [1, 2, 2, 2, 3, 3, 4],
+        );
+        assert_eq!(observations[4].next_audit, Duration::from_secs(75));
+        assert!(!observations[4].blocked);
+        assert!(observations[5].blocked);
+        assert_eq!(observations[5].next_audit, Duration::from_secs(60));
+        assert_eq!(
+            observations[4].gate_after_completion,
+            crate::services::upload_safety::UploadSafetyState::CapacityAuthorityUnsafe,
+        );
+        tokio::time::timeout(Duration::from_secs(1), cancel.cancelled())
+            .await
+            .expect("catalog waits and partial success must not clear the earlier ledger error");
+        assert!(registry.critical_failure().unwrap().contains(
+            "3 consecutive business-health errors: upload capacity ledger does not match durable row facts"
+        ));
+        registry
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn catalog_retry_wait_cannot_hide_a_proved_ledger_violation_or_double_count_a_tick() {
+        let (observations, registry, cancel) = capacity_scenario(vec![
+            (
+                AuditKind::Both(AuditResult::Violation),
+                0,
+                AuditResult::Clean,
+                false,
+            ),
+            (
+                AuditKind::Both(AuditResult::Clean),
+                60000,
+                AuditResult::Unavailable,
+                false,
+            ),
+            (
+                AuditKind::Both(AuditResult::Clean),
+                65000,
+                AuditResult::Clean,
+                false,
+            ),
+        ])
+        .await;
+        assert_eq!(
+            observations
+                .iter()
+                .map(|step| step.calls)
+                .collect::<Vec<_>>(),
+            [2, 3, 3],
+            "catalog failure and its wait must not start another ledger audit",
+        );
+        assert_eq!(
+            observations
+                .iter()
+                .map(|step| step.worker_ready)
+                .collect::<Vec<_>>(),
+            [true, true, false],
+            "each tick reports exactly one error; the wait retains the known violation",
+        );
+        assert!(observations.iter().all(|step| step.blocked));
+        assert_eq!(observations[0].next_audit, Duration::from_secs(300));
+        assert_eq!(observations[1].next_audit, Duration::from_secs(75));
+        assert_eq!(observations[2].next_audit, Duration::from_secs(75));
+        tokio::time::timeout(Duration::from_secs(1), cancel.cancelled())
+            .await
+            .expect("the third tick must preserve the original terminal rule");
+        assert!(registry.critical_failure().unwrap().contains(
+            "3 consecutive business-health errors: upload capacity ledger does not match durable row facts"
+        ));
+        registry
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await;
     }
 
     #[test]

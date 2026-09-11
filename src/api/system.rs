@@ -496,6 +496,7 @@ async fn collect_metrics(state: &AppState) -> String {
     body.push_str(&render_password_work_metrics(
         crate::password_work::rejections_total(),
     ));
+    body.push_str(&crate::logging::render_metrics());
     body.push_str(&render_database_collector(collector.as_ref()));
     let governor = state.sm_memory_governor();
     let sm_metrics = governor.metrics();

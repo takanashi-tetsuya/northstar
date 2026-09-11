@@ -210,6 +210,7 @@ jobs:
         uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
         with:
           version: "1.50.0"
+          github_token: ${{ github.token }}
 
       - name: Record contract toolchain and tree
         shell: bash
@@ -245,6 +246,7 @@ jobs:
         uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
         with:
           version: "1.50.0"
+          github_token: ${{ github.token }}
 
       - name: Detect breaking wire contract changes
         shell: bash

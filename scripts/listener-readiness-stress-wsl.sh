@@ -302,6 +302,49 @@ record_parent_diagnostic() {
   printf '%s\n' "$*" >>"$parent_diagnostic_raw" || true
 }
 
+record_host_pressure() {
+  # Fixed kernel counters only: no environment, process arguments, or SQL text.
+  # Sample at phase boundaries and on failure, without a concurrent observer.
+  python3 - "$1" >>"$parent_diagnostic_raw" 2>&1 <<'PY' || true
+import json, os, re, sys, time
+from pathlib import Path
+
+result = {"phase": sys.argv[1], "monotonic_ns": time.monotonic_ns()}
+def numeric_fields(path, allowed):
+    values = {}
+    try:
+        with Path(path).open() as stream:
+            for line in stream.read(16384).splitlines():
+                fields = line.replace(":", "").split()
+                if len(fields) >= 2 and fields[0] in allowed and fields[1].isdigit():
+                    values[fields[0]] = int(fields[1])
+    except OSError as error:
+        values["read_errno"] = error.errno
+    return values
+
+cpus = os.sched_getaffinity(0)
+result["cpu_ticks"] = {}
+with Path("/proc/stat").open() as stream:
+    for line in stream.read(16384).splitlines():
+        fields = line.split()
+        if fields and re.fullmatch(r"cpu[0-9]+", fields[0]) and int(fields[0][3:]) in cpus:
+            result["cpu_ticks"][fields[0]] = [int(value) for value in fields[1:9]]
+result["memory_kib"] = numeric_fields("/proc/meminfo", {"MemTotal", "MemAvailable", "SwapTotal", "SwapFree"})
+for category in ("cpu", "memory", "io"):
+    try:
+        with Path(f"/proc/pressure/{category}").open() as stream:
+            result[f"{category}_pressure_us"] = {
+                match.group(1): int(match.group(2))
+                for match in re.finditer(r"^(some|full) .*?total=([0-9]+)$", stream.read(4096), re.MULTILINE)
+            }
+    except OSError as error:
+        result[f"{category}_pressure_errno"] = error.errno
+result["cgroup_memory_events"] = numeric_fields("/sys/fs/cgroup/memory.events", {"low", "high", "max", "oom", "oom_kill", "oom_group_kill"})
+result["cgroup_cpu_stat"] = numeric_fields("/sys/fs/cgroup/cpu.stat", {"usage_usec", "user_usec", "system_usec", "nr_periods", "nr_throttled", "throttled_usec"})
+print("host_pressure=" + json.dumps(result, sort_keys=True, separators=(",", ":")))
+PY
+}
+
 initialize_mix_federation_login_slots() {
   local slot index resolved_slot_dir expected_slot
   mix_login_slot_dir="$runtime_dir/mix-federation-login-slots"
@@ -343,58 +386,21 @@ initialize_mix_federation_phase_barrier() {
   record_parent_diagnostic "phase=mix-federation-setup-barrier round=$round status=initialized pairs=$pairs"
 }
 
-mix_phase_worker_leaders_alive() {
-  local pid state
-  for pid in "${workers[@]}"; do
-    state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
-    [[ -n "$state" && "$state" != Z* ]] || return 1
-  done
-}
-
 await_mix_federation_setup_barrier() {
   [[ "$fixture" == mix-federation ]] || return 0
 
-  local expected_pairs="$1" deadline phase_status phase_log
+  local expected_pairs="$1"
   [[ "$expected_pairs" =~ ^[1-9][0-9]*$ && "$mix_phase_round" =~ ^[1-9][0-9]*$ \
      && -n "$mix_phase_dir" && "$mix_phase_run_nonce" =~ ^[0-9a-f]{64}$ ]] || return 1
-  deadline=$((SECONDS + worker_timeout_seconds))
-  phase_log="$runtime_dir/parent-mix-federation-setup-barrier-status.raw.log"
-  while ((SECONDS < deadline)); do
-    # A status of one is the normal "not every pair has published ready"
-    # state.  Capture it inside the conditional: reading `$?` after a failed
-    # `if` with no `else` observes the status of the compound `if` (zero),
-    # which would incorrectly classify normal barrier polling as a fatal
-    # record error and tear down the workers before they can publish.
-    if python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --phase-parent-status \
-      "$mix_phase_dir" "$mix_phase_run_nonce" "$mix_phase_round" "$expected_pairs" >"$phase_log" 2>&1; then
-      phase_status=0
-    else
-      phase_status=$?
-    fi
-    if ((phase_status == 0)); then
-      if ! run_parent_phase "mix-federation-setup-barrier-release-r$mix_phase_round" \
-        python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --phase-parent-release \
-        "$mix_phase_dir" "$mix_phase_run_nonce" "$mix_phase_round" "$expected_pairs"; then
-        return 1
-      fi
-      record_parent_diagnostic "phase=mix-federation-setup-barrier round=$mix_phase_round status=released pairs=$expected_pairs"
-      return 0
-    fi
-    if ((phase_status != 1)); then
-      record_parent_phase_failure "mix-federation-setup-barrier-status-r$mix_phase_round" "$phase_status" "$phase_log"
-      echo "listener stress MIX setup barrier rejected a readiness record" >&2
-      return 1
-    fi
-    if ! mix_phase_worker_leaders_alive; then
-      record_parent_diagnostic "phase=mix-federation-setup-barrier round=$mix_phase_round status=worker_exited_before_release"
-      echo "listener stress MIX worker exited before the all-pair setup release" >&2
-      return 1
-    fi
-    sleep 0.025
-  done
-  record_parent_diagnostic "phase=mix-federation-setup-barrier round=$mix_phase_round status=deadline"
-  echo "listener stress MIX setup barrier did not receive every signed readiness record" >&2
-  return 1
+  # One coordinator retains the deadline and process identities across polls;
+  # pending pairs do not create a new interpreter and ps process for every tick.
+  if ! run_parent_phase "mix-federation-setup-barrier-release-r$mix_phase_round" \
+    python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --phase-parent-await-release \
+    "$mix_phase_dir" "$mix_phase_run_nonce" "$mix_phase_round" "$expected_pairs" \
+    "$worker_timeout_seconds" "${workers[@]}"; then
+    return 1
+  fi
+  record_parent_diagnostic "phase=mix-federation-setup-barrier round=$mix_phase_round status=released pairs=$expected_pairs"
 }
 
 verify_mix_federation_listener_ledger() {
@@ -1374,6 +1380,7 @@ cleanup() {
   # preflight failure must leave redacted evidence even if its later cleanup
   # cannot make progress; the artifact is refreshed below once cleanup returns.
   if ((status != 0)); then
+    record_host_pressure failure-before-cleanup
     if ! retain_parent_diagnostic_artifact "$status"; then
       echo "listener stress failed to retain its initial sanitized parent diagnostic artifact" >&2
       status=1
@@ -1657,6 +1664,7 @@ for ((round = 1; round <= rounds; round++)); do
     "$startup_phase_dir" "$startup_phase_nonce" "$round" live \
     "$worker_timeout_seconds" "${workers[@]}"
   record_parent_diagnostic "phase=all-pair-live-barrier fixture=$fixture round=$round status=released pairs=$pairs children=$stress_child_count startup_pair_limit=$startup_pair_limit"
+  record_host_pressure "all-pair-live-r$round"
   if [[ "$fixture" == federation ]]; then
     run_parent_phase "federation-transport-release-r$round" \
       python3 "$project_dir/scripts/listener-stress-phases.py" release \

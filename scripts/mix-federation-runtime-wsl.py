@@ -445,6 +445,7 @@ def parent_phase_ready(
 ) -> bool:
     if pairs <= 0:
         raise RuntimeError("MIX federation parent phase pair count is invalid")
+    ready = True
     for pair in range(1, pairs + 1):
         configuration = _parent_phase_configuration(directory, run_nonce, round_number, pair)
         try:
@@ -453,12 +454,25 @@ def parent_phase_ready(
                 _phase_record_name("ready", configuration.round, configuration.pair),
             )
         except FileNotFoundError:
-            return False
+            ready = False
+            continue
         # A record is present, so any subsequent failure (including a missing
         # pair key) is malformed control state and must not be downgraded to a
         # harmless "not ready" poll result.
         _verify_phase_record(configuration, "ready", _phase_payload(configuration, "ready"))
-    return True
+    return ready
+
+
+def _publish_parent_phase_release(configuration: PhaseBarrierConfiguration) -> None:
+    payload = _phase_payload(configuration, "release")
+    key = _read_phase_key(configuration)
+    if not _write_phase_record(
+        configuration.directory,
+        _phase_record_name("release", configuration.round, configuration.pair),
+        _signed_record(key, payload),
+        replace=False,
+    ):
+        _verify_phase_record(configuration, "release", payload)
 
 
 def parent_release_phase(
@@ -471,19 +485,88 @@ def parent_release_phase(
         raise RuntimeError("MIX federation parent cannot release an incomplete readiness barrier")
     for pair in range(1, pairs + 1):
         configuration = _parent_phase_configuration(directory, run_nonce, round_number, pair)
-        payload = _phase_payload(configuration, "release")
-        key = _read_phase_key(configuration)
-        if not _write_phase_record(
-            configuration.directory,
-            _phase_record_name("release", configuration.round, configuration.pair),
-            _signed_record(key, payload),
-            replace=False,
-        ):
-            _verify_phase_record(configuration, "release", payload)
+        _publish_parent_phase_release(configuration)
 
 
-def _listening_socket_inodes(port: int) -> set[int]:
-    inodes: set[int] = set()
+def _process_start_time(pid: int) -> int:
+    """Read a live Linux process identity without spawning a status command."""
+
+    if type(pid) is not int or pid <= 0:
+        raise RuntimeError("MIX federation process identity is invalid")
+    try:
+        raw = pathlib.Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        # The command name may itself contain spaces and parentheses.
+        fields = raw.rsplit(")", 1)[1].split()
+        started = int(fields[19])
+        if not raw.startswith(f"{pid} (") or fields[0] in {"Z", "X", "x"} or started <= 0:
+            raise RuntimeError("MIX federation process exited before phase release or listener sampling")
+        return started
+    except (OSError, ValueError, IndexError) as error:
+        raise RuntimeError("MIX federation process identity is no longer inspectable") from error
+
+
+def _require_phase_processes(identities: Mapping[int, int], deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise RuntimeError("MIX federation parent phase deadline expired before release")
+    for pid, started in identities.items():
+        if _process_start_time(pid) != started:
+            raise RuntimeError("MIX federation phase parent or worker leader identity changed")
+    # Reading identities is part of the same absolute phase budget.
+    if time.monotonic() >= deadline:
+        raise RuntimeError("MIX federation parent phase deadline expired before release")
+
+
+def parent_await_release_phase(
+    directory: str,
+    run_nonce: str,
+    round_number: int,
+    pairs: int,
+    timeout_seconds: int,
+    leaders: Sequence[int],
+    *,
+    parent_pid: int | None = None,
+) -> None:
+    """Wait and release once, within one parent-owned phase deadline.
+
+    The shell invokes this interpreter directly and supplies its exact worker
+    leaders. Their start times fence PID reuse, including while signed records
+    are being checked. No process launches or new timeout occur per poll.
+    """
+
+    if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 7200:
+        raise RuntimeError("MIX federation parent phase timeout is invalid")
+    deadline = time.monotonic() + timeout_seconds
+    if (
+        type(pairs) is not int
+        or pairs <= 0
+        or len(leaders) != pairs
+        or any(type(pid) is not int or pid <= 0 for pid in leaders)
+        or len(set(leaders)) != pairs
+    ):
+        raise RuntimeError("MIX federation phase release requires every distinct worker leader")
+    _parent_phase_configuration(directory, run_nonce, round_number, 1)
+    phase_parent = os.getppid() if parent_pid is None else parent_pid
+    if type(phase_parent) is not int or phase_parent <= 1 or phase_parent in leaders:
+        raise RuntimeError("MIX federation phase parent identity is invalid")
+    identities = {pid: _process_start_time(pid) for pid in (phase_parent, *leaders)}
+    while True:
+        _require_phase_processes(identities, deadline)
+        ready = parent_phase_ready(directory, run_nonce, round_number, pairs)
+        _require_phase_processes(identities, deadline)
+        if ready:
+            break
+        time.sleep(min(PHASE_POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+    for pair in range(1, pairs + 1):
+        _require_phase_processes(identities, deadline)
+        configuration = _parent_phase_configuration(directory, run_nonce, round_number, pair)
+        _publish_parent_phase_release(configuration)
+    _require_phase_processes(identities, deadline)
+
+
+def _listening_socket_snapshot() -> dict[int, set[int]]:
+    """Read the shared IPv4/IPv6 listener tables once for an entire ledger."""
+
+    listeners: dict[int, set[int]] = {}
     for path in ("/proc/net/tcp", "/proc/net/tcp6"):
         try:
             lines = pathlib.Path(path).read_text(encoding="ascii").splitlines()[1:]
@@ -495,11 +578,16 @@ def _listening_socket_inodes(port: int) -> set[int]:
                 continue
             raw_port = fields[1].rsplit(":", 1)[1]
             try:
-                if int(raw_port, 16) == port:
-                    inodes.add(int(fields[9]))
+                port = int(raw_port, 16)
+                inode = int(fields[9])
             except ValueError:
                 raise RuntimeError("Linux TCP listener table contained an invalid entry")
-    return inodes
+            listeners.setdefault(port, set()).add(inode)
+    return listeners
+
+
+def _listening_socket_inodes(port: int) -> set[int]:
+    return _listening_socket_snapshot().get(port, set())
 
 
 def _process_socket_inodes(pid: int) -> set[int]:
@@ -547,7 +635,7 @@ def record_listener_ledger(
     configuration: PhaseBarrierConfiguration,
     raw_entries: Sequence[str],
 ) -> None:
-    entries: list[ListenerIdentity] = []
+    requested: list[tuple[str, int, int]] = []
     seen_purposes: set[str] = set()
     seen_ports: set[int] = set()
     for raw in raw_entries:
@@ -556,9 +644,27 @@ def record_listener_ledger(
             raise RuntimeError("MIX federation listener ledger has duplicate identities")
         seen_purposes.add(purpose)
         seen_ports.add(port)
-        entries.append(listener_identity(purpose, pid, port))
-    if not entries:
+        requested.append((purpose, pid, port))
+    if not requested:
         raise RuntimeError("MIX federation listener ledger cannot be empty")
+    # /proc/net is shared by every fixture in the network namespace. Reading
+    # it for each listener multiplies a global scan by the entire matrix.
+    # Bracket all snapshots with live process identities so batching cannot
+    # turn an exited owner or reused PID into valid listener evidence.
+    identities = {
+        pid: _process_start_time(pid) for pid in dict.fromkeys(pid for _, pid, _ in requested)
+    }
+    listening = _listening_socket_snapshot()
+    owned = {pid: _process_socket_inodes(pid) for pid in identities}
+    for pid, started in identities.items():
+        if _process_start_time(pid) != started:
+            raise RuntimeError("MIX federation listener owner identity changed during sampling")
+    entries: list[ListenerIdentity] = []
+    for purpose, pid, port in requested:
+        matching = owned[pid] & listening.get(port, set())
+        if len(matching) != 1:
+            raise RuntimeError("MIX federation listener could not be uniquely attributed to its owner")
+        entries.append(ListenerIdentity(purpose, pid, port, next(iter(matching))))
     entries.sort(key=lambda entry: (entry.purpose, entry.port, entry.pid))
     payload: dict[str, object] = {
         **_phase_payload(configuration, "listeners"),
@@ -645,24 +751,27 @@ def verify_listener_ledger_after_quiescence(
     its caller to establish process-group quiescence first.
     """
 
-    total = 0
-    reused = 0
-    leaks: list[str] = []
+    if pairs <= 0:
+        raise RuntimeError("MIX federation listener ledger pair count is invalid")
+    entries: list[tuple[int, ListenerIdentity]] = []
     for pair in range(1, pairs + 1):
         configuration = _parent_phase_configuration(directory, run_nonce, round_number, pair)
-        for entry in _verified_listener_ledger(configuration):
-            total += 1
-            current = _listening_socket_inodes(entry.port)
-            if entry.socket_inode in current:
-                leaks.append(f"pair={pair} purpose={entry.purpose} port={entry.port}")
-            elif current:
-                reused += 1
+        entries.extend((pair, entry) for entry in _verified_listener_ledger(configuration))
+    listening = _listening_socket_snapshot()
+    reused = 0
+    leaks: list[str] = []
+    for pair, entry in entries:
+        current = listening.get(entry.port, set())
+        if entry.socket_inode in current:
+            leaks.append(f"pair={pair} purpose={entry.purpose} port={entry.port}")
+        elif current:
+            reused += 1
     if leaks:
         raise RuntimeError(
             "MIX federation owned listener remained after worker quiescence: "
             + ", ".join(leaks)
         )
-    return total, reused
+    return len(entries), reused
 
 
 @dataclass(frozen=True)
@@ -1644,6 +1753,24 @@ def _phase_cli_parent_release(argv: list[str]) -> None:
     )
 
 
+def _phase_cli_parent_await_release(argv: list[str]) -> None:
+    if len(argv) < 6:
+        raise RuntimeError(
+            "phase parent wait requires DIRECTORY NONCE ROUND PAIRS TIMEOUT LEADERS..."
+        )
+    directory, nonce, raw_round, raw_pairs, raw_timeout, *raw_leaders = argv
+    if any(re.fullmatch(r"[1-9][0-9]{0,9}", value) is None for value in raw_leaders):
+        raise RuntimeError("MIX federation phase worker leader PID is invalid")
+    parent_await_release_phase(
+        directory,
+        nonce,
+        _phase_integer(raw_round, "ROUND"),
+        _phase_integer(raw_pairs, "PAIRS"),
+        _phase_integer(raw_timeout, "TIMEOUT"),
+        [int(value) for value in raw_leaders],
+    )
+
+
 def _phase_cli_listener_verify(argv: list[str]) -> None:
     if len(argv) != 4:
         raise RuntimeError("listener ledger verification requires DIRECTORY NONCE ROUND PAIRS")
@@ -1681,6 +1808,9 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "--phase-parent-release":
         _phase_cli_parent_release(argv[1:])
         return 0
+    if argv and argv[0] == "--phase-parent-await-release":
+        _phase_cli_parent_await_release(argv[1:])
+        return 0
     if argv and argv[0] == "--listener-ledger-verify":
         _phase_cli_listener_verify(argv[1:])
         return 0
@@ -1697,6 +1827,7 @@ def main(argv: list[str]) -> int:
             "[--self-test|--phase-self-test|--phase-publish-ready|--phase-await-release|"
             "--phase-parent-status DIRECTORY NONCE ROUND PAIRS|"
             "--phase-parent-release DIRECTORY NONCE ROUND PAIRS|"
+            "--phase-parent-await-release DIRECTORY NONCE ROUND PAIRS TIMEOUT LEADERS...|"
             "--listener-ledger-record PURPOSE=PID:PORT...|"
             "--listener-ledger-verify DIRECTORY NONCE ROUND PAIRS|setup|enqueue|finish]"
         )

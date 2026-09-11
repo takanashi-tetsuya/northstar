@@ -1055,18 +1055,60 @@ def assert_api_session(token: str, username: str, stage: str) -> None:
     )
 
 
+# These are fixed public readiness reasons emitted by src/api/system.rs. Never
+# echo an arbitrary response body or exception argument into a CI transcript.
+_READY_ERROR_REASONS = frozenset({
+    "connection admission is closed",
+    "XEP-0198 memory or recovery capacity is not ready",
+    "upload storage authority is not ready",
+    "cluster policy is not ready",
+    "background workers are not ready",
+    "readiness probe is busy",
+    "readiness probe is unavailable",
+    "readiness persistence authority probe timed out",
+    "database or persisted security authority is not ready",
+})
+_READY_ERROR_CODES = frozenset({
+    "service_unavailable", "rate_limited", "internal_error", "bad_request",
+    "unauthorized", "forbidden", "not_found",
+})
+
+
+def readiness_response_summary(status, body) -> str:
+    status_text = str(status) if type(status) is int and 100 <= status <= 599 else "invalid"
+    details = "body=unrecognized"
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        error = body["error"]
+        code = error.get("code")
+        reason = error.get("message")
+        code = code if isinstance(code, str) and code in _READY_ERROR_CODES else "unrecognized"
+        reason = reason if isinstance(reason, str) and reason in _READY_ERROR_REASONS else "unrecognized"
+        details = f"code={code} reason={reason}"
+    elif isinstance(body, str):
+        details = "body=ready" if body == "ready" else f"body=unexpected_text length={len(body)}"
+    return f"status={status_text} {details}"
+
+
 def wait_ready() -> None:
     deadline = time.monotonic() + 30
-    last_error = None
+    last_response = "not observed"
+    last_transport_error = "not observed"
+    attempts = 0
     while time.monotonic() < deadline:
+        attempts += 1
         try:
             status, body = api("GET", "/readyz")
             if status == 200 and body == "ready":
                 return
+            last_response = readiness_response_summary(status, body)
         except OSError as error:
-            last_error = error
+            error_type = type(error).__name__
+            last_transport_error = error_type if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", error_type) else "OSError"
         time.sleep(0.25)
-    raise RuntimeError(f"server did not become ready: {last_error}")
+    raise RuntimeError(
+        f"server did not become ready: attempts={attempts}; "
+        f"last_response=({last_response}); last_transport_error={last_transport_error}"
+    )
 
 
 def read_until(sock: socket.socket, marker: bytes, timeout: float = 10) -> bytes:

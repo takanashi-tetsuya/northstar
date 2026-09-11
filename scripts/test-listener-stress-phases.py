@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -385,7 +386,7 @@ class AuthenticationTests(unittest.TestCase):
 
 class HttpReadinessTests(unittest.TestCase):
     @contextmanager
-    def fixture(self, responses, *, slow_body=False):
+    def fixture(self, responses, *, slow_body=False, content_type="text/plain"):
         observed = []
 
         class Handler(BaseHTTPRequestHandler):
@@ -397,6 +398,7 @@ class HttpReadinessTests(unittest.TestCase):
                 observed.append(status)
                 encoded = body.encode()
                 self.send_response(status)
+                self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(encoded)))
                 self.end_headers()
                 try:
@@ -427,6 +429,79 @@ class HttpReadinessTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def integration_failure(self, status, body, *, content_type="text/plain"):
+        integration = load_module("integration_ready_failure_test", ROOT / "integration-wsl.py")
+        with self.fixture([(status, body)], content_type=content_type) as (_path, _nonce, url, observed):
+            clock = [100.0]
+            sleeps = []
+
+            def expire(seconds):
+                sleeps.append(seconds)
+                clock[0] += 30
+
+            fake_time = SimpleNamespace(monotonic=lambda: clock[0], sleep=expire)
+            with patch.object(integration, "HTTP_PORT", int(url.split(":")[2].split("/")[0])), \
+                    patch.object(integration, "time", fake_time), self.assertRaises(RuntimeError) as error:
+                integration.wait_ready()
+            self.assertEqual(observed, [status])
+            self.assertEqual(sleeps, [0.25])
+            self.assertEqual(clock[0], 130.0)
+            self.assertLess(len(str(error.exception)), 320)
+            return str(error.exception)
+
+    def test_integration_ready_failure_keeps_typed_http_reason_without_extra_fields(self):
+        message = self.integration_failure(503, json.dumps({"error": {
+            "code": "service_unavailable",
+            "message": "background workers are not ready",
+            "token": "private-extra-field-token",
+        }}), content_type="application/json")
+        self.assertIn("status=503 code=service_unavailable reason=background workers are not ready", message)
+        self.assertIn("attempts=1", message)
+        self.assertNotIn("private-extra-field-token", message)
+        self.assertNotIn("None", message)
+
+    def test_integration_ready_failure_never_echoes_unknown_json_or_text(self):
+        secret = "private-diagnostic-token"
+        for status, body, content_type in (
+            (503, json.dumps({"error": {"code": secret, "message": secret * 1000}}), "application/json"),
+            (200, secret * 1000, "text/plain"),
+            (503, json.dumps([secret]), "application/json"),
+        ):
+            with self.subTest(status=status, content_type=content_type):
+                message = self.integration_failure(status, body, content_type=content_type)
+                self.assertIn(f"status={status}", message)
+                self.assertNotIn(secret, message)
+
+    def test_integration_ready_transient_http_rejection_can_still_recover(self):
+        integration = load_module("integration_ready_recovery_test", ROOT / "integration-wsl.py")
+        with self.fixture([(503, "pending"), (200, "ready")]) as (_path, _nonce, url, observed):
+            clock = [100.0]
+            def advance(seconds):
+                clock[0] += seconds
+            with patch.object(integration, "HTTP_PORT", int(url.split(":")[2].split("/")[0])), \
+                    patch.object(integration, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=advance)):
+                integration.wait_ready()
+            self.assertEqual(observed, [503, 200])
+            self.assertEqual(clock[0], 100.25)
+
+    def test_integration_ready_failure_preserves_http_reason_and_transport_error_type(self):
+        integration = load_module("integration_ready_transport_test", ROOT / "integration-wsl.py")
+        clock = [100.0]
+        def advance(seconds):
+            self.assertEqual(seconds, 0.25)
+            clock[0] += 15
+        with patch.object(integration, "api", side_effect=[
+                (503, {"error": {"code": "service_unavailable", "message": "readiness probe is busy"}}),
+                ConnectionResetError("credential=must-not-be-printed"),
+            ]) as request, patch.object(integration, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=advance)), \
+                self.assertRaises(RuntimeError) as error:
+            integration.wait_ready()
+        self.assertEqual(request.call_count, 2)
+        self.assertTrue(all(call.args == ("GET", "/readyz") and not call.kwargs for call in request.call_args_list))
+        self.assertIn("reason=readiness probe is busy", str(error.exception))
+        self.assertIn("last_transport_error=ConnectionResetError", str(error.exception))
+        self.assertNotIn("must-not-be-printed", str(error.exception))
 
     def test_listener_then_transient_http_health_share_one_deadline(self):
         with self.fixture([(503, "workers are starting"), (503, "workers are starting"), (200, "ready")]) as (path, nonce, url, observed):
@@ -516,6 +591,92 @@ class HttpReadinessTests(unittest.TestCase):
                 patch.object(readiness.time, "monotonic", side_effect=[100.0, 100.0, 101.0]):
             with self.assertRaisesRegex(ValueError, "after the startup deadline"):
                 readiness.wait_for_record("unused", "0123456789abcdef", os.getpid(), 15, 100.5)
+
+
+class FederationWarningExcerptTests(unittest.TestCase):
+    def excerpt(self, contents, mode="warnings"):
+        source = (ROOT / "federation-wsl.sh").read_text()
+        program = source.split("<<'PY_WARNING_EXCERPT'\n", 1)[1].split("\nPY_WARNING_EXCERPT", 1)[0]
+        with tempfile.TemporaryDirectory(prefix="northstar-warning-excerpt-test-") as temporary:
+            log = Path(temporary) / "runtime.log"
+            log.write_bytes(contents)
+            result = subprocess.run([sys.executable, "-", str(ROOT.parent), str(log), mode],
+                                    input=program, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def test_warning_excerpt_preserves_middle_failures_with_bounded_redaction(self):
+        records = [json.dumps({"level": "DEBUG", "fields": {"message": "chatty"}})] * 200
+        records += [json.dumps({"level": "ERROR", "fields": {
+            "message": f"failure-{index:03d}", "authorization": "Bearer private-warning-token",
+        }}) for index in range(100)]
+        records += [json.dumps({"level": "DEBUG", "fields": {"message": "chatty"}})] * 200
+        output = self.excerpt(("\n".join(records) + "\n").encode())
+        self.assertIn("matched=100", output)
+        self.assertIn("failure-000", output)
+        self.assertIn("failure-099", output)
+        self.assertNotIn("failure-050", output)
+        self.assertNotIn("chatty", output)
+        self.assertNotIn("private-warning-token", output)
+        self.assertLessEqual(len(output.splitlines()) - 1, 64)
+        self.assertLessEqual(len(output.split("\n", 1)[1].encode()), 65536)
+
+    def test_head_and_tail_keep_original_rows_and_redact_before_byte_truncation(self):
+        # The URI password straddles the per-line output boundary; truncating
+        # before redaction would leave a partial password without its final @.
+        credential = "x" * 2020 + " https://user:private-boundary-password@example.invalid/"
+        records = [f"record-{index:03d}" for index in range(140)]
+        records[0] = "head-first " + credential
+        records[-1] = "tail-last " + credential
+        contents = ("\n".join(records) + "\n").encode()
+        for mode, first, last, rows, limit in (
+            ("head", "head-first", "record-059", 60, 65536),
+            ("tail", "record-020", "tail-last", 120, 131072),
+        ):
+            with self.subTest(mode=mode):
+                output = self.excerpt(contents, mode)
+                payload = output.split("\n", 1)[1]
+                self.assertIn(first, payload)
+                self.assertIn(last, payload)
+                self.assertNotIn("private-boundary", payload)
+                self.assertEqual(len(payload.splitlines()), rows)
+                self.assertLessEqual(len(payload.encode()), limit)
+
+    def test_tail_without_complete_redaction_context_is_explicitly_omitted(self):
+        contents = b"-----BEGIN RSA PRIVATE KEY-----\n"
+        contents += b"partial-secret\n" * 700000
+        contents += b"-----END RSA PRIVATE KEY-----\nlast-complete-record\n"
+        output = self.excerpt(contents, "tail")
+        self.assertIn("scan_truncated=true", output)
+        self.assertIn("omitted=redaction_context_exceeds_scan_limit", output)
+        self.assertNotIn("partial-secret", output)
+        self.assertEqual(output.split("\n", 1)[1], "")
+
+    def test_multiline_private_keys_are_redacted_before_head_and_tail_row_selection(self):
+        key = "-----BEGIN RSA PRIVATE KEY-----\nSENTINEL-PRIVATE-KEY-DATA\n-----END RSA PRIVATE KEY-----\n"
+        contents = ("context\n" * 59 + key + "after\n" * 118).encode()
+        for mode in ("head", "tail"):
+            with self.subTest(mode=mode):
+                output = self.excerpt(contents, mode)
+                self.assertIn("[REDACTED PRIVATE KEY]", output)
+                self.assertNotIn("SENTINEL", output)
+                self.assertNotIn("BEGIN RSA", output)
+                self.assertNotIn("END RSA", output)
+        unfinished = ("context\n" + key.split("-----END", 1)[0]).encode()
+        output = self.excerpt(unfinished, "head")
+        self.assertIn("[REDACTED PRIVATE KEY]", output)
+        self.assertNotIn("SENTINEL", output)
+
+    def test_warning_excerpt_limits_scan_record_size_and_utf8_output_bytes(self):
+        long_record = json.dumps({"level": "ERROR", "fields": {"message": "诊断" * 1000}}, ensure_ascii=False)
+        huge_record = json.dumps({"level": "ERROR", "fields": {"message": "oversized-secret" * 1000}})
+        content = huge_record.encode() + b"\n" + ((long_record + "\n").encode() * 1800)
+        output = self.excerpt(content)
+        self.assertIn("scan_truncated=true", output)
+        self.assertIn("oversized_lines_omitted=1", output)
+        self.assertNotIn("oversized-secret", output)
+        self.assertLessEqual(len(output.splitlines()) - 1, 64)
+        self.assertLessEqual(len(output.split("\n", 1)[1].encode()), 65536)
 
 
 if __name__ == "__main__":

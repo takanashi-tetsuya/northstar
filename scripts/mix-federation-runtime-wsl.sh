@@ -184,7 +184,6 @@ publish_listener_ledger() {
 
 publish_setup_barrier_ready_and_wait() {
   [[ "$phase_barrier_enabled" == true ]] || return 0
-  publish_listener_ledger
   python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --phase-publish-ready
   echo "MIX federation setup barrier: pair=$phase_pair ready"
   python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --phase-await-release
@@ -433,6 +432,9 @@ fixture_assert_private_log_dir() {
 fixture_stress_phase_barrier "$project_dir" prepared
 start_a
 start_b
+# Capture this pair's exact listeners while its bounded startup slot is held.
+# The live barrier then rechecks both server identities before business release.
+publish_listener_ledger
 fixture_stress_phase_barrier "$project_dir" live "$pid_a" "$pid_b"
 echo "MIX federation schemas: $schema_a $schema_b"
 echo "MIX federation ports: http=$http_a,$http_b s2s-tls=$s2s_tls_a,$s2s_tls_b pids=$pid_a,$pid_b"

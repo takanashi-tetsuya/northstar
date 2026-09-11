@@ -148,6 +148,16 @@ concurrent protocol work begins. The scheduled matrix runs 100 rounds of the
 same 50-pair workload. Smoke tests retain the one-pair and two-pair cases.
 This validates concurrent operation and bounded startup on the available
 runner; it does not claim that all 50 pairs can cold-start simultaneously.
+MIX records each pair's listener ownership while that pair still holds its
+startup slot, using one TCP-table snapshot and one file-descriptor snapshot
+per owner. A single coordinator checks the signed setup records and original
+process identities while waiting; pending pairs do not spawn repeated status
+commands. These bounds reduce fixture overhead without reducing protocol work.
+Both fixture families retain application INFO/WARN/ERROR and inbound S2S
+debug logs, without tracing every idle background polling turn. Failure
+diagnostics retain bounded readiness reasons, warnings and errors.
+Fixed host pressure counters are sampled at the live barrier and before failed
+cleanup; no concurrent resource sampler runs during the workload.
 The startup scheduler's failure paths are also checked independently of a
 database using controlled child processes.
 

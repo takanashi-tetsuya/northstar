@@ -123,13 +123,10 @@ for required_parent_function in \
   grep -Fq "$required_parent_function()" "$driver" \
     || { echo "listener stress driver no longer has $required_parent_function" >&2; exit 1; }
 done
-# `--phase-parent-status` deliberately returns one while a valid worker is
-# still reaching its signed-ready point.  Preserve that status through the
-# shell conditional: `$?` after an `if` without an `else` is the compound
-# conditional's status, not the Python command's one, and would kill every
-# worker before the parent can issue its release.
-grep -Fq $'    else\n      phase_status=$?\n    fi\n    if ((phase_status == 0)); then' "$driver" \
-  || { echo "listener stress MIX barrier no longer preserves a normal pending-status result" >&2; exit 1; }
+# The persistent coordinator owns pending status, process identities, and its
+# single deadline. Its fail-closed behavior is exercised by the Python tests.
+grep -Fq -- '--phase-parent-await-release' "$driver" \
+  || { echo "listener stress MIX barrier lost its persistent coordinator" >&2; exit 1; }
 for required_phase_env in \
   NORTHSTAR_MIX_FEDERATION_PHASE_CONTROL_DIR \
   NORTHSTAR_MIX_FEDERATION_PHASE_RUN_NONCE \

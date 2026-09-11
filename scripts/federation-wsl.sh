@@ -93,6 +93,82 @@ s2s_b=""
 s2s_tls_a=""
 s2s_tls_b=""
 declare -a fixture_listener_ports=()
+fixture_print_log_excerpt() {
+  # Server processes are already reaped. Redact complete bounded records before
+  # truncating output; the outer CI wrapper redacts the transcript again.
+  python3 - "$project_dir" "$1" "${2:-warnings}" <<'PY_WARNING_EXCERPT'
+from collections import deque
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
+from github_ci_summary import redact_diagnostic_log
+mode = sys.argv[3] if len(sys.argv) > 3 else "warnings"
+if mode not in ("head", "tail", "warnings"):
+    raise ValueError("unsupported log excerpt mode")
+scan_limit = 8 * 1024 * 1024
+flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+with os.fdopen(os.open(sys.argv[2], flags), "rb") as source:
+    metadata = os.fstat(source.fileno())
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("excerpt requires a regular log file")
+    if mode == "tail" and metadata.st_size > scan_limit:
+        # Seeking into a PEM block loses its BEGIN marker. Fail closed rather
+        # than echo a suffix whose preceding redaction context is unknown.
+        print("tail_excerpt omitted=redaction_context_exceeds_scan_limit scan_truncated=true max_rows=120 max_payload_bytes=131072")
+        sys.exit(0)
+    data = source.read(min(metadata.st_size, scan_limit))
+truncated = metadata.st_size > len(data)
+if truncated and not data.endswith(b"\n"):
+    data = data.rsplit(b"\n", 1)[0] if b"\n" in data else b""
+if mode in ("head", "tail"):
+    max_rows, byte_limit = (60, 65536) if mode == "head" else (120, 131072)
+    # Redact the complete bounded context before selecting physical rows.
+    # Per-line redaction would erase BEGIN while exposing later PEM contents.
+    redacted = redact_diagnostic_log(data.decode("utf-8", errors="replace"))
+    raw_lines = redacted.splitlines()
+    raw_lines = raw_lines[:max_rows] if mode == "head" else raw_lines[-max_rows:]
+    lines, oversized = [], 0
+    for line in raw_lines:
+        encoded = line.encode("utf-8")
+        if len(encoded) > 8192:
+            oversized += 1
+            continue
+        lines.append(encoded)
+    print(f"{mode}_excerpt scanned_bytes={len(data)} scan_truncated={str(truncated).lower()} oversized_lines_omitted={oversized} max_rows={max_rows} max_payload_bytes={byte_limit}", flush=True)
+else:
+    first, latest, matched, oversized = [], deque(maxlen=32), 0, 0
+    for number, raw in enumerate(data.splitlines()):
+        if len(raw) > 8192:
+            oversized += 1
+            continue
+        try:
+            line = raw.decode("utf-8")
+            record = json.loads(line)
+        except (UnicodeError, ValueError):
+            continue
+        if not isinstance(record, dict) or record.get("level") not in ("WARN", "ERROR"):
+            continue
+        matched += 1
+        item = (number, redact_diagnostic_log(line).encode("utf-8"))
+        if len(first) < 32:
+            first.append(item)
+        latest.append(item)
+    lines = [line for _, line in sorted(dict(first + list(latest)).items())]
+    byte_limit = 65536
+    print(f"warning_excerpt scanned_bytes={len(data)} scan_truncated={str(truncated).lower()} matched={matched} oversized_lines_omitted={oversized} max_rows=64 max_payload_bytes={byte_limit}", flush=True)
+remaining = byte_limit
+for line in lines:
+    if remaining <= 1:
+        break
+    line = line[:min(2048, remaining - 1)].decode("utf-8", errors="ignore").encode("utf-8")
+    sys.stdout.buffer.write(line + b"\n")
+    remaining -= len(line) + 1
+PY_WARNING_EXCERPT
+}
+
 cleanup() {
   exit_code=$?
   trap - EXIT INT TERM
@@ -107,10 +183,14 @@ cleanup() {
       if [[ -f "$log" ]]; then
         # Preserve startup evidence before frequent worker debug messages can
         # push a missing-readiness failure out of the bounded ending excerpt.
-        echo "--- $(basename "$log") (first 60 lines) ---" >&2
-        head -n 60 "$log" >&2 || true
-        echo "--- $(basename "$log") (last 120 lines) ---" >&2
-        tail -n 120 "$log" >&2 || true
+        echo "--- $(basename "$log") (first 60 lines, at most 65536 bytes) ---" >&2
+        fixture_print_log_excerpt "$log" head >&2 || true
+        echo "--- $(basename "$log") (last 120 lines, at most 131072 bytes) ---" >&2
+        fixture_print_log_excerpt "$log" tail >&2 || true
+        if [[ "$log" == "$log_a" || "$log" == "$log_b" ]]; then
+          echo "--- $(basename "$log") (bounded WARN/ERROR excerpt) ---" >&2
+          fixture_print_log_excerpt "$log" warnings >&2 || true
+        fi
       fi
     done
   fi
@@ -267,7 +347,7 @@ start_a() {
     FEDERATION_ENABLED=true FEDERATION_ALLOW_PRIVATE_IPS=true S2S_SASL_EXTERNAL_ENABLED="${S2S_SASL_EXTERNAL_ENABLED:-true}" DIALBACK_ENABLED=true \
     DIALBACK_SECRET_FILE= DIALBACK_SECRET= \
     FEDERATION_DNS_OVERRIDES="remote.localhost=xmpps://127.0.0.1:$relay_b_s2s_tls_port,pubsub.remote.localhost=xmpps://127.0.0.1:$relay_b_s2s_tls_port" \
-    FEDERATION_EXTRA_ROOT_CERT_PATH="$cert_dir/federation-ca.crt" LOG_FORMAT=json RUST_LOG=rust_xmpp_server=debug \
+    FEDERATION_EXTRA_ROOT_CERT_PATH="$cert_dir/federation-ca.crt" LOG_FORMAT=json RUST_LOG=rust_xmpp_server=info,rust_xmpp_server::s2s::inbound=debug \
     "$binary" >"$log_a" 2>&1 &
   pid_a=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_a" "$startup_deadline" || return 1
@@ -302,7 +382,7 @@ start_b() {
     FEDERATION_ENABLED=true FEDERATION_ALLOW_PRIVATE_IPS=true S2S_SASL_EXTERNAL_ENABLED="${S2S_SASL_EXTERNAL_ENABLED:-true}" DIALBACK_ENABLED=true \
     DIALBACK_SECRET_FILE= DIALBACK_SECRET= \
     FEDERATION_DNS_OVERRIDES="localhost=127.0.0.1:$relay_a_s2s_port,conference.localhost=127.0.0.1:$relay_a_s2s_port,pubsub.localhost=127.0.0.1:$relay_a_s2s_port" \
-    FEDERATION_EXTRA_ROOT_CERT_PATH="$cert_dir/federation-ca.crt" LOG_FORMAT=json RUST_LOG=rust_xmpp_server=debug \
+    FEDERATION_EXTRA_ROOT_CERT_PATH="$cert_dir/federation-ca.crt" LOG_FORMAT=json RUST_LOG=rust_xmpp_server=info,rust_xmpp_server::s2s::inbound=debug \
     "$binary" >"$log_b" 2>&1 &
   pid_b=$!
   fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_b" "$startup_deadline" || return 1

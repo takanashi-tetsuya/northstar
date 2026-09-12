@@ -428,4 +428,5 @@ FEDERATION_TEST_SCHEMA_A="$schema_a" \
 FEDERATION_TEST_SCHEMA_B="$schema_b" \
 FEDERATION_TEST_DATABASE_A="$database_name_a" \
 FEDERATION_TEST_DATABASE_B="$database_name_b" \
-python3 scripts/federation-wsl.py
+python3 scripts/run-test-with-servers.py --server "$pid_a" --server "$pid_b" -- \
+  python3 scripts/federation-wsl.py

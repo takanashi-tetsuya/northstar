@@ -75,6 +75,28 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(sum(r['type'] == 'first_failure' for r in records(stream)), 1)
         self.assertEqual(e.captured_samples, 5)
 
+    def test_observer_error_context_is_bounded_and_not_a_business_window(self):
+        e, stream = self.make()
+        for at in (69, 70, 90, 100):
+            e.sample(sample(row()), at, 1)
+        e.capture_observer_error('client_query_deadline', 105)
+        context = records(stream)
+        self.assertEqual([r['monotonic'] for r in context[1:]], [90, 100])
+        self.assertTrue(all(r['type'] == 'observer_context_sample' for r in context[1:]))
+        self.assertEqual(e.observer_context_samples, 2)
+        self.assertEqual(e.captured_samples, 0)
+        self.assertIsNone(e.marker)
+        self.assertIsNone(e.capture_until)
+
+    def test_observer_context_does_not_duplicate_an_existing_business_window(self):
+        e, stream = self.make()
+        e.sample(sample(row()), 100, 1)
+        e.capture(marker(), 100)
+        before = stream.getvalue()
+        e.capture_observer_error('client_query_deadline', 105)
+        self.assertEqual(stream.getvalue(), before)
+        self.assertEqual(e.observer_context_samples, 0)
+
     def test_delayed_marker_filters_both_edges_and_never_extends_post(self):
         e, stream = self.make()
         for now in (75, 90, 100, 105, 116):
@@ -504,7 +526,7 @@ class Fake:
             clock[0]+=3.2
             if case=='late_unrecovered':m.on_signal(signal.SIGTERM,None)
             raise m.ObserverError('client_query_deadline_drained')
-        if case=='pending_error':raise m.ObserverError('client_query_deadline')
+        if case=='pending_error' or case=='pending_after_samples' and self.n==3:raise m.ObserverError('client_query_deadline')
         if case=='private_field':return {'at':'now','total':1,'rows':[{'query':'SENSITIVE'}]}
         if case=='unrecovered' and self.n==2:
             m.on_signal(signal.SIGTERM,None)
@@ -555,6 +577,11 @@ if case=='late_unrecovered':assert result['error_code']=='sample_error_not_recov
 if case=='late_repeated':assert instances[0].n==3 and result['consecutive_sample_errors']==3
 if case=='server_error':assert instances[0].n==3 and result['consecutive_sample_errors']==3
 if case=='pending_error':assert instances[0].n==1
+if case=='pending_after_samples':
+    assert result['error_code']=='client_query_deadline' and not result['failure_marker_seen']
+    assert result['observer_context_samples']==2 and result['captured_samples']==0
+    assert result['post_window_complete'] is None
+    assert [r['type'] for r in records]==['metadata','observer_failure_context','observer_context_sample','observer_context_sample','terminal']
 if case=='parent_loss':assert result['error_code']=='parent_identity_lost'
 if case=='capture':
     event=[r for r in records if r['type']=='first_failure']
@@ -588,7 +615,7 @@ class MainTests(unittest.TestCase):
             with self.subTest(case=case): self.run_case(case)
 
     def test_pending_connection_and_parent_failures_close_without_reconnect(self):
-        for case in ('pending_error', 'connect_failure', 'parent_loss', 'attestation_failure', 'attestation_wrong_type', 'overall_deadline'):
+        for case in ('pending_error', 'pending_after_samples', 'connect_failure', 'parent_loss', 'attestation_failure', 'attestation_wrong_type', 'overall_deadline'):
             with self.subTest(case=case): self.run_case(case)
 
     def test_marker_capture_auto_exits_at_original_deadline(self):

@@ -317,6 +317,25 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install pinned Rust for the audit tool
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+
+      - name: Restore pinned audit tool
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-rust1.97.1-v0.22.2-locked
+
+      - name: Install and verify the locked audit tool
+        run: |
+          set -euo pipefail
+          if [[ "$(cargo audit --version 2>/dev/null || true)" != "cargo-audit 0.22.2" ]]; then
+            cargo install cargo-audit --version 0.22.2 --locked --force
+          fi
+          [[ "$(cargo audit --version)" == "cargo-audit 0.22.2" ]]
+
       - name: Audit Cargo.lock
         uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
@@ -458,6 +477,7 @@ jobs:
           python3 scripts/check-github-ci-summary.py
           bash scripts/check-github-ci-run.sh
           python3 scripts/test-ci-console-startup.py
+          python3 scripts/test-run-test-with-servers.py
           bash scripts/test-github-ci-supervisor.sh
           bash scripts/test-listener-stress-worker.sh
           python3 scripts/test-listener-stress-phases.py

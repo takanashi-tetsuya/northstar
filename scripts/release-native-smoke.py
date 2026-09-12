@@ -23,6 +23,10 @@ def print_fixture_diagnostics(log, path):
     log.flush()
     for line in path.read_text(errors='replace').splitlines()[-30:]:
         print(re.sub(r'postgres(?:ql)?://\S+', '[REDACTED_DATABASE_URL]', line))
+    postgres_log = path.with_name('postgres.log')
+    if postgres_log.exists():
+        for line in postgres_log.read_text(errors='replace').splitlines()[-30:]:
+            print(re.sub(r'postgres(?:ql)?://\S+', '[REDACTED_DATABASE_URL]', line))
 
 
 def run(package, pg_bin, openssl, evidence, image=None):
@@ -42,6 +46,10 @@ def run(package, pg_bin, openssl, evidence, image=None):
         raise ValueError('native release smoke requires PostgreSQL 17')
     with tempfile.TemporaryDirectory(prefix='northstar-release-native-') as temporary:
         root = Path(temporary)
+        if os.name == 'nt':
+            subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-File',
+                str(Path(__file__).with_name('release-private-directory-windows.ps1')),
+                '-Directory', str(root)], env=environment, check=True, timeout=20)
         password = root / 'password'
         password.write_text('xmpp-test-password\n')
         password.chmod(0o600)
@@ -59,13 +67,21 @@ def run(package, pg_bin, openssl, evidence, image=None):
             with socket.socket() as reservation:
                 reservation.bind(('127.0.0.1', 0))
                 port = reservation.getsockname()[1]
-            postgres = subprocess.Popen([tool('postgres'), '-D', str(data), '-h', '127.0.0.1',
-                '-p', str(port), '-c', 'unix_socket_directories=', '-c', 'max_connections=32',
-                '-c', 'shared_buffers=16MB', '-c', 'fsync=on'], env=environment,
-                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+            postgres = None
             server = None
             started = time.monotonic()
             try:
+                options = ['-h', '127.0.0.1', '-p', str(port), '-c', 'unix_socket_directories=',
+                           '-c', 'max_connections=32', '-c', 'shared_buffers=16MB', '-c', 'fsync=on']
+                if os.name == 'nt':
+                    spec = importlib.util.spec_from_file_location('windows_postgres',
+                        Path(__file__).with_name('release-postgres-windows.py'))
+                    windows_pg = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(windows_pg)
+                    postgres = windows_pg.WindowsPostgres(tool, data, options, environment, log)
+                else:
+                    postgres = subprocess.Popen([tool('postgres'), '-D', str(data), *options],
+                        env=environment, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
                 pg_env = dict(environment, PGHOST='127.0.0.1', PGPORT=str(port), PGUSER='xmpp_test',
                               PGPASSWORD='xmpp-test-password', PGDATABASE='postgres', PGCONNECT_TIMEOUT='2')
                 deadline = time.monotonic() + 15
@@ -191,9 +207,13 @@ def run(package, pg_bin, openssl, evidence, image=None):
                             server.kill()
                             server.wait(timeout=5)
                 finally:
-                    if postgres.poll() is None:
-                        command([tool('pg_ctl'), '-D', str(data), '-m', 'fast', '-w', '-t', '15', 'stop'], timeout=20)
-                        postgres.wait(timeout=5)
+                    try:
+                        if postgres is not None and postgres.poll() is None:
+                            command([tool('pg_ctl'), '-D', str(data), '-m', 'fast', '-w', '-t', '15', 'stop'], timeout=20)
+                            postgres.wait(timeout=5)
+                    finally:
+                        if os.name == 'nt' and postgres is not None:
+                            postgres.close()
         evidence.parent.mkdir(parents=True, exist_ok=True)
         evidence.write_text(json.dumps(result, sort_keys=True, indent=2) + '\n')
         print(json.dumps(result))

@@ -119,3 +119,46 @@ Python 匯入與初始化，因此首筆輸出的 1 秒期限包含子程序啟�
 通過。移除啟動確認的 mutation 會重現 `console_delivery_stalled`，證明
 修正涵蓋一條可重現的故障路徑；遠端故障沒有 helper 啟動時間紀錄，不能
 據此斷言所有傳送延遲都由啟動造成，仍須完整矩陣驗證。
+
+### 後續失敗分類與發佈平台修正（UTC 2026-09-12 15:36）
+
+- `b44736e` 的 Federation job `103569517567` 在第 7 輪失敗。
+  pair 20 B 於 14:57:47 因 runtime-control heartbeat 5499 ms 超過原有
+  5000 ms 邊界而退出（rules-read 4899 ms）；Python readiness 重試直到
+  約 14:58:22，外層 failure marker 於 14:58:24 才建立，使 30 秒前窗
+  錯過實際退出。新增 Linux pidfd 監看兩個經父子關係驗證的 server，
+  任一退出即建立 lifecycle marker，停止並回收自身 workload；server
+  仍由原 fixture shell 清理，所有後代保留原 supervisor process group。
+  5 個真實程序測試涵蓋正常與失敗退出、已退出 server、非自有／重複
+  PID、及拒絕 TERM 的 workload。原階段 31 項、worker lifecycle 與
+  observer wrapper 20 項回歸通過。
+- `41d8dc2` 的 Federation job `103566011083` 已通過前 19 輪；第 20 輪
+  observer 出現未完成 drain 的 `client_query_deadline`（5000.323 ms）。
+  既有邏輯正確中止 driver，但因沒有事先的業務 marker，只保存摘要。
+  現在額外保留原 ring 中最近 30 秒內的已驗證樣本，使用獨立
+  `observer_context_sample` 類型；不建立業務 marker、不宣稱 post window
+  完成、不延長觀測。41 個 observer 單元測試與 12 個真實 PG17 測試通過。
+  沒有樣本的 attestation 失敗仍只保留摘要。上述改動補齊診斷，**尚未
+  證明修復 runtime-control／資料庫延遲本身**。
+- `616de3b` PR job `103574205606` 尚未稽核 Cargo.lock 即失敗：原 action
+  未鎖定安裝 `cargo-audit`，解析出的 `jiff 0.2.36` 缺少 include_str 所需
+  文件。預先安裝 `cargo-audit 0.22.2 --locked`，驗證版本並使用專屬
+  binary cache；官方該版本鎖定 `jiff 0.2.28`。保留原 RustSec 稽核及
+  最新 advisory 資料庫，待新 runner 驗證冷安裝。
+- `616de3b` Windows native job `103576313132` 已通過發佈包下載、雜湊、
+  解壓與執行版本檢查；initdb 錯誤明確為讀取 fixture password 時
+  `Permission denied`。Python 3.12.10 的 0700 ACL 授權 SYSTEM、
+  Administrators 及 Owner Rights；PostgreSQL 會移除管理員 token 權限。
+  對新建空白 fixture 目錄改授目前 user SID 與 SYSTEM 繼承權限，
+  保持 private protected ACL，並以官方 `pg_ctl` 的 restricted-token
+  路徑啟動 Windows PostgreSQL，持有實際 postmaster handle 至清理。
+  Windows 尚待遠端實測；Linux 實際 `b44736e` 發佈包重新完成 PG17.11
+  migration、readiness、web/Swagger 驗證（2181.094 ms）。這是 harness
+  回歸證據，不替代新 HEAD 的正式發佈驗證。
+
+核對的一手來源：
+[audit-check 安裝行為](https://github.com/rustsec/audit-check/blob/69366f33c96575abad1ee0dba8212993eecbe998/src/main.ts)、
+[cargo-audit 0.22.2 鎖檔](https://github.com/rustsec/rustsec/blob/cargo-audit/v0.22.2/Cargo.lock)、
+[Python Windows mkdir ACL](https://github.com/python/cpython/blob/v3.12.10/Modules/posixmodule.c)、
+[PostgreSQL 17 restricted token](https://github.com/postgres/postgres/blob/REL_17_11/src/common/restricted_token.c)、
+[PostgreSQL 禁止管理員直接啟動](https://github.com/postgres/postgres/blob/REL_17_11/src/backend/main/main.c)。

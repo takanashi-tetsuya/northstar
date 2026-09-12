@@ -470,6 +470,7 @@ class Evidence:
         self.ring_byte_evictions = 0
         self.sample_count = 0
         self.starting_observations = 0
+        self.observer_context_samples = 0
 
     def write(self, record):
         data = record if isinstance(record, bytes) else encoded(record)
@@ -514,6 +515,23 @@ class Evidence:
 
     def complete(self, now):
         return self.capture_until is not None and now >= self.capture_until
+
+    def capture_observer_error(self, code, now):
+        # A failed observer cannot promise a business failure window. Preserve
+        # only already validated, bounded recent rows with a distinct type;
+        # neither manufacture a fixture marker nor extend collection time.
+        if self.marker is not None or not self.ring:
+            return
+        self.write({'type': 'observer_failure_context', 'error_code': code,
+                    'observed_monotonic': round(now, 6),
+                    'context_from_monotonic': now - PRE_SECONDS,
+                    'context_until_monotonic': now})
+        for at, _, data in self.ring:
+            if now - PRE_SECONDS <= at <= now:
+                record = json.loads(data)
+                record['type'] = 'observer_context_sample'
+                self.write(record)
+                self.observer_context_samples += 1
 
     def sample(self, sample, now, duration_ms):
         validate_sample(sample)
@@ -627,7 +645,8 @@ def main():
             'blocking_pids_sampled_only_for_heavyweight_lock': True,
             'database_hash_scope': 'md5_run_salt_colon_database_name',
             'backend_identity': ['pid', 'backend_start'],
-            'disappearance_is_business_failure': False, 'capture_trigger': 'trusted_first_failure_marker'})
+            'disappearance_is_business_failure': False, 'capture_trigger': 'trusted_first_failure_marker',
+            'observer_failure_context': 'bounded_recent_validated_samples_without_business_marker'})
         connection = Libpq(limits)
         connection.connect()
         attested = connection.query(attestation_sql())
@@ -691,7 +710,8 @@ def main():
         if connection:
             connection.close()
         # A signal during the last query can coincide with first failure. Only
-        # a valid marker can flush any rows; ordinary shutdown is summary-only.
+        # a valid marker can establish a business window; ordinary successful
+        # shutdown is summary-only. Observer errors retain separate context.
         if failure:
             try:
                 capture_marker()
@@ -711,6 +731,12 @@ def main():
         post_complete = evidence.complete(time.monotonic())
         if evidence.marker is not None and not post_complete:
             final_code = final_code or 'post_window_incomplete'
+        context_error = None
+        if final_code and evidence.marker is None:
+            try:
+                evidence.capture_observer_error(final_code, time.monotonic())
+            except (ObserverError, OSError, MemoryError, ValueError):
+                context_error = 'observer_context_write_failed'
         ok = (stopped or completed) and final_code is None and evidence.sample_count > 0
         result = {'schema_version': 1, 'observer_ok': ok, 'fixture_status': 'not_determined_by_observer',
             'started_at': started, 'ended_at': utc(), 'stop_signal': STOP_SIGNAL,
@@ -726,6 +752,8 @@ def main():
             'truncated': bool(evidence.ring_byte_evictions or evidence.pre_window_truncated or final_code in
                 {'evidence_byte_limit', 'sample_byte_limit', 'backend_row_limit', 'blocking_pid_limit'}),
             'failure_marker_seen': evidence.marker is not None,
+            'observer_context_samples': evidence.observer_context_samples,
+            'observer_context_error': context_error,
             'captured_samples': evidence.captured_samples, 'pre_window_truncated': evidence.pre_window_truncated,
             'post_window_complete': post_complete if evidence.marker is not None else None,
             'post_window_end_reason': ('complete' if post_complete else 'stop_or_error') if evidence.marker is not None else 'not_requested'}

@@ -292,3 +292,30 @@ invalid PID，兩條路徑均確認沒有存活的自有後代。
 CI 的整個 operational script step、process-isolation 及文件一致性檢查
 已在本地通過；Rust 程式仍為 159d521，遠端 MIX database/wire/federation
 job 103590168274 已成功，完整 regular 矩陣尚待完成。
+
+## cfae924 的 PubSub 重啟觀測期限（UTC 17:49）
+
+[PR job 103591555248](https://github.com/takanashi-tetsuya/northstar/actions/runs/34707965152/job/103591555248)
+在重啟後等第二個 `RESTART-DIGEST-EVENT` 20 秒失敗；伺服器正常啟動且
+Bob 完成登入。同提交的 push 分片通過。原診斷沒有保存佇列與租約狀態，
+不足以斷定遠端是哪一個未結算 claim；但測試期限確實短於程式既有的
+30 秒 PubSub outbox lease 和 60 秒 digest lease。
+
+在自有 PG17.11 fixture 中，於停止前建立這兩種合法的已提交租約：
+outbox 案例先在 1.273 秒收到 delayed replay，再於 28.998 秒後收到
+ordinary event；digest 案例先在 0.324 秒收到 replay，再於 58.998 秒後
+收到 ordinary event。兩者完整 discovery/config/errors/overwrite/retract/
+outcast/restart 檢查及重複投遞檢查均通過。恢復 20 秒等待會失敗，且新增
+診斷明確保留 1 個 pending、1 個 leased digest、未來 claimed_until 和
+0 個 dead letters；清理確認 schema 不存在且 listeners=0。
+
+重啟案例改用兩個邏輯事件共用的 65 秒截止時間，涵蓋最長既有 lease 加
+有界 worker tick 餘量；不清除有效 lease、不更改 production worker，亦
+不增加固定 sleep。一般案例重新通過，兩事件等待分別為 1.316 秒和
+0.001 秒。失敗前保存已收到的事件，並在刪除自有 schema 前以受限 SQL
+取得 queue/lease/dead-letter 計數，不輸出 payload 或憑證。
+
+上述本地 wire probe 使用既有 508c8a0 runtime；已核對其 PubSub DB、
+outbox 和協議程式與本次來源完全相同。它證明測試期限的可重現問題，
+不替代新提交的完整 CI。腳本語法、process-isolation、migration boundary、
+文件一致性及 workflow required policy 檢查通過。

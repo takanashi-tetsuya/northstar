@@ -7,6 +7,7 @@ import importlib.util
 import os
 import pathlib
 import sys
+import time
 
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -79,10 +80,24 @@ def finish_profile() -> None:
     # claim the pre-restart digest before presence enqueues the delayed
     # last-item replay, so they can be one batched headline or two ordered
     # headlines. Classify the logical events rather than assuming one batch.
-    restarted = bob.receive_until("RESTART-DIGEST-EVENT", timeout=20)[0]
-    deliveries = restarted
-    if deliveries.count("RESTART-DIGEST-EVENT") < 2:
-        deliveries += bob.receive_until("RESTART-DIGEST-EVENT", timeout=20)[0]
+    # A process can stop after committing an outbox claim (30 seconds) or a
+    # digest claim (60 seconds), before it releases/settles that lease. The
+    # replacement must respect it. Allow the longest existing lease plus a
+    # bounded worker-tick allowance, using ONE deadline for both events.
+    # Ordinary deliveries return immediately; no fixed sleep is introduced.
+    deadline = time.monotonic() + 65
+    deliveries = ""
+    while deliveries.count("RESTART-DIGEST-EVENT") < 2:
+        remaining = deadline - time.monotonic()
+        try:
+            if remaining <= 0:
+                raise TimeoutError("restart recovery deadline expired")
+            deliveries += bob.receive_until("RESTART-DIGEST-EVENT", timeout=remaining)[0]
+        except TimeoutError as error:
+            raise TimeoutError(
+                "PubSub restart recovery exceeded the shared 65-second lease window; "
+                f"received={deliveries!r}"
+            ) from error
     fixture.check(
         deliveries.count("RESTART-DIGEST-EVENT") == 2
         and deliveries.count("urn:xmpp:delay") == 1,

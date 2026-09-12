@@ -25,6 +25,22 @@ NAMES = [f'{PREFIX}_r1_p{i}_a' for i in range(1, 9)]
 
 
 class CleanupTests(unittest.TestCase):
+    def test_diagnostics_only_extract_standalone_sqlstate(self):
+        self.assertEqual(m.error_sqlstate(b'ERROR:  55P03\n'), '55P03')
+        self.assertEqual(m.error_sqlstate(b'FATAL:  57P01\n'), '57P01')
+        for raw in (b'psql: connection failed for user secret', b'ERROR: password=secret',
+                    b'ERROR:  55P03 extra private detail', b'ERROR:  55p03\n'):
+            self.assertIsNone(m.error_sqlstate(raw))
+
+    def test_drop_diagnostic_preserves_failure_and_omits_error_text(self):
+        from io import StringIO
+        captured = StringIO()
+        with mock.patch.object(m, 'query', side_effect=['owned', m.QueryFailed('psql_exit', '55P03')]), \
+                mock.patch.object(sys, 'stderr', captured):
+            self.assertEqual(m.cleanup_one(NAMES[0], 5432), 'drop_failed')
+        value = json.loads(captured.getvalue().split('=', 1)[1])
+        self.assertEqual(value, dict(name=NAMES[0], phase='drop_failed', reason='psql_exit', sqlstate='55P03'))
+
     def test_names_reject_duplicates_foreign_and_unbounded_input_before_sql(self):
         self.assertEqual(m.names_from_input(PREFIX, ('\n'.join(NAMES)+'\n').encode()), NAMES)
         for data in (b'', b'postgres\n', (NAMES[0]+'\n'+NAMES[0]).encode(), b'x'*8193,

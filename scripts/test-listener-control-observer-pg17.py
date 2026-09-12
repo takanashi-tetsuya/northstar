@@ -418,6 +418,35 @@ class PostgreSQLIntegration(unittest.TestCase):
         # Only the test owner tears down its deliberately foreign-owned fixture.
         self.fixture_sql(f'DROP DATABASE "{names[1]}";\nDROP ROLE cleanup_foreign;\n')
 
+    def test_cleanup_lock_failure_retains_sqlstate_and_owned_database(self):
+        prefix = 'northstar_listener_federation_' + os.urandom(8).hex()
+        name = f'{prefix}_r1_p1_a'
+        self.fixture_sql(f'CREATE DATABASE "{name}";\n')
+        holder = subprocess.Popen([str(PG_BIN / 'psql'), '-XqAt', '-v', 'ON_ERROR_STOP=1'],
+            env=self.env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            # Lock only our disposable database's catalog row. The owner
+            # SELECT remains readable; DROP must hit its existing 5 s limit.
+            holder.stdin.write("BEGIN; SELECT 'locked' FROM pg_catalog.pg_database "
+                               f"WHERE datname='{name}' FOR UPDATE;\n")
+            holder.stdin.flush()
+            self.assertTrue(select.select([holder.stdout], [], [], 5)[0])
+            self.assertEqual(holder.stdout.readline().strip(), 'locked')
+            result = self.cleanup_databases([name], 1)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(json.loads(result.stdout)['results'][0]['status'], 'drop_failed')
+            diagnostic = json.loads(result.stderr.removeprefix('listener_database_cleanup_error='))
+            self.assertEqual(diagnostic, dict(name=name, phase='drop_failed', reason='psql_exit', sqlstate='55P03'))
+            self.assertEqual(self.fixture_sql(f"SELECT count(*) FROM pg_database WHERE datname='{name}';\n").stdout.strip(), '1')
+        finally:
+            if holder.poll() is None:
+                holder.communicate('ROLLBACK;\n', timeout=5)
+            else:
+                holder.communicate(timeout=5)
+        result = self.cleanup_databases([name], 1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['results'][0]['status'], 'dropped')
+
     def test_cleanup_parallelism_benchmark_on_private_databases(self):
         prefix = 'northstar_listener_federation_' + os.urandom(8).hex()
         durations = {1: [], 4: []}

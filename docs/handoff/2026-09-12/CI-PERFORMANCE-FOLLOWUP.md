@@ -493,3 +493,40 @@ truncation flag；最多 4096 個程序或 250 ms，沒有新增輪詢程序，�
 SQL 靜態抽取範圍後，在空的已遷移資料庫規劃 1514 段 SQL 中的
 1488 段，最高估計 cost 2737.3；upload authority audit 為 1127.15。
 這不是 CI 內部函式／實際資料量的 JIT 排除證據，未據此修改 JIT。
+
+## 區分 database cleanup 失敗（UTC 19:50）
+
+`b5a3b9d` 的 [release preview 34714000974](https://github.com/takanashi-tetsuya/northstar/actions/runs/34714000974)
+已完整通過 10 個適用工作，3 個 tag-only 工作預期跳過。Docker app
+編譯層命中快取；映像建置／快取處理約一分鐘，實際 PG17.11 migration、
+readiness 與 assets 驗證仍重跑並成功（1840.611 ms）。Windows／Linux
+也通過 fresh-runner 下載和真實 PostgreSQL 驗證。
+
+同一提交的 [push Federation job 103608673774](https://github.com/takanashi-tetsuya/northstar/actions/runs/34714000982/job/103608673774)
+第一輪完整通過；第二輪 50 pairs 的業務全部成功，卻於 database cleanup
+失敗。首批四個目標（pair 1、2 的 A／B）回報 `drop_failed`，cleanup
+階段總耗時 36.997 秒。Observer 973 個有效樣本、peak 100、0 query
+error，最大 1752.189 ms，90 個 failure-window 樣本完整；wrapper
+明確顯示 `observer_ok=true` 且沒有因 observer 取消 workload。不能把
+此次 failure 歸類為先前的 observer client_query_deadline。
+
+附件 `10304322988`／`10304567554` 已核對 SHA-256：
+`3b1b01215f4665462dbc500c6440cf5d4e0d672bcb404e704b487b1521eae8ad`、
+`a3eaf77fdb71c77f42ee7b58d72c031f29c5fbc5e7a7fa127eca68c683a967c2`。
+第一輪 CPU 分組樣本讀取 1221 個程序、完整包含 100 servers；第二輪
+觸及 250 ms 界線並正確標成 truncated，故不使用不完整分組差值歸因。
+
+cleanup helper 原本丟棄全部 psql stderr，只保留失敗階段。改用 psql
+`VERBOSITY=sqlstate`，只抽取獨立五碼 SQLSTATE，另保留固定的 client
+failure reason，隨同已驗證的自有 database name／phase 寫入既有
+bounded parent diagnostic。其他 stderr 文字不轉存；stdout/stderr
+回應各以 4096 bytes 檢查。schema v1 的逐庫結果、owner attestation、
+post-delete absence、4-worker 上限、5 秒 lock／30 秒 statement／35 秒
+client deadlines、取消與 reaping 都維持。首次清理失敗也會有明確的
+`round-database-cleanup` phase，而非 unknown。沒有增加 retry。
+
+10 項 cleanup 單元／取消／ledger 回歸通過。真實 PG17 的兩項回歸在
+7.294 秒通過：只鎖住自有 database 的 catalog row 時，刪除仍失敗並
+保留 `55P03`，資料庫仍在；解除鎖後才成功刪除。foreign-owner 資料庫
+仍被保留，已刪除／本來不存在者正確回報。這驗證診斷及邊界，尚未
+證明遠端的四筆失敗同為鎖逾時；需由後續精確提交的 CI 證據確認。

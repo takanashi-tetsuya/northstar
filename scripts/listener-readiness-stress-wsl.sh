@@ -1965,6 +1965,7 @@ for ((round = 1; round <= rounds; round++)); do
   parent_stage_end "$failed"
   parent_stage_begin cleanup
   if ! drop_round_databases; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase=round-database-cleanup
     echo "listener stress could not remove every private worker database: fixture=$fixture round=$round" >&2
     failed=1
   fi

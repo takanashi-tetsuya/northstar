@@ -22,7 +22,23 @@ SUCCESS = {'dropped', 'absent'}
 
 
 class QueryFailed(Exception):
-    pass
+    def __init__(self, reason='query_failed', sqlstate=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.sqlstate = sqlstate
+
+
+def error_sqlstate(stderr):
+    # psql's sqlstate verbosity omits server message/detail/context. Never
+    # forward client diagnostics, which can contain connection identities.
+    match = re.search(rb'^(?:ERROR|FATAL|PANIC):\s+([0-9A-Z]{5})\s*$', stderr, re.MULTILINE)
+    return match.group(1).decode('ascii') if match else None
+
+
+def report_query_failure(name, phase, error):
+    print('listener_database_cleanup_error=' + json.dumps({
+        'name': name, 'phase': phase, 'reason': error.reason, 'sqlstate': error.sqlstate,
+    }, separators=(',', ':')), file=sys.stderr, flush=True)
 
 
 def stop(signum, _frame):
@@ -46,7 +62,7 @@ def names_from_input(prefix, data):
 
 def query(sql, port):
     if STOP is not None:
-        raise QueryFailed()
+        raise QueryFailed('cancelled')
     environment = {k: v for k, v in os.environ.items() if not k.startswith('PG')}
     environment.update(PGPASSWORD='xmpp-test-password', PGCONNECT_TIMEOUT='5',
                        PGHOSTADDR='127.0.0.1',
@@ -54,20 +70,22 @@ def query(sql, port):
     process = subprocess.Popen(
         ['psql', '-XqAtw', '--host', '127.0.0.1', '--port', str(port),
          '--username', 'xmpp_test', '--dbname', 'postgres',
-         '--set', 'ON_ERROR_STOP=1', '--command', sql],
-        env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+         '--set', 'ON_ERROR_STOP=1', '--set', 'VERBOSITY=sqlstate', '--command', sql],
+        env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     deadline = time.monotonic() + 35
     try:
         while STOP is None and time.monotonic() < deadline:
             try:
-                output, _ = process.communicate(timeout=.1)
-                if process.returncode != 0 or len(output) > 4096:
-                    raise QueryFailed()
+                output, error = process.communicate(timeout=.1)
+                if len(output) > 4096 or len(error) > 4096:
+                    raise QueryFailed('output_bound')
+                if process.returncode != 0:
+                    raise QueryFailed('psql_exit', error_sqlstate(error))
                 return output.decode('ascii').strip()
             except subprocess.TimeoutExpired:
                 pass
-        raise QueryFailed()
+        raise QueryFailed('cancelled' if STOP is not None else 'client_deadline')
     finally:
         if process.poll() is None:
             process.terminate()
@@ -78,6 +96,8 @@ def query(sql, port):
                 process.communicate(timeout=2)
         if process.stdout is not None:
             process.stdout.close()
+        if process.stderr is not None:
+            process.stderr.close()
 
 
 def cleanup_one(name, port):
@@ -97,7 +117,11 @@ def cleanup_one(name, port):
         phase = 'postcheck_failed'
         exists = query(f"SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_database WHERE datname='{name}')", port)
         return 'dropped' if exists == 'f' else phase
-    except (QueryFailed, OSError, UnicodeError):
+    except QueryFailed as error:
+        report_query_failure(name, phase, error)
+        return 'cancelled' if STOP is not None else phase
+    except (OSError, UnicodeError):
+        report_query_failure(name, phase, QueryFailed('client_error'))
         return 'cancelled' if STOP is not None else phase
 
 
@@ -107,8 +131,10 @@ def cleanup(names, port, jobs):
         authorized = query("SELECT pg_catalog.host(pg_catalog.inet_server_addr())='127.0.0.1' "
                            "AND current_user='xmpp_test' AND EXISTS(SELECT 1 FROM pg_catalog.pg_roles "
                            "WHERE rolname=current_user AND rolcreatedb)", port) == 't'
-    except (QueryFailed, OSError, UnicodeError):
-        pass
+    except QueryFailed as error:
+        report_query_failure(None, 'attestation_failed', error)
+    except (OSError, UnicodeError):
+        report_query_failure(None, 'attestation_failed', QueryFailed('client_error'))
     if not authorized:
         statuses = ['attestation_failed'] * len(names)
     else:

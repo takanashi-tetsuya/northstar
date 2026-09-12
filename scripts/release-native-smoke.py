@@ -29,16 +29,30 @@ def print_fixture_diagnostics(log, path):
             print(re.sub(r'postgres(?:ql)?://\S+', '[REDACTED_DATABASE_URL]', line))
 
 
-def run(package, pg_bin, openssl, evidence, image=None):
-    package = package.resolve(strict=True)
-    binary = package / ('xmpp-server.exe' if os.name == 'nt' else 'xmpp-server')
-    manifest = json.loads((package / 'PACKAGE-MANIFEST.json').read_text())
+def fixture_environment(pg_bin):
     # In particular, do not pass the CI publication token, inherited database
     # credentials, dotenv configuration or application overrides to children.
     allowed = {'PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'HOME', 'USERPROFILE',
                'APPDATA', 'LOCALAPPDATA', 'LD_LIBRARY_PATH', 'LANG', 'LC_ALL'}
     environment = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     environment['PATH'] = str(pg_bin) + os.pathsep + environment.get('PATH', '')
+    return environment
+
+
+def prepare_fixture_directory(root, environment):
+    if os.name == 'nt':
+        # Use the same PowerShell generation as the release workflow. Give a
+        # noninteractive helper an explicit closed stdin as well as its limit.
+        subprocess.run(['pwsh.exe', '-NoProfile', '-NonInteractive', '-File',
+            str(Path(__file__).with_name('release-private-directory-windows.ps1')),
+            '-Directory', str(root)], env=environment, stdin=subprocess.DEVNULL, check=True, timeout=20)
+
+
+def run(package, pg_bin, openssl, evidence, image=None):
+    package = package.resolve(strict=True)
+    binary = package / ('xmpp-server.exe' if os.name == 'nt' else 'xmpp-server')
+    manifest = json.loads((package / 'PACKAGE-MANIFEST.json').read_text())
+    environment = fixture_environment(pg_bin)
     suffix = '.exe' if os.name == 'nt' else ''
     tool = lambda name: str(pg_bin / (name + suffix))
     version = subprocess.check_output([tool('postgres'), '--version'], env=environment, text=True).strip()
@@ -46,10 +60,7 @@ def run(package, pg_bin, openssl, evidence, image=None):
         raise ValueError('native release smoke requires PostgreSQL 17')
     with tempfile.TemporaryDirectory(prefix='northstar-release-native-') as temporary:
         root = Path(temporary)
-        if os.name == 'nt':
-            subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-File',
-                str(Path(__file__).with_name('release-private-directory-windows.ps1')),
-                '-Directory', str(root)], env=environment, check=True, timeout=20)
+        prepare_fixture_directory(root, environment)
         password = root / 'password'
         password.write_text('xmpp-test-password\n')
         password.chmod(0o600)

@@ -179,6 +179,26 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Install Python for portable packaging and fixture preflight
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Restore Windows fixture tools before compilation
+        if: runner.os == 'Windows'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/northstar-release-pg17
+          key: release-pg17-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner }}-${{ hashFiles('scripts/ci-postgres17-tools.sh', 'scripts/ci-postgres17-windows.ps1') }}
+
+      - name: Verify restricted Windows PostgreSQL fixture before compilation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/ci-postgres17-windows.ps1 -Prefix "$env:RUNNER_TEMP/northstar-release-pg17"
+          python scripts/test-release-postgres-windows.py --pg-bin "$env:RUNNER_TEMP/northstar-release-pg17/bin"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PostgreSQL fixture preflight failed' }
+
       - name: Install pinned Rust 1.97.1 target
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
         with:
@@ -228,11 +248,6 @@ jobs:
           if ($actual -ne $expected) {
             throw "binary version mismatch: expected '$expected', got '$actual'"
           }
-
-      - name: Install Python for portable packaging
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
 
       - name: Strip Linux release binary
         if: runner.os == 'Linux'

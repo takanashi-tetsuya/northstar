@@ -2,6 +2,7 @@
 param([Parameter(Mandatory = $true)][string]$Directory)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Write-Output "Preparing private fixture ACL with PowerShell $($PSVersionTable.PSVersion)"
 $item = Get-Item -LiteralPath $Directory -Force
 if (-not $item.PSIsContainer -or
     ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
@@ -23,3 +24,4 @@ if ($actual.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $user.Va
     -not $actual.AreAccessRulesProtected) {
     throw 'Private fixture directory ACL verification failed'
 }
+Write-Output 'Private fixture ACL verified for the current user SID'

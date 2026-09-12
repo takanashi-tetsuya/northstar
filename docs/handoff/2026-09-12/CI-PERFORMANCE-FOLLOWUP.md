@@ -167,3 +167,24 @@ Python 匯入與初始化，因此首筆輸出的 1 秒期限包含子程序啟�
 版本比較誤用了 top-level 工具名稱。上游 acceptance test 明確期待
 `cargo-audit-audit 0.22.2`；改正精確比對並輸出實際版本，保留不符即失敗。
 來源：[cargo-audit version acceptance test](https://github.com/rustsec/rustsec/blob/cargo-audit/v0.22.2/cargo-audit/tests/acceptance.rs)。
+
+`70dd1f4` RustSec job `103578223533` 已通過 locked 冷安裝（2m44s）、
+正確版本比對與正式 Cargo.lock 稽核：沒有漏洞或警告。
+
+`9c22e1c` Windows job `103579356430` 的新失敗位於啟動舊版
+`powershell.exe` 的 20 秒期限，沒有任何 ACL 腳本輸出，尚未重試 initdb。
+改用與 workflow 相同的 `pwsh.exe`（PowerShell 7），關閉 stdin，
+保留 20 秒界線並加入 ACL 開始／完成標記。Windows package build
+在編譯之前先使用共用 helper 實測 initdb 私有密碼讀取、pg_ctl 降權
+啟動、實際 data_directory 及 owned handle 清理，提早揭露平台問題；
+之後仍須乾淨 runner 驗證完整原生發佈包。Linux harness 回歸重新通過
+PG17.11 migration／readiness／assets（1603.906 ms），Windows 待實測。
+
+`41d8dc2` MIX job `103566011129` 完整 20×50 通過，觀測期間
+14:11:14.785—15:45:53.350 UTC（94.643 分鐘）。第 2—20 輪平均 provision
+24.341s、preparation 98.753s、startup 16.441s、workload 134.831s、
+cleanup 6.933s。observer 11061 samples、peak 100、7 errors／7 recovered，
+無截斷，driver／observer／cleanup／map／bounds 全部通過。該 run
+仍因 Federation observer 失敗而整體失敗。ZIP artifact `10300876146`
+SHA-256 `db294b749356e9f9dbdce0cb942f99945fc7e8a9231b409c3312e994db6d3a57`
+已下載核對；不將此舊提交的 MIX 成功替代最新 HEAD 資格。

@@ -530,3 +530,50 @@ client deadlines、取消與 reaping 都維持。首次清理失敗也會有明�
 保留 `55P03`，資料庫仍在；解除鎖後才成功刪除。foreign-owner 資料庫
 仍被保留，已刪除／本來不存在者正確回報。這驗證診斷及邊界，尚未
 證明遠端的四筆失敗同為鎖逾時；需由後續精確提交的 CI 證據確認。
+
+## 將 Federation client 初始化納入啟動上限（UTC 20:50）
+
+`90609f0` 的 [release preview 34715350916](https://github.com/takanashi-tetsuya/northstar/actions/runs/34715350916)
+完整通過 10 個適用工作，3 個 tag-only 工作預期跳過。Windows／Linux
+fresh runner 的 PG17.11 migration、readiness、assets 及三個 amd64
+container 驗證均成功；Docker app 的 compiler layer 命中快取。完整
+CI 尚未通過，不具備 release qualification。
+
+同一提交的 [push Federation 103612348496](https://github.com/takanashi-tetsuya/northstar/actions/runs/34715350918/job/103612348496)
+及 [PR Federation 103613432686](https://github.com/takanashi-tetsuya/northstar/actions/runs/34715354448/job/103613432686)
+前 8 輪成功，第 9 輪在 transport release 期間失敗。push 的最後 observer
+query 未 drain，client deadline 為 5000.356 ms；PR 的 observer 則健康，
+14 次錯誤均已 recover，實際 B runtime-control 在 rules-read 中超過
+5 秒 heartbeat silence，phase elapsed 2655 ms、heartbeat elapsed
+5546 ms。其 watchdog tick delay 僅 1 ms（attempt 最大 26 ms）。兩者
+均非資料庫 cleanup failure。all-live 至 failure 的約 11–12 秒窗口
+分別使用平均 3.988／3.999 CPU cores，IO／memory pressure 沒有相應
+上升。all-live 的程序分組樣本均被截斷，不能拿它減去完整失敗樣本
+來歸因 PostgreSQL、server 或 Python 的 CPU 增量。
+
+原 shell 的 all-live release 同時退出 50 個 barrier interpreters，並
+啟動 50 個 server monitors 和 50 個 Federation clients。只量測實際
+client module imports、限制 4 CPU 的兩次 50-process burst，分別消耗
+4.514／4.299 CPU 秒，wall 1.156／1.116 秒；這是可削減的集中開銷，
+尚未證明它就是所有遠端 heartbeat／observer failure 的根因。
+
+現在 shell 在兩個服務完成 nonce 和 HTTP readiness 後啟動 monitor
+與 persistent client；client 載入 modules 後才以自己的 PID 加入 live
+barrier，並提交原有兩個 server PIDs。parent 的 startup permission、
+nonce、birth time、worker ancestry 和全體 100 servers 驗證維持，
+後續 pair 要等前批 client 就緒才獲 startup slot。所有 transport probes
+仍在全體 live release 後並行執行，之後才可進入 authentication；
+MIX、rounds、pairs、poll cadence、protocol assertions、health 和
+worker deadlines 均未改動。
+
+20 項 startup scheduler、31 項 phase/readiness、5 項真實 pidfd monitor
+測試通過。既有實際子程序測試現在同時驗證 client 在 all-live 前不得
+開始 probe、較快 pair 在較慢 transport 結束前不得註冊。worker lifecycle、
+CI performance 與文件一致性檢查亦通過。
+
+本機 4 CPU、真實 PG17.11、1×4 Federation 全部業務與 cleanup 成功；
+observer 80 個有效樣本、peak 8、0 query errors，最大 2.225 ms，wrapper
+的 observer／diagnostic／map／cleanup 均成功。初次臨時 probe 的 map
+預期值誤留 50，雖業務與 observer 成功，wrapper 正確拒絕；改用既有
+`expected_pairs=4` 參數後完整重跑成功。這是本機修改驗證，不能替代
+遠端完整 20×50 的通過證據。

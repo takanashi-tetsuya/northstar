@@ -718,7 +718,12 @@ def connect(username: str, resource: str):
             return fixture.XmppWebSocket(username, PASSWORD, resource, deadline=attempt.deadline)
 
 
-def run() -> None:
+def run(server_pids: tuple[int, ...] = ()) -> None:
+    # Publish from the initialized client, while its sibling-server monitor
+    # is already bound to both process handles. The parent verifies the same
+    # nonce, child birth times and worker ancestry before admitting more pairs.
+    # No transport or credential work starts until every pair is live.
+    stress_phases.wait_for_fixture_phase("live", server_pids)
     verify_starttls_failure_boundary()
     verify_c2s_transport_boundaries()
     verify_s2s_transport_boundaries()
@@ -1933,4 +1938,4 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    run(tuple(stress_phases.positive(pid) for pid in sys.argv[1:]))

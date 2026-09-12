@@ -164,17 +164,21 @@ if sys.argv[5] == "prepared":
         })
         with patch.dict(os.environ, environment, clear=True), patch.object(phases, "worker") as wait:
             phases.wait_for_fixture_phase("transport")
-            wait.assert_called_once_with(self.directory, self.nonce, 1, "transport", 2, 900)
+            wait.assert_called_once_with(self.directory, self.nonce, 1, "transport", 2, 900, ())
 
     def test_faster_transport_pair_cannot_register_before_slower_probes_finish(self):
-        self.mark_live_release()
+        phases.publish(self.directory / "prepared-release.json", {
+            **self.config, "phase": "prepared", "released": True,
+        })
+        for pair in (1, 2):
+            phases.publish(self.directory / f"prepared-start-{pair}.json", phases.startup_permission(self.config, pair))
         slow_probe_release = Path(self.temporary.name) / "finish-slow-probe"
         probe_names = [
             "verify_starttls_failure_boundary", "verify_c2s_transport_boundaries",
             "verify_s2s_transport_boundaries", "verify_s2s_authentication_boundaries",
         ]
         program = r'''
-import importlib.util, os, pathlib, sys, time
+import importlib.util, os, pathlib, subprocess, sys, time
 root, trace_path, slow_release = map(pathlib.Path, sys.argv[1:])
 spec = importlib.util.spec_from_file_location("federation_transport_regression", root / "federation-wsl.py")
 federation = importlib.util.module_from_spec(spec)
@@ -205,7 +209,13 @@ def register(_username):
     trace("register")
     raise SystemExit(0)
 federation.register = register
-federation.run()
+servers = [subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"]) for _ in range(2)]
+try:
+    federation.run(tuple(server.pid for server in servers))
+finally:
+    for server in servers:
+        server.terminate()
+        server.wait(timeout=3)
 '''
         workers = []
         traces = []
@@ -227,6 +237,15 @@ federation.run()
                     sys.executable, "-c", program, str(ROOT), str(trace), str(slow_probe_release),
                 ], env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     text=True, start_new_session=True))
+            deadline = time.monotonic() + 5
+            leaders = [worker.pid for worker in workers]
+            while not phases.all_prepared(self.directory, self.config, "live", leaders):
+                self.assertTrue(all(worker.poll() is None for worker in workers))
+                if time.monotonic() >= deadline:
+                    self.fail("initialized clients did not reach the live barrier")
+                time.sleep(0.01)
+            self.assertFalse(any(trace.exists() for trace in traces), "transport started before all-live release")
+            phases.release(self.directory, self.nonce, 1, "live", 5, leaders)
             deadline = time.monotonic() + 5
             while not (self.directory / "transport-1.json").exists():
                 self.assertIsNone(workers[0].poll())
@@ -270,8 +289,10 @@ federation.run()
             self.assertEqual(source.count('startup_deadline="$(fixture_startup_deadline "$project_dir")"'), 2, name)
             self.assertEqual(source.count('fixture_wait_for_http_readiness "$project_dir"'), 2, name)
         federation = (ROOT / "federation-wsl.sh").read_text()
-        self.assertLess(federation.index("\nstart_b\n"), federation.index('"$project_dir" live'))
-        self.assertLess(federation.index('"$project_dir" live'), federation.index("python3 scripts/federation-wsl.py"))
+        self.assertLess(federation.index("\nstart_b\n"), federation.index("python3 scripts/federation-wsl.py"))
+        self.assertNotIn('fixture_stress_phase_barrier "$project_dir" live', federation)
+        client = (ROOT / "federation-wsl.py").read_text().split("def run(", 1)[1]
+        self.assertLess(client.index('wait_for_fixture_phase("live", server_pids)'), client.index('verify_starttls_failure_boundary()'))
         driver = (ROOT / "listener-readiness-stress-wsl.sh").read_text()
         self.assertIn('regular) [[ -n "$rounds" ]] || rounds=20', driver)
         self.assertIn('pairs="50"', driver)

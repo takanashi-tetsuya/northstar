@@ -367,7 +367,9 @@ class StartupWiringTests(unittest.TestCase):
                     self.assertRegex(body, r'fixture_wait_for_readiness[^\n]+\|\| return 1')
                     self.assertRegex(body, r'fixture_wait_for_http_readiness[\s\S]+?\|\| return 1')
                 initial = source.index('\nstart_a\nstart_b\n')
-                live = source.index('fixture_stress_phase_barrier "$project_dir" live', initial)
+                barrier = ('python3 scripts/federation-wsl.py' if name == "federation-wsl.sh"
+                           else 'fixture_stress_phase_barrier "$project_dir" live')
+                live = source.index(barrier, initial)
                 self.assertGreater(live, initial)
                 self.assertIn('"$pid_a" "$pid_b"', source[live:source.index('\n', live)])
 

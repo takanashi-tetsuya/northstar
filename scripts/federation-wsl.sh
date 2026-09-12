@@ -411,9 +411,9 @@ fixture_stress_phase_barrier "$project_dir" prepared
 start_a
 start_b
 
-# Keep transport probes and credential setup outside every other pair's
-# cold-start window; all pairs still execute their full protocol matrix.
-fixture_stress_phase_barrier "$project_dir" live "$pid_a" "$pid_b"
+# The persistent client joins the live barrier after loading its modules and
+# the server monitor. Keep that initialization inside the parent's startup
+# slots, so releasing 100 live servers does not also start 100 interpreters.
 
 FEDERATION_TEST_CERT_DIR="$cert_dir" \
 FEDERATION_TEST_EXTERNAL="${S2S_SASL_EXTERNAL_ENABLED:-true}" \
@@ -429,4 +429,4 @@ FEDERATION_TEST_SCHEMA_B="$schema_b" \
 FEDERATION_TEST_DATABASE_A="$database_name_a" \
 FEDERATION_TEST_DATABASE_B="$database_name_b" \
 python3 scripts/run-test-with-servers.py --server "$pid_a" --server "$pid_b" -- \
-  python3 scripts/federation-wsl.py
+  python3 scripts/federation-wsl.py "$pid_a" "$pid_b"

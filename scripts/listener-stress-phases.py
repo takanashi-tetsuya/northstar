@@ -296,7 +296,7 @@ def release(directory: Path, nonce: str, round_number: int, phase: str, timeout:
     print(f"listener stress phase={phase} round={round_number} pairs={config['pairs']} released", flush=True)
 
 
-def wait_for_fixture_phase(phase: str) -> None:
+def wait_for_fixture_phase(phase: str, child_pids: tuple[int, ...] = ()) -> None:
     """Join a phase from the live Python fixture, without an extra publisher."""
     if phase not in PHASES:
         raise ValueError("unknown fixture phase")
@@ -312,7 +312,7 @@ def wait_for_fixture_phase(phase: str) -> None:
         raise ValueError("fixture phase timeout exceeds the worker budget limit")
     # This wait remains inside the original github-ci-run supervisor's total
     # budget. It never holds an authentication slot or starts its I/O clock.
-    worker(Path(directory), nonce, positive(raw_round), phase, positive(raw_pair), timeout)
+    worker(Path(directory), nonce, positive(raw_round), phase, positive(raw_pair), timeout, child_pids)
 
 
 def main(argv: list[str]) -> None:

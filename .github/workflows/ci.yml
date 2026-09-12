@@ -57,6 +57,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
       - name: Install pinned Rust 1.97.1 tools
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
@@ -78,6 +84,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "true"
+
       - name: Install pinned Rust 1.97.1 tools
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
@@ -96,6 +108,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
       - name: Install pinned Rust 1.97.1 tools
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
@@ -113,6 +131,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
 
       - name: Install pinned Rust 1.97.1 tools
         run: |
@@ -138,6 +162,12 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
 
       - name: Install pinned Rust 1.97.1 tools
         run: |
@@ -637,6 +667,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
       - name: Start loopback-only PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
 
@@ -753,6 +789,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
       - name: Start loopback-only PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
 
@@ -801,6 +843,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
       - name: Start loopback-only PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
 
@@ -845,6 +893,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
       - name: Start loopback-only PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
 
@@ -879,6 +933,52 @@ jobs:
         if: always()
         run: bash scripts/loopback-postgres-ci.sh stop
 
+  listener-diagnostics:
+    name: Listener diagnostic preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check diagnostic and cleanup regressions
+        run: |
+          python3 scripts/test-github-ci-failure-marker.py
+          python3 scripts/test-listener-control-observer.py
+          python3 scripts/test-listener-readiness-observed.py
+          python3 scripts/test-listener-stress-diagnostics.py
+          python3 scripts/test-listener-database-cleanup.py
+          node scripts/test-ci-performance.mjs
+
+      - name: Identify PostgreSQL tool platform
+        id: pg_platform
+        run: |
+          . /etc/os-release
+          printf 'version=%s-%s\n' "$ID" "$VERSION_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private PostgreSQL 17 tools
+        id: pg_tools
+        continue-on-error: true
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/northstar-pg17-tools
+          key: pg17-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.pg_platform.outputs.version }}-${{ hashFiles('scripts/ci-postgres17-tools.sh') }}
+
+      - name: Install PostgreSQL build prerequisites
+        if: steps.pg_tools.outputs.cache-hit != 'true'
+        run: bash scripts/ci-install-ubuntu-packages.sh bison flex
+
+      - name: Prepare private PostgreSQL 17 tools
+        run: bash scripts/ci-postgres17-tools.sh "$RUNNER_TEMP/northstar-pg17-tools"
+
+      - name: Verify observer and cleanup against real PostgreSQL 17
+        run: |
+          export PATH="$RUNNER_TEMP/northstar-pg17-tools/bin:$PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/northstar-pg17-tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          python3 scripts/test-listener-control-observer-pg17.py --pg-bin "$RUNNER_TEMP/northstar-pg17-tools/bin"
+
   # A small, real two-node path is a gate, not evidence for the full stress
   # envelope.  It catches setup, template, listener, and cleanup regressions
   # before either regular 20x50 or scheduled 100x50 capacity work begins.
@@ -906,6 +1006,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: runtime-test
+          save: "${{ matrix.fixture == 'federation' }}"
 
       - name: Start isolated loopback PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
@@ -952,10 +1058,11 @@ jobs:
 
   listener-readiness-stress-regular:
     name: Listener/readiness stress (regular 20x50 · ${{ matrix.fixture }})
-    needs: listener-readiness-stress-smoke
+    needs: [listener-readiness-stress-smoke, listener-diagnostics]
     if: >-
       ${{ (github.event_name == 'push' || github.event_name == 'pull_request') &&
-          needs.listener-readiness-stress-smoke.result == 'success' }}
+          needs.listener-readiness-stress-smoke.result == 'success' &&
+          needs.listener-diagnostics.result == 'success' }}
     runs-on: ubuntu-latest
     # This is a capacity ceiling only. Every fixture worker has its own
     # process-group deadline inside the stress driver, so a hung child cannot
@@ -982,6 +1089,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: runtime-test
+          save: "false"
 
       - name: Start isolated loopback PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
@@ -1045,10 +1158,11 @@ jobs:
 
   listener-readiness-stress-scheduled:
     name: Scheduled listener/readiness stress (100x50 · ${{ matrix.fixture }})
-    needs: listener-readiness-stress-smoke
+    needs: [listener-readiness-stress-smoke, listener-diagnostics]
     if: >-
       ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
-          needs.listener-readiness-stress-smoke.result == 'success' }}
+          needs.listener-readiness-stress-smoke.result == 'success' &&
+          needs.listener-diagnostics.result == 'success' }}
     runs-on: ubuntu-latest
     # The 100-round workload remains unchanged. This limit bounds only the
     # host capacity for the scheduled evidence run; worker deadlines remain
@@ -1073,6 +1187,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: runtime-test
+          save: "false"
 
       - name: Start isolated loopback PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
@@ -1123,6 +1243,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
 
       - name: Start loopback-only PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
@@ -1215,6 +1341,7 @@ jobs:
       - mix-integration
       - federation-integration
       - listener-readiness-stress-smoke
+      - listener-diagnostics
       - listener-readiness-stress-regular
       - listener-readiness-stress-scheduled
       - xep0487-integration

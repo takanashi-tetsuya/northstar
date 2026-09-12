@@ -139,6 +139,9 @@ effective_cpu_count() {
 # unchanged.  Passing the value explicitly also prevents an ambient shell
 # setting from silently changing the matrix's resource contract.
 effective_cpu_count="$(effective_cpu_count)"
+database_cleanup_jobs=$effective_cpu_count
+((database_cleanup_jobs >= 1)) || database_cleanup_jobs=1
+((database_cleanup_jobs <= 4)) || database_cleanup_jobs=4
 startup_pair_limit="$(python3 "$project_dir/scripts/listener-stress-phases.py" --startup-pair-concurrency "$effective_cpu_count" "$pairs")"
 readonly scheduler_reserved_cpus=$(((effective_cpu_count + 3) / 4))
 available_scheduler_cpus=$((effective_cpu_count - scheduler_reserved_cpus))
@@ -236,6 +239,29 @@ mix_phase_run_nonce=""
 mix_phase_round=""
 startup_phase_dir=""
 startup_phase_nonce=""
+parent_stage=""
+parent_stage_started_ns=""
+
+parent_stage_begin() {
+  parent_stage="$1"
+  parent_stage_started_ns="$(python3 -c 'import time; print(time.monotonic_ns())')"
+}
+
+parent_stage_end() {
+  [[ -n "$parent_stage" ]] || return 0
+  local timing
+  timing="$(python3 - "$parent_stage" "$parent_stage_started_ns" "${round:-0}" "$fixture" "$1" <<'PY_STAGE_TIMING'
+import json, sys, time
+phase, start, round_number, fixture, status = sys.argv[1:]
+print('listener_stress_timing=' + json.dumps(dict(
+    phase=phase, round=int(round_number), fixture=fixture, status=int(status),
+    elapsed_ms=round((time.monotonic_ns()-int(start))/1e6, 3)), separators=(',', ':')))
+PY_STAGE_TIMING
+)" || return 1
+  parent_stage=""
+  printf '%s\n' "$timing"
+  record_parent_diagnostic "$timing"
+}
 
 # Every stress worker must own two independent database states: one for each
 # federated domain.  Applying the normal migrator from 50 workers would be
@@ -1348,14 +1374,35 @@ provision_pair_databases() {
 }
 
 drop_round_databases() {
-  local database_name failed=0
+  local database_name cleanup_status failed=0 helper_status=0
   local -a remaining=()
-  for database_name in "${round_databases[@]}"; do
-    if ! drop_private_database "$database_name"; then
-      remaining+=("$database_name")
-      failed=1
-    fi
-  done
+  ((${#round_databases[@]} > 0)) || return 0
+  # This follows worker shutdown attempts, retaining the scoped FORCE backstop
+  # on failure. The original list is retained until every result is checked;
+  # malformed/missing output forgets nothing.
+  local result="$runtime_dir/database-cleanup-result.json"
+  local verified="$runtime_dir/database-cleanup-verified.tsv"
+  printf '%s\n' "${round_databases[@]}" | python3 "$project_dir/scripts/listener-database-cleanup.py" \
+    --prefix "$database_prefix" --port "$database_fixture_port" --jobs "$database_cleanup_jobs" \
+    >"$result" 2>>"$parent_diagnostic_raw" || helper_status=$?
+  if ! printf '%s\n' "${round_databases[@]}" | python3 "$project_dir/scripts/listener-database-cleanup.py" \
+    --prefix "$database_prefix" --verify-result "$result" >"$verified" 2>>"$parent_diagnostic_raw"; then
+    for database_name in "${round_databases[@]}"; do
+      record_cleanup_debt "$database_name" cleanup-result-unavailable
+    done
+    return 1
+  fi
+  while IFS=$'\t' read -r database_name cleanup_status; do
+    case "$cleanup_status" in
+      dropped|absent) ;;
+      *)
+        remaining+=("$database_name")
+        record_cleanup_debt "$database_name" "$cleanup_status"
+        failed=1
+        ;;
+    esac
+  done <"$verified"
+  ((helper_status == 0)) || failed=1
   round_databases=("${remaining[@]}")
   if (( failed == 0 )); then
     pair_database_a=()
@@ -1513,6 +1560,7 @@ start_stress_worker() {
 cleanup() {
   status=$?
   trap - EXIT INT TERM
+  parent_stage_end "$status" || status=1
   # Do this before any potentially slow database cleanup.  A migration or
   # preflight failure must leave redacted evidence even if its later cleanup
   # cannot make progress; the artifact is refreshed below once cleanup returns.
@@ -1722,7 +1770,9 @@ print("|".join(str(document[key]) for key in (
 # This is deliberately before database attestation, template creation, and any
 # worker provisioning.  A missing or wrong build artifact is a build failure,
 # never a database or listener failure.
+parent_stage_begin build
 resolve_current_build_binary
+parent_stage_end 0
 load_runtime_connection_budget
 assert_private_database_fixture
 assert_fixture_connection_capacity
@@ -1734,10 +1784,12 @@ if ! initialize_mix_federation_login_slots; then
   echo "listener stress could not initialize private MIX authentication slots" >&2
   exit 1
 fi
+parent_stage_begin templates
 create_migration_template "$template_database_a" localhost
 create_migration_template "$template_database_b" remote.localhost
 quiesce_migration_template "$template_database_a"
 quiesce_migration_template "$template_database_b"
+parent_stage_end 0
 echo "listener stress database templates ready: fixture=$fixture"
 
 failed=0
@@ -1750,6 +1802,7 @@ for ((round = 1; round <= rounds; round++)); do
   pair_database_a=()
   pair_database_b=()
   failed_pair_databases=()
+  parent_stage_begin provision
   for ((pair = 1; pair <= pairs; pair++)); do
     if ! provision_pair_databases "$round" "$pair"; then
       echo "listener stress could not provision private databases: fixture=$fixture round=$round pair=$pair" >&2
@@ -1758,9 +1811,12 @@ for ((round = 1; round <= rounds; round++)); do
     fi
   done
   if ((failed != 0)); then
+    parent_stage_end 1
     drop_round_databases || true
     exit 1
   fi
+  parent_stage_end 0
+  parent_stage_begin startup
   if ! initialize_mix_federation_phase_barrier "$round"; then
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=mix-federation-setup-barrier
     record_parent_diagnostic "phase=mix-federation-setup-barrier round=$round status=initialization_failed"
@@ -1810,6 +1866,8 @@ for ((round = 1; round <= rounds; round++)); do
     "$worker_timeout_seconds" "${workers[@]}"
   record_parent_diagnostic "phase=all-pair-live-barrier fixture=$fixture round=$round status=released pairs=$pairs children=$stress_child_count startup_pair_limit=$startup_pair_limit"
   record_host_pressure "all-pair-live-r$round"
+  parent_stage_end 0
+  parent_stage_begin workload
   if [[ "$fixture" == federation ]]; then
     run_parent_phase "federation-transport-release-r$round" \
       python3 "$project_dir/scripts/listener-stress-phases.py" release \
@@ -1858,10 +1916,13 @@ for ((round = 1; round <= rounds; round++)); do
   if ((failed != 0)); then
     append_mix_federation_database_snapshots
   fi
+  parent_stage_end "$failed"
+  parent_stage_begin cleanup
   if ! drop_round_databases; then
     echo "listener stress could not remove every private worker database: fixture=$fixture round=$round" >&2
     failed=1
   fi
+  parent_stage_end "$failed"
   workers=()
   worker_groups=()
   if grep -E 'EADDRINUSE|Address already in use|bind-close-launch' "${round_logs[@]}" >/dev/null 2>&1; then

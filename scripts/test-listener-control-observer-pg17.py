@@ -10,8 +10,11 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import select
+import shlex
 import signal
+import statistics
 import socket
 import subprocess
 import sys
@@ -28,6 +31,7 @@ SPEC = importlib.util.spec_from_file_location('control_observer', ROOT / 'script
 OBSERVER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(OBSERVER)
 PG_BIN = None
+CLEANUP = ROOT / 'scripts/listener-database-cleanup.py'
 
 RUNNER = r'''
 import importlib.util, os, signal, sys
@@ -271,6 +275,65 @@ class PostgreSQLIntegration(unittest.TestCase):
         self.assertEqual(result['error_code'], 'activity_visibility_incomplete')
         self.assertFalse(wrapper['diagnostic_ok'])
         self.assertEqual(wrapper['driver_exit_status'], 0)
+
+    def cleanup_databases(self, names, jobs):
+        prefix = names[0].split('_r')[0]
+        return subprocess.run([sys.executable, str(CLEANUP), '--prefix', prefix,
+                               '--port', str(self.port), '--jobs', str(jobs)],
+            env={**self.env, 'PATH': str(PG_BIN)+os.pathsep+self.env['PATH']},
+            input='\n'.join(names)+'\n', capture_output=True, text=True, timeout=60)
+
+    def fixture_sql(self, sql):
+        return subprocess.run([str(PG_BIN / 'psql'), '-XqAt', '-v', 'ON_ERROR_STOP=1'],
+                              env=self.env, input=sql, capture_output=True, text=True, check=True, timeout=30)
+
+    def test_parallel_cleanup_preserves_foreign_owner_and_verifies_deletion(self):
+        prefix = 'northstar_listener_federation_' + os.urandom(8).hex()
+        names = [f'{prefix}_r1_p{i}_a' for i in range(1, 4)]
+        self.fixture_sql(f'CREATE ROLE cleanup_foreign;\nCREATE DATABASE "{names[0]}";\n'
+                         f'CREATE DATABASE "{names[1]}" OWNER cleanup_foreign;\n')
+        source = (ROOT / 'scripts/listener-readiness-stress-wsl.sh').read_text()
+        functions = '\n'.join(re.search(rf'^{name}\(\) \{{\n.*?^\}}$', source, re.M|re.S).group(0)
+                              for name in ('record_parent_diagnostic', 'record_cleanup_debt', 'drop_round_databases'))
+        script = '\n'.join([
+            'set -euo pipefail', 'umask 077', f'project_dir={shlex.quote(str(ROOT))}',
+            f'runtime_dir={shlex.quote(str(self.control))}', 'parent_diagnostic_raw="$runtime_dir/cleanup.log"',
+            'parent_diagnostic_max_bytes=524288', f'database_prefix={prefix}',
+            f'database_fixture_port={self.port}', 'database_cleanup_jobs=4',
+            'declare -a cleanup_debt=() round_databases=('+ ' '.join(names)+')',
+            'declare -A pair_database_a=([keep]=value) pair_database_b=([keep]=value)', functions,
+            'if drop_round_databases; then exit 3; fi',
+            '[[ ${pair_database_a[keep]} == value ]]', 'printf "%s\\n" "${round_databases[@]}"',
+        ])
+        result = subprocess.run(['bash', '-c', script], capture_output=True, text=True, timeout=30,
+                                env={**self.env, 'PATH': str(PG_BIN)+os.pathsep+self.env['PATH']})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), names[1])
+        rows = json.loads((self.control / 'database-cleanup-result.json').read_text())['results']
+        self.assertEqual([row['status'] for row in rows], ['dropped', 'owner_mismatch', 'absent'])
+        self.assertEqual(self.fixture_sql(f"SELECT datname FROM pg_database WHERE datname LIKE '{prefix}%';\n").stdout.strip(), names[1])
+        # Only the test owner tears down its deliberately foreign-owned fixture.
+        self.fixture_sql(f'DROP DATABASE "{names[1]}";\nDROP ROLE cleanup_foreign;\n')
+
+    def test_cleanup_parallelism_benchmark_on_private_databases(self):
+        prefix = 'northstar_listener_federation_' + os.urandom(8).hex()
+        durations = {1: [], 4: []}
+        # Alternate order to reduce warm-cache bias; equal empty DB contents.
+        for round_number, jobs in enumerate((1, 4, 4, 1), 1):
+            names = [f'{prefix}_r{round_number}_p{i}_a' for i in range(1, 17)]
+            self.fixture_sql(''.join(f'CREATE DATABASE "{name}";\n' for name in names))
+            start = time.monotonic()
+            result = self.cleanup_databases(names, jobs)
+            durations[jobs].append(time.monotonic()-start)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            rows = json.loads(result.stdout)['results']
+            self.assertEqual([row['name'] for row in rows], names)
+            self.assertTrue(all(row['status']=='dropped' for row in rows))
+            self.assertEqual(self.fixture_sql(f"SELECT count(*) FROM pg_database WHERE datname LIKE '{prefix}%';\n").stdout.strip(), '0')
+        print('listener_cleanup_benchmark=' + json.dumps({
+            'databases_per_batch': 16, 'fsync': True,
+            'median_seconds': {str(jobs): round(statistics.median(values), 3) for jobs, values in durations.items()},
+        }), flush=True)
 
     def test_failed_attestation_cannot_make_successful_driver_green(self):
         def set_createdb(enabled):

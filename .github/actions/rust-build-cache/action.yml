@@ -1,0 +1,49 @@
+name: Rust build cache
+description: Restore compiler work while keeping every Cargo validation command mandatory
+inputs:
+  profile:
+    description: Cargo output directory (debug or runtime-test)
+    required: true
+  save:
+    description: Save only from the designated successful producer job
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Validate cache profile
+      id: platform
+      shell: bash
+      env:
+        CACHE_PROFILE: ${{ inputs.profile }}
+      run: |
+        case "$CACHE_PROFILE" in debug|runtime-test) ;; *) exit 2 ;; esac
+        . /etc/os-release
+        printf 'version=%s-%s\n' "$ID" "$VERSION_ID" >> "$GITHUB_OUTPUT"
+    # Two shared profile buckets limit duplicate archives. Cargo still checks
+    # source fingerprints and the stress driver validates the current artifact.
+    - name: Restore and save build cache
+      if: inputs.save == 'true'
+      continue-on-error: true
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git/db
+          target/${{ inputs.profile }}
+          !target/${{ inputs.profile }}/incremental
+        key: rust-v1-${{ runner.os }}-${{ steps.platform.outputs.version }}-${{ runner.arch }}-1.97.1-${{ inputs.profile }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '.cargo/config*', 'rust-toolchain*') }}-${{ github.sha }}
+        restore-keys: |
+          rust-v1-${{ runner.os }}-${{ steps.platform.outputs.version }}-${{ runner.arch }}-1.97.1-${{ inputs.profile }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '.cargo/config*', 'rust-toolchain*') }}-
+    - name: Restore build cache
+      if: inputs.save != 'true'
+      continue-on-error: true
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git/db
+          target/${{ inputs.profile }}
+          !target/${{ inputs.profile }}/incremental
+        key: rust-v1-${{ runner.os }}-${{ steps.platform.outputs.version }}-${{ runner.arch }}-1.97.1-${{ inputs.profile }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '.cargo/config*', 'rust-toolchain*') }}-${{ github.sha }}
+        restore-keys: |
+          rust-v1-${{ runner.os }}-${{ steps.platform.outputs.version }}-${{ runner.arch }}-1.97.1-${{ inputs.profile }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '.cargo/config*', 'rust-toolchain*') }}-

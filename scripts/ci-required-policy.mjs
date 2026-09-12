@@ -7,6 +7,7 @@ export const ALWAYS_REQUIRED = [
   'dependency-audit', 'dependency-policy', 'web-static', 'container-build',
   'database-role-boundary', 'protocol-integration', 'stateful-database-integration',
   'mix-integration', 'federation-integration', 'listener-readiness-stress-smoke',
+  'listener-diagnostics',
   'xep0487-integration', 'disaster-recovery',
 ];
 export const REGULAR_REQUIRED = ['listener-readiness-stress-regular'];

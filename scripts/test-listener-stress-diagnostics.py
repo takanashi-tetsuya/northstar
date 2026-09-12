@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import re
 import shlex
@@ -208,6 +209,22 @@ retain_parent_diagnostic_artifact 2
         self.assertIn("detail_database_limit=4", function("append_mix_federation_database_snapshots"))
         self.assertIn('failed_worker_logs+=("$log")', SOURCE)
         self.assertIn('failed_worker_logs+=("¤{round_logs[$((pair - 1))]}")'.replace("¤", "$"), SOURCE)
+
+    def test_stage_timings_cover_success_and_interrupted_stage_without_database_names(self):
+        script = '\n'.join((
+            'set -euo pipefail', f'parent_diagnostic_raw={shlex.quote(str(self.runtime / "timing.log"))}',
+            'parent_diagnostic_max_bytes=524288', 'parent_stage=""', 'round=3', 'fixture=federation',
+            function('record_parent_diagnostic'), function('parent_stage_begin'), function('parent_stage_end'),
+            'parent_stage_begin provision', 'sleep .02', 'parent_stage_end 0',
+            'trap \'parent_stage_end "$?"\' EXIT', 'parent_stage_begin workload', 'false',
+        ))
+        result = subprocess.run(['bash', '-c', script], capture_output=True, text=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        values = [json.loads(line.split('=', 1)[1]) for line in result.stdout.splitlines()]
+        self.assertEqual([(v['phase'], v['status']) for v in values], [('provision', 0), ('workload', 1)])
+        self.assertGreaterEqual(values[0]['elapsed_ms'], 20)
+        self.assertTrue(all(v['elapsed_ms'] >= 0 and v['round'] == 3 for v in values))
+        self.assertTrue(all(set(v) == {'phase', 'status', 'round', 'fixture', 'elapsed_ms'} for v in values))
 
 
 if __name__ == "__main__":

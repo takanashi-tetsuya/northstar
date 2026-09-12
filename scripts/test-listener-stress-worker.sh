@@ -246,10 +246,10 @@ for lane in regular scheduled; do
   if ! awk -v lane="$lane" '
     $0 == "  listener-readiness-stress-" lane ":" { in_job = 1; next }
     in_job && /^  [a-zA-Z0-9_-]+:$/ { exit }
-    in_job && /needs: listener-readiness-stress-smoke/ { found = 1; exit }
+    in_job && /needs: \[listener-readiness-stress-smoke, listener-diagnostics\]/ { found = 1; exit }
     END { exit !found }
   ' "$workflow"; then
-    echo "listener stress $lane lane no longer waits for its isolated 1x1/1x2 proof" >&2
+    echo "listener stress $lane lane no longer waits for smoke and diagnostic preflight" >&2
     exit 1
   fi
 done

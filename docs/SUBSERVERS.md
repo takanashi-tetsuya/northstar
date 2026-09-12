@@ -204,6 +204,24 @@ evidence is capped at 8 MiB and 128 backends; incomplete required diagnostics
 fail the wrapper even when the workload succeeds. A workload failure keeps its
 original exit status.
 
+CI restores separate `debug` and `runtime-test` compiler caches, keyed by the
+runner distribution/architecture, Rust version, dependency configuration and
+commit. Rust tests and the Federation smoke job are the two cache producers;
+the pressure jobs reuse smoke's compiler work. Every Cargo command and current
+runtime-profile artifact check still runs. Cache availability never substitutes
+for a successful check. A required diagnostic preflight runs observer, marker,
+wrapper and cleanup regressions, including a private PG17 integration, alongside
+smoke; both must succeed before regular or scheduled pressure begins.
+
+Each stress run reports monotonic timings for build, templates, provisioning,
+startup, workload and round cleanup, including interrupted stages. Database
+provisioning remains serial. Round cleanup uses at most four psql clients, capped
+by the effective CPU count, after worker shutdown attempts. Each recorded name
+is checked for fixture ownership before DROP and for absence afterwards; missing
+or malformed batch results retain the original cleanup list. The failure path
+retains the scoped FORCE backstop and records remaining cleanup debt. This does
+not change the same-host round count, all-live barrier or runtime deadlines.
+
 Startup backends with PostgreSQL's NULL activity state remain visible as NULL,
 with their privilege-gated backend identity and zero activity ages validated;
 they are counted separately, never reported as idle or healthy. Disabled

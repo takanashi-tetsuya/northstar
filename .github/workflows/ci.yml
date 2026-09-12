@@ -16,14 +16,14 @@ permissions:
   contents: read
 
 concurrency:
-  # A pull request has one supersedable validation lane.  Pushes intentionally
-  # use their run id instead: a stalled or timed-out historical dev/main run
-  # must not serialize a later exact-SHA validation run behind it.
+  # Keep only the latest PR and codex branch validation. Protected-branch,
+  # tag, scheduled and manual runs retain independent run IDs, so historical
+  # runs cannot serialize newer exact-SHA qualification behind them.
   #
   # This controls scheduling only.  It does not weaken required jobs, replace
   # per-test deadlines, or turn a cancelled run into passing evidence.
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.event_name == 'push' && startsWith(github.ref, 'refs/heads/codex/') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' && startsWith(github.ref, 'refs/heads/codex/') }}
 
 jobs:
   rust-fmt:
@@ -278,6 +278,9 @@ jobs:
           version: "1.50.0"
           github_token: ${{ github.token }}
 
+      - name: Test baseline resolution and real Buf compatibility failures
+        run: bash scripts/test-contract-compatibility.sh
+
       - name: Detect breaking wire contract changes
         shell: bash
         env:
@@ -287,25 +290,7 @@ jobs:
           CONTRACT_HEAD_SHA: ${{ github.sha }}
           CONTRACT_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           CONTRACT_REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -Eeuo pipefail
-          resolution="$(bash scripts/resolve-contract-baseline.sh)"
-          printf '%s\n' "$resolution"
-          baseline_sha="$(awk -F= '$1 == "baseline_sha" { print $2 }' <<<"$resolution")"
-          test -n "$baseline_sha"
-          temp_branch="northstar-contract-baseline-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-$$"
-          temp_ref="refs/heads/${temp_branch}"
-          cleanup() {
-            git update-ref -d "$temp_ref"
-          }
-          trap cleanup EXIT
-          git update-ref "$temp_ref" "$baseline_sha"
-          echo "current_sha=$(git rev-parse HEAD)"
-          echo "current_contract_tree=$(git rev-parse HEAD:contracts/proto)"
-          echo "baseline_sha=$baseline_sha"
-          echo "baseline_contract_tree=$(git rev-parse "$baseline_sha:contracts/proto")"
-          buf --version
-          buf breaking contracts/proto --against ".git#branch=${temp_branch},subdir=contracts/proto"
+        run: bash scripts/check-contract-compatibility.sh
 
   dependency-audit:
     name: RustSec dependency audit

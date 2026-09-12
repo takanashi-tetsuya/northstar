@@ -77,7 +77,7 @@ resolve_baseline() {
 }
 
 resolve_and_print() {
-  local current_sha expected_head baseline baseline_tree current_tree tree_type
+  local current_sha expected_head baseline baseline_tree current_tree tree_type baseline_mode history
 
   current_sha="$(git rev-parse HEAD)" || die "cannot resolve HEAD"
   expected_head="${CONTRACT_HEAD_SHA:-}"
@@ -90,26 +90,44 @@ resolve_and_print() {
   require_sha 'baseline' "$baseline"
   [[ "$baseline" != "$current_sha" ]] || die "baseline must not equal current HEAD"
 
-  baseline_tree="$(git rev-parse "${baseline}:contracts/proto" 2>/dev/null)" \
-    || die "baseline does not contain contracts/proto"
-  tree_type="$(git cat-file -t "$baseline_tree" 2>/dev/null)" \
-    || die "cannot inspect baseline contracts/proto"
-  [[ "$tree_type" == 'tree' ]] || die "baseline contracts/proto is not a tree"
+  if baseline_tree="$(git rev-parse --verify "${baseline}:contracts/proto" 2>/dev/null)"; then
+    tree_type="$(git cat-file -t "$baseline_tree" 2>/dev/null)" \
+      || die "cannot inspect baseline contracts/proto"
+    [[ "$tree_type" == 'tree' ]] || die "baseline contracts/proto is not a tree"
+    baseline_mode=existing
+  else
+    # An initial schema has no earlier messages to compare. Prove that this is
+    # an introduction, not incomplete history, a removed module or a relocation
+    # of an older .proto API. Never substitute HEAD as a passing baseline.
+    [[ "$(git rev-parse --is-shallow-repository)" == false ]] \
+      || die "initial contracts require complete baseline history"
+    git merge-base --is-ancestor "$baseline" "$current_sha" \
+      || die "initial contract baseline must be an ancestor of HEAD"
+    history="$(git log --full-history --max-count=1 --format=%H "$baseline" -- contracts/proto '*.proto')" \
+      || die "cannot inspect baseline contract history"
+    [[ -z "$history" ]] || die "baseline lacks contracts/proto but has prior contract history"
+    baseline_mode=initial
+    baseline_tree=absent
+  fi
 
   current_tree="$(git rev-parse "${current_sha}:contracts/proto" 2>/dev/null)" \
     || die "current HEAD does not contain contracts/proto"
+  [[ "$(git cat-file -t "$current_tree")" == tree ]] \
+    || die "current HEAD contracts/proto is not a tree"
 
   printf 'current_sha=%s\n' "$current_sha"
   printf 'current_contract_tree=%s\n' "$current_tree"
   printf 'baseline_sha=%s\n' "$baseline"
   printf 'baseline_contract_tree=%s\n' "$baseline_tree"
+  printf 'baseline_mode=%s\n' "$baseline_mode"
 }
 
 expect_baseline() {
   local repo="$1"
   local expected="$2"
   local name="$3"
-  shift 3
+  local mode="$4"
+  shift 4
   local output actual
 
   output="$(cd "$repo" && env "$@" bash "$SCRIPT_PATH")" \
@@ -117,6 +135,8 @@ expect_baseline() {
   actual="$(awk -F= '$1 == "baseline_sha" { print $2 }' <<<"$output")"
   [[ "$actual" == "$expected" ]] \
     || die "self-test ${name} resolved '${actual:-missing}', expected '$expected'"
+  [[ "$output" == *"baseline_mode=$mode"* ]] \
+    || die "self-test ${name} did not use expected mode '$mode'"
 }
 
 expect_failure() {
@@ -129,7 +149,7 @@ expect_failure() {
 }
 
 self_test() {
-  local temp_root repo empty_sha baseline_sha head_sha
+  local temp_root repo empty_sha baseline_sha head_sha removed_sha malformed_sha legacy_sha unrelated_sha
   temp_root="$(mktemp -d "${TMPDIR:-/tmp}/northstar-contract-baseline.XXXXXX")"
   trap 'rm -rf -- "${temp_root:-}"' EXIT
   repo="${temp_root}/repository"
@@ -159,15 +179,15 @@ self_test() {
   git -C "$repo" branch task/baseline-test "$head_sha"
   git -C "$repo" switch -q task/baseline-test
 
-  expect_baseline "$repo" "$baseline_sha" 'pull request' \
+  expect_baseline "$repo" "$baseline_sha" 'pull request' existing \
     CONTRACT_EVENT_NAME=pull_request CONTRACT_PR_BASE_SHA="$baseline_sha"
-  expect_baseline "$repo" "$baseline_sha" 'dev push' \
+  expect_baseline "$repo" "$baseline_sha" 'dev push' existing \
     CONTRACT_EVENT_NAME=push CONTRACT_REF_NAME=dev CONTRACT_EVENT_BEFORE="$baseline_sha"
-  expect_baseline "$repo" "$baseline_sha" 'task branch' \
+  expect_baseline "$repo" "$baseline_sha" 'task branch' existing \
     CONTRACT_EVENT_NAME=push CONTRACT_REF_NAME=task/baseline-test
-  expect_baseline "$repo" "$baseline_sha" 'manual dispatch' \
+  expect_baseline "$repo" "$baseline_sha" 'manual dispatch' existing \
     CONTRACT_EVENT_NAME=workflow_dispatch CONTRACT_BASELINE_SHA="$baseline_sha"
-  expect_baseline "$repo" "$baseline_sha" 'scheduled run' \
+  expect_baseline "$repo" "$baseline_sha" 'scheduled run' existing \
     CONTRACT_EVENT_NAME=schedule
 
   expect_failure "$repo" 'missing dispatch baseline' CONTRACT_EVENT_NAME=workflow_dispatch
@@ -177,7 +197,57 @@ self_test() {
     CONTRACT_EVENT_NAME=workflow_dispatch CONTRACT_BASELINE_SHA=1111111111111111111111111111111111111111
   expect_failure "$repo" 'baseline equal to HEAD' \
     CONTRACT_EVENT_NAME=workflow_dispatch CONTRACT_BASELINE_SHA="$head_sha"
-  expect_failure "$repo" 'baseline without contracts' \
+  expect_baseline "$repo" "$empty_sha" 'first contract PR' initial \
+    CONTRACT_EVENT_NAME=pull_request CONTRACT_PR_BASE_SHA="$empty_sha"
+  expect_baseline "$repo" "$empty_sha" 'first main contract push' initial \
+    CONTRACT_EVENT_NAME=push CONTRACT_REF_NAME=main CONTRACT_EVENT_BEFORE="$empty_sha"
+  expect_failure "$repo" 'mismatched checkout' \
+    CONTRACT_EVENT_NAME=pull_request CONTRACT_PR_BASE_SHA="$empty_sha" CONTRACT_HEAD_SHA="$baseline_sha"
+
+  git -C "$repo" rm -qr contracts/proto
+  git -C "$repo" commit -q -m 'remove contracts'
+  removed_sha="$(git -C "$repo" rev-parse HEAD)"
+  expect_failure "$repo" 'removed current contracts' \
+    CONTRACT_EVENT_NAME=pull_request CONTRACT_PR_BASE_SHA="$baseline_sha"
+  git -C "$repo" checkout "$head_sha" -- contracts/proto
+  git -C "$repo" commit -q -m 'reintroduce contracts'
+  expect_failure "$repo" 'removed historical contracts' \
+    CONTRACT_EVENT_NAME=pull_request CONTRACT_PR_BASE_SHA="$removed_sha"
+
+  git -C "$repo" switch -q -c malformed "$empty_sha"
+  mkdir -p "$repo/contracts"
+  printf 'not a directory\n' >"$repo/contracts/proto"
+  git -C "$repo" add contracts/proto
+  git -C "$repo" commit -q -m 'malformed contract path'
+  malformed_sha="$(git -C "$repo" rev-parse HEAD)"
+  expect_failure "$repo" 'malformed current contracts' \
+    CONTRACT_EVENT_NAME=pull_request CONTRACT_PR_BASE_SHA="$empty_sha"
+  git -C "$repo" switch -q task/baseline-test
+  expect_failure "$repo" 'malformed baseline contracts' \
+    CONTRACT_EVENT_NAME=pull_request CONTRACT_PR_BASE_SHA="$malformed_sha"
+
+  git -C "$repo" switch -q -c legacy "$empty_sha"
+  printf 'syntax = "proto3";\n' >"$repo/legacy.proto"
+  git -C "$repo" add legacy.proto
+  git -C "$repo" commit -q -m 'legacy contract location'
+  legacy_sha="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" checkout "$head_sha" -- contracts/proto
+  git -C "$repo" commit -q -m 'add module beside legacy contracts'
+  expect_failure "$repo" 'older contract outside module' \
+    CONTRACT_EVENT_NAME=pull_request CONTRACT_PR_BASE_SHA="$legacy_sha"
+
+  git -C "$repo" switch -q -c unrelated "$empty_sha"
+  printf 'unrelated\n' >"$repo/unrelated"
+  git -C "$repo" add unrelated
+  git -C "$repo" commit -q -m 'unrelated baseline'
+  unrelated_sha="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" switch -q task/baseline-test
+  expect_failure "$repo" 'unrelated empty baseline' \
+    CONTRACT_EVENT_NAME=pull_request CONTRACT_PR_BASE_SHA="$unrelated_sha"
+
+  git clone -q --depth=1 --branch task/baseline-test "file://$repo" "$temp_root/shallow"
+  git -C "$temp_root/shallow" fetch -q origin "$empty_sha"
+  expect_failure "$temp_root/shallow" 'shallow history' \
     CONTRACT_EVENT_NAME=pull_request CONTRACT_PR_BASE_SHA="$empty_sha"
 
   printf 'contract baseline resolver self-test passed\n'

@@ -24,7 +24,17 @@ node scripts/check-ci-required.mjs --workflow-only
 node --test scripts/test-ci-release-gates.mjs
 node scripts/check-tracked-sensitive-files.mjs --include-untracked
 node scripts/verify-crypto-artifacts.mjs
+bash scripts/test-contract-compatibility.sh # requires the CI-pinned Buf 1.50.0
 ```
+
+`check-contract-compatibility.sh` compares existing Protobuf modules against the
+immutable event baseline with Buf's `FILE` breaking rules. A baseline without
+`contracts/proto` is accepted only for a first introduction: it must be an
+ancestor in a complete checkout, with no module or `.proto` files anywhere in
+its history. That case compiles the new module because Buf 1.50 rejects empty
+comparison images. Formatting, lint and generated-code drift remain mandatory
+in the separate contract quality job. Missing history, removed or relocated
+older contracts, and invalid or removed current modules fail the check.
 
 `check-*`, `verify-*` and `audit-*` are not automatically safe merely because
 of their names: inspect whether they invoke Docker, WSL, a database, a network

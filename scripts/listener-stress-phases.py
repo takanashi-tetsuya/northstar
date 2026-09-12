@@ -38,23 +38,25 @@ def startup_pair_concurrency(cpus: int, pairs: int) -> int:
 def process_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
-        process_stat = Path(f"/proc/{pid}/stat")
-        if process_stat.exists() and process_stat.read_text().rsplit(")", 1)[1].split()[0] == "Z":
-            return False
-        return True
-    except ProcessLookupError:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except (ProcessLookupError, FileNotFoundError):
         return False
 
 
 def process_start_time(pid: int) -> int:
-    if type(pid) is not int or pid <= 0 or not process_alive(pid):
+    if type(pid) is not int or pid <= 0:
         raise ValueError("server child exited before phase release")
     try:
+        # Validate liveness and birth time from one current stat record. The
+        # parent repeats this for every live child during each startup batch.
+        os.kill(pid, 0)
         fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
         started = int(fields[19])
         if fields[0] == "Z" or started <= 0:
             raise ValueError("server child exited before phase release")
         return started
+    except ProcessLookupError as error:
+        raise ValueError("server child exited before phase release") from error
     except (OSError, IndexError) as error:
         raise ValueError("server child identity could not be verified") from error
 

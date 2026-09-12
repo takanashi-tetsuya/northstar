@@ -675,3 +675,65 @@ main/dev 仍待啟用實際 rulesets，tag 簽署識別資訊與瀏覽器 GitHub
 仍待使用者提供。三個 GHCR 名稱的 anonymous token 請求均為 DENIED，
 無法區分尚不存在或 private；正式流程仍須完成 public digest pulls。
 尚未建立 `v0.2.0` tag，也未發布 GitHub Release。
+
+## 2026-09-12 23:32 UTC：發佈預覽通過、排隊期限與啟動成本修正
+
+`f6c5f97` 的 push `34719094174` 最終也完成 28 success／4 expected skips，
+兩項 20×50 均通過；同 tree 的 dev／新提交仍須各自驗證。
+`916e863` 的 [release preview 34723553326](https://github.com/takanashi-tetsuya/northstar/actions/runs/34723553326)
+完成 10 success／3 tag-only skips。實際下載的 Windows／Linux artifact
+分別以 SHA-256 `e719ffd7ef8326e2a457f51ee832350cd77136064ed714675bf62f711a621ec0`、
+`8906f8897e8c237a0dfef04523236c17e4c9ac8b3f6a7e6b14dc006d6166bce1` 校驗，
+並核對 package manifest、commit／version identity 與 raw/archive binary。
+Linux 實際執行通過；Windows 在本機僅做 PE import／內容檢查，其實際
+執行證據來自 fresh Windows runner。Windows／Linux fresh PG17.11 startup、
+migration、readiness、web assets 均通過，分別 7922／1563.831 ms；Docker
+app 的預設 entrypoint 同樣通過，3749.994 ms。組裝 artifact `10307781399`
+成功；preview 未執行 signed-tag qualification、GHCR publication 或建立 draft。
+
+`916e863` 的 PR [Federation 103635412668](https://github.com/takanashi-tetsuya/northstar/actions/runs/34723573535/job/103635412668)
+前 5 輪通過，第 6 輪 pair 49 在 B 的共用 15 秒 HTTP readiness 期限失敗。
+A／B 都已發布 nonce record；B 從首個 startup phase 至 record 為 13.739 秒，
+接著 HTTP transport timeout。A 曾回覆 persistence authority probe timed out。
+Observer 2991 樣本、peak 100、5 次 SQLSTATE 57014 全恢復、最大 4378.41 ms，
+wrapper 的 observer／cleanup／diagnostic／marker／map／bounds 全部通過。
+附件 `10307238348`／`10307323057` 已以各自 GitHub SHA-256 驗證；不能把這次
+失敗歸為 observer client deadline，也尚未證明下述 CPU 修正能解決遠端問題。
+舊 PR #3 的 MIX `103633629199` 另在 round 3 pair 49／50 的 A 尚未發布
+nonce record 時逾時；前 2 輪成功，observer 健康。
+
+dev `ee407bf` 的 [Federation 103632600732](https://github.com/takanashi-tetsuya/northstar/actions/runs/34722721446/job/103632600732)
+則在前 14 輪通過後，第 15 輪遭 observer client_query_deadline 取消。
+6655 樣本、peak 100，11 次 sample errors 中 10 次恢復，最後查詢
+5000.264 ms。all-live 至 failure-before-cleanup 7.310 秒平均 3.985 CPU
+cores、idle ticks 沒有增加；all-live 分組仍遭截斷，不能歸因到某類程序。
+兩份附件 `10306879518`／`10307044028` 已通過 GitHub SHA-256 校驗。
+這是另一種失敗，並非上述 pair 49 HTTP readiness 問題。
+
+新的本機完整 MIX 1×50 診斷在最外層限制 PostgreSQL 與 driver 共用 CPU
+0–3。原始 `916e863` 啟動成功（最後 batch 8638.447 ms），但 12 pairs 在
+`finish()` 的第一次訊息檢查前便耗盡 150 秒。程式將等待共享認證 lane
+也計入 recovery budget，違反其他認證階段既有的 admission／I/O 分工。
+現在取得 lane 後、認證開始前才建立 recovery deadline，認證與四個
+配送事件仍共用原本 150 秒，等待 lane 仍受原本 900 秒 worker 監督。
+新增回歸模擬 200 秒排隊，確認四次認證消耗 20 秒、四個事件依序只剩
+130／120／110／100 秒；用 `916e863` 原始 finish 跑同一測試確實失敗。
+原始診斷 observer 1016 樣本、peak 100、0 errors、最大 66.878 ms；
+wrapper cleanup 與所有診斷檢查通過，整個 business fixture **未通過**。
+
+Phase helper 現在以一次即時 `/proc/<pid>/stat` 讀取同時驗證存活狀態與
+birth time，仍做 signal permission probe、zombie／PID reuse／ancestry／
+nonce 檢查，每次重新讀取，不快取 identity，也不改 25 ms 輪詢。
+100 個自有子程序、100 次 50-pair live 檢查，3 組交替微型量測的平均
+CPU 由 0.87823 降至 0.65794 秒（25.08%）；這不是整個 fixture 的改善幅度。
+新增消失的 proc record、permission denied、真實未 reap zombie 負例。
+23 startup scheduler、31 phase、37 MIX coordination 測試通過，文件一致性
+通過。修正版完整 1×50 MIX 在 23:41 UTC 通過：最後 batch 啟動
+8794.407 ms、業務 481485.209 ms、清理 6839.113 ms；observer 1303 樣本、
+peak 100、0 errors、最大 21.033 ms，wrapper 全部成功且無 adopted descendants。
+本機修正前失敗、修正後通過仍不替代新提交遠端兩項完整 20×50。
+
+本機早期 HTTP 1 秒自測曾因 loopback 建連耗時失敗；在清理壓測並允許
+自有 socket 的執行環境中，未改期限即可通過。沒有將此環境差異當成
+遠端 readiness 的已知根因。GitHub 設定頁仍停在登入畫面，main/dev
+rulesets、tag signing identifier 和正式 GHCR anonymous pull 尚待完成。

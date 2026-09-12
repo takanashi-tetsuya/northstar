@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -302,6 +303,34 @@ class StartupSchedulerTests(unittest.TestCase):
             fixture.release(timeout=0.1)
         self.assertLess(len(fixture.permits()), 6)
         fixture.assert_no_business_release()
+
+
+class ProcessIdentityFailureTests(unittest.TestCase):
+    def test_proc_record_disappearing_after_signal_probe_is_not_alive(self):
+        with patch.object(phases.Path, "read_text", side_effect=FileNotFoundError):
+            self.assertFalse(phases.process_alive(os.getpid()))
+            with self.assertRaises(ValueError):
+                phases.process_start_time(os.getpid())
+
+    def test_permission_failure_cannot_establish_identity(self):
+        with patch.object(phases.os, "kill", side_effect=PermissionError):
+            with self.assertRaises(PermissionError):
+                phases.process_alive(os.getpid())
+            with self.assertRaises(ValueError):
+                phases.process_start_time(os.getpid())
+
+    def test_real_unreaped_zombie_is_not_a_live_server(self):
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        try:
+            deadline = time.monotonic() + 3
+            while os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.01)
+            self.assertFalse(phases.process_alive(child.pid))
+            with self.assertRaisesRegex(ValueError, "server child exited"):
+                phases.process_start_time(child.pid)
+        finally:
+            child.wait(timeout=3)
 
 
 class RealChildIdentityTests(unittest.TestCase):

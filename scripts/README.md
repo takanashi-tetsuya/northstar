@@ -73,6 +73,11 @@ authentication admission lanes, with CPU sizing based on process affinity and
 cgroup quota. A failed or missing pair fails the round; preparation never
 extends the worker supervisor or a server's readiness deadline. Smaller local
 runs diagnose failures and do not replace evidence from the complete CI matrix.
+The MIX restart recovery window begins once the pair acquires its authentication
+lane. Authentication and all four recovery events share the same 150 seconds;
+waiting behind other pairs remains subject to the existing worker deadline.
+Live-child checks read the current process state and birth time together on
+every pass; they do not cache identities or relax phase ownership checks.
 
 Capacity runs explicitly build the `runtime-test` Cargo profile and use
 `$CARGO_TARGET_DIR/runtime-test/rust-xmpp-server`. This profile inherits `dev`,

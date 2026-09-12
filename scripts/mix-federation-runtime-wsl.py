@@ -1321,12 +1321,15 @@ def wait_for_restart(inbox: Inbox, marker: str, deadline: float) -> str:
 # replacement must respect that existing 120-second lease, including a
 # queued presence event ahead of later reverse MIX deliveries. Share one
 # lease window plus the existing 30-second delivery allowance across all
-# recovery events; unrelated frames and successive waits cannot restart it.
+# recovery events, starting when authentication is admitted; unrelated frames
+# and successive waits cannot restart it. Waiting for the fixture's shared
+# authentication lane remains bounded by the worker supervisor, like setup
+# and enqueue, and must not consume recovery time before this pair can act.
 def finish() -> None:
     A.wait_ready()
     B.wait_ready()
-    recovery_deadline = time.monotonic() + 150
     with fixture_phase_auth_admission():
+        recovery_deadline = time.monotonic() + 150
         alice_token = login(A, ALICE)
         bob_token = login(B, BOB)
         bob = connect(B, BOB, "finish-b")

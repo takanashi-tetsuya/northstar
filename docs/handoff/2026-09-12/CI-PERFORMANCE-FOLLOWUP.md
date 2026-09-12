@@ -162,3 +162,8 @@ Python 匯入與初始化，因此首筆輸出的 1 秒期限包含子程序啟�
 [Python Windows mkdir ACL](https://github.com/python/cpython/blob/v3.12.10/Modules/posixmodule.c)、
 [PostgreSQL 17 restricted token](https://github.com/postgres/postgres/blob/REL_17_11/src/common/restricted_token.c)、
 [PostgreSQL 禁止管理員直接啟動](https://github.com/postgres/postgres/blob/REL_17_11/src/backend/main/main.c)。
+
+`9c22e1c` job `103577542447` 已完成上述 locked 冷安裝（2m42s），但新增的
+版本比較誤用了 top-level 工具名稱。上游 acceptance test 明確期待
+`cargo-audit-audit 0.22.2`；改正精確比對並輸出實際版本，保留不符即失敗。
+來源：[cargo-audit version acceptance test](https://github.com/rustsec/rustsec/blob/cargo-audit/v0.22.2/cargo-audit/tests/acceptance.rs)。

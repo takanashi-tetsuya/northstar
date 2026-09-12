@@ -4,6 +4,22 @@ This document maps the current implementation to its security and persistence
 boundaries. Protocol support claims belong in [../XEP_MATRIX.md](../XEP_MATRIX.md);
 operational procedures belong in [PRODUCTION_OPERATIONS.md](PRODUCTION_OPERATIONS.md).
 
+The binary supports combined operation or independent core and maintenance
+processes over shared PostgreSQL. [Subserver ownership](SUBSERVERS.md) specifies
+their exact capabilities, health boundaries and deployment lifecycle. Core
+retains all live-session authority; maintenance receives only retention policy,
+a bounded database pool and metrics.
+
+Durable MIX delivery uses retained PostgreSQL commit and reconnect notifications
+to request a fresh authorized claim. Consecutive empty claims schedule recovery
+scans after 250 ms, 500 ms, then at most one second. A notification or completed
+delivery restores immediate claiming; newly claimed work restores the fast
+cadence. A missed notification, lease expiry or timed retry can therefore add
+up to 750 ms of discovery delay compared with the previous fixed 250 ms scan.
+PAM results have no dedicated commit notification and retain their fixed 250 ms
+scan. Database-turn deadlines, lease fences and worker health requirements are
+unchanged; an idle timer alone never marks a worker healthy.
+
 ## Module map
 
 ```mermaid
@@ -68,6 +84,16 @@ Key ownership:
   cannot directly query users/blocking/privacy or compose MAM, S2S outbox, C2S
   spool and offline writes. Typed decisions keep blocked, privacy-denied,
   missing, stored, replay and quota outcomes explicit at the boundary.
+- `northstar-message-core` and `northstar-message-application` own the
+  capability-free personal-message command/result contract and injected
+  commit repository. Local C2S, authenticated S2S, component ingress and
+  federation egress therefore share one authority check and transaction
+  entry point.
+- `northstar-room-core` and `northstar-room-application` own the first room
+  command boundary: local/federated discussion identity, exact occupancy
+  authority, repository injection and bounded ordered post-commit plans.
+  PostgreSQL remains the final room-policy authority under its existing locks;
+  the remaining room mutations are tracked convergence work.
 - `src/services/replay.rs` owns XEP-0160 account leases, bounded page claims
   and the single-snapshot blocking/privacy decision. Protocol replay code owns
   only ordered transport backpressure. A slow socket never retains a primary
@@ -89,9 +115,12 @@ Key ownership:
 - `src/components.rs` isolates component domain authority and outbox handling.
 - `src/bosh.rs` and the WebSocket path adapt HTTP framing to the same
   `ProtocolSession` state machine.
+- `northstar-delivery-core::OrderedOutboundSink` separates session ordering
+  from the Tokio queue adapter. A rejected or stale item is returned to its
+  durable owner, and only the adapter owns channel/cancellation primitives.
 - `src/abuse.rs` owns PostgreSQL-backed PoW/rate/message-admission policy.
 - `src/cluster.rs` owns optional Redis leases/PubSub, the node/delivery-contract
-  protocol v11 and its explicit degraded state machine;
+  protocol v13 and its explicit degraded state machine;
   `src/cluster_security.rs` independently owns the signed Ed25519 envelope
   format v8, node ACLs and replay binding; `src/db/cluster_keys.rs` owns
   non-secret key generations and key-bound process-instance leases. Redis
@@ -144,7 +173,7 @@ shared-authority exceptions visible.
 | Protocol sessions | negotiation state, stanza parsing, RFC/XEP error mapping, per-resource ordering | production-tree static gate forbids DB symbols, SQLx and raw pools | inline test code is excluded from that gate; session still calls `AppState` service capabilities |
 | Application services | authorization snapshots, message/roster/replay policy, transaction intent and typed outcomes | Rust visibility, typed ports and targeted semantic gates | several services still embed SQLx/`PgPool`; some operation/background paths also hold broad `Arc<AppState>` |
 | Database repository responsibility | SQL, lock order, transactions, durable identity, outbox/admission invariants | PostgreSQL workload ACLs, reviewed routines and Rust module boundary | primarily `src/db/*`, but some service/API/cluster/federation/worker paths still embed persistence; most share the runtime role |
-| Live routing | exact connection incarnation, bounded backpressure, SM/BOSH/socket transfer fences | bounded queues, disconnect/fallback rules and delivery-fence state | in-memory availability state is process-local by design |
+| Live routing | exact connection incarnation, loss-explicit ordered admission, bounded backpressure, SM/BOSH/socket transfer fences | injected ordered-output port, bounded adapter queues, disconnect/fallback rules and delivery-fence state | in-memory availability state is process-local by design |
 | Federation/components | remote identity, discovery/TLS/Dialback and durable outbox ownership | authenticated streams, domain checks and durable repositories | S2S/component code remains in the same binary and runtime role |
 | Cluster control plane | signed node envelopes, leases, socket hints and degraded state | envelope verification plus PostgreSQL authority; Redis is non-authoritative | multi-node mode remains experimental and shares the server process |
 | Background workers | registered lifecycle, heartbeat and restart/fail-fast policy | worker registry and readiness/fatal cancellation | several workers still receive broader `AppState` access than the target port design |
@@ -268,7 +297,7 @@ Storage-eligible `normal`/`chat` delivery to a locally hosted account first
 commits a transient recipient spool row together with the trusted XEP-0359
 identity and any enabled MAM rows. That database fence follows the stanza
 through the bounded local or cross-node channel. The cluster node/delivery
-contract protocol v11 carries the exact recipient/row fence explicitly; the
+contract protocol v13 carries the exact recipient/row fence explicitly; the
 receiver verifies both the PostgreSQL row and its payload before any socket
 queue accepts it. Unsafe
 volatile/durable combinations with a legacy v6 peer fail closed. When
@@ -300,6 +329,23 @@ claim query and is released for the entire Pending wait. A valid bearer may
 cancel only the exact local connection incarnation named by PostgreSQL;
 cross-node ownership is never inferred from an in-memory event and changes
 only after a committed authority transition or its persisted boundary.
+
+Migrations `0133` and `0134` extend that same supervised PostgreSQL listener
+with a schema-only MIX durable-delivery wake. The notification is only a
+commit-ordered hint: a MIX worker always reclaims the fenced recipient row
+before delivery. A verified MIX-capable resource advances the persisted
+route-wake generation of the current ordered recipient head. The generation is
+captured with its lease, so a concurrent defer or retry cannot overwrite an
+already committed route transition with a recovery delay. A dead-letter retry
+is reinserted at the current recipient tail rather than reusing historical
+sequence order. Migrations `0135`–`0137` extend this rule to every resumable
+and cross-node boundary. SM entries and BOSH response fences store a typed MIX
+source rather than a generic message ID. A v13 cross-node command carries the
+exact leased recipient source; the destination atomically rotates it into a
+node/request fence before queueing it, and may report success only after that
+fence becomes a direct socket fence, XEP-0198 entry, or BOSH response owner. A
+bounded process queue admission or a Redis acknowledgement is never an
+acknowledgement.
 
 Members-only direct and mediated MUC invitations use this same ownership
 contract. Their affiliation and spool row commit atomically; local and Redis
@@ -534,6 +580,28 @@ a node's mounted keys or epoch do not match that authority. Rotation retains the
 previous key until the minimum overlap and all durable challenge/admission
 references have expired; PostgreSQL stores only purpose-separated key IDs, not
 the HMAC key material.
+
+The PubSub digest worker retains its one-second polling interval and five-second
+health watchdog. An empty tick uses one read-only eligibility query under the
+existing shared database permit instead of opening a mutation transaction. The
+query checks the same due/lease predicate, verifies UPDATE privilege and rejects
+read-only transaction mode even when no row is due. Its two-second caller deadline
+includes pool acquisition; it does not assert immediate cancellation of
+server-side SQL. A negative result
+is never cached, so new work is discovered on the next normal tick. A positive
+result still uses the original bounded transaction, SKIP LOCKED and claim lease;
+concurrent claimers and authorization errors retain their existing semantics.
+
+The durable API operation executor also avoids opening a claim transaction when
+the journal has no pending or running operation. Its repository preflight checks
+the original empty path's schema and column privileges and rejects read-only
+transaction mode. A negative result is not cached: the existing 250 ms idle
+interval discovers later work. Every pending or running operation, including a
+future retry, active lease, cancellation, expired or revoked operation, still
+enters the original expiry, authorization and claim logic. The executor keeps
+claim and target initialization in one transaction, with the original lease and
+effect fences. Neither idle preflight is a guarantee that write locks will be
+available when actual work arrives.
 
 ## Evidence classification
 

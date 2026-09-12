@@ -13,17 +13,11 @@ fi
 target_dir="${CARGO_TARGET_DIR:-$project_dir/target}"
 
 cd "$project_dir"
+source "$project_dir/scripts/lib/test-listener-readiness.sh"
+
 test_database="${XMPP_TEST_DATABASE:-xmpp_test}"
 run_id="$(openssl rand -hex 8)"
 test_schema="northstar_integration_it_${run_id}"
-pick_port() {
-  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
-}
-test_http_port="${XMPP_TEST_HTTP_PORT:-$(pick_port)}"
-test_metrics_port="${XMPP_TEST_METRICS_PORT:-$(pick_port)}"
-test_client_port="${XMPP_TEST_CLIENT_PORT:-$(pick_port)}"
-test_xmpps_port="${XMPP_TEST_XMPPS_PORT:-$(pick_port)}"
-test_s2s_port="${XMPP_TEST_S2S_PORT:-$(pick_port)}"
 if [[ "$test_database" != "xmpp_test" ]]; then
   echo "integration tests are restricted to the dedicated xmpp_test database" >&2
   exit 2
@@ -34,14 +28,40 @@ if [[ ! "$test_schema" =~ ^northstar_integration_it_[0-9a-f]{16}$ ]]; then
 fi
 runtime_dir="$(mktemp -d /tmp/northstar-integration.XXXXXX)"
 mkdir -p "$runtime_dir/logs"
-export METRICS_BIND="127.0.0.1:$test_metrics_port"
 server_pid=""
+server_generation=0
+# The server selects its own HTTP port.  The integration suite nevertheless
+# exercises APIs which advertise PUBLIC_URL (BOSH, WebSocket discovery and
+# HTTP Upload slots), so retain one fixture-owned public endpoint for the
+# lifetime of all server generations.  The relay is a plain loopback TCP test
+# proxy; the existing loopback secure-request policy models the TLS-terminating
+# proxy boundary for the HTTPS public URL below.
+integration_http_relay_pid=""
+integration_http_relay_port=""
+integration_http_relay_target="$runtime_dir/integration-http.target"
+integration_public_url=""
+test_http_backend_port=""
+test_http_port=""
+test_web_admin_port=""
+test_metrics_port=""
+test_client_port=""
+test_xmpps_port=""
+declare -a fixture_listener_ports=()
 cleanup() {
   exit_code=$?
   trap - EXIT
   if [[ -n "$server_pid" ]]; then
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$integration_http_relay_pid" ]]; then
+    kill "$integration_http_relay_pid" 2>/dev/null || true
+    wait "$integration_http_relay_pid" 2>/dev/null || true
+  fi
+  listener_count=0
+  if ! fixture_assert_no_listeners; then
+    listener_count=1
+    exit_code=1
   fi
   if (( exit_code != 0 )) && [[ -f "$runtime_dir/integration-server.log" ]]; then
     echo "--- integration-server.log (last 160 lines) ---" >&2
@@ -74,6 +94,7 @@ cleanup() {
     /tmp/northstar-integration.*) rm -rf -- "$runtime_dir" ;;
     *) echo "refusing to remove unexpected runtime directory: $runtime_dir" >&2; exit_code=1 ;;
   esac
+  echo "integration cleanup: schema=$test_schema listeners=$listener_count"
   exit "$exit_code"
 }
 trap cleanup EXIT
@@ -172,17 +193,39 @@ env \
   "$target_dir/debug/rust-xmpp-server" migrate
 
 : >"$runtime_dir/integration-server.log"
+# Bind the relay before a server generation exists.  It publishes the only
+# stable public authority used by this fixture; the target changes only after
+# each Northstar child proves ownership of its dynamically bound HTTP socket.
+fixture_start_tcp_relay "$project_dir" "$runtime_dir" integration-http integration-http \
+  "$integration_http_relay_target" "$runtime_dir/integration-http-relay.log" \
+  integration_http_relay_pid integration_http_relay_port
+integration_public_url="https://127.0.0.1:$integration_http_relay_port"
+
+publish_integration_http_target() {
+  fixture_publish_relay_target "$integration_http_relay_target" "$test_http_backend_port"
+}
+
 start_server() {
+  local readiness_file readiness_nonce
+  server_generation=$((server_generation + 1))
+  readiness_file="$runtime_dir/integration-server-$server_generation.ready.json"
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file" "$integration_http_relay_target"
   env \
     NORTHSTAR_DISABLE_DOTENV=true \
     XMPP_DOMAIN=localhost \
     DATABASE_URL="$integration_database_url" \
-    XMPP_BIND="127.0.0.1:$test_client_port" \
-    XMPPS_BIND="127.0.0.1:$test_xmpps_port" \
-    S2S_BIND="127.0.0.1:$test_s2s_port" \
+    XMPP_BIND="127.0.0.1:0" \
+    XMPPS_BIND="127.0.0.1:0" \
+    S2S_BIND="127.0.0.1:0" \
     S2S_TLS_BIND="127.0.0.1:0" \
-    HTTP_BIND="127.0.0.1:$test_http_port" \
-    PUBLIC_URL="https://127.0.0.1:$test_http_port" \
+    HTTP_BIND="127.0.0.1:0" \
+    WEB_ADMIN_BIND="127.0.0.1:0" \
+    METRICS_BIND="127.0.0.1:0" \
+    TEST_LISTENER_ACTIVATION=true \
+    TEST_READINESS_FILE="$readiness_file" \
+    TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL="$integration_public_url" \
     API_CONTROL_ALLOW_EPHEMERAL=true \
     ABUSE_STATE_ALLOW_EPHEMERAL=true \
     API_CONTROL_SECRET_FILE="$runtime_dir/api-control.secret" \
@@ -216,12 +259,25 @@ start_server() {
     RUST_LOG="${RUST_LOG:-rust_xmpp_server=info}" \
     "$target_dir/debug/rust-xmpp-server" >>"$runtime_dir/integration-server.log" 2>&1 &
   server_pid=$!
+  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid" || return 1
+  test_http_backend_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+  test_web_admin_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" web-admin)"
+  test_metrics_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" metrics)"
+  test_client_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
+  test_xmpps_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
+  publish_integration_http_target
+  # Public HTTP/WebSocket/BOSH traffic must use the authority that Northstar
+  # advertises, not the per-generation private backend listener.
+  test_http_port="$integration_http_relay_port"
+  curl --silent --fail "http://127.0.0.1:$test_http_backend_port/readyz" >/dev/null
+  curl --silent --fail "http://127.0.0.1:$test_http_port/readyz" >/dev/null
 }
 start_server
 
 if [[ "${XMPP_TEST_ONLY_JINGLE_GATE:-false}" == "true" ]]; then
   XMPP_TEST_HOST=127.0.0.1 \
   XMPP_TEST_HTTP_PORT="$test_http_port" \
+  XMPP_TEST_WEB_ADMIN_PORT="$test_web_admin_port" \
   XMPP_TEST_CLIENT_PORT="$test_client_port" \
   XMPP_TEST_XMPPS_PORT="$test_xmpps_port" \
   XMPP_TEST_DOMAIN=localhost \
@@ -259,10 +315,12 @@ if [[ "${XMPP_TEST_ONLY_SASL:-false}" == "true" ]]; then
 fi
 XMPP_TEST_HOST=127.0.0.1 \
 XMPP_TEST_HTTP_PORT="$test_http_port" \
+XMPP_TEST_WEB_ADMIN_PORT="$test_web_admin_port" \
 XMPP_TEST_METRICS_PORT="$test_metrics_port" \
 XMPP_TEST_CLIENT_PORT="$test_client_port" \
 XMPP_TEST_XMPPS_PORT="$test_xmpps_port" \
 XMPP_TEST_DOMAIN=localhost \
+XMPP_TEST_PUBLIC_URL="$integration_public_url" \
 XMPP_TEST_FAST_RESTART_FILE="$fast_restart_file" \
 XMPP_TEST_C2S_CLIENT_CERT="$runtime_dir/client-alice.crt" \
 XMPP_TEST_C2S_CLIENT_KEY="$runtime_dir/client-alice.key" \
@@ -277,26 +335,26 @@ python3 scripts/integration-wsl.py
 if [[ "${XMPP_TEST_ONLY_SASL:-false}" != "true" && "${XMPP_TEST_ONLY_ATOMIC_REGISTRATION:-false}" != "true" && "${XMPP_TEST_ONLY_MODERN_MESSAGES:-false}" != "true" && "${XMPP_TEST_ONLY_LOGIN_IDEMPOTENCY:-false}" != "true" && "${XMPP_TEST_ONLY_CHALLENGE_CAPACITY:-false}" != "true" ]]; then
   XMPP_TEST_HOST=127.0.0.1 \
   XMPP_TEST_HTTP_PORT="$test_http_port" \
+  XMPP_TEST_WEB_ADMIN_PORT="$test_web_admin_port" \
   XMPP_TEST_CLIENT_PORT="$test_client_port" \
   XMPP_TEST_XMPPS_PORT="$test_xmpps_port" \
   XMPP_TEST_DOMAIN=localhost \
+  XMPP_TEST_PUBLIC_URL="$integration_public_url" \
   python3 scripts/message-family-restart-wsl.py prepare
 
   kill "$server_pid"
   wait "$server_pid" 2>/dev/null || true
   server_pid=""
   start_server
-  for _ in $(seq 1 150); do
-    if curl --silent --fail "http://127.0.0.1:$test_http_port/readyz" >/dev/null; then break; fi
-    sleep 0.1
-  done
   curl --silent --fail "http://127.0.0.1:$test_http_port/readyz" >/dev/null
 
   XMPP_TEST_HOST=127.0.0.1 \
   XMPP_TEST_HTTP_PORT="$test_http_port" \
+  XMPP_TEST_WEB_ADMIN_PORT="$test_web_admin_port" \
   XMPP_TEST_CLIENT_PORT="$test_client_port" \
   XMPP_TEST_XMPPS_PORT="$test_xmpps_port" \
   XMPP_TEST_DOMAIN=localhost \
+  XMPP_TEST_PUBLIC_URL="$integration_public_url" \
   python3 scripts/message-family-restart-wsl.py verify
 fi
 
@@ -307,10 +365,12 @@ if [[ "${XMPP_TEST_ONLY_SASL:-false}" == "true" ]]; then
   start_server
   XMPP_TEST_HOST=127.0.0.1 \
   XMPP_TEST_HTTP_PORT="$test_http_port" \
+  XMPP_TEST_WEB_ADMIN_PORT="$test_web_admin_port" \
   XMPP_TEST_METRICS_PORT="$test_metrics_port" \
   XMPP_TEST_CLIENT_PORT="$test_client_port" \
   XMPP_TEST_XMPPS_PORT="$test_xmpps_port" \
   XMPP_TEST_DOMAIN=localhost \
+  XMPP_TEST_PUBLIC_URL="$integration_public_url" \
   XMPP_TEST_FAST_RESTART_FILE="$fast_restart_file" \
   XMPP_TEST_SASL_RESTART_VERIFY=true \
   XMPP_TEST_C2S_CLIENT_CERT="$runtime_dir/client-alice.crt" \

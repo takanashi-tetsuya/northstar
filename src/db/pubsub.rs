@@ -3069,7 +3069,22 @@ pub async fn publish_items_with_renderer(
         transaction.commit().await?;
         return Ok(PublishItemsOutcome::Published);
     }
-    for (item_id, xml_payload) in items {
+    // `clock_timestamp()` is shared by the whole locked mutation so that the
+    // outbox and authorization snapshot have one event instant. Item history
+    // additionally needs a stable per-node order when one publish contains
+    // several items. Advance from the newest retained timestamp while the
+    // node lock is held; UUID tie-breakers alone would make retention and
+    // disco#items order arbitrary for same-batch publications.
+    let first_item_time: DateTime<Utc> = sqlx::query_scalar(
+        "SELECT GREATEST($2, COALESCE(MAX(created_at) + INTERVAL '1 microsecond', $2))
+           FROM pubsub_items WHERE node_id=$1",
+    )
+    .bind(fresh.id)
+    .bind(event_time)
+    .fetch_one(&mut *transaction)
+    .await?;
+    for (ordinal, (item_id, xml_payload)) in items.iter().enumerate() {
+        let item_time = first_item_time + chrono::Duration::microseconds(ordinal as i64);
         // XEP-0060 section 12.9 requires an authorized publisher to overwrite
         // an existing NodeID+ItemID rather than rejecting the publication.
         // Node-level authorization has already happened at the protocol
@@ -3080,7 +3095,7 @@ pub async fn publish_items_with_renderer(
             .bind(item_id)
             .bind(&publisher_jid)
             .bind(xml_payload)
-            .bind(event_time)
+            .bind(item_time)
             .execute(&mut *transaction)
             .await?;
         if result.rows_affected() == 0 {
@@ -4209,6 +4224,35 @@ pub async fn enqueue_pubsub_digest(
 }
 
 pub async fn claim_due_pubsub_digests(pool: &PgPool, limit: i64) -> Result<Vec<DuePubSubDigest>> {
+    // Empty queues do not need a mutation transaction on every one-second
+    // worker tick. This is only a scheduling hint: a positive result still
+    // enters the original bounded transaction and claims with SKIP LOCKED.
+    // Do not cache a negative result; newly due rows are seen next tick.
+    // Keep UPDATE revocation and read-only mode visible even without work.
+    let (may_update, writable, has_due): (bool, bool, bool) = tokio::time::timeout(
+        PUBSUB_POOL_ACQUIRE_TIMEOUT,
+        sqlx::query_as(
+            "SELECT has_table_privilege('pubsub_digest_queue', 'UPDATE'),
+                    current_setting('transaction_read_only') = 'off',
+                    EXISTS(SELECT 1 FROM pubsub_digest_queue
+                            WHERE deliver_after <= NOW()
+                              AND (claimed_until IS NULL OR claimed_until <= NOW()))",
+        )
+        .fetch_one(pool),
+    )
+    .await
+    .map_err(|_| PubSubMutationBusy)??;
+    anyhow::ensure!(
+        may_update,
+        "PubSub digest queue UPDATE authority is unavailable"
+    );
+    anyhow::ensure!(
+        writable,
+        "PubSub digest queue requires a writable transaction"
+    );
+    if !has_due {
+        return Ok(Vec::new());
+    }
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     let rows = sqlx::query(
         "WITH due AS (
@@ -4743,6 +4787,16 @@ mod integration_tests {
         .unwrap_or_else(|_| panic!("session {application_name} never reached its lock wait"));
     }
 
+    async fn await_mutation_observation(
+        receiver: &mut tokio::sync::mpsc::UnboundedReceiver<MutationObservation>,
+        phase: &str,
+    ) -> MutationObservation {
+        tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .unwrap_or_else(|_| panic!("{phase} did not emit its mutation observation"))
+            .unwrap_or_else(|| panic!("{phase} mutation observation channel closed"))
+    }
+
     async fn integration_pool(max_connections: u32) -> (String, PgPool) {
         let url = std::env::var("TEST_DATABASE_URL")
             .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
@@ -5200,7 +5254,13 @@ mod integration_tests {
         };
         let collection = get_node_by_id(&pool, collection_id).await.unwrap().unwrap();
         let leaf = create_default_test_node(&pool, &format!("generic-leaf-{suffix}"), &owner).await;
-        let collection_options = PubSubSubscriptionOptions::for_node_type("collection");
+        // XEP-0248 defaults a collection subscription to `nodes`, which
+        // receives association/configuration notifications only. This race
+        // proves item retraction delivery through a direct collection edge,
+        // therefore request the explicit `items` subscription type while
+        // retaining the one-hop depth under test.
+        let mut collection_options = PubSubSubscriptionOptions::for_node_type("collection");
+        collection_options.subscription_type = "items".to_owned();
         assert!(matches!(
             set_subscription_limited_with_options_and_renderer(
                 &pool,
@@ -5292,10 +5352,15 @@ mod integration_tests {
         wait_for_named_session_lock(&pool, &graph_first_application).await;
         graph_change.commit().await.unwrap();
         assert_eq!(
-            graph_first_task.await.unwrap().unwrap(),
+            tokio::time::timeout(Duration::from_secs(5), graph_first_task)
+                .await
+                .expect("graph-first retraction did not return after graph release")
+                .expect("graph-first retraction task panicked")
+                .unwrap(),
             RetractItemsOutcome::Retracted
         );
-        let graph_first_observation = graph_first_rx.recv().await.unwrap();
+        let graph_first_observation =
+            await_mutation_observation(&mut graph_first_rx, "graph-first retraction").await;
         assert_eq!(graph_first_observation.kind, "retract");
         assert!(graph_first_observation.recipients.is_empty());
         assert_eq!(
@@ -5365,7 +5430,8 @@ mod integration_tests {
                 .await
             }
         });
-        let mutation_observation = mutation_rx.recv().await.unwrap();
+        let mutation_observation =
+            await_mutation_observation(&mut mutation_rx, "mutation-first retraction").await;
         assert_eq!(mutation_observation.recipients, vec![subscriber.clone()]);
         let graph_wait_application = format!("ps-graph-wait-{short}");
         let graph_wait_pool = named_single_connection_pool(&url, &graph_wait_application).await;
@@ -5388,11 +5454,19 @@ mod integration_tests {
         wait_for_named_session_lock(&pool, &graph_wait_application).await;
         gate.release();
         assert_eq!(
-            mutation_task.await.unwrap().unwrap(),
+            tokio::time::timeout(Duration::from_secs(5), mutation_task)
+                .await
+                .expect("mutation-first retraction did not return after renderer release")
+                .expect("mutation-first retraction task panicked")
+                .unwrap(),
             RetractItemsOutcome::Retracted
         );
         assert_eq!(
-            dissociate.await.unwrap().unwrap(),
+            tokio::time::timeout(Duration::from_secs(5), dissociate)
+                .await
+                .expect("graph dissociation did not return after retraction commit")
+                .expect("graph dissociation task panicked")
+                .unwrap(),
             CollectionUpdateOutcome::Updated
         );
         assert_eq!(
@@ -5449,7 +5523,8 @@ mod integration_tests {
             .unwrap(),
             CollectionUpdateOutcome::Updated
         );
-        let post_outcast = outcast_rx.recv().await.unwrap();
+        let post_outcast =
+            await_mutation_observation(&mut outcast_rx, "post-outcast association").await;
         assert_eq!(post_outcast.kind, "collection");
         assert!(post_outcast.recipients.is_empty());
         assert_eq!(
@@ -5519,7 +5594,8 @@ mod integration_tests {
         .await
         .unwrap();
         assert!(matches!(batch, SetSubscriptionsOutcome::Updated(_)));
-        let last_observation = last_rx.recv().await.unwrap();
+        let last_observation =
+            await_mutation_observation(&mut last_rx, "last-item subscription").await;
         assert_eq!(last_observation.kind, "subscription");
         assert_eq!(last_observation.recipients, vec![last_jid.clone()]);
         assert_eq!(
@@ -5925,6 +6001,150 @@ mod integration_tests {
         config_pool.close().await;
         delete_pool.close().await;
         delete_unsubscribe_pool.close().await;
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+    async fn digest_idle_preflight_preserves_leases_and_authority_errors() {
+        let url = std::env::var("TEST_DATABASE_URL")
+            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+        // One connection owns this entire temporary namespace. Pin every
+        // replacement connection too: losing the temporary table must fail
+        // instead of falling back to a persistent application relation.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    sqlx::query("SET search_path TO pg_temp, pg_catalog")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(&url)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TEMP TABLE pubsub_digest_queue (
+            id UUID PRIMARY KEY, subscription_node_id UUID NOT NULL,
+            subscriber_jid TEXT NOT NULL, event_xml TEXT NOT NULL,
+            show_values TEXT[], deliver_after TIMESTAMPTZ NOT NULL,
+            claimed_until TIMESTAMPTZ
+        )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(claim_due_pubsub_digests(&pool, 10)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let node = Uuid::new_v4();
+        let future = Uuid::new_v4();
+        let leased = Uuid::new_v4();
+        let unclaimed = Uuid::new_v4();
+        let expired = Uuid::new_v4();
+        sqlx::query("INSERT INTO pubsub_digest_queue
+            (id,subscription_node_id,subscriber_jid,event_xml,deliver_after,claimed_until)
+            VALUES ($1,$3,'reader@example.test','<future/>',NOW()+INTERVAL '1 hour',NULL),
+                   ($2,$3,'reader@example.test','<leased/>',NOW()-INTERVAL '1 hour',NOW()+INTERVAL '1 hour')")
+            .bind(future).bind(leased).bind(node)
+            .execute(&pool).await.unwrap();
+        assert!(claim_due_pubsub_digests(&pool, 10)
+            .await
+            .unwrap()
+            .is_empty());
+        sqlx::query("INSERT INTO pubsub_digest_queue
+            (id,subscription_node_id,subscriber_jid,event_xml,deliver_after,claimed_until)
+            VALUES ($1,$3,'reader@example.test','<unclaimed/>',NOW()-INTERVAL '1 minute',NULL),
+                   ($2,$3,'reader@example.test','<expired/>',NOW()-INTERVAL '1 minute',NOW()-INTERVAL '1 second')")
+            .bind(unclaimed).bind(expired).bind(node)
+            .execute(&pool).await.unwrap();
+        let claimed = claim_due_pubsub_digests(&pool, 10).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(
+            claimed[0].ids.iter().copied().collect::<BTreeSet<_>>(),
+            BTreeSet::from([unclaimed, expired])
+        );
+        assert!(claim_due_pubsub_digests(&pool, 10)
+            .await
+            .unwrap()
+            .is_empty());
+        let protected: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pubsub_digest_queue WHERE id=ANY($1) AND claimed_until>NOW()",
+        )
+        .bind(vec![unclaimed, expired, leased])
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(protected, 3);
+
+        // A preceding empty result is not cached across worker ticks.
+        sqlx::query(
+            "UPDATE pubsub_digest_queue SET deliver_after=NOW()-INTERVAL '1 second' WHERE id=$1",
+        )
+        .bind(future)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let newly_due = claim_due_pubsub_digests(&pool, 10).await.unwrap();
+        assert_eq!(newly_due.len(), 1);
+        assert_eq!(newly_due[0].ids, vec![future]);
+
+        // Use a built-in read-only role on this temporary relation. Empty
+        // queues must still reject lost UPDATE authority. RESET precedes
+        // assertions so the connection never retains the borrowed role.
+        sqlx::query("TRUNCATE pubsub_digest_queue")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Production uses a persistent table. This temporary-only fixture
+        // checks the explicit mode guard, not PostgreSQL's separate allowance
+        // for writes to temporary tables in read-only transactions.
+        sqlx::query("SET default_transaction_read_only = on")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let read_only = claim_due_pubsub_digests(&pool, 10).await;
+        sqlx::query("SET default_transaction_read_only = off")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(read_only
+            .unwrap_err()
+            .to_string()
+            .contains("writable transaction"));
+        assert!(claim_due_pubsub_digests(&pool, 10)
+            .await
+            .unwrap()
+            .is_empty());
+        sqlx::query("GRANT SELECT ON pubsub_digest_queue TO pg_read_all_data")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("SET ROLE pg_read_all_data")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let denied = claim_due_pubsub_digests(&pool, 10).await;
+        sqlx::query("RESET ROLE").execute(&pool).await.unwrap();
+        assert!(denied.unwrap_err().to_string().contains("UPDATE authority"));
+
+        sqlx::query("DROP TABLE pubsub_digest_queue")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(claim_due_pubsub_digests(&pool, 10).await.is_err());
+        let held = pool.acquire().await.unwrap();
+        let busy =
+            tokio::time::timeout(Duration::from_secs(4), claim_due_pubsub_digests(&pool, 10))
+                .await
+                .expect("the read-only preflight must bound its pool wait")
+                .unwrap_err();
+        assert!(busy.downcast_ref::<PubSubMutationBusy>().is_some());
+        drop(held);
         pool.close().await;
     }
 
@@ -6699,6 +6919,14 @@ mod integration_tests {
         assert!(retained.iter().all(|item| item.item_id != "claimed"));
         let discovered = item_ids_for_disco(&pool, leaf_id).await.unwrap();
         assert_eq!(discovered.len(), 2);
+        assert_eq!(
+            retained
+                .iter()
+                .map(|item| item.item_id.as_str())
+                .collect::<Vec<_>>(),
+            discovered.iter().map(String::as_str).collect::<Vec<_>>(),
+            "disco#items must expose the exact retained item sequence"
+        );
         assert_eq!(discovered, ["new-3", "new-2"]);
         assert!(!discovered.iter().any(|item| item == "new-1"));
 
@@ -7306,6 +7534,154 @@ mod integration_tests {
                 .await
                 .unwrap(),
             CollectionUpdateOutcome::Updated
+        );
+        // At the quota boundary the first association must own exactly one
+        // edge.  The graph guard must not count that same edge again when an
+        // update names its immutable identities or only stamps metadata.
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM pubsub_collection_members
+                  WHERE collection_node_id=$1 AND child_node_id=$2",
+            )
+            .bind(collection.id)
+            .bind(child.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query(
+                "UPDATE pubsub_collection_members
+                    SET collection_node_id=$1, child_node_id=$2
+                  WHERE collection_node_id=$1 AND child_node_id=$2",
+            )
+            .bind(collection.id)
+            .bind(child.id)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .rows_affected(),
+            1
+        );
+        assert_eq!(
+            sqlx::query(
+                "UPDATE pubsub_collection_members
+                    SET created_at=created_at + INTERVAL '1 microsecond'
+                  WHERE collection_node_id=$1 AND child_node_id=$2",
+            )
+            .bind(collection.id)
+            .bind(child.id)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .rows_affected(),
+            1
+        );
+
+        // A move within a collection replaces its old edge rather than
+        // consuming another slot.  Move it back before exercising the retry
+        // path below so the second request is an actual idempotent repeat.
+        let replacement =
+            create_default_test_node(&pool, &format!("associate-replacement-{suffix}"), &owner)
+                .await;
+        assert_eq!(
+            sqlx::query(
+                "UPDATE pubsub_collection_members SET child_node_id=$3
+                  WHERE collection_node_id=$1 AND child_node_id=$2",
+            )
+            .bind(collection.id)
+            .bind(child.id)
+            .bind(replacement.id)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .rows_affected(),
+            1
+        );
+        assert_eq!(
+            sqlx::query(
+                "UPDATE pubsub_collection_members SET child_node_id=$3
+                  WHERE collection_node_id=$1 AND child_node_id=$2",
+            )
+            .bind(collection.id)
+            .bind(replacement.id)
+            .bind(child.id)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .rows_affected(),
+            1
+        );
+
+        // A move into a separately full collection and a second direct
+        // insertion both remain database-enforced quota violations.
+        let full_collection_id = match create_node(
+            &pool,
+            &format!("associate-full-parent-{suffix}"),
+            &owner,
+            &collection_config,
+            10,
+        )
+        .await
+        .unwrap()
+        {
+            CreateNodeOutcome::Created(id) => id,
+            other => panic!("unexpected full collection create outcome: {other:?}"),
+        };
+        let full_collection = get_node_by_id(&pool, full_collection_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let full_child =
+            create_default_test_node(&pool, &format!("associate-full-child-{suffix}"), &owner)
+                .await;
+        assert_eq!(
+            associate_collection_child(&pool, &full_collection, &full_child, &owner)
+                .await
+                .unwrap(),
+            CollectionUpdateOutcome::Updated
+        );
+        let full_move = sqlx::query(
+            "UPDATE pubsub_collection_members SET collection_node_id=$3
+              WHERE collection_node_id=$1 AND child_node_id=$2",
+        )
+        .bind(collection.id)
+        .bind(child.id)
+        .bind(full_collection.id)
+        .execute(&pool)
+        .await
+        .expect_err("moving an edge into a full collection must be rejected");
+        assert_eq!(
+            full_move
+                .as_database_error()
+                .and_then(|error| error.code().map(|code| code.into_owned()))
+                .as_deref(),
+            Some("23514")
+        );
+        let overflow =
+            create_default_test_node(&pool, &format!("associate-overflow-{suffix}"), &owner).await;
+        assert_eq!(
+            associate_collection_child(&pool, &collection, &overflow, &owner)
+                .await
+                .unwrap(),
+            CollectionUpdateOutcome::LimitExceeded
+        );
+        let direct_overflow = sqlx::query(
+            "INSERT INTO pubsub_collection_members(collection_node_id, child_node_id)
+             VALUES($1, $2)",
+        )
+        .bind(collection.id)
+        .bind(overflow.id)
+        .execute(&pool)
+        .await
+        .expect_err("trigger must reject a second collection child at the limit");
+        assert_eq!(
+            direct_overflow
+                .as_database_error()
+                .and_then(|error| error.code().map(|code| code.into_owned()))
+                .as_deref(),
+            Some("23514")
         );
 
         let mut graph_blocker = pool.begin().await.unwrap();

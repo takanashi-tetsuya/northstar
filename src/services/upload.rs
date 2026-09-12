@@ -4,41 +4,44 @@
 //! database capability, bearer-token creation and all logical/physical quota
 //! inputs so a handler cannot persist a partially specified reservation.
 
-use crate::services::upload_safety::{UploadIoClass, UploadSafetyGate};
+use crate::services::upload_safety::UploadSafetyGate;
 use crate::{auth, db};
 use anyhow::Result;
+use northstar_upload_application::validate_upload_slot_request;
+pub(crate) use northstar_upload_application::{
+    UploadIoClass, UploadSlotAdmission, UploadSlotRequest, UploadSlotRequestCommand,
+};
 use sqlx::PgPool;
 use std::sync::Arc;
-use uuid::Uuid;
-
-pub(crate) struct UploadSlotRequest<'a> {
-    pub(crate) user_id: Uuid,
-    pub(crate) filename: &'a str,
-    pub(crate) content_type: &'a str,
-    pub(crate) size: u64,
-    pub(crate) max_files_per_user: i64,
-    pub(crate) max_bytes_per_user: i64,
-    pub(crate) storage_backend: &'a str,
-    pub(crate) max_retained_files: i64,
-    pub(crate) max_retained_bytes: i64,
-    pub(crate) max_pending_jobs: i64,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum UploadSlotAdmission {
-    Reserved { id: Uuid, bearer_token: String },
-    CapacityExceeded,
-}
 
 #[derive(Clone)]
 pub(crate) struct UploadService {
     pool: PgPool,
     safety_gate: Arc<UploadSafetyGate>,
+    max_upload_bytes: u64,
 }
 
 impl UploadService {
-    pub(crate) fn new(pool: PgPool, safety_gate: Arc<UploadSafetyGate>) -> Self {
-        Self { pool, safety_gate }
+    pub(crate) fn new(
+        pool: PgPool,
+        safety_gate: Arc<UploadSafetyGate>,
+        max_upload_bytes: u64,
+    ) -> Self {
+        Self {
+            pool,
+            safety_gate,
+            max_upload_bytes,
+        }
+    }
+
+    pub(crate) async fn execute_upload_slot_reservation(
+        &self,
+        command: UploadSlotRequestCommand<'_>,
+    ) -> Result<UploadSlotAdmission> {
+        if let Err(err) = validate_upload_slot_request(&command, self.max_upload_bytes) {
+            anyhow::bail!("invalid upload slot request: {:?}", err);
+        }
+        self.reserve_slot(command).await
     }
 
     pub(crate) async fn reserve_slot(

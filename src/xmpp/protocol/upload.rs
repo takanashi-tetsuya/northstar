@@ -1,54 +1,9 @@
 use super::{Action, ProtocolSession};
-use crate::services::upload::{UploadSlotAdmission, UploadSlotRequest};
+use crate::services::upload::{UploadSlotAdmission, UploadSlotRequestCommand};
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::Result;
 use roxmltree::Node;
-
-struct UploadRequest<'a> {
-    filename: &'a str,
-    content_type: &'a str,
-    size: u64,
-}
-
-fn parse_upload_request<'input>(
-    request: Node<'input, 'input>,
-) -> std::result::Result<UploadRequest<'input>, &'static str> {
-    if request.attributes().any(|attribute| {
-        attribute.namespace().is_some()
-            || !matches!(attribute.name(), "filename" | "size" | "content-type")
-    }) || request
-        .children()
-        .any(|child| child.is_text() && child.text().is_some_and(|text| !text.trim().is_empty()))
-    {
-        return Err("bad-request");
-    }
-    // Upload purposes have retention semantics of their own. Northstar does
-    // not advertise those optional profiles, so accepting and ignoring one
-    // would make a false promise to the client.
-    if request.children().any(|child| child.is_element()) {
-        return Err("feature-not-implemented");
-    }
-    let filename = request.attribute("filename").unwrap_or_default();
-    let content_type = request
-        .attribute("content-type")
-        .unwrap_or("application/octet-stream");
-    let Some(size) = request
-        .attribute("size")
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|size| *size > 0)
-    else {
-        return Err("bad-request");
-    };
-    if !valid_upload_filename(filename) || !valid_content_type(content_type) {
-        return Err("not-acceptable");
-    }
-    Ok(UploadRequest {
-        filename,
-        content_type,
-        size,
-    })
-}
 
 fn file_too_large(id: &str, from: &str, maximum: u64) -> String {
     XmlElement::namespaced("iq", "jabber:client")
@@ -63,27 +18,23 @@ fn file_too_large(id: &str, from: &str, maximum: u64) -> String {
                     "urn:ietf:params:xml:ns:xmpp-stanzas",
                 ))
                 .child(
-                    XmlElement::namespaced("file-too-large", "urn:xmpp:http:upload:0")
+                    XmlElement::namespaced("file-too-large", northstar_xep_0363::NAMESPACE)
                         .child(XmlElement::new("max-file-size").text(maximum.to_string())),
                 ),
         )
         .finish()
 }
 
-fn upload_slot(put_url: &str, token: &str, get_url: &str) -> String {
-    XmlElement::namespaced("slot", "urn:xmpp:http:upload:0")
-        .child(
-            XmlElement::new("put").attr("url", put_url).child(
-                XmlElement::new("header")
-                    .attr("name", "Authorization")
-                    .text(format!("Bearer {token}")),
-            ),
-        )
-        .child(XmlElement::new("get").attr("url", get_url))
-        .finish()
-}
-
 impl ProtocolSession {
+    pub(crate) fn http_upload_enabled(&self) -> bool {
+        self.state.config.upload_mode.admits_new_uploads()
+            && self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0363::XEP_ID)
+    }
+
     pub(crate) fn upload_domain(&self) -> String {
         crate::jid::prepare_domainpart(&format!("upload.{}", self.state.config.domain))
             .expect("configured XMPP domain must form a valid upload service domain")
@@ -106,9 +57,18 @@ impl ProtocolSession {
         }) {
             return Ok(Action::Send(iq_error(id, "service-unavailable")));
         }
-        let upload = match parse_upload_request(request) {
+        let upload = match northstar_xep_0363::parse_request(request) {
             Ok(upload) => upload,
-            Err(condition) => {
+            Err(error) => {
+                let condition = match error {
+                    northstar_xep_0363::ValidationError::UnsupportedChild => {
+                        "feature-not-implemented"
+                    }
+                    northstar_xep_0363::ValidationError::InvalidMetadata => "not-acceptable",
+                    northstar_xep_0363::ValidationError::UnexpectedElement
+                    | northstar_xep_0363::ValidationError::MalformedRequest
+                    | northstar_xep_0363::ValidationError::InvalidResponseValue => "bad-request",
+                };
                 return Ok(Action::Send(iq_error_from(id, &upload_domain, condition)));
             }
         };
@@ -122,7 +82,7 @@ impl ProtocolSession {
         let (slot_id, token) = match self
             .state
             .upload_service()
-            .reserve_slot(UploadSlotRequest {
+            .execute_upload_slot_reservation(UploadSlotRequestCommand {
                 user_id: user.id,
                 filename: upload.filename,
                 content_type: upload.content_type,
@@ -147,7 +107,17 @@ impl ProtocolSession {
         };
         let put_url = format!("{}/api/v1/upload/{}", self.state.config.public_url, slot_id);
         let get_url = format!("{}/uploads/{}", self.state.config.public_url, slot_id);
-        let slot = upload_slot(&put_url, &token, &get_url);
+        let slot = match northstar_xep_0363::build_slot(&put_url, &token, &get_url) {
+            Ok(slot) => slot,
+            Err(error) => {
+                tracing::error!(?error, "refused to build an invalid XEP-0363 upload slot");
+                return Ok(Action::Send(iq_error_from(
+                    id,
+                    &upload_domain,
+                    "internal-server-error",
+                )));
+            }
+        };
         Ok(Action::Send(iq_result_from(id, &upload_domain, &slot)))
     }
 }
@@ -159,13 +129,19 @@ mod tests {
 
     fn parse(xml: &str) -> std::result::Result<(String, String, u64), &'static str> {
         let document = Document::parse(xml).unwrap();
-        parse_upload_request(document.root_element()).map(|request| {
-            (
-                request.filename.to_owned(),
-                request.content_type.to_owned(),
-                request.size,
-            )
-        })
+        northstar_xep_0363::parse_request(document.root_element())
+            .map_err(|error| match error {
+                northstar_xep_0363::ValidationError::UnsupportedChild => "feature-not-implemented",
+                northstar_xep_0363::ValidationError::InvalidMetadata => "not-acceptable",
+                _ => "bad-request",
+            })
+            .map(|request| {
+                (
+                    request.filename.to_owned(),
+                    request.content_type.to_owned(),
+                    request.size,
+                )
+            })
     }
 
     #[test]
@@ -210,7 +186,7 @@ mod tests {
         let put = "https://example.test/put?a='&b=<evil>";
         let token = "token<&already-&amp;";
         let get = "https://example.test/get?'&x=1";
-        let xml = upload_slot(put, token, get);
+        let xml = northstar_xep_0363::build_slot(put, token, get).unwrap();
         let document = Document::parse(&xml).unwrap();
         let slot = document.root_element();
         let put_element = slot

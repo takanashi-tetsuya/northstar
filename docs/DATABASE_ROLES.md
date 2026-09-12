@@ -24,20 +24,29 @@ Role reconciliation also fixes `VALID UNTIL 'infinity'` and executes
 GUC is catalog drift, not an accepted operator override.
 
 `CONNECTION LIMIT` is cluster-wide per PostgreSQL role, not per Northstar
-process. `DATABASE_MAX_CONNECTIONS` is therefore capped at 64, and every node
-sharing `northstar_runtime` must keep the sum of its pool maxima below 64 with
-headroom for rolling overlap. Larger/multi-tenant deployments need separately
-attested runtime roles and an explicit capacity plan; raising the role limit to
-unbounded is not a supported scaling mechanism.
+process. `DATABASE_MAX_CONNECTIONS` is therefore constrained to 2 through 60: each runtime
+process reserves the remaining four of `northstar_runtime`'s 64 connections for
+OMEMO recovery polling (2), the SM authority listener (1), and durable
+service-control observation (1). Every node sharing `northstar_runtime` must
+still keep the sum of **all** these pool maxima below 64 with headroom for
+rolling overlap. Larger/multi-tenant deployments need separately attested
+runtime roles and an explicit capacity plan; raising the role limit to
+unbounded is not a supported scaling mechanism. In the split deployment,
+`serve core` further limits its primary pool to 57, reserving three connections
+for the separate maintenance process. Both processes still use the runtime
+role; see [subserver ownership and budgets](SUBSERVERS.md).
 
 ## Localhost owner-only development mode
 
 The production role table above does not describe the explicit localhost
 source-development exception. On an all-loopback reserved-domain instance, the
 development flags may reuse one local PostgreSQL owner login for migration,
-runtime and command execution. This changes only the number of identities:
-migration and startup still verify an owner-only catalog and ACL shape and
-reject authorization granted to `PUBLIC` or any third-party principal.
+runtime and command execution. The long-lived process also shares its already
+attested primary pool for command-session work: a second pool with the same
+unsafe credential would add connection pressure without creating a capability
+boundary. A development command URL is therefore rejected rather than silently
+ignored. Migration and startup still verify an owner-only catalog and ACL shape
+and reject authorization granted to `PUBLIC` or any third-party principal.
 
 This local workflow does not create the production workload roles and does not
 run production grant reconciliation, which would intentionally install
@@ -180,7 +189,7 @@ This script has no bootstrap secret. It refuses to continue unless:
 - it is connected to database `xmpp`.
 
 Grant application is ledger-gated. The exact manifest for this release contains
-127 migrations from `0001` through `0128`; `0021` is the sole intentional gap.
+141 migrations from `0001` through `0142`; `0021` is the sole intentional gap.
 Every listed row is identified by version, SQLx description and SHA-384 checksum.
 `bootstrap` accepts only a genuinely empty
 database with no sqlx ledger or application object. `auto` accepts either that
@@ -189,11 +198,65 @@ migrated installation. Both non-empty shapes must match the checked-in manifest
 by exact version, SQLx description and SHA-384 checksum; the intentional `0021`
 gap is part of that set. Missing, unknown, failed, duplicated or modified rows,
 one-sided 0114/0115, and post-0115-without-boundary ledgers fail closed. `exact`
-requires the complete checked-in `0001`-`0128` manifest, not merely the
+requires the complete checked-in `0001`-`0142` manifest, not merely the
 `0114`/`0115` transition boundary. Bootstrap and prepare
 leave runtime, command, and backup with **zero** database, schema, object, type,
 or routine capability. Only post-migration exact reconciliation installs the
 current-object workload grants.
+
+Migration `0130` is a stopped-writer identity-index transition. It replaces the
+raw canonical-scope unique B-tree for durable personal-message admissions with
+fixed-width, domain-separated lookup discriminators, and adds the corresponding
+candidate indexes used during account deletion. The discriminators are not
+identity authority: the archive conflict path compares the full canonical
+actor/target scopes, raw authority spelling, identity value, and payload
+evidence; account deletion rechecks the full canonical scope before selecting
+and locking candidate rows. A digest collision therefore fails the attempted
+admission closed or is excluded from deletion, rather than turning it into
+another principal's replay or deleting another principal's admission. Do not
+run a pre-`0130` binary beside a post-`0130` schema: the old
+raw-column `ON CONFLICT` target cannot infer the replacement unique index. Stop
+all application and maintenance writers, apply the migration, run exact grant
+reconciliation, and only then start the matching runtime binary.
+
+Migrations `0131` through `0142` are forward security/capability hardenings, not
+additional stopped-writer transitions. `0131` keeps the authoritative upload
+capacity ledger owner-only through a private `FOR UPDATE NOWAIT` primitive.
+Runtime-facing upload capabilities and table-mutator guards use that primitive
+so contention is a typed retryable SQLSTATE `55P03`, rather than an
+application-pool wait; their established `FALSE` and `in_progress` outcomes
+retain their existing meanings. Neither the lock primitive nor its trigger
+helper may receive a workload-role grant. `0132` pins the existing PubSub
+collection-edge trigger helper to the installation schema while retaining
+`SECURITY INVOKER`; it repairs caller-controlled name resolution without
+turning the graph guard into a privileged routine. Normal repository-ledger and
+ACL verification still applies to both migrations. `0133` adds only a
+`SECURITY INVOKER` schema-only MIX delivery wake trigger: runtime cannot invoke
+the trigger function directly, and a notification can never replace the
+fenced delivery claim. `0134` adds the persisted route-wake generation and its
+row trigger, so a committed verified-route transition defeats a concurrent
+lease defer/retry without granting a new workload capability. `0135` records
+typed MIX ownership in SM and BOSH, `0136` releases SM-owned MIX leases before
+parent-session cascade, and `0137` adds a node/request hand-off fence for
+cross-node MIX transport. `0138` extends the strict session-capability catalog
+with the reviewed `0136` teardown trigger; it still rejects unknown triggers,
+routine bindings, owners, search paths and grants. `0139` repairs the
+expired-upload cleanup admission's named conflict target while preserving its
+existing function signature and schema-pinned `SECURITY DEFINER` boundary.
+`0140` moves the two physical-projection delete accounting edges to `BEFORE
+DELETE`, so only the final surviving projection can release a logical retained
+object during a multi-row deletion; it retains their owner-only capability
+shape and exact schema-pinned paths. `0141` reasserts the complete fixed-path,
+`SECURITY DEFINER`, and `PUBLIC`-revoked contract for the existing expired
+cleanup admission after its immutable `0139` replacement; it does not rewrite
+the earlier migration or widen the runtime grant surface. `0142` applies the
+same forward-only contract reassertion to the two capacity trigger functions
+replaced by immutable `0140`, including their exact installation-schema path
+and `PUBLIC` execution revocation.
+These are relation-level ownership records, not new runtime-executable
+capabilities. Final M00
+validation evidence remains pending and these migrations are not production
+acceptance claims.
 
 Exact reconciliation atomically revokes `PUBLIC`, refreshes current object
 grants, and makes future objects owner-only. Every revocation that can remove a grant
@@ -299,8 +362,8 @@ that marker before cleanup. It then:
    and separately proves empty bootstrap plus partial/tampered-ledger rejection;
    demotion;
 4. runs Northstar's real `migrate` command as `northstar_migrator`, comparing
-   the successful sqlx ledger with all 127 checked-in migrations from `0001`
-   through `0128` (including the intentional numbering gap at `0021`);
+the successful sqlx ledger with all 141 checked-in migrations from `0001`
+through `0142` (including the intentional numbering gap at `0021`);
 5. reapplies the shared `exact` post-migration ACL policy;
 6. removes the function/type override rows and injects missing, unknown, failed,
    and checksum/description-tampered ledger states to prove every audit fails
@@ -372,9 +435,12 @@ sessions and FAST tokens, and write audit records in the same transaction.
 The boundary does **not** yet give every other application subsystem a
 separate database role: the runtime role still has broad DML on mutable
 non-`users` tables because current protocol modules share one connection pool.
-Ordinary invoker routines are available to runtime except for private command
-helpers, all future functions default denied, and the runtime definer allowlist
-is the exact full-signature `runtime` partition of the canonical manifest.
+Directly callable invoker routines are available to runtime except for private
+command helpers. Invoker routines returning `trigger` remain owner-only for
+direct `EXECUTE`; an already-installed trigger still runs for the runtime's
+approved table DML without granting an independently callable routine. All
+future functions default denied, and the runtime definer allowlist is the exact
+full-signature `runtime` partition of the canonical manifest.
 
 Credential rotation, disablement and deletion commit the new
 `auth_generation`, FAST/API revocation, durable SM revocation and audit record
@@ -394,7 +460,7 @@ role also remains a true superuser by design; isolation depends on keeping its
 secret inside the PostgreSQL/bootstrap trust boundary and using it only for
 explicit maintenance.
 
-The `0001`-`0128` migration SQL and checksums used by both the one-shot migrator
+The `0001`-`0142` migration SQL and checksums used by both the one-shot migrator
 and normal startup verifier are embedded in the release binary. The checked-in
 migration directory remains an auditable source/build input, but replacing
 files beside an installed binary cannot redefine the schema that binary accepts.

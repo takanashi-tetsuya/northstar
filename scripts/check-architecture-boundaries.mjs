@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readSubserverSources, verifySubserverBoundaries } from './check-subserver-boundaries.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -154,6 +155,32 @@ function asyncFunctionSpans(source, moduleName) {
   return functions;
 }
 
+function functionBody(source, span) {
+  return source.slice(span.opening + 1, span.closing);
+}
+
+function matchArm(source, markers, marker, description) {
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error(`missing ${description} match arm ${marker}`);
+  if (countMatches(source, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) !== 1) {
+    throw new Error(`${description} must have exactly one ${marker} match arm`);
+  }
+  const end = markers
+    .map((candidate) => source.indexOf(candidate))
+    .filter((index) => index > start)
+    .sort((left, right) => left - right)[0] ?? source.length;
+  return source.slice(start, end);
+}
+
+function statementBeforeAwait(source, awaitOffset) {
+  const boundary = Math.max(
+    source.lastIndexOf(';', awaitOffset),
+    source.lastIndexOf('{', awaitOffset),
+    source.lastIndexOf('}', awaitOffset),
+  );
+  return source.slice(boundary + 1, awaitOffset);
+}
+
 function classifyDbDependencies(source, moduleName) {
   let authorityReferences = 0;
   let domainReferences = 0;
@@ -223,6 +250,11 @@ function classifyDbDependencies(source, moduleName) {
 
 const state = read('src/state.rs');
 const configSource = read('src/config.rs');
+const mainSource = read('src/main.rs');
+const responsibilityDocument = read('docs/PROGRAM_RESPONSIBILITIES.md');
+const listenerStressDriver = read('scripts/listener-readiness-stress-wsl.sh');
+const loopbackPostgresFixture = read('scripts/loopback-postgres-ci.sh');
+const ciWorkflow = read('.github/workflows/ci.yml');
 const appState = structBody(state, 'pub struct AppState');
 const publicFields = countMatches(appState, /^\s*pub\s+[A-Za-z_][A-Za-z0-9_]*\s*:/gm);
 const cratePublicFields = countMatches(appState, /^\s*pub\(crate\)\s+[A-Za-z_][A-Za-z0-9_]*\s*:/gm);
@@ -331,6 +363,465 @@ if (!/^\s*dialback_secret\s*:\s*Zeroizing<Vec<u8>>\s*,/m.test(appState)) {
 }
 if (!/^\s*fast_token_secret\s*:\s*Arc<Zeroizing<Vec<u8>>>\s*,/m.test(appState)) {
   throw new Error('AppState fast_token_secret must remain private Arc<Zeroizing<Vec<u8>>>');
+}
+const runtimeControlPoolConstruction = structBody(state, 'fn runtime_control_pool_options(');
+for (const invariant of [
+  'max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
+  'min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
+  'acquire_timeout(attempt_budget)',
+  'db::pin_public_application_schema(options)',
+]) {
+  if (!runtimeControlPoolConstruction.includes(invariant)) {
+    throw new Error(`runtime-control pool lost its isolated runtime-pool invariant: ${invariant}`);
+  }
+}
+const runtimeControlRefresh = structBody(state, 'fn start_runtime_control_refresh(');
+for (const [call, description] of [
+  ['runtime_control_snapshot', 'runtime administration and federation refresh'],
+  ['poll_admin_service_control', 'XEP-0133 service-control refresh'],
+]) {
+  const observer = call === 'runtime_control_snapshot'
+    ? String.raw`\s*,\s*\|phase\|\s*\{\s*diagnostics\.database_read\(phase\)\s*\}\s*,?`
+    : '';
+  if (!new RegExp(`match db::${call}\\(\\s*&mut connection${observer}\\s*\\)`, 's').test(runtimeControlRefresh)) {
+    throw new Error(`${description} must use the coordinator-owned control connection`);
+  }
+  if (new RegExp(`${call}\\(&state\\.(?:pool|runtime_control_pool)\\)`).test(runtimeControlRefresh)) {
+    throw new Error(`${description} must not acquire from a traffic or shared control pool`);
+  }
+}
+if ((runtimeControlRefresh.match(/let\s+max_silence\s*=/g) ?? []).length !== 1
+    || !/let max_silence = Duration::from_secs\(5\);/.test(runtimeControlRefresh)
+    || !/"runtime-control-refresh",\s*crate::workers::WorkerCriticality::Critical,\s*crate::workers::WorkerMode::Continuous,\s*Some\(max_silence\),/s.test(runtimeControlRefresh)
+    || !/RuntimeControlDiagnostics::new\(diagnostic_cancel,\s*max_silence\)/s.test(runtimeControlRefresh)) {
+  throw new Error('runtime-control diagnostics and supervision must share the unchanged five-second silence bound');
+}
+if (!/"runtime-control-refresh"/.test(runtimeControlRefresh)) {
+  throw new Error('runtime control reads must share one supervised control-plane worker');
+}
+if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(|fn start_service_control_watcher\(/.test(state)) {
+  throw new Error('independent runtime control workers can contend for the one-connection control pool');
+}
+const runtimeControlReservation = structBody(state, 'pub(crate) async fn reserve_runtime_control_connection(');
+const runtimeControlConnectOptions = structBody(state, 'fn runtime_control_connect_options(');
+if (runtimeControlConnectOptions.replace(/\s+/g, '') !== 'Ok(database_url.parse::<PgConnectOptions>()?.application_name("northstar-runtime-control"))') {
+  throw new Error('runtime-control connection identity must only label the original parsed database URL');
+}
+for (const invariant of [
+  'runtime_control_pool_options(config, attempt_budget)',
+  'let connect_options = runtime_control_connect_options(&config.database_url)?;',
+  '.connect_with(connect_options.clone())',
+  'attest_development_database_is_loopback',
+  'attest_runtime_role',
+  'RUNTIME_CONTROL_STARTUP_RETRY_BUDGET',
+  'runtime_control_startup_connect(deadline,',
+  'tokio::time::timeout_at(deadline,',
+]) {
+  if (!runtimeControlReservation.includes(invariant)) {
+    throw new Error(`runtime-control startup reservation lost required invariant: ${invariant}`);
+  }
+}
+if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/s.test(runtimeControlReservation)) {
+  throw new Error('runtime-control startup reservation must retain its one dedicated connection');
+}
+const runtimeControlConnect = structBody(state, 'async fn runtime_control_startup_connect<');
+if (!/startup_database_connect\(\s*deadline,\s*RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET,/.test(runtimeControlConnect)) {
+  throw new Error('runtime-control must use bounded startup admission with its handshake limit');
+}
+const runtimeControlAdmission = structBody(state, 'async fn startup_database_connect<');
+for (const invariant of [
+  'tokio::time::timeout_at(deadline,',
+  'deadline.saturating_duration_since(tokio::time::Instant::now())',
+  'remaining.min(attempt_limit)',
+  'tokio::time::timeout(attempt_budget, connect(attempt_budget))',
+  'runtime_control_startup_retry_delay(attempts, std::process::id())',
+  '.min(remaining)',
+  'Err(sqlx::Error::PoolTimedOut) =>',
+  'Err(error) => return Err(error)',
+]) {
+  if (!runtimeControlAdmission.replace(/\s+/g, '').includes(invariant.replace(/\s+/g, ''))) {
+    throw new Error(`runtime-control startup lost a bounded admission invariant: ${invariant}`);
+  }
+}
+if (!/const RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(3\)/.test(state)
+    || !/const RUNTIME_CONTROL_STARTUP_RETRY_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(15\)/.test(state)) {
+  throw new Error('runtime-control cold handshake remains at most 3 s within one absolute 15 s admission budget');
+}
+const appStateConstruction = structBody(state, 'pub async fn new(');
+if (!/pub async fn new\([\s\S]*?runtime_control_connection\s*:\s*PoolConnection<Postgres>/.test(state)) {
+  throw new Error('AppState must receive the already-reserved runtime-control connection');
+}
+const terminalMain = structBody(mainSource, 'async fn main()');
+if (terminalMain.replace(/\s+/g, '') !== 'logging::report_result(run().await)') {
+  throw new Error('main must report its final result through the bounded console owner');
+}
+const runtimeMain = structBody(mainSource, 'async fn run()');
+const mainRuntimeControlReservation = runtimeMain.indexOf('state::reserve_runtime_control_connection(&config).await?');
+const mainPrimaryPoolConstruction = runtimeMain.indexOf('let pool_options = PgPoolOptions::new()');
+if (mainRuntimeControlReservation < 0 || mainPrimaryPoolConstruction < 0
+    || mainRuntimeControlReservation > mainPrimaryPoolConstruction) {
+  throw new Error('main must reserve runtime-control authority before constructing the traffic pool');
+}
+if (!/Self::start_runtime_control_refresh\(\s*Arc::clone\(&state\),\s*runtime_control_connection,\s*worker_cancel,\s*\);/s.test(state)) {
+  throw new Error('AppState must transfer the reserved connection to the coordinated runtime-control worker');
+}
+const serviceControlInstallation = structBody(state, 'pub fn install_service_shutdown(');
+if (!/self\.service_shutdown\s*\.set\(cancel\)/s.test(serviceControlInstallation)) {
+  throw new Error('XEP-0133 service control must install the shutdown authority before the coordinator polls it');
+}
+for (const invariant of [
+  'state.config.enable_xmpp_service_control',
+  'state.service_shutdown.get().is_some()',
+  'report_runtime_control_health(&heartbeat, observed_database, first_error)',
+]) {
+  if (!runtimeControlRefresh.includes(invariant)) {
+    throw new Error(`runtime control coordinator lost a fail-closed XEP-0133 invariant: ${invariant}`);
+  }
+}
+if (!/service_control_applies\(\s*state\.process_started_at,\s*&control\s*,?\s*\)/s.test(runtimeControlRefresh)) {
+  throw new Error('runtime control coordinator must retain the XEP-0133 process/generation authority check');
+}
+if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtime` | exactly 1 reserved connection; at most 3 s per initial handshake within one absolute 15 s admission deadline, including jitter, role attestation and reservation |')) {
+  throw new Error('program responsibility model must document the dedicated runtime control pool');
+}
+const mixProtocol = read('src/xmpp/protocol/mix.rs');
+const mixProtocolProduction = productionWithoutCfgTestModules(
+  mixProtocol,
+  'src/xmpp/protocol/mix.rs',
+);
+export function verifyMixOutboxLifecycle(mixProtocol) {
+  // Match executable source shape rather than comments, string descriptions or
+  // cfg(test) examples. This uses the same bounded masking convention as the
+  // subserver source gate, not a general Rust parser.
+  const mixProtocolProduction = productionWithoutCfgTestModules(
+    mixProtocol, 'src/xmpp/protocol/mix.rs',
+  ).replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"/g,
+    (text) => text.replace(/[^\r\n]/g, ' '));
+  const mixOutboxQueue = structBody(mixProtocolProduction, 'enum MixOutboxQueue');
+  for (const lane of ['Delivery', 'PamResult']) {
+    if (!new RegExp(`^\\s*${lane}\\s*,?\\s*$`, 'm').test(mixOutboxQueue)) {
+      throw new Error(`MIX outbox must retain an independent ${lane} lane`);
+    }
+  }
+  if (!/const\s+PAM_RESULT_MAX_CONCURRENCY\s*:\s*usize\s*=\s*2\s*;/.test(mixProtocolProduction)) {
+    throw new Error('MIX PAM-result lane must remain capped at two concurrent deliveries');
+  }
+  const mixLaneBudgets = structBody(mixProtocolProduction, 'const fn mix_outbox_lane_budgets(');
+  if (
+    !/let\s+pam_budget\s*=\s*if\s+background_budget\s*<\s*PAM_RESULT_MAX_CONCURRENCY\s*\{\s*background_budget\s*\}\s*else\s*\{\s*PAM_RESULT_MAX_CONCURRENCY\s*\};/s.test(
+      mixLaneBudgets,
+    ) ||
+    !/\(\s*background_budget\s*,\s*pam_budget\s*\)/.test(mixLaneBudgets)
+  ) {
+    throw new Error(
+      'MIX outbox lane budgets must give delivery the typed budget and PAM its independent cap',
+    );
+  }
+  const mixClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
+  const mixClaimArmMarkers = [
+    'MixOutboxQueue::Delivery =>',
+    'MixOutboxQueue::PamResult =>',
+  ];
+  const mixDeliveryClaimArm = matchArm(
+    mixClaimWork,
+    mixClaimArmMarkers,
+    'MixOutboxQueue::Delivery =>',
+    'MIX outbox claim',
+  );
+  const mixPamClaimArm = matchArm(
+    mixClaimWork,
+    mixClaimArmMarkers,
+    'MixOutboxQueue::PamResult =>',
+    'MIX outbox claim',
+  );
+  if (
+    !/\.claim_mix_deliveries\s*\(/.test(mixDeliveryClaimArm) ||
+    /\.claim_pam_results\s*\(/.test(mixDeliveryClaimArm) ||
+    !/\.claim_pam_results\s*\(/.test(mixPamClaimArm) ||
+    /\.claim_mix_deliveries\s*\(/.test(mixPamClaimArm)
+  ) {
+    throw new Error('MIX delivery and PAM lanes must claim only their own durable work; no fallback');
+  }
+  const mixProcessWork = structBody(mixProtocolProduction, 'fn process_mix_outbox_work(');
+  if (
+    !/MixOutboxWork\s*::\s*Delivery\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*Delivery\s*,[\s\S]*?process_claimed_mix_delivery\s*\(/.test(
+      mixProcessWork,
+    ) ||
+    !/MixOutboxWork\s*::\s*PamResult\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*PamResult\s*,[\s\S]*?process_claimed_pam_result\s*\(/.test(
+      mixProcessWork,
+    )
+  ) {
+    throw new Error('MIX outbox work must stay in its claimed delivery or PAM lane');
+  }
+  const mixOutboxLaneWorker = structBody(mixProtocolProduction, 'async fn run_mix_outbox_lane(');
+  const mixOutboxClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
+  const mixOutboxClaim = structBody(mixProtocolProduction, 'fn process_mix_outbox_claim(');
+  const mixOutboxMaintenance = structBody(mixProtocolProduction, 'fn process_mix_outbox_maintenance(');
+  if (
+    !/FuturesUnordered\s*::\s*<\s*MixOutboxTask\s*>\s*::\s*new\s*\(\s*\)/.test(
+      mixOutboxLaneWorker,
+    ) ||
+    !/claim_task\s*=\s*Some\s*\(\s*process_mix_outbox_claim\s*\(/.test(
+      mixOutboxLaneWorker,
+    ) ||
+    !/in_flight\s*\.\s*push\s*\(\s*process_mix_outbox_work\s*\(/.test(mixOutboxLaneWorker) ||
+    !/maintenance_task\s*=\s*Some\s*\(\s*process_mix_outbox_maintenance\s*\(/.test(
+      mixOutboxLaneWorker,
+    ) ||
+    !/next_mix_outbox_progress\s*\(\s*&mut\s+in_flight\s*,\s*&mut\s+claim_task\s*,\s*&mut\s+maintenance_task\s*\)/.test(
+      mixOutboxLaneWorker,
+    ) ||
+    !/claim_mix_outbox_work\s*\(\s*&state\s*,\s*&stop_claiming\s*,\s*&cancel\s*,\s*queue\s*,\s*available\s*,?\s*\)/.test(
+      mixOutboxClaim,
+    ) ||
+    countMatches(mixOutboxClaimWork, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 2 ||
+    countMatches(mixDeliveryClaimArm, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 1 ||
+    countMatches(mixPamClaimArm, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 1 ||
+    !/cancellable_mix_outbox_turn\s*\(\s*&cancel\s*,/.test(mixOutboxMaintenance) ||
+    !/maintain_mix_delivery_retention\s*\(\s*\)/.test(mixOutboxMaintenance)
+  ) {
+    throw new Error('each MIX outbox lane must keep claims and maintenance independently bounded, cancellation-aware, and jointly polled');
+  }
+  const joinMixOutboxLanes = structBody(mixProtocolProduction, 'async fn join_mix_outbox_lanes');
+  if (
+    !/tokio\s*::\s*select!/.test(joinMixOutboxLanes) ||
+    !/lane_cancel\s*\.\s*cancel\s*\(\s*\)/.test(joinMixOutboxLanes) ||
+    !/pam\s*\.\s*await/.test(joinMixOutboxLanes) ||
+    !/delivery\s*\.\s*await/.test(joinMixOutboxLanes)
+  ) {
+    throw new Error('MIX lane join must cancel and drain its peer before surfacing a terminal lane result');
+  }
+  const startMixOutbox = structBody(mixProtocolProduction, 'pub(crate) fn start_mix_delivery_outbox(');
+  const deliveryLaneStart = startMixOutbox.search(/let\s+delivery\s*=\s*run_mix_outbox_lane\s*\(/);
+  const pamLaneStart = startMixOutbox.search(/let\s+pam\s*=\s*run_mix_outbox_lane\s*\(/);
+  const laneJoin = startMixOutbox.search(/join_mix_outbox_lanes\s*\(\s*cancel\s*,\s*lane_cancel\s*,\s*delivery\s*,\s*pam\s*,?\s*\)\s*\.\s*await/);
+  if (deliveryLaneStart < 0 || pamLaneStart < 0 || laneJoin < 0 || deliveryLaneStart > pamLaneStart) {
+    throw new Error('MIX outbox startup must construct delivery and PAM lanes before joining them');
+  }
+  const deliveryLaneStartBody = startMixOutbox.slice(deliveryLaneStart, pamLaneStart);
+  const pamLaneStartBody = startMixOutbox.slice(pamLaneStart, laneJoin);
+  if (
+    !deliveryLaneStartBody.includes('MixOutboxQueue::Delivery') ||
+    !deliveryLaneStartBody.includes('delivery_budget') ||
+    deliveryLaneStartBody.includes('MixOutboxQueue::PamResult') ||
+    !pamLaneStartBody.includes('MixOutboxQueue::PamResult') ||
+    !pamLaneStartBody.includes('pam_budget') ||
+    pamLaneStartBody.includes('MixOutboxQueue::Delivery') ||
+    /\b(?:delivery|pam)\s*\.\s*await\b/.test(startMixOutbox)
+  ) {
+    throw new Error('MIX outbox lanes must start separately without delivery/PAM fallback or head-of-line blocking');
+  }
+  const mixNoHolTest = structBody(
+    mixProtocol,
+    'async fn pam_lane_starts_while_a_delivery_lane_waits_on_external_io(',
+  );
+  if (
+    !mixNoHolTest.includes('join_mix_outbox_lanes(') ||
+    !/timeout\s*\([\s\S]*?pam_started_rx\s*\)/.test(mixNoHolTest)
+  ) {
+    throw new Error('MIX must retain a regression test proving slow delivery cannot head-of-line block PAM');
+  }
+
+  // Source-shape checks complement the Rust race tests; they do not prove Rust
+  // semantics. Inspect production bodies, never test fixtures or comment text.
+  const compact = (source) => source.replace(/\s+/g, '').replace(/,\)/g, ')');
+  const requireMix = (condition, message) => {
+    if (!condition) throw new Error('MIX lifecycle boundary: ' + message);
+  };
+  for (const [name, seconds] of [
+    ['MIX_OUTBOX_DRAIN_GRACE', 14],
+    ['MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE', 5],
+    ['MIX_OUTBOX_ATTEMPT_DEADLINE', 20],
+  ]) {
+    requireMix(compact(mixProtocolProduction).includes(
+      'const' + name + ':Duration=Duration::from_secs(' + seconds + ');'),
+    'keep the reviewed ' + name + ' deadline');
+  }
+  const claimAdmission = compact(structBody(mixProtocolProduction, 'async fn drainable_mix_outbox_claim<'));
+  requireMix(claimAdmission ===
+    'ifstop_claiming.is_cancelled(){returnOk(Vec::new());}cancellable_mix_outbox_turn(cancel,claim).await',
+  'claim admission must stop before polling and preserve only hard cancellation after the claim begins');
+  const claimTurn = compact(structBody(mixProtocolProduction, 'async fn cancellable_mix_outbox_turn<'));
+  requireMix(claimTurn ===
+    'bounded_mix_outbox_turn(cancel,tokio::time::Instant::now()+MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE,turn).await',
+  'claims must retain their five-second bounded hard-cancellation turn');
+  const boundedTurn = compact(structBody(mixProtocolProduction, 'async fn bounded_mix_outbox_turn<'));
+  requireMix(boundedTurn.includes('ifcancel.is_cancelled(){returnErr(MixOutboxShutdown.into());}') &&
+    boundedTurn.includes('tokio::select!{biased;_=cancel.cancelled()=>Err(MixOutboxShutdown.into()),') &&
+    boundedTurn.includes('_=tokio::time::sleep_until(deadline)=>Err(MixOutboxDeadlineElapsed.into()),') &&
+    boundedTurn.includes('result=turn=>result'),
+  'bounded turns must prioritize hard cancellation and retain the original absolute deadline');
+  const lane = compact(mixOutboxLaneWorker);
+  requireMix(lane.includes('ifaccepting&&(stop_claiming.is_cancelled()||cancel.is_cancelled()){accepting=false;}') &&
+    lane.includes('_=stop_claiming.cancelled(),ifaccepting=>{accepting=false;}') &&
+    lane.includes('_=cancel.cancelled(),ifaccepting=>{accepting=false;}'),
+  'lane admission must close for either parent stop or hard cancellation');
+  requireMix(lane.includes('ifaccepting&&claim_task.is_none()&&maintenance_task.is_none()&&in_flight.len()<concurrency&&tokio::time::Instant::now()>=claim_schedule.next_claim{') &&
+    lane.includes('process_mix_outbox_claim(Arc::clone(&state),stop_claiming.clone(),cancel.clone(),queue,available)') &&
+    lane.includes('process_mix_outbox_work(Arc::clone(&state),work,cancel.clone())'),
+  'new claims require open bounded admission; pending claims and work keep the independent hard token');
+  requireMix(lane.includes('if!accepting{maintenance_task.take();}') &&
+    lane.includes('if!accepting&&in_flight.is_empty()&&claim_task.is_none(){returnmatchterminal_error{') &&
+    !/(?:claim_task|in_flight)\s*\.\s*(?:take|clear)\s*\(/.test(mixOutboxLaneWorker) &&
+    !/claim_task[\s\S]*?\.as_mut\(\)[\s\S]*?\.await/.test(mixOutboxLaneWorker),
+  'graceful drain must retain claimed work and claim responses while dropping maintenance');
+  const progress = compact(structBody(mixProtocolProduction, 'async fn next_mix_outbox_progress('));
+  requireMix(progress.includes('tokio::select!{biased;') &&
+    progress.includes('in_flight.next(),if!in_flight.is_empty()=>') &&
+    progress.includes('},ifclaim.is_some()=>{claim.take();MixOutboxProgress::Claim(outcome)') &&
+    progress.includes('},ifmaintenance.is_some()=>{maintenance.take();MixOutboxProgress::Maintenance(outcome)'),
+  'claim, maintenance and owned delivery must remain jointly polled');
+  for (const [finished, peer] of [['delivery', 'pam'], ['pam', 'delivery']]) {
+    const branch = compact(structBody(joinMixOutboxLanes, finished + '_result = &mut ' + finished + ' =>'));
+    const expected = 'if' + finished + '_result.is_err()||!stop_claiming.is_cancelled(){lane_cancel.cancel();}' +
+      'let' + peer + '_result=' + peer + '.await;' + finished + '_result?;' + peer + '_result';
+    requireMix(branch === expected,
+      finished + ' lane must preserve a normal stopped peer and hard-cancel errors or unexpected exits');
+  }
+  requireMix(countMatches(joinMixOutboxLanes, /lane_cancel\s*\.\s*cancel\s*\(/g) === 2,
+    'peer hard cancellation belongs only to the two guarded join branches');
+  const startup = compact(startMixOutbox);
+  const attemptFactory = structBody(startMixOutbox, 'move |heartbeat|');
+  const attemptBody = compact(structBody(attemptFactory, 'async move'));
+  const freshTokenOffset = attemptBody.indexOf('letlane_cancel=tokio_util::sync::CancellationToken::new();');
+  requireMix(freshTokenOffset >= 0 && freshTokenOffset < attemptBody.indexOf('run_mix_outbox_lane('),
+    'every supervised attempt must construct its own independent hard token before starting lanes');
+  requireMix(startup.includes('letlane_cancel=tokio_util::sync::CancellationToken::new();') &&
+    !/\.child_token\s*\(/.test(startMixOutbox) &&
+    startup.includes('run_mix_outbox_lane(Arc::clone(&state),cancel.clone(),lane_cancel.clone(),MixOutboxQueue::Delivery,delivery_budget,true,heartbeat.clone())') &&
+    startup.includes('run_mix_outbox_lane(state,cancel.clone(),lane_cancel.clone(),MixOutboxQueue::PamResult,pam_budget,false,heartbeat)') &&
+    startup.includes('join_mix_outbox_lanes(cancel,lane_cancel,delivery,pam).await'),
+  'production lanes must share a fresh independent hard token and receive the parent stop separately');
+  requireMix(startup.includes('registry.supervise_draining(,crate::workers::WorkerCriticality::Restartable,crate::workers::WorkerMode::Continuous,Some(Duration::from_secs(30)),MIX_OUTBOX_DRAIN_GRACE,cancel.clone(),'),
+  'supervisor must enforce the existing 14-second whole-worker drain');
+  for (const name of ['process_claimed_mix_delivery', 'process_claimed_pam_result']) {
+    const attempt = compact(structBody(mixProtocolProduction, 'async fn ' + name + '('));
+    requireMix(attempt.includes('letattempt_deadline=tokio::time::Instant::now()+MIX_OUTBOX_ATTEMPT_DEADLINE;') &&
+      attempt.includes('bounded_mix_outbox_turn(&cancel,attempt_deadline,'),
+    name + ' must share its original attempt deadline with final durable transitions');
+  }
+
+}
+
+verifyMixOutboxLifecycle(mixProtocol);
+
+const commandPoolConstruction = structBody(state, 'pub async fn new(');
+for (const invariant of [
+  'let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;',
+  'startup_database_connect( auxiliary_pool_deadline, AUXILIARY_POOL_ACQUIRE_TIMEOUT, "XEP-0133 command",',
+  'startup_database_connect( auxiliary_pool_deadline, AUXILIARY_POOL_ACQUIRE_TIMEOUT, "OMEMO recovery poll",',
+  'tokio::time::timeout_at(auxiliary_pool_deadline,',
+]) {
+  if (!commandPoolConstruction.replace(/\s+/g, '').includes(invariant.replace(/\s+/g, ''))) {
+    throw new Error(`auxiliary pools must share bounded startup admission: ${invariant}`);
+  }
+}
+if (countMatches(commandPoolConstruction, /\.acquire_timeout\(AUXILIARY_POOL_ACQUIRE_TIMEOUT\)/g) !== 2
+    || !/const AUXILIARY_POOL_ACQUIRE_TIMEOUT:\s*Duration\s*=\s*Duration::from_secs\(2\)/.test(state)
+    || !/const AUXILIARY_POOL_STARTUP_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(15\)/.test(state)) {
+  throw new Error('auxiliary pools retain a 2 s acquisition policy within a shared 15 s startup window');
+}
+const commandPoolModeMatch = structBody(
+  commandPoolConstruction,
+  'let command_pool = match config.admin_command_pool_mode',
+);
+if (
+  countMatches(commandPoolModeMatch, /AdminCommandPoolMode\s*::\s*SharedUnsafeDevelopment/g) !== 1 ||
+  !/AdminCommandPoolMode\s*::\s*SharedUnsafeDevelopment\s*=>\s*pool\s*\.\s*clone\s*\(\s*\)\s*,/.test(
+    commandPoolModeMatch,
+  )
+) {
+  throw new Error('unsafe development must mount the command service on the already-attested primary pool');
+}
+if (
+  !/AdminCommandPoolMode\s*::\s*DedicatedProductionRole\s*=>\s*\{[\s\S]*?\.connect\s*\(\s*&config\s*\.\s*admin_command_database_url\s*\)[\s\S]*?attest_admin_command_role\s*\(\s*&command_pool\s*\)\s*\.\s*await\s*\?/.test(
+    commandPoolModeMatch,
+  )
+) {
+  throw new Error('production command mode must keep its separately attested command-role pool');
+}
+const adminCommandPoolMode = structBody(configSource, 'pub(crate) enum AdminCommandPoolMode');
+if (
+  !/^\s*DedicatedProductionRole\s*,?\s*$/m.test(adminCommandPoolMode) ||
+  !/^\s*SharedUnsafeDevelopment\s*,?\s*$/m.test(adminCommandPoolMode)
+) {
+  throw new Error('command-pool modes must distinguish dedicated production from shared unsafe development');
+}
+const resolveAdminCommandPoolMode = structBody(
+  configSource,
+  'fn resolve_admin_command_pool_mode(',
+);
+const unsafeDevelopmentCommandMode = structBody(
+  resolveAdminCommandPoolMode,
+  'if unsafe_development',
+);
+if (
+  !/!\s*configured/.test(unsafeDevelopmentCommandMode) ||
+  !/AdminCommandPoolMode\s*::\s*SharedUnsafeDevelopment/.test(unsafeDevelopmentCommandMode)
+) {
+  throw new Error('unsafe command mode must reject a separate command URL and select primary-pool sharing');
+}
+const runtimePoolBudget = structBody(configSource, 'fn validate_runtime_pool_budget(');
+if (
+  !/pub\(crate\)\s+const\s+DATABASE_PRIMARY_POOL_MIN_CONNECTIONS\s*:\s*u32\s*=\s*2\s*;/.test(
+    configSource,
+  ) ||
+  !/!\s*\(\s*DATABASE_PRIMARY_POOL_MIN_CONNECTIONS\s*\.\.\s*=\s*DATABASE_MAX_CONNECTIONS_LIMIT\s*\)\s*\.\s*contains\s*\(\s*&max_connections\s*\)/s.test(
+    runtimePoolBudget,
+  )
+) {
+  throw new Error('the primary runtime pool must reject capacity below two connections');
+}
+for (const invariant of [
+  'pub(crate) const RUNTIME_ROLE_CONNECTION_LIMIT: u32 = 64;',
+  'pub(crate) const OMEMO_RECOVERY_POOL_MAX_CONNECTIONS: u32 = 2;',
+  'pub(crate) const SM_AUTHORITY_LISTENER_MAX_CONNECTIONS: u32 = 1;',
+  'pub(crate) const SERVICE_CONTROL_POOL_MAX_CONNECTIONS: u32 = 1;',
+  'pub(crate) const DATABASE_MAX_CONNECTIONS_LIMIT: u32 =',
+  'RUNTIME_ROLE_CONNECTION_LIMIT - RUNTIME_ROLE_RESERVED_CONNECTIONS;',
+  'validate_runtime_pool_budget(raw.database_max_connections, raw.database_min_connections)?;',
+  'pub(crate) struct RuntimeConnectionBudgetManifest',
+  'pub(crate) const fn runtime_connection_budget_manifest()',
+  'auxiliary_connections: RUNTIME_ROLE_RESERVED_CONNECTIONS,',
+]) {
+  if (!configSource.includes(invariant)) {
+    throw new Error(`runtime pool-budget invariant is missing: ${invariant}`);
+  }
+}
+for (const invariant of [
+  'load_runtime_connection_budget()',
+  '"$binary" --runtime-connection-budget',
+  'runtime_connections_per_child=$((database_max_connections + runtime_auxiliary_connections))',
+  'readonly stress_child_count=$((pairs * 2))',
+  'fixture_control_connections_per_pair=1',
+  'required_fixture_connections=$((stress_child_count * runtime_connections_per_child + fixture_control_connections + observer_connections))',
+  'observer_connections="${NORTHSTAR_LISTENER_STRESS_OBSERVER_CONNECTIONS:-0}"',
+  'case "$observer_connections" in 0|1)',
+  'publish_observer_round_map()',
+  'assert_fixture_connection_capacity()',
+  "SHOW max_connections;",
+  'fixture_actual_max_connections >= required_fixture_connections',
+  '10#$configured == fixture_actual_max_connections',
+]) {
+  if (!listenerStressDriver.includes(invariant)) {
+    throw new Error(`listener stress capacity calculation is missing: ${invariant}`);
+  }
+}
+if (!mainSource.includes('Some("--runtime-connection-budget")')) {
+  throw new Error('the server no longer exposes its runtime connection budget manifest');
+}
+if (listenerStressDriver.includes('NORTHSTAR_LISTENER_STRESS_POSTGRES_HEADROOM')) {
+  throw new Error('listener stress capacity must not rely on generic PostgreSQL headroom');
+}
+if (!/max_connections < 16 \|\| max_connections > 768/.test(loopbackPostgresFixture)) {
+  throw new Error('loopback PostgreSQL fixture no longer admits the reviewed stress capacity');
+}
+if (
+  countMatches(ciWorkflow, /NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "672"/g) !== 2 ||
+  !ciWorkflow.includes('NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "32"') ||
+  ciWorkflow.includes('NORTHSTAR_LISTENER_STRESS_POSTGRES_HEADROOM')
+) {
+  throw new Error('listener stress workflow no longer declares auditable smoke and full-matrix capacity budgets');
 }
 
 // Runtime secrets must be transferred exactly once from Config into their
@@ -467,6 +958,341 @@ if (new Set(mixProducerMethods).size !== mixProducerMethods.length) {
   throw new Error('MIX service producer mapping contains duplicate service methods');
 }
 const mixServiceSource = read('src/services/mix.rs');
+const mixServiceProduction = productionWithoutCfgTestModules(
+  mixServiceSource,
+  'src/services/mix.rs',
+);
+const mixServiceDefinition = structBody(mixServiceProduction, 'pub(crate) struct MixService');
+if (
+  !/^\s*outbox_background_budget\s*:\s*usize\s*,?\s*$/m.test(mixServiceDefinition) ||
+  !/^\s*outbox_db_admission\s*:\s*crate\s*::\s*services\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*,?\s*$/m.test(
+    mixServiceDefinition,
+  ) ||
+  /^\s*pub(?:\(crate\))?\s+outbox_(?:background_budget|db_admission)\s*:/m.test(
+    mixServiceDefinition,
+  )
+) {
+  throw new Error(
+    'MixService must privately retain its typed outbox budget and application-owned DB admission capability',
+  );
+}
+if (
+  !/#\s*\[\s*derive\s*\(\s*Clone\s*\)\s*\]\s*pub\(crate\)\s+struct\s+MixService\b/.test(
+    mixServiceProduction,
+  )
+) {
+  throw new Error('MixService must clone the shared durable-outbox admission instead of replacing it');
+}
+const mixServiceConstructor = structBody(
+  mixServiceProduction,
+  'pub(crate) fn new_with_outbox_database_admission(',
+);
+if (
+  !/let\s+outbox_background_budget\s*=\s*outbox_db_admission\s*\.\s*capacity\s*\(\s*\)\s*;/.test(
+    mixServiceConstructor,
+  ) ||
+  !/outbox_db_admission\s*,/.test(
+    mixServiceConstructor,
+  )
+) {
+  throw new Error('MixService must derive its outbox budget from the injected application admission');
+}
+if (
+  !/pub\s*\(crate\)\s+const\s+fn\s+outbox_background_budget\s*\(\s*&self\s*\)\s*->\s*usize/.test(
+    mixServiceProduction,
+  )
+) {
+  throw new Error('MIX protocol scheduling must consume the service-owned typed outbox budget');
+}
+const durableOutboxAdmission = read('src/services/durable_outbox.rs');
+if (
+  !/primary_pool_max_connections\s+as\s+usize[\s\S]*?\.\s*saturating_sub\s*\(\s*1\s*\)[\s\S]*?\.\s*clamp\s*\(\s*1\s*,\s*MAX_BACKGROUND_DATABASE_TURNS\s*\)/s.test(
+    durableOutboxAdmission,
+  )
+) {
+  throw new Error('durable outbox admission must reserve one primary-pool connection for foreground work');
+}
+if (
+  !/async\s+fn\s+outbox_db_admission_guard\s*\(\s*&self\s*\)\s*->\s*OwnedSemaphorePermit/.test(
+    mixServiceProduction,
+  ) ||
+  /pub(?:\(crate\))?\s+async\s+fn\s+outbox_db_admission_guard\b/.test(mixServiceProduction)
+) {
+  throw new Error('MIX outbox DB permits must remain private OwnedSemaphorePermit capability tokens');
+}
+const mixOutboxDbAdmissionGuard = structBody(
+  mixServiceProduction,
+  'async fn outbox_db_admission_guard(',
+);
+if (
+  !/self\s*\.\s*outbox_db_admission\s*\.\s*acquire\s*\(\s*\)\s*\.\s*await/.test(
+    mixOutboxDbAdmissionGuard,
+  )
+) {
+  throw new Error('MIX outbox DB admission must acquire an owned permit from the shared capability');
+}
+const stateOutboxAdmission = structBody(state, 'pub struct AppState');
+if (
+  !/^\s*durable_outbox_database_admission\s*:\s*crate\s*::\s*services\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*,?$/m.test(
+    stateOutboxAdmission,
+  ) ||
+  /^\s*pub(?:\(crate\))?\s+durable_outbox_database_admission\s*:/m.test(stateOutboxAdmission)
+) {
+  throw new Error('AppState must privately own the shared durable-outbox database admission');
+}
+if (
+  !/let\s+durable_outbox_database_admission\s*=\s*crate\s*::\s*services\s*::\s*durable_outbox\s*::\s*DurableOutboxDatabaseAdmission\s*::\s*for_primary_pool\s*\(\s*config\s*\.\s*database_max_connections\s*,?\s*\)/s.test(
+    state,
+  ) ||
+  !/PubSubService\s*::\s*new_with_durable_outbox_database_admission[\s\S]*?durable_outbox_database_admission\s*\.\s*clone\s*\(\s*\)/.test(
+    state,
+  ) ||
+  !/MixService\s*::\s*new_with_outbox_database_admission[\s\S]*?durable_outbox_database_admission\s*\.\s*clone\s*\(\s*\)/.test(
+    state,
+  )
+) {
+  throw new Error('AppState must inject one durable-outbox admission into PubSub and MIX services');
+}
+
+// The only code that can hold this private owned permit is a reviewed service
+// method below. Every awaited operation in such a method is either a short
+// repository turn, another local admission lock, or one explicitly reviewed
+// authority/enqueue turn that has no peer/socket I/O; this structurally
+// excludes transport/federation delivery from the permit lifetime.
+const mixOutboxDbMethods = new Map([
+  ['reconcile_expired_remote_pam', 'reconcile_expired_remote_pam'],
+  ['claim_pam_results', 'claim_pam_results'],
+  ['renew_pam_result_lease', 'renew_pam_result_lease'],
+  ['acknowledge_pam_result', 'acknowledge_pam_result'],
+  ['defer_pam_result', 'defer_pam_result'],
+  ['retry_pam_result', 'retry_pam_result'],
+  ['prune_expired_pam_results', 'prune_expired_pam_results'],
+  ['outbox_find_enabled_user', 'find_enabled_user'],
+  ['outbox_is_blocked', 'is_blocked'],
+  ['outbox_archive_mix_message_once', 'archive_mix_message_once'],
+  [
+    'outbox_admit_federated_stanza',
+    {
+      description: 'FederationRouter::send durable outbox admission',
+      callPattern:
+        /\bfederation\s*\.\s*send\s*\(\s*target_domain\s*,\s*stanza\s*,\s*None\s*\)\s*\.\s*await\b/,
+      awaitPattern:
+        /\bfederation\s*\.\s*send\s*\(\s*target_domain\s*,\s*stanza\s*,\s*None\s*\)/,
+    },
+  ],
+  ['claim_mix_deliveries', 'claim_mix_deliveries'],
+  ['maintain_mix_delivery_retention', 'maintain_mix_delivery_retention'],
+  ['prune_expired_business_intents', 'prune_expired_mix_business_intents'],
+  ['prune_expired_federated_iq_results', 'prune_expired_federated_mix_iq_results'],
+  ['acknowledge_mix_delivery', 'acknowledge_mix_delivery'],
+  [
+    'fence_mix_socket_write',
+    {
+      description: 'db::mix::fence_mix_socket_write repository turn',
+      callPattern: /\bdb\s*::\s*mix\s*::\s*fence_mix_socket_write\s*\(/,
+      awaitPattern: /\bdb\s*::\s*mix\s*::/,
+    },
+  ],
+  [
+    'transfer_mix_delivery_to_cluster',
+    {
+      description: 'db::mix::transfer_mix_delivery_to_cluster repository turn',
+      callPattern: /\bdb\s*::\s*mix\s*::\s*transfer_mix_delivery_to_cluster\s*\(/,
+      awaitPattern: /\bdb\s*::\s*mix\s*::/,
+    },
+  ],
+  [
+    'release_mix_cluster_delivery',
+    {
+      description: 'db::mix::release_mix_cluster_delivery repository turn',
+      callPattern: /\bdb\s*::\s*mix\s*::\s*release_mix_cluster_delivery\s*\(/,
+      awaitPattern: /\bdb\s*::\s*mix\s*::/,
+    },
+  ],
+  [
+    'transfer_mix_delivery_to_bosh',
+    {
+      description: 'db::mix::transfer_mix_delivery_to_bosh repository turn',
+      callPattern: /\bdb\s*::\s*mix\s*::\s*transfer_mix_delivery_to_bosh\s*\(/,
+      awaitPattern: /\bdb\s*::\s*mix\s*::/,
+    },
+  ],
+  ['renew_mix_delivery_lease', 'renew_mix_delivery_lease'],
+  ['dead_letter_mix_delivery', 'dead_letter_mix_delivery'],
+  ['retry_mix_delivery', 'retry_mix_delivery'],
+  ['defer_mix_delivery', 'defer_mix_delivery'],
+  ['wake_mix_delivery_recipient', 'wake_mix_delivery_recipient'],
+  ['mix_delivery_dead_letters', 'mix_delivery_dead_letters'],
+  ['requeue_mix_delivery_dead_letter', 'requeue_mix_delivery_dead_letter'],
+]);
+function reviewedPermitManifestDetails(requiredMethods, observedOwners) {
+  const unexpected = [...observedOwners.keys()]
+    .filter((name) => !requiredMethods.has(name))
+    .sort();
+  const missing = [...requiredMethods.keys()]
+    .filter((name) => !observedOwners.has(name))
+    .sort();
+  const repeated = [...observedOwners]
+    .filter(([, count]) => count !== 1)
+    .map(([name]) => name)
+    .sort();
+  return { unexpected, missing, repeated };
+}
+
+// A missing reviewed owner is a hard failure, not an invitation to expand the
+// permit allowlist. Keep this small negative regression adjacent to the same
+// helper used for the production source scan.
+const permitManifestNegativeFixture = reviewedPermitManifestDetails(
+  new Map([['required_turn', 'repository_turn']]),
+  new Map(),
+);
+if (permitManifestNegativeFixture.missing.join(',') !== 'required_turn') {
+  throw new Error('MIX outbox permit manifest self-test did not reject a missing reviewed owner');
+}
+
+const mixServiceFunctions = asyncFunctionSpans(mixServiceProduction, 'src/services/mix.rs');
+const mixOutboxDbPermitOwners = new Map();
+const mixOutboxDbPermitCallPattern = /self\s*\.\s*outbox_db_admission_guard\s*\(\s*\)\s*\.\s*await/g;
+for (let match; (match = mixOutboxDbPermitCallPattern.exec(mixServiceProduction)) !== null; ) {
+  const owner = mixServiceFunctions.find(
+    ({ opening, closing }) => opening < match.index && match.index < closing,
+  );
+  if (!owner) {
+    const line = countMatches(mixServiceProduction.slice(0, match.index), /\n/g) + 1;
+    throw new Error(`src/services/mix.rs:${line} acquires an outbox DB permit outside a service method`);
+  }
+  mixOutboxDbPermitOwners.set(owner.name, (mixOutboxDbPermitOwners.get(owner.name) ?? 0) + 1);
+}
+const {
+  unexpected: unexpectedMixOutboxDbPermitOwners,
+  missing: missingMixOutboxDbPermitOwners,
+  repeated: repeatedMixOutboxDbPermitOwners,
+} = reviewedPermitManifestDetails(mixOutboxDbMethods, mixOutboxDbPermitOwners);
+if (
+  unexpectedMixOutboxDbPermitOwners.length > 0 ||
+  missingMixOutboxDbPermitOwners.length > 0 ||
+  repeatedMixOutboxDbPermitOwners.length > 0
+) {
+  const details = [];
+  if (unexpectedMixOutboxDbPermitOwners.length > 0) {
+    details.push(`unreviewed permit owners: ${unexpectedMixOutboxDbPermitOwners.join(', ')}`);
+  }
+  if (missingMixOutboxDbPermitOwners.length > 0) {
+    details.push(`outbox methods without a permit: ${missingMixOutboxDbPermitOwners.join(', ')}`);
+  }
+  if (repeatedMixOutboxDbPermitOwners.length > 0) {
+    details.push(`methods taking more than one permit: ${repeatedMixOutboxDbPermitOwners.join(', ')}`);
+  }
+  throw new Error(`MIX outbox DB admission manifest mismatch; ${details.join('; ')}`);
+}
+for (const [serviceMethod, repositoryMethod] of mixOutboxDbMethods) {
+  const owner = mixServiceFunctions.find(({ name }) => name === serviceMethod);
+  if (!owner) throw new Error(`missing MIX outbox DB service method ${serviceMethod}`);
+  const body = functionBody(mixServiceProduction, owner);
+  const reviewedTurn =
+    typeof repositoryMethod === 'string'
+      ? {
+          description: `db::${repositoryMethod} repository turn`,
+          callPattern: new RegExp(`\\bdb\\s*::\\s*${repositoryMethod}\\s*\\(`),
+          awaitPattern: /\bdb\s*::/,
+        }
+      : repositoryMethod;
+  if (!reviewedTurn.callPattern.test(body)) {
+    throw new Error(
+      `MIX outbox DB service method ${serviceMethod} must make its reviewed ${reviewedTurn.description}`,
+    );
+  }
+  const awaitPattern = /\.\s*await\b/g;
+  for (let awaited; (awaited = awaitPattern.exec(body)) !== null; ) {
+    const statement = statementBeforeAwait(body, awaited.index);
+    if (
+      !/self\s*\.\s*outbox_db_admission_guard\s*\(\s*\)/.test(statement) &&
+      !/self\s*\.\s*delivery_admission_guard\s*\(\s*\)/.test(statement) &&
+      !/self\s*\.\s*pam_capacity_admission_guard\s*\(\s*\)/.test(statement) &&
+      !reviewedTurn.awaitPattern.test(statement)
+    ) {
+      throw new Error(
+        `MIX outbox DB service method ${serviceMethod} awaits unreviewed work while its DB permit may be held`,
+      );
+    }
+  }
+}
+if (/\boutbox_db_admission(?:_guard)?\b/.test(mixProtocolProduction)) {
+  throw new Error('MIX protocol must not gain access to the service-owned outbox DB admission permit');
+}
+const channelStanzaDatabaseLane = structBody(
+  mixProtocolProduction,
+  'enum ChannelStanzaDatabaseLane',
+);
+for (const lane of ['LiveIngress', 'DurableOutbox']) {
+  if (!new RegExp(`^\\s*${lane}\\s*,?\\s*$`, 'm').test(channelStanzaDatabaseLane)) {
+    throw new Error(`MIX channel stanza database lanes must retain ${lane}`);
+  }
+}
+const deliverChannelStanza = structBody(mixProtocolProduction, 'async fn deliver_channel_stanza(');
+const deliveryDatabaseLaneMatches = [];
+const deliveryDatabaseLanePattern = /\bmatch\s+database_lane\s*\{/g;
+for (let match; (match = deliveryDatabaseLanePattern.exec(deliverChannelStanza)) !== null; ) {
+  const opening = deliverChannelStanza.indexOf('{', match.index);
+  const closing = matchingRustBrace(deliverChannelStanza, opening);
+  if (closing < 0) throw new Error('MIX channel stanza database-lane match is unterminated');
+  deliveryDatabaseLaneMatches.push(deliverChannelStanza.slice(opening + 1, closing));
+  deliveryDatabaseLanePattern.lastIndex = closing + 1;
+}
+// These are durable-delivery authority choices, not all PostgreSQL turns:
+// the session-route lookup is Redis-backed and must deliberately stay outside
+// the outbox database-admission permit. Keep its live/durable lane selection
+// explicit nevertheless, because it is part of the same routing decision.
+const channelStanzaDurableLaneOperations = [
+  ['find_enabled_user', 'outbox_find_enabled_user'],
+  ['is_blocked', 'outbox_is_blocked'],
+  ['archive_mix_message_once', 'outbox_archive_mix_message_once'],
+  ['lookup_nodes', 'outbox_lookup_cluster_nodes'],
+  ['send', 'outbox_admit_federated_stanza'],
+];
+if (deliveryDatabaseLaneMatches.length !== channelStanzaDurableLaneOperations.length) {
+  throw new Error('MIX channel delivery must explicitly select a durable lane for every routed authority operation');
+}
+for (const [index, [liveMethod, outboxMethod]] of channelStanzaDurableLaneOperations.entries()) {
+  const laneMatch = deliveryDatabaseLaneMatches[index];
+  const laneMarkers = [
+    'ChannelStanzaDatabaseLane::LiveIngress =>',
+    'ChannelStanzaDatabaseLane::DurableOutbox =>',
+  ];
+  const liveArm = matchArm(
+    laneMatch,
+    laneMarkers,
+    'ChannelStanzaDatabaseLane::LiveIngress =>',
+    'MIX channel stanza database lane',
+  );
+  const outboxArm = matchArm(
+    laneMatch,
+    laneMarkers,
+    'ChannelStanzaDatabaseLane::DurableOutbox =>',
+    'MIX channel stanza database lane',
+  );
+  if (
+    !new RegExp(`\\.\\s*${liveMethod}\\s*\\(`).test(liveArm) ||
+    new RegExp(`\\.\\s*${outboxMethod}\\s*\\(`).test(liveArm) ||
+    !new RegExp(`\\.\\s*${outboxMethod}\\s*\\(`).test(outboxArm) ||
+    new RegExp(`\\.\\s*${liveMethod}\\s*\\(`).test(outboxArm)
+  ) {
+    throw new Error(
+      `MIX durable outbox ${outboxMethod} must be a separate short DB turn, never a live-ingress fallback`,
+    );
+  }
+}
+const processClaimedMixDelivery = structBody(
+  mixProtocolProduction,
+  'async fn process_claimed_mix_delivery(',
+);
+if (
+  !/deliver_channel_stanza\s*\([\s\S]*?ChannelStanzaDelivery\s*\{[\s\S]*?database_lane\s*:\s*ChannelStanzaDatabaseLane\s*::\s*DurableOutbox/s.test(
+    processClaimedMixDelivery,
+  )
+) {
+  throw new Error('claimed MIX outbox work must select the bounded durable database lane before transport I/O');
+}
 for (const [serviceMethod] of mixProducerMappings) {
   const body = structBody(mixServiceSource, `pub(crate) async fn ${serviceMethod}(`);
   const gate = body.indexOf('self.delivery_admission_guard().await');
@@ -1118,10 +1944,10 @@ const registrationAccountBody = structBody(
 if (/(?:\bpassword_hash\b|\bscram_[A-Za-z0-9_]*|\bauth_generation\b|\bis_admin\b)/.test(registrationAccountBody)) {
   throw new Error('AccountService RegistrationAccount regained credential or authority fields');
 }
-const authSource = read('src/auth.rs');
+const authCorePasswordSource = read('crates/northstar-auth-core/src/password.rs');
 const usersSource = read('src/db/users.rs');
 for (const [name, source, typeName] of [
-  ['PasswordCredentials', authSource, 'PasswordCredentials'],
+  ['PasswordCredentials', authCorePasswordSource, 'PasswordCredentials'],
   ['PreparedScramUpgrade', usersSource, 'PreparedScramUpgrade'],
   ['PreparedLogin', usersSource, 'PreparedLogin'],
 ]) {
@@ -1129,7 +1955,7 @@ for (const [name, source, typeName] of [
     throw new Error(`${name} must zeroize reusable credential material on Drop`);
   }
 }
-if (!/impl\s+std::fmt::Debug\s+for\s+PasswordCredentials\b/.test(authSource)
+if (!/impl\s+std::fmt::Debug\s+for\s+PasswordCredentials\b/.test(authCorePasswordSource)
     || !/impl\s+std::fmt::Debug\s+for\s+PreparedLogin\b/.test(usersSource)) {
   throw new Error('credential containers require explicitly redacted Debug implementations');
 }
@@ -1835,7 +2661,9 @@ if (/Deliver\s*\(\s*db::User\s*\)/.test(messageServiceSource)) {
 // inbound presence scope so ordinary presence routing and Caps/PEP effects
 // commit in the same chosen cross-stream order. Participant RAII makes a
 // waiter cancellation remove the registry entry without a background sweep.
-const capsProtocolSource = read('src/xmpp/protocol/caps.rs');
+const capsProtocolSource =
+  read('crates/northstar-protocol-runtime/src/caps.rs') +
+  read('src/xmpp/protocol/caps.rs');
 const s2sInboundSource = read('src/s2s/inbound.rs');
 const s2sOutboundSource = read('src/s2s/outbound.rs');
 const componentsSource = read('src/components.rs');
@@ -1936,8 +2764,6 @@ if (
 // the exact long-lived task identities and domain-service accessors synchronized
 // with the composition root so a renamed or newly introduced authority cannot
 // become invisible to review merely because aggregate budgets still pass.
-const responsibilityDocument = read('docs/PROGRAM_RESPONSIBILITIES.md');
-const mainSource = read('src/main.rs');
 function assertExactUniqueInventory(label, actual, expected) {
   const counts = new Map();
   for (const item of actual) counts.set(item, (counts.get(item) ?? 0) + 1);
@@ -1955,19 +2781,19 @@ function assertExactUniqueInventory(label, actual, expected) {
 const supervisedWorkerContracts = [
   { name: 'abuse-key-deployment-authority', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(ABUSE_KEY_AUTHORITY_POLL_INTERVAL.saturating_mul(2))', draining: false },
   { name: 'deployment-capacity-session-leases', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(capacity_interval.saturating_mul(2))', draining: false },
+  { name: 'deployment-capacity-lease-reaper', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(120))', draining: false },
   { name: 'background-maintenance', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(180))', draining: false },
   { name: 'account-deletion-recovery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(1_200))', draining: false },
   { name: 'upload-storage-reconciliation', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(600))', draining: false },
   { name: 'archive-retention', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(retention_max_silence)', draining: false },
+  { name: 'pubsub-subscription-cleanup', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(subscription_cleanup::MAX_SILENCE)', draining: false },
   { name: 'admin-session-cleanup', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(90))', draining: false },
   { name: 'redis-pubsub', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(45))', draining: false },
   { name: 'cluster-maintenance', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(90))', draining: false },
   { name: 'cluster-failure-policy', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(15))', draining: false },
   { name: 'cluster-muc-outbox', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: false },
   { name: 'locked-muc-expiry', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(20))', draining: false },
-  { name: 'federation-policy-refresh', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(10))', draining: false },
-  { name: 'administration-setting-refresh', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(5))', draining: false },
-  { name: 'service-control-watcher', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(3))', draining: false },
+  { name: 'runtime-control-refresh', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(max_silence)', draining: false },
   { name: 'sm-authority-listener', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(15))', draining: false },
   { name: 'sm-suspension-recovery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: true },
   { name: 'caps-side-effects', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(60))', draining: true },
@@ -1981,19 +2807,19 @@ const supervisedWorkers = supervisedWorkerContracts.map(({ name }) => name);
 const workerResponsibilityEvidence = {
   'abuse-key-deployment-authority': ['src/main.rs', '`main`', '2 ×'],
   'deployment-capacity-session-leases': ['src/main.rs', '`main`', '2 ×'],
+  'deployment-capacity-lease-reaper': ['src/main.rs', '`main`', '120 s'],
   'background-maintenance': ['src/main.rs', '`main`', '180 s'],
   'account-deletion-recovery': ['src/main.rs', '`main`', '1,200 s'],
   'upload-storage-reconciliation': ['src/main.rs', '`main`', '600 s'],
   'archive-retention': ['src/main.rs', '`main`', 'derived retention'],
+  'pubsub-subscription-cleanup': ['src/main.rs', '`main`, standalone only', '110 s'],
   'admin-session-cleanup': ['src/main.rs', '`main`', '90 s'],
   'redis-pubsub': ['src/main.rs', '`main`, cluster only', '45 s'],
   'cluster-maintenance': ['src/main.rs', '`main`, cluster only', '90 s'],
   'cluster-failure-policy': ['src/main.rs', '`main`, cluster only', '15 s'],
   'cluster-muc-outbox': ['src/cluster.rs', 'unconditionally registered', '30 s'],
   'locked-muc-expiry': ['src/state.rs', '`AppState` MUC startup', '20 s'],
-  'federation-policy-refresh': ['src/state.rs', '`AppState` federation startup', '10 s'],
-  'administration-setting-refresh': ['src/state.rs', '`AppState` administration startup', '5 s'],
-  'service-control-watcher': ['src/state.rs', '`AppState` service-control startup', '3 s'],
+  'runtime-control-refresh': ['src/state.rs', 'process startup reserves the connection', '5 s'],
   'sm-authority-listener': ['src/services/sm.rs', '`SmService` startup', '15 s'],
   'sm-suspension-recovery': ['src/services/session_cleanup.rs', 'session-cleanup service startup', '30 s'],
   'caps-side-effects': ['src/xmpp/protocol/caps.rs', 'Caps subsystem startup', '60 s'],
@@ -2005,11 +2831,12 @@ const workerResponsibilityEvidence = {
 };
 const workerDocumentBehaviorEvidence = {
   'abuse-key-deployment-authority': ['first returned validation error/timeout'],
-  'upload-storage-reconciliation': ['three consecutive DB/provider/backlog reports'],
+  'upload-storage-reconciliation': ['three consecutive DB/provider/backlog reports', 'waiting ticks only pulse'],
   'cluster-maintenance': ['authentication or user-agent login generation'],
   'cluster-failure-policy': ['any terminal attempt or silence cancels'],
   'cluster-muc-outbox': ['in every mode', 'single-node PostgreSQL maintenance'],
   'sm-authority-listener': ['5 s liveness tick'],
+  'pubsub-subscription-cleanup': ['60 s', '40 s', '1,000', 'delivery'],
 };
 const productionRustSources = [];
 const pendingResponsibilitySources = [path.join(root, 'src')];
@@ -2027,12 +2854,18 @@ while (pendingResponsibilitySources.length > 0) {
     }
   }
 }
-const productionRustSource = productionRustSources.map(({ source }) => source).join('\n');
-const workerRegistrationMatches = [
-  ...productionRustSource.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g),
-];
-const composedWorkers = workerRegistrationMatches.map((match) => match[2]);
-assertExactUniqueInventory('supervised-worker', composedWorkers, supervisedWorkers);
+// Maintenance is an independently selected process role. Qualify only that
+// reviewed composition root; a duplicate in any other source still fails.
+// The companion gate proves the explicit standalone guard, early maintenance
+// return and exact maintenance capability/worker inventory before this allow.
+verifySubserverBoundaries(readSubserverSources());
+const roleIdentity = (relative, name) => relative === 'src/subservers.rs' ? `maintenance/${name}` : name;
+const composedWorkers = productionRustSources.flatMap(({ relative, source }) =>
+  [...source.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g)]
+    .map((match) => roleIdentity(relative, match[2])),
+);
+assertExactUniqueInventory('supervised-worker', composedWorkers, [...supervisedWorkers,
+  'maintenance/archive-retention', 'maintenance/pubsub-subscription-cleanup']);
 for (const contract of supervisedWorkerContracts) {
   const [expectedSource, documentedOwner, documentedWatchdog] =
     workerResponsibilityEvidence[contract.name] ?? [];
@@ -2091,14 +2924,12 @@ for (const contract of supervisedWorkerContracts) {
     }
   }
 }
-const healthObservers = [
-  ...productionRustSource.matchAll(/\.register_observer\(\s*"([^"]+)"/g),
-].map((match) => match[1]);
-if (healthObservers.length !== 1 || healthObservers[0] !== 'session-cleanup') {
-  throw new Error(
-    `production health-observer inventory differs from the reviewed responsibility model: ${healthObservers.join(', ')}`,
-  );
-}
+const healthObservers = productionRustSources.flatMap(({ relative, source }) =>
+  [...source.matchAll(/\.register_observer\(\s*"([^"]+)"/g)]
+    .map((match) => roleIdentity(relative, match[1])),
+);
+assertExactUniqueInventory('health-observer', healthObservers,
+  ['session-cleanup', 'maintenance/maintenance-ownership']);
 const sessionCleanupRow = responsibilityDocument
   .split(/\r?\n/)
   .find((line) => line.includes('| `session-cleanup` |'));
@@ -2157,6 +2988,7 @@ const serviceTaskNames = [
   'external component',
   'durable operation worker',
   'HTTP',
+  'Web administration',
   'metrics',
 ];
 const composedServiceTasks = [

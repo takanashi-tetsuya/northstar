@@ -143,7 +143,7 @@ struct CachedResponse {
     rid: u64,
     fingerprint: [u8; 32],
     response: BoshHttpResponse,
-    durable_message_ids: Vec<uuid::Uuid>,
+    durable_ownership: crate::outbound::BoshResponseOwnership,
     transport_receipts: Vec<mpsc::UnboundedSender<()>>,
     owned_at: Instant,
     response_bytes: usize,
@@ -680,7 +680,7 @@ impl BoshActor {
             self.terminate_waiters("other-request");
             return false;
         }
-        if let Some((reply, terminate, durable_message_ids)) =
+        if let Some((reply, terminate, durable_ownership)) =
             replay_response(&mut self.replay, &request)
         {
             // An exact cached fingerprint proves this request already passed
@@ -689,7 +689,7 @@ impl BoshActor {
             // lease alive while replaying byte-identical cached bytes.
             if !terminate
                 && self
-                    .renew_delivery_fences(Some((request.rid, &durable_message_ids)))
+                    .renew_delivery_fences(Some((request.rid, &durable_ownership)))
                     .await
                     .is_err()
             {
@@ -842,7 +842,9 @@ impl BoshActor {
                 .await;
             return false;
         }
-        if let Some(condition) = bosh_request_shape_error(request, self.protocol.stream_opened) {
+        if let Some(condition) =
+            bosh_request_shape_error(request, self.protocol.negotiation.is_open())
+        {
             let _ = self.finish_pending(pending, Some(condition), false).await;
             return false;
         }
@@ -1110,7 +1112,7 @@ impl BoshActor {
 
     async fn renew_delivery_fences(
         &self,
-        expected_response: Option<(u64, &[uuid::Uuid])>,
+        expected_response: Option<(u64, &crate::outbound::BoshResponseOwnership)>,
     ) -> anyhow::Result<()> {
         self.protocol
             .state
@@ -1156,7 +1158,43 @@ impl BoshActor {
         if managed_by_sm {
             // The SM sequence entry now owns this fence. A later BOSH response
             // acknowledgement must not complete it before the XEP-0198 h.
-            item.durable_delivery = None;
+            item.durable_source = None;
+            item.mix_handoff = None;
+        } else if let Some(source) = item.mix_delivery() {
+            // BOSH has no per-stanza socket acknowledgement. Transfer the
+            // exact MIX lease to a short-lived, typed BOSH fence *before*
+            // this actor can retain the stanza in its response FIFO. The
+            // source worker is then free to stop; final deletion happens only
+            // after the client acknowledges the response RID.
+            if !self.can_push_output_item(&item) {
+                return false;
+            }
+            let transferred = match self
+                .protocol
+                .state
+                .mix_service()
+                .transfer_mix_delivery_to_bosh(
+                    source,
+                    self.delivery_session_id,
+                    self.delivery_fence_ttl_seconds,
+                )
+                .await
+            {
+                Ok(transferred) => transferred,
+                Err(error) => {
+                    tracing::error!(
+                        ?error,
+                        delivery_id = %source.delivery_id,
+                        session_id = %self.delivery_session_id,
+                        "failed to persist MIX BOSH transport ownership"
+                    );
+                    return false;
+                }
+            };
+            item.durable_source = Some(crate::outbound::TransportOwnershipSource::Mix(transferred));
+            item.complete_mix_handoff(crate::outbound::MixTransportCompletion::BoshPersisted {
+                session_id: self.delivery_session_id,
+            });
         }
         self.push_output_item(item)
     }
@@ -1176,13 +1214,17 @@ impl BoshActor {
     }
 
     fn push_output_item(&mut self, item: crate::outbound::OutboundItem) -> bool {
-        let next_bytes = self.output_bytes.saturating_add(item.stanza.len());
-        if self.output.len() >= self.max_output_stanzas || next_bytes > self.max_output_bytes {
+        if !self.can_push_output_item(&item) {
             return false;
         }
-        self.output_bytes = next_bytes;
+        self.output_bytes = self.output_bytes.saturating_add(item.stanza.len());
         self.output.push_back(item);
         true
+    }
+
+    fn can_push_output_item(&self, item: &crate::outbound::OutboundItem) -> bool {
+        let next_bytes = self.output_bytes.saturating_add(item.stanza.len());
+        self.output.len() < self.max_output_stanzas && next_bytes <= self.max_output_bytes
     }
 
     fn has_output_capacity(&self) -> bool {
@@ -1254,7 +1296,7 @@ impl BoshActor {
         } else {
             self.response_body(None, false)
         };
-        let (response, deliveries, transport_receipts) = match built {
+        let (response, sources, transport_receipts) = match built {
             Ok(built) => built,
             Err(error) => {
                 tracing::error!(?error, rid, "failed to construct bounded BOSH response");
@@ -1270,7 +1312,7 @@ impl BoshActor {
         if cache && condition.is_none() && pending.request.pause.is_none() {
             while self.replay.len() >= RESPONSE_CACHE_SIZE
                 && self.replay.front().is_some_and(|cached| {
-                    cached.durable_message_ids.is_empty() && cached.transport_receipts.is_empty()
+                    cached.durable_ownership.is_empty() && cached.transport_receipts.is_empty()
                 })
             {
                 self.replay.pop_front();
@@ -1291,31 +1333,37 @@ impl BoshActor {
                 return false;
             }
         }
-        if !deliveries.is_empty() {
-            if let Err(error) = self
+        let durable_ownership = if sources.is_empty() {
+            crate::outbound::BoshResponseOwnership::default()
+        } else {
+            match self
                 .protocol
                 .state
                 .replay_service()
-                .bind_bosh_response(
+                .bind_bosh_response_sources(
                     self.delivery_session_id,
                     rid,
-                    &deliveries,
+                    &sources,
                     self.delivery_fence_ttl_seconds,
                 )
                 .await
             {
-                // The HTTP response has not been exposed yet. Fail closed and
-                // leave every offline row recoverable instead of creating an
-                // untracked transport-write window.
-                tracing::error!(?error, session_id = %self.delivery_session_id, rid, "failed to bind durable deliveries to BOSH response");
-                let response =
-                    terminal_response_with_content("internal-server-error", &self.content_type);
-                for responder in pending.responders {
-                    let _ = responder.send(response.clone());
+                Ok(ownership) => ownership,
+                Err(error) => {
+                    // The HTTP response has not been exposed yet. Fail closed
+                    // and leave every source either recoverable or held by its
+                    // typed pending BOSH fence; actor teardown releases that
+                    // pending fence instead of creating an untracked window.
+                    tracing::error!(?error, session_id = %self.delivery_session_id, rid, "failed to bind durable BOSH transport sources");
+                    let response =
+                        terminal_response_with_content("internal-server-error", &self.content_type);
+                    for responder in pending.responders {
+                        let _ = responder.send(response.clone());
+                    }
+                    return false;
                 }
-                return false;
             }
-        }
+        };
         let mut exposed_to_transport = false;
         for responder in pending.responders {
             exposed_to_transport |= responder.send(response.clone()).is_ok();
@@ -1336,15 +1384,11 @@ impl BoshActor {
         self.last_response = Instant::now();
         self.highest_responded = self.highest_responded.max(rid);
         if cache && condition.is_none() && pending.request.pause.is_none() {
-            let durable_message_ids = deliveries
-                .iter()
-                .map(|delivery| delivery.message_id)
-                .collect();
             self.replay.push_back(CachedResponse {
                 rid: pending.request.rid,
                 fingerprint: pending.request.fingerprint,
                 response,
-                durable_message_ids,
+                durable_ownership,
                 transport_receipts,
                 owned_at: Instant::now(),
                 response_bytes,
@@ -1373,16 +1417,15 @@ impl BoshActor {
         terminate: bool,
     ) -> anyhow::Result<(
         BoshHttpResponse,
-        Vec<crate::outbound::DurableDelivery>,
+        Vec<crate::outbound::TransportOwnershipSource>,
         Vec<mpsc::UnboundedSender<()>>,
     )> {
-        let (payload, deliveries, transport_receipts, transient_sm_capacity) =
-            take_response_payload(
-                &mut self.output,
-                &mut self.output_bytes,
-                self.max_response_bytes,
-                self.protocol.state.sm_memory_governor(),
-            )?;
+        let (payload, sources, transport_receipts, transient_sm_capacity) = take_response_payload(
+            &mut self.output,
+            &mut self.output_bytes,
+            self.max_response_bytes,
+            self.protocol.state.sm_memory_governor(),
+        )?;
         let body = bosh_body_element(
             condition,
             terminate,
@@ -1399,7 +1442,7 @@ impl BoshActor {
                 body: bosh_response_bytes(body, transient_sm_capacity),
                 content_type: self.content_type.clone(),
             },
-            deliveries,
+            sources,
             transport_receipts,
         ))
     }
@@ -1477,7 +1520,7 @@ fn queue_bosh_resume_payload(
 
 type BoshResponsePayload = (
     String,
-    Vec<crate::outbound::DurableDelivery>,
+    Vec<crate::outbound::TransportOwnershipSource>,
     Vec<mpsc::UnboundedSender<()>>,
     Vec<Arc<Vec<crate::services::sm_capacity::SmCapacityLease>>>,
 );
@@ -1537,7 +1580,7 @@ fn take_response_payload(
     }
 
     let mut payload = String::with_capacity(selected_bytes);
-    let mut deliveries = Vec::new();
+    let mut sources = Vec::new();
     let mut transport_receipts = Vec::new();
     for _ in 0..selected {
         let stanza = output.pop_front().expect("front was present");
@@ -1548,16 +1591,14 @@ fn take_response_payload(
         if let Some(receipt) = stanza.transport_receipt {
             transport_receipts.push(receipt);
         }
-        if let Some(delivery) = stanza.durable_delivery {
-            deliveries.push(delivery);
+        if let Some(receipt) = stanza.transport_write_receipt {
+            transport_receipts.push(receipt);
+        }
+        if let Some(source) = stanza.durable_source {
+            sources.push(source);
         }
     }
-    Ok((
-        payload,
-        deliveries,
-        transport_receipts,
-        transient_sm_capacity,
-    ))
+    Ok((payload, sources, transport_receipts, transient_sm_capacity))
 }
 
 pub async fn http_bind(
@@ -1749,19 +1790,31 @@ fn advance_bosh_key_sequence(
 fn replay_response(
     replay: &mut VecDeque<CachedResponse>,
     request: &BoshRequest,
-) -> Option<(BoshHttpResponse, bool, Vec<uuid::Uuid>)> {
+) -> Option<(
+    BoshHttpResponse,
+    bool,
+    crate::outbound::BoshResponseOwnership,
+)> {
     let cached = replay.iter_mut().find(|cached| cached.rid == request.rid)?;
     if cached.fingerprint != request.fingerprint {
-        return Some((terminal_response("bad-request"), true, Vec::new()));
+        return Some((
+            terminal_response("bad-request"),
+            true,
+            crate::outbound::BoshResponseOwnership::default(),
+        ));
     }
     if cached.replays >= MAX_RESPONSE_REPLAYS {
-        return Some((terminal_response("policy-violation"), true, Vec::new()));
+        return Some((
+            terminal_response("policy-violation"),
+            true,
+            crate::outbound::BoshResponseOwnership::default(),
+        ));
     }
     cached.replays += 1;
     Some((
         cached.response.clone(),
         false,
-        cached.durable_message_ids.clone(),
+        cached.durable_ownership.clone(),
     ))
 }
 
@@ -2442,34 +2495,41 @@ mod tests {
             rid: request.rid,
             fingerprint: request.fingerprint,
             response: response.clone(),
-            durable_message_ids: vec![uuid::Uuid::from_u128(7)],
+            durable_ownership: crate::outbound::BoshResponseOwnership {
+                c2s_message_ids: vec![uuid::Uuid::from_u128(7)],
+                mix_delivery_ids: Vec::new(),
+            },
             transport_receipts: Vec::new(),
             owned_at: Instant::now(),
             response_bytes: response.body.len(),
             replays: 0,
         }]);
-        let (replayed, terminate, durable_message_ids) =
+        let (replayed, terminate, durable_ownership) =
             replay_response(&mut replay, &request).unwrap();
         assert!(!terminate);
         assert_eq!(replayed.body, response.body);
-        assert_eq!(durable_message_ids, vec![uuid::Uuid::from_u128(7)]);
+        assert_eq!(
+            durable_ownership.c2s_message_ids,
+            vec![uuid::Uuid::from_u128(7)]
+        );
+        assert!(durable_ownership.mix_delivery_ids.is_empty());
 
         let changed = parse_body(
             "<body xmlns='http://jabber.org/protocol/httpbind' rid='12' sid='s'><presence/></body>",
             64,
         )
         .unwrap();
-        let (rejected, terminate, durable_message_ids) =
+        let (rejected, terminate, durable_ownership) =
             replay_response(&mut replay, &changed).unwrap();
         assert!(terminate);
-        assert!(durable_message_ids.is_empty());
+        assert!(durable_ownership.is_empty());
         assert!(response_body_text(&rejected).contains("condition='bad-request'"));
 
         let mut bounded = VecDeque::from([CachedResponse {
             rid: request.rid,
             fingerprint: request.fingerprint,
             response,
-            durable_message_ids: Vec::new(),
+            durable_ownership: crate::outbound::BoshResponseOwnership::default(),
             transport_receipts: Vec::new(),
             owned_at: Instant::now(),
             response_bytes: 64,
@@ -2488,10 +2548,10 @@ mod tests {
         count_limited.pop_back();
         count_limited.front_mut().unwrap().owned_at = now - MAX_RESPONSE_ACK_AGE;
         assert!(bosh_unacknowledged_limit_exceeded(&count_limited, 1, now));
-        let (rejected, terminate, durable_message_ids) =
+        let (rejected, terminate, durable_ownership) =
             replay_response(&mut bounded, &request).unwrap();
         assert!(terminate);
-        assert!(durable_message_ids.is_empty());
+        assert!(durable_ownership.is_empty());
         assert!(response_body_text(&rejected).contains("condition='policy-violation'"));
     }
 
@@ -2508,10 +2568,13 @@ mod tests {
         let mut bytes = first.stanza.len() + second.stanza.len();
         let mut output = VecDeque::from([first.clone(), second.clone()]);
         let governor = response_test_governor();
-        let (payload, fences, receipts, holds) =
+        let (payload, sources, receipts, holds) =
             take_response_payload(&mut output, &mut bytes, 4_096, &governor).unwrap();
         assert_eq!(payload, format!("{}{}", first.stanza, second.stanza));
-        assert_eq!(fences, vec![delivery]);
+        assert_eq!(
+            sources,
+            vec![crate::outbound::TransportOwnershipSource::C2s(delivery)]
+        );
         assert!(receipts.is_empty());
         assert!(holds.is_empty());
         assert_eq!(bytes, 0);
@@ -2526,6 +2589,42 @@ mod tests {
             Some(&oversized.stanza)
         );
         assert_eq!(bytes, output.front().unwrap().stanza.len());
+    }
+
+    #[test]
+    fn response_payload_keeps_typed_mix_source_until_durable_rid_binding() {
+        let c2s = crate::outbound::DurableDelivery {
+            recipient_id: uuid::Uuid::from_u128(11),
+            message_id: uuid::Uuid::from_u128(12),
+            claim_id: Some(uuid::Uuid::from_u128(13)),
+        };
+        let mix = crate::outbound::MixDelivery {
+            delivery_id: uuid::Uuid::from_u128(21),
+            lease_token: uuid::Uuid::from_u128(22),
+        };
+        let c2s_item =
+            crate::outbound::OutboundItem::durable("<message id='c2s'/>".to_owned(), c2s);
+        let (mix_item, _handoff) =
+            crate::outbound::OutboundItem::durable_mix("<message id='mix'/>".to_owned(), mix);
+        let mut output = VecDeque::from([c2s_item.clone(), mix_item.clone()]);
+        let mut bytes = output.iter().map(|item| item.stanza.len()).sum();
+
+        let (payload, sources, receipts, holds) =
+            take_response_payload(&mut output, &mut bytes, 4_096, &response_test_governor())
+                .unwrap();
+
+        assert_eq!(payload, format!("{}{}", c2s_item.stanza, mix_item.stanza));
+        assert_eq!(
+            sources,
+            vec![
+                crate::outbound::TransportOwnershipSource::C2s(c2s),
+                crate::outbound::TransportOwnershipSource::Mix(mix),
+            ]
+        );
+        assert!(receipts.is_empty());
+        assert!(holds.is_empty());
+        assert!(output.is_empty());
+        assert_eq!(bytes, 0);
     }
 
     #[test]

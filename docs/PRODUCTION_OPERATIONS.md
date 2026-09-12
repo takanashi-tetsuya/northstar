@@ -71,6 +71,44 @@ balancer or container orchestrator should reach `/readyz` directly on the
 private application network; never publish that database-backed path through
 the public Caddy virtual host.
 
+## Console log delivery
+
+Core and standalone retain their existing text/JSON formatting, ANSI policy,
+`RUST_LOG` filter and rolling-file output. Maintenance retains its JSON stdout
+output and environment filter without loading the core configuration or keys.
+Both console paths use one dedicated, lossy writer thread: at most 256 complete
+formatted events of at most 64 KiB are queued (16 MiB of queued payload, plus
+one event in the consumer). An oversized event is dropped whole, never emitted
+as a partial JSON record. Formatting still takes place on the calling thread;
+this boundary limits console buffering and device I/O, not the size of arbitrary
+application values before formatting. The rolling-file sink's policy is unchanged.
+
+The existing private metrics endpoints expose
+`xmpp_console_log_dropped_events_total` with fixed reasons `queue_full_or_closed`
+and `oversized`, plus the queue and event-size limits. These counts describe
+console admission losses, not successful persistence at the output device.
+For core/standalone, inspect the rolling-file sink when the console receiver
+falls behind; maintenance has no rolling-file sink.
+
+The process entrypoint owns every logging guard through service teardown. Each
+flush runs in one shutdown helper and is given a total 2.5 seconds;
+`xmpp_logging_shutdown_failures_total` records helper timeout or spawn failure
+in process memory. Metrics endpoints may already be closed at this final stage,
+so these final counts are not a guaranteed last scrape. A stalled OS write
+cannot safely be cancelled: an overdue helper is released by process exit and
+remaining console/file events may be lost. Logging teardown never waits indefinitely
+for a stopped stdout/stderr consumer, including the logger library's own
+shutdown diagnostic. This isolates a known blocking-I/O path; it is not evidence
+that console logging caused any particular federation readiness failure.
+
+An entrypoint error keeps its nonzero exit status and original Debug diagnostic
+through a separate final bounded stderr report, avoiding Rust Result termination
+printing synchronously after logger teardown. This adds at most one final sink
+and one further 2.5-second flush budget on the error path; no subscriber or
+configuration is reinitialized. Oversized terminal diagnostics are replaced by
+a fixed size-limit message, not a partial diagnostic. CLI help/version output
+and arbitrary panic output are outside this tracing and final-error boundary.
+
 ## WebSocket reverse proxy
 
 RFC 7395 authentication must run over WSS. The application HTTP listener is
@@ -939,11 +977,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 127 files from `0001` through
-`0128`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 140 files from `0001` through
+`0142`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0128`, with the exact SQLx description and SHA-384 checksum, before it
+through `0142`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url` and `command_database_url` secrets; neither identity may
 attempt DDL. Pending, failed, unknown, duplicated, missing or checksum-drifted
@@ -979,16 +1017,100 @@ PAM operation INSERT/DELETE authority, and may mutate those rows only through
 the reviewed SECURITY DEFINER capabilities. Startup compares every counter to
 the operation journal and fails closed on drift.
 
-Before each delivery-producing transaction, complete orphan-event reclamation
-and release-journal folding commit in their own authority transaction. Before a
-new remote PAM operation, complete retention-eligible terminal reconciliation
-does the same for its exact counters. Bounded background GC/pruning reduces
-latency and retained rows, but neither worker page size nor cadence is required
-to make a later admission correct. If a completion commits after the
-reconciliation boundary, it is a later state transition and the following
-admission observes it. Do not raise capacity limits to hide a repeatable
-false-full condition: fail startup on counter drift, retain the evidence and
-repair the authority invariant before accepting new writes.
+Migration `0129` replaces the PubSub collection-edge trigger with a
+prospective-graph guard. It preserves quota, cycle and depth enforcement for
+new edges and key moves, but does not mistake a timestamp-only or same-key
+update for an additional child. Stop writers through this migration and exact
+grant reconciliation; it changes a live trigger/function pair and is not a
+rolling-upgrade boundary.
+
+Migration `0130` is also a **stopped-writer migration**. It replaces the raw
+canonical-scope unique B-tree used by durable personal-message admission with
+fixed-width, domain-separated `md5` expression discriminators and adds indexed
+candidate lookup paths for account deletion. PostgreSQL's index discriminator
+is not an authority decision: archive conflict handling compares the full
+canonical actor and target scopes, raw authority spelling, identity value, and
+payload authentication evidence; account deletion rechecks the full canonical
+scope before selecting and locking candidate rows. Consequently a digest
+collision fails the attempted admission closed or is excluded from deletion; it
+cannot make one principal's message a replay of another's or delete another
+principal's admission. A
+pre-`0130` binary names the former raw-column `ON CONFLICT` target and will not
+be compatible with the replacement index. Stop every runtime and maintenance
+writer, apply `0130`, run exact grant reconciliation, and start only the
+matching binary. Do not treat an index build or a successful health probe as a
+safe rolling cut-over.
+
+Migration `0131` is an online, owner-held capacity-admission hardening; it is
+not another stopped-writer boundary. The private
+`northstar_upload_require_capacity_lock()` primitive takes the one authoritative
+upload ledger row with `FOR UPDATE NOWAIT`. Runtime-facing upload capabilities
+and BEFORE table-mutator guards reach that same primitive, so a held ledger is
+reported as SQLSTATE `55P03` for bounded retry rather than consuming an
+application-pool connection while waiting. It deliberately preserves existing
+`FALSE` and `in_progress` meanings for stale/no-op and claim paths. The
+primitive and its trigger helper remain owner-only: do not grant either to a
+runtime, command, backup, or public role.
+
+Migration `0132` is a forward-only repair for the PubSub collection-edge guard
+introduced by immutable migration `0129`. It pins that existing helper to the
+installation schema with a catalog-first `search_path`, but leaves it
+`SECURITY INVOKER`; making it a definer capability would incorrectly widen the
+authority of every collection-edge mutation. It also does not introduce a
+stopped-writer cut-over. Apply both migrations through the ordinary exact
+ledger/ACL verification sequence, and retain final M00 validation evidence
+before making any production-acceptance claim.
+
+Migrations `0133` and `0134` are ordinary forward migrations for MIX durable
+delivery recovery. They add schema-only PostgreSQL wake notifications and a
+persisted recipient route-wake generation; neither notification is delivery
+authority, and exact grant reconciliation must continue to deny direct runtime
+`EXECUTE` on the trigger helper. Migrations `0135` through `0138` add typed
+MIX ownership at SM, BOSH and remote-node boundaries: the remote node rotates
+the exact recipient lease into a node/request fence before it may report a
+socket, SM or BOSH owner. `0138` updates the strict session-capability catalog
+to recognize the known `0136` SM teardown trigger without admitting any
+unknown trigger, routine, owner or ACL. Apply all six migrations through the same complete
+ledger and ACL verification sequence. A mixed cluster protocol version is
+rejected for durable MIX cross-node hand-offs, so roll every participating node
+to the same v13 release before enabling that path.
+
+Migration `0139` is an online forward repair for expired upload cleanup
+admission. Its result-column name is also an `upload_cleanup_queue` key; the
+migration changes conflict handling to name that immutable primary-key
+constraint explicitly, avoiding PL/pgSQL's ambiguous unqualified identifier.
+It retains the existing capability signature, owner, ACL and schema-pinned
+`SECURITY DEFINER` path. Apply it through the normal exact ledger and grant
+reconciliation sequence; it is not a stopped-writer boundary.
+
+Migration `0140` repairs the corresponding release edge: multi-row deletion
+of physical storage projections now evaluates its final-owner condition before
+each row is removed, so the retained object counter decreases once rather than
+once per row. It is an online exact-ledger migration and retains the existing
+owner-only routines and schema-pinned security configuration.
+
+Migration `0141` is the forward authority hardening companion to immutable
+`0139`. It re-pins the existing cleanup-admission function to the exact
+installation-schema `SECURITY DEFINER` path and revokes `PUBLIC` execution
+before asserting the catalog state. It introduces no new runtime capability and
+is not a stopped-writer boundary.
+
+Migration `0142` is the matching forward authority hardening companion to
+immutable `0140`. It re-pins both upload-projection capacity trigger functions
+to the exact installation-schema `SECURITY DEFINER` path, revokes `PUBLIC`
+execution, and asserts that catalog state. It introduces no new runtime
+capability and is not a stopped-writer boundary.
+
+Delivery claiming does not await retention cleanup. An expired, unowned head is
+terminal, so the claim query can advance to the next live ordered row; the
+separate bounded maintenance page later records the dead letter and reclaims
+empty event/sequence projections. Live predecessor leases and SM, BOSH or
+cluster transport fences still block the successor, preserving order. Release
+journal folding and retention-eligible terminal reconciliation remain separate
+authority transactions. Their cadence improves reclamation latency but is not a
+precondition for a valid foreground claim. Do not raise capacity limits to hide
+a repeatable false-full condition: fail startup on counter drift, retain the
+evidence and repair the authority invariant before accepting new writes.
 
 After the cut-over, every delivery-producing MIX application-service operation
 enters one FIFO gate before checking out a PgPool connection. Its database
@@ -1019,7 +1141,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
 1. create and verify a signed, age-encrypted backup with the existing release;
 2. stop every Northstar runtime, MIX delivery worker, backup, restore, and
    maintenance client; verify that no application-schema writer remains before
-   migration `0126` and remains stopped through `0128`, and retain the old
+   migration `0126` and remains stopped through `0130`, and retain the old
    superuser secret until rollback is no longer needed;
 3. generate the new independent secrets, then run
    `scripts/reconcile-database-roles.sh --audit` with the existing superuser;
@@ -1027,7 +1149,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0128` manifest
+5. run the one-shot migration job through the complete `0001`-`0142` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

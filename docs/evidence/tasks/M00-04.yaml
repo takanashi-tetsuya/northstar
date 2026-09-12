@@ -1,0 +1,62 @@
+schema_version: "1.0"
+task:
+  id: "M00-04"
+  title: "Repair release-input and PostgreSQL workload-role boundaries"
+  status: "in-progress"
+  branch: "dev"
+  acceptance_state: "pending-exact-dev-ci"
+scope:
+  owns:
+    - "Container/release input verification assigned to M00-04 by the Program 6 asset inventory."
+    - "PostgreSQL workload-role, schema, routine, search_path and ACL attestation failures."
+    - "Forward-only migration repairs that make an existing strict capability catalog recognize a reviewed object without accepting unknown objects."
+  does_not_own:
+    - "Listener/fixture lifecycle evidence owned by M00-03."
+    - "MIX delivery semantics and cross-node transport results owned by M00-05 and V13-MIX-HANDOFF."
+current_work:
+  - "Migration 0138 extends the exact session trigger catalog for the reviewed 0136 SM-to-MIX BEFORE DELETE hook."
+  - "The verifier remains fail-closed for unknown triggers, incorrect owner, routine binding, fixed search_path or runtime ACL."
+  - "The generated migration ledger must be rechecked by Linux CI before acceptance."
+candidate_preparation:
+  plan: "N00-N07 bounded candidate preparation (2026-09-07); this is not runtime acceptance evidence."
+  source_state: "uncommitted-worktree on dev@fd5a8af493c989267377be75247a9aabeffce140"
+  source_input_fingerprint: "sha256-utf8-lf-record-manifest-v1:5e0bc259cdbb7efa0fdd38a53713bad61fa517fedd04effed49aca6a0ce64094"
+  n01_catalog_contract:
+    reviewed_trigger:
+      relation: "sm_resume_sessions in the installation schema"
+      name: "sm_resume_sessions_release_mix_delivery_owners"
+      function: "northstar_release_sm_session_mix_delivery_owners()"
+      timing_event_row: "BEFORE DELETE FOR EACH ROW (tgtype=11)"
+      required_mode: "enabled origin (tgenabled=O), unqualified, no args, non-constraint, non-deferrable"
+      function_contract: "schema owner, SECURITY INVOKER trigger helper; the catalog verifier itself remains SECURITY DEFINER with an installation-schema-pinned search_path and no PUBLIC EXECUTE"
+    collection_rule: "0138 retains an exact eight-trigger set and rejects missing, moved, extra, disabled, mismatched, or ACL/search_path-drifted entries; it is not a count-at-least exemption."
+    bootstrap_order: "explicit migrator applies SQLx migrations through 0138, then existing identity/grant reconciliation runs; runtime only performs read-only ledger/catalog attestation and never migrates or repairs grants."
+    static_review: "0136 defines the hook; 0138 names the same relation/name/function/tgtype and retains owner, trigger-attribute, routine, ACL, and unknown-trigger checks."
+  n02_diagnostics_contract:
+    authority: "northstar_session_capability_catalog_healthy(current_schema()) remains the only readiness verdict."
+    failure_behavior: "false, NULL, missing data, decode failure, and query failure never produce readiness."
+    diagnostics: "same read-only attestation transaction; fixed reason codes; 64-object and 16 KiB limits; unexpected catalog identifiers are not rendered; a diagnostic failure is secondary and cannot replace the primary attestation failure."
+    no_new_surface: "No migration, grant, schema mutation, HTTP endpoint, application-row read, JID, token, or credential access was added."
+  n03_ledger_contract:
+    source_sets: "The test compares every compiled SQLx MIGRATOR version/description/checksum with the generated repository ledger manifest; version 0021 remains the sole explicit historical gap."
+    immutable_bytes: "The existing migration static checker retains the separate published 0001-0013 checksum manifest; runtime migration application remains paused."
+  runtime_matrix_definitions:
+    DB01: "empty isolated database -> explicit migrator through 0138 -> ledger, canonicalizer marker, catalog, and runtime attestation"
+    DB02: "real 0131 baseline -> full upgrade through 0138, including 0132 checksum regression"
+    DB03: "real 0137 baseline -> 0138 recognizes only the reviewed catalog delta without rewriting prior ledger rows"
+    DB04: "DB03 result -> normal migrator rerun has no duplicate trigger or ledger row"
+    DB05: "template to clone -> cloned runtime role passes the same read-only contract"
+    DB06: "random isolated schema and supported public installation checked separately for shared-schema misreads"
+    DB07: "0138-applied database plus old binary -> exact-ledger rejection, never automatic rollback"
+    DB08: "0137 database plus new runtime binary -> missing migration rejects startup without implicit migration"
+    DB09: "one catalog attribute changed per run -> fail closed with controlled diagnostics"
+    DB10: "0132 historical failure/checksum fixture -> no successful ledger row and unknown checksum rejection"
+  runtime_status: "not-run: safety-pause (no database creation, migration, role, permission, container, or WSL execution)"
+  n07_receipt_reference:
+    source_fingerprint: "sha256-utf8-lf-record-manifest-v1:5e0bc259cdbb7efa0fdd38a53713bad61fa517fedd04effed49aca6a0ce64094"
+    passed_pure_unit: "compiled SQLx MIGRATOR is compared entry-by-entry with the repository ledger; synthetic missing, extra, and checksum-changed entries reject."
+    pending: "DB01-DB10 remain not-run: safety-pause and are required before acceptance."
+evidence:
+  exact_result_commit: null
+  workflow_runs: []
+  pending_reason: "No exact post-change Linux role/migration job has completed."

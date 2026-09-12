@@ -1,4 +1,215 @@
 use sqlx::postgres::PgPoolOptions;
+use std::borrow::Cow;
+
+// Exact source checksum from b588a0a. It is historical test evidence only;
+// it is never accepted as a valid current migration checksum.
+const MIGRATION_0132_PRE_FIX_SHA384: &str =
+    "878db593eff69e873434c109ed78211f2039fedf36076026a635f69add974f6f5f43c6a062a010ce48c8a102e0cfe6d5";
+// Exact corrected source checksum recorded by 6af75a6 and the repository
+// ledger manifest.
+const MIGRATION_0132_CURRENT_SHA384: &str =
+    "3bb9cc8cbda0798d78eb1f22b99a2076bdc6ed321aa59564e7c88faaffe8fbb4b0159ff6a6cc346a1d32769a408d535d";
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn migration_0132_current() -> sqlx::migrate::Migration {
+    super::MIGRATOR
+        .iter()
+        .find(|migration| migration.version == 132)
+        .cloned()
+        .expect("the embedded migration chain must contain 0132")
+}
+
+fn migration_0132_only(migration: sqlx::migrate::Migration) -> sqlx::migrate::Migrator {
+    sqlx::migrate::Migrator {
+        migrations: Cow::Owned(vec![migration]),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    }
+}
+
+fn migrator_through(version: i64) -> sqlx::migrate::Migrator {
+    sqlx::migrate::Migrator {
+        migrations: Cow::Owned(
+            super::MIGRATOR
+                .iter()
+                .filter(|migration| migration.version <= version)
+                .cloned()
+                .collect(),
+        ),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL pointing at the N08-owned empty loopback database"]
+async fn historical_0137_baseline_is_built_from_the_embedded_migration_chain() {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to the N08-owned historical-0137 database");
+    assert_eq!(
+        std::env::var("NORTHSTAR_N08_HISTORICAL_0137_FIXTURE").as_deref(),
+        Ok("true"),
+        "the historical-0137 fixture must be explicitly opted in"
+    );
+    assert!(
+        url.contains("@127.0.0.1:") && url.contains("/xmpp"),
+        "historical-0137 fixture is restricted to an owned loopback xmpp database"
+    );
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
+    let application_relations: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+           FROM pg_catalog.pg_class AS relation
+           JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid=relation.relnamespace
+          WHERE namespace.nspname='public'
+            AND relation.relkind IN ('r','p','v','m','S','f')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        application_relations, 0,
+        "historical-0137 fixture must begin before application DDL"
+    );
+
+    let historical = migrator_through(137);
+    let expected_rows = i64::try_from(historical.iter().count()).unwrap();
+    historical.run(&pool).await.unwrap();
+    let ledger: (i64, Option<i64>, bool) = sqlx::query_as(
+        "SELECT COUNT(*),MAX(version),COALESCE(bool_and(success),FALSE)
+           FROM public._sqlx_migrations",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        ledger,
+        (expected_rows, Some(137), true),
+        "historical baseline must contain precisely the embedded successful migrations through 0137"
+    );
+    let migration_0138_rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM public._sqlx_migrations WHERE version=138")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        migration_0138_rows, 0,
+        "historical baseline must never apply then erase migration 0138"
+    );
+
+    // Keep a durable application record so the external R07 harness can
+    // prove that the explicit 0138 migration and its idempotent rerun do not
+    // rewrite historical data.  `actor_id` is deliberately NULL: this is a
+    // standalone migration fixture, not a fabricated user session.
+    sqlx::query(
+        "INSERT INTO public.audit_log(action,target,details)
+         VALUES('n08.migration.fixture','historical-0137',
+                jsonb_build_object('migration_version',137))",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let fixture_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM public.audit_log
+          WHERE action='n08.migration.fixture' AND target='historical-0137'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        fixture_rows, 1,
+        "historical fixture record was not retained"
+    );
+}
+
+fn pre_fix_0132_migrator() -> sqlx::migrate::Migrator {
+    let mut migration = migration_0132_current();
+    let corrected_arguments = "        migration_schema,\n        migration_schema\n";
+    let historical_arguments = "        migration_schema\n";
+    let historical_sql = migration
+        .sql
+        .replacen(corrected_arguments, historical_arguments, 1);
+    assert_ne!(
+        historical_sql,
+        migration.sql.as_ref(),
+        "migration 0132 must retain the corrected two-argument format invocation"
+    );
+    migration = sqlx::migrate::Migration::new(
+        migration.version,
+        migration.description.clone(),
+        migration.migration_type,
+        Cow::Owned(historical_sql),
+        migration.no_tx,
+    );
+    assert_eq!(
+        hex_encode(migration.checksum.as_ref()),
+        MIGRATION_0132_PRE_FIX_SHA384,
+        "the regression fixture must remain the exact b588 pre-fix migration byte stream"
+    );
+    migration_0132_only(migration)
+}
+
+/// Build only the catalog contract that migration 0132 actually consumes.
+/// The full historical 0013-to-current upgrade is covered by its own test;
+/// duplicating it here hides a focused migration regression behind unrelated
+/// replay cost. Applying the exact 0129 source gives this fixture the real
+/// predecessor routine and trigger, rather than a hand-written imitation.
+async fn install_0132_predecessor(pool: &sqlx::PgPool) {
+    sqlx::query(
+        "CREATE TABLE pubsub_nodes(\
+             id UUID PRIMARY KEY,\
+             node_type TEXT NOT NULL,\
+             children_max INTEGER NOT NULL\
+         )",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE pubsub_collection_members(\
+             collection_node_id UUID NOT NULL,\
+             child_node_id UUID NOT NULL,\
+             PRIMARY KEY(collection_node_id,child_node_id)\
+         )",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let predecessor = super::MIGRATOR
+        .iter()
+        .find(|migration| migration.version == 129)
+        .expect("the embedded migration chain must contain 0129");
+    // Migration 0129 is a trusted, repository-owned multi-statement DDL
+    // script. `query()` prepares a single statement, so PostgreSQL rejects
+    // the fixture before it can establish the actual 0132 predecessor.
+    sqlx::raw_sql(predecessor.sql.as_ref())
+        .execute(pool)
+        .await
+        .unwrap();
+    let helper_exists: bool = sqlx::query_scalar(
+        "SELECT pg_catalog.to_regprocedure(\
+             pg_catalog.format('%I.check_pubsub_collection_edge()',pg_catalog.current_schema())\
+         ) IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(
+        helper_exists,
+        "the focused 0132 predecessor must install the real 0129 collection-edge helper"
+    );
+}
 
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL pointing at a disposable random PostgreSQL schema prepared at migration 0013"]
@@ -503,4 +714,164 @@ async fn baseline_0013_upgrades_through_the_real_domain_migrator() {
         .execute(&pool)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL pointing at a disposable random PostgreSQL schema for the focused migration-0132 predecessor contract"]
+async fn migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksum_is_enforced() {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to the disposable migration-0132 schema");
+    assert!(
+        url.contains("/xmpp_test?") && url.contains("search_path%3Dnorthstar_m0132_"),
+        "migration 0132 integrity test requires its generated xmpp_test schema"
+    );
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
+    let initial_ledger_exists: bool = sqlx::query_scalar(
+        "SELECT pg_catalog.to_regclass(\
+             pg_catalog.format('%I._sqlx_migrations',pg_catalog.current_schema())\
+         ) IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !initial_ledger_exists,
+        "the focused 0132 fixture must not inherit an unrelated migration ledger"
+    );
+    install_0132_predecessor(&pool).await;
+
+    let current_0132 = migration_0132_current();
+    assert_eq!(
+        hex_encode(current_0132.checksum.as_ref()),
+        MIGRATION_0132_CURRENT_SHA384,
+        "the embedded migration source and reviewed current 0132 checksum drifted"
+    );
+    let pre_fix = pre_fix_0132_migrator();
+    let pre_fix_checksum = pre_fix
+        .iter()
+        .find(|migration| migration.version == 132)
+        .expect("the pre-fix fixture must contain 0132")
+        .checksum
+        .as_ref()
+        .to_vec();
+
+    // The b588 body fails inside its normal transactional migration before
+    // SQLx can insert a successful ledger record. This establishes the local
+    // recovery invariant; it deliberately does not claim anything about an
+    // independently administered database that has not been inspected.
+    let pre_fix_error = pre_fix.run(&pool).await.unwrap_err();
+    assert!(
+        pre_fix_error
+            .to_string()
+            .contains("too few arguments for format()"),
+        "the reconstructed pre-fix migration failed for an unexpected reason: {pre_fix_error}"
+    );
+
+    // SQLx takes the migration advisory lock at session scope.  The fixture
+    // intentionally exercises a failed migration, and SQLx's error path is
+    // not a contract that a pool-managed session has already released that
+    // lock before a subsequent migrator acquires another connection.  Close
+    // this dedicated failure-verification pool before testing recovery: doing
+    // so releases only its own PostgreSQL sessions, while the isolated schema
+    // and the failed ledger state remain available for the assertions below.
+    //
+    // Keeping the recovery run in the same pool can make the test wait on its
+    // own failed predecessor forever, which turns a migration-integrity check
+    // into a suite timeout rather than a deterministic recovery assertion.
+    pool.close().await;
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
+    let failed_attempt_rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE version=132")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        failed_attempt_rows, 0,
+        "a transactional 0132 failure must not leave a dirty or successful ledger row"
+    );
+
+    // The corrected source must then upgrade the real 0129 predecessor
+    // contract, and a repeated run must be a checksum-validated no-op.
+    let current = migration_0132_only(current_0132.clone());
+    current.run(&pool).await.unwrap();
+    current.run(&pool).await.unwrap();
+    let final_state: (i64, Option<i64>, bool) = sqlx::query_as(
+        "SELECT COUNT(*),MAX(version),COALESCE(bool_and(success),FALSE) FROM _sqlx_migrations",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(final_state, (1, Some(132), true));
+
+    let routine_is_schema_local_invoker: bool = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE((
+          SELECT NOT routine.prosecdef
+             AND routine.proconfig=ARRAY[
+                   pg_catalog.format(
+                     'search_path=pg_catalog, %I, pg_temp',
+                     pg_catalog.current_schema()
+                   )
+                 ]::pg_catalog.text[]
+            FROM pg_catalog.pg_proc AS routine
+           WHERE routine.oid=pg_catalog.to_regprocedure(
+                   pg_catalog.format(
+                     '%I.check_pubsub_collection_edge()',
+                     pg_catalog.current_schema()
+                   )
+                 )
+        ),FALSE)
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        routine_is_schema_local_invoker,
+        "migration 0132 must pin the PubSub collection-edge guard to its installation schema without granting definer authority"
+    );
+
+    let old_checksum_success_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM _sqlx_migrations
+          WHERE version=132
+            AND success
+            AND pg_catalog.encode(checksum,'hex')=$1",
+    )
+    .bind(MIGRATION_0132_PRE_FIX_SHA384)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        old_checksum_success_rows, 0,
+        "the current isolated ledger must not accept the pre-fix 0132 checksum"
+    );
+
+    // Simulate only the historical checksum in an otherwise successful
+    // isolated ledger. SQLx must reject it rather than silently rewriting the
+    // row, then accept an explicit restoration of the reviewed checksum.
+    sqlx::query("UPDATE _sqlx_migrations SET checksum=$1 WHERE version=132")
+        .bind(&pre_fix_checksum)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mismatch = current.run(&pool).await.unwrap_err();
+    assert!(
+        matches!(mismatch, sqlx::migrate::MigrateError::VersionMismatch(132)),
+        "the current migrator must reject a successful 0132 row with the pre-fix checksum: {mismatch}"
+    );
+    sqlx::query("UPDATE _sqlx_migrations SET checksum=$1 WHERE version=132")
+        .bind(current_0132.checksum.as_ref())
+        .execute(&pool)
+        .await
+        .unwrap();
+    current.run(&pool).await.unwrap();
 }

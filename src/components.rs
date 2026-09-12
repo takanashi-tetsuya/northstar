@@ -198,6 +198,7 @@ async fn wait_for_component_shutdown(cancel: &tokio_util::sync::CancellationToke
 pub async fn serve(
     state: Arc<AppState>,
     cancel: tokio_util::sync::CancellationToken,
+    listener: Option<TcpListener>,
 ) -> Result<()> {
     // This task participates in main's listener select. A disabled or empty
     // component configuration is an idle listener state, not a successful
@@ -241,15 +242,11 @@ pub async fn serve(
         return result;
     }
 
-    let listener = TcpListener::bind(state.config.component_bind)
-        .await
-        .with_context(|| {
-            format!(
-                "could not bind external component listener to {}",
-                state.config.component_bind
-            )
-        })?;
-    tracing::info!(address = %state.config.component_bind, "XMPP external component listener ready");
+    let listener = listener.context("external component listener was not activated")?;
+    let address = listener
+        .local_addr()
+        .context("could not inspect external component listener")?;
+    tracing::info!(%address, "XMPP external component listener ready");
     let result = loop {
         let (stream, peer) = tokio::select! {
             _ = cancel.cancelled() => break Ok(()),

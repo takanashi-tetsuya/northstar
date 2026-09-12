@@ -5,6 +5,7 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 test_database="${XMPP_TEST_DATABASE:-xmpp_test}"
 random_suffix="$(tr -d '-' </proc/sys/kernel/random/uuid)"
 test_schema="northstar_api_operations_it_$random_suffix"
+test_role="northstar_api_operations_role_$random_suffix"
 
 if [[ "$test_database" != "xmpp_test" ]]; then
   echo "API operation tests are restricted to the dedicated xmpp_test database" >&2
@@ -16,12 +17,19 @@ if [[ ! "$test_schema" =~ ^northstar_api_operations_it_[a-f0-9]{32}$ ]]; then
 fi
 
 created=0
+role_created=0
 cleanup() {
   if [[ "$created" == "1" ]]; then
     PGPASSWORD=xmpp-test-password psql \
       --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
       --set ON_ERROR_STOP=1 \
       --command "DROP SCHEMA IF EXISTS \"$test_schema\" CASCADE" >/dev/null
+  fi
+  if [[ "$role_created" == "1" ]]; then
+    PGPASSWORD=xmpp-test-password psql \
+      --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
+      --set ON_ERROR_STOP=1 \
+      --command "DROP ROLE \"$test_role\"" >/dev/null
   fi
 }
 trap cleanup EXIT
@@ -35,10 +43,33 @@ if [[ "$(PGPASSWORD=xmpp-test-password psql \
   echo "refusing to reuse existing PostgreSQL schema: $test_schema" >&2
   exit 2
 fi
-PGPASSWORD=xmpp-test-password psql \
+control_is_superuser="$(PGPASSWORD=xmpp-test-password psql \
   --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
-  --set ON_ERROR_STOP=1 \
-  --command "CREATE SCHEMA \"$test_schema\"" >/dev/null
+  --tuples-only --no-align --set ON_ERROR_STOP=1 \
+  --command 'SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname=current_user')"
+unset TEST_DATABASE_ROLE
+if [[ "$control_is_superuser" == "t" ]]; then
+  # The Docker control identity is privileged; ACL regressions must execute
+  # as an isolated ordinary owner, including after a pool reconnect.
+  PGPASSWORD=xmpp-test-password psql \
+    --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
+    --set ON_ERROR_STOP=1 \
+    --command "CREATE ROLE \"$test_role\" NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS" >/dev/null
+  role_created=1
+  PGPASSWORD=xmpp-test-password psql \
+    --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
+    --set ON_ERROR_STOP=1 \
+    --command "CREATE SCHEMA \"$test_schema\" AUTHORIZATION \"$test_role\"" >/dev/null
+  export TEST_DATABASE_ROLE="$test_role"
+elif [[ "$control_is_superuser" == "f" ]]; then
+  PGPASSWORD=xmpp-test-password psql \
+    --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
+    --set ON_ERROR_STOP=1 \
+    --command "CREATE SCHEMA \"$test_schema\"" >/dev/null
+else
+  echo 'could not determine API operation fixture control privileges' >&2
+  exit 2
+fi
 created=1
 
 cd "$project_dir"
@@ -49,6 +80,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$test_database?options=-csearch_path%3D$test_schema"
+export TEST_DATABASE_SCHEMA="$test_schema"
 
 test_output="$(cargo test --locked --offline 'db::api_operations::tests::' \
   -- --ignored --nocapture --test-threads=1 2>&1)" || {
@@ -56,13 +88,14 @@ test_output="$(cargo test --locked --offline 'db::api_operations::tests::' \
   exit 1
 }
 printf '%s\n' "$test_output"
-if ! grep -Eq 'test result: ok\. 8 passed; 0 failed' <<<"$test_output"; then
-  echo "expected exactly eight ignored API operation tests to execute" >&2
+if ! grep -Eq 'test result: ok\. 10 passed; 0 failed' <<<"$test_output"; then
+  echo "expected exactly ten ignored API operation tests to execute" >&2
   exit 1
 fi
 
 cleanup
 created=0
+role_created=0
 schema_remains="$(PGPASSWORD=xmpp-test-password psql \
   --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
   --tuples-only --no-align \
@@ -70,5 +103,15 @@ schema_remains="$(PGPASSWORD=xmpp-test-password psql \
 if [[ "$schema_remains" != "f" ]]; then
   echo "isolated API operation schema was not removed" >&2
   exit 1
+fi
+if [[ "$control_is_superuser" == "t" ]]; then
+  role_remains="$(PGPASSWORD=xmpp-test-password psql \
+    --host 127.0.0.1 --username xmpp_test --dbname "$test_database" \
+    --tuples-only --no-align --set ON_ERROR_STOP=1 \
+    --command "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='$test_role')")"
+  if [[ "$role_remains" != "f" ]]; then
+    echo 'isolated API operation role was not removed' >&2
+    exit 1
+  fi
 fi
 trap - EXIT

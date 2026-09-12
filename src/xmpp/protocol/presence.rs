@@ -14,7 +14,6 @@ use std::sync::{atomic::Ordering, Arc};
 // Keep the live-session bound aligned with the durable XEP-0198 snapshot
 // validator. An accepted directed presence must remain representable across
 // suspend/resume so that the matching unavailable presence is not lost.
-const MAX_DIRECTED_PRESENCE_RECIPIENTS: usize = 1_024;
 
 enum DirectedPresencePlan {
     None,
@@ -1699,7 +1698,7 @@ impl ProtocolSession {
 }
 
 fn should_resend_pending_outbound_subscription(first_available: bool, ask: Option<&str>) -> bool {
-    first_available && ask == Some("subscribe")
+    northstar_presence_core::should_resend_pending_subscription(first_available, ask)
 }
 
 fn subscription_policy_error(root: Node<'_, '_>, reason: PresencePolicyDenial) -> String {
@@ -1710,17 +1709,7 @@ fn subscription_policy_error(root: Node<'_, '_>, reason: PresencePolicyDenial) -
 }
 
 pub(crate) fn directed_recipient_matches(authorized: &str, requester: &str) -> bool {
-    let (Ok(authorized), Ok(requester)) = (
-        crate::jid::CanonicalJid::parse(authorized),
-        crate::jid::CanonicalJid::parse(requester),
-    ) else {
-        return false;
-    };
-    if authorized.resourcepart().is_some() {
-        authorized == requester
-    } else {
-        authorized.bare() == requester.bare()
-    }
+    northstar_presence_core::directed_recipient_matches(authorized, requester)
 }
 
 fn stamped_subscription_presence(raw: &str, from_bare: &str, to_bare: &str) -> String {
@@ -1772,28 +1761,27 @@ fn offline_replay_became_eligible(
     now_available: bool,
     priority: i16,
 ) -> bool {
-    now_available && priority >= 0 && (!was_available || previous_priority < 0)
+    northstar_presence_core::offline_replay_became_eligible(
+        was_available,
+        previous_priority,
+        now_available,
+        priority,
+    )
 }
 
 fn should_probe_contact_on_presence(first_available: bool, subscription: &str) -> bool {
     // RFC 6121 sections 4.2.2 and 4.3.1 tie automatic contact probes to the
     // start of a presence session. A subsequent status/show update must not
     // amplify into another roster-sized wave of probes.
-    first_available && matches!(subscription, "to" | "both")
+    northstar_presence_core::should_probe_contact_on_presence(first_available, subscription)
 }
 
 fn directed_presence_capacity_reached(current: usize, already_present: bool) -> bool {
-    !already_present && current >= MAX_DIRECTED_PRESENCE_RECIPIENTS
+    northstar_presence_core::directed_presence_capacity_reached(current, already_present)
 }
 
 fn directed_presence_target_is_outside_bare_scope(target: &str, target_bare: &str) -> bool {
-    let (Ok(target), Ok(target_bare)) = (
-        crate::jid::canonical_bare_key(target),
-        crate::jid::canonical_bare_key(target_bare),
-    ) else {
-        return false;
-    };
-    target != target_bare
+    northstar_presence_core::directed_presence_target_is_outside_bare_scope(target, target_bare)
 }
 
 #[cfg(test)]

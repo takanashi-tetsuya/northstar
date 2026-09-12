@@ -27,6 +27,9 @@ backups.
 - Add unresolved compromises only to `docs/KNOWN_ISSUES.md`. Point-in-time
   handoff or validation reports belong in `docs/archive/` with a historical
   banner.
+- Branch governance and release trust assumptions are documented in
+  `docs/governance/branch-rules.md` and
+  `docs/governance/release-roles.md`.
 - Preserve bounded queues, deadlines, payload limits and fail-closed secret,
   TLS and database-role checks. A compatibility exception must be explicit,
   narrowly scoped and documented.
@@ -48,9 +51,9 @@ node scripts/check-tracked-sensitive-files.mjs --include-untracked
 node scripts/verify-crypto-artifacts.mjs
 ```
 
-Run `cargo audit` and `cargo deny --all-features --locked check` for dependency
-changes. The release preflight requires both tools; install them from their
-official Rust packages using a reviewed, pinned version.
+Run `cargo audit` and `cargo deny --all-features --locked check` for
+dependency changes. The release preflight requires both tools; install them from
+their official Rust packages using a reviewed, pinned version.
 
 Fuzzing, malformed/adversarial transport traffic, abuse attack matrices,
 extreme load, process/dependency termination, resource exhaustion and public

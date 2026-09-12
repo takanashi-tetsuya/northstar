@@ -1,8 +1,11 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use dashmap::DashMap;
 use hmac::{Hmac, Mac};
+pub use northstar_abuse_policy::{
+    AbuseAction, AbuseConfig, GuardError, PowChallenge, PowIntentRequest, PowIntentView, PowProof,
+    WorkRequirement,
+};
 use rand::RngCore;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use std::{
@@ -14,23 +17,13 @@ use subtle::ConstantTimeEq;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-pub const POW_INTENT_VERSION: u16 = 2;
-const POW_BODY_DIGEST_BYTES: usize = 32;
-const POW_INTENT_PATH_MAX_BYTES: usize = 512;
+pub const POW_INTENT_VERSION: u16 = northstar_abuse_policy::POW_INTENT_VERSION;
+const POW_BODY_DIGEST_BYTES: usize = northstar_abuse_policy::POW_BODY_DIGEST_BYTES;
 
 /// Public, non-secret commitment supplied when a capable client requests a
 /// v2 challenge. `body_sha256` is the base64url (unpadded) SHA-256 of the
 /// canonical operation body; callers never send the body itself to the
 /// challenge endpoint.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PowIntentRequest {
-    pub version: u16,
-    pub method: String,
-    pub path: String,
-    pub body_sha256: String,
-}
-
 /// Server-validated action intent.  It is deliberately independent from the
 /// proof envelope: mutation handlers reconstruct this value from their own
 /// route and pow-less body rather than trusting fields repeated by a client.
@@ -39,14 +32,6 @@ pub struct PowIntent {
     method: String,
     path: String,
     body_sha256: [u8; POW_BODY_DIGEST_BYTES],
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct PowIntentView {
-    pub version: u16,
-    pub method: String,
-    pub path: String,
-    pub body_sha256: String,
 }
 
 impl PowIntent {
@@ -158,109 +143,65 @@ impl PowIntent {
             body_sha256: URL_SAFE_NO_PAD.encode(self.body_sha256),
         }
     }
+
+    fn commitment(&self) -> northstar_abuse_policy::PowIntentCommitment<'_> {
+        northstar_abuse_policy::PowIntentCommitment {
+            method: &self.method,
+            path: &self.path,
+            body_sha256: &self.body_sha256,
+        }
+    }
 }
 
 fn canonical_pow_path(path: &str) -> bool {
-    !path.is_empty()
-        && path.len() <= POW_INTENT_PATH_MAX_BYTES
-        && path.starts_with('/')
-        && path.is_ascii()
-        && !path.contains(['?', '#', '\\', '\0'])
-        && !path.contains("//")
-        && !path.split('/').any(|segment| matches!(segment, "." | ".."))
-        && !path.chars().any(char::is_control)
+    northstar_abuse_policy::canonical_pow_path(path)
 }
 
 fn action_accepts_intent(action: AbuseAction, method: &str, path: &str) -> bool {
-    match (action, method, path) {
-        (AbuseAction::Registration, "POST", "/api/v1/register")
-        | (AbuseAction::Registration, "XMPP", "/xmpp/register")
-        | (AbuseAction::Login, "POST", "/api/v1/login")
-        | (AbuseAction::Message, "XMPP", "/xmpp/message")
-        | (AbuseAction::Report, "POST", "/api/v1/reports")
-        | (AbuseAction::PasswordChange, "PATCH", "/api/v1/me/password")
-        | (AbuseAction::PasswordChange, "XMPP", "/xmpp/password-change")
-        | (AbuseAction::PasswordChange, "XMPP", "/xmpp/account-remove") => true,
-        (AbuseAction::Appeal, "POST", path) => path
-            .strip_prefix("/api/v1/reports/")
-            .and_then(|tail| tail.strip_suffix("/appeals"))
-            .and_then(|id| Uuid::parse_str(id).ok().map(|parsed| (id, parsed)))
-            .is_some_and(|(id, parsed)| id == parsed.to_string()),
-        _ => false,
-    }
+    northstar_abuse_policy::action_accepts_intent(action, method, path)
 }
 
 /// Deterministic JSON used only as a digest preimage. Object keys are sorted;
 /// arrays retain order; scalar serialization follows JSON. The returned bytes
 /// are never persisted. Browser code implements the same small profile.
 pub fn canonical_json_body_digest(value: &serde_json::Value) -> [u8; 32] {
-    fn append(value: &serde_json::Value, output: &mut String) {
-        match value {
-            serde_json::Value::Null => output.push_str("null"),
-            serde_json::Value::Bool(value) => {
-                output.push_str(if *value { "true" } else { "false" })
-            }
-            serde_json::Value::Number(value) => output.push_str(&value.to_string()),
-            serde_json::Value::String(value) => output.push_str(
-                &serde_json::to_string(value).expect("serializing a JSON string cannot fail"),
-            ),
-            serde_json::Value::Array(values) => {
-                output.push('[');
-                for (index, value) in values.iter().enumerate() {
-                    if index > 0 {
-                        output.push(',');
-                    }
-                    append(value, output);
-                }
-                output.push(']');
-            }
-            serde_json::Value::Object(values) => {
-                output.push('{');
-                let mut keys = values.keys().collect::<Vec<_>>();
-                keys.sort_unstable();
-                for (index, key) in keys.into_iter().enumerate() {
-                    if index > 0 {
-                        output.push(',');
-                    }
-                    output.push_str(
-                        &serde_json::to_string(key)
-                            .expect("serializing a JSON object key cannot fail"),
-                    );
-                    output.push(':');
-                    append(&values[key], output);
-                }
-                output.push('}');
-            }
-        }
-    }
-
-    let mut canonical = String::new();
-    append(value, &mut canonical);
-    Sha256::digest(canonical.as_bytes()).into()
+    northstar_abuse_policy::canonical_json_body_digest(value)
 }
 
-const MAX_ACTIVE_POW_CHALLENGES_GLOBAL: usize = 50_000;
-const MAX_ACTIVE_POW_CHALLENGES_PER_ACTOR: usize = 8;
-const MAX_ACTIVE_POW_CHALLENGES_PER_IP: usize = 256;
-const MAX_CHALLENGE_ISSUES_PER_IP_WINDOW: usize = 300;
-const CHALLENGE_CAPACITY_ADVISORY_LOCK: i64 = 5_640_963_765_310_692_929;
-const MESSAGE_ADMISSION_CAPACITY_SHARDS: u8 = 64;
-const MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_SHARD: i32 = 32_768;
-const MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_USER: i64 = 4_096;
-const MESSAGE_ADMISSION_LEASE: Duration = Duration::from_secs(60);
-const MESSAGE_ADMISSION_PENDING_TTL: Duration = Duration::from_secs(30 * 60);
-const MESSAGE_ADMISSION_ACCEPTED_TTL: Duration = Duration::from_secs(6 * 60 * 60);
-const MESSAGE_ADMISSION_CLEANUP_BATCH: i64 = 1_000;
+const MAX_ACTIVE_POW_CHALLENGES_GLOBAL: usize =
+    northstar_abuse_policy::MAX_ACTIVE_POW_CHALLENGES_GLOBAL;
+const MAX_ACTIVE_POW_CHALLENGES_PER_ACTOR: usize =
+    northstar_abuse_policy::MAX_ACTIVE_POW_CHALLENGES_PER_ACTOR;
+const MAX_ACTIVE_POW_CHALLENGES_PER_IP: usize =
+    northstar_abuse_policy::MAX_ACTIVE_POW_CHALLENGES_PER_IP;
+const MAX_CHALLENGE_ISSUES_PER_IP_WINDOW: usize =
+    northstar_abuse_policy::MAX_CHALLENGE_ISSUES_PER_IP_WINDOW;
+const CHALLENGE_CAPACITY_ADVISORY_LOCK: i64 =
+    northstar_abuse_policy::CHALLENGE_CAPACITY_ADVISORY_LOCK;
+#[cfg(test)]
+const MESSAGE_ADMISSION_CAPACITY_SHARDS: u8 =
+    northstar_abuse_policy::MESSAGE_ADMISSION_CAPACITY_SHARDS;
+const MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_SHARD: i32 =
+    northstar_abuse_policy::MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_SHARD;
+const MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_USER: i64 =
+    northstar_abuse_policy::MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_USER;
+const MESSAGE_ADMISSION_LEASE: Duration = northstar_abuse_policy::MESSAGE_ADMISSION_LEASE;
+const MESSAGE_ADMISSION_PENDING_TTL: Duration =
+    northstar_abuse_policy::MESSAGE_ADMISSION_PENDING_TTL;
+const MESSAGE_ADMISSION_ACCEPTED_TTL: Duration =
+    northstar_abuse_policy::MESSAGE_ADMISSION_ACCEPTED_TTL;
+const MESSAGE_ADMISSION_CLEANUP_BATCH: i64 =
+    northstar_abuse_policy::MESSAGE_ADMISSION_CLEANUP_BATCH;
 /// A delivered offline message retains its replay tombstone for exactly this
 /// long.  The PostgreSQL trigger in migration 0079 uses the same 30-day value.
 /// Live queued messages can outlast this bound and are therefore protected by
 /// the deployment reference fence in `db::abuse_keys` as well.
 pub(crate) const OFFLINE_MESSAGE_ADMISSION_REPLAY_GRACE: Duration =
-    Duration::from_secs(30 * 24 * 60 * 60);
+    northstar_abuse_policy::OFFLINE_MESSAGE_ADMISSION_REPLAY_GRACE;
 /// Local waiters queue on these stripes before acquiring a PgPool connection.
 /// PostgreSQL try-locks below remain the cross-process authority.
-const ABUSE_STATE_GATE_SHARDS: usize = 1_024;
-const ABUSE_STATE_ADVISORY_HASH_SEED: i64 = 5_841_153_820_082_015_233;
+const ABUSE_STATE_GATE_SHARDS: usize = northstar_abuse_policy::ABUSE_STATE_GATE_SHARDS;
+const ABUSE_STATE_ADVISORY_HASH_SEED: i64 = northstar_abuse_policy::ABUSE_STATE_ADVISORY_HASH_SEED;
 
 #[derive(Debug)]
 pub struct ChallengeCapacityExceeded {
@@ -294,16 +235,6 @@ impl std::error::Error for AbuseStateBusy {}
 
 pub fn is_abuse_state_busy(error: &anyhow::Error) -> bool {
     error.downcast_ref::<AbuseStateBusy>().is_some()
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AbuseAction {
-    Registration,
-    Message,
-    Report,
-    Appeal,
-    Login,
-    PasswordChange,
 }
 
 #[derive(Debug)]
@@ -541,33 +472,15 @@ fn punish_db_states(
 }
 
 fn opaque_actor_key(action: AbuseAction, actor: &str, secret: &[u8]) -> String {
-    let state = state_key(action, actor);
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC accepts every key length");
-    mac.update(b"actor\0");
-    mac.update(state.as_bytes());
-    URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+    northstar_abuse_policy::opaque_actor_key(action, actor, secret)
 }
 
 fn opaque_challenge_capacity_key(action: AbuseAction, actor: &str, secret: &[u8]) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC accepts every key length");
-    mac.update(b"challenge-capacity\0");
-    if actor.starts_with("ip:") {
-        // The source-IP ceiling is deliberately shared by all challenge
-        // actions. Otherwise an unauthenticated caller could multiply the
-        // storage allowance by cycling action names.
-        mac.update(b"ip\0");
-    } else {
-        mac.update(action.as_str().as_bytes());
-        mac.update(b"\0actor\0");
-    }
-    mac.update(actor.as_bytes());
-    URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+    northstar_abuse_policy::opaque_challenge_capacity_key(action, actor, secret)
 }
 
 fn derive_actor_key_secret(secret: &[u8]) -> Vec<u8> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC accepts every secret length");
-    mac.update(b"northstar/abuse-actor-key/v1");
-    mac.finalize().into_bytes().to_vec()
+    northstar_abuse_policy::derive_actor_key_secret(secret).to_vec()
 }
 
 #[derive(Clone, Copy)]
@@ -728,11 +641,21 @@ fn content_identity_authenticators(
 }
 
 fn derive_content_identity_key(actor_secret: &[u8], purpose: ContentIdentityPurpose) -> Vec<u8> {
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(actor_secret).expect("HMAC accepts every secret length");
-    mac.update(b"northstar/content-identity/subkey/v1\0");
-    message_admission_mac_field(&mut mac, purpose.label());
-    mac.finalize().into_bytes().to_vec()
+    let purpose = match purpose {
+        ContentIdentityPurpose::PersonalMessage => {
+            northstar_abuse_policy::ContentIdentityPurpose::PersonalMessage
+        }
+        ContentIdentityPurpose::PersonalRetraction => {
+            northstar_abuse_policy::ContentIdentityPurpose::PersonalRetraction
+        }
+        ContentIdentityPurpose::MixMessage => {
+            northstar_abuse_policy::ContentIdentityPurpose::MixMessage
+        }
+        ContentIdentityPurpose::MixRetraction => {
+            northstar_abuse_policy::ContentIdentityPurpose::MixRetraction
+        }
+    };
+    northstar_abuse_policy::derive_content_identity_key(actor_secret, purpose).to_vec()
 }
 
 #[cfg(test)]
@@ -780,19 +703,11 @@ pub(crate) fn test_mix_retraction_content_keyring() -> MixRetractionContentKeyri
 }
 
 fn actor_key_id(secret: &[u8]) -> String {
-    let mut digest = Sha256::new();
-    digest.update(b"northstar/abuse-key-id/v1\0");
-    digest.update(secret);
-    URL_SAFE_NO_PAD.encode(&digest.finalize()[..12])
+    northstar_abuse_policy::actor_key_id(secret)
 }
 
 fn subject_hash(action: AbuseAction, subject: &str, secret: &[u8]) -> Vec<u8> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC accepts every key length");
-    mac.update(b"subject\0");
-    mac.update(action.as_str().as_bytes());
-    mac.update(b"\0");
-    mac.update(subject.as_bytes());
-    mac.finalize().into_bytes().to_vec()
+    northstar_abuse_policy::subject_hash(action, subject, secret).to_vec()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -810,44 +725,19 @@ fn pow_prefix(
     server_nonce: &str,
     intent: Option<&PowIntent>,
 ) -> String {
-    fn field(mac: &mut Hmac<Sha256>, value: &[u8]) {
-        mac.update(&u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
-        mac.update(value);
-    }
-
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC accepts every key length");
-    mac.update(b"northstar/pow-challenge/v2\0");
-    field(&mut mac, &version.to_be_bytes());
-    field(&mut mac, id.as_bytes());
-    field(&mut mac, action.as_str().as_bytes());
-    field(&mut mac, key_id.as_bytes());
-    field(&mut mac, subject.as_bytes());
-    let mut actors = actors.to_vec();
-    actors.sort();
-    actors.dedup();
-    field(
-        &mut mac,
-        &u64::try_from(actors.len())
-            .unwrap_or(u64::MAX)
-            .to_be_bytes(),
-    );
-    for actor in actors {
-        field(&mut mac, actor.as_bytes());
-    }
-    field(&mut mac, &work_factor.to_be_bytes());
-    field(&mut mac, &issued_at.timestamp_millis().to_be_bytes());
-    field(&mut mac, &expires_at.timestamp_millis().to_be_bytes());
-    field(&mut mac, server_nonce.as_bytes());
-    field(&mut mac, &[u8::from(intent.is_some())]);
-    if let Some(intent) = intent {
-        field(&mut mac, intent.method.as_bytes());
-        field(&mut mac, intent.path.as_bytes());
-        field(&mut mac, &intent.body_sha256);
-    }
-    let binding = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
-    format!(
-        "northstar:v{version}:{id}:{}:{key_id}:{server_nonce}:{binding}:",
-        action.as_str()
+    northstar_abuse_policy::compute_pow_prefix_with_commitment(
+        secret,
+        version,
+        id,
+        action,
+        key_id,
+        subject,
+        actors,
+        work_factor,
+        issued_at,
+        expires_at,
+        server_nonce,
+        intent.map(PowIntent::commitment),
     )
 }
 
@@ -872,11 +762,6 @@ fn message_admission_mac_field(mac: &mut Hmac<Sha256>, value: &[u8]) {
     mac.update(value);
 }
 
-fn message_admission_digest_field(digest: &mut Sha256, value: &[u8]) {
-    digest.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
-    digest.update(value);
-}
-
 /// Stable lookup key for the offline-delivery tombstone. The identity value is
 /// a client-generated XEP-0359 origin-id or a random one-use challenge UUID,
 /// so this digest is not an enumerable account/JID hash. Payload authenticity
@@ -886,14 +771,13 @@ fn message_admission_identity_digest(
     identity_kind: &[u8],
     identity_value: &[u8],
 ) -> Vec<u8> {
-    let mut digest = Sha256::new();
-    digest.update(b"northstar/offline-message-identity/v1\0");
-    message_admission_digest_field(&mut digest, AbuseAction::Message.as_str().as_bytes());
-    message_admission_digest_field(&mut digest, request.account_bare.as_bytes());
-    message_admission_digest_field(&mut digest, request.normalized_target.as_bytes());
-    message_admission_digest_field(&mut digest, identity_kind);
-    message_admission_digest_field(&mut digest, identity_value);
-    digest.finalize().to_vec()
+    northstar_abuse_policy::message_admission_identity_digest(
+        request.account_bare,
+        request.normalized_target,
+        identity_kind,
+        identity_value,
+    )
+    .to_vec()
 }
 
 fn message_admission_material(
@@ -902,40 +786,23 @@ fn message_admission_material(
     identity_kind: &[u8],
     identity_value: &[u8],
 ) -> (Vec<u8>, Vec<u8>) {
-    let mut key_mac =
-        Hmac::<Sha256>::new_from_slice(secret).expect("HMAC accepts every key length");
-    key_mac.update(b"northstar/message-admission/key/v1\0");
-    message_admission_mac_field(&mut key_mac, AbuseAction::Message.as_str().as_bytes());
-    message_admission_mac_field(&mut key_mac, request.account_bare.as_bytes());
-    message_admission_mac_field(&mut key_mac, request.normalized_target.as_bytes());
-    message_admission_mac_field(&mut key_mac, identity_kind);
-    message_admission_mac_field(&mut key_mac, identity_value);
-    let admission_key = key_mac.finalize().into_bytes().to_vec();
-
-    let payload_hash = Sha256::digest(request.normalized_payload.as_bytes());
-    let mut payload_mac =
-        Hmac::<Sha256>::new_from_slice(secret).expect("HMAC accepts every key length");
-    payload_mac.update(b"northstar/message-admission/payload/v1\0");
-    message_admission_mac_field(&mut payload_mac, AbuseAction::Message.as_str().as_bytes());
-    message_admission_mac_field(&mut payload_mac, request.account_bare.as_bytes());
-    message_admission_mac_field(&mut payload_mac, request.normalized_target.as_bytes());
-    message_admission_mac_field(&mut payload_mac, identity_kind);
-    message_admission_mac_field(&mut payload_mac, identity_value);
-    message_admission_mac_field(&mut payload_mac, payload_hash.as_slice());
-    let payload_mac = payload_mac.finalize().into_bytes().to_vec();
-    (admission_key, payload_mac)
+    let (admission_key, payload_mac) = northstar_abuse_policy::message_admission_material(
+        request.account_bare,
+        request.normalized_target,
+        identity_kind,
+        identity_value,
+        request.normalized_payload,
+        secret,
+    );
+    (admission_key.to_vec(), payload_mac.to_vec())
 }
 
 fn message_admission_lock_id(admission_key: &[u8]) -> i64 {
-    i64::from_be_bytes(
-        admission_key[..8]
-            .try_into()
-            .expect("message admission HMAC has a 64-bit prefix"),
-    )
+    northstar_abuse_policy::message_admission_lock_id(admission_key)
 }
 
 fn message_admission_capacity_shard(admission_key: &[u8]) -> i16 {
-    i16::from(admission_key[8] % MESSAGE_ADMISSION_CAPACITY_SHARDS)
+    northstar_abuse_policy::message_admission_capacity_shard(admission_key)
 }
 
 fn chrono_duration(duration: Duration) -> chrono::Duration {
@@ -967,38 +834,6 @@ fn retry_after_db(
         })
         .unwrap_or(1)
         .max(1)
-}
-
-impl AbuseAction {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Registration => "registration",
-            Self::Message => "message",
-            Self::Report => "report",
-            Self::Appeal => "appeal",
-            Self::Login => "login",
-            Self::PasswordChange => "password_change",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "registration" => Some(Self::Registration),
-            "message" => Some(Self::Message),
-            "report" => Some(Self::Report),
-            "appeal" => Some(Self::Appeal),
-            "login" => Some(Self::Login),
-            "password_change" => Some(Self::PasswordChange),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PowProof {
-    pub challenge_id: Uuid,
-    pub nonce: String,
 }
 
 /// Immutable, authenticated input to one durable message-rate admission.
@@ -1056,40 +891,6 @@ pub enum MessageAdmissionStart {
     CapacityLimited,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkRequirement {
-    pub action: String,
-    pub step: u32,
-    pub work_factor: u64,
-    pub max_work_factor: u64,
-    pub hard_wait_seconds: u64,
-    pub retry_after_seconds: u64,
-    pub cooldown_seconds: u64,
-    pub approximate_max_device_seconds: u64,
-    pub notice: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct PowChallenge {
-    pub version: u16,
-    pub challenge_id: Uuid,
-    pub prefix: String,
-    pub key_id: String,
-    pub issued_at: chrono::DateTime<chrono::Utc>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
-    pub expires_in_seconds: u64,
-    pub server_nonce: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub intent: Option<PowIntentView>,
-    pub requirement: WorkRequirement,
-}
-
-#[derive(Debug)]
-pub enum GuardError {
-    Required(WorkRequirement),
-    Invalid(&'static str, WorkRequirement),
-}
-
 /// A denial has already mutated persistent challenge/rate state in the
 /// caller's transaction and therefore must be committed before the HTTP error
 /// is returned. Database/internal errors remain ordinary `Err` values and the
@@ -1097,32 +898,6 @@ pub enum GuardError {
 pub enum TransactionalGuardOutcome {
     Allowed(WorkRequirement),
     DeniedNeedsCommit(GuardError),
-}
-
-impl GuardError {
-    pub fn requirement(&self) -> &WorkRequirement {
-        match self {
-            Self::Required(requirement) | Self::Invalid(_, requirement) => requirement,
-        }
-    }
-
-    pub fn message(&self) -> &'static str {
-        match self {
-            Self::Required(_) => "proof of work or cooldown is required",
-            Self::Invalid(message, _) => message,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct AbuseConfig {
-    pub base_work_factor: u64,
-    pub max_work_factor: u64,
-    pub window: Duration,
-    pub cooldown_step: Duration,
-    pub max_wait: Duration,
-    pub message_free_burst: usize,
-    pub approximate_max_device_seconds: u64,
 }
 
 struct ActorState {
@@ -3217,39 +2992,10 @@ impl AbuseGuard {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Policy {
-    free_burst: usize,
-    base_work: u64,
-}
+type Policy = northstar_abuse_policy::Policy;
 
 fn policy(action: AbuseAction, base: u64, message_free_burst: usize) -> Policy {
-    match action {
-        AbuseAction::Registration => Policy {
-            free_burst: 1,
-            base_work: base,
-        },
-        AbuseAction::Message => Policy {
-            free_burst: message_free_burst,
-            base_work: base,
-        },
-        AbuseAction::Report => Policy {
-            free_burst: 0,
-            base_work: base.saturating_mul(2),
-        },
-        AbuseAction::Appeal => Policy {
-            free_burst: 0,
-            base_work: base.saturating_mul(8),
-        },
-        AbuseAction::Login => Policy {
-            free_burst: 5,
-            base_work: base,
-        },
-        AbuseAction::PasswordChange => Policy {
-            free_burst: 3,
-            base_work: base.saturating_mul(4),
-        },
-    }
+    northstar_abuse_policy::policy(action, base, message_free_burst)
 }
 
 /// A message client can legitimately prepare several stanza-bound challenges
@@ -3267,10 +3013,9 @@ fn prefetched_message_challenge_remains_sufficient(
     challenge: &WorkRequirement,
     current: &WorkRequirement,
 ) -> bool {
-    action == AbuseAction::Message
-        && current.retry_after_seconds == 0
-        && challenge.work_factor >= current.work_factor
-        && challenge.hard_wait_seconds >= current.hard_wait_seconds
+    northstar_abuse_policy::prefetched_message_challenge_remains_sufficient(
+        action, challenge, current,
+    )
 }
 
 fn build_requirement(
@@ -3281,58 +3026,14 @@ fn build_requirement(
     retry_after: u64,
     config: &AbuseConfig,
 ) -> WorkRequirement {
-    let step = event_count
-        .saturating_add(1)
-        .saturating_sub(policy.free_burst) as u32;
-    let squared = u64::from(step).saturating_mul(u64::from(step));
-    let penalty_multiplier = 1_u64.checked_shl(penalty.min(20)).unwrap_or(u64::MAX);
-    let work_factor = if step == 0 || policy.base_work == 0 {
-        1
-    } else {
-        policy
-            .base_work
-            .saturating_mul(squared)
-            .saturating_mul(penalty_multiplier)
-            .clamp(1, config.max_work_factor)
-    };
-    let hard_wait = hard_wait_seconds(action, step, penalty)
-        .min(config.max_wait.as_secs())
-        .max(retry_after);
-    WorkRequirement {
-        action: action.as_str().to_owned(),
-        step,
-        work_factor,
-        max_work_factor: config.max_work_factor,
-        hard_wait_seconds: hard_wait,
-        retry_after_seconds: retry_after,
-        // With no accumulated penalty, the next ordinary n² step can fall
-        // only when events age out of the rolling window. Once a failure has
-        // raised the penalty, report its exponentially longer one-level decay
-        // interval instead. This keeps the client notice truthful when an
-        // operator configures the two base intervals differently.
-        cooldown_seconds: if penalty == 0 {
-            config.window.as_secs()
-        } else {
-            penalty_cooldown_interval(config.cooldown_step, penalty).as_secs()
-        },
-        approximate_max_device_seconds: config.approximate_max_device_seconds,
-        notice: "Work rises in quadratic steps, has an operator-calibrated fixed maximum, and falls one penalty level at a time after activity stops. The advertised cooldown is the interval for the current penalty level; each higher level takes twice as long. Standards-only XMPP clients use the free burst and retry cooldown instead of PoW.".to_owned(),
-    }
-}
-
-fn hard_wait_seconds(action: AbuseAction, step: u32, penalty: u32) -> u64 {
-    let base: u64 = match step {
-        0..=3 => 0,
-        4..=7 => 2,
-        8..=11 => 10,
-        12..=15 => 30,
-        _ => 120,
-    };
-    let strict: u64 = match action {
-        AbuseAction::Appeal => 15,
-        _ => 0,
-    };
-    base.max(strict).saturating_mul(1_u64 << penalty.min(8))
+    northstar_abuse_policy::build_requirement(
+        action,
+        policy,
+        event_count,
+        penalty,
+        retry_after,
+        config,
+    )
 }
 
 fn state_key(action: AbuseAction, actor: &str) -> String {
@@ -3362,32 +3063,12 @@ fn decay(state: &mut ActorState, now: Instant, window: Duration, cooldown_step: 
     }
 }
 
-const MAX_PENALTY_LEVEL: u32 = 10;
-
-fn penalty_cooldown_interval(base: Duration, level: u32) -> Duration {
-    base.saturating_mul(1_u32 << level.min(MAX_PENALTY_LEVEL))
-}
-
-fn decayed_penalty(mut level: u32, elapsed: Duration, cooldown_step: Duration) -> (u32, Duration) {
-    if cooldown_step.is_zero() || level == 0 {
-        return (level, Duration::ZERO);
-    }
-    let mut consumed = Duration::ZERO;
-    while level > 0 {
-        let interval = penalty_cooldown_interval(cooldown_step, level);
-        if elapsed.saturating_sub(consumed) < interval {
-            break;
-        }
-        consumed = consumed.saturating_add(interval);
-        level -= 1;
-    }
-    (level, consumed)
+fn decayed_penalty(level: u32, elapsed: Duration, cooldown_step: Duration) -> (u32, Duration) {
+    northstar_abuse_policy::decayed_penalty(level, elapsed, cooldown_step)
 }
 
 fn max_penalty_decay_horizon(cooldown_step: Duration) -> Duration {
-    (1..=MAX_PENALTY_LEVEL).fold(Duration::ZERO, |total, level| {
-        total.saturating_add(penalty_cooldown_interval(cooldown_step, level))
-    })
+    northstar_abuse_policy::max_penalty_decay_horizon(cooldown_step)
 }
 
 #[cfg(test)]

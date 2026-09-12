@@ -44,11 +44,122 @@ fail() {
   exit 1
 }
 
+# The cleanup marker comes from a privileged control query.  Treat it as a
+# small wire protocol, rather than as a best-effort shell split: cleanup may
+# mutate cluster-global roles and databases only after a successful query has
+# returned exactly one six-bit record.  In particular, do not let an erroring
+# query with a stale-looking stdout line authorize teardown.
+read_cleanup_marker_state() {
+  local output_file=$1
+  shift
+  local -a marker_lines=()
+
+  "$@" >"$output_file" || return 1
+  mapfile -t marker_lines <"$output_file"
+  (( ${#marker_lines[@]} == 1 )) || return 1
+  [[ "${marker_lines[0]}" =~ ^[01]:[01]:[01]:[01]:[01]:[01]$ ]] || return 1
+  printf '%s\n' "${marker_lines[0]}"
+}
+
+cleanup_marker_authorizes() {
+  local marker_state=$1
+  local control_marked=''
+  local database_exists=''
+  local database_marked=''
+  local database_owned_by_legacy=''
+  local role_exists=''
+  local role_marked=''
+  local extra=''
+
+  IFS=: read -r control_marked database_exists database_marked \
+    database_owned_by_legacy role_exists role_marked extra <<<"$marker_state"
+  # The controller marker is the root of teardown authority.  Check it
+  # independently before considering the mutable fixture-resource fields, so
+  # the authorization boundary is obvious and cannot be weakened by a later
+  # edit to the resource-state predicate below.
+  [[ "$control_marked" == 1 ]] || return 1
+  [[ -z "$extra" && "$database_exists" =~ ^[01]$ && "$database_marked" =~ ^[01]$ \
+    && "$database_owned_by_legacy" =~ ^[01]$ && "$role_exists" =~ ^[01]$ \
+    && "$role_marked" =~ ^[01]$ ]] \
+    || return 1
+
+  # A database may have been transferred away from the legacy owner during
+  # reconciliation, but an existing database must still carry this fixture's
+  # marker unless it remains owned by the explicitly scoped legacy role.
+  # Likewise, an existing legacy role must carry the fixture marker.  Do not
+  # require all six fields to be one: a prior safe cleanup may already have
+  # removed either object.
+  (( database_exists == 0 || database_marked == 1 || database_owned_by_legacy == 1 )) \
+    && (( role_exists == 0 || role_marked == 1 ))
+}
+
+run_cleanup_marker_parser_self_test() {
+  local test_dir=''
+  local output_file=''
+  test_dir="$(mktemp -d "$tmp_root/northstar-cleanup-marker-self-test.XXXXXX")"
+  output_file="$test_dir/marker-state"
+
+  emit_valid_marker() { printf '%s\n' '1:1:1:1:1:1'; }
+  emit_extra_line() { printf '%s\n%s\n' '1:1:1:1:1:1' '0:0:0:0:0:0'; }
+  emit_extra_blank_line() { printf '%s\n\n' '1:1:1:1:1:1'; }
+  emit_trailing_delimiter() { printf '%s\n' '1:1:1:1:1:1:'; }
+  emit_valid_then_fail() { printf '%s\n' '1:1:1:1:1:1'; return 23; }
+
+  if ! read_cleanup_marker_state "$output_file" emit_valid_marker >/dev/null; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker parser rejected the canonical six-field record'
+  fi
+  if read_cleanup_marker_state "$output_file" emit_extra_line >/dev/null; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker parser accepted an extra output line'
+  fi
+  if read_cleanup_marker_state "$output_file" emit_extra_blank_line >/dev/null; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker parser accepted an extra blank output line'
+  fi
+  if read_cleanup_marker_state "$output_file" emit_trailing_delimiter >/dev/null; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker parser accepted a trailing delimiter'
+  fi
+  if read_cleanup_marker_state "$output_file" emit_valid_then_fail >/dev/null; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker parser accepted stdout from a failed query'
+  fi
+  if cleanup_marker_authorizes '0:1:1:1:1:1'; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker authorization accepted a missing or mismatched control marker'
+  fi
+  if cleanup_marker_authorizes '1:1:0:0:1:1'; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker authorization accepted an unmarked non-legacy database'
+  fi
+  if ! cleanup_marker_authorizes '1:1:0:1:1:1'; then
+    rm -rf -- "$test_dir"
+    fail 'cleanup marker authorization rejected the scoped legacy-owner state'
+  fi
+  rm -rf -- "$test_dir"
+  printf '%s\n' 'cleanup marker parser self-test passed'
+}
+
+if [[ "${1:-}" == '--self-test-cleanup-marker' ]]; then
+  run_cleanup_marker_parser_self_test
+  exit 0
+fi
+
 [[ "${CI:-}" == 'true' && "${NORTHSTAR_DATABASE_ROLE_CI:-}" == 'true' ]] \
   || fail 'refusing destructive test outside an explicitly enabled CI job'
 case "$database_host" in
-  127.0.0.1|localhost|::1) ;;
-  *) fail 'the destructive CI fixture must use a loopback PostgreSQL service' ;;
+  127.0.0.1|localhost|::1)
+    database_transport='loopback-tcp'
+    ;;
+  /tmp/northstar-database-role-wsl.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]/socket)
+    # The local wrapper creates this directory with mode 0700 and starts
+    # PostgreSQL with TCP disabled.  Keep the allow-list exact: accepting an
+    # arbitrary socket path here would make this intentionally destructive
+    # fixture too easy to point at a developer's shared database.
+    database_transport='private-unix-socket'
+    ;;
+  *) fail 'the destructive CI fixture must use its loopback service or its private Unix socket' ;;
 esac
 [[ "$database_port" =~ ^[1-9][0-9]{0,4}$ ]] \
   && (( database_port <= 65535 )) || fail 'invalid PostgreSQL port'
@@ -80,18 +191,16 @@ psql_as() {
     --username "$role" --dbname "$database_name" "$@"
 }
 
-cleanup() {
-  local original_status=$?
-  local cleanup_status=0
-  local marker_state='f:f'
-
-  trap - EXIT
-  set +e
-  if [[ "$database_is_managed" == true ]]; then
-    marker_state=$(control_psql --dbname=postgres --tuples-only --no-align \
-      --set=expected_marker="$marker" <<'PSQL'
+query_cleanup_marker_state() {
+  control_psql --dbname=postgres --tuples-only --no-align \
+    --set=expected_marker="$marker" <<'PSQL'
 WITH fixture AS (
   SELECT
+    COALESCE((
+      SELECT pg_catalog.shobj_description(control.oid,'pg_authid')=:'expected_marker'
+        FROM pg_catalog.pg_roles AS control
+       WHERE control.rolname='northstar_ci_control'
+    ),false) AS control_marked,
     EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname='xmpp') AS database_exists,
     COALESCE((
       SELECT pg_catalog.shobj_description(database.oid,'pg_database')=:'expected_marker'
@@ -109,17 +218,40 @@ WITH fixture AS (
         FROM pg_catalog.pg_roles AS role WHERE role.rolname='xmpp'
     ),false) AS role_marked
 )
-SELECT (database_exists OR role_exists)::pg_catalog.text || ':' ||
-       (
-         (NOT database_exists AND NOT role_exists)
-         OR (role_exists AND role_marked AND (
-               NOT database_exists OR database_marked OR database_owned_by_legacy
-             ))
-       )::pg_catalog.text
+SELECT CASE WHEN control_marked THEN '1' ELSE '0' END || ':' ||
+       CASE WHEN database_exists THEN '1' ELSE '0' END || ':' ||
+       CASE WHEN database_marked THEN '1' ELSE '0' END || ':' ||
+       CASE WHEN database_owned_by_legacy THEN '1' ELSE '0' END || ':' ||
+       CASE WHEN role_exists THEN '1' ELSE '0' END || ':' ||
+       CASE WHEN role_marked THEN '1' ELSE '0' END
   FROM fixture;
 PSQL
-    )
-    if [[ "$marker_state" == 't:t' ]]; then
+}
+
+cleanup() {
+  local original_status=$?
+  local cleanup_status=0
+  local marker_state=''
+  local control_marked=''
+  local database_exists=''
+  local database_marked=''
+  local database_owned_by_legacy=''
+  local role_exists=''
+  local role_marked=''
+  local marker_state_extra=''
+  local marker_state_file=''
+
+  trap - EXIT
+  set +e
+  if [[ "$database_is_managed" == true ]]; then
+    marker_state_file="$runtime_dir/cleanup-marker-state"
+    if marker_state=$(read_cleanup_marker_state "$marker_state_file" query_cleanup_marker_state); then
+      IFS=: read -r control_marked database_exists database_marked \
+        database_owned_by_legacy role_exists role_marked marker_state_extra <<<"$marker_state"
+    else
+      cleanup_status=1
+    fi
+    if (( cleanup_status == 0 )) && cleanup_marker_authorizes "$marker_state"; then
       if [[ "$phase_fixture_database_created" == true ]]; then
         if control_psql --dbname=postgres \
           --command="DROP DATABASE IF EXISTS northstar_ci_grant_phase_fixture WITH (FORCE);"; then
@@ -194,10 +326,13 @@ DROP ROLE IF EXISTS northstar_bootstrap;
 DROP ROLE IF EXISTS northstar_ci_stale_grantee;
 DROP ROLE IF EXISTS northstar_ci_delegated_grantee;
 DROP ROLE IF EXISTS xmpp;
+-- The controller marker is the cleanup authority.  It is deliberately
+-- cleared last, so a failed teardown remains attributable and retryable.
+COMMENT ON ROLE northstar_ci_control IS NULL;
 PSQL
-    elif [[ "$marker_state" != 'f:t' ]]; then
+    else
       printf '%s\n' \
-        'refusing database cleanup because the isolated CI ownership marker is absent or inconsistent' >&2
+        "refusing database cleanup because the isolated CI control marker is absent or inconsistent (control=${control_marked:-invalid} database_exists=${database_exists:-invalid} database_marked=${database_marked:-invalid} database_owned_by_legacy=${database_owned_by_legacy:-invalid} role_exists=${role_exists:-invalid} role_marked=${role_marked:-invalid})" >&2
       cleanup_status=1
     fi
   fi
@@ -227,6 +362,72 @@ write_secret() {
   printf '%s\n' "$value" >"$path"
 }
 
+readonly privilege_matrix_file="$runtime_dir/privilege-matrix.jsonl"
+: >"$privilege_matrix_file"
+
+record_privilege_probe() {
+  local role="$1" database="$2" schema="$3" object="$4" privilege="$5" expected="$6" actual="$7" sqlstate="$8" classification="$9"
+  printf '{"role":"%s","database":"%s","schema":"%s","object":"%s","privilege":"%s","expected":"%s","actual":"%s","sqlstate":"%s","classification":"%s"}\n' \
+    "$role" "$database" "$schema" "$object" "$privilege" "$expected" "$actual" "$sqlstate" "$classification" >>"$privilege_matrix_file"
+}
+
+print_role_diagnostic() {
+  local classification="$1" role="$2" database="$3" schema="$4" object="$5" privilege="$6" expected="$7" actual="$8" sqlstate="$9"
+  printf '[WORKLOAD_ROLE_DIAGNOSTIC]\n' >&2
+  printf '  role: %s\n' "$role" >&2
+  printf '  database: %s\n' "$database" >&2
+  printf '  schema: %s\n' "$schema" >&2
+  printf '  object: %s\n' "$object" >&2
+  printf '  privilege: %s\n' "$privilege" >&2
+  printf '  expected: %s\n' "$expected" >&2
+  printf '  actual: %s\n' "$actual" >&2
+  printf '  SQLSTATE: %s\n' "$sqlstate" >&2
+  printf '  classification: %s\n' "$classification" >&2
+}
+
+parse_sql_metadata() {
+  local sql="$1"
+  local schema="public" object="unknown" privilege="UNKNOWN"
+  if [[ "$sql" =~ ALTER[[:space:]]+TABLE[[:space:]]+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+) ]]; then
+    schema="${BASH_REMATCH[1]}"
+    object="${BASH_REMATCH[2]}"
+    privilege="ALTER"
+  elif [[ "$sql" =~ UPDATE[[:space:]]+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+) ]]; then
+    schema="${BASH_REMATCH[1]}"
+    object="${BASH_REMATCH[2]}"
+    privilege="UPDATE"
+  elif [[ "$sql" =~ DELETE[[:space:]]+FROM[[:space:]]+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+) ]]; then
+    schema="${BASH_REMATCH[1]}"
+    object="${BASH_REMATCH[2]}"
+    privilege="DELETE"
+  elif [[ "$sql" =~ INSERT[[:space:]]+INTO[[:space:]]+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+) ]]; then
+    schema="${BASH_REMATCH[1]}"
+    object="${BASH_REMATCH[2]}"
+    privilege="INSERT"
+  elif [[ "$sql" =~ CREATE[[:space:]]+TEMPORARY ]]; then
+    schema="pg_temp"
+    object="temp_table"
+    privilege="CREATE_TEMP"
+  elif [[ "$sql" =~ CREATE[[:space:]]+TABLE ]]; then
+    schema="public"
+    object="table"
+    privilege="CREATE"
+  elif [[ "$sql" =~ SELECT[[:space:]]+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+) ]]; then
+    schema="${BASH_REMATCH[1]}"
+    object="${BASH_REMATCH[2]}"
+    privilege="EXECUTE"
+  elif [[ "$sql" =~ SET[[:space:]]+ROLE ]]; then
+    schema="pg_catalog"
+    object="role"
+    privilege="SET_ROLE"
+  fi
+  # `read` is executed under `set -e`; terminate the metadata record so a
+  # valid parser result is not reported as an EOF failure after populating all
+  # three fields.  This preserves fail-closed handling for an actual parser
+  # command failure while avoiding a silent harness exit during a denial probe.
+  printf '%s\t%s\t%s\n' "$schema" "$object" "$privilege"
+}
+
 expect_insufficient_privilege() {
   local role=$1
   local password=$2
@@ -234,6 +435,8 @@ expect_insufficient_privilege() {
   local sql=$4
   local output
   local status
+  local schema object privilege
+  IFS=$'\t' read -r schema object privilege < <(parse_sql_metadata "$sql")
 
   denial_probe=$((denial_probe + 1))
   output="$runtime_dir/denial-$denial_probe.log"
@@ -246,13 +449,22 @@ expect_insufficient_privilege() {
   status=$?
   set -e
   if (( status == 0 )); then
+    print_role_diagnostic "SHOULD_DENY_BUT_ALLOWED" "$role" "$database_name" "$schema" "$object" "$privilege" "DENY (42501)" "ALLOWED (00000)" "00000"
+    record_privilege_probe "$role" "$database_name" "$schema" "$object" "$privilege" "42501" "00000" "00000" "SHOULD_DENY_BUT_ALLOWED"
     fail "$label unexpectedly succeeded as $role"
   fi
+  local actual_sqlstate
+  actual_sqlstate="$(sed -nE 's/.*ERROR:[[:space:]]+([0-9A-Z]{5}):.*/\1/p' "$output" | head -n 1)"
+  [[ -n "$actual_sqlstate" ]] || actual_sqlstate="UNKNOWN"
+
   if ! grep -Eq 'ERROR:[[:space:]]+42501:' "$output"; then
+    print_role_diagnostic "UNEXPECTED_SQLSTATE" "$role" "$database_name" "$schema" "$object" "$privilege" "42501" "$actual_sqlstate" "$actual_sqlstate"
+    record_privilege_probe "$role" "$database_name" "$schema" "$object" "$privilege" "42501" "$actual_sqlstate" "$actual_sqlstate" "UNEXPECTED_SQLSTATE"
     printf 'unexpected denial result for %s:\n' "$label" >&2
     sed -E 's/(password=)[^[:space:]]+/\1[REDACTED]/gi' "$output" >&2
     fail "$label failed for a reason other than insufficient_privilege"
   fi
+  record_privilege_probe "$role" "$database_name" "$schema" "$object" "$privilege" "42501" "42501" "42501" "DENIED_AS_EXPECTED"
 }
 
 expect_sqlstate() {
@@ -263,6 +475,8 @@ expect_sqlstate() {
   local sql=$5
   local output
   local status
+  local schema object privilege
+  IFS=$'\t' read -r schema object privilege < <(parse_sql_metadata "$sql")
 
   denial_probe=$((denial_probe + 1))
   output="$runtime_dir/sqlstate-$denial_probe.log"
@@ -275,13 +489,22 @@ expect_sqlstate() {
   status=$?
   set -e
   if (( status == 0 )); then
+    print_role_diagnostic "SHOULD_DENY_BUT_ALLOWED" "$role" "$database_name" "$schema" "$object" "$privilege" "DENY ($expected_state)" "ALLOWED (00000)" "00000"
+    record_privilege_probe "$role" "$database_name" "$schema" "$object" "$privilege" "$expected_state" "00000" "00000" "SHOULD_DENY_BUT_ALLOWED"
     fail "$label unexpectedly succeeded as $role"
   fi
+  local actual_sqlstate
+  actual_sqlstate="$(sed -nE 's/.*ERROR:[[:space:]]+([0-9A-Z]{5}):.*/\1/p' "$output" | head -n 1)"
+  [[ -n "$actual_sqlstate" ]] || actual_sqlstate="UNKNOWN"
+
   if ! grep -Eq "ERROR:[[:space:]]+${expected_state}:" "$output"; then
+    print_role_diagnostic "UNEXPECTED_SQLSTATE" "$role" "$database_name" "$schema" "$object" "$privilege" "$expected_state" "$actual_sqlstate" "$actual_sqlstate"
+    record_privilege_probe "$role" "$database_name" "$schema" "$object" "$privilege" "$expected_state" "$actual_sqlstate" "$actual_sqlstate" "UNEXPECTED_SQLSTATE"
     printf 'unexpected SQLSTATE result for %s:\n' "$label" >&2
     sed -E 's/(password=)[^[:space:]]+/\1[REDACTED]/gi' "$output" >&2
     fail "$label failed with an unexpected SQLSTATE"
   fi
+  record_privilege_probe "$role" "$database_name" "$schema" "$object" "$privilege" "$expected_state" "$expected_state" "$expected_state" "DENIED_AS_EXPECTED"
 }
 
 cd "$project_dir"
@@ -338,6 +561,11 @@ SELECT (
           AND NOT privilege.is_grantable
       )=2
   AND pg_catalog.count(*)=5
+  AND (
+    SELECT pg_catalog.shobj_description(control.oid,'pg_authid') IS NULL
+      FROM pg_catalog.pg_roles AS control
+     WHERE control.rolname='northstar_ci_control'
+  )
 )
   FROM pg_catalog.pg_database AS database
   JOIN pg_catalog.pg_roles AS database_owner ON database_owner.oid=database.datdba
@@ -355,7 +583,18 @@ PSQL
 # owner. Password values enter psql only through environment variables.
 export NORTHSTAR_CI_LEGACY_PASSWORD="$legacy_password"
 export NORTHSTAR_CI_DATABASE_MARKER="$marker"
+# The service roles and database are intentionally mutated by the role
+# reconciliation fixture.  Anchor teardown authority on the external control
+# role instead, after proving it is the pristine disposable controller above.
+# Mark before CREATE DATABASE so a lost client acknowledgement still leaves a
+# recoverable ownership record; clear it only after a complete teardown.
 database_is_managed=true
+control_psql --dbname=postgres <<'PSQL'
+\getenv database_marker NORTHSTAR_CI_DATABASE_MARKER
+BEGIN;
+COMMENT ON ROLE northstar_ci_control IS :'database_marker';
+COMMIT;
+PSQL
 control_psql --dbname=postgres <<'PSQL'
 \getenv legacy_password NORTHSTAR_CI_LEGACY_PASSWORD
 \getenv database_marker NORTHSTAR_CI_DATABASE_MARKER
@@ -436,8 +675,20 @@ write_secret "$migrator_password_file" "$migrator_password"
 write_secret "$runtime_password_file" "$runtime_password"
 write_secret "$command_password_file" "$command_password"
 write_secret "$backup_password_file" "$backup_password"
-write_secret "$migrator_url_file" \
-  "postgres://northstar_migrator:${migrator_password}@127.0.0.1:${database_port}/xmpp"
+if [[ "$database_transport" == 'private-unix-socket' ]]; then
+  # SQLx/libpq use a URL query parameter for a Unix-domain PostgreSQL host.
+  # Keep a syntactically nonempty authority host as well: SQLx validates that
+  # component before applying the query-host socket override.  `localhost` is
+  # never used as a TCP destination here because the percent-encoded, exact
+  # private socket path below remains the effective host.  The directory is
+  # generated by the wrapper above and the exact allow-list prevents this
+  # destructive fixture from following a caller-supplied path.
+  encoded_database_host="${database_host//\//%2F}"
+  migrator_database_url="postgresql://northstar_migrator:${migrator_password}@localhost/xmpp?host=${encoded_database_host}"
+else
+  migrator_database_url="postgres://northstar_migrator:${migrator_password}@${database_host}:${database_port}/xmpp"
+fi
+write_secret "$migrator_url_file" "$migrator_database_url"
 
 # Exercise the explicit existing-volume upgrade using the old superuser, then
 # reconnect through the new bootstrap boundary before the guarded legacy cutover.
@@ -1076,6 +1327,177 @@ PSQL
 )
 [[ "$safe_default_overrides_restored" == t ]] \
   || fail 'reconciliation did not restore owner-only routine/type default ACL overrides'
+
+# An invoker trigger executes because it is attached to a table the caller may
+# mutate; it is not a directly callable runtime capability.  Check the
+# catalog-derived policy after the real post-migration reconciliation rather
+# than relying on a migration-local REVOKE that a later reconciliation could
+# silently replace.  Preserve a positive directly-callable invoker witness so
+# the trigger exclusion cannot accidentally become a blanket invoker revoke.
+trigger_only_invoker_execute_policy=$(control_psql --dbname="$database_name" \
+  --tuples-only --no-align <<'PSQL'
+SELECT NOT pg_catalog.has_function_privilege(
+         'northstar_runtime','public.check_pubsub_collection_edge()','EXECUTE'
+       )
+   AND NOT pg_catalog.has_function_privilege(
+         'northstar_runtime','public.northstar_mix_delivery_notify()','EXECUTE'
+       )
+   AND NOT EXISTS (
+     SELECT 1
+       FROM pg_catalog.pg_proc AS routine
+       JOIN pg_catalog.pg_namespace AS namespace
+         ON namespace.oid=routine.pronamespace
+       CROSS JOIN (VALUES
+         ('northstar_runtime'),
+         ('northstar_commands'),
+         ('northstar_backup')
+       ) AS workload(role_name)
+       JOIN pg_catalog.pg_roles AS role ON role.rolname=workload.role_name
+      WHERE namespace.nspname='public'
+        AND routine.prokind='f'
+        AND NOT routine.prosecdef
+        AND routine.prorettype='pg_catalog.trigger'::pg_catalog.regtype
+        AND pg_catalog.has_function_privilege(role.oid,routine.oid,'EXECUTE')
+   )
+   AND EXISTS (
+     SELECT 1
+       FROM pg_catalog.pg_proc AS routine
+       JOIN pg_catalog.pg_namespace AS namespace
+         ON namespace.oid=routine.pronamespace
+      WHERE namespace.nspname='public'
+        AND routine.prokind='f'
+        AND NOT routine.prosecdef
+        AND routine.prorettype<>'pg_catalog.trigger'::pg_catalog.regtype
+        AND pg_catalog.has_function_privilege(
+              'northstar_runtime',routine.oid,'EXECUTE'
+            )
+   );
+PSQL
+)
+[[ "$trigger_only_invoker_execute_policy" == t ]] \
+  || fail 'runtime direct EXECUTE was not denied for trigger-only invoker helpers'
+
+# Exercise the real PubSub graph guard through runtime DML.  The first edge is
+# valid, while the second exceeds the collection's database-enforced limit;
+# the 23514 result proves that the owner-only trigger helper still fires under
+# the runtime role rather than merely having a hardened ACL.
+psql_as "$migrator_role" "$migrator_password" >/dev/null <<'PSQL'
+INSERT INTO public.pubsub_nodes(
+  id,node,creator_jid,node_type,children_max
+) VALUES
+  ('00000000-0000-0000-0000-00000000d201',
+   'role-ci-trigger-collection-d201','trigger-owner@ci.northstar.invalid',
+   'collection',1),
+  ('00000000-0000-0000-0000-00000000d202',
+   'role-ci-trigger-child-d202','trigger-owner@ci.northstar.invalid',
+   'leaf',1000),
+  ('00000000-0000-0000-0000-00000000d203',
+   'role-ci-trigger-child-d203','trigger-owner@ci.northstar.invalid',
+   'leaf',1000);
+PSQL
+pubsub_trigger_first_edge=$(psql_as "$runtime_role" "$runtime_password" \
+  --tuples-only --no-align --command="
+    WITH inserted AS (
+      INSERT INTO public.pubsub_collection_members(collection_node_id,child_node_id)
+      VALUES(
+        '00000000-0000-0000-0000-00000000d201',
+        '00000000-0000-0000-0000-00000000d202'
+      )
+      RETURNING 1
+    )
+    SELECT EXISTS (SELECT 1 FROM inserted);")
+[[ "$pubsub_trigger_first_edge" == t ]] \
+  || fail 'runtime DML could not execute the installed PubSub invoker trigger'
+expect_sqlstate "$runtime_role" "$runtime_password" '23514' \
+  'runtime PubSub invoker trigger enforces the collection child limit' \
+  "INSERT INTO public.pubsub_collection_members(collection_node_id,child_node_id)
+   VALUES(
+     '00000000-0000-0000-0000-00000000d201',
+     '00000000-0000-0000-0000-00000000d203'
+   );"
+psql_as "$migrator_role" "$migrator_password" --command="
+  DELETE FROM public.pubsub_nodes
+   WHERE id IN (
+     '00000000-0000-0000-0000-00000000d201',
+     '00000000-0000-0000-0000-00000000d202',
+     '00000000-0000-0000-0000-00000000d203'
+   );" >/dev/null
+
+# The MIX wake helper is also trigger-only.  Pre-account the disposable
+# recipient/event projection exactly, then let runtime insert and delete it.
+# Its two commit notifications prove both INSERT and DELETE DML paths execute
+# after direct EXECUTE has been removed; the reviewed drain returns the
+# authority ledger to its starting state.
+psql_as "$migrator_role" "$migrator_password" >/dev/null <<'PSQL'
+UPDATE public.mix_delivery_capacity
+   SET queued_rows=queued_rows+1,
+       queued_bytes=queued_bytes
+         + pg_catalog.octet_length('<message/>')
+         + pg_catalog.octet_length('mix-trigger-runtime@ci.northstar.invalid')
+         + 128,
+       updated_at=clock_timestamp()
+ WHERE bucket=0;
+PSQL
+mix_delivery_wake_runtime_log="$runtime_dir/mix-delivery-trigger-runtime.log"
+psql_as "$runtime_role" "$runtime_password" --tuples-only --no-align \
+  >"$mix_delivery_wake_runtime_log" <<'PSQL'
+BEGIN;
+LISTEN northstar_mix_delivery_v1;
+COMMIT;
+BEGIN;
+INSERT INTO public.mix_delivery_events(
+  event_id,channel_id,channel_jid,stanza_template,authoritative_stanza_id,
+  archive,encrypted
+) VALUES(
+  '00000000-0000-0000-0000-00000000d133',
+  '00000000-0000-0000-0000-00000000d134',
+  'mix-trigger@ci.northstar.invalid','<message/>',NULL,FALSE,FALSE
+);
+INSERT INTO public.mix_delivery_recipients(
+  delivery_id,event_id,recipient_participant_id,recipient_jid,delivery_sequence
+) VALUES(
+  '00000000-0000-0000-0000-00000000d135',
+  '00000000-0000-0000-0000-00000000d133',
+  '00000000-0000-0000-0000-00000000d136',
+  'mix-trigger-runtime@ci.northstar.invalid',1
+);
+COMMIT;
+SELECT 1;
+BEGIN;
+DELETE FROM public.mix_delivery_recipients
+ WHERE delivery_id='00000000-0000-0000-0000-00000000d135';
+DELETE FROM public.mix_delivery_events
+ WHERE event_id='00000000-0000-0000-0000-00000000d133';
+SELECT public.northstar_mix_delivery_capacity_drain();
+COMMIT;
+SELECT 1;
+PSQL
+mix_delivery_wake_notifications=$(grep -Fc \
+  'Asynchronous notification "northstar_mix_delivery_v1" with payload "public"' \
+  "$mix_delivery_wake_runtime_log" || true)
+(( mix_delivery_wake_notifications >= 2 )) \
+  || fail 'runtime MIX DML did not fire both committed trigger-only wake paths'
+mix_trigger_fixture_cleaned=$(psql_as "$migrator_role" "$migrator_password" \
+  --tuples-only --no-align <<'PSQL'
+SELECT NOT EXISTS (
+         SELECT 1 FROM public.mix_delivery_events
+          WHERE event_id='00000000-0000-0000-0000-00000000d133'
+       )
+   AND NOT EXISTS (
+         SELECT 1 FROM public.mix_delivery_recipients
+          WHERE delivery_id='00000000-0000-0000-0000-00000000d135'
+       )
+   AND NOT EXISTS (
+         SELECT 1 FROM public.mix_delivery_capacity_releases
+          WHERE object_id IN (
+            '00000000-0000-0000-0000-00000000d133',
+            '00000000-0000-0000-0000-00000000d135'
+          )
+       );
+PSQL
+)
+[[ "$mix_trigger_fixture_cleaned" == t ]] \
+  || fail 'runtime MIX trigger fixture left a durable delivery or capacity release artifact'
 
 # The repository ledger is a release trust root, not a best-effort migration
 # counter. Exercise each fail-closed class independently and restore the exact

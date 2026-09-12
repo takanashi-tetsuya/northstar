@@ -12,6 +12,7 @@ import re
 import socket
 import ssl
 import subprocess
+import sys
 import time
 
 
@@ -21,12 +22,70 @@ fixture = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(fixture)
 
+# Reuse the same checked, crash-released fixture login slots as the MIX
+# matrix. Importing this module does not initialize endpoints or run probes.
+admission_spec = importlib.util.spec_from_file_location(
+    "northstar_federation_stress_admission", ROOT / "mix-federation-runtime-wsl.py"
+)
+stress_admission = importlib.util.module_from_spec(admission_spec)
+sys.modules[admission_spec.name] = stress_admission
+assert admission_spec.loader is not None
+admission_spec.loader.exec_module(stress_admission)
+stress_admission.LOGIN_SLOT_CONFIGURATION = stress_admission.login_slot_configuration_from_environment()
+
+phase_spec = importlib.util.spec_from_file_location(
+    "northstar_federation_stress_phases", ROOT / "listener-stress-phases.py"
+)
+stress_phases = importlib.util.module_from_spec(phase_spec)
+assert phase_spec.loader is not None
+phase_spec.loader.exec_module(stress_phases)
+
 PASSWORD = "federation-password-123"
 ALICE = "alice_fed"
 BOB = "bob_fed"
 
 
-def psql_schema(schema: str, sql: str) -> str:
+def listener_stress_database_endpoint() -> tuple[str, int]:
+    """Return the parent-validated loopback endpoint for preprovisioned DBs.
+
+    Direct federation runs retain the historical 127.0.0.1:5432 default.  A
+    listener-stress parent may use a different local port for an isolated
+    PostgreSQL instance, but this Python assertion layer refuses any remote
+    host or malformed port even if the shell wrapper was bypassed.
+    """
+
+    host = os.environ.get("NORTHSTAR_LISTENER_STRESS_DATABASE_HOST", "127.0.0.1")
+    raw_port = os.environ.get("NORTHSTAR_LISTENER_STRESS_DATABASE_PORT", "5432")
+    fixture.check(
+        host == "127.0.0.1",
+        "listener stress database host must be the IPv4 loopback address",
+    )
+    fixture.check(
+        raw_port.isascii() and raw_port.isdecimal(),
+        "listener stress database port must be a decimal TCP port",
+    )
+    port = int(raw_port)
+    fixture.check(
+        1 <= port <= 65535,
+        "listener stress database port must be from 1 through 65535",
+    )
+    return host, port
+
+
+DATABASE_HOST, DATABASE_PORT = listener_stress_database_endpoint()
+
+
+def required_test_database(name: str) -> str:
+    database = os.environ.get(name, "xmpp_test")
+    fixture.check(
+        re.fullmatch(r"(?:xmpp_test|northstar_listener_[a-z0-9_]{1,42})", database)
+        is not None,
+        f"{name} must name the shared fixture database or a private listener database",
+    )
+    return database
+
+
+def psql_schema(schema: str, database: str, sql: str) -> str:
     fixture.check(
         re.fullmatch(r"[a-z][a-z0-9_]{0,62}", schema) is not None,
         "federation fixture did not receive a safe random schema name",
@@ -47,11 +106,13 @@ def psql_schema(schema: str, sql: str) -> str:
         [
             "psql",
             "--host",
-            "127.0.0.1",
+            DATABASE_HOST,
+            "--port",
+            str(DATABASE_PORT),
             "--username",
             "xmpp_test",
             "--dbname",
-            "xmpp_test",
+            database,
             "--tuples-only",
             "--no-align",
             "--set",
@@ -645,15 +706,32 @@ def endpoint(port: int, xmpp_port: int, domain: str) -> None:
 
 
 def register(username: str) -> None:
-    status, result = fixture.register_account(username, PASSWORD)
+    with stress_admission.fixture_phase_auth_admission():
+        with stress_admission.authentication_attempt() as attempt:
+            status, result = fixture.register_account(username, PASSWORD, deadline=attempt.deadline)
     fixture.check(status == 201, f"registration failed: {status} {result}")
 
 
-def run() -> None:
+def connect(username: str, resource: str):
+    with stress_admission.fixture_phase_auth_admission():
+        with stress_admission.authentication_attempt() as attempt:
+            return fixture.XmppWebSocket(username, PASSWORD, resource, deadline=attempt.deadline)
+
+
+def run(server_pids: tuple[int, ...] = ()) -> None:
+    # Publish from the initialized client, while its sibling-server monitor
+    # is already bound to both process handles. The parent verifies the same
+    # nonce, child birth times and worker ancestry before admitting more pairs.
+    # No transport or credential work starts until every pair is live.
+    stress_phases.wait_for_fixture_phase("live", server_pids)
     verify_starttls_failure_boundary()
     verify_c2s_transport_boundaries()
     verify_s2s_transport_boundaries()
     verify_s2s_authentication_boundaries()
+    # Every pair completes the original concurrent transport probes before a
+    # faster pair begins password work. This process publishes its own PID
+    # and stays alive at the barrier, before taking any authentication slot.
+    stress_phases.wait_for_fixture_phase("transport")
     endpoint(
         required_test_port("FEDERATION_TEST_HTTP_PORT_A"),
         required_test_port("FEDERATION_TEST_CLIENT_PORT_A"),
@@ -661,8 +739,9 @@ def run() -> None:
     )
     fixture.wait_ready()
     register(ALICE)
-    verify_c2s_authenticated_limits()
-    alice = fixture.XmppWebSocket(ALICE, PASSWORD, "alice-federation")
+    with stress_admission.fixture_phase_auth_admission():
+        verify_c2s_authenticated_limits()
+    alice = connect(ALICE, "alice-federation")
 
     endpoint(
         required_test_port("FEDERATION_TEST_HTTP_PORT_B"),
@@ -671,7 +750,7 @@ def run() -> None:
     )
     fixture.wait_ready()
     register(BOB)
-    bob = fixture.XmppWebSocket(BOB, PASSWORD, "bob-federation")
+    bob = connect(BOB, "bob-federation")
 
     # RFC 6121 distinguishes connected, available, and interested resources.
     # Subscription approvals and roster pushes are delivered to interested
@@ -773,17 +852,20 @@ def run() -> None:
         re.fullmatch(r"[a-z][a-z0-9_]{0,62}", schema_a) is not None,
         "federation fixture did not receive a safe random schema name",
     )
+    database_a = required_test_database("FEDERATION_TEST_DATABASE_A")
     psql_env = os.environ.copy()
     psql_env["PGPASSWORD"] = "xmpp-test-password"
     persisted = subprocess.run(
         [
             "psql",
             "--host",
-            "127.0.0.1",
+            DATABASE_HOST,
+            "--port",
+            str(DATABASE_PORT),
             "--username",
             "xmpp_test",
             "--dbname",
-            "xmpp_test",
+            database_a,
             "--tuples-only",
             "--no-align",
             "--set",
@@ -918,18 +1000,25 @@ def run() -> None:
         "<item nick='RemoteBob' role='none'><reason>Federated kick</reason></item>"
         "</query></iq>"
     )
-    alice.receive_until("fed-muc-kick")
+    kick_result, _ = alice.receive_until("fed-muc-kick")
+    fixture.check(
+        "type='result'" in kick_result,
+        "federated MUC kick was rejected before status delivery",
+    )
     kicked, _ = bob.receive_until("code='307'", timeout=20)
     fixture.check(
         "Federated kick" in kicked and "type='unavailable'" in kicked,
         "remote occupant did not receive MUC kick status 307",
     )
     bob.send(
-        f"<presence xmlns='jabber:client' to='{federated_room}/RemoteBobReturn'>"
+        f"<presence xmlns='jabber:client' id='fed-muc-rejoin' to='{federated_room}/RemoteBobReturn'>"
         "<x xmlns='http://jabber.org/protocol/muc'/></presence>"
     )
-    returned, _ = bob.receive_until("code='110'", timeout=20)
-    fixture.check("role='participant'" in returned, "kicked remote occupant could not rejoin")
+    returned, _ = bob.receive_until("fed-muc-rejoin", timeout=20)
+    fixture.check(
+        "code='110'" in returned and "role='participant'" in returned,
+        "kicked remote occupant could not rejoin: " + returned,
+    )
     alice.receive_until(f"from='{federated_room}/RemoteBobReturn'", timeout=20)
     alice.send(
         f"<iq xmlns='jabber:client' type='set' id='fed-muc-ban' to='{federated_room}'>"
@@ -1434,7 +1523,7 @@ def run() -> None:
         required_test_port("FEDERATION_TEST_CLIENT_PORT_A"),
         "localhost",
     )
-    alice_carbon = fixture.XmppWebSocket(ALICE, PASSWORD, "alice-federation-carbon")
+    alice_carbon = connect(ALICE, "alice-federation-carbon")
     alice_carbon.send(
         "<iq xmlns='jabber:client' type='set' id='fed-carbon-enable-a'>"
         "<enable xmlns='urn:xmpp:carbons:2'/></iq>"
@@ -1451,7 +1540,7 @@ def run() -> None:
         required_test_port("FEDERATION_TEST_CLIENT_PORT_B"),
         "remote.localhost",
     )
-    bob_carbon = fixture.XmppWebSocket(BOB, PASSWORD, "bob-federation-carbon")
+    bob_carbon = connect(BOB, "bob-federation-carbon")
     bob_carbon.send(
         "<iq xmlns='jabber:client' type='set' id='fed-carbon-enable-b'>"
         "<enable xmlns='urn:xmpp:carbons:2'/></iq>"
@@ -1511,6 +1600,8 @@ def run() -> None:
     # stream exists: the message can arrive only through that live stream.
     schema_a = os.environ.get("FEDERATION_TEST_SCHEMA_A", "")
     schema_b = os.environ.get("FEDERATION_TEST_SCHEMA_B", "")
+    database_a = required_test_database("FEDERATION_TEST_DATABASE_A")
+    database_b = required_test_database("FEDERATION_TEST_DATABASE_B")
     marker = "fed-no-store-persistence-probe"
     no_store_guard = f"""
         CREATE OR REPLACE FUNCTION reject_federated_no_store_outbox()
@@ -1527,7 +1618,7 @@ def run() -> None:
         BEFORE INSERT ON s2s_outbox
         FOR EACH ROW EXECUTE FUNCTION reject_federated_no_store_outbox();
     """
-    psql_schema(schema_a, no_store_guard)
+    psql_schema(schema_a, database_a, no_store_guard)
     try:
         alice.send(
             f"<message xmlns='jabber:client' to='bob_fed@remote.localhost' "
@@ -1555,9 +1646,10 @@ def run() -> None:
             "federated no-store message did not preserve online Carbons",
         )
 
-        for schema in (schema_a, schema_b):
+        for schema, database in ((schema_a, database_a), (schema_b, database_b)):
             persisted_no_store = psql_schema(
                 schema,
+                database,
                 f"""
                 SELECT
                     (SELECT COUNT(*) FROM s2s_outbox WHERE stanza LIKE '%{marker}%') +
@@ -1576,6 +1668,7 @@ def run() -> None:
     finally:
         psql_schema(
             schema_a,
+            database_a,
             "DROP TRIGGER IF EXISTS reject_federated_no_store_outbox ON s2s_outbox; "
             "DROP FUNCTION IF EXISTS reject_federated_no_store_outbox();",
         )
@@ -1820,7 +1913,7 @@ def run() -> None:
         required_test_port("FEDERATION_TEST_CLIENT_PORT_B"),
         "remote.localhost",
     )
-    bob = fixture.XmppWebSocket(BOB, PASSWORD, "bob-federation-reconnected")
+    bob = connect(BOB, "bob-federation-reconnected")
     offline, _ = bob.receive_until("fed-offline", timeout=20)
     fixture.check(
         fixture.omemo_payload_b64("FEDERATED-OFFLINE-CIPHERTEXT") in offline
@@ -1845,4 +1938,4 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    run(tuple(stress_phases.positive(pid) for pid in sys.argv[1:]))

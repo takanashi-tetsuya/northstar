@@ -1,0 +1,21 @@
+[package]
+name = "northstar-auth-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Capability-free authentication, password verification, SCRAM/SASL/FAST crypto and state machines for Northstar"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+argon2 = "0.5"
+base64 = "0.22"
+hmac = "0.12"
+pbkdf2 = { version = "0.12", features = ["hmac"] }
+rand = "0.8"
+sha1 = "0.10"
+sha2 = "0.10"
+uuid = { version = "1.12", features = ["v4"] }
+zeroize = "1.8"
+northstar-xmpp-types = { path = "../northstar-xmpp-types" }

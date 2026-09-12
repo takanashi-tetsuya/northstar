@@ -1,0 +1,93 @@
+version: "2.0.0"
+
+# Topic/ACL policy is generated into broker-specific configuration. Partitions
+# are deliberately benchmark inputs, not a universal hard-coded capacity.
+topics:
+  - topic: northstar.identity.account.v1
+    event_type: identity.account.v1
+    key_strategy: recipient
+    partitions: 12
+    replication_factor: 3
+    min_insync_replicas: 2
+    max_message_bytes: 1048576
+    retention_ms: 604800000
+    region_mode: home_region
+    producers: [identity]
+    consumers: [session-directory, roster-authority, abuse-risk]
+  - topic: northstar.identity.credential.v1
+    event_type: identity.credential.v1
+    key_strategy: recipient
+    partitions: 12
+    replication_factor: 3
+    min_insync_replicas: 2
+    max_message_bytes: 524288
+    retention_ms: 604800000
+    region_mode: home_region
+    producers: [identity]
+    consumers: [session-directory]
+  - topic: northstar.edge.connection.v1
+    event_type: edge.connection.v1
+    key_strategy: full_jid
+    partitions: 24
+    replication_factor: 3
+    min_insync_replicas: 2
+    max_message_bytes: 524288
+    retention_ms: 86400000
+    region_mode: regional
+    producers: [xmpp-edge]
+    consumers: [session-directory, delivery-router]
+  - topic: northstar.message.accepted.v1
+    event_type: message.accepted.v1
+    key_strategy: recipient
+    partitions: 24
+    replication_factor: 3
+    min_insync_replicas: 2
+    max_message_bytes: 16777216
+    retention_ms: 604800000
+    region_mode: home_region
+    producers: [message-ingress]
+    consumers: [delivery-router, xep-0313-mam, federation-outbox]
+  - topic: northstar.delivery.completed.v1
+    event_type: delivery.completed.v1
+    key_strategy: recipient
+    partitions: 24
+    replication_factor: 3
+    min_insync_replicas: 2
+    max_message_bytes: 1048576
+    retention_ms: 604800000
+    region_mode: home_region
+    producers: [delivery-router]
+    consumers: [xep-0313-mam, admin-orchestrator]
+  - topic: northstar.session.authority.v1
+    event_type: session.authority.v1
+    key_strategy: full_jid
+    partitions: 24
+    replication_factor: 3
+    min_insync_replicas: 2
+    max_message_bytes: 524288
+    retention_ms: 604800000
+    region_mode: home_region
+    producers: [session-directory]
+    consumers: [xmpp-edge, delivery-router]
+  - topic: northstar.room.event.v1
+    event_type: room.event.v1
+    key_strategy: room_id
+    partitions: 24
+    replication_factor: 3
+    min_insync_replicas: 2
+    max_message_bytes: 16777216
+    retention_ms: 604800000
+    region_mode: home_region
+    producers: [xep-0045-muc]
+    consumers: [delivery-router, xep-0313-mam]
+  - topic: northstar.pubsub.event.v1
+    event_type: pubsub.event.v1
+    key_strategy: node_id
+    partitions: 24
+    replication_factor: 3
+    min_insync_replicas: 2
+    max_message_bytes: 16777216
+    retention_ms: 604800000
+    region_mode: home_region
+    producers: [xep-0060-pubsub]
+    consumers: [delivery-router, xep-0313-mam]

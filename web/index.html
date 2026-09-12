@@ -13,7 +13,7 @@
   <header class="topbar">
     <a class="brand" href="#home"><span class="mark">N</span><span>Northstar <small>XMPP</small></span></a>
     <nav aria-label="主导航">
-      <a href="#home">概览</a><a href="/client.html">Web 客户端</a><a href="#admin">管理</a>
+      <a href="#home">概览</a><a href="#" data-public-client>Web 客户端</a><a href="#admin">管理</a>
     </nav>
     <div class="language-host" data-language-host></div>
     <span id="server-status" class="status"><i></i> 检查服务中</span>
@@ -25,7 +25,7 @@
         <p class="eyebrow">开放 · 标准 · 自托管</p>
         <h1>一颗属于你的<br><em>通信恒星</em></h1>
         <p class="lede">面向千人规模的单机 XMPP 服务。标准客户端可直接连接，网页端支持 OMEMO 2 端到端加密，服务端只保存密文。</p>
-        <div class="actions"><a class="primary" href="/client.html">打开安全 Web 客户端</a><a class="secondary" href="#setup">查看连接参数</a></div>
+        <div class="actions"><a class="primary" href="#" data-public-client>打开安全 Web 客户端</a><a class="secondary" href="#setup">查看连接参数</a></div>
       </div>
       <div class="orbit" aria-hidden="true"><span class="core"></span><span class="ring one"></span><span class="ring two"></span><b>5222</b><b>WSS</b><b>OMEMO</b></div>
     </section>
@@ -43,7 +43,7 @@
         <p>独立页面提供注册、联系人、在线状态、历史消息、送达状态以及 OMEMO 设备指纹管理。默认优先使用端到端加密。</p>
         <p class="security-note">首次在可信设备登录时会生成本机 OMEMO 身份密钥。请核对联系人的设备指纹；共享或临时电脑不要勾选“可信设备”。</p>
       </div>
-      <a class="primary launch-button" href="/client.html">进入客户端</a>
+      <a class="primary launch-button" href="#" data-public-client>进入客户端</a>
     </section>
 
     <section id="admin" class="admin panel">
@@ -61,7 +61,7 @@
         <div class="admin-actions"><span id="admin-identity"></span><button id="admin-logout" class="secondary" type="button">退出管理</button></div>
         <div id="stats" class="stats"></div>
         <div class="admin-grid">
-          <section class="admin-subpanel">
+          <section id="invitation-control" class="admin-subpanel">
             <div class="subpanel-heading"><div><p class="eyebrow">Runtime controls</p><h3>Service controls</h3></div><span>Every change is authenticated and audited.</span></div>
             <div class="runtime-control-grid">
               <label class="switch-row"><span><strong>Open registration</strong><small>Allow new accounts under the configured invitation policy.</small></span><input id="registration-toggle" type="checkbox"></label>

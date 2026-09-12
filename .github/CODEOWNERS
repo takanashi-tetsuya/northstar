@@ -1,0 +1,42 @@
+# Northstar branch protection should require review by these code owners.
+# Replace placeholder owners with your actual GitHub handles/teams if different.
+
+# Global governance and release-critical files
+*                                    @takanashi-tetsuya
+/LICENSE                              @takanashi-tetsuya
+/Cargo.toml                           @takanashi-tetsuya
+/Cargo.lock                           @takanashi-tetsuya
+/.github/**                           @takanashi-tetsuya
+/deploy/**                            @takanashi-tetsuya
+/buf*.yml                             @takanashi-tetsuya
+/Dockerfile*                           @takanashi-tetsuya
+/docker-compose*.yml                  @takanashi-tetsuya
+
+# Contracts and protocol authority
+/src/proto/**                         @takanashi-tetsuya
+/contracts/**                         @takanashi-tetsuya
+/crates/foundation-contracts/**        @takanashi-tetsuya
+
+# Security, auth, identity and session boundaries
+/src/auth.rs                          @takanashi-tetsuya
+/src/auth/**                          @takanashi-tetsuya
+/src/db/**                            @takanashi-tetsuya
+/src/s2s/**                           @takanashi-tetsuya
+/migrations/**                        @takanashi-tetsuya
+/scripts/**                           @takanashi-tetsuya
+
+# Core runtime and protocol entrypoint
+/src/main.rs                          @takanashi-tetsuya
+/src/state.rs                         @takanashi-tetsuya
+/src/api/**                           @takanashi-tetsuya
+/src/xmpp/**                          @takanashi-tetsuya
+
+# Microservice service crates
+/services/**                          @takanashi-tetsuya
+/crates/**                            @takanashi-tetsuya
+
+# Documentation boundaries
+/README.md                            @takanashi-tetsuya
+/SECURITY.md                          @takanashi-tetsuya
+/CONTRIBUTING.md                      @takanashi-tetsuya
+/docs/**                              @takanashi-tetsuya

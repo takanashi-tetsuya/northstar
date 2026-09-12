@@ -1,0 +1,13 @@
+[package]
+name = "northstar-roster-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Capability-free RFC 6121 roster domain entities, subscription state machines, and snapshot models"
+publish = false
+
+[dependencies]
+northstar-xmpp-types = { path = "../northstar-xmpp-types" }
+serde = { version = "1.0", features = ["derive"] }
+uuid = { version = "1.12", features = ["v4", "serde"] }

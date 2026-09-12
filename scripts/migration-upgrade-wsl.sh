@@ -5,6 +5,15 @@ umask 077
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
 
+# This suite deliberately exercises an upgrade from a historical schema.  A
+# migration can legitimately take longer than a normal unit test, but it must
+# never become opaque to the CI supervisor: stream the Rust test transcript as
+# it is produced and retain it only long enough to verify the exact test
+# result.  The existing EXIT trap owns the temporary transcripts.
+tmp_root="${TMPDIR:-/tmp}"
+tmp_root=${tmp_root%/}
+declare -a migrator_output_files=()
+
 test_database="${XMPP_TEST_DATABASE:-xmpp_test}"
 if [[ "$test_database" != "xmpp_test" ]]; then
   echo "migration upgrade validation is restricted to the dedicated xmpp_test database" >&2
@@ -40,9 +49,15 @@ if [[ "$(printf '%s\n' "$manifest_paths" | sed '/^$/d' | wc -l | tr -d ' ')" != 
 fi
 random_suffix="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 test_schema="northstar_mupgrade_$random_suffix"
+pre_fix_schema="northstar_m0132_$random_suffix"
 if [[ ! "$test_schema" =~ ^northstar_mupgrade_[a-f0-9]{32}$ ]] ||
    (( ${#test_schema} > 63 )); then
   echo "refusing unsafe migration upgrade schema name: $test_schema" >&2
+  exit 2
+fi
+if [[ ! "$pre_fix_schema" =~ ^northstar_m0132_[a-f0-9]{32}$ ]] ||
+   (( ${#pre_fix_schema} > 63 )); then
+  echo "refusing unsafe migration 0132 schema name: $pre_fix_schema" >&2
   exit 2
 fi
 
@@ -55,16 +70,64 @@ database_args=(
   --set ON_ERROR_STOP=1
 )
 created=0
+pre_fix_created=0
 
 psql_admin() {
   PGPASSWORD=xmpp-test-password PGOPTIONS="-c client_min_messages=warning" \
     psql "${database_args[@]}" "$@"
 }
 
-psql_schema() {
+psql_named_schema() {
+  local schema_name="$1"
+  shift
+  [[ "$schema_name" == "$test_schema" || "$schema_name" == "$pre_fix_schema" ]] || {
+    echo "refusing an unexpected migration fixture schema" >&2
+    return 2
+  }
   PGPASSWORD=xmpp-test-password \
-    PGOPTIONS="-c search_path=$test_schema -c client_min_messages=warning" \
+    PGOPTIONS="-c search_path=$schema_name -c client_min_messages=warning" \
     psql "${database_args[@]}" "$@"
+}
+
+psql_schema() {
+  psql_named_schema "$test_schema" "$@"
+}
+
+prepare_immutable_0013_baseline() {
+  local schema_name="$1"
+  local migration filename version_text version stem description checksum baseline_state
+  psql_named_schema "$schema_name" >/dev/null <<'SQL'
+CREATE TABLE _sqlx_migrations (
+    version BIGINT PRIMARY KEY,
+    description TEXT NOT NULL,
+    installed_on TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    success BOOLEAN NOT NULL,
+    checksum BYTEA NOT NULL,
+    execution_time BIGINT NOT NULL
+);
+SQL
+
+  while IFS= read -r migration; do
+    [[ -n "$migration" ]] || continue
+    filename="${migration##*/}"
+    version_text="${filename%%_*}"
+    version="$((10#$version_text))"
+    stem="${filename%.sql}"
+    description="${stem#*_}"
+    description="${description//_/ }"
+    checksum="$(sha384sum "$migration" | awk '{print $1}')"
+    psql_named_schema "$schema_name" --single-transaction --file "$migration" >/dev/null
+    psql_named_schema "$schema_name" --command \
+      "INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES($version,'$description',TRUE,decode('$checksum','hex'),0)" \
+      >/dev/null
+  done <<<"$manifest_paths"
+
+  baseline_state="$(psql_named_schema "$schema_name" --tuples-only --no-align --command \
+    "SELECT COUNT(*) || '|' || MIN(version) || '|' || MAX(version) || '|' || bool_and(success) FROM _sqlx_migrations")"
+  if [[ "$baseline_state" != "13|1|13|true" ]]; then
+    echo "failed to prepare the exact SQLx 0013 baseline: $baseline_state" >&2
+    return 1
+  fi
 }
 
 drop_test_schema() {
@@ -82,14 +145,39 @@ drop_test_schema() {
   fi
 }
 
+drop_pre_fix_schema() {
+  if [[ ! "$pre_fix_schema" =~ ^northstar_m0132_[a-f0-9]{32}$ ]]; then
+    echo "refusing to clean an unexpected migration 0132 schema name: $pre_fix_schema" >&2
+    return 1
+  fi
+  psql_admin --command "DROP SCHEMA \"$pre_fix_schema\" CASCADE" >/dev/null
+  local remains
+  remains="$(psql_admin --tuples-only --no-align --command \
+    "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='$pre_fix_schema')")"
+  if [[ "$remains" != "f" ]]; then
+    echo "isolated migration 0132 schema was not removed: $pre_fix_schema (exists=$remains)" >&2
+    return 1
+  fi
+}
+
 cleanup() {
   local status=$?
+  local output_file=''
   trap - EXIT INT TERM
+  if [[ "$pre_fix_created" == "1" ]]; then
+    if ! drop_pre_fix_schema; then
+      status=1
+    fi
+  fi
   if [[ "$created" == "1" ]]; then
     if ! drop_test_schema; then
       status=1
     fi
   fi
+  for output_file in "${migrator_output_files[@]}"; do
+    [[ "$output_file" == "$tmp_root"/northstar-migration-upgrade-cargo.* ]] \
+      && rm -f -- "$output_file" || status=1
+  done
   exit "$status"
 }
 trap cleanup EXIT
@@ -113,39 +201,7 @@ if [[ "$(psql_schema --tuples-only --no-align --command 'SELECT current_schema()
   echo "PostgreSQL did not select the isolated migration schema" >&2
   exit 1
 fi
-
-psql_schema >/dev/null <<'SQL'
-CREATE TABLE _sqlx_migrations (
-    version BIGINT PRIMARY KEY,
-    description TEXT NOT NULL,
-    installed_on TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    success BOOLEAN NOT NULL,
-    checksum BYTEA NOT NULL,
-    execution_time BIGINT NOT NULL
-);
-SQL
-
-while IFS= read -r migration; do
-  [[ -n "$migration" ]] || continue
-  filename="${migration##*/}"
-  version_text="${filename%%_*}"
-  version="$((10#$version_text))"
-  stem="${filename%.sql}"
-  description="${stem#*_}"
-  description="${description//_/ }"
-  checksum="$(sha384sum "$migration" | awk '{print $1}')"
-  psql_schema --single-transaction --file "$migration" >/dev/null
-  psql_schema --command \
-    "INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES($version,'$description',TRUE,decode('$checksum','hex'),0)" \
-    >/dev/null
-done <<<"$manifest_paths"
-
-baseline_state="$(psql_schema --tuples-only --no-align --command \
-  "SELECT COUNT(*) || '|' || MIN(version) || '|' || MAX(version) || '|' || bool_and(success) FROM _sqlx_migrations")"
-if [[ "$baseline_state" != "13|1|13|true" ]]; then
-  echo "failed to prepare the exact SQLx 0013 baseline: $baseline_state" >&2
-  exit 1
-fi
+prepare_immutable_0013_baseline "$test_schema"
 
 psql_schema >/dev/null <<'SQL'
 INSERT INTO users(id,username,password_hash,display_name,is_admin)
@@ -258,19 +314,31 @@ export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432
 test_name="db::migration_upgrade_test::baseline_0013_upgrades_through_the_real_domain_migrator"
 
 run_migrator() {
-  local output
-  if ! output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture 2>&1)"; then
-    printf '%s\n' "$output" >&2
+  local requested_test_name="$1"
+  local output_file=''
+  local cargo_status=0
+
+  output_file="$(mktemp "$tmp_root/northstar-migration-upgrade-cargo.XXXXXX")"
+  migrator_output_files+=("$output_file")
+  printf 'migration-upgrade phase=rust-test-start test=%s\n' "$requested_test_name" >&2
+  set +e
+  cargo test --locked --offline "$requested_test_name" -- --ignored --exact --nocapture 2>&1 \
+    | tee "$output_file"
+  cargo_status=${PIPESTATUS[0]}
+  set -e
+  if (( cargo_status != 0 )); then
+    printf 'migration-upgrade phase=rust-test-failed test=%s status=%s\n' \
+      "$requested_test_name" "$cargo_status" >&2
     return 1
   fi
-  if ! grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$output"; then
-    printf '%s\n' "$output" >&2
+  if ! grep -Eq 'test result: ok\. 1 passed; 0 failed' "$output_file"; then
     echo "expected exactly one migration upgrade test to run" >&2
     return 1
   fi
+  printf 'migration-upgrade phase=rust-test-finished test=%s\n' "$requested_test_name" >&2
 }
 
-run_migrator
+run_migrator "$test_name"
 
 after_fingerprint="$(snapshot_baseline_rows | sha256sum | awk '{print $1}')"
 if [[ "$after_fingerprint" != "$before_fingerprint" ]]; then
@@ -307,6 +375,31 @@ while IFS= read -r migration; do
   fi
 done <<<"$migration_files"
 
+# Exercise the exact 0132 recovery boundary in a second, initially empty
+# schema. The Rust fixture installs the real 0129 predecessor function over
+# its minimal table contract, proves the b588 0132 body fails without a ledger
+# row, then applies and repeats the corrected source. The full immutable
+# 0013-to-current upgrade above remains the separate end-to-end assertion;
+# this focused test must not replay that chain a second time. It also verifies
+# that a deliberately injected pre-fix checksum is rejected rather than
+# silently rewritten.
+if [[ "$(psql_admin --tuples-only --no-align --command \
+  "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='$pre_fix_schema')")" == "t" ]]; then
+  echo "refusing to reuse existing migration 0132 schema: $pre_fix_schema" >&2
+  exit 2
+fi
+psql_admin --command "CREATE SCHEMA \"$pre_fix_schema\" AUTHORIZATION xmpp_test" >/dev/null
+pre_fix_created=1
+if [[ "$(psql_named_schema "$pre_fix_schema" --tuples-only --no-align --command 'SELECT current_schema()')" != "$pre_fix_schema" ]]; then
+  echo "PostgreSQL did not select the isolated migration 0132 schema" >&2
+  exit 1
+fi
+export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$pre_fix_schema"
+run_migrator "db::migration_upgrade_test::migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksum_is_enforced"
+drop_pre_fix_schema
+pre_fix_created=0
+export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema"
+
 version_one_checksum="$(sha384sum migrations/0001_initial.sql | awk '{print $1}')"
 psql_schema --command \
   "UPDATE _sqlx_migrations SET checksum=set_byte(checksum,0,(get_byte(checksum,0)+1)%256) WHERE version=1" \
@@ -329,7 +422,7 @@ psql_schema --command \
   >/dev/null
 
 # A clean repeat validates both checksum recovery and migration idempotence.
-run_migrator
+run_migrator "$test_name"
 final_fingerprint="$(snapshot_baseline_rows | sha256sum | awk '{print $1}')"
 if [[ "$final_fingerprint" != "$before_fingerprint" ]]; then
   echo "representative baseline data changed after an idempotent migration rerun" >&2
@@ -338,4 +431,4 @@ fi
 
 drop_test_schema
 created=0
-echo "migration upgrade validation passed: immutable 0001-0013 baseline -> current version $expected_latest; SQLx checksums, representative data, idempotence and exact cleanup verified"
+echo "migration upgrade validation passed: immutable 0001-0013 baseline -> current version $expected_latest; 0131 -> 0132 recovery, SQLx checksum rejection, representative data, idempotence and exact cleanup verified"

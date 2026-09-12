@@ -132,8 +132,9 @@ pub(crate) struct ProfileService {
 impl ProfileService {
     #[cfg(test)]
     pub(crate) fn new(pool: PgPool, domain: String) -> Self {
-        let mutation_admission =
-            Arc::new(crate::services::pubsub::PubSubMutationAdmission::new(&pool));
+        let mutation_admission = Arc::new(crate::services::pubsub::PubSubMutationAdmission::new(
+            pool.options().get_max_connections() as usize,
+        ));
         Self {
             pool,
             domain,

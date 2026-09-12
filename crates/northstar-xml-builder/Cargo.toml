@@ -1,0 +1,12 @@
+[package]
+name = "northstar-xml-builder"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Typed and resource-bounded XML output builder for Northstar"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+roxmltree = "0.20"

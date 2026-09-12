@@ -7,6 +7,8 @@
 
 use crate::{abuse::PersonalRetractionContentKeyring, db, xmpp::xml_builder::XmlElement};
 use anyhow::{Context, Result};
+pub(crate) use northstar_message_core::ArchiveProjection as ArchiveWrite;
+
 use roxmltree::{Document, Node};
 use sha2::{Digest, Sha256, Sha512};
 use sqlx::{PgPool, Row};
@@ -18,16 +20,6 @@ const NS_RETRACT: &str = "urn:xmpp:message-retract:1";
 const NS_STANZA_ID: &str = "urn:xmpp:sid:0";
 const NS_NORTHSTAR_POW: &str = "urn:northstar:pow:1";
 const RETRACTION_LOCK_DOMAIN: &[u8] = b"northstar/retraction-action-lock/v1\0";
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ArchiveWrite<'a> {
-    pub(crate) id: Uuid,
-    pub(crate) owner_id: Uuid,
-    pub(crate) peer_jid: &'a str,
-    pub(crate) stanza: &'a str,
-    pub(crate) encrypted: bool,
-    pub(crate) stanza_id: Option<&'a str>,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OwnerProjection<'a> {
@@ -877,34 +869,6 @@ impl RetractionService {
         Ok(RetractionOutcome::Applied {
             tombstones: tombstones.len(),
         })
-    }
-
-    /// Remove expired replay evidence after all durable projections complete.
-    /// The fixed 30-day expiry is created by migration 0102; pending S2S or
-    /// C2S ownership always wins over the clock.
-    pub(crate) async fn purge_expired_intents(&self, batch_size: i64) -> Result<u64> {
-        anyhow::ensure!(
-            (1..=10_000).contains(&batch_size),
-            "retraction intent cleanup batch size must be between 1 and 10000"
-        );
-        Ok(sqlx::query(
-            "WITH expired AS MATERIALIZED (
-                 SELECT id FROM personal_retraction_intents
-                  WHERE expires_at < clock_timestamp()
-                    AND s2s_outbox_id IS NULL
-                    AND c2s_delivery_id IS NULL
-                  ORDER BY expires_at,id
-                  LIMIT $1
-                  FOR UPDATE SKIP LOCKED
-             )
-             DELETE FROM personal_retraction_intents intent
-             USING expired
-             WHERE intent.id=expired.id",
-        )
-        .bind(batch_size)
-        .execute(&self.pool)
-        .await?
-        .rows_affected())
     }
 }
 
@@ -2236,7 +2200,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert_eq!(service.purge_expired_intents(10).await.unwrap(), 0);
+        assert_eq!(
+            db::purge_expired_retraction_intents(&service.pool, 10)
+                .await
+                .unwrap(),
+            0
+        );
         sqlx::query("DELETE FROM offline_messages WHERE id=$1")
             .bind(delivery_id)
             .execute(&pool)
@@ -2250,7 +2219,12 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(cleared, (true, None));
-        assert_eq!(service.purge_expired_intents(10).await.unwrap(), 1);
+        assert_eq!(
+            db::purge_expired_retraction_intents(&service.pool, 10)
+                .await
+                .unwrap(),
+            1
+        );
 
         let capacity_target = Uuid::new_v4();
         sqlx::query(
@@ -2961,7 +2935,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert_eq!(service.purge_expired_intents(10).await.unwrap(), 1);
+        assert_eq!(
+            db::purge_expired_retraction_intents(&service.pool, 10)
+                .await
+                .unwrap(),
+            1
+        );
         let retained_outbox_intent: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM personal_retraction_intents WHERE action_id='action-1'",
         )

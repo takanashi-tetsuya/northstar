@@ -14,6 +14,7 @@ import re
 import socket
 import ssl
 import struct
+import sys
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -22,10 +23,12 @@ import zlib
 
 HTTP_HOST = os.environ.get("XMPP_TEST_HOST", "127.0.0.1")
 HTTP_PORT = int(os.environ.get("XMPP_TEST_HTTP_PORT", "18080"))
+WEB_ADMIN_PORT = int(os.environ.get("XMPP_TEST_WEB_ADMIN_PORT", "0"))
 METRICS_PORT = int(os.environ.get("XMPP_TEST_METRICS_PORT", str(HTTP_PORT)))
 XMPP_PORT = int(os.environ.get("XMPP_TEST_CLIENT_PORT", "15222"))
 XMPPS_PORT = int(os.environ.get("XMPP_TEST_XMPPS_PORT", "15223"))
 DOMAIN = os.environ.get("XMPP_TEST_DOMAIN", "localhost")
+PUBLIC_URL = os.environ.get("XMPP_TEST_PUBLIC_URL")
 ALICE = "alice_it"
 BOB = "bob_it"
 PASSWORD = "integration-password-123"
@@ -44,6 +47,28 @@ C2S_UNTRUSTED_KEY = os.environ.get("XMPP_TEST_C2S_UNTRUSTED_KEY")
 def check(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+def assert_public_url(url: str, expected_path_prefix: str, label: str) -> None:
+    """Keep advertised public endpoints tied to the fixture-owned relay.
+
+    The integration child binds a private ephemeral HTTP backend.  Its
+    externally advertised authority is a stable relay, so accepting an URL
+    merely because its path works against an out-of-band backend would hide a
+    broken PUBLIC_URL after a restart.
+    """
+
+    check(PUBLIC_URL is not None, "integration fixture did not provide XMPP_TEST_PUBLIC_URL")
+    expected = urllib.parse.urlsplit(PUBLIC_URL)
+    actual = urllib.parse.urlsplit(url)
+    check(
+        actual.scheme == expected.scheme and actual.netloc == expected.netloc,
+        f"{label} used {actual.scheme}://{actual.netloc}, expected public origin {PUBLIC_URL}",
+    )
+    check(
+        actual.path.startswith(expected_path_prefix),
+        f"{label} used unexpected path {actual.path!r}",
+    )
 
 
 def assert_carbon_shape(stanza: str, direction: str) -> None:
@@ -146,8 +171,183 @@ def omemo2_bundle(prekey_count: int = 25, first_prekey_id: int = 1) -> str:
     )
 
 
-def api(method: str, path: str, payload=None, token: str | None = None):
-    connection = http.client.HTTPConnection(HTTP_HOST, HTTP_PORT, timeout=10)
+_DEADLINE_HTTP_MAX_RESPONSE_BYTES = 1024 * 1024
+
+
+def _remaining_deadline_timeout(deadline: float, operation: str) -> float:
+    """Return the remaining wall-clock I/O budget without resetting it."""
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError(f"timed out during {operation}")
+    return remaining
+
+
+def _recv_with_deadline(sock: socket.socket, deadline: float, operation: str) -> bytes:
+    sock.settimeout(_remaining_deadline_timeout(deadline, operation))
+    chunk = sock.recv(8192)
+    if not chunk:
+        raise EOFError(f"connection closed during {operation}")
+    return chunk
+
+
+def _read_http_headers_with_deadline(sock: socket.socket, deadline: float) -> tuple[bytes, bytearray]:
+    received = bytearray()
+    while b"\r\n\r\n" not in received:
+        received.extend(_recv_with_deadline(sock, deadline, "HTTP response headers"))
+        if len(received) > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+            raise ValueError("HTTP response headers exceeded the fixture safety limit")
+    header_end = received.index(b"\r\n\r\n")
+    return bytes(received[:header_end]), received[header_end + 4 :]
+
+
+def _read_exact_http_body_with_deadline(
+    sock: socket.socket, body: bytearray, length: int, deadline: float
+) -> bytes:
+    if length < 0 or length > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+        raise ValueError("HTTP response body exceeded the fixture safety limit")
+    while len(body) < length:
+        body.extend(_recv_with_deadline(sock, deadline, "HTTP response body"))
+        if len(body) > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+            raise ValueError("HTTP response body exceeded the fixture safety limit")
+    return bytes(body[:length])
+
+
+def _read_chunked_http_body_with_deadline(
+    sock: socket.socket, buffered: bytearray, deadline: float
+) -> bytes:
+    """Read the small chunked responses used by local test endpoints."""
+
+    body = bytearray()
+
+    def read_line() -> bytes:
+        while b"\r\n" not in buffered:
+            buffered.extend(_recv_with_deadline(sock, deadline, "HTTP chunk header"))
+            if len(buffered) > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+                raise ValueError("HTTP response exceeded the fixture safety limit")
+        end = buffered.index(b"\r\n")
+        line = bytes(buffered[:end])
+        del buffered[: end + 2]
+        return line
+
+    def read_exact(length: int) -> bytes:
+        while len(buffered) < length:
+            buffered.extend(_recv_with_deadline(sock, deadline, "HTTP chunk body"))
+            if len(buffered) > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+                raise ValueError("HTTP response exceeded the fixture safety limit")
+        result = bytes(buffered[:length])
+        del buffered[:length]
+        return result
+
+    while True:
+        size_text = read_line().split(b";", 1)[0]
+        try:
+            size = int(size_text, 16)
+        except ValueError as error:
+            raise ValueError("invalid HTTP chunk size") from error
+        if size < 0 or len(body) + size > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+            raise ValueError("HTTP response body exceeded the fixture safety limit")
+        if size == 0:
+            # Consume optional trailers, stopping at the required empty line.
+            while read_line():
+                pass
+            return bytes(body)
+        body.extend(read_exact(size))
+        if read_exact(2) != b"\r\n":
+            raise ValueError("HTTP chunk did not end with CRLF")
+
+
+def _deadline_http_api(
+    method: str,
+    path: str,
+    body: bytes | None,
+    headers: dict[str, str],
+    deadline: float,
+    port: int | None = None,
+) -> tuple[int, str, bytes]:
+    """Execute a fixture REST request under one non-extendable deadline.
+
+    ``http.client`` has a per-socket-operation timeout.  That is useful for
+    ordinary integration calls, but cannot express an authentication budget
+    that includes queueing, connect, write, header reads, and body reads.  The
+    MIX pressure fixture uses this deliberately small HTTP/1.1 client only
+    when it supplies an absolute deadline.
+    """
+
+    port = resolve_http_port(port)
+    request_headers = {
+        "Host": f"{HTTP_HOST}:{port}",
+        "Connection": "close",
+        **headers,
+    }
+    if body is not None:
+        request_headers["Content-Length"] = str(len(body))
+    request = (
+        f"{method} {path} HTTP/1.1\r\n"
+        + "".join(f"{name}: {value}\r\n" for name, value in request_headers.items())
+        + "\r\n"
+    ).encode() + (body or b"")
+
+    with socket.create_connection(
+        (HTTP_HOST, port), timeout=_remaining_deadline_timeout(deadline, "HTTP connect")
+    ) as sock:
+        sock.settimeout(_remaining_deadline_timeout(deadline, "HTTP request write"))
+        sock.sendall(request)
+        raw_headers, buffered_body = _read_http_headers_with_deadline(sock, deadline)
+        try:
+            lines = raw_headers.decode("iso-8859-1").split("\r\n")
+        except UnicodeDecodeError as error:  # pragma: no cover - ISO-8859-1 always decodes bytes.
+            raise ValueError("HTTP response headers were not decodable") from error
+        if not lines:
+            raise ValueError("HTTP response did not contain a status line")
+        status_match = re.fullmatch(r"HTTP/1\.[01] ([1-5][0-9]{2})(?: .*)?", lines[0])
+        if status_match is None:
+            raise ValueError("HTTP response had an invalid status line")
+        response_headers: dict[str, str] = {}
+        for line in lines[1:]:
+            if not line or ":" not in line:
+                raise ValueError("HTTP response had an invalid header")
+            name, value = line.split(":", 1)
+            response_headers[name.lower()] = value.strip()
+        transfer_encoding = response_headers.get("transfer-encoding", "").lower()
+        if transfer_encoding == "chunked":
+            raw_body = _read_chunked_http_body_with_deadline(sock, buffered_body, deadline)
+        elif "content-length" in response_headers:
+            try:
+                content_length = int(response_headers["content-length"])
+            except ValueError as error:
+                raise ValueError("HTTP response had an invalid Content-Length") from error
+            raw_body = _read_exact_http_body_with_deadline(
+                sock, buffered_body, content_length, deadline
+            )
+        else:
+            # The client asked for connection-close semantics.  Keep reading
+            # under the absolute deadline, including any bytes that arrived
+            # with the headers.
+            while True:
+                try:
+                    buffered_body.extend(
+                        _recv_with_deadline(sock, deadline, "HTTP response body")
+                    )
+                except EOFError:
+                    break
+                if len(buffered_body) > _DEADLINE_HTTP_MAX_RESPONSE_BYTES:
+                    raise ValueError("HTTP response body exceeded the fixture safety limit")
+            raw_body = bytes(buffered_body)
+        return int(status_match.group(1)), response_headers.get("content-type", ""), raw_body
+
+
+def api(
+    method: str,
+    path: str,
+    payload=None,
+    token: str | None = None,
+    timeout: float = 10,
+    deadline: float | None = None,
+    port: int | None = None,
+):
+    check(0 < timeout <= 10, "HTTP API timeout must be greater than zero and no more than ten seconds")
+    port = resolve_http_port(port)
     headers = {}
     body = None
     if payload is not None:
@@ -155,13 +355,234 @@ def api(method: str, path: str, payload=None, token: str | None = None):
         headers["Content-Type"] = "application/json"
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    connection.request(method, path, body=body, headers=headers)
-    response = connection.getresponse()
-    raw = response.read()
-    content_type = response.getheader("Content-Type", "")
+    if deadline is None:
+        connection = http.client.HTTPConnection(HTTP_HOST, port, timeout=timeout)
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        raw = response.read()
+        content_type = response.getheader("Content-Type", "")
+        status = response.status
+        connection.close()
+    else:
+        status, content_type, raw = _deadline_http_api(method, path, body, headers, deadline, port)
     result = json.loads(raw) if raw and "json" in content_type else raw.decode()
-    connection.close()
-    return response.status, result
+    return status, result
+
+
+def admin_api(
+    method: str,
+    path: str,
+    payload=None,
+    token: str | None = None,
+    timeout: float = 10,
+):
+    """Call the loopback-only administrator listener selected by readiness.
+
+    Public HTTP intentionally has no administrator routes. Keeping this wrapper
+    separate makes a fixture fail loudly if a launcher forgets to pass the
+    child-owned private listener rather than silently testing public HTTP.
+    """
+
+    check(0 < WEB_ADMIN_PORT <= 65535, "administrator listener was not published by readiness")
+    return api(method, path, payload, token, timeout, port=WEB_ADMIN_PORT)
+
+
+def deadline_io_self_test() -> None:
+    """Exercise deadline accounting without opening a real network listener."""
+
+    class FakeSocket:
+        def __init__(self, response: bytes):
+            self.response = bytearray(response)
+            self.timeouts: list[float] = []
+            self.sent = b""
+
+        def settimeout(self, value: float) -> None:
+            self.timeouts.append(value)
+
+        def sendall(self, payload: bytes) -> None:
+            self.sent += payload
+
+        def recv(self, length: int) -> bytes:
+            if not self.response:
+                return b""
+            result = bytes(self.response[:length])
+            del self.response[:length]
+            return result
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _kind, _value, _traceback) -> None:
+            return None
+
+    http_socket = FakeSocket(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+    )
+    original_create_connection = socket.create_connection
+    try:
+        socket.create_connection = lambda _address, timeout: http_socket  # type: ignore[assignment]
+        deadline = time.monotonic() + 1
+        status, content_type, body = _deadline_http_api(
+            "POST",
+            "/fixture",
+            b"{}",
+            {"Content-Type": "application/json"},
+            deadline,
+        )
+    finally:
+        socket.create_connection = original_create_connection  # type: ignore[assignment]
+    check(
+        status == 200 and content_type == "application/json" and body == b"{}",
+        "deadline HTTP fixture did not decode the bounded response",
+    )
+    check(
+        http_socket.timeouts and all(0 < value <= 1 for value in http_socket.timeouts),
+        "deadline HTTP fixture extended an I/O timeout past its absolute budget",
+    )
+    check(
+        b"Connection: close\r\n" in http_socket.sent
+        and b"Content-Length: 2\r\n" in http_socket.sent,
+        "deadline HTTP fixture did not emit its bounded request framing",
+    )
+
+    normal_socket = FakeSocket(b"\x81\x02ok")
+    normal_client = object.__new__(XmppWebSocket)
+    normal_client.sock = normal_socket
+    normal_client._construction_deadline = None
+    check(normal_client.receive(30) == "ok", "post-construction WebSocket receive failed")
+    check(
+        normal_socket.timeouts and normal_socket.timeouts[0] > 20,
+        "post-construction WebSocket receive was silently capped by the constructor timeout",
+    )
+
+    construction_socket = FakeSocket(b"\x81\x02ok")
+    construction_client = object.__new__(XmppWebSocket)
+    construction_client.sock = construction_socket
+    construction_client._construction_deadline = time.monotonic() + 0.5
+    check(construction_client.receive(30) == "ok", "construction WebSocket receive failed")
+    check(
+        construction_socket.timeouts and 0 < construction_socket.timeouts[0] <= 0.5,
+        "construction WebSocket receive ignored its shared absolute deadline",
+    )
+    try:
+        _remaining_deadline_timeout(time.monotonic() - 1, "expired deadline self-test")
+    except TimeoutError:
+        pass
+    else:
+        raise AssertionError("expired HTTP deadline was accepted")
+
+
+def resolve_http_port(port: int | None) -> int:
+    """Resolve optional HTTP endpoint overrides when a request is made.
+
+    Two-domain fixtures import this module once, then select the currently
+    running child by updating ``HTTP_PORT``.  Python evaluates function
+    defaults during import, so a default of ``HTTP_PORT`` would silently keep
+    using the first child endpoint.  Keeping this resolution in one helper
+    makes that ownership rule explicit for ordinary, raw, and deadline-bound
+    HTTP requests.
+    """
+
+    return HTTP_PORT if port is None else port
+
+
+def endpoint_binding_self_test() -> None:
+    """Prove endpoint selection is late-bound without opening a socket."""
+
+    global HTTP_HOST, HTTP_PORT
+
+    class FakeResponse:
+        status = 204
+
+        def read(self) -> bytes:
+            return b""
+
+        def getheader(self, _name: str, default: str = "") -> str:
+            return default
+
+        def getheaders(self) -> list[tuple[str, str]]:
+            return []
+
+    observed_connections: list[tuple[str, int, float]] = []
+
+    class FakeConnection:
+        def __init__(self, host: str, port: int, timeout: float) -> None:
+            observed_connections.append((host, port, timeout))
+
+        def request(self, *_args, **_kwargs) -> None:
+            return None
+
+        def getresponse(self) -> FakeResponse:
+            return FakeResponse()
+
+        def close(self) -> None:
+            return None
+
+    class FakeDeadlineSocket:
+        def __init__(self) -> None:
+            self.response = bytearray(
+                b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n"
+            )
+
+        def settimeout(self, _value: float) -> None:
+            return None
+
+        def sendall(self, _payload: bytes) -> None:
+            return None
+
+        def recv(self, length: int) -> bytes:
+            result = bytes(self.response[:length])
+            del self.response[:length]
+            return result
+
+        def __enter__(self) -> FakeDeadlineSocket:
+            return self
+
+        def __exit__(self, _kind, _value, _traceback) -> None:
+            return None
+
+    original_host = HTTP_HOST
+    original_port = HTTP_PORT
+    original_connection = http.client.HTTPConnection
+    original_create_connection = socket.create_connection
+    deadline_addresses: list[tuple[str, int]] = []
+    try:
+        HTTP_HOST = "127.0.0.1"
+        HTTP_PORT = 19123
+        http.client.HTTPConnection = FakeConnection  # type: ignore[assignment]
+        status, _ = api("GET", "/readyz")
+        raw_status, _, _ = raw_http("GET", "/readyz")
+        socket.create_connection = (  # type: ignore[assignment]
+            lambda address, timeout: (
+                deadline_addresses.append(address),
+                FakeDeadlineSocket(),
+            )[1]
+        )
+        deadline_status, _, deadline_body = _deadline_http_api(
+            "GET", "/readyz", None, {}, time.monotonic() + 1
+        )
+        check(status == 204 and raw_status == 204, "endpoint binding fixture did not decode fake HTTP")
+        check(
+            deadline_status == 204 and deadline_body == b"",
+            "deadline HTTP fixture did not decode fake HTTP",
+        )
+        check(
+            observed_connections == [("127.0.0.1", 19123, 10), ("127.0.0.1", 19123, 10)],
+            f"HTTP helpers retained an import-time endpoint: {observed_connections!r}",
+        )
+        check(
+            deadline_addresses == [("127.0.0.1", 19123)],
+            f"deadline HTTP helper retained an import-time endpoint: {deadline_addresses!r}",
+        )
+        check(
+            resolve_http_port(None) == 19123 and resolve_http_port(19124) == 19124,
+            "HTTP port resolver did not preserve explicit or late-bound endpoints",
+        )
+    finally:
+        http.client.HTTPConnection = original_connection  # type: ignore[assignment]
+        socket.create_connection = original_create_connection  # type: ignore[assignment]
+        HTTP_HOST = original_host
+        HTTP_PORT = original_port
 
 
 def metrics_api():
@@ -174,8 +595,16 @@ def metrics_api():
     return status, body
 
 
-def raw_http(method: str, path: str, body: bytes | None = None, headers=None):
-    connection = http.client.HTTPConnection(HTTP_HOST, HTTP_PORT, timeout=10)
+def raw_http(
+    method: str,
+    path: str,
+    body: bytes | None = None,
+    headers=None,
+    *,
+    port: int | None = None,
+):
+    port = resolve_http_port(port)
+    connection = http.client.HTTPConnection(HTTP_HOST, port, timeout=10)
     connection.request(method, path, body=body, headers=headers or {})
     response = connection.getresponse()
     result = response.read()
@@ -183,6 +612,11 @@ def raw_http(method: str, path: str, body: bytes | None = None, headers=None):
     response_headers = {name.lower(): value for name, value in response.getheaders()}
     connection.close()
     return status, response_headers, result
+
+
+def raw_admin_http(method: str, path: str, body: bytes | None = None, headers=None):
+    check(0 < WEB_ADMIN_PORT <= 65535, "administrator listener was not published by readiness")
+    return raw_http(method, path, body, headers, port=WEB_ADMIN_PORT)
 
 
 def admin_operation_request(
@@ -200,7 +634,7 @@ def admin_operation_request(
     }
     if body is not None:
         headers["Content-Type"] = "application/json"
-    status, response_headers, raw = raw_http(method, path, body, headers)
+    status, response_headers, raw = raw_admin_http(method, path, body, headers)
     check(status == 202, f"operation enqueue failed: {status} {raw!r}")
     result = json.loads(raw)
     operation_id = result.get("operation_id")
@@ -212,7 +646,7 @@ def admin_operation_request(
         f"invalid asynchronous operation response: {response_headers} {result}",
     )
     if verify_replay:
-        replay_status, replay_headers, replay_raw = raw_http(method, path, body, headers)
+        replay_status, replay_headers, replay_raw = raw_admin_http(method, path, body, headers)
         check(
             replay_status == status
             and replay_headers.get("location") == location
@@ -226,7 +660,7 @@ def wait_operation(token: str, location: str, expected: str = "succeeded") -> di
     deadline = time.monotonic() + 20
     last = None
     while time.monotonic() < deadline:
-        status, last = api("GET", location, token=token)
+        status, last = admin_api("GET", location, token=token)
         check(status == 200, f"operation lookup failed: {status} {last}")
         if last.get("status") in {"succeeded", "failed", "canceled", "indeterminate"}:
             check(last["status"] == expected, f"operation ended unexpectedly: {last}")
@@ -473,7 +907,9 @@ def atomic_registration_wire_conformance() -> None:
     check(status == 200 and login.get("token"), f"XEP-0389 account did not commit: {login}")
 
 
-def register_account(username: str, password: str) -> tuple[int, object]:
+def register_account(
+    username: str, password: str, timeout: float = 10, deadline: float | None = None
+) -> tuple[int, object]:
     request = {
         "username": username,
         "password": password,
@@ -488,6 +924,8 @@ def register_account(username: str, password: str) -> tuple[int, object]:
         "POST",
         "/api/v1/register",
         {**request, "pow": proof},
+        timeout=timeout,
+        deadline=deadline,
     )
 
 
@@ -617,18 +1055,60 @@ def assert_api_session(token: str, username: str, stage: str) -> None:
     )
 
 
+# These are fixed public readiness reasons emitted by src/api/system.rs. Never
+# echo an arbitrary response body or exception argument into a CI transcript.
+_READY_ERROR_REASONS = frozenset({
+    "connection admission is closed",
+    "XEP-0198 memory or recovery capacity is not ready",
+    "upload storage authority is not ready",
+    "cluster policy is not ready",
+    "background workers are not ready",
+    "readiness probe is busy",
+    "readiness probe is unavailable",
+    "readiness persistence authority probe timed out",
+    "database or persisted security authority is not ready",
+})
+_READY_ERROR_CODES = frozenset({
+    "service_unavailable", "rate_limited", "internal_error", "bad_request",
+    "unauthorized", "forbidden", "not_found",
+})
+
+
+def readiness_response_summary(status, body) -> str:
+    status_text = str(status) if type(status) is int and 100 <= status <= 599 else "invalid"
+    details = "body=unrecognized"
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        error = body["error"]
+        code = error.get("code")
+        reason = error.get("message")
+        code = code if isinstance(code, str) and code in _READY_ERROR_CODES else "unrecognized"
+        reason = reason if isinstance(reason, str) and reason in _READY_ERROR_REASONS else "unrecognized"
+        details = f"code={code} reason={reason}"
+    elif isinstance(body, str):
+        details = "body=ready" if body == "ready" else f"body=unexpected_text length={len(body)}"
+    return f"status={status_text} {details}"
+
+
 def wait_ready() -> None:
     deadline = time.monotonic() + 30
-    last_error = None
+    last_response = "not observed"
+    last_transport_error = "not observed"
+    attempts = 0
     while time.monotonic() < deadline:
+        attempts += 1
         try:
             status, body = api("GET", "/readyz")
             if status == 200 and body == "ready":
                 return
+            last_response = readiness_response_summary(status, body)
         except OSError as error:
-            last_error = error
+            error_type = type(error).__name__
+            last_transport_error = error_type if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", error_type) else "OSError"
         time.sleep(0.25)
-    raise RuntimeError(f"server did not become ready: {last_error}")
+    raise RuntimeError(
+        f"server did not become ready: attempts={attempts}; "
+        f"last_response=({last_response}); last_transport_error={last_transport_error}"
+    )
 
 
 def read_until(sock: socket.socket, marker: bytes, timeout: float = 10) -> bytes:
@@ -1354,11 +1834,11 @@ def tcp_sasl_core_conformance() -> None:
     # here made the fixture depend on the random dummy-SCRAM secret. Corrupt
     # stored verifiers are tested separately as a temporary backend failure in
     # the random-schema database suite.
-    status, admin_login = api(
+    status, admin_login = admin_api(
         "POST", "/api/v1/login", {"username": ADMIN, "password": ADMIN_PASSWORD}
     )
     check(status == 200, f"could not authenticate admin for disabled SCRAM probe: {admin_login}")
-    status, user_page = api("GET", "/api/v1/admin/users", token=admin_login["token"])
+    status, user_page = admin_api("GET", "/api/v1/admin/users", token=admin_login["token"])
     check(status == 200, f"could not list users for disabled SCRAM probe: {user_page}")
     bob_id = next(row["id"] for row in user_page["users"] if row["username"] == BOB)
     _, disable_location, _ = admin_operation_request(
@@ -1393,7 +1873,7 @@ def tcp_sasl_core_conformance() -> None:
             "unknown/disabled SCRAM did not finish with one non-enumerating failure shape",
         )
     finally:
-        status, reenabled = api(
+        status, reenabled = admin_api(
             "PATCH",
             f"/api/v1/admin/users/{bob_id}",
             {"disabled": False},
@@ -1615,9 +2095,11 @@ def fast_after_process_restart_conformance() -> None:
     secure.close()
 
 
-def recv_exact(sock: socket.socket, length: int) -> bytes:
+def recv_exact(sock: socket.socket, length: int, deadline: float | None = None) -> bytes:
     result = bytearray()
     while len(result) < length:
+        if deadline is not None:
+            sock.settimeout(_remaining_deadline_timeout(deadline, "WebSocket frame read"))
         chunk = sock.recv(length - len(result))
         if not chunk:
             raise EOFError("WebSocket connection closed")
@@ -1636,9 +2118,18 @@ class XmppWebSocket:
         sasl2: bool = False,
         sasl2_resume=None,
         initial_presence: bool = True,
+        timeout: float = 10,
+        deadline: float | None = None,
     ):
-        self.sock = socket.create_connection((HTTP_HOST, HTTP_PORT), timeout=10)
-        self.sock.settimeout(10)
+        check(0 < timeout <= 10, "WebSocket construction timeout must be greater than zero and no more than ten seconds")
+        self._construction_deadline: float | None = (
+            time.monotonic() + timeout if deadline is None else deadline
+        )
+        _remaining_deadline_timeout(self._construction_deadline, "WebSocket construction")
+        self.sock = socket.create_connection(
+            (HTTP_HOST, HTTP_PORT), timeout=self._construction_timeout()
+        )
+        self.sock.settimeout(self._construction_timeout())
         key = base64.b64encode(os.urandom(16)).decode()
         request = (
             "GET /xmpp-websocket HTTP/1.1\r\n"
@@ -1651,7 +2142,7 @@ class XmppWebSocket:
             "X-Forwarded-Proto: https\r\n\r\n"
         ).encode()
         self.sock.sendall(request)
-        response = read_until(self.sock, b"\r\n\r\n")
+        response = self._read_during_construction(b"\r\n\r\n")
         check(response.startswith(b"HTTP/1.1 101"), f"WebSocket upgrade failed: {response!r}")
         accept = base64.b64encode(
             hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
@@ -1667,6 +2158,28 @@ class XmppWebSocket:
             self.login_sasl2(sasl2_resume, initial_presence)
         else:
             self.login(resume, expect_bind_conflict, initial_presence)
+        self._construction_deadline = None
+
+    def _construction_timeout(self) -> float:
+        """Return the remaining constructor budget without extending it."""
+
+        if self._construction_deadline is None:
+            raise RuntimeError("WebSocket construction deadline is no longer active")
+        return _remaining_deadline_timeout(
+            self._construction_deadline, "XMPP WebSocket construction"
+        )
+
+    def _read_during_construction(self, marker: bytes) -> bytes:
+        """Read an HTTP upgrade response under the same constructor deadline."""
+
+        data = bytearray()
+        while marker not in data:
+            self.sock.settimeout(self._construction_timeout())
+            chunk = self.sock.recv(8192)
+            if not chunk:
+                raise EOFError("WebSocket connection closed during HTTP upgrade")
+            data.extend(chunk)
+        return bytes(data)
 
     def send(self, text: str, opcode: int = 1) -> None:
         payload = text.encode()
@@ -1679,6 +2192,12 @@ class XmppWebSocket:
         else:
             header = bytes((first, 0x80 | 127)) + struct.pack("!Q", len(payload))
         masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+        if self._construction_deadline is None:
+            # A preceding bounded receive must not leave a stale short socket
+            # timeout behind for normal post-authentication protocol traffic.
+            self.sock.settimeout(10)
+        else:
+            self.sock.settimeout(self._construction_timeout())
         self.sock.sendall(header + mask + masked)
 
     def send_with_pow(self, text: str, token: str) -> dict[str, str]:
@@ -1709,24 +2228,27 @@ class XmppWebSocket:
         self.send(text[: -len("</message>")] + pow_xml + "</message>")
 
     def receive(self, timeout: float = 10) -> str:
+        check(timeout > 0, "WebSocket receive timeout must be greater than zero")
+        if self._construction_deadline is not None:
+            timeout = min(timeout, self._construction_timeout())
         deadline = time.monotonic() + timeout
         fragments = bytearray()
         while time.monotonic() < deadline:
-            self.sock.settimeout(max(0.1, deadline - time.monotonic()))
-            first, second = recv_exact(self.sock, 2)
+            first, second = recv_exact(self.sock, 2, deadline)
             opcode = first & 0x0F
             length = second & 0x7F
             if length == 126:
-                length = struct.unpack("!H", recv_exact(self.sock, 2))[0]
+                length = struct.unpack("!H", recv_exact(self.sock, 2, deadline))[0]
             elif length == 127:
-                length = struct.unpack("!Q", recv_exact(self.sock, 8))[0]
+                length = struct.unpack("!Q", recv_exact(self.sock, 8, deadline))[0]
             if second & 0x80:
-                mask = recv_exact(self.sock, 4)
+                mask = recv_exact(self.sock, 4, deadline)
                 payload = bytes(
-                    byte ^ mask[index % 4] for index, byte in enumerate(recv_exact(self.sock, length))
+                    byte ^ mask[index % 4]
+                    for index, byte in enumerate(recv_exact(self.sock, length, deadline))
                 )
             else:
-                payload = recv_exact(self.sock, length)
+                payload = recv_exact(self.sock, length, deadline)
             if opcode == 8:
                 raise EOFError("WebSocket was closed")
             if opcode == 9:
@@ -2131,6 +2653,19 @@ def run() -> None:
     status, config = api("GET", "/api/v1/config")
     check(status == 200 and config["domain"] == DOMAIN, "public config failed")
     check(config["archive_policy"] == "encrypted_only", "encrypted archive policy is not active")
+    check(
+        config.get("public_url") == PUBLIC_URL,
+        f"public config advertised {config.get('public_url')!r}, expected stable relay origin {PUBLIC_URL!r}",
+    )
+    status, _, host_meta = raw_http("GET", "/.well-known/host-meta")
+    host_meta_text = host_meta.decode("utf-8")
+    check(
+        status == 200
+        and PUBLIC_URL is not None
+        and f'href="{PUBLIC_URL}/http-bind"' in host_meta_text
+        and f'href="wss://{urllib.parse.urlsplit(PUBLIC_URL).netloc}/xmpp-websocket"' in host_meta_text,
+        f"host-meta did not advertise the stable public BOSH/WebSocket authority: {host_meta_text!r}",
+    )
     status, api_headers, _ = raw_http("GET", "/api/v1/config")
     check(
         status == 200 and api_headers.get("cache-control") == "no-store, max-age=0",
@@ -2187,12 +2722,12 @@ def run() -> None:
     status, me = api("GET", "/api/v1/me", token=alice_token)
     check(status == 200 and me["jid"] == f"{ALICE}@{DOMAIN}", "current-user endpoint failed")
 
-    status, admin_login = api(
+    status, admin_login = admin_api(
         "POST", "/api/v1/login", {"username": ADMIN, "password": ADMIN_PASSWORD}
     )
     check(status == 200 and admin_login["is_admin"], "bootstrap administrator login failed")
     admin_token = admin_login["token"]
-    status, invalid_admin_auth = api(
+    status, invalid_admin_auth = admin_api(
         "GET", "/api/v1/admin/users", token="A" * 64
     )
     check(
@@ -2200,12 +2735,12 @@ def run() -> None:
         and invalid_admin_auth.get("error", {}).get("code") == "unauthorized",
         f"unknown administrator bearer was not treated as unauthenticated: {invalid_admin_auth}",
     )
-    status, non_admin_auth = api("GET", "/api/v1/admin/users", token=alice_token)
+    status, non_admin_auth = admin_api("GET", "/api/v1/admin/users", token=alice_token)
     check(
         status == 403 and non_admin_auth.get("error", {}).get("code") == "forbidden",
         f"valid non-administrator bearer was not forbidden: {non_admin_auth}",
     )
-    status, users = api("GET", "/api/v1/admin/users", token=admin_token)
+    status, users = admin_api("GET", "/api/v1/admin/users", token=admin_token)
     listed_usernames = {entry["username"] for entry in users.get("users", [])}
     check(
         status == 200
@@ -2477,6 +3012,8 @@ def run() -> None:
     put_match = re.search(r"<put url='([^']+)'>.*?Bearer ([A-Za-z0-9]+)", upload_slot)
     get_match = re.search(r"<get url='([^']+)'", upload_slot)
     check(put_match is not None and get_match is not None, f"invalid HTTP Upload slot: {upload_slot}")
+    assert_public_url(put_match.group(1), "/api/v1/upload/", "HTTP Upload PUT slot")
+    assert_public_url(get_match.group(1), "/uploads/", "HTTP Upload GET slot")
     put_path = re.sub(r"^https?://[^/]+", "", put_match.group(1))
     get_path = re.sub(r"^https?://[^/]+", "", get_match.group(1))
     status, _, _ = raw_http(
@@ -3633,7 +4170,7 @@ def run() -> None:
     # Keep the client XML untouched while the server internally binds the
     # missing recipient to Alice's bare account for authorization, replay and
     # durable C2S projection identity.
-    archive_status, archive_baseline = api(
+    archive_status, archive_baseline = admin_api(
         "GET", "/api/v1/admin/stats", token=admin_token
     )
     check(
@@ -4095,7 +4632,7 @@ def run() -> None:
     # XEP-0045 sends the current subject after self-presence.  Consume that
     # initial-join subject before issuing a tagged rejoin so the assertion
     # below cannot accidentally match the earlier queued stanza.
-    bob.receive_until("<subject>")
+    bob.receive_until("<subject")
     bob.send(
         f"<iq xmlns='jabber:client' type='get' id='muc-occupant-disco' to='{room}'>"
         "<query xmlns='http://jabber.org/protocol/disco#items'>"
@@ -4113,14 +4650,16 @@ def run() -> None:
         f"<presence xmlns='jabber:client' id='muc-full-resync' to='{room}/Bob'>"
         "<x xmlns='http://jabber.org/protocol/muc'><history maxstanzas='0'/></x></presence>"
     )
-    _, resync_frames = bob.receive_until("<subject>")
+    _, resync_frames = bob.receive_until("<subject")
     resync = "".join(resync_frames)
     check(
         f"from='{room}/Alice'" in resync
         and "id='muc-full-resync'" in resync
         and "code='110'" in resync
         and resync.index(f"from='{room}/Alice'") < resync.index("code='110'")
-        < resync.index("<subject>"),
+        # An empty MUC subject is correctly serialized as <subject/>.  Check
+        # the subject element's start rather than requiring a non-empty body.
+        < resync.index("<subject"),
         "repeated tagged MUC join did not return roster, self-presence, then subject",
     )
     alice_saw_bob, _ = alice.receive_until(f"from='{room}/Bob'")
@@ -5150,7 +5689,7 @@ def run() -> None:
         f"foreign archive evidence was accepted: {foreign_status} {foreign_result}",
     )
 
-    status, stats = api("GET", "/api/v1/admin/stats", token=admin_token)
+    status, stats = admin_api("GET", "/api/v1/admin/stats", token=admin_token)
     # The self-target is one deduplicated owner row retained as a tombstone, its
     # plaintext retraction action is a separate auditable row, and
     # encrypted-offline plus encrypted-page-two each create sender and recipient
@@ -5211,7 +5750,7 @@ def run() -> None:
         "Prometheus metrics missing",
     )
 
-    status, nuke_disabled = api(
+    status, nuke_disabled = admin_api(
         "POST",
         "/api/v1/admin/nuke",
         {
@@ -5226,7 +5765,7 @@ def run() -> None:
         f"destructive administration was not disabled: {nuke_disabled}",
     )
 
-    status, registration_state = api(
+    status, registration_state = admin_api(
         "POST", "/api/v1/admin/registration", {"enabled": False}, token=admin_token
     )
     check(status == 200 and not registration_state["open_registration"], "admin registration close failed")
@@ -5247,7 +5786,7 @@ def run() -> None:
         "closed registration advertised the IBR2 signup flow or hid authenticated "
         "XEP-0077 account maintenance",
     )
-    status, _ = api(
+    status, _ = admin_api(
         "POST", "/api/v1/admin/registration", {"enabled": True}, token=admin_token
     )
     check(status == 200, "admin registration reopen failed")
@@ -5262,7 +5801,7 @@ def run() -> None:
         "Authorization": f"Bearer {admin_token}", "Content-Type": "application/json",
         "Idempotency-Key": island_key,
     }
-    conflict_status, _, conflict_raw = raw_http(
+    conflict_status, _, conflict_raw = raw_admin_http(
         "POST", "/api/v1/admin/island_mode", b'{"enabled":false}', conflict_headers,
     )
     conflict = json.loads(conflict_raw)
@@ -5278,13 +5817,31 @@ def run() -> None:
     wait_operation(admin_token, island_off_location)
 
     kick_target = XmppWebSocket(BOB, PASSWORD, "admin-kick-target")
-    status, sessions = api("GET", "/api/v1/admin/sessions", token=admin_token)
+    # A successful legacy Bind reply is deliberately written before its route
+    # becomes visible.  This avoids accepting delivery for a client whose
+    # success frame could not be written, but it also means a separate HTTP
+    # connection has no ordering relationship with that reply.  A ping is an
+    # XMPP-level commit barrier: it can only be handled on the next protocol
+    # turn, after SendManyThenActivate published the exact route incarnation.
+    # Do not replace this with a timing retry or expose staged routes through
+    # the administration API.
+    kick_ready_id = "admin-kick-route-ready"
+    kick_target.send(
+        f"<iq xmlns='jabber:client' type='get' id='{kick_ready_id}'>"
+        "<ping xmlns='urn:xmpp:ping'/></iq>"
+    )
+    kick_ready, _ = kick_target.receive_until(kick_ready_id)
+    check(
+        "type='result'" in kick_ready,
+        f"admin kick target did not cross its XMPP route commit barrier: {kick_ready}",
+    )
+    status, sessions = admin_api("GET", "/api/v1/admin/sessions", token=admin_token)
     kick_jid = f"{BOB}@{DOMAIN}/admin-kick-target"
     check(
         status == 200 and isinstance(sessions.get("sessions"), list),
         f"admin session page envelope failed: {sessions}",
     )
-    malformed_status, malformed_headers, malformed_raw = raw_http(
+    malformed_status, malformed_headers, malformed_raw = raw_admin_http(
         "DELETE",
         "/api/v1/admin/sessions/not-a-uuid",
         headers={"Authorization": f"Bearer {admin_token}", "Idempotency-Key": f"bad-uuid-{time.time_ns()}"},
@@ -5305,7 +5862,7 @@ def run() -> None:
     expect_orderly_websocket_close(kick_target, "admin session kick")
 
     kick_operation_id = kick_location.rsplit("/", 1)[1]
-    status, operation_page = api(
+    status, operation_page = admin_api(
         "GET", "/api/v1/admin/operations?limit=10", token=admin_token
     )
     check(
@@ -5313,7 +5870,7 @@ def run() -> None:
         and any(row["id"] == kick_operation_id for row in operation_page.get("items", [])),
         f"operation list did not expose the enqueued kick: {operation_page}",
     )
-    status, filtered_operation_page = api(
+    status, filtered_operation_page = admin_api(
         "GET",
         "/api/v1/admin/operations?status=succeeded&kind=admin.session_kick&limit=10",
         token=admin_token,
@@ -5327,7 +5884,7 @@ def run() -> None:
         "operation list did not bind combined status/kind filters: "
         f"{filtered_operation_page}",
     )
-    status, target_page = api(
+    status, target_page = admin_api(
         "GET", f"/api/v1/admin/operations/{kick_operation_id}/targets?limit=10",
         token=admin_token,
     )
@@ -5341,7 +5898,7 @@ def run() -> None:
         "Authorization": f"Bearer {admin_token}",
         "Idempotency-Key": f"cancel-terminal-{time.time_ns()}",
     }
-    status, first_cancel_headers, first_cancel_body = raw_http(
+    status, first_cancel_headers, first_cancel_body = raw_admin_http(
         "POST", cancel_path, headers=cancel_headers
     )
     cancel_result = json.loads(first_cancel_body)
@@ -5349,7 +5906,7 @@ def run() -> None:
         status == 200 and cancel_result.get("outcome") == "already_terminal",
         f"terminal operation cancel was not safely idempotent: {cancel_result}",
     )
-    replay_status, replay_cancel_headers, replay_cancel_body = raw_http(
+    replay_status, replay_cancel_headers, replay_cancel_body = raw_admin_http(
         "POST", cancel_path, headers=cancel_headers
     )
     check(
@@ -5373,7 +5930,7 @@ def run() -> None:
         "Content-Type": "application/json",
         "Idempotency-Key": f"reconcile-terminal-{time.time_ns()}",
     }
-    status, _, reconcile_raw = raw_http(
+    status, _, reconcile_raw = raw_admin_http(
         "POST", reconcile_path, reconcile_body, reconcile_headers
     )
     reconcile_result = json.loads(reconcile_raw)
@@ -5381,7 +5938,7 @@ def run() -> None:
         status == 409 and reconcile_result.get("error", {}).get("code") == "conflict",
         f"parent reconciliation endpoint was not reachable: {reconcile_result}",
     )
-    status, _, target_reconcile_raw = raw_http(
+    status, _, target_reconcile_raw = raw_admin_http(
         "POST",
         f"/api/v1/admin/operations/{kick_operation_id}/targets/{target_id}/reconcile",
         json.dumps(
@@ -5408,7 +5965,7 @@ def run() -> None:
         "status=Running",
         "kind=admin.private_future_kind",
     ):
-        invalid_status, invalid_body = api(
+        invalid_status, invalid_body = admin_api(
             "GET", f"/api/v1/admin/operations?{invalid_query}", token=admin_token
         )
         check(
@@ -5560,7 +6117,7 @@ def run() -> None:
         "POST", "/api/v1/login", {"username": BOB, "password": rotated_password}
     )
     check(status == 401, "disabled account could authenticate")
-    status, _ = api(
+    status, _ = admin_api(
         "PATCH", f"/api/v1/admin/users/{bob_id}", {"disabled": False}, token=admin_token
     )
     check(status == 200, "administrator could not re-enable the test account")
@@ -5599,4 +6156,8 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    if sys.argv[1:] == ["--endpoint-binding-self-test"]:
+        endpoint_binding_self_test()
+        print("integration endpoint binding self-test: PASS")
+    else:
+        run()

@@ -16,6 +16,14 @@ use crate::{
     db,
 };
 use anyhow::Result;
+use northstar_message_application::{
+    CommitError, MessageApplication, PersonalMessageCommitRepository,
+};
+pub(crate) use northstar_message_core::{
+    ArchiveProjection as ArchiveWrite, FederationDelivery, IdentityAuthority, LocalDelivery,
+    MessageCommit as DurableAdmissionOutcome, MessageIdentity, MessagePostCommit,
+    PersonalMessageDestination, ValidatedPersonalMessage,
+};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -24,8 +32,6 @@ use uuid::Uuid;
 ///
 /// The protocol layer supplies already-sanitized stanza text; canonical JID,
 /// size and identity validation remain enforced by the repository transaction.
-pub(crate) use super::retractions::ArchiveWrite;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OutboundPolicyDecision {
     Allowed,
@@ -50,13 +56,6 @@ pub(crate) struct LocalRecipient {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DurableAdmissionOutcome {
-    Stored { archive_written: bool },
-    Replay,
-    AccountUnavailable,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OfflineAdmissionOutcome {
     Stored,
     Replay,
@@ -71,23 +70,85 @@ struct OfflineLimits {
     ttl_days: i64,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct MessageIdentity<'a> {
-    pub(crate) actor_scope_raw: &'a str,
-    pub(crate) actor_scope: &'a str,
-    pub(crate) target_scope: &'a str,
-    pub(crate) value: &'a str,
-    pub(crate) payload: &'a str,
+#[derive(Clone)]
+struct PostgresPersonalMessageRepository {
+    pool: PgPool,
+    content_identity: PersonalMessageContentKeyring,
+    configured_domain: String,
+    offline: OfflineLimits,
 }
 
-pub(crate) struct RemoteMessageAdmission<'a> {
-    pub(crate) local_actor_id: Uuid,
-    pub(crate) identity: Option<MessageIdentity<'a>>,
-    pub(crate) archives: &'a [ArchiveWrite<'a>],
-    pub(crate) target_domain: &'a str,
-    pub(crate) stanza: &'a str,
-    pub(crate) bounce_to: Option<&'a str>,
-    pub(crate) outbox_policy: FederationOutboxPolicy,
+impl PersonalMessageCommitRepository for PostgresPersonalMessageRepository {
+    type Error = anyhow::Error;
+
+    async fn commit<'a>(
+        &'a self,
+        request: &'a ValidatedPersonalMessage<'a>,
+    ) -> Result<DurableAdmissionOutcome> {
+        let identity = request
+            .identity
+            .as_ref()
+            .map(|identity| db_history_identity(&self.content_identity, identity))
+            .transpose()?;
+        let archives = persistence_archive_writes(request.archives);
+        let (outcome, post_commit) = match request.destination {
+            PersonalMessageDestination::Federation(destination) => {
+                let outbox = db::PersonalS2sOutboxAdmission {
+                    local_actor_id: destination.local_actor_id,
+                    target_domain: destination.target_domain,
+                    stanza: destination.stanza,
+                    bounce_to: destination.bounce_to,
+                    policy: db::S2sOutboxPolicy {
+                        ttl_seconds: destination.limits.ttl_seconds,
+                        max_rows: destination.limits.max_rows,
+                        max_bytes: destination.limits.max_bytes,
+                        max_per_domain: destination.limits.max_per_domain,
+                    },
+                };
+                let outcome = db::admit_outbound_personal_history(
+                    &self.pool,
+                    identity.as_ref(),
+                    &archives,
+                    &outbox,
+                )
+                .await?;
+                (outcome, MessagePostCommit::WakeFederationOutbox)
+            }
+            PersonalMessageDestination::Local(destination) => {
+                validate_local_recipient_authority_for_domain(
+                    destination.recipient_bare_jid,
+                    &self.configured_domain,
+                )?;
+                let target_full_jid = durable_target_full_jid(destination.stanza)?;
+                let delivery = db::PersonalC2sDeliveryAdmission {
+                    id: destination.delivery_id,
+                    recipient_id: destination.recipient_id,
+                    recipient_bare_jid: destination.recipient_bare_jid,
+                    local_actor_id: request.local_actor_id,
+                    sender_jid: destination.sender_jid,
+                    stanza: destination.stanza,
+                    target_full_jid: target_full_jid.as_deref(),
+                    encrypted: destination.encrypted,
+                    policy: offline_store_policy(self.offline, destination.mam_backed),
+                };
+                let outcome = db::admit_personal_history_and_c2s_delivery(
+                    &self.pool,
+                    identity.as_ref(),
+                    &archives,
+                    &delivery,
+                )
+                .await?;
+                (
+                    outcome,
+                    MessagePostCommit::RouteLocalDelivery {
+                        delivery_id: destination.delivery_id,
+                        recipient_id: destination.recipient_id,
+                    },
+                )
+            }
+        };
+        map_history_outcome(outcome, request.writes_history(), post_commit)
+    }
 }
 
 pub(crate) struct RemoteMucInviteAdmission<'a> {
@@ -111,19 +172,6 @@ pub(crate) enum RemoteMucInviteAdmissionOutcome {
     Rejected,
     Stale,
     Conflict,
-}
-
-pub(crate) struct LocalMessageAdmission<'a> {
-    pub(crate) local_actor_id: Option<Uuid>,
-    pub(crate) identity: Option<MessageIdentity<'a>>,
-    pub(crate) archives: &'a [ArchiveWrite<'a>],
-    pub(crate) delivery_id: Uuid,
-    pub(crate) recipient_id: Uuid,
-    pub(crate) recipient_bare_jid: &'a str,
-    pub(crate) sender_jid: &'a str,
-    pub(crate) stanza: &'a str,
-    pub(crate) encrypted: bool,
-    pub(crate) mam_backed: bool,
 }
 
 pub(crate) struct OfflineMessageAdmission<'a> {
@@ -156,6 +204,7 @@ pub(crate) struct LocalMucInviteAdmission<'a> {
 
 #[derive(Clone)]
 pub(crate) struct MessageService {
+    personal: MessageApplication<PostgresPersonalMessageRepository>,
     pool: PgPool,
     content_identity: PersonalMessageContentKeyring,
     configured_domain: String,
@@ -173,16 +222,25 @@ impl MessageService {
         offline_max_bytes: i64,
         offline_ttl_days: i64,
     ) -> Self {
+        let configured_domain = configured_domain.into();
+        let offline = OfflineLimits {
+            max_messages: offline_max_messages,
+            max_bytes: offline_max_bytes,
+            ttl_days: offline_ttl_days,
+        };
+        let personal = MessageApplication::new(PostgresPersonalMessageRepository {
+            pool: pool.clone(),
+            content_identity: content_identity.clone(),
+            configured_domain: configured_domain.clone(),
+            offline,
+        });
         Self {
+            personal,
             pool,
             content_identity,
-            configured_domain: configured_domain.into(),
+            configured_domain,
             require_encrypted_archive,
-            offline: OfflineLimits {
-                max_messages: offline_max_messages,
-                max_bytes: offline_max_bytes,
-                ttl_days: offline_ttl_days,
-            },
+            offline,
         }
     }
 
@@ -288,28 +346,21 @@ impl MessageService {
         db::archive_allowed(&self.pool, owner_id, peer_jid).await
     }
 
-    pub(crate) async fn admit_remote_message(
+    /// Commit one validated personal-message command through its authoritative
+    /// local-delivery or federation-outbox transaction. Protocol origin does
+    /// not select a repository function; the typed destination and identity
+    /// authority do, preventing C2S and S2S adapters from drifting apart.
+    pub(crate) async fn admit_personal_message(
         &self,
-        request: &RemoteMessageAdmission<'_>,
+        request: &ValidatedPersonalMessage<'_>,
     ) -> Result<DurableAdmissionOutcome> {
-        let identity = request
-            .identity
-            .as_ref()
-            .map(|identity| self.db_identity(identity, "local-origin"))
-            .transpose()?;
-        let archives = persistence_archive_writes(request.archives);
-        let outbox = db::PersonalS2sOutboxAdmission {
-            local_actor_id: request.local_actor_id,
-            target_domain: request.target_domain,
-            stanza: request.stanza,
-            bounce_to: request.bounce_to,
-            policy: request.outbox_policy.into(),
-        };
-        map_history_outcome(
-            db::admit_outbound_personal_history(&self.pool, identity.as_ref(), &archives, &outbox)
-                .await?,
-            !request.archives.is_empty(),
-        )
+        match self.personal.commit(request).await {
+            Ok(commit) => Ok(commit),
+            Err(CommitError::Invalid(error)) => {
+                anyhow::bail!("invalid personal-message command: {error:?}")
+            }
+            Err(CommitError::Repository(error)) => Err(error),
+        }
     }
 
     /// Atomically admit a local-room invitation addressed to a federated
@@ -326,7 +377,7 @@ impl MessageService {
         let identity = request
             .identity
             .as_ref()
-            .map(|identity| self.db_identity(identity, "local-origin"))
+            .map(|identity| self.db_identity(identity))
             .transpose()?;
         let archives = persistence_archive_writes(request.archives);
         let outbox = db::PersonalS2sOutboxAdmission {
@@ -407,63 +458,6 @@ impl MessageService {
         Ok(outcome)
     }
 
-    /// Atomically commit every enabled MAM projection and the recoverable C2S
-    /// delivery fence. The origin identity cannot become a history-only ghost
-    /// and an exact retry cannot fan out a second live copy.
-    pub(crate) async fn admit_local_message(
-        &self,
-        request: &LocalMessageAdmission<'_>,
-    ) -> Result<DurableAdmissionOutcome> {
-        self.admit_c2s_message(request, "local-origin").await
-    }
-
-    /// Federated stanza IDs use the authenticated remote domain as their
-    /// authority and therefore occupy a distinct identity namespace from a
-    /// client origin-id. The same application transaction remains responsible
-    /// for its optional MAM and recoverable C2S projections.
-    pub(crate) async fn admit_inbound_federated_message(
-        &self,
-        request: &LocalMessageAdmission<'_>,
-    ) -> Result<DurableAdmissionOutcome> {
-        self.admit_c2s_message(request, "remote-stanza").await
-    }
-
-    async fn admit_c2s_message(
-        &self,
-        request: &LocalMessageAdmission<'_>,
-        identity_kind: &'static str,
-    ) -> Result<DurableAdmissionOutcome> {
-        self.validate_local_recipient_authority(request.recipient_bare_jid)?;
-        let identity = request
-            .identity
-            .as_ref()
-            .map(|identity| self.db_identity(identity, identity_kind))
-            .transpose()?;
-        let archives = persistence_archive_writes(request.archives);
-        let target_full_jid = durable_target_full_jid(request.stanza)?;
-        let delivery = db::PersonalC2sDeliveryAdmission {
-            id: request.delivery_id,
-            recipient_id: request.recipient_id,
-            recipient_bare_jid: request.recipient_bare_jid,
-            local_actor_id: request.local_actor_id,
-            sender_jid: request.sender_jid,
-            stanza: request.stanza,
-            target_full_jid: target_full_jid.as_deref(),
-            encrypted: request.encrypted,
-            policy: self.offline_policy(request.mam_backed),
-        };
-        map_history_outcome(
-            db::admit_personal_history_and_c2s_delivery(
-                &self.pool,
-                identity.as_ref(),
-                &archives,
-                &delivery,
-            )
-            .await?,
-            !request.archives.is_empty(),
-        )
-    }
-
     /// Commit a local members-only direct invitation as one state change.
     ///
     /// Lock ordering intentionally extends the ordinary durable message path:
@@ -479,7 +473,7 @@ impl MessageService {
         let identity = request
             .identity
             .as_ref()
-            .map(|identity| self.db_identity(identity, "local-origin"))
+            .map(|identity| self.db_identity(identity))
             .transpose()?;
         let archives = persistence_archive_writes(request.archives);
         let target_full_jid = durable_target_full_jid(request.stanza)?;
@@ -614,34 +608,45 @@ impl MessageService {
     }
 
     fn offline_policy(&self, mam_backed: bool) -> db::OfflineStorePolicy {
-        db::OfflineStorePolicy {
-            max_messages: self.offline.max_messages,
-            max_bytes: self.offline.max_bytes,
-            ttl_days: self.offline.ttl_days,
-            mam_backed,
-        }
+        offline_store_policy(self.offline, mam_backed)
     }
 
     fn db_identity<'a>(
         &self,
         identity: &'a MessageIdentity<'a>,
-        kind: &'static str,
     ) -> Result<db::PersonalHistoryIdentity<'a>> {
-        anyhow::ensure!(
-            !identity.payload.is_empty() && identity.payload.len() <= 1_048_576,
-            "personal history payload must contain 1 byte to 1 MiB"
-        );
-        let commitment = personal_message_commitment(kind, identity);
-        Ok(db::PersonalHistoryIdentity {
-            kind,
-            actor_scope_raw: identity.actor_scope_raw,
-            actor_scope: identity.actor_scope,
-            target_scope: identity.target_scope,
-            identity_value: identity.value,
-            payload_authenticators: self.content_identity.authenticators(&commitment),
-            legacy_payload_digest: Sha256::digest(identity.payload.as_bytes()).into(),
-        })
+        db_history_identity(&self.content_identity, identity)
     }
+}
+
+fn offline_store_policy(limits: OfflineLimits, mam_backed: bool) -> db::OfflineStorePolicy {
+    db::OfflineStorePolicy {
+        max_messages: limits.max_messages,
+        max_bytes: limits.max_bytes,
+        ttl_days: limits.ttl_days,
+        mam_backed,
+    }
+}
+
+fn db_history_identity<'a>(
+    content_identity: &PersonalMessageContentKeyring,
+    identity: &'a MessageIdentity<'a>,
+) -> Result<db::PersonalHistoryIdentity<'a>> {
+    anyhow::ensure!(
+        !identity.payload.is_empty() && identity.payload.len() <= 1_048_576,
+        "personal history payload must contain 1 byte to 1 MiB"
+    );
+    let kind = identity.authority.persistence_kind();
+    let commitment = personal_message_commitment(kind, identity);
+    Ok(db::PersonalHistoryIdentity {
+        kind,
+        actor_scope_raw: identity.actor_scope_raw,
+        actor_scope: identity.actor_scope,
+        target_scope: identity.target_scope,
+        identity_value: identity.value,
+        payload_authenticators: content_identity.authenticators(&commitment),
+        legacy_payload_digest: Sha256::digest(identity.payload.as_bytes()).into(),
+    })
 }
 
 fn validate_local_recipient_authority_for_domain(
@@ -719,11 +724,13 @@ fn personal_message_commitment(kind: &str, identity: &MessageIdentity<'_>) -> Ve
 fn map_history_outcome(
     outcome: db::PersonalHistoryAdmission,
     archive_written: bool,
+    post_commit: MessagePostCommit,
 ) -> Result<DurableAdmissionOutcome> {
     Ok(match outcome {
-        db::PersonalHistoryAdmission::Stored(_) => {
-            DurableAdmissionOutcome::Stored { archive_written }
-        }
+        db::PersonalHistoryAdmission::Stored(_) => DurableAdmissionOutcome::Stored {
+            archive_written,
+            post_commit,
+        },
         db::PersonalHistoryAdmission::Replay(_) => DurableAdmissionOutcome::Replay,
         db::PersonalHistoryAdmission::AccountUnavailable => {
             DurableAdmissionOutcome::AccountUnavailable
@@ -768,15 +775,22 @@ mod tests {
         assert_eq!(
             map_history_outcome(
                 db::PersonalHistoryAdmission::Stored(vec![Uuid::new_v4()]),
-                true
+                true,
+                MessagePostCommit::WakeFederationOutbox,
             )
             .unwrap(),
             DurableAdmissionOutcome::Stored {
-                archive_written: true
+                archive_written: true,
+                post_commit: MessagePostCommit::WakeFederationOutbox,
             }
         );
         assert_eq!(
-            map_history_outcome(db::PersonalHistoryAdmission::Replay(vec![]), false).unwrap(),
+            map_history_outcome(
+                db::PersonalHistoryAdmission::Replay(vec![]),
+                false,
+                MessagePostCommit::WakeFederationOutbox,
+            )
+            .unwrap(),
             DurableAdmissionOutcome::Replay
         );
     }
@@ -950,6 +964,7 @@ mod tests {
         let request = LocalMucInviteAdmission {
             local_actor_id: sender_id,
             identity: Some(MessageIdentity {
+                authority: IdentityAuthority::LocalOrigin,
                 actor_scope_raw: &sender,
                 actor_scope: &sender,
                 target_scope: &recipient,
@@ -1118,6 +1133,7 @@ mod tests {
         let failure_request = LocalMucInviteAdmission {
             local_actor_id: sender_id,
             identity: Some(MessageIdentity {
+                authority: IdentityAuthority::LocalOrigin,
                 actor_scope_raw: &sender,
                 actor_scope: &sender,
                 target_scope: &failure_recipient,
@@ -1195,6 +1211,7 @@ mod tests {
         let quota_request = LocalMucInviteAdmission {
             local_actor_id: sender_id,
             identity: Some(MessageIdentity {
+                authority: IdentityAuthority::LocalOrigin,
                 actor_scope_raw: &sender,
                 actor_scope: &sender,
                 target_scope: &quota_recipient,
@@ -1265,6 +1282,7 @@ mod tests {
         let concurrent_invite = LocalMucInviteAdmission {
             local_actor_id: sender_id,
             identity: Some(MessageIdentity {
+                authority: IdentityAuthority::LocalOrigin,
                 actor_scope_raw: &sender,
                 actor_scope: &sender,
                 target_scope: &concurrent_recipient,
@@ -1282,9 +1300,10 @@ mod tests {
             room_id: concurrent_room.id,
             cluster_authority: None,
         };
-        let concurrent_message = LocalMessageAdmission {
+        let concurrent_message = ValidatedPersonalMessage {
             local_actor_id: Some(sender_id),
             identity: Some(MessageIdentity {
+                authority: IdentityAuthority::LocalOrigin,
                 actor_scope_raw: &sender,
                 actor_scope: &sender,
                 target_scope: &concurrent_recipient,
@@ -1292,18 +1311,20 @@ mod tests {
                 payload: &concurrent_message_stanza,
             }),
             archives: &message_writes,
-            delivery_id: concurrent_message_id,
-            recipient_id: concurrent_recipient_id,
-            recipient_bare_jid: &concurrent_recipient,
-            sender_jid: &sender,
-            stanza: &concurrent_message_stanza,
-            encrypted: true,
-            mam_backed: true,
+            destination: PersonalMessageDestination::Local(LocalDelivery {
+                delivery_id: concurrent_message_id,
+                recipient_id: concurrent_recipient_id,
+                recipient_bare_jid: &concurrent_recipient,
+                sender_jid: &sender,
+                stanza: &concurrent_message_stanza,
+                encrypted: true,
+                mam_backed: true,
+            }),
         };
         let (invite_result, message_result) = tokio::time::timeout(Duration::from_secs(5), async {
             tokio::join!(
                 service.admit_local_muc_invite(&concurrent_invite),
-                service.admit_local_message(&concurrent_message)
+                service.admit_personal_message(&concurrent_message)
             )
         })
         .await
@@ -1324,7 +1345,7 @@ mod tests {
         .await;
         assert_eq!(
             service
-                .admit_local_message(&concurrent_message)
+                .admit_personal_message(&concurrent_message)
                 .await
                 .unwrap(),
             DurableAdmissionOutcome::Replay
@@ -1357,6 +1378,7 @@ mod tests {
         let remote_request = RemoteMucInviteAdmission {
             local_actor_id: sender_id,
             identity: Some(MessageIdentity {
+                authority: IdentityAuthority::LocalOrigin,
                 actor_scope_raw: &sender,
                 actor_scope: &sender,
                 target_scope: &remote_target,
@@ -1420,6 +1442,7 @@ mod tests {
         let changed_remote = RemoteMucInviteAdmission {
             local_actor_id: sender_id,
             identity: Some(MessageIdentity {
+                authority: IdentityAuthority::LocalOrigin,
                 actor_scope_raw: &sender,
                 actor_scope: &sender,
                 target_scope: &remote_target,
@@ -1517,6 +1540,7 @@ mod tests {
         let failed_remote = RemoteMucInviteAdmission {
             local_actor_id: sender_id,
             identity: Some(MessageIdentity {
+                authority: IdentityAuthority::LocalOrigin,
                 actor_scope_raw: &sender,
                 actor_scope: &sender,
                 target_scope: &failed_remote_target,
@@ -1578,6 +1602,7 @@ mod tests {
         let concurrent_remote = RemoteMucInviteAdmission {
             local_actor_id: sender_id,
             identity: Some(MessageIdentity {
+                authority: IdentityAuthority::LocalOrigin,
                 actor_scope_raw: &sender,
                 actor_scope: &sender,
                 target_scope: &remote_target,

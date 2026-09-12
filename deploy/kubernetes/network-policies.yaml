@@ -1,0 +1,158 @@
+# Northstar Zero-Trust Kubernetes Network Policies
+# Defined per northstar_microservices_deep_audit_2026-09-03.md (Section 14).
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: northstar
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# xmpp-edge NetworkPolicy: Can only talk to allowed internal platform RPCs
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: xmpp-edge-policy
+  namespace: northstar
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: xmpp-edge
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Accept external client connections on standard XMPP ports
+    - ports:
+        - protocol: TCP
+          port: 5222
+        - protocol: TCP
+          port: 5223
+        - protocol: TCP
+          port: 5280
+    # Accept incoming push delivery streams from delivery-router
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: delivery-router
+      ports:
+        - protocol: TCP
+          port: 50055
+  egress:
+    # Allowed internal RPC targets only
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: protocol-registry
+      ports:
+        - protocol: TCP
+          port: 50050
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: identity
+      ports:
+        - protocol: TCP
+          port: 50051
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: session-directory
+      ports:
+        - protocol: TCP
+          port: 50052
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: message-ingress
+      ports:
+        - protocol: TCP
+          port: 50053
+
+---
+# identity NetworkPolicy: Can only talk to identity-db and kafka
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: identity-policy
+  namespace: northstar
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: identity
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: xmpp-edge
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: admin-api
+      ports:
+        - protocol: TCP
+          port: 50051
+  egress:
+    # Can ONLY connect to its exclusive database and Kafka
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: identity-db
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+      ports:
+        - protocol: TCP
+          port: 9092
+
+---
+# session-directory NetworkPolicy: Can only talk to session-db and kafka
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: session-directory-policy
+  namespace: northstar
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: session-directory
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: xmpp-edge
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: delivery-router
+      ports:
+        - protocol: TCP
+          port: 50052
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: session-db
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+      ports:
+        - protocol: TCP
+          port: 9092

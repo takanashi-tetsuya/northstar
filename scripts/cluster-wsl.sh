@@ -16,48 +16,46 @@ else
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$project_dir/target}"
 fi
 cd "$project_dir"
+source "$project_dir/scripts/lib/test-listener-readiness.sh"
 
 schema="${XMPP_TEST_SCHEMA:-cluster_it_$(openssl rand -hex 6)}"
 if [[ ! "$schema" =~ ^cluster_it_[0-9a-f]{12,48}$ ]]; then
   echo "XMPP_TEST_SCHEMA must use the isolated cluster_it_ prefix followed by 12-48 lowercase hexadecimal characters" >&2
   exit 2
 fi
+# Keep both shell and Python psql probes on the same disposable endpoint as
+# the server URL. A separate loopback port permits a private fixture without
+# touching an existing service on PostgreSQL's conventional port.
+database_port="${NORTHSTAR_CLUSTER_DATABASE_PORT:-5432}"
+if ! [[ "$database_port" =~ ^[1-9][0-9]{0,4}$ ]] || ((10#$database_port > 65535)); then
+  echo "NORTHSTAR_CLUSTER_DATABASE_PORT must be an integer from 1 through 65535" >&2
+  exit 2
+fi
+export PGPORT="$database_port"
 redis_tmp="$(mktemp -d /tmp/northstar-redis.XXXXXX)"
-pick_port() {
-  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
-}
-declare -a allocated_ports=()
-assign_port() {
-  local destination="$1"
-  local port=""
-  while :; do
-    port="$(pick_port)"
-    if [[ ! " ${allocated_ports[*]} " =~ " $port " ]]; then
-      break
-    fi
-  done
-  allocated_ports+=("$port")
-  printf -v "$destination" '%s' "$port"
-}
-assign_port redis_port
-assign_port redis_tls_port
-assign_port xmpp_a
-assign_port xmpp_b
-assign_port http_a
-assign_port http_b
-assign_port metrics_a
-assign_port metrics_b
-assign_port http_probe
+chmod 700 "$redis_tmp"
+if [[ "$(stat -c '%a' "$redis_tmp")" != "700" ]]; then
+  echo "cluster Redis runtime directory must be private: $redis_tmp" >&2
+  exit 1
+fi
+redis_socket="$redis_tmp/redis.sock"
 
 redis_pid=""
-redis_tls_pid=""
+redis_required_tls_pid=""
+redis_optional_tls_pid=""
 optional_pid=""
 pid_a=""
 pid_b=""
-port_is_listening() {
-  local port="$1"
-  ss -H -ltn "sport = :$port" 2>/dev/null | grep -q .
-}
+relay_a_http_pid=""
+relay_b_http_pid=""
+relay_probe_http_pid=""
+relay_a_http_port=""
+relay_b_http_port=""
+relay_probe_http_port=""
+target_a_http="$redis_tmp/cluster-a.http.target"
+target_b_http="$redis_tmp/cluster-b.http.target"
+target_probe_http="$redis_tmp/cluster-probe.http.target"
+declare -a fixture_listener_ports=()
 cleanup() {
   exit_code=$?
   trap - EXIT INT TERM
@@ -65,19 +63,24 @@ cleanup() {
   # script created.  If the test runner is interrupted inside that window,
   # Redis cannot act on SIGTERM until it is continued.  Resume only the two
   # recorded child PIDs before terminating any owned processes.
-  for pid in "$redis_pid" "$redis_tls_pid"; do
+  for pid in "$redis_pid" "$redis_required_tls_pid" "$redis_optional_tls_pid"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       kill -CONT "$pid" 2>/dev/null || true
     fi
   done
-  for pid in "$pid_a" "$pid_b" "$redis_pid" "$redis_tls_pid" "$optional_pid"; do
+  for pid in "$pid_a" "$pid_b" "$relay_a_http_pid" "$relay_b_http_pid" "$relay_probe_http_pid" \
+    "$redis_required_tls_pid" "$redis_optional_tls_pid" "$redis_pid" "$optional_pid"; do
     if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; fi
   done
-  for pid in "$pid_a" "$pid_b" "$redis_pid" "$redis_tls_pid" "$optional_pid"; do
+  for pid in "$pid_a" "$pid_b" "$relay_a_http_pid" "$relay_b_http_pid" "$relay_probe_http_pid" \
+    "$redis_required_tls_pid" "$redis_optional_tls_pid" "$redis_pid" "$optional_pid"; do
     if [[ -n "$pid" ]]; then wait "$pid" 2>/dev/null || true; fi
   done
   if (( exit_code != 0 )); then
-    for log in "$redis_tmp/cluster-a.log" "$redis_tmp/cluster-b.log" "$redis_tmp/cluster-redis.log"; do
+    for log in "$redis_tmp/cluster-a.log" "$redis_tmp/cluster-b.log" "$redis_tmp/cluster-optional.log" \
+      "$redis_tmp/cluster-redis.log" "$redis_tmp/redis-required-mtls.log" \
+      "$redis_tmp/redis-optional-mtls.log" "$redis_tmp/cluster-a-http-relay.log" \
+      "$redis_tmp/cluster-b-http-relay.log" "$redis_tmp/cluster-probe-http-relay.log"; do
       if [[ -f "$log" ]]; then
         echo "--- $(basename "$log") (last 160 lines) ---" >&2
         tail -n 160 "$log" >&2 || true
@@ -101,13 +104,14 @@ cleanup() {
     exit_code=1
   fi
   listener_count=0
-  for port in "${allocated_ports[@]}"; do
-    if port_is_listening "$port"; then
-      echo "cluster listener remained on port $port" >&2
-      listener_count=$((listener_count + 1))
-      exit_code=1
-    fi
-  done
+  if ! fixture_assert_no_listeners; then
+    listener_count=1
+    exit_code=1
+  fi
+  if [[ -e "$redis_socket" || -L "$redis_socket" ]]; then
+    echo "cluster Redis Unix socket remained after its owned process stopped: $redis_socket" >&2
+    exit_code=1
+  fi
   case "$redis_tmp" in
     /tmp/northstar-redis.*) rm -rf -- "$redis_tmp" ;;
     *) echo "refusing to remove unexpected cluster runtime directory: $redis_tmp" >&2; exit_code=1 ;;
@@ -134,7 +138,7 @@ if [[ "${NORTHSTAR_CLUSTER_SKIP_BUILD:-false}" != "true" ]]; then
 fi
 binary="$CARGO_TARGET_DIR/debug/rust-xmpp-server"
 [[ -x "$binary" ]] || { echo "cluster runtime binary is missing: $binary" >&2; exit 1; }
-cluster_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema"
+cluster_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:$database_port/xmpp_test?options=-csearch_path%3D$schema"
 env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=cluster.localhost \
   MIGRATOR_DATABASE_URL="$cluster_database_url" "$binary" migrate
 openssl req -x509 -newkey rsa:3072 -nodes -days 1 -subj "/CN=cluster.localhost" \
@@ -197,80 +201,121 @@ redis_binary="$(command -v redis-server)"
 redis_cli="$(command -v redis-cli)"
 redis_password="$(openssl rand -hex 32)"
 cat >"$redis_tmp/redis.conf" <<EOF
-bind 127.0.0.1
 port 0
-tls-port $redis_port
+tls-port 0
+unixsocket $redis_socket
+unixsocketperm 700
 save ""
 appendonly no
 protected-mode yes
-tls-cert-file $redis_tmp/redis-tls.crt
-tls-key-file $redis_tmp/redis-tls.key
-tls-ca-cert-file $redis_tmp/redis-ca.crt
-tls-auth-clients yes
 user default off
-user northstar on >$redis_password ~northstar:cluster.localhost:* &northstar:cluster.localhost:* +ping +time +get +set +setex +expire +ttl +exists +del +sadd +srem +smembers +zadd +zrem +zrangebyscore +zremrangebyscore +scan +publish +subscribe +unsubscribe +psubscribe +punsubscribe +eval +evalsha +script|load +hget +hset +hdel +hexists +hlen +hvals +hgetall +hkeys +hincrby
+user northstar on >$redis_password ~northstar:cluster.localhost:* &northstar:cluster.localhost:* +ping +time +get +set +setex +expire +ttl +exists +del +sadd +srem +smembers +scard +zadd +zrem +zrangebyscore +zremrangebyscore +scan +publish +subscribe +unsubscribe +psubscribe +punsubscribe +eval +evalsha +script|load +hget +hset +hdel +hexists +hlen +hvals +hgetall +hkeys +hincrby
 EOF
 chmod 600 "$redis_tmp/redis.conf"
-cat >"$redis_tmp/redis-tls.conf" <<EOF
-bind 127.0.0.1
-port 0
-tls-port $redis_tls_port
-save ""
-appendonly no
-protected-mode yes
-tls-cert-file $redis_tmp/redis-tls.crt
-tls-key-file $redis_tmp/redis-tls.key
-tls-ca-cert-file $redis_tmp/redis-ca.crt
-tls-auth-clients optional
-user default off
-user northstar on >$redis_password ~northstar:cluster.localhost:* &northstar:cluster.localhost:* +ping +time +get +set +setex +expire +ttl +exists +del +sadd +srem +smembers +zadd +zrem +zrangebyscore +zremrangebyscore +scan +publish +subscribe +unsubscribe +psubscribe +punsubscribe +eval +evalsha +script|load +hget +hset +hdel +hexists +hlen +hvals +hgetall +hkeys +hincrby
-EOF
-chmod 600 "$redis_tmp/redis-tls.conf"
-printf 'rediss://northstar:%s@localhost:%s/\n' "$redis_password" "$redis_port" >"$redis_tmp/redis.url"
-chmod 600 "$redis_tmp/redis.url"
 
 "$redis_binary" "$redis_tmp/redis.conf" >"$redis_tmp/cluster-redis.log" 2>&1 &
 redis_pid=$!
 
-"$redis_binary" "$redis_tmp/redis-tls.conf" >"$redis_tmp/cluster-redis-tls.log" 2>&1 &
-redis_tls_pid=$!
-
 for _ in $(seq 1 100); do
-  if REDISCLI_AUTH="$redis_password" "$redis_cli" --tls --cacert "$redis_tmp/redis-ca.crt" \
-    --cert "$redis_tmp/redis-client.crt" --key "$redis_tmp/redis-client.key" \
-    --user northstar -h localhost -p "$redis_port" ping 2>/dev/null | grep -q PONG; then
+  if REDISCLI_AUTH="$redis_password" "$redis_cli" -s "$redis_socket" \
+    --user northstar ping 2>/dev/null | grep -q PONG; then
     break
+  fi
+  if ! kill -0 "$redis_pid" 2>/dev/null; then
+    echo "cluster Redis exited before publishing its private Unix socket" >&2
+    tail -n 160 "$redis_tmp/cluster-redis.log" >&2 || true
+    exit 1
   fi
   sleep 0.05
 done
+REDISCLI_AUTH="$redis_password" "$redis_cli" -s "$redis_socket" \
+  --user northstar ping | grep -q PONG
+[[ -S "$redis_socket" ]] || {
+  echo "cluster Redis readiness succeeded without a Unix-domain socket: $redis_socket" >&2
+  exit 1
+}
+if [[ "$(stat -c '%a' "$redis_socket")" != "700" ]]; then
+  echo "cluster Redis Unix socket must remain private: $redis_socket" >&2
+  exit 1
+fi
+
+# Redis itself owns no TCP listener.  The two short-lived TLS frontends own
+# their own ephemeral ports and readiness records, preserving the required
+# and optional mTLS test boundary while Northstar uses the private Unix socket
+# behind them.
+start_redis_tls_frontend() {
+  local label="$1" client_auth="$2" purpose="$3" pid_variable="$4" port_variable="$5"
+  local readiness_file="$redis_tmp/$label.ready.json" readiness_nonce relay_pid relay_port
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file"
+  python3 "$project_dir/scripts/test-redis-tls-unix-relay.py" \
+    --readiness-file "$readiness_file" --nonce "$readiness_nonce" --purpose "$purpose" \
+    --unix-socket "$redis_socket" --certificate "$redis_tmp/redis-tls.crt" \
+    --private-key "$redis_tmp/redis-tls.key" --ca-certificate "$redis_tmp/redis-ca.crt" \
+    --client-auth "$client_auth" >"$redis_tmp/$label.log" 2>&1 &
+  relay_pid=$!
+  if ! fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$relay_pid"; then
+    kill "$relay_pid" 2>/dev/null || true
+    wait "$relay_pid" 2>/dev/null || true
+    return 1
+  fi
+  relay_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" "$purpose")" || return 1
+  printf -v "$pid_variable" '%s' "$relay_pid"
+  printf -v "$port_variable" '%s' "$relay_port"
+}
+
+start_redis_tls_frontend redis-required-mtls required redis-required-mtls \
+  redis_required_tls_pid redis_required_tls_port
+start_redis_tls_frontend redis-optional-mtls optional redis-optional-mtls \
+  redis_optional_tls_pid redis_optional_tls_port
+printf 'rediss://northstar:%s@localhost:%s/\n' "$redis_password" "$redis_required_tls_port" >"$redis_tmp/redis.url"
+chmod 600 "$redis_tmp/redis.url"
+
 REDISCLI_AUTH="$redis_password" "$redis_cli" --tls --cacert "$redis_tmp/redis-ca.crt" \
   --cert "$redis_tmp/redis-client.crt" --key "$redis_tmp/redis-client.key" \
-  --user northstar -h localhost -p "$redis_port" ping | grep -q PONG
+  --user northstar -h localhost -p "$redis_required_tls_port" ping | grep -q PONG
+REDISCLI_AUTH="$redis_password" "$redis_cli" --raw --tls \
+  --cacert "$redis_tmp/redis-ca.crt" --cert "$redis_tmp/redis-client.crt" \
+  --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_required_tls_port" \
+  sadd northstar:cluster.localhost:muc_nodes:acl-probe scoped-node | grep -qx '1'
+cardinality="$(REDISCLI_AUTH="$redis_password" "$redis_cli" --raw --tls \
+  --cacert "$redis_tmp/redis-ca.crt" --cert "$redis_tmp/redis-client.crt" \
+  --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_required_tls_port" \
+  scard northstar:cluster.localhost:muc_nodes:acl-probe)"
+if [[ "$cardinality" != "1" ]]; then
+  echo "Redis ACL did not permit the namespaced MUC cardinality probe" >&2
+  exit 1
+fi
+REDISCLI_AUTH="$redis_password" "$redis_cli" --raw --tls \
+  --cacert "$redis_tmp/redis-ca.crt" --cert "$redis_tmp/redis-client.crt" \
+  --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_required_tls_port" \
+  del northstar:cluster.localhost:muc_nodes:acl-probe | grep -qx '1'
+outside_namespace="$(REDISCLI_AUTH="$redis_password" "$redis_cli" --raw --tls \
+  --cacert "$redis_tmp/redis-ca.crt" --cert "$redis_tmp/redis-client.crt" \
+  --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_required_tls_port" \
+  scard northstar:outside.localhost:muc_nodes:acl-probe 2>&1 || true)"
+if ! grep -q 'NOPERM' <<<"$outside_namespace"; then
+  echo "Redis ACL allowed a cardinality probe outside the fixture namespace" >&2
+  exit 1
+fi
 unauthorized="$(REDISCLI_AUTH="$redis_password" "$redis_cli" --tls \
   --cacert "$redis_tmp/redis-ca.crt" --cert "$redis_tmp/redis-client.crt" \
-  --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_port" \
+  --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_required_tls_port" \
   flushall 2>&1 || true)"
 if ! grep -q 'NOPERM' <<<"$unauthorized"; then
   echo "Redis ACL did not reject an ungranted administrative command" >&2
   exit 1
 fi
-for _ in $(seq 1 100); do
-  if REDISCLI_AUTH="$redis_password" "$redis_cli" --tls --cacert "$redis_tmp/redis-ca.crt" \
-    --user northstar -h localhost -p "$redis_tls_port" ping 2>/dev/null | grep -q PONG; then
-    break
-  fi
-  sleep 0.05
-done
 REDISCLI_AUTH="$redis_password" "$redis_cli" --tls --cacert "$redis_tmp/redis-ca.crt" \
-  --user northstar -h localhost -p "$redis_tls_port" ping | grep -q PONG
+  --user northstar -h localhost -p "$redis_optional_tls_port" ping | grep -q PONG
 if REDISCLI_AUTH="$redis_password" "$redis_cli" --tls --cacert "$redis_tmp/redis-ca.crt" \
-  --user northstar -h localhost -p "$redis_port" ping >/dev/null 2>&1; then
+  --user northstar -h localhost -p "$redis_required_tls_port" ping >/dev/null 2>&1; then
   echo "Redis required-mTLS endpoint accepted a client without a certificate" >&2
   exit 1
 fi
 if REDISCLI_AUTH="$redis_password" "$redis_cli" --tls --cacert "$redis_tmp/redis-ca.crt" \
   --cert "$redis_tmp/redis-rogue-client.crt" --key "$redis_tmp/redis-rogue-client.key" \
-  --user northstar -h localhost -p "$redis_port" ping >/dev/null 2>&1; then
+  --user northstar -h localhost -p "$redis_required_tls_port" ping >/dev/null 2>&1; then
   echo "Redis required-mTLS endpoint accepted an untrusted client certificate" >&2
   exit 1
 fi
@@ -279,11 +324,10 @@ echo "Redis ACL and optional/required mTLS endpoint configuration probes passed"
 node scripts/generate-cluster-signing-key.mjs \
   "$redis_tmp/node-a.pkcs8.b64" "$redis_tmp/node-a.public.b64" >/dev/null
 node scripts/generate-cluster-signing-key.mjs \
-  "$redis_tmp/node-b.pkcs8.b64" "$redis_tmp/node-b.public.b64" >/dev/null
+  "$redis_tmp/node-b.pkcs8.b64" "$redis_tmp/node-b.public.b64" "$redis_tmp/node-b.pkcs8.der" >/dev/null
 node scripts/generate-cluster-signing-key.mjs \
   "$redis_tmp/node-probe.pkcs8.b64" "$redis_tmp/node-probe.public.b64" >/dev/null
-node -e 'const fs=require("node:fs"); fs.writeFileSync(process.argv[2], Buffer.from(fs.readFileSync(process.argv[1], "utf8").trim(), "base64url"), {mode: 0o600, flag: "wx"});' \
-  "$redis_tmp/node-b.pkcs8.b64" "$redis_tmp/node-b.pkcs8.der"
+
 cluster_public_a="$(tr -d '\r\n' <"$redis_tmp/node-a.public.b64")"
 cluster_public_b="$(tr -d '\r\n' <"$redis_tmp/node-b.public.b64")"
 cluster_kinds='["ack","direct_delivery","blocking_presence","presence_probe","session_teardown","account_generation_teardown","user_agent_replacement","sm_session_teardown","sm_muc_teardown","muc_broadcast","muc_private","muc_presence","muc_nickname_change","muc_role_change","muc_evict","muc_destroy","muc_operation_wake"]'
@@ -296,10 +340,14 @@ printf '{"namespace":"cluster.localhost","nodes":[{"node_id":"node-a","key_epoch
 chmod 600 "$redis_tmp"/*.pkcs8.b64 "$redis_tmp"/*.pkcs8.der \
   "$redis_tmp"/*.public.b64 "$redis_tmp"/*-peers.json
 
+# Every process using this schema must identify the same physical upload
+# namespace. Keep that shared storage inside the fixture's private directory.
+mkdir -m 700 "$redis_tmp/uploads"
 common_env=(
   NORTHSTAR_DISABLE_DOTENV=true
   XMPP_DOMAIN=cluster.localhost
   DATABASE_URL="$cluster_database_url"
+  UPLOAD_DIR="$redis_tmp/uploads"
   REDIS_URL_FILE="$redis_tmp/redis.url"
   REDIS_TLS_CA_CERT_PATH="$redis_tmp/redis-ca.crt"
   REDIS_TLS_CLIENT_CERT_PATH="$redis_tmp/redis-client.crt"
@@ -322,70 +370,167 @@ common_env=(
   FAST_TOKEN_SECRET_FILE="$redis_tmp/fast_token_secret"
   DUMMY_SCRAM_SECRET_FILE="$redis_tmp/dummy_scram_secret"
   LOG_FORMAT=json
-  RUST_LOG=rust_xmpp_server=info,rust_xmpp_server::cluster=debug,rust_xmpp_server::xmpp::protocol::messaging=debug,rust_xmpp_server::db::replay=debug
+  RUST_LOG=rust_xmpp_server=info,rust_xmpp_server::cluster=debug,rust_xmpp_server::xmpp=debug,rust_xmpp_server::xmpp::protocol=info,rust_xmpp_server::xmpp::protocol::messaging=debug,rust_xmpp_server::db::replay=debug
 )
 
-env "${common_env[@]}" REDIS_URL_FILE= \
-  REDIS_URL="rediss://northstar:$redis_password@localhost:$redis_tls_port/" \
-  REDIS_TLS_CLIENT_CERT_PATH= REDIS_TLS_CLIENT_KEY_PATH= \
-  XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 \
-  HTTP_BIND="127.0.0.1:$http_probe" S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
-  PUBLIC_URL="http://127.0.0.1:$http_probe" UPLOAD_DIR="$redis_tmp/cluster-optional" \
-  "$binary" >"$redis_tmp/cluster-optional.log" 2>&1 &
-optional_pid=$!
-for _ in $(seq 1 150); do
-  if curl --silent --fail "http://127.0.0.1:$http_probe/readyz" >/dev/null; then break; fi
-  if ! kill -0 "$optional_pid" 2>/dev/null; then cat "$redis_tmp/cluster-optional.log" >&2; exit 1; fi
-  sleep 0.1
-done
-curl --silent --fail "http://127.0.0.1:$http_probe/readyz" >/dev/null
+# PUBLIC_URL is consumed while each node starts, before that node can publish
+# its own dynamic HTTP listener.  A fixture-owned relay supplies that stable
+# externally visible origin and follows the child-written target across the
+# deliberate node-A restart later in this scenario.
+publish_relay_target() {
+  local target="$1" port="$2" temporary
+  # The runtime directory is private.  The caller retires the old target only
+  # after reaping the old child; publication below then creates the target
+  # exactly once through a hard link.  A relay can therefore observe only an
+  # absent target (and wait), or a complete immutable HOST:PORT record --
+  # never a partial write or a stale endpoint being overwritten in place.
+  temporary="$(mktemp "$redis_tmp/.cluster-http-target.XXXXXX")"
+  printf '127.0.0.1:%s\n' "$port" >"$temporary"
+  chmod 600 "$temporary"
+  if ! ln -- "$temporary" "$target"; then
+    rm -f -- "$temporary"
+    echo "refusing to replace an existing relay target: $target" >&2
+    return 1
+  fi
+  rm -f -- "$temporary"
+}
+
+retire_relay_target() {
+  local target="$1"
+  # This is deliberately a two-phase target lifecycle: callers invoke it
+  # only after the child which owned the prior endpoint has exited.  The
+  # relay will wait for a replacement instead of connecting a new request to
+  # a dead or superseded endpoint.
+  rm -f -- "$target"
+}
+
+fixture_start_tcp_relay "$project_dir" "$redis_tmp" cluster-a cluster-a-http-relay \
+  "$target_a_http" "$redis_tmp/cluster-a-http-relay.log" relay_a_http_pid relay_a_http_port
+fixture_start_tcp_relay "$project_dir" "$redis_tmp" cluster-b cluster-b-http-relay \
+  "$target_b_http" "$redis_tmp/cluster-b-http-relay.log" relay_b_http_pid relay_b_http_port
+fixture_start_tcp_relay "$project_dir" "$redis_tmp" cluster-probe cluster-probe-http-relay \
+  "$target_probe_http" "$redis_tmp/cluster-probe-http-relay.log" relay_probe_http_pid relay_probe_http_port
+
+# Listener publication proves socket ownership; dependency health can still
+# be completing its first observation. Keep both checks within one original
+# 15-second startup budget, and preserve the final response on failure.
+wait_cluster_http_ready() {
+  local pid="$1" port="$2" deadline="$3" status response="$redis_tmp/ready-$1-$2.body"
+  while ((SECONDS < deadline)) && kill -0 "$pid" 2>/dev/null; do
+    status="$(curl --silent --show-error --max-time 1 --output "$response" --write-out '%{http_code}' \
+      "http://127.0.0.1:$port/readyz")" || status=transport-failed
+    if [[ "$status" == 200 ]] && ((SECONDS < deadline)); then return 0; fi
+    sleep 0.05
+  done
+  echo "cluster HTTP readiness failed within startup budget: pid=$pid port=$port status=${status:-not-observed}" >&2
+  if [[ -f "$response" ]]; then head -c 2048 "$response" >&2; printf '\n' >&2; fi
+  return 1
+}
+
+start_optional_cluster_probe() {
+  local readiness_file="$redis_tmp/cluster-optional.ready.json" readiness_nonce optional_http startup_deadline=$((SECONDS + 15))
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file"
+  retire_relay_target "$target_probe_http"
+  env "${common_env[@]}" REDIS_URL_FILE= \
+    REDIS_URL="rediss://northstar:$redis_password@localhost:$redis_optional_tls_port/" \
+    REDIS_TLS_CLIENT_CERT_PATH= REDIS_TLS_CLIENT_KEY_PATH= \
+    XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 METRICS_BIND=127.0.0.1:0 \
+    HTTP_BIND=127.0.0.1:0 WEB_ADMIN_BIND=127.0.0.1:0 S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
+    TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL="http://127.0.0.1:$relay_probe_http_port" \
+    "$binary" >"$redis_tmp/cluster-optional.log" 2>&1 &
+  optional_pid=$!
+  if ! fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$optional_pid"; then
+    cat "$redis_tmp/cluster-optional.log" >&2 || true
+    return 1
+  fi
+  optional_http="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)" || return 1
+  publish_relay_target "$target_probe_http" "$optional_http"
+  wait_cluster_http_ready "$optional_pid" "$optional_http" "$startup_deadline"
+  wait_cluster_http_ready "$optional_pid" "$relay_probe_http_port" "$startup_deadline"
+}
+
+start_optional_cluster_probe
 kill "$optional_pid"
 wait "$optional_pid" || true
 optional_pid=""
-kill "$redis_tls_pid"
-wait "$redis_tls_pid"
-redis_tls_pid=""
+kill "$redis_optional_tls_pid"
+wait "$redis_optional_tls_pid"
+redis_optional_tls_pid=""
+retire_relay_target "$target_probe_http"
 echo "Northstar rediss custom-CA optional-mTLS connection passed"
 
 expect_redis_tls_rejected() {
   local label="$1" url="$2" ca="$3" cert="$4" key="$5"
-  local log="$redis_tmp/rejected-$label.log" probe_pid ready=0 nodes_before nodes_after
+  local log="$redis_tmp/rejected-$label.log" readiness_file="$redis_tmp/rejected-$label.ready.json"
+  local readiness_nonce probe_pid published=0 exited=0 nodes_before nodes_after tls_log_offset
+  # A startup failure may retain its database node lease until expiry. Give
+  # each negative case its own identity so it must reach the intended TLS
+  # boundary instead of failing on a previous probe's incarnation fence.
+  node scripts/generate-cluster-signing-key.mjs \
+    "$redis_tmp/rejected-$label.pkcs8.b64" "$redis_tmp/rejected-$label.public.b64" >/dev/null
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file"
+  retire_relay_target "$target_probe_http"
   nodes_before="$(REDISCLI_AUTH="$redis_password" "$redis_cli" --tls \
     --cacert "$redis_tmp/redis-ca.crt" --cert "$redis_tmp/redis-client.crt" \
-    --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_port" \
+    --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_required_tls_port" \
     --scan --pattern 'northstar:cluster.localhost:node:*:alive' | wc -l | tr -d '[:space:]')"
+  REDISCLI_AUTH="$redis_password" "$redis_cli" --tls --cacert "$redis_tmp/redis-ca.crt" \
+    --cert "$redis_tmp/redis-client.crt" --key "$redis_tmp/redis-client.key" \
+    --user northstar -h localhost -p "$redis_required_tls_port" ping | grep -qx PONG
+  tls_log_offset="$(stat -c '%s' "$redis_tmp/redis-required-mtls.log")"
   env "${common_env[@]}" REDIS_URL_FILE= REDIS_URL="$url" \
+    CLUSTER_NODE_ID="node-rejected-$label" CLUSTER_SIGNING_PRIVATE_KEY_FILE="$redis_tmp/rejected-$label.pkcs8.b64" \
     REDIS_TLS_CA_CERT_PATH="$ca" REDIS_TLS_CLIENT_CERT_PATH="$cert" \
     REDIS_TLS_CLIENT_KEY_PATH="$key" XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 \
-    HTTP_BIND="127.0.0.1:$http_probe" S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
-    PUBLIC_URL="http://127.0.0.1:$http_probe" UPLOAD_DIR="$redis_tmp/rejected-$label" \
+    METRICS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 WEB_ADMIN_BIND=127.0.0.1:0 S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
+    TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL="http://127.0.0.1:$relay_probe_http_port" \
     "$binary" >"$log" 2>&1 &
   probe_pid=$!
   for _ in $(seq 1 50); do
-    if curl --silent --fail "http://127.0.0.1:$http_probe/readyz" >/dev/null 2>&1; then
-      ready=1
+    if [[ -e "$readiness_file" ]]; then
+      if fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$probe_pid"; then
+        published=1
+        break
+      fi
+    fi
+    if ! kill -0 "$probe_pid" 2>/dev/null; then
+      exited=1
       break
     fi
-    kill -0 "$probe_pid" 2>/dev/null || break
     sleep 0.1
   done
-  kill "$probe_pid" 2>/dev/null || true
-  wait "$probe_pid" 2>/dev/null || true
-  if (( ready != 0 )); then
+  if (( published != 0 )); then
+    kill "$probe_pid" 2>/dev/null || true
+    wait "$probe_pid" 2>/dev/null || true
     echo "Northstar accepted rejected Redis TLS fixture: $label" >&2
+    exit 1
+  fi
+  if (( exited == 0 )); then
+    kill "$probe_pid" 2>/dev/null || true
+    wait "$probe_pid" 2>/dev/null || true
+    echo "Northstar did not reject the Redis TLS fixture within its bounded startup window: $label" >&2
+    exit 1
+  fi
+  if wait "$probe_pid"; then
+    echo "Northstar exited successfully without readiness for rejected Redis TLS fixture: $label" >&2
     exit 1
   fi
   if grep -Fq "$redis_password" "$log" || grep -Fq "$url" "$log"; then
     echo "Northstar leaked Redis credentials or URL in $label failure log" >&2
     exit 1
   fi
-  if port_is_listening "$http_probe"; then
-    echo "rejected Redis TLS fixture retained an HTTP listener: $label" >&2
-    exit 1
-  fi
+  python3 "$project_dir/scripts/test-cluster-tls-rejection.py" --label "$label" \
+    --application-log "$log" --relay-log "$redis_tmp/redis-required-mtls.log" --offset "$tls_log_offset"
+  REDISCLI_AUTH="$redis_password" "$redis_cli" --tls --cacert "$redis_tmp/redis-ca.crt" \
+    --cert "$redis_tmp/redis-client.crt" --key "$redis_tmp/redis-client.key" \
+    --user northstar -h localhost -p "$redis_required_tls_port" ping | grep -qx PONG
   nodes_after="$(REDISCLI_AUTH="$redis_password" "$redis_cli" --tls \
     --cacert "$redis_tmp/redis-ca.crt" --cert "$redis_tmp/redis-client.crt" \
-    --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_port" \
+    --key "$redis_tmp/redis-client.key" --user northstar -h localhost -p "$redis_required_tls_port" \
     --scan --pattern 'northstar:cluster.localhost:node:*:alive' | wc -l | tr -d '[:space:]')"
   if [[ "$nodes_before" != "$nodes_after" ]]; then
     echo "rejected Redis TLS fixture changed cluster liveness leases: $label" >&2
@@ -395,53 +540,96 @@ expect_redis_tls_rejected() {
 }
 
 expect_redis_tls_rejected wrong-hostname \
-  "rediss://northstar:$redis_password@127.0.0.1:$redis_port/" \
+  "rediss://northstar:$redis_password@127.0.0.1:$redis_required_tls_port/" \
   "$redis_tmp/redis-ca.crt" "$redis_tmp/redis-client.crt" "$redis_tmp/redis-client.key"
 expect_redis_tls_rejected wrong-ca \
-  "rediss://northstar:$redis_password@localhost:$redis_port/" \
+  "rediss://northstar:$redis_password@localhost:$redis_required_tls_port/" \
   "$redis_tmp/redis-rogue-ca.crt" "$redis_tmp/redis-client.crt" "$redis_tmp/redis-client.key"
 expect_redis_tls_rejected wrong-client-cert \
-  "rediss://northstar:$redis_password@localhost:$redis_port/" \
+  "rediss://northstar:$redis_password@localhost:$redis_required_tls_port/" \
   "$redis_tmp/redis-ca.crt" "$redis_tmp/redis-rogue-client.crt" "$redis_tmp/redis-rogue-client.key"
 
+http_a=""
+http_b=""
+xmpp_a=""
+xmpp_b=""
+metrics_a=""
+metrics_b=""
+
+# Experimental clustering fixture: A is the single retention owner and B is
+# explicitly core-only. Restart functions preserve these process roles. The
+# supported deployment remains one core plus one maintenance process.
 start_a() {
+  local readiness_file="$redis_tmp/cluster-a.ready.json" readiness_nonce startup_deadline=$((SECONDS + 15))
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file"
+  retire_relay_target "$target_a_http"
   env "${common_env[@]}" \
     CLUSTER_NODE_ID=node-a \
     CLUSTER_SIGNING_PRIVATE_KEY_FILE="$redis_tmp/node-a.pkcs8.b64" \
     CLUSTER_PEER_KEYS_FILE="$redis_tmp/node-a-peers.json" \
-    XMPP_BIND="127.0.0.1:$xmpp_a" XMPPS_BIND=127.0.0.1:0 \
-    METRICS_BIND="127.0.0.1:$metrics_a" \
-    HTTP_BIND="127.0.0.1:$http_a" S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
-    PUBLIC_URL="http://127.0.0.1:$http_a" UPLOAD_DIR="$redis_tmp/cluster-a" \
-    "$binary" >"$redis_tmp/cluster-a.log" 2>&1 &
+    XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 METRICS_BIND=127.0.0.1:0 \
+    HTTP_BIND=127.0.0.1:0 WEB_ADMIN_BIND=127.0.0.1:0 S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
+    TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL="http://127.0.0.1:$relay_a_http_port" \
+    "$binary" serve standalone >"$redis_tmp/cluster-a.log" 2>&1 &
   pid_a=$!
-  for _ in $(seq 1 150); do
-    if curl --silent --fail "http://127.0.0.1:$http_a/readyz" >/dev/null; then return; fi
-    sleep 0.1
-  done
-  return 1
+  if ! fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_a"; then
+    cat "$redis_tmp/cluster-a.log" >&2 || true
+    return 1
+  fi
+  http_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)" || return 1
+  xmpp_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)" || return 1
+  metrics_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" metrics)" || return 1
+  publish_relay_target "$target_a_http" "$http_a"
+  wait_cluster_http_ready "$pid_a" "$http_a" "$startup_deadline"
+  wait_cluster_http_ready "$pid_a" "$relay_a_http_port" "$startup_deadline"
+}
+
+start_b() {
+  local readiness_file="$redis_tmp/cluster-b.ready.json" readiness_nonce startup_deadline=$((SECONDS + 15))
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file"
+  retire_relay_target "$target_b_http"
+  env "${common_env[@]}" \
+    CLUSTER_NODE_ID=node-b \
+    CLUSTER_SIGNING_PRIVATE_KEY_FILE="$redis_tmp/node-b.pkcs8.b64" \
+    CLUSTER_PEER_KEYS_FILE="$redis_tmp/node-b-peers.json" \
+    XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 METRICS_BIND=127.0.0.1:0 \
+    HTTP_BIND=127.0.0.1:0 WEB_ADMIN_BIND=127.0.0.1:0 S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
+    TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL="http://127.0.0.1:$relay_b_http_port" \
+    "$binary" serve core >"$redis_tmp/cluster-b.log" 2>&1 &
+  pid_b=$!
+  if ! fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_b"; then
+    cat "$redis_tmp/cluster-b.log" >&2 || true
+    return 1
+  fi
+  http_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)" || return 1
+  xmpp_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)" || return 1
+  metrics_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" metrics)" || return 1
+  publish_relay_target "$target_b_http" "$http_b"
+  wait_cluster_http_ready "$pid_b" "$http_b" "$startup_deadline"
+  wait_cluster_http_ready "$pid_b" "$relay_b_http_port" "$startup_deadline"
 }
 
 start_a
+start_b
 
-env "${common_env[@]}" \
-  CLUSTER_NODE_ID=node-b \
-  CLUSTER_SIGNING_PRIVATE_KEY_FILE="$redis_tmp/node-b.pkcs8.b64" \
-  CLUSTER_PEER_KEYS_FILE="$redis_tmp/node-b-peers.json" \
-  XMPP_BIND="127.0.0.1:$xmpp_b" XMPPS_BIND=127.0.0.1:0 \
-  METRICS_BIND="127.0.0.1:$metrics_b" \
-  HTTP_BIND="127.0.0.1:$http_b" S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
-  PUBLIC_URL="http://127.0.0.1:$http_b" UPLOAD_DIR="$redis_tmp/cluster-b" \
-  "$binary" >"$redis_tmp/cluster-b.log" 2>&1 &
-pid_b=$!
-
-for _ in $(seq 1 150); do
-  if curl --silent --fail "http://127.0.0.1:$http_b/readyz" >/dev/null; then break; fi
-  sleep 0.1
-done
-curl --silent --fail "http://127.0.0.1:$http_b/readyz" >/dev/null
-
-NORTHSTAR_CLUSTER_HTTP_A="$http_a" NORTHSTAR_CLUSTER_HTTP_B="$http_b" \
+# The protocol driver deliberately reaches node-specific public origins via
+# the stable relays.  It retains the exact dynamically published XMPP and
+# metrics addresses because those are internal node-specific test surfaces.
+# Both the initial MUC lease checks and the later fault probes use the same
+# owned Redis endpoint and verified client identity.
+redis_probe_env=(
+  "NORTHSTAR_CLUSTER_REDIS_PORT=$redis_required_tls_port"
+  "NORTHSTAR_CLUSTER_REDIS_PASSWORD=$redis_password"
+  "NORTHSTAR_CLUSTER_REDIS_CA=$redis_tmp/redis-ca.crt"
+  "NORTHSTAR_CLUSTER_REDIS_CERT=$redis_tmp/redis-client.crt"
+  "NORTHSTAR_CLUSTER_REDIS_KEY=$redis_tmp/redis-client.key"
+)
+env "${redis_probe_env[@]}" \
+NORTHSTAR_CLUSTER_HTTP_A="$relay_a_http_port" NORTHSTAR_CLUSTER_HTTP_B="$relay_b_http_port" \
 NORTHSTAR_CLUSTER_XMPP_A="$xmpp_a" NORTHSTAR_CLUSTER_XMPP_B="$xmpp_b" \
 NORTHSTAR_CLUSTER_METRICS_A="$metrics_a" NORTHSTAR_CLUSTER_METRICS_B="$metrics_b" \
 NORTHSTAR_CLUSTER_PID_A="$pid_a" NORTHSTAR_CLUSTER_SCHEMA="$schema" \
@@ -449,16 +637,13 @@ python3 scripts/cluster-wsl.py
 wait "$pid_a" || true
 pid_a=""
 start_a
-NORTHSTAR_CLUSTER_HTTP_A="$http_a" NORTHSTAR_CLUSTER_HTTP_B="$http_b" \
+env "${redis_probe_env[@]}" \
+NORTHSTAR_CLUSTER_HTTP_A="$relay_a_http_port" NORTHSTAR_CLUSTER_HTTP_B="$relay_b_http_port" \
 NORTHSTAR_CLUSTER_XMPP_A="$xmpp_a" NORTHSTAR_CLUSTER_XMPP_B="$xmpp_b" \
 NORTHSTAR_CLUSTER_METRICS_A="$metrics_a" NORTHSTAR_CLUSTER_METRICS_B="$metrics_b" \
 NORTHSTAR_CLUSTER_PID_A="$pid_a" NORTHSTAR_CLUSTER_REDIS_PID="$redis_pid" \
 NORTHSTAR_CLUSTER_PID_B="$pid_b" \
 NORTHSTAR_CLUSTER_NODE_B_PRIVATE_KEY_DER="$redis_tmp/node-b.pkcs8.der" \
-NORTHSTAR_CLUSTER_REDIS_PORT="$redis_port" NORTHSTAR_CLUSTER_REDIS_PASSWORD="$redis_password" \
-NORTHSTAR_CLUSTER_REDIS_CA="$redis_tmp/redis-ca.crt" \
-NORTHSTAR_CLUSTER_REDIS_CERT="$redis_tmp/redis-client.crt" \
-NORTHSTAR_CLUSTER_REDIS_KEY="$redis_tmp/redis-client.key" \
 NORTHSTAR_CLUSTER_LOG_B="$redis_tmp/cluster-b.log" \
 NORTHSTAR_CLUSTER_SCHEMA="$schema" \
 python3 scripts/cluster-wsl.py faults

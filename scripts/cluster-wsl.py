@@ -12,13 +12,20 @@ import re
 import signal
 import socket
 import json
+import math
 import select
 import subprocess
 import sys
 import time
+import tempfile
 import urllib.error
 import urllib.request
 import uuid
+from collections import deque
+from contextlib import contextmanager
+from html import escape
+import xml.etree.ElementTree as ET
+from xml.parsers import expat
 
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -49,7 +56,243 @@ PID_B = int(os.environ.get("NORTHSTAR_CLUSTER_PID_B", "0"))
 NODE_B_PRIVATE_KEY_DER = os.environ.get("NORTHSTAR_CLUSTER_NODE_B_PRIVATE_KEY_DER", "")
 
 
-def redis_cli(*arguments: str, input_bytes: bytes | None = None) -> str:
+def repository_cluster_protocol_version() -> str:
+    """Read the exact cluster wire version the fixture's binary must expose.
+
+    The test deliberately mutates Redis heartbeats to exercise old/new-peer
+    rejection.  Keeping an independent literal here previously allowed the
+    fixture to drift from the Rust contract and turn a compatibility check
+    into a false observation.  The live heartbeat is checked against this
+    source contract before any mutation, so a stale binary also fails closed.
+    """
+
+    source = ROOT.parent / "src" / "cluster.rs"
+    try:
+        text = source.read_text(encoding="utf-8")
+    except OSError as error:
+        raise RuntimeError(f"cannot read cluster protocol contract: {source}") from error
+    match = re.search(
+        r'^const NODE_PROTOCOL_VERSION: &str = "([0-9]+)";$',
+        text,
+        flags=re.MULTILINE,
+    )
+    if match is None or int(match.group(1)) < 1:
+        raise RuntimeError("cluster protocol contract is missing or invalid")
+    return match.group(1)
+
+
+CLUSTER_PROTOCOL_VERSION = repository_cluster_protocol_version()
+
+SM_NAMESPACE = "urn:xmpp:sm:3"
+SASL2_NAMESPACE = "urn:xmpp:sasl:2"
+STREAM_NAMESPACE = "http://etherx.jabber.org/streams"
+
+
+def split_protocol_elements(frame: str) -> list[str]:
+    """Keep original XML spelling while preserving every coframed element.
+
+    SASL2 sends success and features without restarting the stream. A resumed
+    response may also share a WebSocket frame with replayed stanzas. Parsing
+    each top-level element avoids dropping either sibling or rewriting the
+    quote/namespace spelling used by the existing fixture's assertions.
+    """
+
+    if len(frame.encode("utf-8")) > 2 * 1024 * 1024:
+        raise RuntimeError("cluster protocol frame exceeds the fixture byte limit")
+    raw = (f"<fixture xmlns:stream='{STREAM_NAMESPACE}'>" + frame + "</fixture>").encode()
+    parser = expat.ParserCreate()
+    depth = 0
+    start = 0
+    self_closing = False
+    elements = []
+
+    def reject_declaration(*_arguments):
+        raise ValueError("XML declarations are not protocol elements")
+
+    def on_start(_name, _attributes):
+        nonlocal depth, start, self_closing
+        if depth == 1:
+            start = parser.CurrentByteIndex
+            opening = re.match(br"<(?:[^>\"']|\"[^\"]*\"|'[^']*')*>" , raw[start:])
+            if opening is None:
+                raise ValueError("missing element opening tag")
+            self_closing = opening.group().endswith(b"/>")
+        depth += 1
+
+    def on_end(_name):
+        nonlocal depth
+        depth -= 1
+        if depth == 1:
+            end = parser.CurrentByteIndex
+            if not self_closing:
+                end = raw.index(b">", end) + 1
+            elements.append(raw[start:end].decode("utf-8"))
+            if len(elements) > 256:
+                raise ValueError("too many protocol elements")
+
+    def on_text(value):
+        if depth == 1 and value.strip():
+            raise ValueError("text outside protocol elements")
+
+    parser.StartElementHandler = on_start
+    parser.EndElementHandler = on_end
+    parser.CharacterDataHandler = on_text
+    parser.StartDoctypeDeclHandler = reject_declaration
+    parser.EntityDeclHandler = reject_declaration
+    parser.ProcessingInstructionHandler = reject_declaration
+    try:
+        parser.Parse(raw, True)
+        if not elements:
+            raise ValueError("no protocol elements")
+    except (expat.ExpatError, ValueError, UnicodeError):
+        # Never attach the received frame: SM IDs are bearer credentials.
+        raise RuntimeError("invalid cluster protocol XML frame") from None
+    return elements
+
+
+def protocol_element(frame: str) -> ET.Element:
+    try:
+        root = ET.fromstring(f"<fixture xmlns:stream='{STREAM_NAMESPACE}'>{frame}</fixture>")
+        if len(root) != 1:
+            raise ValueError("expected one protocol element")
+        return root[0]
+    except (ET.ParseError, ValueError):
+        raise RuntimeError("invalid cluster protocol XML element") from None
+
+
+class DeviceXmppWebSocket(fixture.XmppWebSocket):
+    """Local SASL2 adapter retaining the fixture's exact RFC 6120 resource.
+
+    A stable authenticated user-agent makes SM resumable under the production
+    same-device default. No Bind2, inline SM, or replacement presence is sent.
+    All protocol reads retain the constructor's existing ten-second budget.
+    """
+
+    def __init__(self, username, password, resource, *, device_id, resume=None):
+        try:
+            parsed_device = uuid.UUID(device_id)
+            if parsed_device.int == 0 or str(parsed_device) != device_id:
+                raise ValueError("noncanonical device ID")
+        except (ValueError, AttributeError, TypeError):
+            raise RuntimeError("cluster device ID must be a canonical non-nil UUID") from None
+        self.device_id = device_id
+        self._protocol_frames = deque()
+        super().__init__(username, password, resource, resume=resume)
+
+    def receive(self, timeout=10):
+        if not self._protocol_frames:
+            self._protocol_frames.extend(split_protocol_elements(super().receive(timeout)))
+        return self._protocol_frames.popleft()
+
+    def receive_until(self, marker, timeout=10):
+        # The shared fixture includes raw received frames in error messages.
+        # This client can queue SM bearer IDs, including unexpected duplicates,
+        # so preserve success semantics while reporting only a safe count.
+        fixture.check(timeout > 0, "cluster receive timeout must be positive")
+        deadline = time.monotonic() + timeout
+        frames = []
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"cluster protocol marker timed out; frames_received={len(frames)}")
+            try:
+                frame = self.receive(remaining)
+            except TimeoutError:
+                raise TimeoutError(f"cluster protocol marker timed out; frames_received={len(frames)}") from None
+            except (EOFError, ConnectionError, OSError):
+                raise EOFError(f"cluster protocol marker connection closed; frames_received={len(frames)}") from None
+            frames.append(frame)
+            if marker in frame:
+                return frame, frames
+
+    def _wait_element(self, tag, phase):
+        deadline = time.monotonic() + 10
+        if self._construction_deadline is not None:
+            deadline = min(deadline, self._construction_deadline)
+        while time.monotonic() < deadline:
+            try:
+                element = protocol_element(self.receive(deadline - time.monotonic()))
+            except (OSError, EOFError, RuntimeError, ValueError):
+                raise RuntimeError(f"cluster {phase} did not return valid protocol XML") from None
+            if element.tag == tag:
+                return element
+            if element.tag in {
+                f"{{{SASL2_NAMESPACE}}}failure",
+                f"{{{SM_NAMESPACE}}}failed",
+                f"{{{STREAM_NAMESPACE}}}error",
+            }:
+                raise RuntimeError(f"cluster {phase} was rejected")
+        raise RuntimeError(f"cluster {phase} exceeded its original protocol deadline")
+
+    def login(self, resume=None, expect_bind_conflict=False, initial_presence=True):
+        fixture.check(not expect_bind_conflict, "device client has no expected bind-conflict mode")
+        self.send(
+            f"<open xmlns='urn:ietf:params:xml:ns:xmpp-framing' to='{DOMAIN}' "
+            f"from='{escape(self.username, quote=True)}@{DOMAIN}' version='1.0'/>"
+        )
+        features = self._wait_element(f"{{{STREAM_NAMESPACE}}}features", "SASL2 advertisement")
+        fixture.check(
+            features.find(f"{{{SASL2_NAMESPACE}}}authentication") is not None,
+            "cluster WebSocket did not advertise SASL2",
+        )
+        encoded = base64.b64encode(f"\0{self.username}\0{self.password}".encode()).decode()
+        self.send(
+            f"<authenticate xmlns='{SASL2_NAMESPACE}' mechanism='PLAIN'>"
+            f"<initial-response>{encoded}</initial-response>"
+            f"<user-agent id='{self.device_id}'>"
+            "<software>Northstar cluster fixture</software></user-agent></authenticate>"
+        )
+        self._wait_element(f"{{{SASL2_NAMESPACE}}}success", "SASL2 authentication")
+        features = self._wait_element(f"{{{STREAM_NAMESPACE}}}features", "post-SASL2 features")
+        fixture.check(
+            features.find(f"{{{SM_NAMESPACE}}}sm") is not None,
+            "cluster WebSocket did not advertise SM after SASL2",
+        )
+        if resume is not None:
+            previous_id, handled = resume
+            fixture.check(type(handled) is int and 0 <= handled <= 0xFFFFFFFF, "invalid SM handled count")
+            self.send(
+                f"<resume xmlns='{SM_NAMESPACE}' previd='{escape(previous_id, quote=True)}' h='{handled}'/>"
+            )
+            resumed = self._wait_element(f"{{{SM_NAMESPACE}}}resumed", "same-device SM resume")
+            matches = resumed.get("previd") == previous_id
+            print(f"cluster SM resume: namespace_matches=True previous_id_matches={matches}")
+            fixture.check(matches, "cluster same-device SM resume returned a different identifier")
+            return
+        bind_id = f"bind-{self.resource}"
+        self.send(
+            f"<iq xmlns='jabber:client' type='set' id='{escape(bind_id, quote=True)}'>"
+            "<bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'>"
+            f"<resource>{escape(self.resource)}</resource></bind></iq>"
+        )
+        reply = self._wait_element("{jabber:client}iq", "exact-resource binding")
+        jid = reply.find("{urn:ietf:params:xml:ns:xmpp-bind}bind/{urn:ietf:params:xml:ns:xmpp-bind}jid")
+        fixture.check(
+            reply.get("id") == bind_id and reply.get("type") == "result"
+            and jid is not None and jid.text == f"{self.username}@{DOMAIN}/{self.resource}",
+            "cluster SASL2 client did not bind the exact requested full JID",
+        )
+        if initial_presence:
+            self.send("<presence xmlns='jabber:client'/>")
+
+    def enable_resumption(self):
+        self.send(f"<enable xmlns='{SM_NAMESPACE}' resume='true'/>")
+        enabled = self._wait_element(f"{{{SM_NAMESPACE}}}enabled", "SM enable")
+        resume_id = enabled.get("id")
+        resume_value = enabled.get("resume")
+        diagnostic_resume = resume_value if resume_value in {"true", "false", "1", "0"} else "missing-or-invalid"
+        print(
+            "cluster SM enable: namespace_matches=True "
+            f"id_present={bool(resume_id)} resume={diagnostic_resume}"
+        )
+        fixture.check(
+            bool(resume_id) and resume_value in {"true", "1"},
+            "cluster MUC stream did not enable resumable SM for its authenticated device",
+        )
+        return resume_id
+
+
+def redis_cli(*arguments: str, input_bytes: bytes | None = None, timeout: float | None = None) -> str:
     environment = dict(os.environ)
     environment["REDISCLI_AUTH"] = REDIS_PASSWORD
     result = subprocess.run(
@@ -76,6 +319,7 @@ def redis_cli(*arguments: str, input_bytes: bytes | None = None) -> str:
         stderr=subprocess.PIPE,
         check=True,
         env=environment,
+        timeout=timeout,
     )
     return result.stdout.decode("utf-8", "strict").strip()
 
@@ -192,13 +436,159 @@ def offline_account_snapshot(username: str) -> str:
     return result.stdout.strip()
 
 
-def metric_value(port: int, name: str) -> int:
+def metric_value(port: int, name: str, timeout: float = 3) -> int:
     fixture.check(port > 0, "cluster metrics listener is not configured")
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=3) as response:
+    fixture.check(timeout > 0, "cluster metrics observation deadline elapsed")
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=timeout) as response:
         body = response.read().decode("utf-8", "strict")
     match = re.search(rf"^{re.escape(name)} ([0-9]+)$", body, re.MULTILINE)
     fixture.check(match is not None, f"cluster metric is missing: {name}")
     return int(match.group(1))
+
+
+def authentication_rejection_since(log_path: pathlib.Path, offset: int) -> bool:
+    """Observe this injection's bounded node-B log suffix, never an old event."""
+    fixture.check(type(offset) is int and offset >= 0, "invalid cluster log observation offset")
+    try:
+        with log_path.open("rb") as log:
+            log.seek(0, os.SEEK_END)
+            fixture.check(log.tell() >= offset, "cluster rejection log was truncated during observation")
+            log.seek(offset)
+            suffix = log.read(256 * 1024 + 1)
+    except OSError:
+        raise RuntimeError("could not read the node-B rejection observation") from None
+    fixture.check(len(suffix) <= 256 * 1024, "cluster rejection observation exceeded its byte bound")
+    # Leave an incomplete final line unconsumed. A later poll reads the same
+    # suffix and may only accept it once the logger has completed the JSON row.
+    complete, _separator, _partial = suffix.rpartition(b"\n")
+    for line in complete.splitlines():
+        try:
+            event = json.loads(line)
+        except (ValueError, UnicodeError):
+            continue
+        if not isinstance(event, dict) or not isinstance(event.get("fields"), dict):
+            continue
+        fields = event["fields"]
+        if (
+            event.get("target") == "rust_xmpp_server::cluster"
+            and fields.get("message") == "rejected unauthenticated cluster protocol envelope"
+            and fields.get("error") == "cluster envelope is oversized"
+        ):
+            return True
+    return False
+
+
+def wait_for_authentication_rejection(
+    log_path: pathlib.Path, offset: int, deadline: float
+) -> bool:
+    while time.monotonic() < deadline:
+        if authentication_rejection_since(log_path, offset):
+            return time.monotonic() <= deadline
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.05, remaining))
+    return False
+
+
+def version_skew_probe_stanza(full_jid: str, stanza_id: str) -> str:
+    # Version incompatibility is tested as a volatile route failure. Ordinary
+    # chat is durably accepted before routing and intentionally may go offline.
+    return (
+        f"<message xmlns='jabber:client' to='{escape(full_jid, quote=True)}' "
+        f"type='chat' id='{escape(stanza_id, quote=True)}'>"
+        "<body>incompatible peer contract must fail</body>"
+        "<no-store xmlns='urn:xmpp:hints'/></message>"
+    )
+
+
+@contextmanager
+def paused_node_for_ack(pid: int):
+    """Isolate one ACK request without suspending real watchdogs across recovery."""
+    fixture.check(type(pid) is int and pid > 1, "invalid ACK fixture process")
+    fixture.check(signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0), "ACK fixture already has an active alarm")
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    deadline = time.monotonic() + 3
+
+    def expired(_signum, _frame):
+        raise TimeoutError("cluster ACK pause exceeded its three-second budget")
+
+    signal.signal(signal.SIGALRM, expired)
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            expired(None, None)
+        signal.setitimer(signal.ITIMER_REAL, remaining)
+        os.kill(pid, signal.SIGSTOP)
+        while True:
+            status = pathlib.Path(f"/proc/{pid}/status").read_text()
+            if re.search(r"^State:\s+T\b", status, re.MULTILINE):
+                break
+            if time.monotonic() >= deadline:
+                expired(None, None)
+            time.sleep(0.001)
+        if time.monotonic() >= deadline:
+            expired(None, None)
+        yield
+        if time.monotonic() > deadline:
+            expired(None, None)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        try:
+            os.kill(pid, signal.SIGCONT)
+        finally:
+            signal.signal(signal.SIGALRM, previous_handler)
+
+
+def validate_ack_probe_request(envelope: dict, target: str, stanza_id: str, previous: dict | None = None) -> dict:
+    payload = envelope.get("payload")
+    fixture.check(isinstance(payload, dict), "ACK probe did not observe a delivery payload")
+    fixture.check(
+        payload.get("protocol_version") == CLUSTER_PROTOCOL_VERSION
+        and payload.get("delivery") == {"reliability": "volatile"}
+        and payload.get("target") == target,
+        "ACK probe observed the wrong delivery contract or exact target",
+    )
+    try:
+        stanza = ET.fromstring(payload.get("stanza", ""))
+    except (ET.ParseError, TypeError):
+        raise AssertionError("ACK probe observed an invalid stanza") from None
+    fixture.check(
+        stanza.tag == "{jabber:client}message"
+        and stanza.get("id") == stanza_id
+        and stanza.get("to") == target,
+        "ACK probe observed a different message",
+    )
+    for field in ("request_id", "ack_nonce"):
+        fixture.check(isinstance(payload.get(field), str) and bool(payload[field]), "ACK probe lacks a correlation identity")
+        if previous is not None:
+            fixture.check(payload[field] != previous[field], "ACK probe reused a previous correlation identity")
+    return payload
+
+
+def wait_for_cluster_recovery(ports: tuple[int, ...], deadline: float) -> bool:
+    """Require both live authorities in one poll, within the original recovery budget."""
+    fixture.check(bool(ports) and all(port > 0 for port in ports), "cluster recovery listeners are not configured")
+    while time.monotonic() < deadline:
+        ready = True
+        for port in ports:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/readyz", timeout=min(2, remaining)
+                ) as response:
+                    ready = ready and response.status == 200
+            except (OSError, urllib.error.URLError):
+                ready = False
+            if time.monotonic() > deadline:
+                return False
+        if ready:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.25, remaining))
+    return False
 
 
 def subscriber_envelope(process: subprocess.Popen[bytes], timeout: float = 5) -> dict:
@@ -253,27 +643,34 @@ def signed_ack_envelope(request: dict, payload: dict) -> str:
         "payload": payload,
     }
     unsigned = json.dumps(envelope, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    signature = subprocess.run(
-        [
-            "openssl",
-            "pkeyutl",
-            "-sign",
-            "-rawin",
-            "-inkey",
-            NODE_B_PRIVATE_KEY_DER,
-            "-keyform",
-            "DER",
-        ],
-        input=unsigned,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=True,
-    ).stdout
+    # Ed25519 is an OpenSSL one-shot operation: its input size must be
+    # available before signing. A stdin pipe cannot provide that size.
+    with tempfile.NamedTemporaryFile(prefix="northstar-cluster-signing-") as message:
+        message.write(unsigned)
+        message.flush()
+        signature = subprocess.run(
+            [
+                "openssl",
+                "pkeyutl",
+                "-sign",
+                "-rawin",
+                "-inkey",
+                NODE_B_PRIVATE_KEY_DER,
+                "-keyform",
+                "DER",
+                "-in",
+                message.name,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=10,
+        ).stdout
     envelope["signature"] = b64url(signature)
     return json.dumps(envelope, separators=(",", ":"), ensure_ascii=False)
 
 
-def database_scalar(command: str) -> str:
+def database_scalar(command: str, timeout: float | None = None) -> str:
     fixture.check(
         re.fullmatch(r"[a-z_][a-z0-9_]*", SCHEMA) is not None,
         "cluster PostgreSQL schema is missing or invalid",
@@ -304,8 +701,149 @@ def database_scalar(command: str) -> str:
         check=True,
         env=environment,
         text=True,
+        timeout=timeout,
     )
     return result.stdout.strip()
+
+
+def read_takeover_authority(full_jid: str) -> dict:
+    """Capture the exact killed resource's durable owners on the fixture endpoint."""
+    jid_literal = full_jid.replace("'", "''")
+    result = json.loads(database_scalar(
+        "WITH observed AS MATERIALIZED (SELECT clock_timestamp() AS now_at) "
+        "SELECT json_build_object("
+        "'database',current_database(),'schema',current_schema(),"
+        "'host',host(inet_server_addr()),'port',inet_server_port(),"
+        "'namespace',route.namespace,'full_jid',route.full_jid,"
+        "'node',route.owner_node_id,'instance',route.owner_instance_uuid,"
+        "'epoch',route.owner_instance_epoch,'connection',route.connection_uuid,"
+        "'database_observed_at',EXTRACT(EPOCH FROM observed.now_at),"
+        "'live_expires_at',EXTRACT(EPOCH FROM lease.lease_until),"
+        "'process_expires_at',EXTRACT(EPOCH FROM instance.lease_until),"
+        "'live_remaining',EXTRACT(EPOCH FROM (lease.lease_until-observed.now_at)),"
+        "'process_remaining',EXTRACT(EPOCH FROM (instance.lease_until-observed.now_at))) "
+        "FROM cluster_session_routes route "
+        "JOIN deployment_session_leases lease ON lease.full_jid=route.full_jid "
+        " AND lease.connection_id=route.connection_uuid "
+        "JOIN cluster_node_instances instance ON instance.xmpp_domain=route.namespace "
+        " AND instance.node_id=route.owner_node_id "
+        " AND instance.instance_uuid=route.owner_instance_uuid "
+        " AND instance.instance_epoch=route.owner_instance_epoch "
+        "CROSS JOIN observed "
+        f"WHERE route.namespace='{DOMAIN}' AND route.full_jid='{jid_literal}' "
+        "AND route.claim_proof_kind='lease'",
+        timeout=3,
+    ))
+    validate_takeover_authority(result, full_jid)
+    return result
+
+
+def validate_takeover_authority(snapshot: dict, full_jid: str) -> None:
+    expected_port = os.environ.get("PGPORT", "")
+    if not re.fullmatch(r"[0-9]{1,5}", expected_port) or not 1 <= int(expected_port) <= 65535:
+        raise AssertionError("takeover PostgreSQL endpoint is not explicit")
+    if not isinstance(snapshot, dict) or any(snapshot.get(key) != value for key, value in {
+        "database": "xmpp_test", "schema": SCHEMA, "host": "127.0.0.1",
+        "port": int(expected_port), "namespace": DOMAIN,
+        "full_jid": full_jid, "node": "node-a",
+    }.items()):
+        raise AssertionError("takeover authority identity or endpoint mismatch")
+    for field in ("instance", "connection"):
+        value = snapshot.get(field)
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f-]{36}", value):
+            raise AssertionError("takeover authority UUID is invalid")
+        parsed = uuid.UUID(value)
+        if str(parsed) != value or parsed.int == 0:
+            raise AssertionError("takeover authority UUID is invalid")
+    epoch = snapshot.get("epoch")
+    if type(epoch) is not int or not 1 <= epoch <= 2**63 - 1:
+        raise AssertionError("takeover process epoch is invalid")
+    for field, maximum in (("live_remaining", 120), ("process_remaining", 90)):
+        remaining = snapshot.get(field)
+        if type(remaining) not in (int, float) or not math.isfinite(remaining) or not 0 < remaining <= maximum:
+            raise AssertionError("takeover authority remaining lease is outside the production fixture bounds")
+    # Keep the fresh-binding crash case. Waiting for an old session instead
+    # would conceal the original 105-second test budget's mismatch with the
+    # independent 120-second deployment lease.
+    if snapshot["live_remaining"] <= 105:
+        raise AssertionError("takeover did not capture the newly bound live lease")
+    for field in ("database_observed_at", "live_expires_at", "process_expires_at"):
+        value = snapshot.get(field)
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise AssertionError("takeover database-clock expiry snapshot is invalid")
+    for prefix in ("live", "process"):
+        delta = snapshot[f"{prefix}_expires_at"] - snapshot["database_observed_at"]
+        if abs(delta - snapshot[f"{prefix}_remaining"]) > 0.001:
+            raise AssertionError("takeover database-clock expiry snapshot is inconsistent")
+
+
+def takeover_expiry_deadline(snapshot: dict, redis_ttl: int, killed_at: float, snapshot_started_at: float) -> float:
+    if type(redis_ttl) is not int or not 1 < redis_ttl <= 90:
+        raise AssertionError("crashed node did not have its production Redis liveness TTL")
+    if not all(math.isfinite(value) for value in (killed_at, snapshot_started_at)) or not killed_at <= snapshot_started_at <= killed_at + 15:
+        raise AssertionError("takeover authority snapshot exceeded the observation budget")
+    remaining = max(snapshot["live_remaining"], snapshot["process_remaining"], redis_ttl)
+    # The old fixed 105 seconds covered only Redis/process TTL=90. The exact
+    # newly bound live-session authority lasts up to 120 seconds independently.
+    # Keep the original 15-second observation margin, with one absolute hard
+    # ceiling measured from SIGKILL; no poll or failed bind renews this budget.
+    # Anchor before the PostgreSQL query, conservatively excluding the query
+    # duration from the remaining lease budget. Database timestamps below are
+    # a separate clock used to prove that both original deadlines really pass.
+    return min(killed_at + 135, snapshot_started_at + remaining + 15)
+
+
+def takeover_authorities_expired(snapshot: dict, timeout: float) -> bool:
+    jid_literal = snapshot["full_jid"].replace("'", "''")
+    result = json.loads(database_scalar(
+        "WITH observed AS MATERIALIZED (SELECT clock_timestamp() AS now_at) "
+        "SELECT json_build_object("
+        "'original_deadlines_elapsed',"
+        f"observed.now_at>=to_timestamp({snapshot['live_expires_at']}) "
+        f"AND observed.now_at>=to_timestamp({snapshot['process_expires_at']}),"
+        "'identity_matches',NOT EXISTS(SELECT 1 FROM deployment_session_leases "
+        f"WHERE full_jid='{jid_literal}' AND connection_id<>'{snapshot['connection']}'::UUID) "
+        "AND NOT EXISTS(SELECT 1 FROM cluster_node_instances "
+        f"WHERE xmpp_domain='{DOMAIN}' AND node_id='node-a' "
+        f"AND (instance_uuid<>'{snapshot['instance']}'::UUID OR instance_epoch<>{snapshot['epoch']})),"
+        "'live_active',EXISTS(SELECT 1 FROM deployment_session_leases "
+        f"WHERE full_jid='{jid_literal}' AND connection_id='{snapshot['connection']}'::UUID "
+        "AND lease_until>observed.now_at),"
+        "'process_active',EXISTS(SELECT 1 FROM cluster_node_instances "
+        f"WHERE xmpp_domain='{DOMAIN}' AND node_id='node-a' "
+        f"AND instance_uuid='{snapshot['instance']}'::UUID AND instance_epoch={snapshot['epoch']} "
+        "AND lease_until>observed.now_at)) FROM observed",
+        timeout=timeout,
+    ))
+    if not isinstance(result, dict) or any(type(result.get(field)) is not bool for field in (
+        "original_deadlines_elapsed", "identity_matches", "live_active", "process_active",
+    )):
+        raise AssertionError("takeover expiry observation is malformed")
+    if not result["identity_matches"]:
+        raise AssertionError("takeover authority was replaced during natural expiry observation")
+    # Even an absent original row cannot manufacture natural expiry before
+    # its captured database-clock deadline. Any new owner remains an error.
+    return result["original_deadlines_elapsed"] and not result["live_active"] and not result["process_active"]
+
+
+def wait_for_takeover_expiry(snapshot: dict, alive_key: str, deadline: float) -> bool:
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        alive = redis_cli("exists", alive_key, timeout=min(2, remaining))
+        if alive not in {"0", "1"}:
+            raise AssertionError("takeover Redis liveness observation is malformed")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        expired = takeover_authorities_expired(snapshot, min(2, remaining))
+        if time.monotonic() >= deadline:
+            return False
+        if alive == "0" and expired:
+            return True
+        time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+    return False
 
 
 def endpoint(http_port: int, xmpp_port: int) -> None:
@@ -336,7 +874,8 @@ def run() -> None:
         expect_bind_conflict=True,
     )
     duplicate.close()
-    bob_b = fixture.XmppWebSocket(BOB, PASSWORD, "bob-node-b")
+    bob_device_id = str(uuid.uuid4())
+    bob_b = DeviceXmppWebSocket(BOB, PASSWORD, "bob-node-b", device_id=bob_device_id)
     alice_b = fixture.XmppWebSocket(ALICE, PASSWORD, "alice-node-b")
     alice_b.send(
         "<iq xmlns='jabber:client' type='set' id='cluster-carbons'>"
@@ -534,8 +1073,8 @@ def run() -> None:
 
     # Redis is a bounded, disposable MUC routing projection. Every live exact
     # occupant refresh must keep all three companion keys leased, while a
-    # crashed node embedded in a still-active room must be pruned rather than
-    # retained forever by the other node's sliding lease.
+    # crashed node must not block healthy-node fan-out, and a room read must
+    # remove its occupants instead of renewing them behind a live room lease.
     muc_prefix = f"northstar:{DOMAIN}"
     occupants_key = f"{muc_prefix}:muc_occupants:{room}"
     owners_key = f"{muc_prefix}:muc_occupant_nodes:{room}"
@@ -554,6 +1093,20 @@ def run() -> None:
         "<body>prune crashed Redis owner</body></message>"
     )
     alice_a.receive_until("cluster-muc-prune")
+    # Volatile fan-out only filters bounded node hints. An explicit room read
+    # owns the full occupant/index sweep, independently of stanza delivery.
+    bob_b.send(
+        f"<iq xmlns='jabber:client' type='get' id='cluster-muc-prune-read' to='{room}'>"
+        "<query xmlns='http://jabber.org/protocol/disco#items'/></iq>"
+    )
+    room_items, _ = bob_b.receive_until("cluster-muc-prune-read")
+    fixture.check(
+        "type='result'" in room_items
+        and f"{room}/Alice" in room_items
+        and f"{room}/Bob" in room_items
+        and f"{room}/Ghost" not in room_items,
+        "explicit MUC room read did not reconcile the stale occupant projection",
+    )
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         if redis_cli("hexists", occupants_key, "Ghost") == "0":
@@ -563,7 +1116,7 @@ def run() -> None:
         redis_cli("hexists", occupants_key, "Ghost") == "0"
         and redis_cli("hexists", owners_key, "Ghost") == "0"
         and "crashed-node" not in redis_cli("smembers", nodes_key).splitlines(),
-        "live room renewal retained a crashed-node MUC soft-state member",
+        "explicit room read retained a crashed-node MUC soft-state member",
     )
 
     cleanup_room = f"soft-state-cleanup@conference.{DOMAIN}"
@@ -670,20 +1223,14 @@ def run() -> None:
         "members-only configuration did not evict the remote-node non-member",
     )
 
-    bob_b.send("<enable xmlns='urn:xmpp:sm:3' resume='true'/>")
-    enabled, _ = bob_b.receive_until("<enabled ")
-    resume_match = re.search(r"id='([^']+)'", enabled)
-    fixture.check(
-        resume_match is not None and "resume='true'" in enabled,
-        "cluster MUC stream did not enable resumable SM",
-    )
-    resume_id = resume_match.group(1)
+    resume_id = bob_b.enable_resumption()
     bob_b.abort()
     endpoint(HTTP_B, XMPP_B)
-    bob_b = fixture.XmppWebSocket(
+    bob_b = DeviceXmppWebSocket(
         BOB,
         PASSWORD,
         "ignored-after-muc-resume",
+        device_id=bob_device_id,
         resume=(resume_id, 0),
     )
     bob_b.send(
@@ -722,7 +1269,11 @@ def run() -> None:
         "<item nick='Bob' role='none'><reason>runtime kick</reason></item>"
         "</query></iq>"
     )
-    alice_a.receive_until("cluster-kick")
+    kick_result, _ = alice_a.receive_until("cluster-kick")
+    fixture.check(
+        "type='result'" in kick_result,
+        "cluster MUC kick was rejected before status delivery",
+    )
     kicked, _ = bob_b.receive_until("code='307'")
     fixture.check("type='unavailable'" in kicked, "remote kick was not acknowledged by owner node")
     bob_b.send(
@@ -811,6 +1362,24 @@ def run() -> None:
         "<x xmlns='jabber:x:data' type='submit'/></query></iq>"
     )
     alice_a.receive_until("shutdown-room-instant")
+    # Exercise the stronger write boundary: SM ownership alone and inactive
+    # CSI deferral must not make a shutdown notice disappear before close.
+    alice_a.send("<enable xmlns='urn:xmpp:sm:3' resume='false'/>")
+    shutdown_sm, _ = alice_a.receive_until("<enabled ")
+    shutdown_sm_element = protocol_element(shutdown_sm)
+    fixture.check(
+        shutdown_sm_element.tag == f"{{{SM_NAMESPACE}}}enabled"
+        and shutdown_sm_element.get("resume") in {"false", "0"}
+        and shutdown_sm_element.get("id") is None,
+        "shutdown fixture did not enable non-resumable stream management",
+    )
+    alice_a.send("<inactive xmlns='urn:xmpp:csi:0'/>")
+    alice_a.send(
+        "<iq xmlns='jabber:client' type='get' id='shutdown-csi-barrier'>"
+        "<ping xmlns='urn:xmpp:ping'/></iq>"
+    )
+    shutdown_barrier, _ = alice_a.receive_until("shutdown-csi-barrier")
+    fixture.check("type='result'" in shutdown_barrier, "shutdown CSI barrier did not complete")
     server_a_pid = int(os.environ["NORTHSTAR_CLUSTER_PID_A"])
     os.kill(server_a_pid, signal.SIGTERM)
     # One connection can occupy several rooms; graceful shutdown emits 332
@@ -971,18 +1540,34 @@ def run_faults() -> None:
     authentication_failures_before = metric_value(
         METRICS_B, "xmpp_cluster_authentication_failures_total"
     )
+    rejection_log = pathlib.Path(LOG_B)
+    rejection_offset = rejection_log.stat().st_size
+    injected_at = time.monotonic()
     redis_cli("-x", "publish", bob_channel, input_bytes=b"x" * (2 * 1024 * 1024 + 1))
-    deadline = time.monotonic() + 3
-    while (
-        time.monotonic() < deadline
-        and metric_value(METRICS_B, "xmpp_cluster_authentication_failures_total")
-        <= authentication_failures_before
-    ):
-        time.sleep(0.05)
     fixture.check(
-        metric_value(METRICS_B, "xmpp_cluster_authentication_failures_total")
-        > authentication_failures_before,
-        "node B did not reject the oversized Redis envelope",
+        wait_for_authentication_rejection(rejection_log, rejection_offset, injected_at + 3),
+        "node B did not reject the oversized Redis envelope within the original three-second window",
+    )
+    # The metrics endpoint intentionally caches complete scrapes for five
+    # seconds. Keep the security action's three-second deadline above, then
+    # separately verify its counter after that existing cache can expire.
+    metrics_deadline = injected_at + 5 + 3
+    counter_updated = False
+    while (remaining := metrics_deadline - time.monotonic()) > 0:
+        observed_counter = metric_value(
+            METRICS_B,
+            "xmpp_cluster_authentication_failures_total",
+            timeout=min(3, remaining),
+        )
+        if observed_counter > authentication_failures_before:
+            counter_updated = time.monotonic() <= metrics_deadline
+            break
+        remaining = metrics_deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.05, remaining))
+    fixture.check(
+        counter_updated,
+        "node B rejected the oversized envelope but its refreshed authentication counter did not advance",
     )
     alice_a.send(
         f"<message xmlns='jabber:client' to='{bob_full}' type='chat' id='after-oversize'>"
@@ -990,33 +1575,36 @@ def run_faults() -> None:
     )
     bob_b.receive_until("after-oversize")
 
-    # Mixed application versions fail closed in both directions. Presence
-    # replay now carries UUID/generation authority which a v9 process would
-    # ignore, so a v10 sender must never publish executable traffic to it.
-    redis_cli("set", bob_alive, "11", "EX", "90")
-    alice_a.send(
-        f"<message xmlns='jabber:client' to='{bob_full}' type='chat' id='newer-peer-version'>"
-        "<body>unknown peer contract must fail</body>"
-        "<no-store xmlns='urn:xmpp:hints'/></message>"
+    # Mutate an otherwise healthy current-version heartbeat in both
+    # directions. The source-derived contract and the live node heartbeat
+    # must agree first; otherwise this fixture would silently test source
+    # text against a stale binary.
+    fixture.check(
+        redis_cli("get", bob_alive) == CLUSTER_PROTOCOL_VERSION,
+        "node B heartbeat protocol version differs from the repository contract",
     )
+    newer_cluster_protocol_version = str(int(CLUSTER_PROTOCOL_VERSION) + 1)
+    older_cluster_protocol_version = str(max(1, int(CLUSTER_PROTOCOL_VERSION) - 1))
+
+    # Mixed application versions fail closed in both directions. New wire
+    # semantics must never be published to a node which could ignore them.
+    redis_cli("set", bob_alive, newer_cluster_protocol_version, "EX", "90")
+    alice_a.send(version_skew_probe_stanza(bob_full, "newer-peer-version"))
     newer_rejected, _ = alice_a.receive_until("newer-peer-version", timeout=6)
     fixture.check(
         "type='error'" in newer_rejected and "service-unavailable" in newer_rejected,
         f"unknown newer cluster delivery contract did not fail closed: {newer_rejected}",
     )
     expect_no_frame(bob_b, "newer-peer-version")
-    redis_cli("set", bob_alive, "9", "EX", "90")
-    alice_a.send(
-        f"<message xmlns='jabber:client' to='{bob_full}' type='chat' id='legacy-peer-version'>"
-        "<body>peer version 9</body></message>"
-    )
+    redis_cli("set", bob_alive, older_cluster_protocol_version, "EX", "90")
+    alice_a.send(version_skew_probe_stanza(bob_full, "legacy-peer-version"))
     legacy_rejected, _ = alice_a.receive_until("legacy-peer-version", timeout=6)
     fixture.check(
         "type='error'" in legacy_rejected and "service-unavailable" in legacy_rejected,
         f"older cluster application version did not fail closed: {legacy_rejected}",
     )
     expect_no_frame(bob_b, "legacy-peer-version")
-    redis_cli("set", bob_alive, "10", "EX", "90")
+    redis_cli("set", bob_alive, CLUSTER_PROTOCOL_VERSION, "EX", "90")
 
     # Claim a dedicated nonexistent full resource through the real
     # PostgreSQL process/connection authority, then pause node B so the test
@@ -1081,114 +1669,98 @@ def run_faults() -> None:
     )
     fixture.check(claim == "claimed", f"fake exact route claim failed: {claim}")
     subscriber = redis_subscriber(fake_channel)
-    os.kill(PID_B, signal.SIGSTOP)
     try:
-        alice_a.send(
-            f"<message xmlns='jabber:client' to='{fake_full}' type='normal' id='forged-ack'>"
-            "<body>must not reach the live resource</body>"
-            "<no-store xmlns='urn:xmpp:hints'/></message>"
-        )
-        request_envelope = subscriber_envelope(subscriber)
-        request = request_envelope["payload"]
-        fixture.check(
-            request.get("protocol_version") == "10"
-            and request.get("delivery") == {"reliability": "volatile"},
-            f"cluster no-store envelope omitted its volatile v10 contract: {request}",
-        )
-        request_id = request["request_id"]
-        nonce = request["ack_nonce"]
-        ack_channel = f"{prefix}:node:{request_envelope['source_node']}"
-        invalid_acks = (
-            {
-                "request_id": "stale-request",
-                "nonce": nonce,
-                "node_id": fake_node,
-                "delivered": 1,
-                "accepted_full_jid": fake_full,
-                "delivery": request["delivery"],
-            },
-            {
-                "request_id": request_id,
-                "nonce": "wrong-nonce",
-                "node_id": fake_node,
-                "delivered": 1,
-                "accepted_full_jid": fake_full,
-                "delivery": request["delivery"],
-            },
-            {
-                "request_id": request_id,
-                "nonce": nonce,
-                "node_id": "wrong-node",
-                "delivered": 1,
-                "accepted_full_jid": fake_full,
-                "delivery": request["delivery"],
-            },
-        )
-        for ack in invalid_acks:
+        with paused_node_for_ack(PID_B):
+            alice_a.send(
+                f"<message xmlns='jabber:client' to='{fake_full}' type='normal' id='forged-ack'>"
+                "<body>must not reach the live resource</body>"
+                "<no-store xmlns='urn:xmpp:hints'/></message>"
+            )
+            request_envelope = subscriber_envelope(subscriber)
+            request = validate_ack_probe_request(request_envelope, fake_full, "forged-ack")
+            request_id = request["request_id"]
+            nonce = request["ack_nonce"]
+            ack_channel = f"{prefix}:node:{request_envelope['source_node']}"
+            invalid_acks = (
+                {
+                    "request_id": "stale-request",
+                    "nonce": nonce,
+                    "node_id": fake_node,
+                    "delivered": 1,
+                    "accepted_full_jid": fake_full,
+                    "delivery": request["delivery"],
+                },
+                {
+                    "request_id": request_id,
+                    "nonce": "wrong-nonce",
+                    "node_id": fake_node,
+                    "delivered": 1,
+                    "accepted_full_jid": fake_full,
+                    "delivery": request["delivery"],
+                },
+                {
+                    "request_id": request_id,
+                    "nonce": nonce,
+                    "node_id": "wrong-node",
+                    "delivered": 1,
+                    "accepted_full_jid": fake_full,
+                    "delivery": request["delivery"],
+                },
+            )
+            for ack in invalid_acks:
+                redis_cli(
+                    "publish",
+                    ack_channel,
+                    signed_ack_envelope(request_envelope, ack),
+                )
+            oversized_ack = dict(invalid_acks[-1])
+            oversized_ack["request_id"] = str(uuid.uuid4())
+            oversized_ack["padding"] = "x" * 4097
             redis_cli(
                 "publish",
                 ack_channel,
-                signed_ack_envelope(request_envelope, ack),
+                signed_ack_envelope(request_envelope, oversized_ack),
             )
-        oversized_ack = dict(invalid_acks[-1])
-        oversized_ack["request_id"] = str(uuid.uuid4())
-        oversized_ack["padding"] = "x" * 4097
-        redis_cli(
-            "publish",
-            ack_channel,
-            signed_ack_envelope(request_envelope, oversized_ack),
-        )
-        rejected, _ = alice_a.receive_until("forged-ack", timeout=5)
-        fixture.check(
-            "type='error'" in rejected and "service-unavailable" in rejected,
-            f"invalid cluster ACKs did not fail the exact route: {rejected}",
-        )
+            rejected, _ = alice_a.receive_until("forged-ack", timeout=5)
+            fixture.check(
+                "type='error'" in rejected and "service-unavailable" in rejected,
+                f"invalid cluster ACKs did not fail the exact route: {rejected}",
+            )
         expect_no_frame(bob_b, "forged-ack")
         deadline = time.monotonic() + 40
-        node_a_ready = False
-        while time.monotonic() < deadline:
-            try:
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{HTTP_A}/readyz", timeout=2
-                ) as response:
-                    node_a_ready = response.status == 200
-            except (OSError, urllib.error.URLError):
-                node_a_ready = False
-            if node_a_ready:
-                break
-            time.sleep(0.25)
         fixture.check(
-            node_a_ready,
-            "node A did not rotate/reconcile after the invalid ACK timeout",
+            wait_for_cluster_recovery((HTTP_A, HTTP_B), deadline),
+            "cluster nodes did not rotate/reconcile after the invalid ACK timeout",
         )
 
         # A valid negative ACK is deliberately duplicated. It can end the
         # request once, but it cannot manufacture a positive delivery.
-        alice_a.send(
-            f"<message xmlns='jabber:client' to='{fake_full}' type='normal' id='duplicate-ack'>"
-            "<body>duplicate negative acknowledgement</body>"
-            "<no-store xmlns='urn:xmpp:hints'/></message>"
-        )
-        duplicate_envelope = subscriber_envelope(subscriber)
-        duplicate_request = duplicate_envelope["payload"]
-        negative_ack = {
-            "request_id": duplicate_request["request_id"],
-            "nonce": duplicate_request["ack_nonce"],
-            "node_id": fake_node,
-            "delivered": 0,
-            "accepted_full_jid": None,
-            "delivery": duplicate_request["delivery"],
-        }
-        duplicate_channel = f"{prefix}:node:{duplicate_envelope['source_node']}"
-        signed_negative = signed_ack_envelope(duplicate_envelope, negative_ack)
-        redis_cli("publish", duplicate_channel, signed_negative)
-        redis_cli("publish", duplicate_channel, signed_negative)
-        duplicate_rejected, _ = alice_a.receive_until("duplicate-ack", timeout=5)
-        fixture.check(
-            "type='error'" in duplicate_rejected
-            and "service-unavailable" in duplicate_rejected,
-            f"duplicate negative ACK did not fail the exact route: {duplicate_rejected}",
-        )
+        with paused_node_for_ack(PID_B):
+            alice_a.send(
+                f"<message xmlns='jabber:client' to='{fake_full}' type='normal' id='duplicate-ack'>"
+                "<body>duplicate negative acknowledgement</body>"
+                "<no-store xmlns='urn:xmpp:hints'/></message>"
+            )
+            duplicate_envelope = subscriber_envelope(subscriber)
+            duplicate_request = validate_ack_probe_request(duplicate_envelope, fake_full, "duplicate-ack", request)
+            negative_ack = {
+                "request_id": duplicate_request["request_id"],
+                "nonce": duplicate_request["ack_nonce"],
+                "node_id": fake_node,
+                "delivered": 0,
+                "accepted_full_jid": None,
+                "delivery": duplicate_request["delivery"],
+            }
+            duplicate_channel = f"{prefix}:node:{duplicate_envelope['source_node']}"
+            signed_negative = signed_ack_envelope(duplicate_envelope, negative_ack)
+            redis_cli("publish", duplicate_channel, signed_negative)
+            redis_cli("publish", duplicate_channel, signed_negative)
+            duplicate_rejected, _ = alice_a.receive_until("duplicate-ack", timeout=5)
+            fixture.check(
+                "type='error'" in duplicate_rejected
+                and "service-unavailable" in duplicate_rejected,
+                f"duplicate negative ACK did not fail the exact route: {duplicate_rejected}",
+            )
         expect_no_frame(bob_b, "duplicate-ack")
     finally:
         database_scalar(
@@ -1200,18 +1772,25 @@ def run_faults() -> None:
             "DELETE FROM deployment_session_leases "
             f"WHERE connection_id='{fake_connection}'::UUID"
         )
-        os.kill(PID_B, signal.SIGCONT)
         subscriber.terminate()
         subscriber.wait(timeout=5)
 
+    # A late response to a completed fault request can rotate either listener.
+    # Reuse the same absolute recovery budget, then send one fresh message.
+    # A message accepted durably while routing is unavailable is legitimately
+    # offline; it does not prove that the current route has recovered.
+    fixture.check(
+        wait_for_cluster_recovery((HTTP_A, HTTP_B), deadline),
+        "cluster nodes did not recover before the fresh correlated delivery probe",
+    )
     alice_a.send(
         f"<message xmlns='jabber:client' to='{bob_full}' type='chat' id='after-forged-acks'>"
         "<body>real correlated acknowledgement restored</body></message>"
     )
     bob_b.receive_until("after-forged-acks")
 
-    # Kill node A without cleanup and wait for both its PostgreSQL process
-    # authority and disposable Redis lease to expire naturally.  The same
+    # Kill node A without cleanup and wait for its exact PostgreSQL live lease,
+    # process authority and disposable Redis lease to expire naturally. The same
     # exact resource must then be claimable on node B.  The test deliberately
     # does not edit either authority, so it covers the production ABA fence.
     endpoint(HTTP_A, XMPP_A)
@@ -1219,17 +1798,21 @@ def run_faults() -> None:
     takeover_full = f"{ALICE}@{DOMAIN}/ttl-takeover"
     takeover_route = f"{prefix}:session:{takeover_full}"
     takeover_owner = redis_cli("get", takeover_route)
-    fixture.check(bool(takeover_owner), "takeover route was not registered on node A")
+    fixture.check(takeover_owner == "node-a", "takeover route was not registered on node A")
+    killed_at = time.monotonic()
     os.kill(int(os.environ["NORTHSTAR_CLUSTER_PID_A"]), signal.SIGKILL)
+    snapshot_started_at = time.monotonic()
+    takeover_authority = read_takeover_authority(takeover_full)
     takeover_alive = f"{prefix}:node:{takeover_owner}:alive"
-    original_ttl = int(redis_cli("ttl", takeover_alive))
-    fixture.check(original_ttl > 1, "crashed node did not have a real liveness TTL")
-    deadline = time.monotonic() + 105
-    while time.monotonic() < deadline and redis_cli("exists", takeover_alive) != "0":
-        time.sleep(0.1)
+    original_ttl = int(redis_cli("ttl", takeover_alive, timeout=3))
     fixture.check(
-        redis_cli("exists", takeover_alive) == "0",
-        "crashed node liveness lease did not expire within its production TTL",
+        time.monotonic() < killed_at + 15,
+        "takeover authority snapshot exceeded the observation budget",
+    )
+    deadline = takeover_expiry_deadline(takeover_authority, original_ttl, killed_at, snapshot_started_at)
+    fixture.check(
+        wait_for_takeover_expiry(takeover_authority, takeover_alive, deadline),
+        "crashed node live/process/Redis authority did not expire within its production lease budget",
     )
     endpoint(HTTP_B, XMPP_B)
     takeover_b = fixture.XmppWebSocket(ALICE, PASSWORD, "ttl-takeover")

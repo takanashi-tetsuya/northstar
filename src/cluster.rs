@@ -1,11 +1,11 @@
 use crate::state::AppState;
 use anyhow::{Context, Result};
 use bb8::Pool;
-use futures::StreamExt;
+use futures::{future::BoxFuture, FutureExt, StreamExt};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -73,21 +73,30 @@ const REDIS_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const REDIS_IO_TIMEOUT: Duration = Duration::from_millis(500);
 const CLUSTER_REDIS_POOL_MAX_SIZE: u32 = 16;
 const DELIVERY_ACK_TIMEOUT: Duration = Duration::from_secs(2);
+// This is the per-resource C2S ownership wait for the older exact-resource
+// delivery path. MIX uses a typed durable hand-off below instead: it waits for
+// an actual socket/SM/BOSH boundary and closes the one route if its caller is
+// cancelled, rather than declaring ownership after this timer elapses.
+const DELIVERY_TRANSPORT_RECEIPT_TIMEOUT: Duration = Duration::from_millis(500);
+const MIX_CLUSTER_HANDOFF_TTL_SECONDS: u64 = 30;
 const MAX_DELIVERY_ACK_BYTES: usize = 4096;
 const MAX_CLUSTER_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
 const MAX_DELIVERY_EXCLUSIONS: usize = 16;
 const MAX_PENDING_CLUSTER_ACKS: usize = 4096;
+const MAX_LISTENER_CONTINUATIONS: usize = 16;
 const MUC_OUTBOX_MAX_BATCHES_PER_PASS: usize = 4;
 const MUC_OUTBOX_BATCH_SIZE: i64 = 16;
 const MUC_OUTBOX_PASS_BUDGET: Duration = Duration::from_secs(20);
 const MUC_OUTBOX_DELIVERY_BUDGET: Duration = Duration::from_secs(5);
 const CLUSTER_MAINTENANCE_BUDGET: Duration = Duration::from_secs(25);
-const NODE_PROTOCOL_VERSION: &str = "11";
-const DELIVERY_CONTRACT_PROTOCOL_VERSION: u16 = 11;
+const NODE_PROTOCOL_VERSION: &str = "13";
+const DELIVERY_CONTRACT_PROTOCOL_VERSION: u16 = 13;
 // Version 8 introduced the explicit volatile/durable delivery contract.
-// Versions 9 through 11 retain that wire meaning while adding independent
-// signed envelope, presence-authority and MIX-capability requirements. They must never fall back to
-// the version-7 stanza-id inference rules during a rolling upgrade.
+// Versions 9 through 13 retain that wire meaning while adding independent
+// signed envelope, presence-authority, MIX-capability, and MIX transport
+// receipt requirements. Version 13 adds an exact leased MIX source; it must
+// never fall back to the version-7 stanza-id inference rules during a rolling
+// upgrade.
 const DELIVERY_CONTRACT_PROTOCOL_MIN: u16 = 8;
 const PRESENCE_AUTHORITY_VERSION: u16 = 1;
 const LEGACY_DELIVERY_PROTOCOL_MAX: u16 = 7;
@@ -255,6 +264,7 @@ pub struct NodeDeliveryReceipt {
     pub mix_supported: usize,
     pub mix_unsupported: usize,
     pub mix_unknown: usize,
+    pub mix_handoff: Option<ClusterMixHandoff>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -278,6 +288,11 @@ struct NodeDeliveryOptions<'a> {
     /// peer's in-memory queue. The receiver waits for the exact transport to
     /// take ownership (or rejects and keeps the durable source journal).
     transport_receipt_required: bool,
+    /// Dedicated transport-ownership acknowledgement for a bare-JID MIX
+    /// message. This deliberately differs from `transport_receipt_required`:
+    /// MIX must retain its verified-capability fan-out and may acknowledge any
+    /// one qualified resource, rather than a single preselected full JID.
+    mix_transport_receipt_required: bool,
     exclude_jids: &'a [&'a str],
     primary: bool,
     available_only: bool,
@@ -289,6 +304,10 @@ struct NodeDeliveryOptions<'a> {
     /// means the message is deliberately volatile; it must never be inferred
     /// as durable merely because it contains an XEP-0359 stanza-id.
     durable_delivery: Option<crate::outbound::DurableDelivery>,
+    /// Exact leased MIX recipient source. Unlike C2S, this source is first
+    /// transferred to a remote-node fence and then to socket/SM/BOSH
+    /// ownership; it is never inferred from a stanza-id.
+    mix_delivery: Option<crate::outbound::MixDelivery>,
     presence_authority: Option<ClusterPresenceAuthority>,
     presence_delivery: Option<ClusterPresenceDelivery>,
 }
@@ -396,6 +415,21 @@ enum NodeDeliveryContract {
         recipient_id: uuid::Uuid,
         message_id: uuid::Uuid,
     },
+    DurableMix {
+        delivery_id: uuid::Uuid,
+        lease_token: uuid::Uuid,
+    },
+}
+
+/// The durable local boundary reached by a remote node after it accepted one
+/// exact MIX source. The source node uses this only to decide that its old
+/// lease was transferred; database rows retain the actual new lease token.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClusterMixHandoff {
+    SocketFenced,
+    SmPersisted,
+    BoshPersisted,
 }
 
 impl NodeDeliveryContract {
@@ -438,6 +472,11 @@ struct NodeDeliveryAck {
     control_outcome: Option<ClusterControlOutcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     delivery: Option<NodeDeliveryContract>,
+    /// Present only for a durable MIX contract after the destination has
+    /// transferred the exact PostgreSQL source to a socket, SM, or BOSH
+    /// owner. Redis acknowledgement alone is deliberately not sufficient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mix_handoff: Option<ClusterMixHandoff>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -450,6 +489,7 @@ enum RequestedNodeMessageDelivery {
 enum ResolvedNodeMessageDelivery {
     Volatile,
     Durable(crate::outbound::DurableDelivery),
+    Mix(crate::outbound::MixDelivery),
 }
 
 impl ResolvedNodeMessageDelivery {
@@ -459,6 +499,10 @@ impl ResolvedNodeMessageDelivery {
             Self::Durable(delivery) => NodeDeliveryContract::DurableC2s {
                 recipient_id: delivery.recipient_id,
                 message_id: delivery.message_id,
+            },
+            Self::Mix(delivery) => NodeDeliveryContract::DurableMix {
+                delivery_id: delivery.delivery_id,
+                lease_token: delivery.lease_token,
             },
         }
     }
@@ -496,10 +540,15 @@ fn requested_node_message_delivery(
             }),
             "cluster delivery contract requires a delivery-contract capable protocol version"
         );
-        return Ok(Some(RequestedNodeMessageDelivery::Explicit(
-            serde_json::from_value(delivery.clone())
-                .context("cluster delivery contract is invalid")?,
-        )));
+        let contract: NodeDeliveryContract = serde_json::from_value(delivery.clone())
+            .context("cluster delivery contract is invalid")?;
+        if matches!(contract, NodeDeliveryContract::DurableMix { .. }) {
+            anyhow::ensure!(
+                advertised_version == Some(DELIVERY_CONTRACT_PROTOCOL_VERSION),
+                "typed MIX cluster hand-off requires the current protocol version"
+            );
+        }
+        return Ok(Some(RequestedNodeMessageDelivery::Explicit(contract)));
     }
     anyhow::ensure!(
         advertised_version.is_none_or(|version| version <= LEGACY_DELIVERY_PROTOCOL_MAX),
@@ -552,6 +601,51 @@ async fn resolve_node_message_delivery(
                 },
             ))
         }
+        RequestedNodeMessageDelivery::Explicit(NodeDeliveryContract::DurableMix {
+            delivery_id,
+            lease_token,
+        }) => {
+            anyhow::ensure!(
+                crate::jid::CanonicalJid::parse(target_jid)?
+                    .resourcepart()
+                    .is_none(),
+                "durable cluster MIX delivery requires a bare target"
+            );
+            let projection: Option<(String, String, bool, bool)> = sqlx::query_as(
+                "SELECT recipient.recipient_jid,event.stanza_template,
+                        recipient.lease_until>clock_timestamp() AS lease_active,
+                        event.expires_at>clock_timestamp() AS event_active
+                   FROM mix_delivery_recipients recipient
+                   JOIN mix_delivery_events event ON event.event_id=recipient.event_id
+                  WHERE recipient.delivery_id=$1 AND recipient.lease_token=$2",
+            )
+            .bind(delivery_id)
+            .bind(lease_token)
+            .fetch_optional(pool)
+            .await
+            .context("failed to verify clustered durable MIX projection")?;
+            let (recipient, template, lease_active, event_active) =
+                projection.context("cluster durable MIX delivery projection is missing")?;
+            anyhow::ensure!(
+                lease_active && event_active,
+                "cluster durable MIX delivery source is no longer active"
+            );
+            anyhow::ensure!(
+                crate::jid::canonicalize_bare(&recipient)?
+                    == crate::jid::canonicalize_bare(target_jid)?,
+                "cluster durable MIX recipient does not match the target"
+            );
+            anyhow::ensure!(
+                crate::xmpp::xml_util::set_to(&template, target_jid) == stanza,
+                "cluster durable MIX payload does not match its PostgreSQL projection"
+            );
+            Ok(ResolvedNodeMessageDelivery::Mix(
+                crate::outbound::MixDelivery {
+                    delivery_id,
+                    lease_token,
+                },
+            ))
+        }
         RequestedNodeMessageDelivery::LegacyInference => {
             let message_id = match crate::outbound::recipient_delivery_identity(stanza, target_jid)
             {
@@ -599,16 +693,21 @@ fn outbound_delivery_contract(
     stanza: &str,
     target_jid: &str,
     durable_delivery: Option<crate::outbound::DurableDelivery>,
+    mix_delivery: Option<crate::outbound::MixDelivery>,
 ) -> Result<Option<NodeDeliveryContract>> {
     let document = roxmltree::Document::parse(stanza).context("cluster stanza is invalid XML")?;
     let is_message = document.root_element().tag_name().name() == "message";
     if !is_message {
         anyhow::ensure!(
-            durable_delivery.is_none(),
+            durable_delivery.is_none() && mix_delivery.is_none(),
             "non-message cluster stanza cannot be durable"
         );
         return Ok(None);
     }
+    anyhow::ensure!(
+        !(durable_delivery.is_some() && mix_delivery.is_some()),
+        "cluster message cannot carry both C2S and MIX durable sources"
+    );
     if let Some(delivery) = durable_delivery {
         anyhow::ensure!(
             matches!(
@@ -618,6 +717,18 @@ fn outbound_delivery_contract(
             "durable cluster message lacks an unambiguous recipient stanza-id"
         );
         return NodeDeliveryContract::from_durable(delivery).map(Some);
+    }
+    if let Some(delivery) = mix_delivery {
+        anyhow::ensure!(
+            crate::jid::CanonicalJid::parse(target_jid)?
+                .resourcepart()
+                .is_none(),
+            "durable cluster MIX delivery requires a bare target"
+        );
+        return Ok(Some(NodeDeliveryContract::DurableMix {
+            delivery_id: delivery.delivery_id,
+            lease_token: delivery.lease_token,
+        }));
     }
     Ok(Some(NodeDeliveryContract::Volatile {}))
 }
@@ -652,6 +763,7 @@ struct DeliveryAckExpectation<'a> {
     require_delivery_contract: bool,
     mix_capable_only: bool,
     transport_receipt_required: bool,
+    mix_transport_receipt_required: bool,
 }
 
 fn validated_delivery_ack(
@@ -677,6 +789,22 @@ fn validated_delivery_ack(
     if expected.transport_receipt_required
         && (ack.delivered > 1 || (ack.delivered == 0) != ack.accepted_full_jid.is_none())
     {
+        return None;
+    }
+    if expected.mix_transport_receipt_required {
+        // A MIX recipient row is transferred to exactly one destination
+        // resource.  The capability counters may describe every resource,
+        // but the authoritative source can cross only one local boundary.
+        if !matches!(
+            expected.delivery,
+            Some(NodeDeliveryContract::DurableMix { .. })
+        ) || ack.delivered > 1
+            || (ack.delivered == 0) != ack.accepted_full_jid.is_none()
+            || (ack.delivered == 0) != ack.mix_handoff.is_none()
+        {
+            return None;
+        }
+    } else if ack.mix_handoff.is_some() {
         return None;
     }
     if expected.mix_capable_only {
@@ -712,6 +840,7 @@ fn validated_delivery_ack(
         mix_supported: ack.mix_supported,
         mix_unsupported: ack.mix_unsupported,
         mix_unknown: ack.mix_unknown,
+        mix_handoff: ack.mix_handoff,
     })
 }
 
@@ -729,6 +858,70 @@ fn node_delivery_stanza(stanza: &str, carbons_only: bool, session_key: &str) -> 
         return stanza.to_owned();
     };
     crate::xmpp::xml_util::set_to(stanza, &exact_full_jid)
+}
+
+/// The remote cluster worker owns a concrete C2S route while awaiting a
+/// typed MIX hand-off.  If the request task is cancelled or the driver drops
+/// its completion channel, the route is torn down before an old queued item
+/// can become visible after its database lease is released for retry.
+struct PendingClusterMixHandoff {
+    sender: crate::outbound::OutboundSender,
+    disconnect: CancellationToken,
+    completed: bool,
+}
+
+impl PendingClusterMixHandoff {
+    fn new(sender: crate::outbound::OutboundSender, disconnect: CancellationToken) -> Self {
+        Self {
+            sender,
+            disconnect,
+            completed: false,
+        }
+    }
+
+    fn mark_completed(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for PendingClusterMixHandoff {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.sender.disconnect_backpressured_transport();
+            self.disconnect.cancel();
+        }
+    }
+}
+
+/// Enqueue an exact remote MIX source and wait for a typed durable boundary.
+/// There is intentionally no synthetic ownership timeout: a socket writer
+/// fences the source before bytes, while SM and BOSH persist it.  Cancellation
+/// closes only this route and leaves the database fence reclaimable.
+async fn try_send_cluster_mix_transport(
+    sender: &crate::outbound::OutboundSender,
+    disconnect: &CancellationToken,
+    stanza: String,
+    source: crate::outbound::MixDelivery,
+) -> Result<crate::outbound::MixTransportCompletion> {
+    let receiver = match sender.try_send_durable_mix(stanza, source) {
+        Ok(receiver) => receiver,
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            sender.disconnect_backpressured_transport();
+            disconnect.cancel();
+            anyhow::bail!("remote MIX resource output queue is full");
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            sender.disconnect_backpressured_transport();
+            disconnect.cancel();
+            anyhow::bail!("remote MIX resource output queue is closed");
+        }
+    };
+    let mut pending = PendingClusterMixHandoff::new(sender.clone(), disconnect.clone());
+    let completion = receiver
+        .await
+        .context("remote MIX resource closed before durable hand-off")?;
+    pending.mark_completed();
+    Ok(completion)
 }
 
 /// Privacy lists are resource scoped, while both Carbon wrappers are addressed
@@ -941,10 +1134,17 @@ const CLUSTER_FAIL_CLOSED: u8 = 3;
 const CLUSTER_DURABLE_DIRECT_ONLY: u8 = 4;
 const CLUSTER_SHUTDOWN_REQUIRED: u8 = 5;
 
+#[derive(Debug, Eq, PartialEq)]
+enum ReconciliationOutcome {
+    Complete,
+    WaitingForInitialListener,
+}
+
 struct ClusterHealth {
     state: AtomicU8,
     listener_generation: AtomicU64,
     required_listener_generation: AtomicU64,
+    listener_rotation_epoch: AtomicU64,
     failure_since: Mutex<Option<Instant>>,
     authentication_failures: AtomicU64,
     replay_rejections: AtomicU64,
@@ -959,6 +1159,7 @@ impl ClusterHealth {
             state: AtomicU8::new(CLUSTER_DISABLED),
             listener_generation: AtomicU64::new(0),
             required_listener_generation: AtomicU64::new(0),
+            listener_rotation_epoch: AtomicU64::new(0),
             failure_since: Mutex::new(None),
             authentication_failures: AtomicU64::new(0),
             replay_rejections: AtomicU64::new(0),
@@ -968,11 +1169,33 @@ impl ClusterHealth {
         }
     }
 
+    fn next_listener_generation(&self) -> u64 {
+        self.listener_generation
+            .load(Ordering::Acquire)
+            .saturating_add(1)
+    }
+
+    fn begin_listener_attempt(&self) -> (u64, u64) {
+        let _transition = self
+            .failure_since
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (
+            self.next_listener_generation(),
+            self.listener_rotation_epoch.load(Ordering::Acquire),
+        )
+    }
+
+    fn listener_requires_rotation(&self, candidate_generation: u64) -> bool {
+        candidate_generation < self.required_listener_generation.load(Ordering::Acquire)
+    }
+
     fn enabled() -> Self {
         Self {
             state: AtomicU8::new(CLUSTER_RECONCILING),
             listener_generation: AtomicU64::new(0),
             required_listener_generation: AtomicU64::new(1),
+            listener_rotation_epoch: AtomicU64::new(0),
             failure_since: Mutex::new(Some(Instant::now())),
             authentication_failures: AtomicU64::new(0),
             replay_rejections: AtomicU64::new(0),
@@ -1475,11 +1698,7 @@ impl ClusterManager {
     }
 
     pub fn begin_shutdown(&self) {
-        if self.is_enabled() {
-            self.health
-                .state
-                .store(CLUSTER_SHUTDOWN_REQUIRED, Ordering::Release);
-        }
+        self.require_shutdown();
     }
 
     /// Wait for every already-admitted signed publication to complete and
@@ -1557,6 +1776,16 @@ impl ClusterManager {
         if !self.is_enabled() {
             return;
         }
+        // Serialize the failure fence with complete_reconciliation's generation
+        // check and healthy commit, so an older completion cannot hide failure.
+        let mut since = self
+            .health
+            .failure_since
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.health.state.load(Ordering::Acquire) == CLUSTER_SHUTDOWN_REQUIRED {
+            return;
+        }
         let degraded = match self.failure_policy() {
             Some(crate::cluster_security::ClusterFailurePolicy::DurableDirectOnly) => {
                 CLUSTER_DURABLE_DIRECT_ONLY
@@ -1577,22 +1806,33 @@ impl ClusterManager {
         self.health
             .required_listener_generation
             .fetch_max(next_listener, Ordering::AcqRel);
+        self.health
+            .listener_rotation_epoch
+            .fetch_add(1, Ordering::AcqRel);
         self.listener_rotation.notify_waiters();
+        if since.is_none() {
+            *since = Some(Instant::now());
+        }
+        drop(since);
+        tracing::error!(?error, ?class, policy = ?self.failure_policy(), "cluster control plane entered a degraded state");
+    }
+
+    fn confirm_listener_generation(&self, generation: u64, rotation_epoch: u64) -> Result<()> {
         let mut since = self
             .health
             .failure_since
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if since.is_none() {
-            *since = Some(Instant::now());
-        }
-        tracing::error!(?error, ?class, policy = ?self.failure_policy(), "cluster control plane entered a degraded state");
-    }
-
-    fn note_listener_generation(&self) {
+        anyhow::ensure!(
+            self.health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED
+                && self.health.listener_rotation_epoch.load(Ordering::Acquire) == rotation_epoch
+                && generation == self.health.next_listener_generation()
+                && !self.health.listener_requires_rotation(generation),
+            "Redis PubSub listener rotation was requested before self-loop confirmation"
+        );
         self.health
             .listener_generation
-            .fetch_add(1, Ordering::AcqRel);
+            .store(generation, Ordering::Release);
         // Startup has no pre-existing local sessions or MUC occupants: State
         // already reconciled PostgreSQL key/instance authority and activate()
         // acquired the Redis node lease. The first subscribed listener is the
@@ -1601,19 +1841,79 @@ impl ClusterManager {
         if self.health.state.load(Ordering::Acquire) == CLUSTER_RECONCILING
             && self.health.degraded_transitions.load(Ordering::Acquire) == 0
         {
-            let _ = self.complete_reconciliation();
+            let outcome = self.complete_reconciliation_locked(&mut since, rotation_epoch)?;
+            anyhow::ensure!(
+                outcome == ReconciliationOutcome::Complete,
+                "confirmed initial listener did not complete startup reconciliation"
+            );
         }
+        Ok(())
     }
 
-    fn begin_reconciliation(&self) {
+    #[cfg(test)]
+    fn note_listener_generation(&self) {
+        let (generation, rotation_epoch) = self.health.begin_listener_attempt();
+        self.confirm_listener_generation(generation, rotation_epoch)
+            .unwrap();
+    }
+
+    fn begin_reconciliation(&self) -> Result<u64> {
+        let _transition = self
+            .health
+            .failure_since
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        anyhow::ensure!(
+            self.health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED,
+            "cluster shutdown is required; reconciliation cannot begin"
+        );
         if self.is_enabled() {
             self.health
                 .state
                 .store(CLUSTER_RECONCILING, Ordering::Release);
         }
+        Ok(self.health.listener_rotation_epoch.load(Ordering::Acquire))
     }
 
-    fn complete_reconciliation(&self) -> Result<()> {
+    fn complete_reconciliation(&self, rotation_epoch: u64) -> Result<ReconciliationOutcome> {
+        let mut since = self
+            .health
+            .failure_since
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.complete_reconciliation_locked(&mut since, rotation_epoch)
+    }
+
+    fn complete_reconciliation_locked(
+        &self,
+        since: &mut std::sync::MutexGuard<'_, Option<Instant>>,
+        rotation_epoch: u64,
+    ) -> Result<ReconciliationOutcome> {
+        anyhow::ensure!(
+            self.health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED,
+            "cluster shutdown is required; reconciliation cannot restore readiness"
+        );
+        anyhow::ensure!(
+            self.health.listener_rotation_epoch.load(Ordering::Acquire) == rotation_epoch,
+            "cluster control-plane failure invalidated this reconciliation attempt"
+        );
+        // The first maintenance pass can finish its successful authority I/O
+        // before the listener receives its initial self-loop. This is still
+        // startup, not a Redis failure: forcing rotation here invalidates that
+        // pending proof and prevents its normal empty-state readiness commit.
+        // Keep the original failure timer and not-ready state until proof.
+        if self.health.state.load(Ordering::Acquire) == CLUSTER_RECONCILING
+            && self.health.listener_generation.load(Ordering::Acquire) == 0
+            && self
+                .health
+                .required_listener_generation
+                .load(Ordering::Acquire)
+                == 1
+            && rotation_epoch == 0
+            && self.health.degraded_transitions.load(Ordering::Acquire) == 0
+        {
+            return Ok(ReconciliationOutcome::WaitingForInitialListener);
+        }
         anyhow::ensure!(
             self.health.listener_generation.load(Ordering::Acquire)
                 >= self
@@ -1623,12 +1923,8 @@ impl ClusterManager {
             "cluster PubSub listener generation has not been re-established"
         );
         self.health.state.store(CLUSTER_HEALTHY, Ordering::Release);
-        *self
-            .health
-            .failure_since
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        Ok(())
+        **since = None;
+        Ok(ReconciliationOutcome::Complete)
     }
 
     fn safety_lease_expired(&self) -> bool {
@@ -1646,6 +1942,11 @@ impl ClusterManager {
 
     fn require_shutdown(&self) {
         if self.is_enabled() {
+            let _transition = self
+                .health
+                .failure_since
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             self.health
                 .state
                 .store(CLUSTER_SHUTDOWN_REQUIRED, Ordering::Release);
@@ -1775,6 +2076,23 @@ impl ClusterManager {
             security.peers().as_ref(),
             chrono::Utc::now().timestamp(),
         )?;
+        self.validate_verified_envelope(&envelope)?;
+        if remember_replay {
+            self.remember_envelope_replay(&envelope)?;
+        }
+        Ok(envelope)
+    }
+
+    fn validate_verified_envelope(
+        &self,
+        envelope: &crate::cluster_security::SignedClusterEnvelope,
+    ) -> Result<()> {
+        let security = self
+            .security
+            .as_ref()
+            .context("cluster verifier is not configured")?;
+        envelope
+            .current_verification_key(security.peers().as_ref(), chrono::Utc::now().timestamp())?;
         anyhow::ensure!(
             envelope.destination_connection_uuid == self.connection_uuid
                 && envelope.destination_connection_epoch
@@ -1806,10 +2124,7 @@ impl ClusterManager {
             ),
             "cluster source process instance lease is stale or mismatched"
         );
-        if remember_replay {
-            self.remember_envelope_replay(&envelope)?;
-        }
-        Ok(envelope)
+        Ok(())
     }
 
     fn remember_envelope_replay(
@@ -2363,14 +2678,17 @@ impl ClusterManager {
             .delivered)
     }
 
-    /// Signed MIX-only fanout with tri-state capability evidence. Unknown
-    /// resources are reported to the source so it can perform a bounded
-    /// capability wait without charging a business retry attempt.
+    /// Signed MIX-only fanout with tri-state capability evidence. A live
+    /// ingress stanza remains deliberately volatile; a claimed recipient row
+    /// supplies `source` and then requires an exact typed transport hand-off.
+    /// Unknown resources are reported to the source so its ordered row can
+    /// remain pending until a route becomes eligible.
     pub async fn send_to_node_mix(
         &self,
         node_id: &str,
         target_jid: &str,
         stanza: &str,
+        source: Option<crate::outbound::MixDelivery>,
     ) -> Result<NodeDeliveryReceipt> {
         self.send_to_node_receipt(
             node_id,
@@ -2378,6 +2696,8 @@ impl ClusterManager {
             stanza,
             NodeDeliveryOptions {
                 mix_capable_only: true,
+                mix_transport_receipt_required: source.is_some(),
+                mix_delivery: source,
                 ..NodeDeliveryOptions::default()
             },
         )
@@ -2749,8 +3069,8 @@ impl ClusterManager {
             return Ok(());
         };
         let owner = crate::jid::canonicalize_bare(owner)?;
-        if targets.len() > crate::xmpp::xml_util::MAX_BLOCKING_ITEMS
-            || patterns.len() > crate::xmpp::xml_util::MAX_BLOCKING_ITEMS
+        if targets.len() > northstar_xep_0191::MAX_ITEMS
+            || patterns.len() > northstar_xep_0191::MAX_ITEMS
         {
             anyhow::bail!("too many blocking presence targets");
         }
@@ -3071,6 +3391,9 @@ impl ClusterManager {
             let receivers = self
                 .publish_signed(&mut conn, node_id, &channel, payload)
                 .await?;
+            // ACK publication needs the same bounded pool. Keep only the
+            // pending registration while waiting for the remote receipt.
+            drop(conn);
             if receivers == 0 {
                 let error = anyhow::anyhow!("cluster control had no subscriber");
                 self.record_control_plane_failure(&error);
@@ -3141,20 +3464,26 @@ impl ClusterManager {
             );
         }
         if self.health.state.load(Ordering::Acquire) == CLUSTER_DURABLE_DIRECT_ONLY
-            && options.durable_delivery.is_some()
+            && (options.durable_delivery.is_some() || options.mix_delivery.is_some())
         {
             // The PostgreSQL row remains the only accepted projection. The
             // caller observes no live acceptance and leaves it for replay.
             return Ok(NodeDeliveryReceipt::default());
         }
-        self.admit(if options.durable_delivery.is_some() {
-            ClusterOperation::DurableDirect
-        } else {
-            ClusterOperation::VolatileDelivery
-        })?;
+        self.admit(
+            if options.durable_delivery.is_some() || options.mix_delivery.is_some() {
+                ClusterOperation::DurableDirect
+            } else {
+                ClusterOperation::VolatileDelivery
+            },
+        )?;
         let target_jid = crate::jid::canonicalize(target_jid)?;
-        let delivery_contract =
-            outbound_delivery_contract(stanza, &target_jid, options.durable_delivery)?;
+        let delivery_contract = outbound_delivery_contract(
+            stanza,
+            &target_jid,
+            options.durable_delivery,
+            options.mix_delivery,
+        )?;
         if options.exclude_jids.len() > MAX_DELIVERY_EXCLUSIONS {
             anyhow::bail!("too many cluster delivery exclusions");
         }
@@ -3172,6 +3501,10 @@ impl ClusterManager {
                 ))
             })
             .transpose()?;
+        anyhow::ensure!(
+            !(options.transport_receipt_required && options.mix_transport_receipt_required),
+            "cluster delivery cannot combine exact-resource and MIX transport receipts"
+        );
         if options.transport_receipt_required {
             anyhow::ensure!(
                 delivery_contract.is_none()
@@ -3190,6 +3523,31 @@ impl ClusterManager {
                     && exclude_jids.is_empty()
                     && carbon_muc_scope.is_none(),
                 "transport-receipted cluster delivery requires one exact account resource"
+            );
+        }
+        if options.mix_transport_receipt_required {
+            anyhow::ensure!(
+                matches!(
+                    delivery_contract,
+                    Some(NodeDeliveryContract::DurableMix { .. })
+                ) && options.mix_capable_only
+                    && crate::jid::CanonicalJid::parse(&target_jid)?
+                        .resourcepart()
+                        .is_none()
+                    && !options.carbons_only
+                    && !options.blocklist_requested_only
+                    && !options.roster_requested_only
+                    && !options.privacy_requested_only
+                    && !options.primary
+                    && !options.available_only
+                    && !options.available_nonnegative_only
+                    && options.expected_user_id.is_none()
+                    && options.expected_auth_generation.is_none()
+                    && options.roster_version.is_none()
+                    && options.roster_annotated_stanza.is_none()
+                    && exclude_jids.is_empty()
+                    && carbon_muc_scope.is_none(),
+                "MIX transport-receipted cluster delivery requires one exact bare-JID MIX source"
             );
         }
         let legacy_exclude_jid = exclude_jids.first();
@@ -3214,6 +3572,7 @@ impl ClusterManager {
             "privacy_requested_only": options.privacy_requested_only,
             "mix_capable_only": options.mix_capable_only,
             "transport_receipt_required": options.transport_receipt_required,
+            "mix_transport_receipt_required": options.mix_transport_receipt_required,
             "exclude_jid": legacy_exclude_jid,
             "exclude_jids": exclude_jids,
             "request_id": request_id,
@@ -3298,6 +3657,7 @@ impl ClusterManager {
             let receivers = self
                 .publish_signed(&mut conn, node_id, &channel, payload)
                 .await?;
+            drop(conn);
             if receivers == 0 {
                 self.record_control_plane_failure(&anyhow::anyhow!(
                     "cluster delivery had no authoritative subscriber"
@@ -3331,6 +3691,7 @@ impl ClusterManager {
                         require_delivery_contract,
                         mix_capable_only: options.mix_capable_only,
                         transport_receipt_required: options.transport_receipt_required,
+                        mix_transport_receipt_required: options.mix_transport_receipt_required,
                     },
                 ) {
                     return Ok(receipt);
@@ -4461,7 +4822,44 @@ impl ClusterManager {
         let room = crate::jid::canonicalize_bare(room_jid)?;
         let mut conn = pool.get().await?;
         let key = self.key(format!("muc_nodes:{room}"));
-        Ok(conn.smembers(&key).await?)
+        // Fan-out only examines bounded node hints. Full occupant/index
+        // reconciliation belongs to maintenance and explicit room reads.
+        // The allowlist excludes this process, hence the extra local slot.
+        let script = redis::Script::new(
+            r#"
+            if redis.call('scard', KEYS[1]) > tonumber(ARGV[2]) then
+                return redis.error_reply('MUC routing node hint limit exceeded')
+            end
+            local nodes = redis.call('smembers', KEYS[1])
+            for _, node in ipairs(nodes) do
+                if #node == 0 or #node > tonumber(ARGV[3]) then
+                    return redis.error_reply('MUC routing node hint has an invalid length')
+                end
+            end
+            local active = {}
+            local stale = {}
+            for _, node in ipairs(nodes) do
+                if redis.call('get', ARGV[1] .. node .. ':alive') then
+                    table.insert(active, node)
+                else
+                    table.insert(stale, node)
+                end
+            end
+            for _, node in ipairs(stale) do
+                redis.call('srem', KEYS[1], node)
+            end
+            return active
+            "#,
+        );
+        let mut nodes: Vec<String> = script
+            .key(key)
+            .arg(self.key("node:".to_owned()))
+            .arg(crate::cluster_security::MAX_PEERS + 1)
+            .arg(crate::cluster_security::MAX_NODE_ID_BYTES)
+            .invoke_async(&mut *conn)
+            .await?;
+        nodes.sort_unstable();
+        Ok(nodes)
     }
 
     pub async fn send_to_muc(&self, room_jid: &str, stanza: &str) -> Result<()> {
@@ -4566,15 +4964,36 @@ impl ClusterManager {
             "real_sender": real_sender,
         });
         let mut conn = pool.get().await?;
+        self.publish_muc_fan_out(&mut conn, nodes, payload).await
+    }
+
+    async fn publish_muc_fan_out(
+        &self,
+        conn: &mut redis::aio::MultiplexedConnection,
+        nodes: Vec<String>,
+        payload: serde_json::Value,
+    ) -> Result<()> {
+        let mut first_error = None;
         for node_id in nodes {
             if node_id != self.node_id {
                 let channel = self.key(format!("node:{node_id}"));
-                let _ = self
-                    .publish_signed(&mut conn, &node_id, &channel, payload.clone())
-                    .await?;
+                // A destination-specific authority error must not suppress
+                // other recipients. Each attempt still uses publish_signed's
+                // admission gate: global degradation remains fail-closed.
+                if let Err(error) = self
+                    .publish_signed(conn, &node_id, &channel, payload.clone())
+                    .await
+                {
+                    first_error.get_or_insert_with(|| {
+                        error.context(format!("MUC volatile fan-out to node {node_id} failed"))
+                    });
+                }
             }
         }
-        Ok(())
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     pub async fn send_muc_private_from(
@@ -4992,10 +5411,11 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
     if !state.cluster.is_enabled() {
         return Ok(());
     }
-    let reconcile = state.cluster.readiness_error().is_some();
-    if reconcile {
-        state.cluster.begin_reconciliation();
-    }
+    let reconciliation_epoch = if state.cluster.readiness_error().is_some() {
+        Some(state.cluster.begin_reconciliation()?)
+    } else {
+        None
+    };
     // PostgreSQL instance authority is refreshed before Redis ownership. A
     // recovered listener cannot make this node ready while its view of peer
     // process epochs is stale.
@@ -5138,12 +5558,18 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
             tracing::warn!(?error, %room, "could not reconcile Redis MUC room soft-state");
         }
     }
-    if reconcile {
+    if let Some(rotation_epoch) = reconciliation_epoch {
         anyhow::ensure!(
             muc_soft_state_errors == 0,
             "Redis MUC soft-state reconciliation failed for {muc_soft_state_errors} authoritative occupancies"
         );
-        state.cluster.complete_reconciliation()?;
+        if state.cluster.complete_reconciliation(rotation_epoch)?
+            == ReconciliationOutcome::WaitingForInitialListener
+        {
+            // Every database/Redis operation above succeeded. The independent
+            // cluster readiness gate stays closed until the first self-loop.
+            tracing::debug!("cluster authority reconciled; awaiting initial listener self-loop");
+        }
     }
     Ok(())
 }
@@ -5294,20 +5720,26 @@ async fn run_muc_outbox_delivery(
             _ = poll.tick() => {},
             _ = state.cluster.wait_for_muc_outbox_wake() => {},
         }
-        crate::db::expire_cluster_muc_occupancies(&state.pool, 32).await?;
-        crate::db::dead_letter_expired_cluster_muc_outbox(&state.pool, 256).await?;
+        {
+            let _database_turn = state.durable_outbox_database_turn().await;
+            crate::db::expire_cluster_muc_occupancies(&state.pool, 32).await?;
+            crate::db::dead_letter_expired_cluster_muc_outbox(&state.pool, 256).await?;
+        }
         let pass_started = Instant::now();
         'batches: for _ in 0..MUC_OUTBOX_MAX_BATCHES_PER_PASS {
             if cancel.is_cancelled() || pass_started.elapsed() >= MUC_OUTBOX_PASS_BUDGET {
                 break;
             }
-            let deliveries = crate::db::claim_cluster_muc_outbox(
-                &state.pool,
-                &state.cluster.node_id,
-                MUC_OUTBOX_BATCH_SIZE,
-                Duration::from_secs(30),
-            )
-            .await?;
+            let deliveries = {
+                let _database_turn = state.durable_outbox_database_turn().await;
+                crate::db::claim_cluster_muc_outbox(
+                    &state.pool,
+                    &state.cluster.node_id,
+                    MUC_OUTBOX_BATCH_SIZE,
+                    Duration::from_secs(30),
+                )
+                .await?
+            };
             if deliveries.is_empty() {
                 break;
             }
@@ -5327,13 +5759,17 @@ async fn run_muc_outbox_delivery(
                 .and_then(std::convert::identity);
                 match outcome {
                     Ok(()) => {
-                        anyhow::ensure!(
+                        let acknowledged = {
+                            let _database_turn = state.durable_outbox_database_turn().await;
                             crate::db::ack_cluster_muc_outbox(
                                 &state.pool,
                                 delivery.delivery_id,
                                 delivery.claim_token,
                             )
-                            .await?,
+                            .await?
+                        };
+                        anyhow::ensure!(
+                            acknowledged,
                             "cluster MUC outbox ACK lost its exact claim lease"
                         );
                         state
@@ -5349,12 +5785,15 @@ async fn run_muc_outbox_delivery(
                             event_id=%delivery.event_id,
                             "cluster MUC audience delivery will retry with the same stable event ID"
                         );
-                        crate::db::retry_cluster_muc_outbox(
-                            &state.pool,
-                            &delivery,
-                            &error.to_string(),
-                        )
-                        .await?;
+                        {
+                            let _database_turn = state.durable_outbox_database_turn().await;
+                            crate::db::retry_cluster_muc_outbox(
+                                &state.pool,
+                                &delivery,
+                                &error.to_string(),
+                            )
+                            .await?;
+                        }
                         state
                             .metrics
                             .cluster_muc_outbox_retries_total
@@ -5364,16 +5803,25 @@ async fn run_muc_outbox_delivery(
                 heartbeat.ok();
             }
         }
-        crate::db::cleanup_cluster_muc_dead_letters(&state.pool, 256).await?;
+        {
+            let _database_turn = state.durable_outbox_database_turn().await;
+            crate::db::cleanup_cluster_muc_dead_letters(&state.pool, 256).await?;
+        }
         if Instant::now() >= next_history_cleanup {
             // Ninety days is the bounded online idempotency/recovery horizon
             // for experimental clustered room-control events. Active legal
             // holds and outstanding delivery projections make the database
             // cleanup fail closed or skip the protected incarnation.
-            crate::db::cleanup_cluster_muc_history(&state.pool, 90, 256).await?;
+            {
+                let _database_turn = state.durable_outbox_database_turn().await;
+                crate::db::cleanup_cluster_muc_history(&state.pool, 90, 256).await?;
+            }
             next_history_cleanup = Instant::now() + Duration::from_secs(60);
         }
-        let snapshot = crate::db::cluster_muc_outbox_snapshot(&state.pool).await?;
+        let snapshot = {
+            let _database_turn = state.durable_outbox_database_turn().await;
+            crate::db::cluster_muc_outbox_snapshot(&state.pool).await?
+        };
         state.metrics.cluster_muc_outbox_queued.store(
             snapshot.queued_rows.max(0) as u64,
             std::sync::atomic::Ordering::Relaxed,
@@ -5544,9 +5992,12 @@ async fn deliver_cluster_muc_event(
             && payload["event_sequence"].as_i64() == Some(delivery.event_sequence),
         "cluster MUC outbox payload identity is not exactly bound"
     );
-    let context = crate::db::cluster_muc_event_context(&state.pool, delivery.operation_id)
-        .await?
-        .context("cluster MUC outbox operation is missing")?;
+    let context = {
+        let _database_turn = state.durable_outbox_database_turn().await;
+        crate::db::cluster_muc_event_context(&state.pool, delivery.operation_id)
+            .await?
+            .context("cluster MUC outbox operation is missing")?
+    };
     anyhow::ensure!(
         context.room_epoch == delivery.room_epoch,
         "cluster MUC outbox room epoch is stale"
@@ -5585,10 +6036,16 @@ async fn deliver_cluster_muc_event(
         // is written to the socket. Reconstruct only an endpoint from the
         // immutable outbox audience tuple; never revive membership or trust a
         // Redis nickname cache. The stable event ID remains the retry key.
-        let snapshot =
-            crate::db::cluster_muc_delivery_recipient_snapshot(&state.pool, delivery).await?;
+        let snapshot = {
+            let _database_turn = state.durable_outbox_database_turn().await;
+            crate::db::cluster_muc_delivery_recipient_snapshot(&state.pool, delivery).await?
+        };
         let Some(snapshot) = snapshot else {
-            if crate::db::cluster_muc_delivery_audience_is_current(&state.pool, delivery).await? {
+            let audience_is_current = {
+                let _database_turn = state.durable_outbox_database_turn().await;
+                crate::db::cluster_muc_delivery_audience_is_current(&state.pool, delivery).await?
+            };
+            if audience_is_current {
                 anyhow::bail!("authoritative MUC audience snapshot disappeared");
             }
             return Ok(());
@@ -5697,15 +6154,25 @@ async fn deliver_cluster_muc_event(
         }
         "leave" | "expire" | "account_delete" => {
             let target = target.context("MUC departure event has no exact target")?;
+            let self_presence = target.full_jid == recipient.full_jid;
             stanzas.push(crate::xmpp::xml_util::muc_presence_stanza(
                 &target,
                 &recipient.full_jid,
                 true,
-                target.full_jid == recipient.full_jid,
+                self_presence,
                 false,
                 Some(&event_id),
                 context.room_non_anonymous || recipient.role == "moderator",
             ));
+            if self_presence {
+                let target_key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &target.nick);
+                state.remove_live_muc_membership(&target);
+                state.muc_occupants.remove_if(&target_key, |_, current| {
+                    current.full_jid == target.full_jid
+                        && current.cluster_epoch == target.cluster_epoch
+                        && current.connection_id == target.connection_id
+                });
+            }
         }
         "suspend" => {
             // XEP-0198 suspension retains membership until its PG lease
@@ -5728,11 +6195,12 @@ async fn deliver_cluster_muc_event(
                     .into_iter()
                     .find_map(|(_, actor)| (actor.full_jid == full).then_some(actor.nick))
             });
+            let self_presence = target.full_jid == recipient.full_jid;
             stanzas.push(crate::xmpp::xml_util::muc_presence_stanza_with_status(
                 &target,
                 &recipient.full_jid,
                 true,
-                target.full_jid == recipient.full_jid,
+                self_presence,
                 false,
                 Some(&event_id),
                 true,
@@ -5740,6 +6208,15 @@ async fn deliver_cluster_muc_event(
                 actor_nick.as_deref(),
                 reason,
             ));
+            if self_presence {
+                let target_key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &target.nick);
+                state.remove_live_muc_membership(&target);
+                state.muc_occupants.remove_if(&target_key, |_, current| {
+                    current.full_jid == target.full_jid
+                        && current.cluster_epoch == target.cluster_epoch
+                        && current.connection_id == target.connection_id
+                });
+            }
         }
         "destroy" | "locked_expiry" => {
             let alternate = context.details["alternate_jid"].as_str();
@@ -5834,14 +6311,17 @@ async fn deliver_cluster_muc_event(
         let ordinal =
             i32::try_from(ordinal).context("MUC event has too many stanza projections")?;
         let stable_item_id = format!("{}:{ordinal}", delivery.event_id);
-        if crate::db::cluster_muc_delivery_item_completed(
-            &state.pool,
-            delivery.delivery_id,
-            ordinal,
-            &stable_item_id,
-        )
-        .await?
-        {
+        let completed = {
+            let _database_turn = state.durable_outbox_database_turn().await;
+            crate::db::cluster_muc_delivery_item_completed(
+                &state.pool,
+                delivery.delivery_id,
+                ordinal,
+                &stable_item_id,
+            )
+            .await?
+        };
+        if completed {
             continue;
         }
         anyhow::ensure!(
@@ -5850,16 +6330,192 @@ async fn deliver_cluster_muc_event(
                 .await?,
             "exact MUC audience transport did not reach a durable ownership/write boundary"
         );
-        anyhow::ensure!(
+        let completed = {
+            let _database_turn = state.durable_outbox_database_turn().await;
             crate::db::complete_cluster_muc_delivery_item(
                 &state.pool,
                 delivery,
                 ordinal,
                 &stable_item_id,
             )
-            .await?,
+            .await?
+        };
+        anyhow::ensure!(
+            completed,
             "cluster MUC delivery item lost its stable ordinal identity"
         );
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct ListenerContinuations {
+    pending: VecDeque<BoxFuture<'static, Result<()>>>,
+}
+
+impl ListenerContinuations {
+    fn push(
+        &mut self,
+        work: impl std::future::Future<Output = Result<()>> + Send + 'static,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.pending.len() < MAX_LISTENER_CONTINUATIONS,
+            "Redis listener response continuation capacity exceeded"
+        );
+        self.pending.push_back(work.boxed());
+        Ok(())
+    }
+
+    async fn next(&mut self) -> Option<Result<()>> {
+        // Poll only the first response batch, preserving remote presence
+        // transition order. Cancelling this wait leaves that batch in place.
+        let result = self.pending.front_mut()?.await;
+        self.pending.pop_front();
+        Some(result)
+    }
+}
+
+struct ListenerResponse {
+    node_id: String,
+    recipient: String,
+    stanza: String,
+    presence_authority: Option<ClusterPresenceAuthority>,
+}
+
+#[derive(Default)]
+struct ListenerResponses {
+    items: Vec<ListenerResponse>,
+    bytes: usize,
+}
+
+impl ListenerResponses {
+    fn push(&mut self, response: ListenerResponse) -> Result<()> {
+        let bytes = self
+            .bytes
+            .saturating_add(response.node_id.len())
+            .saturating_add(response.recipient.len())
+            .saturating_add(response.stanza.len());
+        anyhow::ensure!(
+            self.items.len() < MAX_PENDING_CLUSTER_ACKS && bytes <= MAX_CLUSTER_PAYLOAD_BYTES,
+            "Redis listener response batch exceeded its count or byte budget"
+        );
+        self.items.push(response);
+        self.bytes = bytes;
+        Ok(())
+    }
+}
+
+struct ListenerCommandAuthority {
+    generation: u64,
+    rotation_epoch: u64,
+    envelope: crate::cluster_security::SignedClusterEnvelope,
+}
+
+impl ListenerCommandAuthority {
+    fn validate(&self, cluster: &ClusterManager) -> Result<()> {
+        validate_listener_generation(cluster, self.generation, self.rotation_epoch)?;
+        // Recheck expiry and current source key/process authority after deferred
+        // work. Replay admission already happened once in the reader.
+        cluster.validate_verified_envelope(&self.envelope)?;
+        Ok(())
+    }
+}
+
+fn validate_listener_generation(
+    cluster: &ClusterManager,
+    generation: u64,
+    rotation_epoch: u64,
+) -> Result<()> {
+    let _transition = cluster
+        .health
+        .failure_since
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    anyhow::ensure!(
+        cluster.health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED
+            && cluster
+                .health
+                .listener_rotation_epoch
+                .load(Ordering::Acquire)
+                == rotation_epoch
+            && cluster.health.listener_generation.load(Ordering::Acquire) == generation
+            && !cluster.health.listener_requires_rotation(generation),
+        "Redis listener response belongs to a retired listener generation"
+    );
+    Ok(())
+}
+
+async fn publish_listener_ack(
+    cluster: &ClusterManager,
+    source_node: &str,
+    ack: NodeDeliveryAck,
+    authority: &ListenerCommandAuthority,
+) -> Result<()> {
+    if let Some(pool) = &cluster.pool {
+        let mut conn = pool.get().await?;
+        authority.validate(cluster)?;
+        let ack_channel = cluster.key(format!("node:{source_node}"));
+        cluster
+            .publish_signed(
+                &mut conn,
+                source_node,
+                &ack_channel,
+                serde_json::to_value(ack)?,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+async fn complete_listener_responses(
+    state: Arc<AppState>,
+    authority: ListenerCommandAuthority,
+    responses: ListenerResponses,
+    source_node: String,
+    mut ack: Option<NodeDeliveryAck>,
+) -> Result<()> {
+    for response in responses.items {
+        authority.validate(&state.cluster)?;
+        let result = if let Some(presence_authority) = response.presence_authority {
+            state
+                .cluster
+                .send_to_node_current_presence_replay(
+                    &response.node_id,
+                    &response.recipient,
+                    &response.stanza,
+                    presence_authority,
+                )
+                .await
+        } else {
+            state
+                .cluster
+                .send_to_node_available_presence(
+                    &response.node_id,
+                    &response.recipient,
+                    &response.stanza,
+                )
+                .await
+        };
+        match result {
+            Ok(accepted) => {
+                if let Some(ack) = &mut ack {
+                    ack.delivered += usize::from(accepted);
+                }
+            }
+            Err(error) => {
+                if response.presence_authority.is_some() {
+                    state
+                        .metrics
+                        .cluster_presence_probe_failures_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                return Err(error.context("cluster listener remote presence response failed"));
+            }
+        }
+    }
+    authority.validate(&state.cluster)?;
+    if let Some(ack) = ack {
+        publish_listener_ack(&state.cluster, &source_node, ack, &authority).await?;
     }
     Ok(())
 }
@@ -5874,6 +6530,13 @@ async fn listen_once(
         .client
         .as_ref()
         .context("Redis listener started without a configured Redis client")?;
+    // Register before any setup await: repeated failures can request rotation
+    // without increasing the required generation again, so a fresh notified()
+    // inside the loop could miss their notify_waiters() call.
+    let rotation = state.cluster.listener_rotation.notified();
+    tokio::pin!(rotation);
+    rotation.as_mut().enable();
+    let (candidate_generation, rotation_epoch) = state.cluster.health.begin_listener_attempt();
     let mut redis_setup_timer = Some(state.metrics.redis_operation_duration_seconds.start_timer());
     let mut pubsub_conn = open_pubsub(client).await?;
     let channel = state.cluster.key(format!("node:{}", state.cluster.node_id));
@@ -5898,24 +6561,25 @@ async fn listen_once(
         Duration::from_secs(15),
     );
     liveness.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // No spawned tasks: dropping this listener synchronously drops every
+    // outstanding receipt registration before a replacement listener starts.
+    let mut continuations = ListenerContinuations::default();
 
     enum ListenerInput {
         ProbeDue,
         ProbeTimedOut,
         Message(Option<redis::Msg>),
+        ResponseComplete(Option<Result<()>>),
     }
 
     loop {
+        // This connection must be allowed to receive its initial self-loop
+        // before publishing its generation. Comparing the last completed
+        // generation here would reject every startup and recovery attempt.
         if state
             .cluster
             .health
-            .listener_generation
-            .load(Ordering::Acquire)
-            < state
-                .cluster
-                .health
-                .required_listener_generation
-                .load(Ordering::Acquire)
+            .listener_requires_rotation(candidate_generation)
         {
             anyhow::bail!("Redis PubSub listener rotation was requested");
         }
@@ -5924,10 +6588,12 @@ async fn listen_once(
             .map(|(_, deadline, _)| *deadline)
             .unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(86_400));
         let input = tokio::select! {
+            biased;
             _ = cancel.cancelled() => return Ok(()),
-            _ = state.cluster.listener_rotation.notified() => {
+            _ = &mut rotation => {
                 anyhow::bail!("Redis PubSub listener rotation was requested");
             }
+            result = continuations.next(), if !continuations.pending.is_empty() => ListenerInput::ResponseComplete(result),
             _ = liveness.tick() => ListenerInput::ProbeDue,
             _ = tokio::time::sleep_until(probe_deadline), if pending_probe.is_some() => {
                 ListenerInput::ProbeTimedOut
@@ -5935,6 +6601,10 @@ async fn listen_once(
             message = stream.next() => ListenerInput::Message(message),
         };
         let message = match input {
+            ListenerInput::ResponseComplete(result) => {
+                result.context("Redis listener response set ended unexpectedly")??;
+                continue;
+            }
             ListenerInput::ProbeDue => {
                 anyhow::ensure!(
                     pending_probe.is_none(),
@@ -5968,7 +6638,9 @@ async fn listen_once(
             {
                 let (_, _, establishing) = pending_probe.take().expect("probe was present");
                 if establishing {
-                    state.cluster.note_listener_generation();
+                    state
+                        .cluster
+                        .confirm_listener_generation(candidate_generation, rotation_epoch)?;
                     drop(redis_setup_timer.take());
                 }
                 heartbeat.ok();
@@ -5979,6 +6651,15 @@ async fn listen_once(
             received_channel == channel,
             "Redis PubSub listener received an unexpected channel"
         );
+        if pending_probe
+            .as_ref()
+            .is_some_and(|(_, _, establishing)| *establishing)
+        {
+            // Do not consume signature replay records or execute node commands
+            // until this subscription has proved its own publish/receive path.
+            // Durable deliveries remain eligible for their normal retry.
+            continue;
+        }
         let envelope = match state
             .cluster
             .verify_signed_payload_persisted(&payload, &channel, None)
@@ -5992,16 +6673,20 @@ async fn listen_once(
         };
         let protocol_version = envelope.version;
         let envelope_kind = envelope.kind;
-        let source_node = envelope.source_node;
-        let json = envelope.payload;
+        let source_node = envelope.source_node.clone();
+        validate_listener_generation(&state.cluster, candidate_generation, rotation_epoch)?;
         if envelope_kind == crate::cluster_security::ClusterCommandKind::Ack {
-            if !state.cluster.dispatch_pending_ack(&source_node, json) {
+            if !state
+                .cluster
+                .dispatch_pending_ack(&source_node, envelope.payload)
+            {
                 state.cluster.note_authentication_failure(&anyhow::anyhow!(
                     "cluster acknowledgement had no exact pending request"
                 ));
             }
             continue;
         }
+        let json = &envelope.payload;
         let Some(target) = json["target"].as_str() else {
             continue;
         };
@@ -6010,9 +6695,11 @@ async fn listen_once(
         let mut mix_supported = 0usize;
         let mut mix_unsupported = 0usize;
         let mut mix_unknown = 0usize;
+        let mut mix_handoff = None;
         let mut control_processed = None;
         let mut control_outcome = None;
         let mut acknowledged_delivery = None;
+        let mut responses = ListenerResponses::default();
         let is_muc = json["muc_broadcast"].as_bool().unwrap_or(false);
         let is_muc_presence = json["muc_presence"].as_bool().unwrap_or(false);
         let is_muc_nickname_change = json["muc_nickname_change"].as_bool().unwrap_or(false);
@@ -6192,7 +6879,7 @@ async fn listen_once(
                 .as_str()
                 .and_then(|recipient| crate::jid::canonicalize(recipient).ok());
             let availability_only = json["availability_only"].as_bool().unwrap_or(false);
-            let authority = match presence_authority(&json) {
+            let authority = match presence_authority(json) {
                 Ok(Some(authority)) => Some(authority),
                 Ok(None) => {
                     state.cluster.note_authentication_failure(&anyhow::anyhow!(
@@ -6230,7 +6917,7 @@ async fn listen_once(
                     .avatar_hash(authority.owner_id)
                     .await
                     .ok();
-                let mut responses = Vec::new();
+                let mut presences = Vec::new();
                 for (owner_full, session) in state.session_entries_for(&owner) {
                     if session.user_id != authority.owner_id
                         || session.auth_generation != authority.owner_auth_generation
@@ -6303,11 +6990,11 @@ async fn listen_once(
                                 .finish()
                             })
                     };
-                    responses.push(presence);
+                    presences.push(presence);
                 }
 
                 let mut processed = true;
-                for presence in responses {
+                for presence in presences {
                     for (_, recipient_session) in state
                         .session_entries_for(&recipient)
                         .into_iter()
@@ -6337,23 +7024,12 @@ async fn listen_once(
                                 if node_id == state.cluster.node_id {
                                     continue;
                                 }
-                                match state
-                                    .cluster
-                                    .send_to_node_current_presence_replay(
-                                        &node_id, &recipient, &presence, authority,
-                                    )
-                                    .await
-                                {
-                                    Ok(accepted) => delivered += usize::from(accepted),
-                                    Err(error) => {
-                                        processed = false;
-                                        state
-                                            .metrics
-                                            .cluster_presence_probe_failures_total
-                                            .fetch_add(1, Ordering::Relaxed);
-                                        tracing::warn!(?error, %owner, %recipient, %node_id, "cross-node initial-presence response failed");
-                                    }
-                                }
+                                responses.push(ListenerResponse {
+                                    node_id,
+                                    recipient: recipient.clone(),
+                                    stanza: presence.clone(),
+                                    presence_authority: Some(authority),
+                                })?;
                             }
                         }
                         Err(error) => {
@@ -6372,7 +7048,7 @@ async fn listen_once(
             let owner = crate::jid::canonicalize_bare(target).ok();
             let targets = json["blocking_targets"]
                 .as_array()
-                .filter(|items| items.len() <= crate::xmpp::xml_util::MAX_BLOCKING_ITEMS)
+                .filter(|items| items.len() <= northstar_xep_0191::MAX_ITEMS)
                 .and_then(|items| {
                     items
                         .iter()
@@ -6384,7 +7060,7 @@ async fn listen_once(
                 });
             let patterns = json["blocking_patterns"]
                 .as_array()
-                .filter(|items| items.len() <= crate::xmpp::xml_util::MAX_BLOCKING_ITEMS)
+                .filter(|items| items.len() <= northstar_xep_0191::MAX_ITEMS)
                 .and_then(|items| {
                     items
                         .iter()
@@ -6395,14 +7071,22 @@ async fn listen_once(
                         .collect::<Option<Vec<_>>>()
                 });
             if let (Some(owner), Some(targets), Some(patterns)) = (owner, targets, patterns) {
-                crate::xmpp::protocol::blocking::deliver_blocking_presence_change(
+                crate::xmpp::protocol::blocking::deliver_blocking_presence_change_with_remote(
                     &state,
                     &owner,
                     &targets,
                     &patterns,
                     json["available"].as_bool().unwrap_or(false),
+                    |node_id, recipient, stanza| {
+                        std::future::ready(responses.push(ListenerResponse {
+                            node_id,
+                            recipient,
+                            stanza,
+                            presence_authority: None,
+                        }))
+                    },
                 )
-                .await;
+                .await?;
             }
         } else if is_sm_muc_teardown {
             let parsed = json["sm_session_id"]
@@ -6661,7 +7345,7 @@ async fn listen_once(
                 );
                 continue;
             }
-            let parsed_presence_authority = match presence_authority(&json) {
+            let parsed_presence_authority = match presence_authority(json) {
                 Ok(authority) => authority,
                 Err(error) => {
                     state.cluster.note_authentication_failure(&error);
@@ -6728,7 +7412,7 @@ async fn listen_once(
             let (resolved_message_delivery, direct_delivery_contract_valid) = if !is_muc
                 && !is_muc_private
             {
-                match requested_node_message_delivery(&json, is_message_stanza) {
+                match requested_node_message_delivery(json, is_message_stanza) {
                     Ok(Some(request)) => {
                         match resolve_node_message_delivery(&state.pool, request, stanza, target)
                             .await
@@ -6909,8 +7593,14 @@ async fn listen_once(
                     Some(serde_json::Value::Bool(value)) => *value,
                     Some(_) => continue,
                 };
-                let exclude_jids = delivery_exclusions(&json);
-                let Ok(carbon_muc_scope) = delivery_carbon_muc_scope(&json) else {
+                let mix_transport_receipt_required =
+                    match json.get("mix_transport_receipt_required") {
+                        None => false,
+                        Some(serde_json::Value::Bool(value)) => *value,
+                        Some(_) => continue,
+                    };
+                let exclude_jids = delivery_exclusions(json);
+                let Ok(carbon_muc_scope) = delivery_carbon_muc_scope(json) else {
                     continue;
                 };
                 let primary_one_to_one = json["primary_one_to_one"].as_bool().unwrap_or(false);
@@ -6953,6 +7643,62 @@ async fn listen_once(
                 {
                     continue;
                 }
+                // This is intentionally a separate contract from the
+                // exact-resource policy/PAM receipt above. A durable MIX
+                // event is a bare-JID message, is routed only to resources
+                // with verified MIX support, and may be acknowledged after
+                // any one such resource obtains true transport ownership.
+                // Reject every other combination rather than letting a
+                // signed-but-malformed payload silently downgrade to an
+                // in-memory `try_send` acknowledgement.
+                if mix_transport_receipt_required
+                    && (transport_receipt_required
+                        || !is_message_stanza
+                        || !matches!(
+                            resolved_message_delivery,
+                            Some(ResolvedNodeMessageDelivery::Mix(_))
+                        )
+                        || !mix_capable_only
+                        || crate::jid::CanonicalJid::parse(target)
+                            .map_or(true, |jid| jid.resourcepart().is_some())
+                        || carbons_only
+                        || blocklist_requested_only
+                        || roster_requested_only
+                        || privacy_requested_only
+                        || primary_one_to_one
+                        || available_only
+                        || available_nonnegative_only
+                        || expected_user_id.is_some()
+                        || expected_auth_generation.is_some()
+                        || roster_version.is_some()
+                        || roster_annotated_stanza.is_some()
+                        || !exclude_jids.is_empty()
+                        || carbon_muc_scope.is_some())
+                {
+                    continue;
+                }
+                // A typed MIX contract is never a hint.  Requiring the
+                // matching receipt flag in both directions prevents a
+                // signed-but-malformed command from taking the volatile
+                // queue branch while carrying a live recipient lease.
+                if matches!(
+                    resolved_message_delivery,
+                    Some(ResolvedNodeMessageDelivery::Mix(_))
+                ) != mix_transport_receipt_required
+                {
+                    continue;
+                }
+                let mix_request_id = if mix_transport_receipt_required {
+                    match json["request_id"]
+                        .as_str()
+                        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                    {
+                        Some(request_id) => Some(request_id),
+                        None => continue,
+                    }
+                } else {
+                    None
+                };
                 let mut targets = state.session_entries_for(target);
                 if (primary_one_to_one || available_only || available_nonnegative_only)
                     && !target.contains('/')
@@ -7051,7 +7797,19 @@ async fn listen_once(
                             {
                                 Some(durable)
                             }
-                            Some(ResolvedNodeMessageDelivery::Durable(_)) | None => continue,
+                            Some(ResolvedNodeMessageDelivery::Durable(_))
+                            | Some(ResolvedNodeMessageDelivery::Mix(_))
+                            | None => None,
+                        }
+                    } else {
+                        None
+                    };
+                    let mix_delivery = if is_message_stanza {
+                        match resolved_message_delivery {
+                            Some(ResolvedNodeMessageDelivery::Mix(source)) => Some(source),
+                            Some(ResolvedNodeMessageDelivery::Volatile)
+                            | Some(ResolvedNodeMessageDelivery::Durable(_))
+                            | None => None,
                         }
                     } else {
                         None
@@ -7068,9 +7826,13 @@ async fn listen_once(
                             delivery.clone(),
                             annotated,
                         ) {
-                            crate::services::roster::RosterPushDisposition::NotInterested => false,
-                            crate::services::roster::RosterPushDisposition::Buffered => true,
-                            crate::services::roster::RosterPushDisposition::Deliver(stanza) => {
+                            northstar_roster_application::RosterPushDisposition::NotInterested => {
+                                false
+                            }
+                            northstar_roster_application::RosterPushDisposition::Buffered => true,
+                            northstar_roster_application::RosterPushDisposition::Deliver(
+                                stanza,
+                            ) => {
                                 if session.sender.try_send(stanza).is_ok() {
                                     true
                                 } else {
@@ -7079,9 +7841,83 @@ async fn listen_once(
                                     false
                                 }
                             }
-                            crate::services::roster::RosterPushDisposition::Overflow => {
+                            northstar_roster_application::RosterPushDisposition::Overflow => {
                                 session.sender.disconnect_backpressured_transport();
                                 session.disconnect.cancel();
+                                false
+                            }
+                        }
+                    } else if let (Some(source), Some(request_id)) = (mix_delivery, mix_request_id)
+                    {
+                        // Rotate the signed source into this node's durable
+                        // fence before putting it on a local C2S output.  No
+                        // acknowledgement is emitted until that output has
+                        // itself transferred to its socket/SM/BOSH owner.
+                        let remote_source = match state
+                            .mix_service()
+                            .transfer_mix_delivery_to_cluster(
+                                source,
+                                &state.cluster.node_id,
+                                request_id,
+                                MIX_CLUSTER_HANDOFF_TTL_SECONDS,
+                            )
+                            .await
+                        {
+                            Ok(source) => source,
+                            Err(error) => {
+                                tracing::warn!(
+                                    ?error,
+                                    delivery_id = %source.delivery_id,
+                                    "failed to establish remote MIX ownership fence"
+                                );
+                                break;
+                            }
+                        };
+                        match try_send_cluster_mix_transport(
+                            &session.sender,
+                            &session.disconnect,
+                            delivery.clone(),
+                            remote_source,
+                        )
+                        .await
+                        {
+                            Ok(crate::outbound::MixTransportCompletion::SocketFenced {
+                                ..
+                            }) => {
+                                mix_handoff = Some(ClusterMixHandoff::SocketFenced);
+                                true
+                            }
+                            Ok(crate::outbound::MixTransportCompletion::SmPersisted { .. }) => {
+                                mix_handoff = Some(ClusterMixHandoff::SmPersisted);
+                                true
+                            }
+                            Ok(crate::outbound::MixTransportCompletion::BoshPersisted {
+                                ..
+                            }) => {
+                                mix_handoff = Some(ClusterMixHandoff::BoshPersisted);
+                                true
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    ?error,
+                                    delivery_id = %remote_source.delivery_id,
+                                    "remote MIX transport failed before durable ownership"
+                                );
+                                if let Err(release_error) = state
+                                    .mix_service()
+                                    .release_mix_cluster_delivery(
+                                        remote_source,
+                                        &state.cluster.node_id,
+                                        request_id,
+                                    )
+                                    .await
+                                {
+                                    tracing::error!(
+                                        ?release_error,
+                                        delivery_id = %remote_source.delivery_id,
+                                        "failed to release unowned remote MIX hand-off"
+                                    );
+                                }
                                 false
                             }
                         }
@@ -7092,7 +7928,7 @@ async fn listen_once(
                             .try_send_with_transport_receipt(delivery.clone(), receipt_tx)
                         {
                             Ok(()) => match tokio::time::timeout(
-                                Duration::from_millis(500),
+                                DELIVERY_TRANSPORT_RECEIPT_TIMEOUT,
                                 receipt_rx.recv(),
                             )
                             .await
@@ -7121,7 +7957,7 @@ async fn listen_once(
                     };
                     if accepted {
                         if is_message_stanza {
-                            let counter = if durable_delivery.is_some() {
+                            let counter = if durable_delivery.is_some() || mix_delivery.is_some() {
                                 &state.metrics.online_queue_durable_acceptances_total
                             } else {
                                 &state.metrics.online_queue_volatile_acceptances_total
@@ -7130,7 +7966,7 @@ async fn listen_once(
                         }
                         delivered += 1;
                         accepted_full_jid.get_or_insert(jid);
-                        if primary_one_to_one {
+                        if primary_one_to_one || mix_delivery.is_some() {
                             break;
                         }
                     }
@@ -7138,40 +7974,59 @@ async fn listen_once(
             }
         }
 
-        if let Some(request_id) = json["request_id"].as_str() {
-            if uuid::Uuid::parse_str(request_id).is_err() {
-                continue;
-            }
-            if let Some(pool) = &state.cluster.pool {
-                let mut conn = pool.get().await?;
-                let ack_channel = state.cluster.key(format!("node:{source_node}"));
-                if let Some(nonce) = json["ack_nonce"]
+        let ack = json["request_id"]
+            .as_str()
+            .filter(|request_id| uuid::Uuid::parse_str(request_id).is_ok())
+            .zip(
+                json["ack_nonce"]
                     .as_str()
-                    .filter(|nonce| (32..=128).contains(&nonce.len()))
-                {
-                    let ack = NodeDeliveryAck {
-                        request_id: request_id.to_owned(),
-                        nonce: nonce.to_owned(),
-                        node_id: state.cluster.node_id.clone(),
-                        delivered,
-                        accepted_full_jid,
-                        mix_supported,
-                        mix_unsupported,
-                        mix_unknown,
-                        control_processed,
-                        control_outcome,
-                        delivery: acknowledged_delivery,
-                    };
-                    let ack_payload = serde_json::to_value(&ack)?;
-                    let _ = state
-                        .cluster
-                        .publish_signed(&mut conn, &source_node, &ack_channel, ack_payload)
-                        .await?;
-                }
+                    .filter(|nonce| (32..=128).contains(&nonce.len())),
+            )
+            .map(|(request_id, nonce)| NodeDeliveryAck {
+                request_id: request_id.to_owned(),
+                nonce: nonce.to_owned(),
+                node_id: state.cluster.node_id.clone(),
+                delivered,
+                accepted_full_jid,
+                mix_supported,
+                mix_unsupported,
+                mix_unknown,
+                control_processed,
+                control_outcome,
+                delivery: acknowledged_delivery,
+                mix_handoff,
+            });
+        let authority = ListenerCommandAuthority {
+            generation: candidate_generation,
+            rotation_epoch,
+            envelope,
+        };
+        if responses.items.is_empty() {
+            if let Some(ack) = ack {
+                publish_listener_ack(&state.cluster, &source_node, ack, &authority).await?;
             }
+        } else {
+            // Only remote receipt waits leave the sequential command turn.
+            // Both peers can therefore execute each other's leaf deliveries
+            // even when they simultaneously handle presence probes.
+            continuations.push(complete_listener_responses(
+                state.clone(),
+                authority,
+                responses,
+                source_node,
+                ack,
+            ))?;
         }
     }
 }
+
+#[cfg(test)]
+#[path = "cluster_listener_continuation_tests.rs"]
+mod listener_continuation_tests;
+
+#[cfg(test)]
+#[path = "cluster_muc_routing_tests.rs"]
+mod muc_routing_tests;
 
 #[cfg(test)]
 mod tests {
@@ -7238,7 +8093,7 @@ mod tests {
         ));
     }
 
-    fn verification_manager(
+    pub(super) fn verification_manager(
         namespace: &str,
         security: Arc<crate::cluster_security::ClusterSecurityConfig>,
     ) -> ClusterManager {
@@ -7265,6 +8120,244 @@ mod tests {
             pending_ack_slots: Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_CLUSTER_ACKS)),
             pending_acks: Arc::new(dashmap::DashMap::new()),
         }
+    }
+
+    pub(super) fn listener_health_manager() -> ClusterManager {
+        let namespace = "listener-health.test";
+        let (_, security) = crate::cluster_security::test_configuration_pair(namespace);
+        let mut manager = verification_manager(namespace, security);
+        // A lazy, unused pool enables the health policy without opening Redis.
+        let client = redis::Client::open("redis://127.0.0.1:1").unwrap();
+        manager.pool =
+            Some(cluster_pool_builder().build_unchecked(RedisConnectionManager { client }));
+        manager.health = Arc::new(ClusterHealth::enabled());
+        manager
+    }
+
+    #[tokio::test]
+    async fn listener_generation_requires_proof_at_startup_and_after_failure() {
+        let manager = listener_health_manager();
+        let initial = manager.health.next_listener_generation();
+        assert_eq!(initial, 1);
+        assert!(!manager.health.listener_requires_rotation(initial));
+        assert_eq!(
+            manager.complete_reconciliation(0).unwrap(),
+            ReconciliationOutcome::WaitingForInitialListener
+        );
+        assert!(manager.readiness_error().is_some());
+
+        // Only the successfully matched initial self-loop publishes this.
+        manager.note_listener_generation();
+        assert!(manager.readiness_error().is_none());
+        manager.record_listener_failure(&anyhow::anyhow!("lost initial subscription"));
+        assert!(manager.health.listener_requires_rotation(initial));
+        assert!(manager.readiness_error().is_some());
+
+        let replacement = manager.health.next_listener_generation();
+        assert_eq!(replacement, initial + 1);
+        assert!(!manager.health.listener_requires_rotation(replacement));
+        let recovery_epoch = manager.begin_reconciliation().unwrap();
+        assert!(manager.complete_reconciliation(recovery_epoch).is_err());
+        manager.note_listener_generation();
+        // A recovery also needs maintenance reconciliation, unlike startup.
+        assert!(manager.readiness_error().is_some());
+        assert_eq!(
+            manager.complete_reconciliation(recovery_epoch).unwrap(),
+            ReconciliationOutcome::Complete
+        );
+        assert!(manager.readiness_error().is_none());
+
+        // A concurrent later failure must fence even the proven replacement.
+        manager.record_listener_failure(&anyhow::anyhow!("lost replacement subscription"));
+        assert!(manager.health.listener_requires_rotation(replacement));
+        assert!(manager.complete_reconciliation(recovery_epoch).is_err());
+        assert!(manager.readiness_error().is_some());
+    }
+
+    #[tokio::test]
+    async fn maintenance_before_initial_probe_waits_without_invalidating_the_subscription() {
+        let manager = listener_health_manager();
+        let (candidate, listener_epoch) = manager.health.begin_listener_attempt();
+        let initial_timer = *manager.health.failure_since.lock().unwrap();
+        assert!(initial_timer.is_some());
+        for _ in 0..2 {
+            // All maintenance I/O has succeeded, but its listener has not yet
+            // received the initial self-loop. Repeating this order is benign.
+            let maintenance_epoch = manager.begin_reconciliation().unwrap();
+            assert_eq!(
+                manager.complete_reconciliation(maintenance_epoch).unwrap(),
+                ReconciliationOutcome::WaitingForInitialListener
+            );
+            assert!(manager.readiness_error().is_some());
+            assert_eq!(
+                manager.health.listener_generation.load(Ordering::Acquire),
+                0
+            );
+            assert_eq!(
+                manager
+                    .health
+                    .listener_rotation_epoch
+                    .load(Ordering::Acquire),
+                listener_epoch
+            );
+            assert_eq!(
+                manager.health.degraded_transitions.load(Ordering::Acquire),
+                0
+            );
+            assert_eq!(*manager.health.failure_since.lock().unwrap(), initial_timer);
+        }
+        manager
+            .confirm_listener_generation(candidate, listener_epoch)
+            .unwrap();
+        assert!(manager.readiness_error().is_none());
+        assert!(manager.health.failure_since.lock().unwrap().is_none());
+
+        // Once a real failure has happened, an unproved subscription is no
+        // longer the benign initial wait even if completed/required stay 0/1.
+        let failed_manager = listener_health_manager();
+        failed_manager.record_listener_failure(&anyhow::anyhow!("real startup Redis failure"));
+        let failure_epoch = failed_manager.begin_reconciliation().unwrap();
+        assert!(failed_manager
+            .complete_reconciliation(failure_epoch)
+            .is_err());
+        assert!(failed_manager.readiness_error().is_some());
+    }
+
+    #[tokio::test]
+    async fn listener_rotation_during_setup_is_retained_without_generation_increment() {
+        let manager = listener_health_manager();
+        let rotation = manager.listener_rotation.notified();
+        tokio::pin!(rotation);
+        rotation.as_mut().enable();
+        let candidate = manager.health.next_listener_generation();
+        // Both failures happen during setup, before the listener first polls.
+        manager.record_listener_failure(&anyhow::anyhow!("setup authority failure"));
+        manager.record_listener_failure(&anyhow::anyhow!("repeated setup failure"));
+        assert_eq!(candidate, 1);
+        assert!(!manager.health.listener_requires_rotation(candidate));
+        assert_eq!(
+            manager.health.listener_generation.load(Ordering::Acquire),
+            0
+        );
+        tokio::time::timeout(Duration::from_millis(100), &mut rotation)
+            .await
+            .expect("setup lost the requested rotation because its generation was unchanged");
+        assert!(manager.readiness_error().is_some());
+    }
+
+    #[tokio::test]
+    async fn listener_selected_probe_cannot_confirm_after_same_generation_failure() {
+        let manager = listener_health_manager();
+        let (candidate, epoch) = manager.health.begin_listener_attempt();
+        // Insert the failure after stream.next selected the initial probe but
+        // before confirmation. The required generation stays at one.
+        manager.record_listener_failure(&anyhow::anyhow!("failure after probe selection"));
+        assert!(!manager.health.listener_requires_rotation(candidate));
+        assert!(manager
+            .confirm_listener_generation(candidate, epoch)
+            .is_err());
+        assert_eq!(
+            manager.health.listener_generation.load(Ordering::Acquire),
+            0
+        );
+        assert!(manager.complete_reconciliation(epoch).is_err());
+
+        let (replacement, replacement_epoch) = manager.health.begin_listener_attempt();
+        assert_eq!(replacement, candidate);
+        assert_ne!(replacement_epoch, epoch);
+        manager
+            .confirm_listener_generation(replacement, replacement_epoch)
+            .unwrap();
+        assert!(manager.readiness_error().is_some());
+        let reconciliation_epoch = manager.begin_reconciliation().unwrap();
+        assert_eq!(
+            manager
+                .complete_reconciliation(reconciliation_epoch)
+                .unwrap(),
+            ReconciliationOutcome::Complete
+        );
+        assert!(manager.readiness_error().is_none());
+        assert!(manager
+            .confirm_listener_generation(replacement, replacement_epoch)
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn reconciliation_cannot_borrow_a_new_probe_after_an_intervening_failure() {
+        let manager = listener_health_manager();
+        manager.note_listener_generation();
+        manager.record_listener_failure(&anyhow::anyhow!("first failure"));
+        let stale_epoch = manager.begin_reconciliation().unwrap();
+        manager.record_listener_failure(&anyhow::anyhow!("failure during authority refresh"));
+        manager.note_listener_generation();
+        assert!(manager.complete_reconciliation(stale_epoch).is_err());
+        assert!(manager.readiness_error().is_some());
+
+        let fresh_epoch = manager.begin_reconciliation().unwrap();
+        assert_eq!(
+            manager.complete_reconciliation(fresh_epoch).unwrap(),
+            ReconciliationOutcome::Complete
+        );
+        assert!(manager.readiness_error().is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_is_terminal_for_every_cluster_health_transition() {
+        for shutdown in [
+            ClusterManager::begin_shutdown,
+            ClusterManager::require_shutdown,
+        ] {
+            let manager = listener_health_manager();
+            manager.note_listener_generation();
+            let reconciliation_epoch = manager.begin_reconciliation().unwrap();
+            shutdown(&manager);
+            manager.record_listener_failure(&anyhow::anyhow!("failure after shutdown"));
+            assert!(manager.begin_reconciliation().is_err());
+            let (candidate, epoch) = manager.health.begin_listener_attempt();
+            assert!(manager
+                .confirm_listener_generation(candidate, epoch)
+                .is_err());
+            assert!(manager
+                .complete_reconciliation(reconciliation_epoch)
+                .is_err());
+            assert_eq!(
+                manager.health.state.load(Ordering::Acquire),
+                CLUSTER_SHUTDOWN_REQUIRED
+            );
+            assert!(manager.readiness_error().is_some());
+            assert!(manager.admit(ClusterOperation::DurableDirect).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn health_transition_lock_orders_failure_after_healthy_commit() {
+        let manager = listener_health_manager();
+        manager.note_listener_generation();
+        let epoch = manager.begin_reconciliation().unwrap();
+        let mut transition = manager.health.failure_since.lock().unwrap();
+        let ready = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                ready.wait();
+                manager.record_listener_failure(&anyhow::anyhow!("failure racing with commit"));
+            });
+            // Use the same guard and actual commit implementation as production.
+            assert_eq!(
+                manager
+                    .complete_reconciliation_locked(&mut transition, epoch)
+                    .unwrap(),
+                ReconciliationOutcome::Complete
+            );
+            ready.wait();
+            drop(transition);
+            worker.join().unwrap();
+        });
+        assert_eq!(
+            manager.health.state.load(Ordering::Acquire),
+            CLUSTER_FAIL_CLOSED
+        );
+        assert!(manager.complete_reconciliation(epoch).is_err());
+        assert!(manager.readiness_error().is_some());
     }
 
     #[test]
@@ -7693,7 +8786,10 @@ mod tests {
         assert_eq!(delivery_privacy_peer(&ambiguous, true), None);
     }
 
-    fn rename_occupant(epoch: uuid::Uuid, nick: &str) -> crate::state::SerializableMucOccupant {
+    pub(super) fn rename_occupant(
+        epoch: uuid::Uuid,
+        nick: &str,
+    ) -> crate::state::SerializableMucOccupant {
         crate::state::SerializableMucOccupant {
             full_jid: "alice@example.test/Phone".to_owned(),
             room_jid: "room@conference.example.test".to_owned(),
@@ -7708,6 +8804,38 @@ mod tests {
             sm_session_id: None,
             payload: String::new(),
         }
+    }
+
+    /// The Redis-only MUC fixture has no PostgreSQL authority worker.  Seed
+    /// both sides from the same immutable key/instance values that the
+    /// production authority refresh would read, so it verifies the signed
+    /// cross-node publication instead of bypassing it.
+    pub(super) fn seed_test_peer_authority(receiver: &ClusterManager, sender: &ClusterManager) {
+        let sender_security = sender
+            .security
+            .as_ref()
+            .expect("Redis cluster fixture requires signing identity");
+        let now = Instant::now();
+        receiver.authorized_instances.insert(
+            sender.node_id.clone(),
+            AuthorizedClusterInstance {
+                instance_uuid: sender.connection_uuid,
+                instance_epoch: sender.instance_epoch.load(Ordering::Acquire),
+                signing_key_id: sender_security.current_key_id.clone(),
+                signing_key_epoch: sender_security.key_epoch,
+                valid_until: now + Duration::from_secs(NODE_TTL_SECONDS),
+                refresh_until: now + Duration::from_secs(10),
+            },
+        );
+        receiver.authorized_peer_keys.insert(
+            sender.node_id.clone(),
+            AuthorizedPeerKeys {
+                epoch: sender_security.key_epoch,
+                current_key_id: sender_security.current_key_id.clone(),
+                previous_key_id: None,
+                refresh_until: now + Duration::from_secs(10),
+            },
+        );
     }
 
     #[tokio::test]
@@ -7794,6 +8922,14 @@ mod tests {
             cluster.touch_node().await.unwrap();
             cluster.note_listener_generation();
         }
+        seed_test_peer_authority(&first, &second);
+        seed_test_peer_authority(&second, &first);
+        let second_channel = second.key(format!("node:{}", second.node_id));
+        let mut second_pubsub = open_pubsub(second.client.as_ref().unwrap()).await.unwrap();
+        subscribe_pubsub(&mut second_pubsub, &second_channel)
+            .await
+            .unwrap();
+        let mut second_messages = second_pubsub.on_message();
         let room = "room@conference.example.test";
         let original_epoch = uuid::Uuid::new_v4();
         let original = rename_occupant(original_epoch, "Old");
@@ -7943,6 +9079,16 @@ mod tests {
             .change_muc_occupant_role(room, &replacement, "visitor")
             .await
             .unwrap();
+        let signed_role_change: String =
+            tokio::time::timeout(REDIS_IO_TIMEOUT, second_messages.next())
+                .await
+                .expect("remote role change publication timed out")
+                .expect("remote role change subscription ended")
+                .get_payload()
+                .unwrap();
+        second
+            .verify_signed_payload(&signed_role_change, &second_channel, Some(&first.node_id))
+            .unwrap();
         assert!(matches!(
             changed,
             MucRoleChange::Changed(ref occupant) if occupant.role == "visitor"
@@ -7954,6 +9100,16 @@ mod tests {
         let policy_changed = first
             .change_muc_occupant_policy(room, &changed, "participant", true)
             .await
+            .unwrap();
+        let signed_policy_change: String =
+            tokio::time::timeout(REDIS_IO_TIMEOUT, second_messages.next())
+                .await
+                .expect("remote policy change publication timed out")
+                .expect("remote policy change subscription ended")
+                .get_payload()
+                .unwrap();
+        second
+            .verify_signed_payload(&signed_policy_change, &second_channel, Some(&first.node_id))
             .unwrap();
         assert!(matches!(
             policy_changed,
@@ -7971,9 +9127,13 @@ mod tests {
         .unwrap();
         assert_eq!(persisted.role, "participant");
         assert!(persisted.room_non_anonymous);
+        // A policy write is a full serialized-value compare-and-set, not only
+        // an epoch check. `changed` still describes the preceding visitor
+        // state for this exact connection and must not overwrite the newer
+        // participant/non-anonymous policy.
         assert!(matches!(
             first
-                .change_muc_occupant_policy(room, &replacement, "visitor", false)
+                .change_muc_occupant_policy(room, &changed, "visitor", false)
                 .await
                 .unwrap(),
             MucRoleChange::Stale
@@ -8154,17 +9314,21 @@ mod tests {
         assert!(!supports_control_ack(Some("6")));
         assert!(supports_control_ack(Some("7")));
         assert!(supports_control_ack(Some(NODE_PROTOCOL_VERSION)));
-        assert!(!supports_control_ack(Some("12")));
+        assert!(!supports_control_ack(Some(&future_protocol_version)));
         assert!(!supports_delivery_contract(Some("7")));
         assert!(supports_delivery_contract(Some("8")));
         assert!(supports_delivery_contract(Some("9")));
         assert!(supports_delivery_contract(Some(NODE_PROTOCOL_VERSION)));
         assert!(!supports_delivery_contract(Some(&future_protocol_version)));
-        // Presence authority became mandatory in application protocol 10.
-        // A new sender must not publish an executable payload to a live v9
-        // peer which would ignore the new UUID/generation fields.
-        assert!(supports_current_cluster_protocol(Some("11")));
-        assert!(!supports_current_cluster_protocol(Some("10")));
+        // Presence authority became mandatory in application protocol 10 and
+        // Exact MIX transport hand-offs became mandatory in application
+        // protocol 13.
+        // A new sender must not publish a receipt-required MIX event to a
+        // live v11 peer which would ignore the ownership requirement.
+        assert!(supports_current_cluster_protocol(Some(
+            NODE_PROTOCOL_VERSION
+        )));
+        assert!(!supports_current_cluster_protocol(Some("11")));
         assert!(!supports_current_cluster_protocol(None));
     }
 
@@ -8348,6 +9512,34 @@ mod tests {
                 }
             ))
         );
+        let mix_delivery_id = uuid::Uuid::from_u128(31);
+        let mix_lease_token = uuid::Uuid::from_u128(32);
+        let mix = serde_json::json!({
+            "protocol_version": NODE_PROTOCOL_VERSION,
+            "delivery": {
+                "reliability": "durable_mix",
+                "delivery_id": mix_delivery_id,
+                "lease_token": mix_lease_token
+            }
+        });
+        assert_eq!(
+            requested_node_message_delivery(&mix, true).unwrap(),
+            Some(RequestedNodeMessageDelivery::Explicit(
+                NodeDeliveryContract::DurableMix {
+                    delivery_id: mix_delivery_id,
+                    lease_token: mix_lease_token,
+                }
+            ))
+        );
+        let stale_mix = serde_json::json!({
+            "protocol_version": "12",
+            "delivery": {
+                "reliability": "durable_mix",
+                "delivery_id": mix_delivery_id,
+                "lease_token": mix_lease_token
+            }
+        });
+        assert!(requested_node_message_delivery(&stale_mix, true).is_err());
         assert!(requested_node_message_delivery(
             &serde_json::json!({"protocol_version": NODE_PROTOCOL_VERSION}),
             true
@@ -8474,6 +9666,7 @@ mod tests {
                     message_id: offline_row_id,
                     claim_id: None,
                 }),
+                None,
             )
             .unwrap(),
             Some(NodeDeliveryContract::DurableC2s {
@@ -8481,6 +9674,29 @@ mod tests {
                 message_id: offline_row_id,
             })
         );
+    }
+
+    #[test]
+    fn mix_contract_carries_only_the_exact_recipient_lease() {
+        let source = crate::outbound::MixDelivery {
+            delivery_id: uuid::Uuid::from_u128(41),
+            lease_token: uuid::Uuid::from_u128(42),
+        };
+        let stanza = "<message xmlns='jabber:client' to='bob@example.test' type='groupchat'><body>hello</body></message>";
+        assert_eq!(
+            outbound_delivery_contract(stanza, "bob@example.test", None, Some(source)).unwrap(),
+            Some(NodeDeliveryContract::DurableMix {
+                delivery_id: source.delivery_id,
+                lease_token: source.lease_token,
+            })
+        );
+        assert!(outbound_delivery_contract(
+            stanza,
+            "bob@example.test/resource",
+            None,
+            Some(source)
+        )
+        .is_err());
     }
 
     #[test]
@@ -8607,6 +9823,7 @@ mod tests {
             require_delivery_contract: false,
             mix_capable_only: false,
             transport_receipt_required: false,
+            mix_transport_receipt_required: false,
         }
     }
 
@@ -8624,6 +9841,7 @@ mod tests {
             control_processed: None,
             control_outcome: None,
             delivery: None,
+            mix_handoff: None,
         };
         let payload = serde_json::to_string(&ack).unwrap();
         let receipt = validated_delivery_ack(
@@ -8673,6 +9891,7 @@ mod tests {
                 control_processed: None,
                 control_outcome: None,
                 delivery: None,
+                mix_handoff: None,
             },
             NodeDeliveryAck {
                 request_id: "r".to_owned(),
@@ -8686,6 +9905,7 @@ mod tests {
                 control_processed: None,
                 control_outcome: None,
                 delivery: None,
+                mix_handoff: None,
             },
         ] {
             let payload = serde_json::to_string(&ack).unwrap();
@@ -8711,6 +9931,7 @@ mod tests {
             control_processed: None,
             control_outcome: None,
             delivery: None,
+            mix_handoff: None,
         };
         let mut expected = ack_expectation("mix-r", "mix-n", "node", "a@example.test");
         expected.primary = false;
@@ -8748,6 +9969,7 @@ mod tests {
             control_processed: None,
             control_outcome: None,
             delivery: None,
+            mix_handoff: None,
         };
         let expectation = || {
             let mut expected = ack_expectation("pam-r", "pam-n", "node", "a@example.test/one");
@@ -8782,6 +10004,148 @@ mod tests {
     }
 
     #[test]
+    fn mix_transport_receipt_ack_requires_confirmed_capable_resource() {
+        let source = crate::outbound::MixDelivery {
+            delivery_id: uuid::Uuid::from_u128(11),
+            lease_token: uuid::Uuid::from_u128(12),
+        };
+        let ack = NodeDeliveryAck {
+            request_id: "mix-r".to_owned(),
+            nonce: "mix-n".to_owned(),
+            node_id: "node".to_owned(),
+            // Capability accounting may describe more than one resource, but
+            // one ordered recipient row can be transferred only once.
+            delivered: 1,
+            accepted_full_jid: Some("a@example.test/one".to_owned()),
+            mix_supported: 2,
+            mix_unsupported: 1,
+            mix_unknown: 0,
+            control_processed: None,
+            control_outcome: None,
+            delivery: Some(NodeDeliveryContract::DurableMix {
+                delivery_id: source.delivery_id,
+                lease_token: source.lease_token,
+            }),
+            mix_handoff: Some(ClusterMixHandoff::SocketFenced),
+        };
+        let expectation = || {
+            let mut expected = ack_expectation("mix-r", "mix-n", "node", "a@example.test");
+            expected.primary = false;
+            expected.delivery = Some(NodeDeliveryContract::DurableMix {
+                delivery_id: source.delivery_id,
+                lease_token: source.lease_token,
+            });
+            expected.require_delivery_contract = true;
+            expected.mix_capable_only = true;
+            expected.mix_transport_receipt_required = true;
+            expected
+        };
+        assert!(
+            validated_delivery_ack(&serde_json::to_string(&ack).unwrap(), expectation()).is_some()
+        );
+
+        for forged in [
+            NodeDeliveryAck {
+                delivered: 0,
+                ..ack.clone()
+            },
+            NodeDeliveryAck {
+                accepted_full_jid: None,
+                ..ack.clone()
+            },
+            NodeDeliveryAck {
+                delivered: 3,
+                mix_supported: 2,
+                ..ack.clone()
+            },
+            NodeDeliveryAck {
+                mix_handoff: None,
+                ..ack.clone()
+            },
+        ] {
+            assert!(validated_delivery_ack(
+                &serde_json::to_string(&forged).unwrap(),
+                expectation(),
+            )
+            .is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn mix_transport_receipt_waits_for_typed_ownership_and_fails_closed() {
+        // A queued stanza is not yet delivered. The peer must explicitly
+        // signal the output boundary before the remote node reports success.
+        let source = crate::outbound::MixDelivery {
+            delivery_id: uuid::Uuid::from_u128(21),
+            lease_token: uuid::Uuid::from_u128(22),
+        };
+        let (output, mut consumer) = tokio::sync::mpsc::channel(1);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = CancellationToken::new();
+        let waiter = {
+            let sender = sender.clone();
+            let disconnect = disconnect.clone();
+            tokio::spawn(async move {
+                try_send_cluster_mix_transport(&sender, &disconnect, "owned".to_owned(), source)
+                    .await
+            })
+        };
+        let item = consumer.recv().await.expect("MIX item was queued");
+        item.complete_mix_handoff(crate::outbound::MixTransportCompletion::SocketFenced {
+            connection_id: uuid::Uuid::from_u128(23),
+        });
+        assert!(matches!(
+            waiter.await.unwrap(),
+            Ok(crate::outbound::MixTransportCompletion::SocketFenced { .. })
+        ));
+        assert!(!disconnect.is_cancelled());
+
+        // A full bounded queue must not become a successful remote receipt.
+        let (output, _consumer) = tokio::sync::mpsc::channel(1);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = CancellationToken::new();
+        sender.try_send("older".to_owned()).unwrap();
+        assert!(
+            try_send_cluster_mix_transport(&sender, &disconnect, "full".to_owned(), source)
+                .await
+                .is_err()
+        );
+        assert!(disconnect.is_cancelled());
+
+        // A disconnected output transport cannot acknowledge a durable MIX
+        // row, even though the caller has a live session object.
+        let (output, consumer) = tokio::sync::mpsc::channel(1);
+        drop(consumer);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = CancellationToken::new();
+        assert!(
+            try_send_cluster_mix_transport(&sender, &disconnect, "closed".to_owned(), source)
+                .await
+                .is_err()
+        );
+        assert!(disconnect.is_cancelled());
+
+        // A receiver that takes the item and drops it before a recoverable
+        // boundary closes the one-shot and is rejected without inventing a
+        // timer-based delivery decision.
+        let (output, mut consumer) = tokio::sync::mpsc::channel(1);
+        let sender = crate::outbound::OutboundSender::new(output);
+        let disconnect = CancellationToken::new();
+        let waiter = {
+            let sender = sender.clone();
+            let disconnect = disconnect.clone();
+            tokio::spawn(async move {
+                try_send_cluster_mix_transport(&sender, &disconnect, "late".to_owned(), source)
+                    .await
+            })
+        };
+        let late = consumer.recv().await.expect("late MIX item was queued");
+        drop(late);
+        assert!(waiter.await.unwrap().is_err());
+        assert!(disconnect.is_cancelled());
+    }
+
+    #[test]
     fn version_seven_ack_must_echo_the_exact_delivery_contract() {
         let ack = NodeDeliveryAck {
             request_id: "r".to_owned(),
@@ -8795,6 +10159,7 @@ mod tests {
             control_processed: None,
             control_outcome: None,
             delivery: Some(NodeDeliveryContract::Volatile {}),
+            mix_handoff: None,
         };
         let payload = serde_json::to_string(&ack).unwrap();
         let mut expected = ack_expectation("r", "n", "node", "a@example.test");

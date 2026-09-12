@@ -842,12 +842,9 @@ async fn import(pool: &PgPool, runtime: &ImportRuntime<'_>, options: &ImportOpti
         .await?;
     if options.conflict == ConflictPolicy::Replace {
         // Replacement cascades through upload_slots. Match online account
-        // deletion's global-capacity -> domain/user lock order and reject
-        // contention quickly instead of occupying a pool connection behind
-        // storage admission.
-        sqlx::query("SET LOCAL lock_timeout='50ms'")
-            .execute(&mut *tx)
-            .await?;
+        // deletion's global-capacity -> domain/user lock order. The typed
+        // SQL capability performs a NOWAIT capacity admission, so this does
+        // not impose an arbitrary timeout on the rest of the replacement.
         sqlx::query("SELECT northstar_upload_capacity_lock()")
             .fetch_one(&mut *tx)
             .await

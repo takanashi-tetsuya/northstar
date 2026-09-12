@@ -1826,6 +1826,12 @@ pub async fn retract_muc_message_and_archive_action(
     };
 
     let mut transaction = pool.begin().await?;
+    // The retraction race fixture must stop before the authority snapshot.
+    // A concurrent affiliation change can then commit, after which this
+    // transaction takes the normal namespace/row locks and observes the
+    // changed authority instead of creating a time-of-check/time-of-use gap.
+    #[cfg(test)]
+    maybe_pause_muc_authorization_for_test("retraction").await;
     if mutation.authority.actor_scope != actor_scope
         || mutation.authority.full_jid != sender_jid
         || mutation.authority.nick != mutation.nick
@@ -3112,6 +3118,12 @@ mod tests {
         transaction.commit().await.unwrap();
     }
 
+    async fn await_authorization_pause(entered: &Arc<tokio::sync::Notify>, operation: &str) {
+        tokio::time::timeout(Duration::from_secs(5), entered.notified())
+            .await
+            .unwrap_or_else(|_| panic!("MUC authorization pause was not reached: {operation}"));
+    }
+
     fn local_process_authority<'a>(
         room_epoch: Uuid,
         user_id: Uuid,
@@ -3624,7 +3636,7 @@ mod tests {
             .try_send_durable(local_invitation, local_delivery)
             .unwrap();
         let queued = local_rx.recv().await.unwrap();
-        assert_eq!(queued.durable_delivery, Some(local_delivery));
+        assert_eq!(queued.c2s_delivery(), Some(local_delivery));
         drop(queued);
         drop(local_rx);
         assert_eq!(
@@ -3680,7 +3692,7 @@ mod tests {
             .try_send_durable(federated_invitation, federated_delivery)
             .unwrap();
         let queued = federated_rx.recv().await.unwrap();
-        assert_eq!(queued.durable_delivery, Some(federated_delivery));
+        assert_eq!(queued.c2s_delivery(), Some(federated_delivery));
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM offline_messages WHERE id=$1")
                 .bind(repeated_invite_id)
@@ -4457,7 +4469,7 @@ mod tests {
                 .unwrap()
             })
         };
-        entered.notified().await;
+        await_authorization_pause(&entered, "discussion_after_advisory").await;
         let cluster_room_writer = {
             let pool = pool.clone();
             tokio::spawn(async move {
@@ -4530,7 +4542,7 @@ mod tests {
                 .unwrap()
             })
         };
-        entered.notified().await;
+        await_authorization_pause(&entered, "discussion local revocation").await;
         set_muc_affiliation(&pool, room_id, "alice", "outcast")
             .await
             .unwrap();
@@ -4582,7 +4594,7 @@ mod tests {
                 .unwrap()
             })
         };
-        entered.notified().await;
+        await_authorization_pause(&entered, "discussion federated revocation").await;
         set_federated_muc_affiliation(&pool, room_id, "race@remote.test", "outcast")
             .await
             .unwrap();
@@ -4667,7 +4679,7 @@ mod tests {
                 .unwrap()
             })
         };
-        entered.notified().await;
+        await_authorization_pause(&entered, "admin_affiliation").await;
         // In a members-only, non-anonymous room a member intentionally keeps
         // read access to owner/admin/member lists so an OMEMO client can build
         // the complete recipient set.  Use `none` here: this race is meant to
@@ -4708,7 +4720,7 @@ mod tests {
                 .unwrap()
             })
         };
-        entered.notified().await;
+        await_authorization_pause(&entered, "admin_role").await;
         set_muc_affiliation(&pool, room_id, "alice", "member")
             .await
             .unwrap();
@@ -4802,7 +4814,7 @@ mod tests {
                 .unwrap()
             })
         };
-        entered.notified().await;
+        await_authorization_pause(&entered, "discussion clustered revocation").await;
         sqlx::query(
             "UPDATE cluster_muc_occupancies
                 SET state='revoked',role='none',ended_at=clock_timestamp(),updated_at=clock_timestamp()
@@ -4897,7 +4909,7 @@ mod tests {
                 .unwrap()
             })
         };
-        entered.notified().await;
+        await_authorization_pause(&entered, "discussion cluster handoff").await;
         sqlx::query(
             "UPDATE cluster_muc_occupancies
                 SET state='revoked',role='none',ended_at=clock_timestamp(),updated_at=clock_timestamp()
@@ -5074,7 +5086,7 @@ mod tests {
                 .unwrap()
             })
         };
-        entered.notified().await;
+        await_authorization_pause(&entered, "retraction local revocation").await;
         set_muc_affiliation(&pool, room_id, "carol", "owner")
             .await
             .unwrap();
@@ -5155,7 +5167,7 @@ mod tests {
                 .unwrap()
             })
         };
-        entered.notified().await;
+        await_authorization_pause(&entered, "retraction clustered revocation").await;
         set_federated_muc_affiliation(&pool, room_id, "moderator@remote.test", "member")
             .await
             .unwrap();

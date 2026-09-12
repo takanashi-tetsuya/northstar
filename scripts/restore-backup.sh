@@ -20,6 +20,7 @@ security_policy="${BACKUP_SECURITY_POLICY:-production}"
 max_upload_object_bytes="${RESTORE_MAX_UPLOAD_OBJECT_BYTES:-1073741824}"
 max_upload_total_bytes="${RESTORE_MAX_UPLOAD_TOTAL_BYTES:-68719476736}"
 reserve_free_bytes="${RESTORE_RESERVE_FREE_BYTES:-1073741824}"
+session_response_timeout_seconds="${RESTORE_SESSION_RESPONSE_TIMEOUT_SECONDS:-300}"
 maintenance_lock_key=735559096281326101
 grant_boundary_sql="$project_dir/deploy/postgres-init/lib/verify-northstar-grant-boundary.sql"
 grant_apply_sql="$project_dir/deploy/postgres-init/lib/apply-northstar-grants.sql"
@@ -52,6 +53,9 @@ Options:
   --max-upload-total-bytes N     Maximum expanded bytes for all objects
   --reserve-free-bytes N         Free-space reserve on every working filesystem
   --development-insecure-legacy  Explicitly permit legacy/unsigned development restore
+
+RESTORE_SESSION_RESPONSE_TIMEOUT_SECONDS bounds each database response wait
+(default 300, maximum 3600 seconds). Expiry is never proof of commit or rollback.
 EOF
 }
 
@@ -149,6 +153,9 @@ for numeric_setting in max_upload_object_bytes max_upload_total_bytes reserve_fr
 done
 (( max_upload_object_bytes > 0 && max_upload_total_bytes > 0 )) \
   || { echo "restore upload byte limits must be positive" >&2; exit 2; }
+[[ "$session_response_timeout_seconds" =~ ^[1-9][0-9]{0,3}$ ]] \
+  && (( session_response_timeout_seconds <= 3600 )) \
+  || { echo "RESTORE_SESSION_RESPONSE_TIMEOUT_SECONDS must be between 1 and 3600" >&2; exit 2; }
 
 test_fail_after_moves="${NORTHSTAR_RESTORE_TEST_FAIL_AFTER_UPLOAD_MOVES:-0}"
 test_fail_point="${NORTHSTAR_RESTORE_TEST_FAIL_POINT:-}"
@@ -1062,13 +1069,22 @@ psql_session_command() {
 
 psql_session_wait_token() {
   local session_out="$1" token="$2" output_file="$3" line
-  while IFS= read -r line <&"$session_out"; do
+  local deadline=$((SECONDS + session_response_timeout_seconds)) remaining
+  while true; do
+    remaining=$((deadline - SECONDS))
+    if (( remaining <= 0 )); then
+      echo "restore database response timed out; transaction outcome remains unproven (${output_file##*/})" >&2
+      return 1
+    fi
+    if ! IFS= read -r -t "$remaining" line <&"$session_out"; then
+      echo "restore database response ended or timed out before its completion marker (${output_file##*/}); transaction outcome remains unproven" >&2
+      return 1
+    fi
     if [[ "$line" == "$token" ]]; then
       return 0
     fi
-    printf '%s\n' "$line" >>"$output_file"
+    printf '%s\n' "$line" >>"$output_file" || return 1
   done
-  return 1
 }
 
 control_session_command() {
@@ -1151,7 +1167,7 @@ wait_for_restore_transaction_barrier() {
     printf "%s\n" \
       "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(:'restore_barrier_key', 0));"
     if [[ -n "$transaction_xid" ]]; then
-      printf "SELECT '%s' || COALESCE(pg_catalog.pg_xact_status((:'restore_xid')::pg_catalog.xid8), '__TOO_OLD__);\n" \
+      printf "SELECT '%s' || COALESCE(pg_catalog.pg_xact_status((:'restore_xid')::pg_catalog.xid8), '__TOO_OLD__');\n" \
         "$status_prefix"
     fi
     printf '%s\n' 'COMMIT;'
@@ -1482,16 +1498,28 @@ set_target_database_connections() {
   local output_file="$work_dir/database-connections-$enabled.out"
   local expected catalog_value catalog_count
   [[ "$enabled" == true || "$enabled" == false ]] || return 2
+  # The coordinator derives this from `current_database()` and has already
+  # applied this grammar in `discover_target_coordinator_identity`. Repeat it
+  # at the SQL construction boundary so neither an altered caller nor future
+  # control-flow refactor can interpolate an arbitrary database identifier.
+  [[ "$target_database" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || {
+    echo "restore refused an unsafe target database identifier for the connection fence" >&2
+    return 2
+  }
   if [[ "$enabled" == true ]]; then
-    expected=t
+    # PostgreSQL renders boolean values through `bool::text` as `true` or
+    # `false`, rather than the psql-specific `t` / `f` display format.
+    expected=true
   else
-    expected=f
+    expected=false
   fi
   {
-    printf '\\set target_db %s\n' "$target_database"
     printf '%s\n' 'SET synchronous_commit TO on;'
-    printf "SELECT format('ALTER DATABASE %%I WITH ALLOW_CONNECTIONS %s', :'target_db') \\\\gexec\n" \
-      "$enabled"
+    # Use one ordinary SQL statement rather than passing a generated statement
+    # through psql's \gexec meta-command. The identifier is safe to quote only
+    # because the grammar above excludes quotes and every SQL metacharacter.
+    printf 'ALTER DATABASE "%s" WITH ALLOW_CONNECTIONS %s;\n' "$target_database" "$enabled"
+    printf '\\set target_db %s\n' "$target_database"
     printf "%s\n" \
       "SELECT '__NORTHSTAR_ALLOW_CONNECTIONS__' || datallowconn::text FROM pg_catalog.pg_database WHERE datname = :'target_db';"
   } >"$sql_file"
@@ -1499,7 +1527,12 @@ set_target_database_connections() {
   catalog_value="$(sed -n 's/^__NORTHSTAR_ALLOW_CONNECTIONS__//p' "$output_file")"
   catalog_count="$(awk 'index($0, "__NORTHSTAR_ALLOW_CONNECTIONS__") == 1 { count += 1 } END { print count + 0 }' "$output_file")"
   if [[ "$catalog_count" != 1 || "$catalog_value" != "$expected" ]]; then
-    echo "database connection fence did not converge to ALLOW_CONNECTIONS=$enabled" >&2
+    # This record contains only the expected single-bit catalog result and
+    # the number/value of marked rows.  It is safe to emit and makes a failed
+    # restore fence diagnosable without disclosing a connection URL, target
+    # data, or the SQL transcript used to control PostgreSQL.
+    printf 'database connection fence did not converge to ALLOW_CONNECTIONS=%s (expected=%s marker_rows=%s marker_value=%q)\n' \
+      "$enabled" "$expected" "$catalog_count" "$catalog_value" >&2
     return 1
   fi
 }
@@ -1507,12 +1540,16 @@ set_target_database_connections() {
 activate_target_database_fence() {
   local sql_file="$work_dir/database-fence.sql" session_counts remaining_sessions allowed_sessions
   fence_attempted=true
-  set_target_database_connections false || return 1
+  if ! set_target_database_connections false; then
+    fence_attempted=false
+    return 1
+  fi
+  journal_append state ConnectionsDenied
   cat >"$sql_file" <<SQL
-\\set target_db $target_database
-\\set coordinator_pid $target_coordinator_backend_pid
-\\set primary_pid $primary_backend_pid
-\\set compensation_pid $compensation_backend_pid
+\set target_db $target_database
+\set coordinator_pid $target_coordinator_backend_pid
+\set primary_pid $primary_backend_pid
+\set compensation_pid $compensation_backend_pid
 SELECT COUNT(*) FILTER (
          WHERE pid NOT IN (:coordinator_pid, :primary_pid, :compensation_pid)
        )::text || ':' ||
@@ -1522,15 +1559,26 @@ SELECT COUNT(*) FILTER (
 FROM pg_stat_activity
 WHERE datname = :'target_db';
 SQL
-  control_session_command "$sql_file" "$work_dir/database-fence.out" || return 1
+  if ! control_session_command "$sql_file" "$work_dir/database-fence.out"; then
+    set_target_database_connections true || true
+    fence_attempted=false
+    return 1
+  fi
   session_counts="$(sed -n '/^[0-9][0-9]*:[0-9][0-9]*$/p' "$work_dir/database-fence.out")"
-  [[ "$session_counts" =~ ^[0-9]+:[0-9]+$ ]] \
-    || { echo "failed to identify the exact restore database sessions" >&2; return 1; }
+  if [[ ! "$session_counts" =~ ^[0-9]+:[0-9]+$ ]]; then
+    echo "failed to identify the exact restore database sessions" >&2
+    set_target_database_connections true || true
+    fence_attempted=false
+    return 1
+  fi
   IFS=: read -r remaining_sessions allowed_sessions <<<"$session_counts"
   if (( remaining_sessions != 0 || allowed_sessions != 3 )); then
     echo "restore refused: $remaining_sessions other target database session(s) remain after the connection fence; stop Northstar and all database clients, then retry" >&2
+    set_target_database_connections true || true
+    fence_attempted=false
     return 1
   fi
+  journal_append state OldWorkloadsDrained
   database_fence_active=true
   journal_append fence-active \
     "target-database=$target_database" \
@@ -1577,6 +1625,7 @@ release_target_database_fence() {
     echo "database replacement is final, but the connection fence could not be released" >&2
     return 1
   fi
+  journal_append state ConnectionsEnabled
   database_fence_active=false
   fence_attempted=false
 }
@@ -1936,6 +1985,7 @@ finish_restore() {
   fi
   if [[ "$compensation_ok" != true || "$fence_ok" != true \
      || "$cleanup_ok" != true ]]; then
+    journal_append state RecoveryRequired || true
     preserve_work=true
     status=1
     echo "RECOVERY REQUIRED: preserved plaintext work directory: $work_dir" >&2
@@ -2177,7 +2227,9 @@ rollback_dump="$rollback_set/database-before.dump"
 # owns only the hard connection fence. The coordinator also arbitrates each
 # replacement XID after its transaction-local barrier; neither fence is
 # represented as an application-writer lock.
+echo 'restore phase=database-authority-preflight' >&2
 establish_restore_database_authorities
+echo 'restore phase=rollback-snapshot' >&2
 run_pg_client_without_parent_fds pg_dump --format=custom --compress=9 --no-owner --no-acl \
   --file="$rollback_dump"
 chmod 0600 "$rollback_dump"
@@ -2185,6 +2237,7 @@ run_pg_client_without_parent_fds pg_restore --list "$rollback_dump" >/dev/null
 fsync_path "$rollback_dump"
 fsync_path "$rollback_set"
 journal_append rollback-ready "$rollback_set"
+journal_append state Prepared
 
 # ALLOW_CONNECTIONS=false is the fail-closed boundary. The restore does not
 # terminate sessions: operators must stop the application and all clients first.
@@ -2193,18 +2246,24 @@ journal_append rollback-ready "$rollback_set"
 # crash leaves the target unavailable rather than exposing a half-switched data
 # plane.
 start_compensation_worker
+echo 'restore phase=connection-fence' >&2
 activate_target_database_fence
 release_primary_policy_lock_after_fence
 verify_manifest_objects "$old_manifest" "$resolved_upload" "${cutover_dir##*/}" \
   || { echo "upload root changed while the database fence was being installed" >&2; exit 1; }
+journal_append state BackupVerified
 compensation_required=true
 journal_append database-switch-intent
 replacement_committed=false
+echo 'restore phase=database-replacement' >&2
 if ! replace_database_from_dump "$payload_dir/database.dump" restored exact \
   "$primary_worker_in" "$primary_worker_out" incoming; then
   false
 fi
 journal_append database-switch-done
+echo 'restore phase=database-replacement-verified' >&2
+journal_append state RestoreApplied
+journal_append state RolesReconciled
 
 inject_at() {
   local point="$1"
@@ -2282,6 +2341,7 @@ done <"$old_manifest"
 fsync_path "$previous_uploads"
 verify_manifest_objects "$old_manifest" "$previous_uploads"
 journal_append rollback-uploads-verified
+journal_append state PostRestoreVerified
 inject_at before-commit
 
 journal_append commit-intent
@@ -2305,6 +2365,9 @@ trap 'exit 143' TERM
 # the terminal-state guard below is the only path that may reopen connections.
 release_target_database_fence
 close_db_sessions
+# Record completion while the journal still exists. Deleting its cutover
+# directory first turns a successful, reopened restore into an exit-1 result.
+journal_append state Completed || preserve_work=true
 if [[ "$preserve_work" != true ]]; then
   remove_cutover_dir
   remove_work_dir

@@ -115,7 +115,23 @@ pub async fn reconcile_deployment_capacity(
         sessions_per_account: current.try_get("sessions_per_account_limit")?,
         resumable_sessions: current.try_get("resumable_session_limit")?,
     };
-    validate_authority_transition(current_configuration, configured)?;
+    let reconciliation_required =
+        authority_reconciliation_required(current_configuration, configured)?;
+    if !reconciliation_required
+        && deployment_capacity_authority_is_consistent(&mut tx, configured).await?
+    {
+        // A peer has already committed this exact authority epoch and its
+        // immutable ledgers still agree with the live entities. Do not turn
+        // every process start into a global repair write: runtime mutations
+        // maintain these ledgers atomically, while any detected divergence
+        // below deliberately takes the slower recovery path.
+        tx.commit().await?;
+        return Ok(());
+    }
+
+    // Only bootstrap, a deliberate epoch transition, or an audited divergence
+    // reaches the repair-only lock. This preserves the recovery authority
+    // without making ordinary peer startup serialize the full deployment.
 
     let counts: (i64, i64, i64, i64) = sqlx::query_as(
         "SELECT (SELECT COUNT(*) FROM users),
@@ -307,6 +323,106 @@ fn validate_authority_transition(
     Ok(())
 }
 
+fn authority_reconciliation_required(
+    current: DeploymentCapacityConfiguration,
+    configured: DeploymentCapacityConfiguration,
+) -> Result<bool> {
+    validate_authority_transition(current, configured)?;
+    Ok(current != configured)
+}
+
+/// Check the durable projections that ordinary runtime mutations keep atomic.
+/// The caller already owns the deployment advisory gate, so a false result is
+/// safe to hand to the repair-only path below. This query intentionally has no
+/// side effects: healthy peers may verify a committed epoch without rewriting
+/// allocation placement, counters, or the capacity-limit timestamp.
+async fn deployment_capacity_authority_is_consistent(
+    tx: &mut Transaction<'_, Postgres>,
+    configured: DeploymentCapacityConfiguration,
+) -> Result<bool> {
+    sqlx::query_scalar(
+        r#"WITH requested_limits(resource_kind, requested_limit) AS (
+               VALUES
+                 ('account'::text, $1::bigint),
+                 ('muc_room'::text, $2::bigint),
+                 ('live_session'::text, $3::bigint),
+                 ('sm_session'::text, $4::bigint)
+           ), expected_shards AS (
+               SELECT requested_limits.resource_kind, shards.shard::smallint AS shard,
+                      (requested_limits.requested_limit / 64)
+                        + CASE WHEN shards.shard < (requested_limits.requested_limit % 64)
+                               THEN 1 ELSE 0 END AS capacity
+                 FROM requested_limits CROSS JOIN generate_series(0, 63) AS shards(shard)
+           ), expected_entities(resource_kind, entity_id) AS (
+               SELECT 'account'::text, id FROM users
+               UNION ALL
+               SELECT 'muc_room'::text, id FROM muc_rooms WHERE destroyed_at IS NULL
+               UNION ALL
+               SELECT 'live_session'::text, lease_id FROM deployment_session_leases
+               UNION ALL
+               SELECT 'sm_session'::text, id FROM sm_resume_sessions
+           ), actual_entities(resource_kind, entity_id) AS (
+               SELECT resource_kind, entity_id FROM deployment_capacity_allocations
+           ), expected_counters(resource_kind, owner_id, used) AS (
+               SELECT 'muc_room'::text, owner_id, COUNT(*)::bigint FROM muc_rooms
+                WHERE destroyed_at IS NULL AND owner_id IS NOT NULL GROUP BY owner_id
+               UNION ALL
+               SELECT 'live_session'::text, user_id, COUNT(*)::bigint
+                 FROM deployment_session_leases GROUP BY user_id
+               UNION ALL
+               SELECT 'sm_session'::text, user_id, COUNT(*)::bigint
+                 FROM sm_resume_sessions GROUP BY user_id
+           ), actual_counters(resource_kind, owner_id, used) AS (
+               SELECT resource_kind, owner_id, used FROM deployment_account_capacity
+                WHERE resource_kind IN ('muc_room', 'live_session', 'sm_session')
+           )
+           SELECT (SELECT COUNT(*) = 256 FROM deployment_capacity_shards)
+              AND NOT EXISTS(
+                  SELECT 1 FROM expected_shards expected
+                   FULL OUTER JOIN deployment_capacity_shards actual
+                     ON actual.resource_kind = expected.resource_kind
+                    AND actual.shard = expected.shard
+                   WHERE actual.resource_kind IS NULL OR expected.resource_kind IS NULL
+                      OR actual.capacity <> expected.capacity
+              )
+              AND NOT EXISTS(
+                  SELECT 1 FROM deployment_capacity_shards shard
+                   WHERE shard.used <> (
+                      SELECT COUNT(*) FROM deployment_capacity_allocations allocation
+                       WHERE allocation.resource_kind = shard.resource_kind
+                         AND allocation.shard = shard.shard
+                   )
+              )
+              AND NOT EXISTS(
+                  SELECT resource_kind, entity_id FROM expected_entities
+                  EXCEPT SELECT resource_kind, entity_id FROM actual_entities
+              )
+              AND NOT EXISTS(
+                  SELECT resource_kind, entity_id FROM actual_entities
+                  EXCEPT SELECT resource_kind, entity_id FROM expected_entities
+              )
+              AND NOT EXISTS(
+                  SELECT 1 FROM deployment_session_leases
+                   WHERE lease_until <= clock_timestamp()
+              )
+              AND NOT EXISTS(
+                  SELECT resource_kind, owner_id, used FROM expected_counters
+                  EXCEPT SELECT resource_kind, owner_id, used FROM actual_counters
+              )
+              AND NOT EXISTS(
+                  SELECT resource_kind, owner_id, used FROM actual_counters
+                  EXCEPT SELECT resource_kind, owner_id, used FROM expected_counters
+              )"#,
+    )
+    .bind(configured.accounts)
+    .bind(configured.muc_rooms)
+    .bind(configured.live_sessions)
+    .bind(configured.resumable_sessions)
+    .fetch_one(&mut **tx)
+    .await
+    .context("could not audit deployment capacity authority")
+}
+
 async fn reconcile_allocations(
     tx: &mut Transaction<'_, Postgres>,
     configured: DeploymentCapacityConfiguration,
@@ -342,36 +458,96 @@ async fn reconcile_allocations(
     .await?;
 
     // Install the requested exact hard budgets before backfilling missing
-    // allocations. Existing persisted placement is never re-hashed. If that
-    // placement does not fit a lower snapshot, fail closed and require a
-    // staged rebalance/limit increase rather than silently moving ownership.
-    for (kind, limit) in configured.values() {
-        for shard in 0..CAPACITY_SHARDS {
-            let hard_budget = shard_budget(limit, shard);
-            let shard = i16::try_from(shard).expect("capacity shard fits SMALLINT");
-            let used: i64 = sqlx::query_scalar(
-                "SELECT used FROM deployment_capacity_shards
-                  WHERE resource_kind=$1 AND shard=$2 FOR UPDATE",
-            )
-            .bind(kind)
-            .bind(shard)
-            .fetch_one(&mut **tx)
-            .await?;
-            anyhow::ensure!(
-                used <= hard_budget,
-                "configured {kind} capacity cannot represent persisted shard {shard}: usage {used}, hard budget {hard_budget}; raise the limit/epoch or perform a staged offline rebalance"
-            );
-            sqlx::query(
-                "UPDATE deployment_capacity_shards SET capacity=$3
-                  WHERE resource_kind=$1 AND shard=$2",
-            )
-            .bind(kind)
-            .bind(shard)
-            .bind(hard_budget)
-            .execute(&mut **tx)
-            .await?;
-        }
+    // allocations. The enclosing reconciliation capability already holds a
+    // table-level authority lock, so 256 sequential SELECT/UPDATE round trips
+    // add latency but no isolation. Derive the complete requested matrix once,
+    // reject the first unrepresentable persisted placement, then replace every
+    // shard budget in one statement. This preserves the exact shard placement
+    // contract while keeping cold starts bounded under parallel deployment.
+    let unrepresentable = sqlx::query(
+        "WITH requested_limits(resource_kind,requested_limit) AS (
+             VALUES
+               ('account'::text,$1::bigint),
+               ('muc_room'::text,$2::bigint),
+               ('live_session'::text,$3::bigint),
+               ('sm_session'::text,$4::bigint)
+         ),
+         desired AS (
+             SELECT requested_limits.resource_kind,
+                    shards.shard::smallint AS shard,
+                    (requested_limits.requested_limit / 64)
+                      + CASE
+                          WHEN shards.shard < (requested_limits.requested_limit % 64)
+                            THEN 1
+                          ELSE 0
+                        END AS hard_budget
+               FROM requested_limits
+               CROSS JOIN generate_series(0,63) AS shards(shard)
+         )
+         SELECT existing.resource_kind,existing.shard,existing.used,desired.hard_budget
+           FROM deployment_capacity_shards existing
+           JOIN desired
+             ON desired.resource_kind=existing.resource_kind
+            AND desired.shard=existing.shard
+          WHERE existing.used > desired.hard_budget
+          ORDER BY existing.resource_kind,existing.shard
+          LIMIT 1",
+    )
+    .bind(configured.accounts)
+    .bind(configured.muc_rooms)
+    .bind(configured.live_sessions)
+    .bind(configured.resumable_sessions)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if let Some(row) = unrepresentable {
+        let kind: String = row.try_get("resource_kind")?;
+        let shard: i16 = row.try_get("shard")?;
+        let used: i64 = row.try_get("used")?;
+        let hard_budget: i64 = row.try_get("hard_budget")?;
+        anyhow::bail!(
+            "configured {kind} capacity cannot represent persisted shard {shard}: usage {used}, hard budget {hard_budget}; raise the limit/epoch or perform a staged offline rebalance"
+        );
     }
+    let expected_shards = i64::try_from(configured.values().len())
+        .expect("deployment capacity resource-kind count fits i64")
+        * CAPACITY_SHARDS;
+    let updated_shards = sqlx::query(
+        "WITH requested_limits(resource_kind,requested_limit) AS (
+             VALUES
+               ('account'::text,$1::bigint),
+               ('muc_room'::text,$2::bigint),
+               ('live_session'::text,$3::bigint),
+               ('sm_session'::text,$4::bigint)
+         ),
+         desired AS (
+             SELECT requested_limits.resource_kind,
+                    shards.shard::smallint AS shard,
+                    (requested_limits.requested_limit / 64)
+                      + CASE
+                          WHEN shards.shard < (requested_limits.requested_limit % 64)
+                            THEN 1
+                          ELSE 0
+                        END AS hard_budget
+               FROM requested_limits
+               CROSS JOIN generate_series(0,63) AS shards(shard)
+         )
+         UPDATE deployment_capacity_shards existing
+            SET capacity=desired.hard_budget
+           FROM desired
+          WHERE existing.resource_kind=desired.resource_kind
+            AND existing.shard=desired.shard",
+    )
+    .bind(configured.accounts)
+    .bind(configured.muc_rooms)
+    .bind(configured.live_sessions)
+    .bind(configured.resumable_sessions)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(
+        updated_shards == u64::try_from(expected_shards).expect("expected shard count is positive"),
+        "deployment capacity shard matrix is incomplete during reconciliation (updated={updated_shards}, expected={expected_shards})"
+    );
 
     for (kind, statement) in [
         ("account", "SELECT u.id FROM users u WHERE NOT EXISTS(SELECT 1 FROM deployment_capacity_allocations a WHERE a.resource_kind='account' AND a.entity_id=u.id) ORDER BY u.id"),
@@ -440,6 +616,7 @@ async fn rebuild_account_counters(tx: &mut Transaction<'_, Postgres>) -> Result<
     Ok(())
 }
 
+#[cfg(test)]
 fn shard_budget(limit: i64, shard: i64) -> i64 {
     limit / CAPACITY_SHARDS
         + if shard < limit % CAPACITY_SHARDS {
@@ -580,12 +757,34 @@ pub async fn refresh_live_session_leases(
     Ok(rows.into_iter().collect())
 }
 
-pub async fn cleanup_expired_live_session_leases(pool: &PgPool, limit: i64) -> Result<u64> {
+/// Attempt the deployment-wide lease reaper role without queuing behind an
+/// already-active peer. Session renewal is local and critical; reaping is
+/// shared maintenance and must never make every otherwise idle node compete
+/// for the same cleanup work. The transaction-scoped advisory lock releases
+/// automatically on commit, rollback, or connection loss.
+pub async fn try_cleanup_expired_live_session_leases(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Option<u64>> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL lock_timeout='500ms'")
+        .execute(&mut *tx)
+        .await?;
+    let elected: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(1314079572,4)")
+        .fetch_one(&mut *tx)
+        .await?;
+    if !elected {
+        tx.rollback().await?;
+        return Ok(None);
+    }
     let removed: i64 = sqlx::query_scalar("SELECT northstar_session_cleanup_live($1)")
         .bind(limit.clamp(1, 10_000))
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
-    u64::try_from(removed).context("negative live-session cleanup count")
+    tx.commit().await?;
+    Ok(Some(
+        u64::try_from(removed).context("negative live-session cleanup count")?,
+    ))
 }
 
 pub async fn extend_live_session_lease_in_transaction(
@@ -702,6 +901,8 @@ mod tests {
             resumable_sessions: 200,
         };
         assert!(validate_authority_transition(current, current).is_ok());
+        assert!(!authority_reconciliation_required(current, current)
+            .expect("an unchanged committed epoch must take the audit path"));
         assert!(validate_authority_transition(
             current,
             DeploymentCapacityConfiguration {
@@ -711,6 +912,15 @@ mod tests {
             }
         )
         .is_ok());
+        assert!(authority_reconciliation_required(
+            current,
+            DeploymentCapacityConfiguration {
+                epoch: 8,
+                accounts: 101,
+                ..current
+            }
+        )
+        .expect("the next epoch is a recovery transition"));
         assert!(validate_authority_transition(
             current,
             DeploymentCapacityConfiguration {
@@ -748,6 +958,14 @@ mod tests {
         )
         .is_ok());
         assert!(validate_authority_transition(bootstrap, current).is_err());
+        assert!(authority_reconciliation_required(
+            bootstrap,
+            DeploymentCapacityConfiguration {
+                epoch: 1,
+                ..current
+            }
+        )
+        .expect("bootstrap must reconcile its first committed epoch"));
     }
 
     #[test]
@@ -803,6 +1021,196 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; uses only transaction-local temporary tables"]
+    async fn postgres_capacity_audit_compares_complete_entity_and_counter_sets() {
+        let url = std::env::var("TEST_DATABASE_URL")
+            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect(&url)
+            .await
+            .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        // The production audit resolves every business table inside this one
+        // connection's temporary namespace. A missing table cannot fall back
+        // to a persistent schema, including one supplied through the URL.
+        sqlx::raw_sql(
+            "SET LOCAL search_path=pg_temp,pg_catalog;
+             SET LOCAL statement_timeout='5s';
+             SET LOCAL lock_timeout='1s';
+             CREATE TEMP TABLE users(id UUID PRIMARY KEY) ON COMMIT DROP;
+             CREATE TEMP TABLE muc_rooms(
+                 id UUID PRIMARY KEY, destroyed_at TIMESTAMPTZ, owner_id UUID
+             ) ON COMMIT DROP;
+             CREATE TEMP TABLE deployment_session_leases(
+                 lease_id UUID PRIMARY KEY, user_id UUID NOT NULL,
+                 lease_until TIMESTAMPTZ NOT NULL
+             ) ON COMMIT DROP;
+             CREATE TEMP TABLE sm_resume_sessions(
+                 id UUID PRIMARY KEY, user_id UUID NOT NULL
+             ) ON COMMIT DROP;
+             CREATE TEMP TABLE deployment_capacity_shards(
+                 resource_kind TEXT NOT NULL, shard SMALLINT NOT NULL,
+                 capacity BIGINT NOT NULL, used BIGINT NOT NULL,
+                 PRIMARY KEY(resource_kind,shard)
+             ) ON COMMIT DROP;
+             CREATE TEMP TABLE deployment_capacity_allocations(
+                 resource_kind TEXT NOT NULL, entity_id UUID NOT NULL,
+                 shard SMALLINT NOT NULL, PRIMARY KEY(resource_kind,entity_id)
+             ) ON COMMIT DROP;
+             CREATE TEMP TABLE deployment_account_capacity(
+                 resource_kind TEXT NOT NULL, owner_id UUID NOT NULL,
+                 used BIGINT NOT NULL, PRIMARY KEY(resource_kind,owner_id)
+             ) ON COMMIT DROP;
+             INSERT INTO deployment_capacity_shards(resource_kind,shard,capacity,used)
+             SELECT kind,shard,1,0
+               FROM unnest(ARRAY['account','muc_room','live_session','sm_session']) kind
+               CROSS JOIN generate_series(0,63) shard;",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        assert!(sqlx::query_scalar::<_, bool>(
+            "SELECT current_schema()=(pg_my_temp_schema()::regnamespace)::text"
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap());
+        let authority = DeploymentCapacityConfiguration {
+            epoch: 1,
+            accounts: 64,
+            muc_rooms: 64,
+            muc_rooms_per_owner: 64,
+            live_sessions: 64,
+            sessions_per_account: 64,
+            resumable_sessions: 64,
+        };
+        assert!(
+            deployment_capacity_authority_is_consistent(&mut tx, authority)
+                .await
+                .unwrap()
+        );
+        sqlx::raw_sql(
+            "INSERT INTO users(id) VALUES
+                 ('00000000-0000-0000-0000-000000000001'),
+                 ('00000000-0000-0000-0000-000000000002');
+             INSERT INTO sm_resume_sessions(id,user_id) VALUES
+                 ('00000000-0000-0000-0000-000000000011','00000000-0000-0000-0000-000000000001'),
+                 ('00000000-0000-0000-0000-000000000012','00000000-0000-0000-0000-000000000001'),
+                 ('00000000-0000-0000-0000-000000000013','00000000-0000-0000-0000-000000000002');
+             INSERT INTO deployment_capacity_allocations(resource_kind,entity_id,shard) VALUES
+                 ('account','00000000-0000-0000-0000-000000000001',0),
+                 ('account','00000000-0000-0000-0000-000000000002',1),
+                 ('sm_session','00000000-0000-0000-0000-000000000011',0),
+                 ('sm_session','00000000-0000-0000-0000-000000000012',1),
+                 ('sm_session','00000000-0000-0000-0000-000000000013',2);
+             UPDATE deployment_capacity_shards
+                SET used=1 WHERE (resource_kind='account' AND shard IN (0,1))
+                             OR (resource_kind='sm_session' AND shard IN (0,1,2));
+             INSERT INTO deployment_account_capacity(resource_kind,owner_id,used) VALUES
+                 ('sm_session','00000000-0000-0000-0000-000000000001',2),
+                 ('sm_session','00000000-0000-0000-0000-000000000002',1);",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        assert!(
+            deployment_capacity_authority_is_consistent(&mut tx, authority)
+                .await
+                .unwrap()
+        );
+        let corruptions = [
+            (
+                "different entity with unchanged nonempty counts and shard usage",
+                "UPDATE deployment_capacity_allocations
+                    SET entity_id='00000000-0000-0000-0000-000000000099'
+                  WHERE entity_id='00000000-0000-0000-0000-000000000011'",
+            ),
+            (
+                "different kinds with unchanged per-kind counts and shard usage",
+                "UPDATE deployment_capacity_allocations
+                    SET resource_kind=CASE resource_kind
+                        WHEN 'account' THEN 'sm_session' ELSE 'account' END
+                  WHERE entity_id IN ('00000000-0000-0000-0000-000000000001',
+                                      '00000000-0000-0000-0000-000000000011')",
+            ),
+            (
+                "different owner with unchanged counter count and total usage",
+                "UPDATE deployment_account_capacity
+                    SET owner_id='00000000-0000-0000-0000-000000000099'
+                  WHERE owner_id='00000000-0000-0000-0000-000000000001'",
+            ),
+            (
+                "different counter usage with unchanged nonempty row count",
+                "UPDATE deployment_account_capacity SET used=3
+                  WHERE owner_id='00000000-0000-0000-0000-000000000001'",
+            ),
+            (
+                "swapped owner usage with unchanged row count and total usage",
+                "UPDATE deployment_account_capacity SET used=3-used",
+            ),
+            (
+                "different counter kind with unchanged count and total usage",
+                "UPDATE deployment_account_capacity SET resource_kind='live_session'",
+            ),
+            (
+                "missing allocation with its shard counter kept consistent",
+                "DELETE FROM deployment_capacity_allocations
+                  WHERE entity_id='00000000-0000-0000-0000-000000000013';
+                 UPDATE deployment_capacity_shards SET used=0
+                  WHERE resource_kind='sm_session' AND shard=2",
+            ),
+            (
+                "extra allocation with its shard counter kept consistent",
+                "INSERT INTO deployment_capacity_allocations(resource_kind,entity_id,shard)
+                 VALUES('sm_session','00000000-0000-0000-0000-000000000099',3);
+                 UPDATE deployment_capacity_shards SET used=1
+                  WHERE resource_kind='sm_session' AND shard=3",
+            ),
+            (
+                "missing owner counter while both sets remain nonempty",
+                "DELETE FROM deployment_account_capacity
+                  WHERE owner_id='00000000-0000-0000-0000-000000000001'",
+            ),
+            (
+                "extra owner counter while both sets remain nonempty",
+                "INSERT INTO deployment_account_capacity(resource_kind,owner_id,used)
+                 VALUES('sm_session','00000000-0000-0000-0000-000000000099',1)",
+            ),
+        ];
+        for (case, mutation) in corruptions {
+            sqlx::query("SAVEPOINT capacity_audit_case")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::raw_sql(mutation).execute(&mut *tx).await.unwrap();
+            assert!(
+                !deployment_capacity_authority_is_consistent(&mut tx, authority)
+                    .await
+                    .unwrap(),
+                "audit accepted {case}"
+            );
+            sqlx::query("ROLLBACK TO SAVEPOINT capacity_audit_case")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query("RELEASE SAVEPOINT capacity_audit_case")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            assert!(
+                deployment_capacity_authority_is_consistent(&mut tx, authority)
+                    .await
+                    .unwrap(),
+                "baseline did not recover after {case}"
+            );
+        }
+        tx.rollback().await.unwrap();
+        pool.close().await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -936,9 +1344,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            cleanup_expired_live_session_leases(&pool, 10)
+            try_cleanup_expired_live_session_leases(&pool, 10)
                 .await
-                .unwrap(),
+                .unwrap()
+                .expect("an isolated fixture must acquire the reaper role"),
             1
         );
         let live_owner_counter_exists: bool = sqlx::query_scalar(

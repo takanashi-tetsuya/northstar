@@ -1,15 +1,18 @@
-FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS builder
+FROM rust:1.97.1-bookworm@sha256:14bc9c5966e7b3a385794b3d5389a8765668342025fbcc7b2e3d2866ac4bd8c3 AS builder
 RUN rustc --version | grep -E '^rustc 1\.97\.1 '
 WORKDIR /app
 COPY Cargo.toml ./
 COPY Cargo.lock ./
+COPY crates ./crates
+COPY services ./services
+COPY tools ./tools
 COPY src ./src
 COPY migrations ./migrations
 COPY docs/openapi.yaml ./docs/openapi.yaml
 COPY deploy/postgres-init/lib/northstar-capability-manifest.sql \
      deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql \
      ./deploy/postgres-init/lib/
-RUN cargo build --release --locked
+RUN cargo build -p rust-xmpp-server --release --locked
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 ARG NORTHSTAR_VERSION=0.2.0

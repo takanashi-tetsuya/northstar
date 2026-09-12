@@ -1,6 +1,9 @@
 use crate::{
     abuse::{AbuseConfig, AbuseGuard},
-    config::Config,
+    config::{
+        AdminCommandPoolMode, Config, OMEMO_RECOVERY_POOL_MAX_CONNECTIONS,
+        SERVICE_CONTROL_POOL_MAX_CONNECTIONS,
+    },
     db,
     metrics::Metrics,
     s2s::FederationRouter,
@@ -17,8 +20,9 @@ use hickory_resolver::{
 };
 use sha2::{Digest, Sha256};
 use sqlx::{
+    pool::PoolConnection,
     postgres::{PgConnectOptions, PgPoolOptions},
-    PgPool,
+    PgPool, Postgres,
 };
 use std::{
     collections::{HashSet, VecDeque},
@@ -38,6 +42,687 @@ use zeroize::{Zeroize, Zeroizing};
 const OMEMO_POLL_CONCURRENCY: usize = 4;
 const OMEMO_POLL_IP_REQUESTS_PER_MINUTE: usize = 30;
 const OMEMO_POLL_MAX_ACTIVE_IPS: usize = 65_536;
+/// Durable runtime policy is a safety boundary, not ordinary background work.
+/// Reserve one runtime-role connection so traffic workers cannot prevent the
+/// process from observing committed administration settings under a saturated
+/// main pool. XEP-0133 uses the same control-plane capability when enabled,
+/// but does not own the capability itself.
+// This is an initial connection/SCRAM handshake budget, not the runtime
+// policy polling interval. Repeatedly cancelling half-second handshakes under
+// a cold-start cohort can prevent any of them from reaching authentication.
+const RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET: Duration = Duration::from_secs(3);
+/// A process has no traffic listeners while this bounded admission window is
+/// active.  It exists specifically to de-correlate a cold-start cohort from a
+/// short, per-attempt pool deadline; it is not a runtime worker retry policy.
+const RUNTIME_CONTROL_STARTUP_RETRY_BUDGET: Duration = Duration::from_secs(15);
+const RUNTIME_CONTROL_STARTUP_RETRY_MAX_DELAY: Duration = Duration::from_millis(500);
+// Auxiliary pools retain their two-second acquisition policy while serving.
+// Only initial handshakes may retry, within one shared admission window.
+const AUXILIARY_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(2);
+const AUXILIARY_POOL_STARTUP_BUDGET: Duration = Duration::from_secs(15);
+
+/// Fixed concurrency keeps one slow transport from blocking other shutdown
+/// notices without spawning tasks or increasing the root's total deadline.
+pub(crate) async fn count_shutdown_notification_completions<I, F>(notifications: I) -> usize
+where
+    I: IntoIterator<Item = F>,
+    F: std::future::Future<Output = bool>,
+{
+    use futures::StreamExt;
+    futures::stream::iter(notifications)
+        .buffer_unordered(16)
+        .fold(0, |confirmed, written| async move {
+            confirmed + usize::from(written)
+        })
+        .await
+}
+
+fn runtime_control_pool_options(config: &Config, attempt_budget: Duration) -> PgPoolOptions {
+    let options = PgPoolOptions::new()
+        .max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)
+        .min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)
+        .acquire_timeout(attempt_budget);
+    if config.database_allow_unsafe_role_for_development {
+        options
+    } else {
+        db::pin_public_application_schema(options)
+    }
+}
+
+fn runtime_control_connect_options(database_url: &str) -> Result<PgConnectOptions, sqlx::Error> {
+    Ok(database_url
+        .parse::<PgConnectOptions>()?
+        .application_name("northstar-runtime-control"))
+}
+
+fn runtime_control_startup_retry_delay(attempt: u32, process_id: u32) -> Duration {
+    let exponent = attempt.saturating_sub(1).min(5);
+    let exponential_millis = 10_u64.saturating_mul(1_u64 << exponent);
+    // A process-local deterministic spread avoids another synchronized
+    // connection wave without introducing shared startup state or a random
+    // source into the authority boundary.
+    let jitter_millis = u64::from(process_id)
+        .wrapping_mul(0x9e37_79b9)
+        .wrapping_add(u64::from(attempt).wrapping_mul(0x85eb_ca6b))
+        % 97;
+    Duration::from_millis(
+        exponential_millis
+            .saturating_add(jitter_millis)
+            .min(RUNTIME_CONTROL_STARTUP_RETRY_MAX_DELAY.as_millis() as u64),
+    )
+}
+
+async fn runtime_control_startup_connect<T, Connect, ConnectFuture>(
+    deadline: tokio::time::Instant,
+    connect: Connect,
+) -> anyhow::Result<T>
+where
+    Connect: FnMut(Duration) -> ConnectFuture,
+    ConnectFuture: std::future::Future<Output = Result<T, sqlx::Error>>,
+{
+    startup_database_connect(
+        deadline,
+        RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET,
+        "runtime-control",
+        connect,
+    )
+    .await
+}
+
+async fn startup_database_connect<T, Connect, ConnectFuture>(
+    deadline: tokio::time::Instant,
+    attempt_limit: Duration,
+    pool_name: &'static str,
+    mut connect: Connect,
+) -> anyhow::Result<T>
+where
+    Connect: FnMut(Duration) -> ConnectFuture,
+    ConnectFuture: std::future::Future<Output = Result<T, sqlx::Error>>,
+{
+    let mut attempts = 0_u32;
+    let admission = tokio::time::timeout_at(deadline, async {
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(sqlx::Error::PoolTimedOut);
+            }
+            let attempt_budget = remaining.min(attempt_limit);
+            attempts = attempts.saturating_add(1);
+            let result = tokio::time::timeout(attempt_budget, connect(attempt_budget))
+                .await
+                .unwrap_or(Err(sqlx::Error::PoolTimedOut));
+            match result {
+                Ok(pool) => return Ok(pool),
+                Err(sqlx::Error::PoolTimedOut) => {
+                    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                    let delay = runtime_control_startup_retry_delay(attempts, std::process::id())
+                        .min(remaining);
+                    tokio::time::sleep(delay).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })
+    .await
+    .unwrap_or(Err(sqlx::Error::PoolTimedOut));
+    admission.with_context(|| {
+        format!("could not create isolated {pool_name} database pool after {attempts} bounded startup admission attempts")
+    })
+}
+
+#[cfg(test)]
+mod runtime_control_startup_tests {
+    use super::{
+        runtime_control_connect_options, runtime_control_startup_connect, startup_database_connect,
+    };
+    use std::sync::{
+        atomic::{AtomicBool, AtomicU32, Ordering},
+        Arc,
+    };
+    use std::time::Duration;
+
+    #[test]
+    fn control_connection_identification_preserves_url_transport_and_schema_options() {
+        let url = "postgres://fixture_user@127.0.0.1:6543/fixture_db?sslmode=verify-full&application_name=caller-name&options=-csearch_path%3Dfixture_schema%2Cpublic%20-cstatement_timeout%3D5000";
+        let original = url.parse::<sqlx::postgres::PgConnectOptions>().unwrap();
+        let control = runtime_control_connect_options(url).unwrap();
+        assert_eq!(
+            control.get_application_name(),
+            Some("northstar-runtime-control")
+        );
+        assert_eq!(original.get_application_name(), Some("caller-name"));
+        assert_eq!(control.get_host(), original.get_host());
+        assert_eq!(control.get_port(), original.get_port());
+        assert_eq!(control.get_username(), original.get_username());
+        assert_eq!(control.get_database(), original.get_database());
+        assert!(matches!(
+            control.get_ssl_mode(),
+            sqlx::postgres::PgSslMode::VerifyFull
+        ));
+        assert_eq!(control.get_options(), original.get_options());
+        assert_eq!(
+            control.get_options(),
+            Some("-csearch_path=fixture_schema,public -cstatement_timeout=5000")
+        );
+        assert!(runtime_control_connect_options("not a database URL").is_err());
+    }
+
+    #[tokio::test]
+    async fn slow_initial_handshake_finishes_without_half_second_cancellation() {
+        let attempts = AtomicU32::new(0);
+        let result = runtime_control_startup_connect(
+            tokio::time::Instant::now() + Duration::from_secs(15),
+            |budget| {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                assert!(budget > Duration::from_millis(500));
+                assert!(budget <= Duration::from_secs(3));
+                async {
+                    tokio::time::sleep(Duration::from_millis(750)).await;
+                    Ok(7_u32)
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, 7);
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn remaining_admission_budget_cancels_an_incomplete_handshake() {
+        struct CancellationWitness(Arc<AtomicBool>);
+        impl Drop for CancellationWitness {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let attempts = AtomicU32::new(0);
+        let result: anyhow::Result<()> = runtime_control_startup_connect(
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            |budget| {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                assert!(budget <= Duration::from_secs(1));
+                let witness = CancellationWitness(Arc::clone(&cancelled));
+                async move {
+                    let _witness = witness;
+                    std::future::pending().await
+                }
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(cancelled.load(Ordering::Relaxed));
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn admission_retries_pool_timeouts_but_never_authentication_or_protocol_errors() {
+        let attempts = AtomicU32::new(0);
+        runtime_control_startup_connect(
+            tokio::time::Instant::now() + Duration::from_secs(2),
+            |_| {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    if attempt == 0 {
+                        Err(sqlx::Error::PoolTimedOut)
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+        attempts.store(0, Ordering::Relaxed);
+        let result: anyhow::Result<()> = runtime_control_startup_connect(
+            tokio::time::Instant::now() + Duration::from_secs(2),
+            |_| {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                async {
+                    Err(sqlx::Error::Protocol(
+                        "fixture authentication rejected".into(),
+                    ))
+                }
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn expired_admission_never_starts_a_new_connection() {
+        let result: anyhow::Result<()> = runtime_control_startup_connect(
+            tokio::time::Instant::now() - Duration::from_millis(1),
+            |_| async { panic!("connection was attempted after its admission deadline") },
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn auxiliary_pools_share_the_remaining_deadline_and_cancel_inflight_connect() {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        startup_database_connect(deadline, Duration::from_secs(2), "command", |_| async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let result: anyhow::Result<()> =
+            startup_database_connect(deadline, Duration::from_secs(2), "OMEMO", |budget| {
+                assert!(budget < Duration::from_secs(2));
+                std::future::pending()
+            })
+            .await;
+        assert!(result.unwrap_err().to_string().contains("OMEMO"));
+        let result: anyhow::Result<()> =
+            startup_database_connect(deadline, Duration::from_secs(2), "command", |_| async {
+                panic!("a later pool must not reset an exhausted shared deadline")
+            })
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn auxiliary_pool_retry_preserves_its_acquisition_limit() {
+        let attempts = AtomicU32::new(0);
+        startup_database_connect(
+            tokio::time::Instant::now() + Duration::from_secs(15),
+            Duration::from_secs(2),
+            "OMEMO",
+            |budget| {
+                assert_eq!(budget, Duration::from_secs(2));
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    if attempt == 0 {
+                        Err(sqlx::Error::PoolTimedOut)
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeControlPhase {
+    Idle,
+    SettingsRead,
+    RulesRead,
+    PolicyApply,
+    ServiceControlRead,
+}
+
+impl RuntimeControlPhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::SettingsRead => "settings-read",
+            Self::RulesRead => "rules-read",
+            Self::PolicyApply => "policy-apply",
+            Self::ServiceControlRead => "service-control-read",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeControlStall {
+    phase: RuntimeControlPhase,
+    phase_elapsed: Duration,
+    heartbeat_elapsed: Duration,
+}
+
+/// Observation only: a stalled attempt is dropped before its supervisor sets
+/// the root cancellation token. Normal root shutdown must not produce a warning.
+struct RuntimeControlDiagnostics {
+    phase: RuntimeControlPhase,
+    phase_started: tokio::time::Instant,
+    last_reported: tokio::time::Instant,
+    max_silence: Duration,
+    root_cancel: CancellationToken,
+    #[cfg(test)]
+    captured: Option<Arc<std::sync::Mutex<Vec<RuntimeControlStall>>>>,
+}
+
+impl RuntimeControlDiagnostics {
+    fn new(root_cancel: CancellationToken, max_silence: Duration) -> Self {
+        let now = tokio::time::Instant::now();
+        Self {
+            phase: RuntimeControlPhase::Idle,
+            phase_started: now,
+            last_reported: now,
+            max_silence,
+            root_cancel,
+            #[cfg(test)]
+            captured: None,
+        }
+    }
+
+    fn enter(&mut self, phase: RuntimeControlPhase) {
+        self.phase = phase;
+        self.phase_started = tokio::time::Instant::now();
+    }
+
+    fn database_read(&mut self, phase: db::RuntimeControlReadPhase) {
+        self.enter(match phase {
+            db::RuntimeControlReadPhase::Settings => RuntimeControlPhase::SettingsRead,
+            db::RuntimeControlReadPhase::Rules => RuntimeControlPhase::RulesRead,
+        });
+    }
+
+    /// Call only after the existing heartbeat report; this changes no health.
+    fn reported(&mut self) {
+        let now = tokio::time::Instant::now();
+        self.last_reported = now;
+        self.phase = RuntimeControlPhase::Idle;
+        self.phase_started = now;
+    }
+
+    fn stalled(&self) -> Option<RuntimeControlStall> {
+        if self.root_cancel.is_cancelled() {
+            return None;
+        }
+        let now = tokio::time::Instant::now();
+        let heartbeat_elapsed = now.saturating_duration_since(self.last_reported);
+        (heartbeat_elapsed > self.max_silence).then(|| RuntimeControlStall {
+            phase: self.phase,
+            phase_elapsed: now.saturating_duration_since(self.phase_started),
+            heartbeat_elapsed,
+        })
+    }
+}
+
+impl Drop for RuntimeControlDiagnostics {
+    fn drop(&mut self) {
+        let Some(stall) = self.stalled() else {
+            return;
+        };
+        tracing::warn!(
+            phase = stall.phase.label(),
+            phase_elapsed_ms = stall.phase_elapsed.as_millis() as u64,
+            heartbeat_elapsed_ms = stall.heartbeat_elapsed.as_millis() as u64,
+            "runtime-control attempt dropped after heartbeat silence"
+        );
+        #[cfg(test)]
+        if let Some(captured) = &self.captured {
+            captured.lock().unwrap().push(stall);
+        }
+    }
+}
+
+fn report_runtime_control_health(
+    heartbeat: &crate::workers::WorkerHeartbeat,
+    observed_database: bool,
+    error: Option<anyhow::Error>,
+) {
+    if let Some(error) = error {
+        heartbeat.error(error);
+    } else if observed_database {
+        heartbeat.ok();
+    } else {
+        // With XEP-0133 control disabled, alternate ticks perform no query.
+        // They prove scheduler liveness only, never database/ownership health.
+        // Clearing an error here would let a dead reserved connection alternate
+        // error/ok forever, concealing loss of the standalone retention lock.
+        heartbeat.pulse();
+    }
+}
+
+#[cfg(test)]
+mod runtime_control_health_tests {
+    use super::report_runtime_control_health;
+    use crate::workers::{WorkerCriticality, WorkerMode, WorkerRegistry};
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn idle_ticks_cannot_reset_a_broken_control_connection() {
+        let workers = WorkerRegistry::new();
+        let cancel = CancellationToken::new();
+        workers.supervise(
+            "test-runtime-control-loss",
+            WorkerCriticality::Critical,
+            WorkerMode::Continuous,
+            None,
+            cancel.clone(),
+            |heartbeat| async move {
+                for _ in 0..3 {
+                    report_runtime_control_health(
+                        &heartbeat,
+                        true,
+                        Some(anyhow::anyhow!("fixture connection closed")),
+                    );
+                    report_runtime_control_health(&heartbeat, false, None);
+                }
+                std::future::pending().await
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(2), cancel.cancelled())
+            .await
+            .expect("idle ticks concealed a broken reserved connection");
+        assert!(workers.critical_failure().is_some());
+        assert!(workers
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await
+            .is_clean());
+    }
+
+    #[tokio::test]
+    async fn successful_database_reads_can_restore_control_health() {
+        let workers = WorkerRegistry::new();
+        let cancel = CancellationToken::new();
+        let (complete, mut observed) = tokio::sync::mpsc::channel(1);
+        workers.supervise(
+            "test-runtime-control-recovery",
+            WorkerCriticality::Critical,
+            WorkerMode::Continuous,
+            None,
+            cancel.clone(),
+            move |heartbeat| {
+                let complete = complete.clone();
+                async move {
+                    for _ in 0..2 {
+                        report_runtime_control_health(
+                            &heartbeat,
+                            true,
+                            Some(anyhow::anyhow!("fixture query failed")),
+                        );
+                        report_runtime_control_health(&heartbeat, false, None);
+                    }
+                    report_runtime_control_health(&heartbeat, true, None);
+                    for _ in 0..2 {
+                        report_runtime_control_health(
+                            &heartbeat,
+                            true,
+                            Some(anyhow::anyhow!("fixture query failed")),
+                        );
+                        report_runtime_control_health(&heartbeat, false, None);
+                    }
+                    let _ = complete.send(()).await;
+                    std::future::pending().await
+                }
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(2), observed.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!cancel.is_cancelled());
+        assert!(workers.readiness_error().is_none());
+        cancel.cancel();
+        assert!(workers
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await
+            .is_clean());
+    }
+
+    fn diagnostic_guard(
+        root_cancel: CancellationToken,
+    ) -> (
+        super::RuntimeControlDiagnostics,
+        std::sync::Arc<std::sync::Mutex<Vec<super::RuntimeControlStall>>>,
+    ) {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut guard = super::RuntimeControlDiagnostics::new(root_cancel, Duration::from_secs(5));
+        guard.captured = Some(std::sync::Arc::clone(&captured));
+        (guard, captured)
+    }
+
+    #[tokio::test]
+    async fn dropped_pending_control_turn_reports_its_actual_phase() {
+        use super::RuntimeControlPhase;
+        for phase in [
+            RuntimeControlPhase::SettingsRead,
+            RuntimeControlPhase::RulesRead,
+            RuntimeControlPhase::PolicyApply,
+            RuntimeControlPhase::Idle,
+            RuntimeControlPhase::ServiceControlRead,
+        ] {
+            let (mut guard, captured) = diagnostic_guard(CancellationToken::new());
+            let (entered, observed) = tokio::sync::oneshot::channel();
+            let task = tokio::spawn(async move {
+                match phase {
+                    RuntimeControlPhase::SettingsRead => {
+                        guard.database_read(crate::db::RuntimeControlReadPhase::Settings);
+                    }
+                    RuntimeControlPhase::RulesRead => {
+                        guard.database_read(crate::db::RuntimeControlReadPhase::Rules);
+                    }
+                    other => guard.enter(other),
+                }
+                guard.phase_started -= Duration::from_secs(6);
+                guard.last_reported -= Duration::from_secs(6);
+                entered.send(()).unwrap();
+                std::future::pending::<()>().await;
+                drop(guard);
+            });
+            observed.await.unwrap();
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            let reports = captured.lock().unwrap();
+            assert_eq!(reports.len(), 1);
+            assert_eq!(reports[0].phase, phase);
+            assert!(reports[0].phase_elapsed >= Duration::from_secs(6));
+            assert!(reports[0].heartbeat_elapsed >= Duration::from_secs(6));
+        }
+    }
+
+    #[tokio::test]
+    async fn normal_shutdown_drops_a_stalled_control_turn_without_warning() {
+        let root_cancel = CancellationToken::new();
+        let (mut guard, captured) = diagnostic_guard(root_cancel.clone());
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            guard.database_read(crate::db::RuntimeControlReadPhase::Rules);
+            guard.phase_started -= Duration::from_secs(6);
+            guard.last_reported -= Duration::from_secs(6);
+            entered.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(guard);
+        });
+        observed.await.unwrap();
+        root_cancel.cancel();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(captured.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn short_control_phases_do_not_reset_total_heartbeat_silence() {
+        let (mut guard, captured) = diagnostic_guard(CancellationToken::new());
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let (next_phase, continue_turn) = tokio::sync::oneshot::channel();
+        let (changed, change_observed) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            guard.database_read(crate::db::RuntimeControlReadPhase::Settings);
+            guard.last_reported -= Duration::from_secs(6);
+            entered.send(()).unwrap();
+            continue_turn.await.unwrap();
+            guard.database_read(crate::db::RuntimeControlReadPhase::Rules);
+            guard.phase_started -= Duration::from_secs(2);
+            changed.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(guard);
+        });
+        observed.await.unwrap();
+        next_phase.send(()).unwrap();
+        change_observed.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let reports = captured.lock().unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].phase, super::RuntimeControlPhase::RulesRead);
+        assert!(reports[0].phase_elapsed >= Duration::from_secs(2));
+        assert!(reports[0].heartbeat_elapsed >= Duration::from_secs(6));
+        assert!(reports[0].heartbeat_elapsed > reports[0].phase_elapsed);
+    }
+
+    #[tokio::test]
+    async fn an_existing_health_report_resets_only_the_diagnostic_clock() {
+        let (mut guard, captured) = diagnostic_guard(CancellationToken::new());
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let (report, continue_turn) = tokio::sync::oneshot::channel();
+        let (reported, report_observed) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            guard.database_read(crate::db::RuntimeControlReadPhase::Settings);
+            guard.last_reported -= Duration::from_secs(6);
+            entered.send(()).unwrap();
+            continue_turn.await.unwrap();
+            guard.reported();
+            reported.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(guard);
+        });
+        observed.await.unwrap();
+        report.send(()).unwrap();
+        report_observed.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(captured.lock().unwrap().is_empty());
+    }
+}
+
+/// Establish the one process-owned control-plane connection before the
+/// traffic pool or any startup reconciliation can take database capacity.
+///
+/// Keeping this at the application boundary makes the ordering explicit:
+/// `main` owns startup sequencing, while [`AppState`] only owns the connection
+/// after startup transfers it into the coordinated runtime worker.  The
+/// connection remains separate from traffic for its whole lifetime.
+pub(crate) async fn reserve_runtime_control_connection(
+    config: &Config,
+) -> anyhow::Result<PoolConnection<Postgres>> {
+    let deadline = tokio::time::Instant::now() + RUNTIME_CONTROL_STARTUP_RETRY_BUDGET;
+    let connect_options = runtime_control_connect_options(&config.database_url)?;
+    let runtime_control_pool = runtime_control_startup_connect(deadline, |attempt_budget| {
+        runtime_control_pool_options(config, attempt_budget).connect_with(connect_options.clone())
+    })
+    .await?;
+    // Attestation and final ownership transfer share the same absolute startup
+    // deadline. A completed handshake alone never authorizes serving traffic.
+    tokio::time::timeout_at(deadline, async {
+        if config.database_allow_unsafe_role_for_development {
+            crate::db::attest_development_database_is_loopback(&runtime_control_pool).await?;
+        } else {
+            crate::db::attest_runtime_role(&runtime_control_pool).await?;
+        }
+        runtime_control_pool
+            .acquire()
+            .await
+            .context("could not reserve the runtime-control database connection")
+    })
+    .await
+    .context(
+        "runtime-control role attestation/reservation exceeded its startup admission deadline",
+    )?
+}
 
 fn admit_omemo_poll_ip_window(window: &mut VecDeque<Instant>, now: Instant) -> bool {
     let cutoff = now.checked_sub(Duration::from_secs(60)).unwrap_or(now);
@@ -131,56 +816,11 @@ fn upload_storage_namespace_id(config: &Config) -> anyhow::Result<[u8; 32]> {
     Ok(digest.finalize().into())
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct CapsKey {
-    pub algorithm: String,
-    pub node: String,
-    pub version: String,
-}
+#[allow(unused_imports)]
+pub use northstar_protocol_runtime::caps::CapsKey;
 
-/// Exact authority for one local XEP-0115 observation. The connection fence
-/// prevents full-JID ABA after bind/resume, while the generation fence prevents
-/// an older response or running side effect from surviving a newer presence on
-/// the same transport.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LocalCapsEpoch {
-    pub connection_id: uuid::Uuid,
-    pub generation: u64,
-}
-
-/// Lossless lifecycle signal for one exact local route incarnation.
-///
-/// The sender retains the terminal state, so a waiter which subscribes after
-/// the compare-and-remove has committed still observes `Removed`.  Binding the
-/// signal to the connection UUID prevents a full-JID ABA replacement from
-/// satisfying a waiter for the previous transport.
-#[derive(Debug)]
-pub(crate) struct RouteIncarnationSignal {
-    connection_id: uuid::Uuid,
-    removed: tokio::sync::watch::Sender<bool>,
-}
-
-impl RouteIncarnationSignal {
-    pub(crate) fn new(connection_id: uuid::Uuid) -> Arc<Self> {
-        let (removed, _) = tokio::sync::watch::channel(false);
-        Arc::new(Self {
-            connection_id,
-            removed,
-        })
-    }
-
-    pub(crate) fn connection_id(&self) -> uuid::Uuid {
-        self.connection_id
-    }
-
-    pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<bool> {
-        self.removed.subscribe()
-    }
-
-    fn publish_removed(&self) {
-        self.removed.send_replace(true);
-    }
-}
+pub use northstar_session_application::RouteIncarnationSignal;
+pub use northstar_session_core::LocalCapsEpoch;
 
 #[derive(Clone)]
 pub struct OnlineSession {
@@ -234,7 +874,7 @@ pub struct OnlineSession {
     pub roster_requested: Arc<AtomicBool>,
     /// Per-resource initial roster synchronization fence. Committed pushes
     /// are version-buffered until the initial IQ result owns the transport.
-    pub roster_sync: Arc<crate::services::roster::RosterSyncGate>,
+    pub roster_sync: Arc<northstar_roster_application::RosterSyncGate>,
     /// Per-resource XEP-0405 roster annotation preference. It is deliberately
     /// not an account-wide flag: a roster get without `<annotate/>` resets it
     /// only for the requesting client.
@@ -266,38 +906,10 @@ pub struct OnlineSession {
     pub disconnect: CancellationToken,
 }
 
-#[derive(Clone, Copy)]
-struct StagedRouteIdentity {
-    connection_id: uuid::Uuid,
-    user_id: uuid::Uuid,
-    auth_generation: i64,
-}
-
-#[derive(Clone, Copy)]
-struct StagedRouteActivationCheck {
-    session: StagedRouteIdentity,
-    expected: StagedRouteIdentity,
-    same_lifecycle: bool,
-    lifecycle_state: u8,
-    session_cancelled: bool,
-    owner_cancelled: bool,
-}
-
-fn staged_route_activation_allowed(check: StagedRouteActivationCheck) -> bool {
-    check.session.connection_id == check.expected.connection_id
-        && check.session.user_id == check.expected.user_id
-        && check.session.auth_generation == check.expected.auth_generation
-        && check.same_lifecycle
-        && check.lifecycle_state == 0
-        && !check.session_cancelled
-        && !check.owner_cancelled
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct JoinedMucMembership {
-    pub nick: String,
-    pub cluster_epoch: uuid::Uuid,
-}
+pub use northstar_session_core::{
+    staged_route_activation_allowed, JoinedMucMembership, StagedRouteActivationCheck,
+    StagedRouteIdentity,
+};
 
 pub(crate) fn muc_actor_identity_matches(
     occupant: &MucOccupant,
@@ -394,35 +1006,7 @@ pub(crate) fn muc_suspended_teardown_identity_matches(
         )
 }
 
-#[derive(Clone)]
-pub enum MixIqRelayStage {
-    /// A local client sent an IQ through a remote channel.  The remote MIX
-    /// service must return exactly the encoded participant and requester that
-    /// were registered here before the client id is restored.
-    Participant {
-        requester_full_jid: String,
-        original_id: String,
-        expected_from: String,
-        channel_jid: String,
-    },
-    /// A locally hosted channel relayed a whitelisted read to a remote
-    /// participant.  Responses are accepted only from the exact real target
-    /// and are rewritten back to the encoded channel identity.
-    Channel {
-        requester_full_jid: String,
-        requester_encoded_jid: String,
-        original_id: String,
-        target_real_jid: String,
-        target_encoded_jid: String,
-        channel_jid: String,
-    },
-}
-
-#[derive(Clone)]
-pub struct PendingMixIqRelay {
-    pub stage: MixIqRelayStage,
-    pub expires_at: Instant,
-}
+pub use northstar_protocol_runtime::mix::{MixIqRelayStage, PendingMixIqRelay};
 
 #[derive(Clone)]
 pub enum MucOccupantEndpoint {
@@ -734,6 +1318,29 @@ fn append_suspended_muc_suffix_to_snapshot(
 }
 
 impl SuspendedMucEndpoint {
+    fn try_send_live_write_notification(
+        &self,
+        stanza: String,
+        receipt: tokio::sync::mpsc::UnboundedSender<()>,
+    ) -> anyhow::Result<bool> {
+        let route = self
+            .route
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let SuspendedMucRoute::Live(sender) = &*route else {
+            // A write-only completion cannot transfer into durable or volatile
+            // SM storage, nor cross a concurrent Live-to-Transitioning fence.
+            return Ok(false);
+        };
+        match sender.try_send_with_transport_write_receipt(stanza, receipt) {
+            Ok(()) => Ok(true),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Ok(false),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                anyhow::bail!("live SM shutdown recipient queue is full")
+            }
+        }
+    }
+
     #[cfg(test)]
     pub fn new(sm_session_id: uuid::Uuid) -> Self {
         Self::new_collecting(sm_session_id, 0, 0)
@@ -1004,8 +1611,70 @@ impl FederationWritePolicy {
     }
 
     async fn refresh(&self, enabled: bool) -> bool {
+        // An unchanged observation linearizes at this acquire load. It must
+        // not wait behind a socket write merely to publish the same value.
+        // Actual transitions still drain and fence writes under the gate.
+        let previous = self.island_mode.load(Ordering::Acquire);
+        if previous == enabled {
+            return previous;
+        }
         let _write_guard = self.gate.write().await;
         self.island_mode.swap(enabled, Ordering::AcqRel)
+    }
+}
+
+struct UploadAdmission {
+    semaphore: Arc<Semaphore>,
+    by_ip: Arc<DashMap<std::net::IpAddr, usize>>,
+    max_per_ip: usize,
+}
+
+enum UploadRuntime {
+    Enabled {
+        requests: UploadAdmission,
+        downloads: UploadAdmission,
+    },
+    DrainReadOnly {
+        downloads: UploadAdmission,
+    },
+    Disabled,
+}
+
+impl UploadRuntime {
+    fn from_config(config: &crate::config::Config) -> Self {
+        let downloads = || UploadAdmission {
+            semaphore: Arc::new(Semaphore::new(config.upload_download_max_concurrent)),
+            by_ip: Arc::new(DashMap::new()),
+            max_per_ip: config.upload_download_max_per_ip,
+        };
+        match config.upload_mode {
+            crate::config::UploadMode::Enabled => Self::Enabled {
+                requests: UploadAdmission {
+                    semaphore: Arc::new(Semaphore::new(32)),
+                    by_ip: Arc::new(DashMap::new()),
+                    max_per_ip: 4,
+                },
+                downloads: downloads(),
+            },
+            crate::config::UploadMode::DrainReadOnly => Self::DrainReadOnly {
+                downloads: downloads(),
+            },
+            crate::config::UploadMode::Disabled => Self::Disabled,
+        }
+    }
+
+    fn request_admission(&self) -> Option<&UploadAdmission> {
+        match self {
+            Self::Enabled { requests, .. } => Some(requests),
+            Self::DrainReadOnly { .. } | Self::Disabled => None,
+        }
+    }
+
+    fn download_admission(&self) -> Option<&UploadAdmission> {
+        match self {
+            Self::Enabled { downloads, .. } | Self::DrainReadOnly { downloads } => Some(downloads),
+            Self::Disabled => None,
+        }
     }
 }
 
@@ -1050,7 +1719,7 @@ pub struct AppState {
     admin_command_service: crate::services::admin_commands::AdminCommandService,
     push_service: crate::services::push::PushService,
     pub cluster: crate::cluster::ClusterManager,
-    bosh: crate::bosh::BoshManager,
+    bosh: Option<crate::bosh::BoshManager>,
     pub sessions: DashMap<String, OnlineSession>,
     pub muc_occupants: DashMap<String, MucOccupant>,
     /// Exactly one process-local suspension/resume FIFO per durable SM
@@ -1066,10 +1735,18 @@ pub struct AppState {
     /// Optional credential for the dedicated observability listener. Callers
     /// can ask for an authorization decision but cannot read the token.
     metrics_bearer_token: Option<Arc<Zeroizing<String>>>,
+    /// Reverse-proxy credential for the isolated administration origin. The
+    /// API can ask for a constant-time decision but cannot read key bytes.
+    web_admin_gateway_token: Option<Arc<Zeroizing<String>>>,
     /// A fail-closed, read-only-sized pool for the unauthenticated poll
     /// capability. It cannot consume the primary 32-connection application
     /// pool during a capability flood.
     omemo_recovery_poll_pool: PgPool,
+    /// Clone-shared permission for short MIX, PubSub and clustered-MUC
+    /// durable-outbox database turns. It preserves a primary-pool foreground
+    /// reserve without giving protocol handlers raw pool access.
+    durable_outbox_database_admission:
+        crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
     api_control: db::ApiControlKeyring,
     /// Opaque REST pagination cursors use purpose-separated subkeys derived
     /// from the same current/previous process secrets as API idempotency.
@@ -1079,11 +1756,12 @@ pub struct AppState {
     api_cursor: crate::api::cursor::CursorKeyring,
     /// XEP-0363 bearer-token and capacity admission authority. Protocol code
     /// receives typed slot outcomes, never the PostgreSQL pool.
-    upload_service: crate::services::upload::UploadService,
-    upload_store: Arc<dyn UploadStore>,
+    upload_service: Option<crate::services::upload::UploadService>,
+    upload_store: Option<Arc<dyn UploadStore>>,
     upload_storage_namespace_sha256: [u8; 32],
     upload_authority_generation: UploadAuthorityGeneration,
     upload_safety_gate: Arc<UploadSafetyGate>,
+    upload_startup_audits: crate::upload_worker::StartupAuditHandoff,
     pub federation: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.
@@ -1099,20 +1777,20 @@ pub struct AppState {
     s2s_dnssec_resolver: Option<TokioResolver>,
     /// XEP-0403 IQ relay correlations. Keys are server-generated opaque IQ
     /// ids, never client-controlled ids; entries are bounded and short-lived.
-    pending_mix_iq: crate::xmpp::protocol::mix::MixIqRelayIndex,
+    pending_mix_iq: northstar_protocol_runtime::mix::MixIqRelayIndex,
     /// XEP-0115 entries are inserted only after the advertised verification
     /// string has been recomputed successfully. Unverified payloads never
     /// enter this shared cache.
-    caps_cache: crate::xmpp::protocol::caps::CapsCacheIndex,
-    caps_by_jid: crate::xmpp::protocol::caps::CapsResourceIndex,
-    pending_caps: crate::xmpp::protocol::caps::PendingCapsIndex,
+    caps_cache: northstar_protocol_runtime::caps::CapsCacheIndex,
+    caps_by_jid: northstar_protocol_runtime::caps::CapsResourceIndex,
+    pending_caps: northstar_protocol_runtime::caps::PendingCapsIndex,
     /// Cross-stream ordering authority for one authenticated federated full
     /// JID's capability lifecycle. Weak, self-cleaning entries exist only
     /// while an observer or response owns or waits for the resource.
-    federated_caps_gates: crate::xmpp::protocol::caps::FederatedCapsGateIndex,
+    federated_caps_gates: northstar_protocol_runtime::caps::FederatedCapsGateIndex,
     /// Bounded, per-full-JID single-flight boundary for XEP-0115-triggered
     /// PEP last-item delivery and verified MIX presence publication.
-    caps_effect_dispatcher: Arc<crate::xmpp::protocol::caps::CapsEffectDispatcher>,
+    caps_effect_dispatcher: Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>,
     dialback_secret: Zeroizing<Vec<u8>>,
     /// XEP-0484 token derivation key. PostgreSQL contains only derived token
     /// hashes and public diversification data.
@@ -1120,12 +1798,9 @@ pub struct AppState {
     dialback_verifications: Arc<Semaphore>,
     client_connections: Arc<Semaphore>,
     client_connections_by_ip: DashMap<std::net::IpAddr, usize>,
-    /// HTTP upload hashing and local-file I/O are bounded independently from
-    /// sockets so a valid capability cannot monopolize CPU or disk bandwidth.
-    upload_requests: Arc<Semaphore>,
-    upload_requests_by_ip: DashMap<std::net::IpAddr, usize>,
-    upload_downloads: Arc<Semaphore>,
-    upload_downloads_by_ip: DashMap<std::net::IpAddr, usize>,
+    /// Capability-owned upload runtime. Disabled mode contains no store,
+    /// semaphore, per-IP map or upload-specific numeric state.
+    upload_runtime: UploadRuntime,
     /// The unauthenticated OMEMO source completion capability is bounded
     /// independently from the general API and database pool. Keys are trusted-
     /// proxy-resolved IP addresses and expire from the one-minute window.
@@ -1234,7 +1909,9 @@ impl AppState {
     /// Process-local XEP-0124/XEP-0206 session authority. Transport handlers
     /// may submit bounded manager operations but cannot replace the manager.
     pub(crate) fn bosh_manager(&self) -> &crate::bosh::BoshManager {
-        &self.bosh
+        self.bosh
+            .as_ref()
+            .expect("BOSH routes exist only when the capability runtime is enabled")
     }
 
     /// Cached ordinary DNS resolver used only by the federation discovery
@@ -1328,20 +2005,41 @@ impl AppState {
     }
 
     /// Refresh the cached island-mode value and return the previous value.
-    /// The exclusive delivery guard waits for any in-flight stanza write and
-    /// blocks queued writers until they can observe the new policy.
+    /// Unchanged observations do not wait for socket writes. Actual changes
+    /// take the exclusive delivery guard, drain in-flight stanza writes, and
+    /// fence queued writers until they can observe the new policy.
     async fn refresh_island_mode(&self, enabled: bool) -> bool {
         self.federation_write_policy.refresh(enabled).await
     }
 
     /// Read the public-registration kill switch with acquire ordering.
     pub(crate) fn registration_is_closed(&self) -> bool {
-        self.registration_closed.load(Ordering::Acquire)
+        self.config.registration_dependency_locked()
+            || self.registration_closed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn registration_mode(&self) -> crate::config::RegistrationMode {
+        if self.registration_is_closed() {
+            crate::config::RegistrationMode::Closed
+        } else {
+            self.config.configured_registration_mode()
+        }
+    }
+
+    pub(crate) fn registration_requires_invitation(&self) -> bool {
+        self.registration_mode() == crate::config::RegistrationMode::InvitationOnly
     }
 
     /// Apply the authoritative registration setting with release ordering.
     pub(crate) fn apply_registration_closed(&self, closed: bool) {
-        self.registration_closed.store(closed, Ordering::Release);
+        self.registration_closed.store(
+            closed || self.config.registration_dependency_locked(),
+            Ordering::Release,
+        );
+    }
+
+    pub(crate) fn registration_opening_is_dependency_locked(&self) -> bool {
+        self.config.registration_dependency_locked()
     }
 
     /// Evaluate one resource's session-local XEP-0016 selection (or the
@@ -1376,6 +2074,7 @@ impl AppState {
         pool: PgPool,
         federation: FederationRouter,
         components: crate::components::ComponentRegistry,
+        runtime_control_connection: PoolConnection<Postgres>,
         worker_cancel: CancellationToken,
     ) -> anyhow::Result<Arc<Self>> {
         // This one-shot credential was consumed by ensure_bootstrap_admin
@@ -1384,6 +2083,7 @@ impl AppState {
             password.zeroize();
         }
         let metrics_bearer_token = config.metrics_bearer_token.take();
+        let web_admin_gateway_token = config.web_admin_gateway_token.take();
         let component_credentials: Arc<[crate::config::ComponentCredential]> =
             std::mem::take(&mut config.components).into();
         config.components = component_credentials
@@ -1414,6 +2114,7 @@ impl AppState {
                 config.api_control_allow_ephemeral
                     && config.redis_url.is_none()
                     && config.http_bind.ip().is_loopback()
+                    && (!config.web_admin_enabled || config.web_admin_bind.ip().is_loopback())
                     && (config.domain == "localhost"
                         || config.domain.ends_with(".localhost")
                         || config.domain.ends_with(".test")),
@@ -1432,159 +2133,239 @@ impl AppState {
             process_secret.zeroize();
             keyrings?
         };
+        let startup_phase = crate::logging::StartupPhase::begin("mix_delivery_capacity_audit");
         db::audit_mix_delivery_capacity_ledger(&pool)
             .await
             .context("MIX delivery capacity ledger failed startup reconciliation")?;
+        startup_phase.complete();
+        let startup_phase = crate::logging::StartupPhase::begin("mix_pam_capacity_audit");
         db::audit_mix_pam_operation_capacity(&pool)
             .await
             .context("MIX-PAM operation capacity authority failed startup audit")?;
-        let upload_safety_gate = UploadSafetyGate::new();
-        let upload_namespace = upload_storage_namespace_id(&config)?;
-        let namespace_generation = db::validate_upload_storage_backend(
-            &pool,
-            &config.upload_storage_backend,
-            &upload_namespace,
-        )
-        .await
-        .context("upload storage backend does not match durable metadata")?;
-        let (capacity_policy_generation, recovery_draining) = db::validate_upload_capacity_policy(
-            &pool,
-            config.upload_storage_max_pending_jobs,
-            config.upload_storage_max_retained_files,
-            config.upload_storage_max_retained_bytes,
-        )
-        .await
-        .context("upload capacity policy does not match durable deployment authority")?;
-        let upload_authority_generation = UploadAuthorityGeneration {
-            namespace: namespace_generation,
-            capacity_policy: capacity_policy_generation,
-        };
-        let authority_audit = db::audit_upload_capacity_authority(
-            &pool,
-            config.upload_storage_max_pending_jobs,
-            config.upload_storage_max_retained_files,
-            config.upload_storage_max_retained_bytes,
-        )
-        .await
-        .context("could not prove upload authority catalog and ACL invariants")?;
-        if authority_audit.violation_count() != 0 {
-            upload_safety_gate.mark_capacity_authority_unsafe(Arc::<str>::from(format!(
-                "upload authority catalog/ACL audit found {} violations",
-                authority_audit.violation_count()
-            )));
-            anyhow::bail!(
-                "upload authority catalog/ACL audit found {} violations",
-                authority_audit.violation_count()
-            );
-        }
-        let capacity_reconciliation = db::reconcile_upload_capacity_ledger(&pool)
-            .await
-            .context("could not reconcile upload capacity facts before storage startup")?;
-        if capacity_reconciliation.mismatch_count() != 0 {
-            upload_safety_gate.mark_ledger_mismatch(Arc::<str>::from(format!(
-                "upload capacity ledger differs from {} durable facts",
-                capacity_reconciliation.mismatch_count()
-            )));
-            anyhow::bail!(
-                "upload capacity ledger differs from {} durable facts",
-                capacity_reconciliation.mismatch_count()
-            );
-        }
-        upload_safety_gate.establish(upload_authority_generation, recovery_draining);
-        let upload_store: Arc<dyn UploadStore> = match config.upload_storage_backend.as_str() {
-            "local" => {
-                let local = Arc::new(
-                    LocalUploadStore::new(config.upload_dir.clone())
-                        .with_safety_gate(Arc::clone(&upload_safety_gate)),
-                );
-                let guarded = Arc::new(GuardedUploadStore::new(
-                    local.clone(),
-                    Arc::clone(&upload_safety_gate),
-                ));
-                // This bounded local enumeration is retained only for legacy
-                // pre-0091 partials. S3 reconciliation never lists a bucket;
-                // every stage is represented by a PostgreSQL job.
-                let mut abandoned_stages = 0_u64;
-                let startup_stages =
-                    tokio::time::timeout(Duration::from_secs(10), local.staging_attempts())
-                        .await
-                        .context("upload staging scan exceeded its startup time budget")?
-                        .context("failed to enumerate upload staging files")?;
-                // Enumeration is bounded above, but every candidate still
-                // needs an authoritative lease lookup and may need one exact
-                // unlink. Keep the complete reconciliation phase under one
-                // wall-clock budget so thousands of crash remnants cannot
-                // hold readiness indefinitely through sequential queries.
-                let startup_cleanup_deadline =
-                    tokio::time::Instant::now() + Duration::from_secs(30);
-                for (object_id, claim_token) in startup_stages {
-                    let remaining = startup_cleanup_deadline
-                        .checked_duration_since(tokio::time::Instant::now())
-                        .context(
-                            "upload staging reconciliation exceeded its startup time budget",
-                        )?;
-                    if tokio::time::timeout(
-                        remaining,
-                        db::upload_claim_is_live(&pool, object_id, claim_token),
+        startup_phase.complete();
+        let upload_startup_phase =
+            crate::logging::StartupPhase::begin("upload_storage_initialization");
+        let upload_startup_audits;
+        let (upload_safety_gate, upload_namespace, upload_authority_generation, upload_store) =
+            if config.upload_mode.keeps_storage_runtime() {
+                let upload_safety_gate = UploadSafetyGate::new();
+                let upload_namespace = upload_storage_namespace_id(&config)?;
+                let startup_phase =
+                    crate::logging::StartupPhase::begin("upload_namespace_and_policy");
+                let namespace_generation = db::validate_upload_storage_backend(
+                    &pool,
+                    &config.upload_storage_backend,
+                    &upload_namespace,
+                )
+                .await
+                .context("upload storage backend does not match durable metadata")?;
+                let (capacity_policy_generation, recovery_draining) =
+                    db::validate_upload_capacity_policy(
+                        &pool,
+                        config.upload_storage_max_pending_jobs,
+                        config.upload_storage_max_retained_files,
+                        config.upload_storage_max_retained_bytes,
                     )
                     .await
-                    .context("upload staging lease verification exceeded its startup time budget")?
-                    .context("failed to verify an upload staging lease")?
-                    {
-                        continue;
-                    }
-                    let remaining = startup_cleanup_deadline
-                        .checked_duration_since(tokio::time::Instant::now())
-                        .context(
-                            "upload staging reconciliation exceeded its startup time budget",
-                        )?;
-                    if tokio::time::timeout(
-                        remaining,
-                        guarded.abort(&object_id.to_string(), &claim_token.to_string(), None),
-                    )
-                    .await
-                    .context("upload staging deletion exceeded its startup time budget")?
-                    .context("failed to remove an abandoned upload stage")?
-                    {
-                        abandoned_stages = abandoned_stages.saturating_add(1);
-                    }
-                }
-                if abandoned_stages > 0 {
-                    tracing::warn!(
-                        abandoned_stages,
-                        "removed upload stages left by a previous process"
+                    .context(
+                        "upload capacity policy does not match durable deployment authority",
+                    )?;
+                let upload_authority_generation = UploadAuthorityGeneration {
+                    namespace: namespace_generation,
+                    capacity_policy: capacity_policy_generation,
+                };
+                startup_phase.complete();
+                let startup_phase = crate::logging::StartupPhase::begin("upload_authority_audit");
+                let authority_audit_started_at = tokio::time::Instant::now();
+                let authority_audit = db::audit_upload_capacity_authority(
+                    &pool,
+                    config.upload_storage_max_pending_jobs,
+                    config.upload_storage_max_retained_files,
+                    config.upload_storage_max_retained_bytes,
+                )
+                .await
+                .context("could not prove upload authority catalog and ACL invariants")?;
+                if authority_audit.violation_count() != 0 {
+                    upload_safety_gate.mark_capacity_authority_unsafe(Arc::<str>::from(format!(
+                        "upload authority catalog/ACL audit found {} violations",
+                        authority_audit.violation_count()
+                    )));
+                    anyhow::bail!(
+                        "upload authority catalog/ACL audit found {} violations",
+                        authority_audit.violation_count()
                     );
                 }
-                guarded
-            }
-            "s3" => {
-                let inner: Arc<dyn UploadStore> = Arc::new(
-                    S3UploadStore::new(S3UploadSettings {
-                        endpoint: config.upload_s3_endpoint.clone(),
-                        region: config.upload_s3_region.clone(),
-                        bucket: config
-                            .upload_s3_bucket
-                            .clone()
-                            .context("S3 upload bucket is missing after validation")?,
-                        prefix: config.upload_s3_prefix.clone(),
-                        path_style: config.upload_s3_path_style,
-                        allow_http: config.upload_s3_allow_http,
-                        ambient_credentials: config.upload_s3_credential_mode == "ambient",
-                        credential_bundle_file: config.upload_s3_credential_bundle_file.clone(),
-                        access_key_id_file: config.upload_s3_access_key_id_file.clone(),
-                        secret_access_key_file: config.upload_s3_secret_access_key_file.clone(),
-                        session_token_file: config.upload_s3_session_token_file.clone(),
-                        sse_kms_key_id_file: config.upload_s3_sse_kms_key_id_file.clone(),
-                    })?
-                    .with_safety_gate(Arc::clone(&upload_safety_gate)),
+                startup_phase.complete();
+                let startup_phase =
+                    crate::logging::StartupPhase::begin("upload_ledger_reconciliation");
+                let ledger_audit_started_at = tokio::time::Instant::now();
+                let capacity_reconciliation = db::reconcile_upload_capacity_ledger(&pool)
+                    .await
+                    .context("could not reconcile upload capacity facts before storage startup")?;
+                if capacity_reconciliation.mismatch_count() != 0 {
+                    upload_safety_gate.mark_ledger_mismatch(Arc::<str>::from(format!(
+                        "upload capacity ledger differs from {} durable facts",
+                        capacity_reconciliation.mismatch_count()
+                    )));
+                    anyhow::bail!(
+                        "upload capacity ledger differs from {} durable facts",
+                        capacity_reconciliation.mismatch_count()
+                    );
+                }
+                startup_phase.complete();
+                upload_safety_gate.establish(upload_authority_generation, recovery_draining);
+                let upload_store: Arc<dyn UploadStore> = match config
+                    .upload_storage_backend
+                    .as_str()
+                {
+                    "local" => {
+                        let local = Arc::new(
+                            LocalUploadStore::new(config.upload_dir.clone())
+                                .with_safety_gate(Arc::clone(&upload_safety_gate)),
+                        );
+                        let guarded = Arc::new(GuardedUploadStore::new(
+                            local.clone(),
+                            Arc::clone(&upload_safety_gate),
+                        ));
+                        // This bounded local enumeration is retained only for legacy
+                        // pre-0091 partials. S3 reconciliation never lists a bucket;
+                        // every stage is represented by a PostgreSQL job.
+                        let mut abandoned_stages = 0_u64;
+                        let startup_stages =
+                            tokio::time::timeout(Duration::from_secs(10), local.staging_attempts())
+                                .await
+                                .context("upload staging scan exceeded its startup time budget")?
+                                .context("failed to enumerate upload staging files")?;
+                        // Enumeration is bounded above, but every candidate still
+                        // needs an authoritative lease lookup and may need one exact
+                        // unlink. Keep the complete reconciliation phase under one
+                        // wall-clock budget so thousands of crash remnants cannot
+                        // hold readiness indefinitely through sequential queries.
+                        let startup_cleanup_deadline =
+                            tokio::time::Instant::now() + Duration::from_secs(30);
+                        for (object_id, claim_token) in startup_stages {
+                            let remaining = startup_cleanup_deadline
+                            .checked_duration_since(tokio::time::Instant::now())
+                            .context(
+                                "upload staging reconciliation exceeded its startup time budget",
+                            )?;
+                            if tokio::time::timeout(
+                            remaining,
+                            db::upload_claim_is_live(&pool, object_id, claim_token),
+                        )
+                        .await
+                        .context(
+                            "upload staging lease verification exceeded its startup time budget",
+                        )?
+                        .context("failed to verify an upload staging lease")?
+                        {
+                            continue;
+                        }
+                            let remaining = startup_cleanup_deadline
+                            .checked_duration_since(tokio::time::Instant::now())
+                            .context(
+                                "upload staging reconciliation exceeded its startup time budget",
+                            )?;
+                            if tokio::time::timeout(
+                                remaining,
+                                guarded.abort(
+                                    &object_id.to_string(),
+                                    &claim_token.to_string(),
+                                    None,
+                                ),
+                            )
+                            .await
+                            .context("upload staging deletion exceeded its startup time budget")?
+                            .context("failed to remove an abandoned upload stage")?
+                            {
+                                abandoned_stages = abandoned_stages.saturating_add(1);
+                            }
+                        }
+                        if abandoned_stages > 0 {
+                            tracing::warn!(
+                                abandoned_stages,
+                                "removed upload stages left by a previous process"
+                            );
+                        }
+                        guarded
+                    }
+                    "s3" => {
+                        let inner: Arc<dyn UploadStore> = Arc::new(
+                            S3UploadStore::new(S3UploadSettings {
+                                endpoint: config.upload_s3_endpoint.clone(),
+                                region: config.upload_s3_region.clone(),
+                                bucket: config
+                                    .upload_s3_bucket
+                                    .clone()
+                                    .context("S3 upload bucket is missing after validation")?,
+                                prefix: config.upload_s3_prefix.clone(),
+                                path_style: config.upload_s3_path_style,
+                                allow_http: config.upload_s3_allow_http,
+                                ambient_credentials: config.upload_s3_credential_mode == "ambient",
+                                credential_bundle_file: config
+                                    .upload_s3_credential_bundle_file
+                                    .clone(),
+                                access_key_id_file: config.upload_s3_access_key_id_file.clone(),
+                                secret_access_key_file: config
+                                    .upload_s3_secret_access_key_file
+                                    .clone(),
+                                session_token_file: config.upload_s3_session_token_file.clone(),
+                                sse_kms_key_id_file: config.upload_s3_sse_kms_key_id_file.clone(),
+                            })?
+                            .with_safety_gate(Arc::clone(&upload_safety_gate)),
+                        );
+                        Arc::new(GuardedUploadStore::new(
+                            inner,
+                            Arc::clone(&upload_safety_gate),
+                        ))
+                    }
+                    _ => unreachable!("upload backend was validated by Config"),
+                };
+                upload_startup_audits =
+                    crate::upload_worker::StartupAuditHandoff::after_successful_audits(
+                        upload_authority_generation,
+                        [
+                            config.upload_storage_max_pending_jobs,
+                            config.upload_storage_max_retained_files,
+                            config.upload_storage_max_retained_bytes,
+                        ],
+                        authority_audit_started_at,
+                        ledger_audit_started_at,
+                    );
+                (
+                    upload_safety_gate,
+                    upload_namespace,
+                    upload_authority_generation,
+                    Some(upload_store),
+                )
+            } else {
+                let durable_upload_state_exists: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM upload_slots LIMIT 1)
+                         OR EXISTS(SELECT 1 FROM upload_storage_jobs LIMIT 1)
+                         OR EXISTS(SELECT 1 FROM upload_cleanup_queue LIMIT 1)",
+                )
+                .fetch_one(&pool)
+                .await
+                .context("could not verify that disabled upload storage is empty")?;
+                anyhow::ensure!(
+                    !durable_upload_state_exists,
+                    "UPLOAD_MODE=disabled requires empty durable upload state; use drain_read_only until historical downloads and cleanup jobs have drained"
                 );
-                Arc::new(GuardedUploadStore::new(
-                    inner,
-                    Arc::clone(&upload_safety_gate),
-                ))
-            }
-            _ => unreachable!("upload backend was validated by Config"),
-        };
+                tracing::info!(
+                    "upload capability disabled; skipping storage authority, object-store and reconciliation initialization"
+                );
+                upload_startup_audits = crate::upload_worker::StartupAuditHandoff::default();
+                (
+                    UploadSafetyGate::disabled(),
+                    [0_u8; 32],
+                    UploadAuthorityGeneration {
+                        namespace: 0,
+                        capacity_policy: 0,
+                    },
+                    None,
+                )
+            };
+        upload_startup_phase.complete();
         let extdisco_service = crate::services::extdisco::ExtDiscoService::new(
             config.raw.turn_shared_secret.take(),
             config.turn_credentials_ttl_seconds,
@@ -1607,7 +2388,8 @@ impl AppState {
                 config.component_bind,
             ]
             .iter()
-            .all(|address| address.ip().is_loopback());
+            .all(|address| address.ip().is_loopback())
+                && (!config.web_admin_enabled || config.web_admin_bind.ip().is_loopback());
             anyhow::ensure!(
                 config.abuse_state_allow_ephemeral
                     && config.redis_url.is_none()
@@ -1823,7 +2605,13 @@ impl AppState {
             .activate()
             .await
             .context("failed to publish the initial signed cluster node lease")?;
-        db::initialize_admin_runtime_settings(&pool, false, !open_registration).await?;
+        db::initialize_admin_runtime_settings(
+            &pool,
+            false,
+            !open_registration,
+            config.registration_dependency_locked(),
+        )
+        .await?;
         let (island_mode, registration_closed) = db::admin_runtime_settings(&pool).await?;
         let process_started_at: chrono::DateTime<chrono::Utc> =
             sqlx::query_scalar("SELECT clock_timestamp()")
@@ -1851,17 +2639,27 @@ impl AppState {
                 .context("anti-abuse HMAC deployment consistency check failed")?;
         }
 
-        let bosh = crate::bosh::BoshManager::new(
-            config.bosh_max_sessions,
-            config.bosh_max_concurrent_body_reads,
-        );
-        let upload_download_max_concurrent = config.upload_download_max_concurrent;
+        let bosh = config.bosh_enabled.then(|| {
+            crate::bosh::BoshManager::new(
+                config.bosh_max_sessions,
+                config.bosh_max_concurrent_body_reads,
+            )
+        });
+        let upload_runtime = UploadRuntime::from_config(&config);
         let sm_recovery_max_jobs = config.sm_recovery_max_jobs;
         let sm_recovery_max_bytes = config.sm_recovery_max_bytes;
         let message_content_identity = abuse.personal_message_content_keyring();
         let retraction_content_identity = abuse.personal_retraction_content_keyring();
         let mix_message_content_identity = abuse.mix_message_content_keyring();
         let mix_retraction_content_identity = abuse.mix_retraction_content_keyring();
+        // Durable outbox workers share one application-owned admission
+        // capability. This leaves a primary-pool connection for foreground
+        // protocol traffic even during simultaneous MIX, PubSub and MUC
+        // recovery.
+        let durable_outbox_database_admission =
+            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
+                config.database_max_connections,
+            );
         let message_service = crate::services::messaging::MessageService::new(
             pool.clone(),
             message_content_identity,
@@ -1879,7 +2677,8 @@ impl AppState {
         let account_service = crate::services::account::AccountService::new(
             pool.clone(),
             config.domain.clone(),
-            config.invitation_required,
+            config.configured_registration_mode()
+                == crate::config::RegistrationMode::InvitationOnly,
             config.registration_rate_per_hour,
             config.scram_iterations,
             config.scram_sha1_enabled,
@@ -1897,17 +2696,24 @@ impl AppState {
                 config.scram_sha1_enabled,
             );
         let pubsub_service =
-            crate::services::pubsub::PubSubService::new(pool.clone(), &config.domain);
+            crate::services::pubsub::PubSubService::new_with_durable_outbox_database_admission(
+                pool.clone(),
+                &config.domain,
+                durable_outbox_database_admission.clone(),
+            );
         let profile_service = crate::services::profile::ProfileService::with_mutation_admission(
             pool.clone(),
             config.domain.clone(),
             pubsub_service.mutation_admission(),
         );
         let mam_service = crate::services::mam::MamService::new(pool.clone());
-        let upload_service = crate::services::upload::UploadService::new(
-            pool.clone(),
-            Arc::clone(&upload_safety_gate),
-        );
+        let upload_service = config.upload_mode.admits_new_uploads().then(|| {
+            crate::services::upload::UploadService::new(
+                pool.clone(),
+                Arc::clone(&upload_safety_gate),
+                config.upload_max_bytes,
+            )
+        });
         let privacy_service = crate::services::privacy::PrivacyService::new(pool.clone());
         let replay_service = crate::services::replay::ReplayService::new(
             pool.clone(),
@@ -1920,37 +2726,60 @@ impl AppState {
             config.pep_max_nodes_per_account,
             config.pep_max_storage_bytes_per_account,
         );
-        let command_pool_options = PgPoolOptions::new()
-            .max_connections(4)
-            .min_connections(0)
-            .acquire_timeout(Duration::from_secs(2));
-        let command_pool_options = if config.database_allow_unsafe_role_for_development {
-            command_pool_options
-        } else {
-            crate::db::pin_public_application_schema(command_pool_options)
+        let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;
+        let command_pool = match config.admin_command_pool_mode {
+            // The explicit loopback-only exception has no independent
+            // PostgreSQL principal.  A second PgPool with the same unsafe
+            // credential would add pressure without adding a capability
+            // boundary, so share the already-attested primary pool instead.
+            AdminCommandPoolMode::SharedUnsafeDevelopment => pool.clone(),
+            AdminCommandPoolMode::DedicatedProductionRole => {
+                let command_pool_options = crate::db::pin_public_application_schema(
+                    PgPoolOptions::new()
+                        .max_connections(4)
+                        .min_connections(0)
+                        .acquire_timeout(AUXILIARY_POOL_ACQUIRE_TIMEOUT),
+                );
+                let command_pool = startup_database_connect(
+                    auxiliary_pool_deadline,
+                    AUXILIARY_POOL_ACQUIRE_TIMEOUT,
+                    "XEP-0133 command",
+                    |_| {
+                        command_pool_options
+                            .clone()
+                            .connect(&config.admin_command_database_url)
+                    },
+                )
+                .await?;
+                tokio::time::timeout_at(auxiliary_pool_deadline, async {
+                    crate::db::attest_admin_command_role(&command_pool).await?;
+                    anyhow::Ok(())
+                })
+                .await
+                .context("command role attestation exceeded its startup admission deadline")??;
+                command_pool
+            }
         };
-        let command_pool = command_pool_options
-            .connect(&config.admin_command_database_url)
-            .await
-            .context("could not create bounded XEP-0133 command database pool")?;
-        if config.database_allow_unsafe_role_for_development {
-            crate::db::attest_development_database_is_loopback(&command_pool).await?;
-        } else {
-            crate::db::attest_admin_command_role(&command_pool).await?;
-        }
         let omemo_recovery_pool_options = PgPoolOptions::new()
-            .max_connections(2)
+            .max_connections(OMEMO_RECOVERY_POOL_MAX_CONNECTIONS)
             .min_connections(0)
-            .acquire_timeout(Duration::from_secs(2));
+            .acquire_timeout(AUXILIARY_POOL_ACQUIRE_TIMEOUT);
         let omemo_recovery_pool_options = if config.database_allow_unsafe_role_for_development {
             omemo_recovery_pool_options
         } else {
             crate::db::pin_public_application_schema(omemo_recovery_pool_options)
         };
-        let omemo_recovery_poll_pool = omemo_recovery_pool_options
-            .connect(&config.database_url)
-            .await
-            .context("could not create isolated OMEMO recovery poll database pool")?;
+        let omemo_recovery_poll_pool = startup_database_connect(
+            auxiliary_pool_deadline,
+            AUXILIARY_POOL_ACQUIRE_TIMEOUT,
+            "OMEMO recovery poll",
+            |_| {
+                omemo_recovery_pool_options
+                    .clone()
+                    .connect(&config.database_url)
+            },
+        )
+        .await?;
         let sm_authority_schema: String = sqlx::query_scalar("SELECT current_schema()")
             .fetch_one(&pool)
             .await
@@ -1963,7 +2792,19 @@ impl AppState {
             sm_authority_connect_options =
                 sm_authority_connect_options.options([("search_path", "public")]);
         }
-        let sm_service = crate::services::sm::SmService::new(pool.clone(), sm_authority_schema)?;
+        let sm_service =
+            crate::services::sm::SmService::new(pool.clone(), sm_authority_schema.clone())?;
+        // The MIX wake broker validates the same schema identity that the
+        // dedicated PostgreSQL listener attests below.  It never trusts a
+        // notification as delivery authority; schema matching only prevents
+        // a shared database's unrelated schema from creating local scan load.
+        let mix_service = crate::services::mix::MixService::new_with_outbox_database_admission(
+            pool.clone(),
+            mix_message_content_identity,
+            mix_retraction_content_identity,
+            durable_outbox_database_admission.clone(),
+            sm_authority_schema,
+        )?;
         config.raw.database_url.zeroize();
         config.raw.database_url.clear();
         config.raw.admin_command_database_url.zeroize();
@@ -1979,11 +2820,7 @@ impl AppState {
             message_service,
             retraction_service,
             mam_service,
-            mix_service: crate::services::mix::MixService::new(
-                pool.clone(),
-                mix_message_content_identity,
-                mix_retraction_content_identity,
-            ),
+            mix_service,
             sm_service,
             blocking_service: crate::services::blocking::BlockingService::new(pool.clone()),
             presence_service: crate::services::presence::PresenceService::new(pool.clone()),
@@ -2014,7 +2851,9 @@ impl AppState {
             sm_memory_governor,
             metrics: Metrics::default(),
             metrics_bearer_token,
+            web_admin_gateway_token,
             omemo_recovery_poll_pool,
+            durable_outbox_database_admission,
             api_control,
             api_cursor,
             upload_service,
@@ -2022,27 +2861,25 @@ impl AppState {
             upload_storage_namespace_sha256: upload_namespace,
             upload_authority_generation,
             upload_safety_gate,
+            upload_startup_audits,
             federation,
             component_credentials,
             components,
             s2s_connection_registry: crate::s2s::S2sConnectionRegistry::default(),
             s2s_dns_resolver,
             s2s_dnssec_resolver,
-            pending_mix_iq: crate::xmpp::protocol::mix::MixIqRelayIndex::new(),
-            caps_cache: crate::xmpp::protocol::caps::CapsCacheIndex::new(),
-            caps_by_jid: crate::xmpp::protocol::caps::CapsResourceIndex::new(),
-            pending_caps: crate::xmpp::protocol::caps::PendingCapsIndex::new(),
-            federated_caps_gates: crate::xmpp::protocol::caps::FederatedCapsGateIndex::new(),
-            caps_effect_dispatcher: crate::xmpp::protocol::caps::CapsEffectDispatcher::new(),
+            pending_mix_iq: northstar_protocol_runtime::mix::MixIqRelayIndex::new(),
+            caps_cache: northstar_protocol_runtime::caps::CapsCacheIndex::new(),
+            caps_by_jid: northstar_protocol_runtime::caps::CapsResourceIndex::new(),
+            pending_caps: northstar_protocol_runtime::caps::PendingCapsIndex::new(),
+            federated_caps_gates: northstar_protocol_runtime::caps::FederatedCapsGateIndex::new(),
+            caps_effect_dispatcher: northstar_protocol_runtime::caps::CapsEffectDispatcher::new(),
             dialback_secret,
             fast_token_secret,
             dialback_verifications: Arc::new(Semaphore::new(64)),
             client_connections,
             client_connections_by_ip: DashMap::new(),
-            upload_requests: Arc::new(Semaphore::new(32)),
-            upload_requests_by_ip: DashMap::new(),
-            upload_downloads: Arc::new(Semaphore::new(upload_download_max_concurrent)),
-            upload_downloads_by_ip: DashMap::new(),
+            upload_runtime,
             omemo_recovery_poll_requests: Arc::new(Semaphore::new(OMEMO_POLL_CONCURRENCY)),
             omemo_recovery_poll_requests_by_ip: DashMap::new(),
             omemo_recovery_poll_ip_admission: std::sync::Mutex::new(()),
@@ -2069,16 +2906,23 @@ impl AppState {
             "session-cleanup",
             crate::workers::WorkerCriticality::Restartable,
         );
-        crate::services::sm::start_sm_authority_listener(
+        crate::services::sm::start_database_authority_listener(
             state.sm_service().clone(),
+            state.mix_service().delivery_wake_broker(),
             sm_authority_connect_options,
             Arc::clone(state.worker_registry()),
             worker_cancel.clone(),
         );
-        crate::xmpp::protocol::caps::start_caps_effect_dispatcher(
-            Arc::clone(&state),
-            worker_cancel.clone(),
-        );
+        if state
+            .config
+            .xmpp_extensions
+            .enabled(northstar_xep_0115::XEP_ID)
+        {
+            crate::xmpp::protocol::caps::start_caps_effect_dispatcher(
+                Arc::clone(&state),
+                worker_cancel.clone(),
+            );
+        }
         crate::services::session_cleanup::start_sm_suspension_recovery(
             Arc::clone(&state),
             Arc::clone(&state.sm_suspension_recovery),
@@ -2108,8 +2952,15 @@ impl AppState {
         );
         crate::cluster::start_muc_outbox_delivery(Arc::clone(&state), worker_cancel.clone());
         Self::start_locked_muc_expiry(Arc::clone(&state), worker_cancel.clone());
-        Self::start_runtime_federation_policy_refresh(Arc::clone(&state), worker_cancel.clone());
-        Self::start_runtime_admin_setting_refresh(Arc::clone(&state), worker_cancel);
+        // Both durable policy snapshots deliberately share the single reserved
+        // control-plane connection.  They must therefore be refreshed by one
+        // sequential worker: two independently supervised workers can turn a
+        // CPU-saturated process into its own connection-pool contention.
+        Self::start_runtime_control_refresh(
+            Arc::clone(&state),
+            runtime_control_connection,
+            worker_cancel,
+        );
         Ok(state)
     }
 
@@ -2135,29 +2986,29 @@ impl AppState {
 
     pub(crate) fn caps_effect_dispatcher(
         &self,
-    ) -> &Arc<crate::xmpp::protocol::caps::CapsEffectDispatcher> {
+    ) -> &Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher> {
         &self.caps_effect_dispatcher
     }
 
-    pub(crate) fn pending_mix_iq(&self) -> &crate::xmpp::protocol::mix::MixIqRelayIndex {
+    pub(crate) fn pending_mix_iq(&self) -> &northstar_protocol_runtime::mix::MixIqRelayIndex {
         &self.pending_mix_iq
     }
 
-    pub(crate) fn caps_cache(&self) -> &crate::xmpp::protocol::caps::CapsCacheIndex {
+    pub(crate) fn caps_cache(&self) -> &northstar_protocol_runtime::caps::CapsCacheIndex {
         &self.caps_cache
     }
 
-    pub(crate) fn caps_by_jid(&self) -> &crate::xmpp::protocol::caps::CapsResourceIndex {
+    pub(crate) fn caps_by_jid(&self) -> &northstar_protocol_runtime::caps::CapsResourceIndex {
         &self.caps_by_jid
     }
 
-    pub(crate) fn pending_caps(&self) -> &crate::xmpp::protocol::caps::PendingCapsIndex {
+    pub(crate) fn pending_caps(&self) -> &northstar_protocol_runtime::caps::PendingCapsIndex {
         &self.pending_caps
     }
 
     pub(crate) fn federated_caps_gates(
         &self,
-    ) -> &crate::xmpp::protocol::caps::FederatedCapsGateIndex {
+    ) -> &northstar_protocol_runtime::caps::FederatedCapsGateIndex {
         &self.federated_caps_gates
     }
 
@@ -2174,7 +3025,9 @@ impl AppState {
     }
 
     pub(crate) fn upload_store(&self) -> &dyn UploadStore {
-        self.upload_store.as_ref()
+        self.upload_store
+            .as_deref()
+            .expect("upload routes and workers require an enabled or draining runtime")
     }
 
     pub(crate) fn metrics_request_authorized(
@@ -2184,6 +3037,20 @@ impl AppState {
     ) -> bool {
         let Some(expected) = self.metrics_bearer_token.as_deref() else {
             return peer.is_loopback();
+        };
+        candidate.is_some_and(|candidate| {
+            candidate.len() == expected.len()
+                && bool::from(candidate.as_bytes().ct_eq(expected.as_bytes()))
+        })
+    }
+
+    pub(crate) fn admin_gateway_authentication_enabled(&self) -> bool {
+        self.web_admin_gateway_token.is_some()
+    }
+
+    pub(crate) fn admin_gateway_request_authorized(&self, candidate: Option<&str>) -> bool {
+        let Some(expected) = self.web_admin_gateway_token.as_deref() else {
+            return true;
         };
         candidate.is_some_and(|candidate| {
             candidate.len() == expected.len()
@@ -2257,8 +3124,16 @@ impl AppState {
         &self.upload_safety_gate
     }
 
+    pub(crate) fn take_upload_startup_audits(
+        &self,
+    ) -> Option<crate::upload_worker::SuccessfulStartupAudits> {
+        self.upload_startup_audits.take()
+    }
+
     pub(crate) fn upload_service(&self) -> &crate::services::upload::UploadService {
-        &self.upload_service
+        self.upload_service
+            .as_ref()
+            .expect("upload slot admission requires UploadMode::Enabled")
     }
 
     pub(crate) fn pubsub_service(&self) -> &crate::services::pubsub::PubSubService {
@@ -2271,6 +3146,10 @@ impl AppState {
 
     pub(crate) fn mix_service(&self) -> &crate::services::mix::MixService {
         &self.mix_service
+    }
+
+    pub(crate) async fn durable_outbox_database_turn(&self) -> OwnedSemaphorePermit {
+        self.durable_outbox_database_admission.acquire().await
     }
 
     pub(crate) fn extdisco_service(&self) -> &crate::services::extdisco::ExtDiscoService {
@@ -2453,37 +3332,119 @@ impl AppState {
         );
     }
 
-    fn start_runtime_federation_policy_refresh(state: Arc<Self>, cancel: CancellationToken) {
+    fn start_runtime_control_refresh(
+        state: Arc<Self>,
+        connection: PoolConnection<Postgres>,
+        cancel: CancellationToken,
+    ) {
         let weak = Arc::downgrade(&state);
+        let connection = Arc::new(tokio::sync::Mutex::new(Some(connection)));
+        let max_silence = Duration::from_secs(5);
+        let diagnostic_cancel = cancel.clone();
         state.worker_registry().supervise(
-            "federation-policy-refresh",
+            "runtime-control-refresh",
             crate::workers::WorkerCriticality::Critical,
             crate::workers::WorkerMode::Continuous,
-            Some(Duration::from_secs(10)),
+            Some(max_silence),
             cancel,
             move |heartbeat| {
                 let weak = weak.clone();
+                let connection = Arc::clone(&connection);
+                let diagnostic_cancel = diagnostic_cancel.clone();
                 async move {
-                    let mut interval = tokio::time::interval(Duration::from_secs(2));
+                    let mut diagnostics =
+                        RuntimeControlDiagnostics::new(diagnostic_cancel, max_silence);
+                    let mut connection = connection.lock().await.take().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "runtime-control coordinator was restarted after its reserved connection ended"
+                        )
+                    })?;
+                    // This coordinator is the sole owner of the one reserved
+                    // control-plane connection. It serializes committed
+                    // administration, federation, and (when enabled) service
+                    // control reads instead of allowing its own workers to
+                    // contend for that connection.
+                    let mut interval = tokio::time::interval(Duration::from_millis(500));
                     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    let mut refresh_policy = true;
+                    let mut acted_service_control = None;
                     loop {
                         interval.tick().await;
                         let Some(state) = weak.upgrade() else {
                             return Ok(());
                         };
-                        match db::federation_runtime_rules(&state.pool).await {
-                            Ok((blacklist, whitelist)) => {
-                                state.replace_runtime_federation_cache(blacklist, whitelist);
-                                heartbeat.ok();
+
+                        let mut first_error = None;
+                        let mut observed_database = false;
+                        if refresh_policy {
+                            observed_database = true;
+                            match db::runtime_control_snapshot(&mut connection, |phase| {
+                                diagnostics.database_read(phase)
+                            })
+                            .await
+                            {
+                                Ok((island_mode, registration_closed, blacklist, whitelist)) => {
+                                    diagnostics.enter(RuntimeControlPhase::PolicyApply);
+                                    let was_island = state.refresh_island_mode(island_mode).await;
+                                    state.apply_registration_closed(registration_closed);
+                                    if island_mode && !was_island {
+                                        state
+                                            .s2s_connection_registry()
+                                            .clear_outbound_for_island_mode();
+                                    }
+                                    state.replace_runtime_federation_cache(blacklist, whitelist);
+                                }
+                                Err(error) => {
+                                    tracing::error!(
+                                        ?error,
+                                        "could not refresh durable administration settings"
+                                    );
+                                    first_error = Some(error);
+                                }
                             }
-                            Err(error) => {
-                                heartbeat.error(&error);
-                                tracing::error!(
-                                    ?error,
-                                    "could not refresh durable federation policy"
-                                );
+
+                        }
+
+                        if state.config.enable_xmpp_service_control
+                            && state.service_shutdown.get().is_some()
+                        {
+                            observed_database = true;
+                            diagnostics.enter(RuntimeControlPhase::ServiceControlRead);
+                            match db::poll_admin_service_control(&mut connection).await {
+                                Ok(Some(control))
+                                    if service_control_applies(
+                                        state.process_started_at,
+                                        &control,
+                                    ) && acted_service_control != Some(control.generation) =>
+                                {
+                                    acted_service_control = Some(control.generation);
+                                    tracing::warn!(
+                                        operation = %control.action,
+                                        generation = %control.generation,
+                                        execute_at = %control.execute_at,
+                                        expires_at = %control.expires_at,
+                                        "executing durable cluster-wide service control"
+                                    );
+                                    if let Some(shutdown) = state.service_shutdown.get() {
+                                        shutdown.cancel();
+                                    }
+                                }
+                                Ok(_) => {}
+                                Err(error) => {
+                                    tracing::error!(
+                                        ?error,
+                                        "could not poll durable cluster-wide service control"
+                                    );
+                                    if first_error.is_none() {
+                                        first_error = Some(error);
+                                    }
+                                }
                             }
                         }
+
+                        report_runtime_control_health(&heartbeat, observed_database, first_error);
+                        diagnostics.reported();
+                        refresh_policy = !refresh_policy;
                     }
                 }
             },
@@ -2530,49 +3491,6 @@ impl AppState {
             }));
     }
 
-    fn start_runtime_admin_setting_refresh(state: Arc<Self>, cancel: CancellationToken) {
-        let weak = Arc::downgrade(&state);
-        state.worker_registry().supervise(
-            "administration-setting-refresh",
-            crate::workers::WorkerCriticality::Critical,
-            crate::workers::WorkerMode::Continuous,
-            Some(Duration::from_secs(5)),
-            cancel,
-            move |heartbeat| {
-                let weak = weak.clone();
-                async move {
-                    let mut interval = tokio::time::interval(Duration::from_secs(1));
-                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                    loop {
-                        interval.tick().await;
-                        let Some(state) = weak.upgrade() else {
-                            return Ok(());
-                        };
-                        match db::admin_runtime_settings(&state.pool).await {
-                            Ok((island_mode, registration_closed)) => {
-                                let was_island = state.refresh_island_mode(island_mode).await;
-                                state.apply_registration_closed(registration_closed);
-                                if island_mode && !was_island {
-                                    state
-                                        .s2s_connection_registry()
-                                        .clear_outbound_for_island_mode();
-                                }
-                                heartbeat.ok();
-                            }
-                            Err(error) => {
-                                heartbeat.error(&error);
-                                tracing::error!(
-                                    ?error,
-                                    "could not refresh durable administration settings"
-                                );
-                            }
-                        }
-                    }
-                }
-            },
-        );
-    }
-
     pub fn install_service_shutdown(
         self: &Arc<Self>,
         cancel: CancellationToken,
@@ -2580,69 +3498,11 @@ impl AppState {
         self.service_shutdown
             .set(cancel)
             .map_err(|_| anyhow::anyhow!("service shutdown control was already installed"))?;
-        Self::start_service_control_watcher(Arc::clone(self));
         Ok(())
     }
 
     pub fn service_control_available(&self) -> bool {
-        self.service_shutdown.get().is_some()
-    }
-
-    fn start_service_control_watcher(state: Arc<Self>) {
-        let weak = Arc::downgrade(&state);
-        let cancel = state
-            .service_shutdown
-            .get()
-            .expect("service shutdown installed before watcher")
-            .clone();
-        state.worker_registry().supervise(
-            "service-control-watcher",
-            crate::workers::WorkerCriticality::Critical,
-            crate::workers::WorkerMode::Continuous,
-            Some(Duration::from_secs(3)),
-            cancel,
-            move |heartbeat| {
-                let weak = weak.clone();
-                async move {
-                    let mut interval = tokio::time::interval(Duration::from_millis(500));
-                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                    let mut acted = None;
-                    loop {
-                        interval.tick().await;
-                        let Some(state) = weak.upgrade() else {
-                            return Ok(());
-                        };
-                        match db::poll_admin_service_control(&state.pool).await {
-                            Ok(Some(control))
-                                if service_control_applies(state.process_started_at, &control)
-                                    && acted != Some(control.generation) =>
-                            {
-                                acted = Some(control.generation);
-                                tracing::warn!(
-                                    operation = %control.action,
-                                    generation = %control.generation,
-                                    execute_at = %control.execute_at,
-                                    expires_at = %control.expires_at,
-                                    "executing durable cluster-wide service control"
-                                );
-                                if let Some(shutdown) = state.service_shutdown.get() {
-                                    shutdown.cancel();
-                                }
-                                heartbeat.ok();
-                            }
-                            Ok(_) => heartbeat.ok(),
-                            Err(error) => {
-                                heartbeat.error(&error);
-                                tracing::error!(
-                                    ?error,
-                                    "could not poll durable cluster-wide service control"
-                                );
-                            }
-                        }
-                    }
-                }
-            },
-        );
+        self.config.enable_xmpp_service_control && self.service_shutdown.get().is_some()
     }
 
     pub fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {
@@ -2868,7 +3728,7 @@ impl AppState {
     }
 
     pub async fn deliver_to_muc_occupant(&self, occupant: &MucOccupant, stanza: String) -> bool {
-        self.deliver_to_muc_occupant_inner(occupant, stanza, None)
+        self.deliver_to_muc_occupant_inner(occupant, stanza, None, None)
             .await
     }
 
@@ -2883,7 +3743,7 @@ impl AppState {
     ) -> anyhow::Result<bool> {
         let (receipt, mut received) = tokio::sync::mpsc::unbounded_channel();
         let accepted = self
-            .deliver_to_muc_occupant_inner(occupant, stanza, Some(receipt))
+            .deliver_to_muc_occupant_inner(occupant, stanza, Some(receipt), None)
             .await;
         if !accepted {
             return Ok(false);
@@ -2910,6 +3770,7 @@ impl AppState {
         occupant: &MucOccupant,
         stanza: String,
         receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+        write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) -> bool {
         let senders = roxmltree::Document::parse(&stanza)
             .ok()
@@ -2946,12 +3807,17 @@ impl AppState {
                 return false;
             }
         }
-        self.deliver_to_muc_occupant_unchecked_result_with_receipt(occupant, stanza, receipt)
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(?error, "failed to deliver a MUC stanza");
-                false
-            })
+        self.deliver_to_muc_occupant_unchecked_result_with_receipt(
+            occupant,
+            stanza,
+            receipt,
+            write_receipt,
+        )
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(?error, "failed to deliver a MUC stanza");
+            false
+        })
     }
 
     /// Rebuild only the delivery endpoint for an immutable clustered MUC
@@ -3069,7 +3935,7 @@ impl AppState {
         occupant: &MucOccupant,
         stanza: String,
     ) -> anyhow::Result<bool> {
-        self.deliver_to_muc_occupant_unchecked_result_with_receipt(occupant, stanza, None)
+        self.deliver_to_muc_occupant_unchecked_result_with_receipt(occupant, stanza, None, None)
             .await
     }
 
@@ -3078,6 +3944,7 @@ impl AppState {
         occupant: &MucOccupant,
         stanza: String,
         receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+        write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) -> anyhow::Result<bool> {
         // Installing the session gate precedes the per-room endpoint swaps.
         // Consulting it first makes that multi-entry transition atomic from
@@ -3164,12 +4031,39 @@ impl AppState {
                 }
             }
         }
+        if write_receipt.is_some() {
+            let membership = JoinedMucMembership {
+                nick: occupant.nick.clone(),
+                cluster_epoch: occupant.cluster_epoch,
+            };
+            if self
+                .validated_local_muc_occupant(
+                    &occupant.full_jid,
+                    occupant.connection_id,
+                    &occupant.room_jid,
+                    &membership,
+                )
+                .is_none()
+            {
+                return Ok(false);
+            }
+        }
         if let Some(suspended) = session_gate {
             return self
-                .deliver_to_suspended_muc_endpoint(&suspended, stanza, receipt)
+                .deliver_to_suspended_muc_endpoint(&suspended, stanza, receipt, write_receipt)
                 .await;
         }
         match &occupant.endpoint {
+            MucOccupantEndpoint::Local(sender) if write_receipt.is_some() => {
+                let receipt = write_receipt.expect("write receipt was present");
+                match sender.try_send_with_transport_write_receipt(stanza, receipt) {
+                    Ok(()) => Ok(true),
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Ok(false),
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        anyhow::bail!("local MUC shutdown recipient queue is full")
+                    }
+                }
+            }
             MucOccupantEndpoint::Local(sender) => match receipt {
                 Some(receipt) => match sender.try_send_with_transport_receipt(stanza, receipt) {
                     Ok(()) => Ok(true),
@@ -3187,7 +4081,7 @@ impl AppState {
                 },
             },
             MucOccupantEndpoint::Suspended(suspended) => {
-                self.deliver_to_suspended_muc_endpoint(suspended, stanza, receipt)
+                self.deliver_to_suspended_muc_endpoint(suspended, stanza, receipt, None)
                     .await
             }
             MucOccupantEndpoint::Federated {
@@ -3213,7 +4107,11 @@ impl AppState {
         suspended: &Arc<SuspendedMucEndpoint>,
         stanza: String,
         receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+        write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) -> anyhow::Result<bool> {
+        if let Some(receipt) = write_receipt {
+            return suspended.try_send_live_write_notification(stanza, receipt);
+        }
         let mut stanza = Some(stanza);
         let mut receipt = receipt;
         let volatile_source_id = uuid::Uuid::new_v4();
@@ -3384,21 +4282,22 @@ impl AppState {
         self: &Arc<Self>,
         ip: std::net::IpAddr,
     ) -> Option<UploadRequestGuard> {
-        let permit = Arc::clone(&self.upload_requests).try_acquire_owned().ok()?;
+        let admission = self.upload_runtime.request_admission()?;
+        let permit = Arc::clone(&admission.semaphore).try_acquire_owned().ok()?;
         {
-            let mut count = self.upload_requests_by_ip.entry(ip).or_insert(0);
-            if *count >= 4 {
+            let mut count = admission.by_ip.entry(ip).or_insert(0);
+            if *count >= admission.max_per_ip {
                 let remove_zero = *count == 0;
                 drop(count);
                 if remove_zero {
-                    self.upload_requests_by_ip.remove(&ip);
+                    admission.by_ip.remove(&ip);
                 }
                 return None;
             }
             *count += 1;
         }
         Some(UploadRequestGuard {
-            state: Arc::clone(self),
+            counts: Arc::clone(&admission.by_ip),
             ip,
             _permit: permit,
         })
@@ -3408,22 +4307,21 @@ impl AppState {
         self: &Arc<Self>,
         ip: std::net::IpAddr,
     ) -> Option<UploadDownloadGuard> {
-        let permit = Arc::clone(&self.upload_downloads)
-            .try_acquire_owned()
-            .ok()?;
-        let mut count = self.upload_downloads_by_ip.entry(ip).or_insert(0);
-        if *count >= self.config.upload_download_max_per_ip {
+        let admission = self.upload_runtime.download_admission()?;
+        let permit = Arc::clone(&admission.semaphore).try_acquire_owned().ok()?;
+        let mut count = admission.by_ip.entry(ip).or_insert(0);
+        if *count >= admission.max_per_ip {
             let remove_zero = *count == 0;
             drop(count);
             if remove_zero {
-                self.upload_downloads_by_ip.remove(&ip);
+                admission.by_ip.remove(&ip);
             }
             return None;
         }
         *count += 1;
         drop(count);
         Some(UploadDownloadGuard {
-            state: Arc::clone(self),
+            counts: Arc::clone(&admission.by_ip),
             ip,
             _permit: permit,
         })
@@ -4073,18 +4971,18 @@ impl AppState {
         Ok(delivered)
     }
 
-    /// Give every locally-owned MUC endpoint the XEP-0045 system-shutdown
-    /// status before listener cancellation tears transports down. One self
-    /// unavailable per occupancy avoids an O(n²) room broadcast during the
-    /// bounded graceful-shutdown window.
+    /// Give live locally-owned MUC endpoints XEP-0045 system-shutdown status.
+    /// Count only completed TCP/WS writes or BOSH client response ACKs; SM
+    /// persistence alone cannot satisfy this process-local completion. The
+    /// root supervises the whole loop under one bounded, cancellable window.
     pub async fn notify_muc_system_shutdown(&self) -> usize {
         let occupants = self
             .muc_occupants
             .iter()
+            .filter(|entry| matches!(&entry.value().endpoint, MucOccupantEndpoint::Local(_)))
             .map(|entry| entry.value().clone())
             .collect::<Vec<_>>();
-        let mut delivered = 0;
-        for occupant in occupants {
+        count_shutdown_notification_completions(occupants.into_iter().map(|occupant| async move {
             let serialized = SerializableMucOccupant::from(&occupant);
             let stanza = crate::xmpp::xml_util::muc_presence_stanza_with_status(
                 &serialized,
@@ -4098,9 +4996,12 @@ impl AppState {
                 None,
                 None,
             );
-            delivered += usize::from(self.deliver_to_muc_occupant(&occupant, stanza).await);
-        }
-        delivered
+            let (receipt, mut received) = tokio::sync::mpsc::unbounded_channel();
+            self.deliver_to_muc_occupant_inner(&occupant, stanza, None, Some(receipt))
+                .await
+                && received.recv().await.is_some()
+        }))
+        .await
     }
 
     pub fn suspend_local_muc_occupants(
@@ -5425,37 +6326,33 @@ pub struct ClientConnectionGuard {
 }
 
 pub struct UploadRequestGuard {
-    state: Arc<AppState>,
+    counts: Arc<DashMap<std::net::IpAddr, usize>>,
     ip: std::net::IpAddr,
     _permit: OwnedSemaphorePermit,
 }
 
 pub struct UploadDownloadGuard {
-    state: Arc<AppState>,
+    counts: Arc<DashMap<std::net::IpAddr, usize>>,
     ip: std::net::IpAddr,
     _permit: OwnedSemaphorePermit,
 }
 
 impl Drop for UploadDownloadGuard {
     fn drop(&mut self) {
-        if let Some(mut count) = self.state.upload_downloads_by_ip.get_mut(&self.ip) {
+        if let Some(mut count) = self.counts.get_mut(&self.ip) {
             *count = count.saturating_sub(1);
             drop(count);
-            self.state
-                .upload_downloads_by_ip
-                .remove_if(&self.ip, |_, count| *count == 0);
+            self.counts.remove_if(&self.ip, |_, count| *count == 0);
         }
     }
 }
 
 impl Drop for UploadRequestGuard {
     fn drop(&mut self) {
-        if let Some(mut count) = self.state.upload_requests_by_ip.get_mut(&self.ip) {
+        if let Some(mut count) = self.counts.get_mut(&self.ip) {
             *count = count.saturating_sub(1);
             drop(count);
-            self.state
-                .upload_requests_by_ip
-                .remove_if(&self.ip, |_, count| *count == 0);
+            self.counts.remove_if(&self.ip, |_, count| *count == 0);
         }
     }
 }
@@ -5506,20 +6403,93 @@ mod session_key_tests {
         encode_api_control_entropy, ephemeral_api_control_secret, federation_rule_matches,
         insert_restored_muc_occupant, muc_actor_identity_matches, muc_departure_identity_matches,
         muc_suspended_teardown_identity_matches, promote_suspended_muc_buffer,
-        seal_suspended_muc_buffer, service_control_applies, session_lookup,
-        snapshot_suspended_muc_buffer_for_resume, staged_route_activation_allowed,
+        runtime_control_startup_retry_delay, seal_suspended_muc_buffer, service_control_applies,
+        session_lookup, snapshot_suspended_muc_buffer_for_resume, staged_route_activation_allowed,
         suspended_muc_resume_actor_matches, suspended_occupant_is_created,
         transfer_muc_suffix_to_checkpoint, FederationWritePolicy, JoinedMucMembership, MucOccupant,
         MucOccupantEndpoint, RouteIncarnationSignal, SerializableMucOccupant, SessionLookup,
         StagedRouteActivationCheck, StagedRouteIdentity, SuspendedMucBuffer, SuspendedMucEndpoint,
         SuspendedMucPhase, SuspendedMucRoute,
     };
-    use std::collections::VecDeque;
+    use std::collections::{BTreeSet, VecDeque};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
     };
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn runtime_control_startup_backoff_is_bounded_and_decorrelates_processes() {
+        let first = runtime_control_startup_retry_delay(1, 17);
+        assert!(first >= Duration::from_millis(10));
+        assert!(first <= Duration::from_millis(500));
+
+        let saturated = runtime_control_startup_retry_delay(128, 17);
+        assert!(saturated <= Duration::from_millis(500));
+        assert!(saturated >= first);
+
+        let delays = (10_u32..110)
+            .map(|process_id| runtime_control_startup_retry_delay(3, process_id))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            delays.len() > 16,
+            "a cold-start cohort must not retry in one synchronized wave"
+        );
+    }
+
+    #[test]
+    fn live_sm_shutdown_write_receipt_does_not_cross_the_suspension_fence() {
+        let (sender, mut outbound) = tokio::sync::mpsc::channel(2);
+        let endpoint = SuspendedMucEndpoint::new_live(
+            uuid::Uuid::new_v4(),
+            crate::outbound::OutboundSender::new(sender),
+        );
+        let (receipt, mut completion) = tokio::sync::mpsc::unbounded_channel();
+        assert!(endpoint
+            .try_send_live_write_notification("<presence/>".to_owned(), receipt)
+            .unwrap());
+        let item = outbound.try_recv().unwrap();
+        item.confirm_transport_ownership();
+        assert!(matches!(
+            completion.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        item.confirm_transport_write();
+        assert_eq!(completion.try_recv(), Ok(()));
+
+        begin_suspended_muc_route_transition(&endpoint, 0, 0);
+        let (receipt, mut completion) = tokio::sync::mpsc::unbounded_channel();
+        assert!(!endpoint
+            .try_send_live_write_notification("<presence/>".to_owned(), receipt)
+            .unwrap());
+        assert!(matches!(
+            completion.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
+        assert!(matches!(
+            outbound.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
+        assert_eq!(endpoint.buffer.try_lock().unwrap().bytes, 0);
+    }
+
+    #[test]
+    fn suspended_sm_shutdown_write_receipt_is_never_persisted_or_confirmed() {
+        for endpoint in [
+            SuspendedMucEndpoint::new_collecting(uuid::Uuid::new_v4(), 0, 0),
+            SuspendedMucEndpoint::new_durable(uuid::Uuid::new_v4()),
+        ] {
+            let (receipt, mut completion) = tokio::sync::mpsc::unbounded_channel();
+            assert!(!endpoint
+                .try_send_live_write_notification("<presence/>".to_owned(), receipt)
+                .unwrap());
+            assert!(matches!(
+                completion.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+            ));
+            assert!(endpoint.buffer.try_lock().unwrap().stanzas.is_empty());
+        }
+    }
 
     #[test]
     fn route_removal_signal_retains_the_exact_terminal_state_for_late_subscribers() {
@@ -5533,6 +6503,94 @@ mod session_key_tests {
             *late.borrow(),
             "subscribing after compare-and-remove must not lose the terminal event"
         );
+    }
+
+    #[tokio::test]
+    async fn unchanged_island_refresh_does_not_wait_for_held_read_guard() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        for enabled in [false, true] {
+            let policy = FederationWritePolicy::new(enabled);
+            let held_read = if enabled {
+                // A raw reader also proves the true no-op does not acquire
+                // the exclusive gate; delivery itself is already forbidden.
+                policy.gate.read().await
+            } else {
+                policy.permit().await.expect("federation starts enabled")
+            };
+            let mut refresh = std::pin::pin!(policy.refresh(enabled));
+            let mut context = Context::from_waker(Waker::noop());
+            assert_eq!(refresh.as_mut().poll(&mut context), Poll::Ready(enabled));
+            assert_eq!(policy.enabled(), enabled);
+            drop(held_read);
+        }
+    }
+
+    #[tokio::test]
+    async fn island_refresh_transition_fences_queued_delivery_despite_concurrent_noop() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        let policy = FederationWritePolicy::new(false);
+        let held_read = policy.permit().await.expect("federation starts enabled");
+        let mut transition = std::pin::pin!(policy.refresh(true));
+        let mut queued_delivery = std::pin::pin!(policy.permit());
+        let mut context = Context::from_waker(Waker::noop());
+        assert_eq!(transition.as_mut().poll(&mut context), Poll::Pending);
+        assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
+
+        let mut unchanged = std::pin::pin!(policy.refresh(false));
+        assert_eq!(unchanged.as_mut().poll(&mut context), Poll::Ready(false));
+        assert!(!policy.enabled());
+        assert_eq!(transition.as_mut().poll(&mut context), Poll::Pending);
+        assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
+
+        drop(held_read);
+        assert_eq!(transition.as_mut().poll(&mut context), Poll::Ready(false));
+        assert!(policy.enabled());
+        assert!(matches!(
+            queued_delivery.as_mut().poll(&mut context),
+            Poll::Ready(None)
+        ));
+    }
+
+    #[tokio::test]
+    async fn island_refresh_reopening_waits_for_gate_and_returns_locked_previous_value() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        for concurrent_apply in [false, true] {
+            let policy = FederationWritePolicy::new(true);
+            let held_read = policy.gate.read().await;
+            let mut earlier_apply = std::pin::pin!(policy.apply(false));
+            let mut context = Context::from_waker(Waker::noop());
+            if concurrent_apply {
+                assert_eq!(earlier_apply.as_mut().poll(&mut context), Poll::Pending);
+            }
+            let mut transition = std::pin::pin!(policy.refresh(false));
+            let mut queued_delivery = std::pin::pin!(policy.permit());
+            assert_eq!(transition.as_mut().poll(&mut context), Poll::Pending);
+            assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
+            assert!(policy.enabled());
+
+            drop(held_read);
+            if concurrent_apply {
+                assert_eq!(earlier_apply.as_mut().poll(&mut context), Poll::Ready(()));
+                assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
+            }
+            // The slow path returns the swap's value after the exclusive
+            // wait, including when an earlier apply changed the initial read.
+            assert_eq!(
+                transition.as_mut().poll(&mut context),
+                Poll::Ready(!concurrent_apply)
+            );
+            assert!(!policy.enabled());
+            assert!(matches!(
+                queued_delivery.as_mut().poll(&mut context),
+                Poll::Ready(Some(_))
+            ));
+        }
     }
 
     #[tokio::test]
@@ -5672,7 +6730,7 @@ mod session_key_tests {
         assert!(snapshot
             .unacked
             .iter()
-            .all(|entry| entry.durable_delivery.is_none()));
+            .all(|entry| entry.durable_delivery().is_none()));
 
         let before_h = snapshot.outbound_h;
         let before = snapshot.unacked.clone();

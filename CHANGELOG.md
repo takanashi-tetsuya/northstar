@@ -4,8 +4,31 @@ All notable Northstar changes are documented here. Protocol support claims are
 normative only in [XEP_MATRIX.md](XEP_MATRIX.md), and unresolved release
 boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
-## [0.2.0] - Unreleased
+## [0.2.0] - Release notes (publication date: GitHub Releases)
 
+- Added complete Windows x64 and Linux x64 package manifests and installation
+  instructions, native PostgreSQL startup/resource verification, default-user
+  Docker startup checks, and fresh draft-download checksum/provenance checks.
+  A verified draft is prepared for manual publication; build previews publish
+  neither a Release nor GHCR images.
+
+- Added migration `0139` to repair expired upload-cleanup admission without
+  changing its public capability: the queue's named primary-key conflict target
+  avoids an ambiguous PL/pgSQL output-column reference, and the replacement
+  function is re-pinned to the installation schema. The embedded migration
+  ledger, role-attestation count and operations documentation now advance
+  together to the 139-entry `0001`–`0140` chain.
+- Added migration `0140` to make the final physical upload projection release
+  its logical retained owner exactly once, including a multi-row deletion.
+  The two capacity-delete triggers now evaluate the final-owner predicate
+  before their row disappears; physical recovery counters remain per locator.
+- Repaired CI fixture topology so administrative integration requests use the
+  readiness-published loopback-only management listener, not public HTTP.
+  The Redis-only MUC fixture now seeds and verifies the same signed peer
+  authority envelope that the production cross-node path requires.
+- Fixed the S2S outbox test's random UUID substring false positive and made the
+  backup image ship every SQL policy file used by its offline dump validator;
+  the static capability gate now guards that image/runtime dependency contract.
 - The complete change set from the previous committed `0.1.0` baseline is
   recorded in the [0.2 development changelog](changelog/v0.2.md).
 - Cargo, Compose, OCI, backup and OpenAPI metadata now identify the current

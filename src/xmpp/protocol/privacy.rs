@@ -15,7 +15,7 @@ use std::sync::atomic::Ordering;
 #[cfg(test)]
 use crate::services::privacy::PrivacyService;
 
-const PRIVACY_NS: &str = "jabber:iq:privacy";
+const PRIVACY_NS: &str = northstar_xep_0016::NAMESPACE;
 const MAX_PRIVACY_QUERY_BYTES: usize = 64 * 1024;
 
 impl ProtocolSession {

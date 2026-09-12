@@ -9,6 +9,8 @@ use tokio_rustls::TlsConnector;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 const VOLATILE_DELIVERY_TIMEOUT: Duration = Duration::from_secs(16);
+// One shared budget for all recovery observations and conditional writes.
+const AUTHENTICATED_ROUTE_RECOVERY_DEADLINE: Duration = Duration::from_secs(5);
 const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(250);
 const HAPPY_EYEBALLS_MAX_IN_FLIGHT: usize = 4;
 
@@ -1246,6 +1248,80 @@ async fn request_bidi_if_advertised<S: AsyncWrite + Unpin>(
     Ok(true)
 }
 
+/// A newly authenticated bidirectional stream may recover one matching FIFO
+/// head from an obsolete connection-failure backoff. The registry consumes the
+/// hint before a mutating query is polled; an unknown database result therefore
+/// falls back to normal durable retry instead of replaying the acceleration.
+async fn recover_authenticated_route_heads(
+    pool: &sqlx::PgPool,
+    registry: &S2sConnectionRegistry,
+    excluded_domains: &[String],
+    domain_allowed: impl Fn(&str) -> bool,
+    limit: usize,
+) -> Result<usize> {
+    let deadline = tokio::time::Instant::now() + AUTHENTICATED_ROUTE_RECOVERY_DEADLINE;
+    let mut recovered = 0;
+    for route in registry.pending_bidi_recoveries(limit) {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        if !registry.bidi_recovery_is_current(&route) {
+            continue;
+        }
+        if excluded_domains.contains(&route.remote_domain) || !domain_allowed(&route.remote_domain)
+        {
+            registry.observe_bidi_recovery(&route, None);
+            continue;
+        }
+        let head = tokio::select! {
+            biased;
+            _ = route.disconnect.cancelled() => {
+                registry.observe_bidi_recovery(&route, None);
+                continue;
+            }
+            result = tokio::time::timeout_at(
+                deadline,
+                db::s2s_route_recovery_head(pool, &route.remote_domain),
+            ) => result.context("authenticated S2S recovery observation exceeded its turn deadline")??,
+        };
+        let observation = head.as_ref().map(|head| BidiRecoveryHead {
+            id: head.id,
+            attempt_count: head.attempt_count,
+            leased: head.claim_in_flight,
+            due: head.retry_due,
+            direction_matches: same_s2s_domain(&head.target_domain, &route.remote_domain)
+                && bidi_stanza_authorized(&head.stanza, &route.local_domain, &route.remote_domain),
+        });
+        if !matches!(
+            registry.observe_bidi_recovery(&route, observation),
+            BidiRecoveryAction::RetryHead
+        ) {
+            continue;
+        }
+        let Some(head) = head else {
+            continue;
+        };
+        // Observation consumed this connection's one opportunity synchronously.
+        // Recheck its exact owner after the read; never hold a registry guard
+        // across PostgreSQL or let a revoked/replaced stream schedule new work.
+        if !registry.bidi_recovery_is_current(&route) {
+            continue;
+        }
+        let changed = tokio::select! {
+            biased;
+            _ = route.disconnect.cancelled() => false,
+            result = tokio::time::timeout_at(
+                deadline,
+                db::wake_s2s_route_recovery_head(
+                    pool, head.id, &route.remote_domain, head.attempt_count,
+                ),
+            ) => result.context("authenticated S2S recovery write exceeded its turn deadline")??,
+        };
+        recovered += usize::from(changed);
+    }
+    Ok(recovered)
+}
+
 pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
     for expired in db::expire_s2s_outbox(&state.pool, state.config.s2s_outbox_claim_batch).await? {
         state
@@ -1259,17 +1335,15 @@ pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
             queued_at = %expired.created_at,
             "federation stanza expired before delivery"
         );
-        let envelope = FederationEnvelope {
-            outbox_id: expired.id,
-            lock_token: uuid::Uuid::nil(),
-            attempt_count: expired.attempt_count,
-            target_domain: expired.target_domain,
-            bounce_to: expired.bounce_to,
-            stanza: expired.stanza,
-            delivery_mode: FederationDeliveryMode::DurableOutbox,
-            volatile_completion: None,
-            volatile_deadline: None,
-        };
+        let envelope = FederationEnvelope::new(
+            expired.id,
+            uuid::Uuid::nil(),
+            expired.attempt_count,
+            expired.target_domain,
+            expired.bounce_to,
+            expired.stanza,
+            FederationDeliveryMode::DurableOutbox,
+        );
         bounce_delivery_failure(state, &envelope);
     }
 
@@ -1277,6 +1351,20 @@ pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
         return Ok(());
     }
     let component_domains = state.configured_component_domains();
+    if let Err(error) = recover_authenticated_route_heads(
+        &state.pool,
+        state.s2s_connection_registry(),
+        &component_domains,
+        |domain| state.federation_domain_allowed(domain),
+        usize::try_from(state.config.s2s_outbox_claim_batch)
+            .context("S2S outbox recovery batch must be nonnegative")?,
+    )
+    .await
+    {
+        // Recovery is a bounded optimization. Its failure must not suppress
+        // ordinary due work, lease expiry or the established retry policy.
+        tracing::warn!(?error, "authenticated S2S route recovery could not finish");
+    }
     let items = db::claim_due_s2s_outbox_excluding_domains(
         &state.pool,
         state.config.s2s_outbox_claim_batch,
@@ -1362,7 +1450,15 @@ fn envelope_source_domain(state: &AppState, envelope: &FederationEnvelope) -> St
 }
 
 fn bidi_envelope_authorized(envelope: &FederationEnvelope, local_stream_domain: &str) -> bool {
-    let Ok(document) = Document::parse(&envelope.stanza) else {
+    bidi_stanza_authorized(
+        &envelope.stanza,
+        local_stream_domain,
+        &envelope.target_domain,
+    )
+}
+
+fn bidi_stanza_authorized(stanza: &str, local_stream_domain: &str, target_domain: &str) -> bool {
+    let Ok(document) = Document::parse(stanza) else {
         return false;
     };
     let root = document.root_element();
@@ -1380,7 +1476,7 @@ fn bidi_envelope_authorized(envelope: &FederationEnvelope, local_stream_domain: 
     source_authorized
         && to
             .as_deref()
-            .is_some_and(|domain| same_s2s_domain(domain, &envelope.target_domain))
+            .is_some_and(|domain| same_s2s_domain(domain, target_domain))
 }
 
 pub(crate) fn bounce_delivery_failure(state: &AppState, envelope: &FederationEnvelope) {
@@ -1434,6 +1530,386 @@ fn delivery_failure_stanza(stanza: &str, condition: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn enqueue_authenticated_recovery_test_row(
+        pool: &sqlx::PgPool,
+        target: &str,
+        stanza: &str,
+    ) -> uuid::Uuid {
+        db::enqueue_s2s_outbox(pool, target, stanza, None, 300, 100, 1_000_000, 100)
+            .await
+            .unwrap()
+    }
+
+    fn publish_authenticated_recovery_test_route(
+        registry: &S2sConnectionRegistry,
+        target: &str,
+        disconnect: tokio_util::sync::CancellationToken,
+    ) -> mpsc::Receiver<FederationEnvelope> {
+        let (sender, receiver) = mpsc::channel(4);
+        assert!(registry
+            .register_bidirectional_if_vacant(
+                bidi_connection_key("local.test", target).unwrap(),
+                BidiS2sSession::new(
+                    uuid::Uuid::new_v4(),
+                    "local.test".to_owned(),
+                    sender,
+                    disconnect
+                ),
+            )
+            .is_ok());
+        receiver
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
+    async fn authenticated_route_recovery_integrates_with_fifo_and_leased_failure_commit() {
+        let url = std::env::var("TEST_DATABASE_URL")
+            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+        let admin = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        let schema = format!("s2s_recovery_integration_{}", uuid::Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        eprintln!("isolated_schema_created={schema}");
+        let connection_schema = schema.clone();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(6)
+            .after_connect(move |connection, _| {
+                let statement = format!("SET search_path TO {connection_schema}");
+                Box::pin(async move {
+                    sqlx::query(&statement).execute(connection).await?;
+                    Ok(())
+                })
+            })
+            .connect(&url)
+            .await
+            .unwrap();
+        db::migrate(&pool).await.unwrap();
+
+        let registry = S2sConnectionRegistry::default();
+        let target = "recovered.remote.test";
+        let domains = vec![target.to_owned()];
+        let head_id = enqueue_authenticated_recovery_test_row(
+            &pool,
+            target,
+            "<message from='sender@local.test' to='peer@recovered.remote.test' id='first'/>",
+        )
+        .await;
+        let successor_id = enqueue_authenticated_recovery_test_row(
+            &pool,
+            target,
+            "<message from='sender@local.test' to='peer@recovered.remote.test' id='second'/>",
+        )
+        .await;
+        let mut claimed = db::claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let first = claimed.remove(0);
+        assert_eq!(first.id, head_id);
+        assert_eq!(
+            db::fail_s2s_outbox(&pool, &first, "initial route outage", 60, 60, 200, false)
+                .await
+                .unwrap(),
+            db::S2sFailureDisposition::RetryScheduled
+        );
+        assert_eq!(
+            recover_authenticated_route_heads(&pool, &registry, &[], |_| true, 4)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(
+            !db::s2s_route_recovery_head(&pool, target)
+                .await
+                .unwrap()
+                .unwrap()
+                .retry_due
+        );
+        let _first_receiver = publish_authenticated_recovery_test_route(
+            &registry,
+            target,
+            tokio_util::sync::CancellationToken::new(),
+        );
+        assert_eq!(
+            recover_authenticated_route_heads(&pool, &registry, &[], |_| true, 4)
+                .await
+                .unwrap(),
+            1
+        );
+        let mut claimed = db::claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
+            .await
+            .unwrap();
+        assert_eq!(
+            claimed.len(),
+            1,
+            "recovery must not let a successor overtake its head"
+        );
+        let recovered = claimed.remove(0);
+        assert_eq!(recovered.id, head_id);
+        assert_ne!(recovered.id, successor_id);
+        assert_ne!(recovered.lock_token, first.lock_token);
+        assert!(!db::complete_s2s_outbox(&pool, first.id, first.lock_token)
+            .await
+            .unwrap());
+        assert_eq!(
+            db::fail_s2s_outbox(
+                &pool,
+                &recovered,
+                "same stream failed again",
+                60,
+                60,
+                200,
+                false
+            )
+            .await
+            .unwrap(),
+            db::S2sFailureDisposition::RetryScheduled
+        );
+        assert_eq!(
+            recover_authenticated_route_heads(&pool, &registry, &[], |_| true, 4)
+                .await
+                .unwrap(),
+            0,
+            "the same authenticated stream must not repeatedly defeat backoff"
+        );
+        assert!(
+            !db::s2s_route_recovery_head(&pool, target)
+                .await
+                .unwrap()
+                .unwrap()
+                .retry_due
+        );
+        assert!(
+            db::claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let leased_target = "leased.remote.test";
+        let leased_domains = vec![leased_target.to_owned()];
+        let leased_id = enqueue_authenticated_recovery_test_row(
+            &pool,
+            leased_target,
+            "<message from='sender@local.test' to='peer@leased.remote.test' id='leased'/>",
+        )
+        .await;
+        let mut claimed = db::claim_due_s2s_outbox_for_domains(&pool, 10, 120, &leased_domains)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let leased = claimed.remove(0);
+        let _leased_receiver = publish_authenticated_recovery_test_route(
+            &registry,
+            leased_target,
+            tokio_util::sync::CancellationToken::new(),
+        );
+        let mut blocker = pool.begin().await.unwrap();
+        let _: uuid::Uuid = sqlx::query_scalar("SELECT id FROM s2s_outbox WHERE id=$1 FOR UPDATE")
+            .bind(leased_id)
+            .fetch_one(&mut *blocker)
+            .await
+            .unwrap();
+        let fail_pool = pool.clone();
+        let failing_item = leased.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let failing = tokio::spawn(async move {
+            started_tx.send(()).unwrap();
+            db::fail_s2s_outbox(
+                &fail_pool,
+                &failing_item,
+                "old lease failure awaiting commit",
+                60,
+                60,
+                200,
+                false,
+            )
+            .await
+        });
+        started_rx.await.unwrap();
+        // The actual failure cannot commit while the row lock is held. The
+        // production recovery helper must retain the exact head's hint.
+        assert_eq!(
+            recover_authenticated_route_heads(&pool, &registry, &[], |_| true, 4)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(registry.pending_bidi_recoveries(4).len(), 1);
+        assert!(
+            db::s2s_route_recovery_head(&pool, leased_target)
+                .await
+                .unwrap()
+                .unwrap()
+                .claim_in_flight
+        );
+        assert!(!failing.is_finished());
+        blocker.commit().await.unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), failing)
+                .await
+                .expect("released row lock must allow the real failure to commit")
+                .unwrap()
+                .unwrap(),
+            db::S2sFailureDisposition::RetryScheduled
+        );
+        assert_eq!(
+            recover_authenticated_route_heads(&pool, &registry, &[], |_| true, 4)
+                .await
+                .unwrap(),
+            1
+        );
+        let mut claimed = db::claim_due_s2s_outbox_for_domains(&pool, 10, 120, &leased_domains)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let after_commit = claimed.remove(0);
+        assert_eq!(after_commit.id, leased_id);
+        assert_eq!(after_commit.attempt_count, leased.attempt_count + 1);
+        assert_ne!(after_commit.lock_token, leased.lock_token);
+        assert!(
+            !db::complete_s2s_outbox(&pool, leased.id, leased.lock_token)
+                .await
+                .unwrap()
+        );
+        assert!(
+            db::complete_s2s_outbox(&pool, after_commit.id, after_commit.lock_token)
+                .await
+                .unwrap()
+        );
+        assert!(registry.pending_bidi_recoveries(4).is_empty());
+
+        for reason in ["direction", "component", "denied", "revoked"] {
+            let target = format!("{reason}.remote.test");
+            let source = if reason == "direction" {
+                "other.test"
+            } else {
+                "local.test"
+            };
+            let stanza =
+                format!("<message from='sender@{source}' to='peer@{target}' id='{reason}'/>");
+            let id = enqueue_authenticated_recovery_test_row(&pool, &target, &stanza).await;
+            sqlx::query(
+                "UPDATE s2s_outbox SET next_attempt_at=NOW()+INTERVAL '10 minutes' WHERE id=$1",
+            )
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+            let rejected_registry = S2sConnectionRegistry::default();
+            let disconnect = tokio_util::sync::CancellationToken::new();
+            let _receiver = publish_authenticated_recovery_test_route(
+                &rejected_registry,
+                &target,
+                disconnect.clone(),
+            );
+            if reason == "revoked" {
+                disconnect.cancel();
+            }
+            let excluded = if reason == "component" {
+                vec![target.clone()]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                recover_authenticated_route_heads(
+                    &pool,
+                    &rejected_registry,
+                    &excluded,
+                    |_| reason != "denied",
+                    4
+                )
+                .await
+                .unwrap(),
+                0,
+                "an ineligible route must not accelerate its head: {reason}"
+            );
+            assert!(
+                !db::s2s_route_recovery_head(&pool, &target)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .retry_due
+            );
+            assert_eq!(
+                recover_authenticated_route_heads(&pool, &rejected_registry, &[], |_| true, 4)
+                    .await
+                    .unwrap(),
+                0,
+                "a consumed or revoked route hint must not reappear: {reason}"
+            );
+        }
+        pool.close().await;
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+    }
+
+    #[test]
+    fn authenticated_recovery_requires_the_exact_stanza_direction() {
+        assert!(bidi_stanza_authorized(
+            "<message from='alice@LOCAL.test/a' to='room@REMOTE.test'/>",
+            "local.test",
+            "remote.test",
+        ));
+        for stanza in [
+            "<message from='alice@other.test' to='room@remote.test'/>",
+            "<message from='alice@local.test' to='room@other.test'/>",
+            "<message from='alice@remote.test' to='room@local.test'/>",
+            "<message to='room@remote.test'/>",
+            "<message from='alice@local.test'/>",
+            "<message from='invalid user@local.test' to='room@remote.test'/>",
+            "<message from='alice@local.test' to='@remote.test'/>",
+            "<message><body>from='alice@local.test' to='room@remote.test'</body></message>",
+            "<message",
+        ] {
+            assert!(!bidi_stanza_authorized(stanza, "local.test", "remote.test"));
+        }
+    }
+
+    #[tokio::test]
+    async fn disallowed_recovery_routes_never_poll_the_database() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+            .unwrap();
+        pool.close().await;
+        for component in [false, true] {
+            let registry = S2sConnectionRegistry::default();
+            let (sender, _receiver) = mpsc::channel(1);
+            assert!(registry
+                .register_bidirectional_if_vacant(
+                    bidi_connection_key("local.test", "remote.test").unwrap(),
+                    BidiS2sSession::new(
+                        uuid::Uuid::new_v4(),
+                        "local.test".to_owned(),
+                        sender,
+                        tokio_util::sync::CancellationToken::new(),
+                    ),
+                )
+                .is_ok());
+            let excluded = if component {
+                vec!["remote.test".to_owned()]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                recover_authenticated_route_heads(&pool, &registry, &excluded, |_| component, 1,)
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert!(registry.pending_bidi_recoveries(1).is_empty());
+        }
+    }
 
     #[test]
     fn outbound_cancellation_distinguishes_shutdown_from_certificate_revocation() {

@@ -1,6 +1,10 @@
 //! Application boundary for durable resource binding and XEP-0198 ownership.
 
-use crate::db;
+use crate::{
+    config::SM_AUTHORITY_LISTENER_MAX_CONNECTIONS,
+    db,
+    services::mix::{MixDeliveryWakeBroker, MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL},
+};
 use anyhow::{Context, Result};
 use dashmap::mapref::entry::Entry;
 use sqlx::{
@@ -22,11 +26,7 @@ const SM_AUTHORITY_NOTIFICATION_CHANNEL: &str = "northstar_sm_authority_v1";
 
 /// Application-layer proof that one already-authorized C2S lifecycle may
 /// claim a cluster route. Protocol code never receives a database DTO.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SessionRouteClaimProof {
-    Binding,
-    SmResume { session_id: Uuid, claim_token: Uuid },
-}
+pub(crate) use northstar_session_core::{SessionRouteClaimProof, SmMucMembership};
 
 impl From<SessionRouteClaimProof> for db::ClusterSessionRouteClaimProof {
     fn from(value: SessionRouteClaimProof) -> Self {
@@ -39,30 +39,6 @@ impl From<SessionRouteClaimProof> for db::ClusterSessionRouteClaimProof {
                 session_id,
                 claim_token,
             },
-        }
-    }
-}
-
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
-pub(crate) struct SmMucMembership {
-    pub(crate) room_jid: String,
-    pub(crate) nick: String,
-}
-
-impl From<db::SmMucMembership> for SmMucMembership {
-    fn from(value: db::SmMucMembership) -> Self {
-        Self {
-            room_jid: value.room_jid,
-            nick: value.nick,
-        }
-    }
-}
-
-impl From<&SmMucMembership> for db::SmMucMembership {
-    fn from(value: &SmMucMembership) -> Self {
-        Self {
-            room_jid: value.room_jid.clone(),
-            nick: value.nick.clone(),
         }
     }
 }
@@ -144,7 +120,7 @@ impl From<&db::SmSessionSnapshot> for SmSessionSnapshot {
             privacy_requested: value.privacy_requested,
             peer_ip: value.peer_ip,
             user_agent_id: value.user_agent_id,
-            joined_rooms: value.joined_rooms.iter().cloned().map(Into::into).collect(),
+            joined_rooms: value.joined_rooms.clone(),
             directed_presence: value.directed_presence.clone(),
             last_presence: value.last_presence.clone(),
             unacked: value.unacked.clone(),
@@ -167,7 +143,7 @@ impl From<&SmSessionSnapshot> for db::SmSessionSnapshot {
             privacy_requested: value.privacy_requested,
             peer_ip: value.peer_ip,
             user_agent_id: value.user_agent_id,
-            joined_rooms: value.joined_rooms.iter().map(Into::into).collect(),
+            joined_rooms: value.joined_rooms.clone(),
             directed_presence: value.directed_presence.clone(),
             last_presence: value.last_presence.clone(),
             unacked: value.unacked.clone(),
@@ -262,7 +238,7 @@ impl From<db::SmResumeClaim> for SmResumeClaim {
             active_privacy_list: value.active_privacy_list,
             privacy_requested: value.privacy_requested,
             user_agent_id: value.user_agent_id,
-            joined_rooms: value.joined_rooms.into_iter().map(Into::into).collect(),
+            joined_rooms: value.joined_rooms,
             directed_presence: value.directed_presence,
             last_presence: value.last_presence,
             unacked: value.unacked,
@@ -300,10 +276,76 @@ pub(crate) struct SmSessionCreationRequest<'a> {
     pub max_global: usize,
 }
 
+/// A committed source-capability rewrite which the protocol must apply to its
+/// in-memory XEP-0198 FIFO before a later checkpoint or client acknowledgement.
+/// C2S identities remain stable; only MIX hand-offs rotate their lease token.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SmMixLeaseRotation {
+    pub(crate) previous: crate::outbound::MixDelivery,
+    pub(crate) current: crate::outbound::MixDelivery,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SmQueueOwnershipResolution {
+    pub(crate) mix_rotations: Vec<SmMixLeaseRotation>,
+}
+
+impl SmQueueOwnershipResolution {
+    pub(crate) fn resolve_source(
+        &self,
+        source: Option<crate::outbound::TransportOwnershipSource>,
+    ) -> Option<crate::outbound::TransportOwnershipSource> {
+        match source {
+            Some(crate::outbound::TransportOwnershipSource::Mix(previous)) => self
+                .mix_rotations
+                .iter()
+                .find(|rotation| rotation.previous == previous)
+                .map(|rotation| crate::outbound::TransportOwnershipSource::Mix(rotation.current))
+                .or(Some(crate::outbound::TransportOwnershipSource::Mix(
+                    previous,
+                ))),
+            other => other,
+        }
+    }
+}
+
+impl From<db::SmQueueOwnershipResolution> for SmQueueOwnershipResolution {
+    fn from(value: db::SmQueueOwnershipResolution) -> Self {
+        Self {
+            mix_rotations: value
+                .mix_rotations
+                .into_iter()
+                .map(|rotation| SmMixLeaseRotation {
+                    previous: rotation.previous,
+                    current: rotation.current,
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(crate) enum SmSessionCreationOutcome {
-    Created(Uuid),
+    Created {
+        id: Uuid,
+        ownership: SmQueueOwnershipResolution,
+    },
     CapacityExhausted,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SmCheckpointOutcome {
+    pub(crate) updated: bool,
+    pub(crate) ownership: SmQueueOwnershipResolution,
+}
+
+impl From<db::SmCheckpointOutcome> for SmCheckpointOutcome {
+    fn from(value: db::SmCheckpointOutcome) -> Self {
+        Self {
+            updated: value.updated,
+            ownership: value.ownership.into(),
+        }
+    }
 }
 
 pub(crate) struct SmResumeClaimRequest<'a> {
@@ -709,7 +751,7 @@ impl SmService {
         request: SmSessionCreationRequest<'_>,
     ) -> Result<SmSessionCreationOutcome> {
         let snapshot = db::SmSessionSnapshot::from(request.snapshot);
-        match db::create_sm_session(
+        match db::create_sm_session_with_ownership_resolution(
             &self.pool,
             request.token_hash,
             request.user_id,
@@ -726,7 +768,10 @@ impl SmService {
         )
         .await
         {
-            Ok(id) => Ok(SmSessionCreationOutcome::Created(id)),
+            Ok(created) => Ok(SmSessionCreationOutcome::Created {
+                id: created.id,
+                ownership: created.ownership.into(),
+            }),
             Err(error) if db::is_capacity_exhausted(&error) => {
                 Ok(SmSessionCreationOutcome::CapacityExhausted)
             }
@@ -790,9 +835,9 @@ impl SmService {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
-    ) -> Result<bool> {
+    ) -> Result<SmCheckpointOutcome> {
         let snapshot = db::SmSessionSnapshot::from(snapshot);
-        db::checkpoint_sm_session(
+        Ok(db::checkpoint_sm_session_with_ownership_resolution(
             &self.pool,
             session_id,
             connection_id,
@@ -802,7 +847,8 @@ impl SmService {
             max_stanzas,
             max_bytes,
         )
-        .await
+        .await?
+        .into())
     }
 
     pub(crate) async fn remove_live_muc_memberships(
@@ -811,12 +857,7 @@ impl SmService {
         connection_id: Uuid,
         memberships: &[SmMucMembership],
     ) -> Result<bool> {
-        let memberships = memberships
-            .iter()
-            .map(db::SmMucMembership::from)
-            .collect::<Vec<_>>();
-        db::remove_live_sm_muc_memberships(&self.pool, session_id, connection_id, &memberships)
-            .await
+        db::remove_live_sm_muc_memberships(&self.pool, session_id, connection_id, memberships).await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -830,27 +871,30 @@ impl SmService {
         live_lease_seconds: u64,
         max_stanzas: usize,
         max_bytes: usize,
-    ) -> Result<bool> {
+    ) -> Result<SmCheckpointOutcome> {
         let snapshot = db::SmSessionSnapshot::from(snapshot);
-        db::checkpoint_sm_session_and_acknowledge(
-            &self.pool,
-            session_id,
-            connection_id,
-            &snapshot,
-            acknowledged,
-            ttl_seconds,
-            live_lease_seconds,
-            max_stanzas,
-            max_bytes,
+        Ok(
+            db::checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
+                &self.pool,
+                session_id,
+                connection_id,
+                &snapshot,
+                acknowledged,
+                ttl_seconds,
+                live_lease_seconds,
+                max_stanzas,
+                max_bytes,
+            )
+            .await?
+            .into(),
         )
-        .await
     }
 
     pub(crate) async fn acknowledge_delivery_batch(
         &self,
-        deliveries: &[crate::outbound::DurableDelivery],
+        sources: &[crate::outbound::TransportOwnershipSource],
     ) -> Result<()> {
-        db::replay::acknowledge_durable_deliveries(&self.pool, deliveries).await
+        db::acknowledge_transport_sources(&self.pool, sources).await
     }
 
     /// Phase one of resource publication. Only durable capacity and the exact
@@ -1112,9 +1156,17 @@ impl SmService {
     }
 }
 
-async fn run_sm_authority_listener(
+/// Run the one reserved PostgreSQL notification connection shared by the
+/// XEP-0198 authority broker and the typed MIX delivery wake broker.
+///
+/// AppState composes these independent services here; neither protocol layer
+/// reaches into the other's broker.  This deliberately reuses the existing
+/// reserved listener connection instead of consuming a primary-pool slot or
+/// adding a new runtime-role connection.
+async fn run_database_authority_listener(
     connect_options: PgConnectOptions,
     authority: Arc<SmAuthorityBroker>,
+    mix_delivery_wake: Arc<MixDeliveryWakeBroker>,
     cancel: tokio_util::sync::CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
@@ -1124,7 +1176,7 @@ async fn run_sm_authority_listener(
     // request/transaction connections.
     let listener_pool = PgPoolOptions::new()
         .min_connections(0)
-        .max_connections(1)
+        .max_connections(SM_AUTHORITY_LISTENER_MAX_CONNECTIONS)
         .max_lifetime(None)
         .idle_timeout(None)
         .connect_with(connect_options)
@@ -1142,10 +1194,17 @@ async fn run_sm_authority_listener(
         .await
         .context("could not acquire the dedicated SM authority LISTEN connection")?;
     listener
-        .listen(SM_AUTHORITY_NOTIFICATION_CHANNEL)
+        .listen_all([
+            SM_AUTHORITY_NOTIFICATION_CHANNEL,
+            MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL,
+        ])
         .await
-        .context("could not subscribe to SM authority notifications")?;
+        .context("could not subscribe to PostgreSQL authority notifications")?;
+    // Publish only after both channels are installed. A reconnect or startup
+    // can have a gap before LISTEN becomes active; each broker's retained
+    // generation makes its workers run an authoritative database probe.
     authority.publish_listener_transition();
+    mix_delivery_wake.publish_listener_transition();
     heartbeat.ok();
     let mut liveness = tokio::time::interval(Duration::from_secs(5));
     liveness.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1155,6 +1214,7 @@ async fn run_sm_authority_listener(
             biased;
             _ = cancel.cancelled() => {
                 authority.publish_listener_transition();
+                mix_delivery_wake.publish_listener_transition();
                 return Ok(());
             }
             _ = liveness.tick() => {
@@ -1167,22 +1227,41 @@ async fn run_sm_authority_listener(
             notification = listener.try_recv() => {
                 match notification {
                     Ok(Some(notification)) => {
-                        if notification.channel() != SM_AUTHORITY_NOTIFICATION_CHANNEL
-                            || notification.payload().len() > 256
-                        {
-                            continue;
-                        }
-                        let Ok(event) = serde_json::from_str::<SmAuthorityNotification>(
-                            notification.payload(),
-                        ) else {
-                            tracing::warn!(
-                                channel = notification.channel(),
-                                "discarded malformed SM authority notification"
-                            );
-                            continue;
-                        };
-                        if event.schema == authority.schema && event.state_version > 0 {
-                            authority.publish_state(event.session_id, event.state_version);
+                        match notification.channel() {
+                            SM_AUTHORITY_NOTIFICATION_CHANNEL => {
+                                if notification.payload().len() > 256 {
+                                    continue;
+                                }
+                                let Ok(event) = serde_json::from_str::<SmAuthorityNotification>(
+                                    notification.payload(),
+                                ) else {
+                                    tracing::warn!(
+                                        channel = notification.channel(),
+                                        "discarded malformed SM authority notification"
+                                    );
+                                    continue;
+                                };
+                                if event.schema == authority.schema && event.state_version > 0 {
+                                    authority.publish_state(event.session_id, event.state_version);
+                                }
+                            }
+                            MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL => {
+                                // Migration 0133 emits only TG_TABLE_SCHEMA
+                                // (max 63 bytes). The payload is a wake hint,
+                                // never a delivery capability: MIX workers
+                                // still claim the exact fenced recipient row.
+                                if notification.payload().len() > 63
+                                    || !mix_delivery_wake
+                                        .accept_committed_notification(notification.payload())
+                                {
+                                    tracing::warn!(
+                                        channel = notification.channel(),
+                                        "discarded mismatched MIX delivery wake notification"
+                                    );
+                                    continue;
+                                }
+                            }
+                            _ => continue,
                         }
                         heartbeat.ok();
                     }
@@ -1192,10 +1271,12 @@ async fn run_sm_authority_listener(
                         // are unknowable, so generation is the loss marker and
                         // every current waiter performs a fresh authority read.
                         authority.publish_listener_transition();
+                        mix_delivery_wake.publish_listener_transition();
                         heartbeat.ok();
                     }
                     Err(error) => {
                         authority.publish_listener_transition();
+                        mix_delivery_wake.publish_listener_transition();
                         return Err(error).context("SM authority notification listener failed");
                     }
                 }
@@ -1204,8 +1285,13 @@ async fn run_sm_authority_listener(
     }
 }
 
-pub(crate) fn start_sm_authority_listener(
+/// Start the one database authority listener after AppState has composed the
+/// independent SM and MIX service brokers.  The listener is a wake transport,
+/// not a source of protocol authority; each recipient/session path still
+/// reads its fenced PostgreSQL record before acting.
+pub(crate) fn start_database_authority_listener(
     service: SmService,
+    mix_delivery_wake: Arc<MixDeliveryWakeBroker>,
     connect_options: PgConnectOptions,
     registry: Arc<crate::workers::WorkerRegistry>,
     cancel: tokio_util::sync::CancellationToken,
@@ -1219,10 +1305,18 @@ pub(crate) fn start_sm_authority_listener(
         cancel.clone(),
         move |heartbeat| {
             let authority = Arc::clone(&authority);
+            let mix_delivery_wake = Arc::clone(&mix_delivery_wake);
             let connect_options = connect_options.clone();
             let cancel = cancel.clone();
             async move {
-                run_sm_authority_listener(connect_options, authority, cancel, heartbeat).await
+                run_database_authority_listener(
+                    connect_options,
+                    authority,
+                    mix_delivery_wake,
+                    cancel,
+                    heartbeat,
+                )
+                .await
             }
         },
     );

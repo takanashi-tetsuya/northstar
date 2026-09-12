@@ -207,6 +207,10 @@ impl ConnectionActorRegistry {
         self.inner.shutdown.clone()
     }
 
+    pub fn is_accepting(&self) -> bool {
+        self.inner.accepting.load(Ordering::Acquire) && !self.inner.shutdown.is_cancelled()
+    }
+
     pub fn active_count(&self) -> usize {
         self.inner
             .tasks
@@ -278,8 +282,8 @@ impl ConnectionActorRegistry {
         Ok(actor_id)
     }
 
-    /// Atomically stop new actor admission and signal all existing actors.
-    pub fn begin_shutdown(&self) {
+    /// Stop admission while existing actors can finish bounded notifications.
+    pub fn close_admission(&self) {
         let _tasks = self
             .inner
             .tasks
@@ -287,6 +291,11 @@ impl ConnectionActorRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.inner.accepting.store(false, Ordering::Release);
         self.inner.tracker.close();
+    }
+
+    /// Stop new actor admission and signal all existing actors.
+    pub fn begin_shutdown(&self) {
+        self.close_admission();
         self.inner.shutdown.cancel();
     }
 

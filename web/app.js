@@ -107,6 +107,18 @@ async function loadPublicConfig() {
     state.publicConfig = config;
     state.domain = config.domain;
     $('#domain-value').textContent = config.domain;
+    const publicClient = config.capabilities?.web_client && config.public_url
+      ? `${String(config.public_url).replace(/\/$/, '')}/client.html`
+      : null;
+    document.querySelectorAll('[data-public-client]').forEach((link) => {
+      if (publicClient) {
+        link.href = publicClient;
+        link.removeAttribute('aria-disabled');
+      } else {
+        link.removeAttribute('href');
+        link.setAttribute('aria-disabled', 'true');
+      }
+    });
   } catch {
     $('#domain-value').textContent = location.hostname;
   }
@@ -127,9 +139,10 @@ async function loadAdmin() {
       api('/api/v1/admin/users'),
       api('/api/v1/config'),
     ]);
+    const invitationAvailable = Boolean(publicConfig.capabilities?.invitation_registration);
     const [reports, invitations] = await Promise.all([
       api('/api/v1/admin/reports').catch(() => null),
-      api('/api/v1/admin/invitations').catch(() => null),
+      invitationAvailable ? api('/api/v1/admin/invitations') : Promise.resolve(null),
     ]);
     const values = [
       ['账户', stats.users],
@@ -157,6 +170,11 @@ async function loadAdmin() {
       islandMode: Boolean(stats.island_mode),
     };
     $('#registration-toggle').checked = state.runtime.openRegistration;
+    $('#registration-toggle').disabled = Boolean(publicConfig.registration_dependency_locked);
+    $('#registration-toggle').title = publicConfig.registration_dependency_locked
+      ? 'Web client is disabled, so invitation-only registration is locked closed.'
+      : '';
+    $('#invitation-control').classList.toggle('hidden', !invitationAvailable);
     $('#island-toggle').checked = state.runtime.islandMode;
     $('#island-toggle').disabled = stats.island_mode === undefined;
     $('#users').innerHTML = users.users.map((user) => `<tr>
@@ -167,7 +185,6 @@ async function loadAdmin() {
       <td><button data-user="${user.id}" data-action="disabled" data-value="${!user.is_disabled}">${user.is_disabled ? '启用' : '停用'}</button><button data-user="${user.id}" data-action="admin" data-value="${!user.is_admin}">${user.is_admin ? '撤销管理' : '设为管理'}</button></td>
     </tr>`).join('');
     if (invitations) renderInvitations(invitations.invitations || [], invitations.required);
-    else $('#invitations').innerHTML = '<p class="admin-help">服务器更新并重启后启用邀请码管理。</p>';
     if (reports) renderReports(reports.reports || []);
     else $('#reports').innerHTML = '<p class="admin-help">服务器更新并重启后启用举报队列。</p>';
     await Promise.all([

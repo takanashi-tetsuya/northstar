@@ -288,10 +288,10 @@ impl ReplayService {
     pub(crate) async fn renew_bosh_fences(
         &self,
         session_id: Uuid,
-        expected_response: Option<(u64, &[Uuid])>,
+        expected_response: Option<(u64, &crate::outbound::BoshResponseOwnership)>,
         ttl_seconds: u64,
     ) -> Result<()> {
-        db::replay::renew_bosh_delivery_fences(
+        db::replay::renew_bosh_transport_fences(
             &self.pool,
             session_id,
             expected_response,
@@ -305,7 +305,7 @@ impl ReplayService {
         session_id: Uuid,
         acknowledged_rid: u64,
     ) -> Result<()> {
-        let acknowledged = db::replay::acknowledge_bosh_delivery_responses(
+        let acknowledged = db::replay::acknowledge_bosh_transport_responses(
             &self.pool,
             session_id,
             acknowledged_rid,
@@ -315,29 +315,23 @@ impl ReplayService {
             %session_id,
             acknowledged_rid,
             acknowledged,
-            "acknowledged durable BOSH response fences"
+            "acknowledged durable BOSH transport sources"
         );
         Ok(())
     }
 
-    pub(crate) async fn bind_bosh_response(
+    pub(crate) async fn bind_bosh_response_sources(
         &self,
         session_id: Uuid,
         rid: u64,
-        deliveries: &[crate::outbound::DurableDelivery],
+        sources: &[crate::outbound::TransportOwnershipSource],
         ttl_seconds: u64,
-    ) -> Result<()> {
-        db::replay::bind_bosh_delivery_response(
-            &self.pool,
-            session_id,
-            rid,
-            deliveries,
-            ttl_seconds,
-        )
-        .await
+    ) -> Result<crate::outbound::BoshResponseOwnership> {
+        db::replay::bind_bosh_transport_response(&self.pool, session_id, rid, sources, ttl_seconds)
+            .await
     }
 
     pub(crate) async fn release_bosh_fences(&self, session_id: Uuid) -> Result<()> {
-        db::replay::release_bosh_delivery_fences(&self.pool, session_id).await
+        db::replay::release_bosh_transport_fences(&self.pool, session_id).await
     }
 }

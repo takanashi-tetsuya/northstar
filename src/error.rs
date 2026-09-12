@@ -165,21 +165,39 @@ impl IntoResponse for AppError {
 }
 
 fn retryable_database_sqlstate(code: &str) -> bool {
-    // A serialization failure or deadlock is a transaction scheduling
-    // outcome, not an application fault.  Returning the sanitized 503 below
-    // tells HTTP callers to retry and avoids exposing PostgreSQL diagnostics.
-    matches!(code, "40001" | "40P01")
+    // A serialization failure, deadlock, or bounded lock-acquisition failure
+    // is a transaction scheduling outcome, not an application fault.
+    // Returning the sanitized 503 below tells HTTP callers to retry and
+    // avoids exposing PostgreSQL diagnostics.  In particular, PostgreSQL
+    // reports NOWAIT/lock_timeout contention as 55P03 (lock_not_available).
+    matches!(code, "40001" | "40P01" | "55P03")
+}
+
+fn retryable_sqlx_error(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .and_then(|error| error.code())
+        .is_some_and(|code| retryable_database_sqlstate(code.as_ref()))
+}
+
+/// Inspect the complete anyhow causal chain.  Database helpers may need to
+/// roll back before returning a bounded lock failure and add operation context
+/// while doing so; the original sqlx error remains the source of truth for the
+/// HTTP retry classification.
+fn retryable_database_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<sqlx::Error>()
+            .is_some_and(retryable_sqlx_error)
+    })
 }
 
 impl AppError {
     pub(crate) fn from_internal(error: anyhow::Error) -> Self {
-        if error
-            .downcast_ref::<sqlx::Error>()
-            .and_then(|error| error.as_database_error())
-            .and_then(|error| error.code())
-            .is_some_and(|code| retryable_database_sqlstate(code.as_ref()))
-        {
-            return Self::Unavailable("database transaction conflicted; retry the request".into());
+        if retryable_database_error(&error) {
+            return Self::Unavailable(
+                "database operation is temporarily busy; retry the request".into(),
+            );
         }
         Self::Internal(error)
     }
@@ -193,12 +211,10 @@ impl From<anyhow::Error> for AppError {
 
 impl From<sqlx::Error> for AppError {
     fn from(value: sqlx::Error) -> Self {
-        if value
-            .as_database_error()
-            .and_then(|error| error.code())
-            .is_some_and(|code| retryable_database_sqlstate(code.as_ref()))
-        {
-            return Self::Unavailable("database transaction conflicted; retry the request".into());
+        if retryable_sqlx_error(&value) {
+            return Self::Unavailable(
+                "database operation is temporarily busy; retry the request".into(),
+            );
         }
         Self::Internal(value.into())
     }
@@ -209,6 +225,48 @@ pub type Result<T, E = AppError> = std::result::Result<T, E>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        borrow::Cow,
+        error::Error as StdError,
+        fmt::{self, Display, Formatter},
+    };
+
+    #[derive(Debug)]
+    struct TestLockNotAvailable;
+
+    impl Display for TestLockNotAvailable {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+            formatter.write_str("test lock is not available")
+        }
+    }
+
+    impl StdError for TestLockNotAvailable {}
+
+    impl sqlx::error::DatabaseError for TestLockNotAvailable {
+        fn message(&self) -> &str {
+            "test lock is not available"
+        }
+
+        fn code(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed("55P03"))
+        }
+
+        fn as_error(&self) -> &(dyn StdError + Send + Sync + 'static) {
+            self
+        }
+
+        fn as_error_mut(&mut self) -> &mut (dyn StdError + Send + Sync + 'static) {
+            self
+        }
+
+        fn into_error(self: Box<Self>) -> Box<dyn StdError + Send + Sync + 'static> {
+            self
+        }
+
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::Other
+        }
+    }
 
     #[tokio::test]
     async fn internal_errors_are_not_returned_to_clients() {
@@ -297,7 +355,19 @@ mod tests {
     fn database_scheduling_conflicts_are_the_only_retryable_sqlstates() {
         assert!(retryable_database_sqlstate("40001"));
         assert!(retryable_database_sqlstate("40P01"));
+        assert!(retryable_database_sqlstate("55P03"));
         assert!(!retryable_database_sqlstate("23505"));
         assert!(!retryable_database_sqlstate("42501"));
+    }
+
+    #[test]
+    fn contextual_lock_not_available_remains_a_retryable_http_error() {
+        let error = anyhow::Error::new(sqlx::Error::Database(Box::new(TestLockNotAvailable)))
+            .context("upload storage capacity busy; retry upload cleanup completion");
+        assert!(matches!(
+            AppError::from_internal(error),
+            AppError::Unavailable(message)
+                if message == "database operation is temporarily busy; retry the request"
+        ));
     }
 }

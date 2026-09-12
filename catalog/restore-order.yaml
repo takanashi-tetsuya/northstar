@@ -1,0 +1,280 @@
+version: "2.0.0"
+
+# Every stateful logical database has encrypted base backup + PITR/WAL,
+# deletion/crypto-shredding propagation, and a post-restore fencing check.
+# restore-verifier enforces unique phases and dependency ordering.
+entries:
+  - database: northstar_identity
+    restore_order: 10
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 365
+    deletion_ledger: true
+    fence_check: credential_generation
+  - database: northstar_session
+    restore_order: 20
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 90
+    dependencies: [northstar_identity]
+    deletion_ledger: true
+    fence_check: region_epoch
+  - database: northstar_roster
+    restore_order: 30
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 90
+    dependencies: [northstar_identity]
+    deletion_ledger: true
+    fence_check: account_generation
+  - database: northstar_presence
+    restore_order: 40
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 30
+    dependencies: [northstar_session]
+    deletion_ledger: true
+    fence_check: route_incarnation
+  - database: northstar_message_ingress
+    restore_order: 50
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 90
+    dependencies: [northstar_identity, northstar_session]
+    deletion_ledger: true
+    fence_check: ingress_epoch
+  - database: northstar_delivery
+    restore_order: 60
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 90
+    dependencies: [northstar_message_ingress, northstar_session]
+    deletion_ledger: true
+    fence_check: delivery_epoch
+  - database: northstar_federation_outbox
+    restore_order: 70
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 90
+    dependencies: [northstar_message_ingress]
+    deletion_ledger: true
+    fence_check: federation_epoch
+  - database: northstar_xep_0016
+    restore_order: 80
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 90
+    dependencies: [northstar_identity]
+    deletion_ledger: true
+    fence_check: policy_generation
+  - database: northstar_xep_0191
+    restore_order: 90
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 90
+    dependencies: [northstar_identity]
+    deletion_ledger: true
+    fence_check: blocklist_generation
+  - database: northstar_xep_0045
+    restore_order: 100
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 365
+    dependencies: [northstar_identity, northstar_session]
+    deletion_ledger: true
+    fence_check: room_epoch
+  - database: northstar_xep_0060
+    restore_order: 110
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 365
+    dependencies: [northstar_identity]
+    deletion_ledger: true
+    fence_check: pubsub_generation
+  - database: northstar_xep_0163
+    restore_order: 120
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 365
+    dependencies: [northstar_identity, northstar_xep_0060]
+    deletion_ledger: true
+    fence_check: pep_generation
+  - database: northstar_xep_0313
+    restore_order: 130
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 3650
+    dependencies: [northstar_message_ingress, northstar_identity]
+    deletion_ledger: true
+    fence_check: mam_cursor
+  - database: northstar_xep_0363
+    restore_order: 140
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 365
+    dependencies: [northstar_identity]
+    deletion_ledger: true
+    fence_check: upload_generation
+  - database: northstar_xep_0198
+    restore_order: 150
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 30
+    dependencies: [northstar_session]
+    deletion_ledger: true
+    fence_check: sm_epoch
+  - database: northstar_xep_0484
+    restore_order: 160
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 90
+    dependencies: [northstar_identity]
+    deletion_ledger: true
+    fence_check: fast_generation
+  - database: northstar_xep_0049
+    restore_order: 170
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 90
+    dependencies: [northstar_identity]
+    deletion_ledger: true
+    fence_check: private_storage_generation
+  - database: northstar_xep_0054
+    restore_order: 180
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 90
+    dependencies: [northstar_identity]
+    deletion_ledger: true
+    fence_check: vcard_generation
+  - database: northstar_xep_0357
+    restore_order: 190
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 90
+    dependencies: [northstar_identity]
+    deletion_ledger: true
+    fence_check: push_generation
+  - database: northstar_xep_0280
+    restore_order: 200
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 90
+    dependencies: [northstar_session]
+    deletion_ledger: true
+    fence_check: carbon_generation
+  - database: northstar_xep_0369
+    restore_order: 210
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 365
+    dependencies: [northstar_identity, northstar_session]
+    deletion_ledger: true
+    fence_check: mix_generation
+  - database: northstar_abuse_risk
+    restore_order: 220
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 90
+    dependencies: [northstar_identity]
+    deletion_ledger: true
+    fence_check: abuse_epoch
+  - database: northstar_moderation
+    restore_order: 230
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 2555
+    dependencies: [northstar_identity, northstar_xep_0313]
+    deletion_ledger: true
+    fence_check: moderation_epoch
+  - database: northstar_admin_operations
+    restore_order: 240
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 2555
+    dependencies: [northstar_identity]
+    deletion_ledger: true
+    fence_check: admin_epoch
+  - database: northstar_retention
+    restore_order: 250
+    cluster_class: primary-home
+    pitr: true
+    base_backup: true
+    wal_archiving: true
+    encrypted: true
+    retention_days: 2555
+    dependencies: [northstar_identity, northstar_admin_operations]
+    deletion_ledger: true
+    fence_check: retention_epoch

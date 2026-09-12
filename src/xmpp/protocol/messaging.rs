@@ -1,8 +1,9 @@
 use super::{Action, ProtocolSession};
 use crate::services::messaging::{
-    ArchiveWrite, DurableAdmissionOutcome, LocalMessageAdmission, LocalMucInviteAdmission,
-    LocalRecipientDecision, MessageIdentity, OfflineAdmissionOutcome, OutboundPolicyDecision,
-    RemoteMessageAdmission, RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome,
+    ArchiveWrite, DurableAdmissionOutcome, FederationDelivery, IdentityAuthority, LocalDelivery,
+    LocalMucInviteAdmission, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
+    OfflineAdmissionOutcome, OutboundPolicyDecision, PersonalMessageDestination,
+    RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
 };
 use crate::services::muc::{
     ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,
@@ -17,6 +18,11 @@ use crate::{
 };
 use anyhow::Result;
 use futures::{stream::FuturesUnordered, StreamExt};
+pub(crate) use northstar_message_core::{
+    bare_message_route, durable_direct_delivery_allowed, durable_full_no_match_recovers,
+    full_no_match_route, missing_user_message_should_error, undelivered_disposition,
+    BareMessageRoute, DirectDeliveryMode, FullNoMatchRoute, UndeliveredDisposition,
+};
 use roxmltree::Node;
 use std::{future::Future, pin::Pin, sync::atomic::Ordering, time::Duration};
 
@@ -116,7 +122,7 @@ impl ProtocolSession {
         let Some(from) = self.full_jid.as_deref() else {
             return Ok(message_error(root, "cancel", "not-authorized"));
         };
-        if let Err(condition) = validate_routed_message(root) {
+        if let Err(condition) = validate_routed_message(root, &self.state.config.xmpp_extensions) {
             // RFC 6120 section 8.3.1: never answer an error stanza with a
             // second stanza error. This validation boundary runs before every
             // local archive, Carbon and offline side effect.
@@ -452,6 +458,7 @@ impl ProtocolSession {
                 let invitee_bare_jid = target_jid.bare();
                 let origin_id = direct_origin_id(root);
                 let identity = origin_id.as_deref().map(|id| MessageIdentity {
+                    authority: IdentityAuthority::LocalOrigin,
                     actor_scope_raw: actor_scope,
                     actor_scope,
                     target_scope,
@@ -567,29 +574,36 @@ impl ProtocolSession {
                 // projection; otherwise an exact retry can enqueue twice and
                 // a changed payload can reuse the same origin-id.
                 let identity = origin_id.as_deref().map(|id| MessageIdentity {
+                    authority: IdentityAuthority::LocalOrigin,
                     actor_scope_raw: actor_scope,
                     actor_scope,
                     target_scope,
                     value: id,
                     payload: &rewritten,
                 });
-                let admission = RemoteMessageAdmission {
-                    local_actor_id: user.id,
+                let admission = ValidatedPersonalMessage {
+                    local_actor_id: Some(user.id),
                     identity,
                     archives: &writes,
-                    target_domain: domain,
-                    stanza: &routed,
-                    bounce_to: Some(from),
-                    outbox_policy: self.state.federation.outbox_policy().into(),
+                    destination: PersonalMessageDestination::Federation(FederationDelivery {
+                        local_actor_id: user.id,
+                        target_domain: domain,
+                        stanza: &routed,
+                        bounce_to: Some(from),
+                        limits: self.state.federation.outbox_policy(),
+                    }),
                 };
                 match self
                     .state
                     .message_service()
-                    .admit_remote_message(&admission)
+                    .admit_personal_message(&admission)
                     .await
                 {
-                    Ok(DurableAdmissionOutcome::Stored { .. }) => {
-                        self.state.federation.wake_outbox();
+                    Ok(DurableAdmissionOutcome::Stored { post_commit, .. }) => {
+                        debug_assert_eq!(post_commit, MessagePostCommit::WakeFederationOutbox);
+                        if post_commit == MessagePostCommit::WakeFederationOutbox {
+                            self.state.federation.wake_outbox();
+                        }
                     }
                     Ok(DurableAdmissionOutcome::Replay) => {
                         self.finalize_message_admission(
@@ -845,6 +859,7 @@ impl ProtocolSession {
                 let actor_scope = bare_jid(from);
                 let target_scope = bare_jid(to);
                 MessageIdentity {
+                    authority: IdentityAuthority::LocalOrigin,
                     actor_scope_raw: actor_scope,
                     actor_scope,
                     target_scope,
@@ -857,27 +872,36 @@ impl ProtocolSession {
                 chrono::Utc::now(),
                 Some(&self.state.config.domain),
             );
-            let admission = LocalMessageAdmission {
+            let admission = ValidatedPersonalMessage {
                 local_actor_id: Some(user.id),
                 identity,
                 archives: &writes,
-                delivery_id: recipient_stable_id,
-                recipient_id: recipient.id,
-                recipient_bare_jid: &recipient_by,
-                sender_jid: from,
-                stanza: &delayed_delivery,
-                encrypted,
-                mam_backed: recipient_history_enabled,
+                destination: PersonalMessageDestination::Local(LocalDelivery {
+                    delivery_id: recipient_stable_id,
+                    recipient_id: recipient.id,
+                    recipient_bare_jid: &recipient_by,
+                    sender_jid: from,
+                    stanza: &delayed_delivery,
+                    encrypted,
+                    mam_backed: recipient_history_enabled,
+                }),
             };
             match self
                 .state
                 .message_service()
-                .admit_local_message(&admission)
+                .admit_personal_message(&admission)
                 .await
             {
-                Ok(DurableAdmissionOutcome::Stored { archive_written }) => {
+                Ok(DurableAdmissionOutcome::Stored {
+                    archive_written,
+                    post_commit,
+                }) => {
                     history_committed = archive_written;
-                    durable_c2s_delivery = Some(recipient_stable_id);
+                    let MessagePostCommit::RouteLocalDelivery { delivery_id, .. } = post_commit
+                    else {
+                        return Ok(message_error(root, "wait", "internal-server-error"));
+                    };
+                    durable_c2s_delivery = Some(delivery_id);
                     tracing::debug!(
                         recipient_id = %recipient.id,
                         message_id = %recipient_stable_id,
@@ -1100,6 +1124,7 @@ impl ProtocolSession {
                 let actor_scope = bare_jid(from);
                 let target_scope = bare_jid(to);
                 MessageIdentity {
+                    authority: IdentityAuthority::LocalOrigin,
                     actor_scope_raw: actor_scope,
                     actor_scope,
                     target_scope,
@@ -1673,6 +1698,14 @@ impl ProtocolSession {
         delivered_self: Option<&str>,
         muc_scope: Option<(&str, &str)>,
     ) {
+        if !self
+            .state
+            .config
+            .xmpp_extensions
+            .enabled(northstar_xep_0280::XEP_ID)
+        {
+            return;
+        }
         let current = crate::jid::canonical_session_key(from).unwrap_or_else(|_| from.to_owned());
         let bare = bare_jid(from);
         let Some(peer) = carbon_forwarded_recipient(forwarded) else {
@@ -1874,49 +1907,6 @@ fn message_blocked_error(root: Node<'_, '_>) -> Action {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BareMessageRoute {
-    Primary,
-    All,
-    Reject,
-    Ignore,
-}
-
-pub(crate) fn bare_message_route(kind: &str) -> BareMessageRoute {
-    match kind {
-        "headline" => BareMessageRoute::All,
-        "groupchat" => BareMessageRoute::Reject,
-        "error" => BareMessageRoute::Ignore,
-        _ => BareMessageRoute::Primary,
-    }
-}
-
-pub(crate) fn missing_user_message_should_error(kind: &str) -> bool {
-    !matches!(kind, "headline" | "error")
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FullNoMatchRoute {
-    FallbackChat,
-    Reject,
-    Ignore,
-}
-
-pub(crate) fn full_no_match_route(kind: &str) -> FullNoMatchRoute {
-    match kind {
-        "chat" => FullNoMatchRoute::FallbackChat,
-        "error" => FullNoMatchRoute::Ignore,
-        _ => FullNoMatchRoute::Reject,
-    }
-}
-
-/// Once the database delivery projection commits, a disappearing exact route
-/// is a worker/transport recovery condition rather than a truthful stanza
-/// rejection. Returning an error would invite a duplicate client retry.
-pub(crate) fn durable_full_no_match_recovers(kind: &str, durable_committed: bool) -> bool {
-    durable_committed && full_no_match_route(kind) == FullNoMatchRoute::Reject
-}
-
 #[cfg(test)]
 fn offline_storage_eligible(root: Node<'_, '_>) -> bool {
     matches!(
@@ -1925,62 +1915,17 @@ fn offline_storage_eligible(root: Node<'_, '_>) -> bool {
     )
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum UndeliveredDisposition {
-    Drop,
-    RejectCancel,
-    RejectWait,
-    StoreOffline,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DirectDeliveryMode {
-    Durable,
-    Volatile,
-    VolatileExplicitNoStore,
-}
-
 /// Classify direct messages without conflating an explicit XEP-0334 privacy
 /// request with the protocol defaults for ephemeral signal-only messages.
 pub(crate) fn direct_delivery_mode(root: Node<'_, '_>) -> DirectDeliveryMode {
-    if has_explicit_no_store_hint(root) {
-        DirectDeliveryMode::VolatileExplicitNoStore
-    } else if offline_storage_permitted(root) {
-        DirectDeliveryMode::Durable
-    } else {
-        DirectDeliveryMode::Volatile
-    }
-}
-
-pub(crate) fn durable_direct_delivery_allowed(
-    mode: DirectDeliveryMode,
-    content_storage_allowed: bool,
-) -> bool {
-    mode == DirectDeliveryMode::Durable && content_storage_allowed
-}
-
-/// Decide the fate of a message only after all online routes have declined
-/// it. This is intentionally pure: every non-Store outcome returns before
-/// offline, MAM, or retraction mutations can run.
-pub(crate) fn undelivered_disposition(
-    message_type: &str,
-    persistence_allowed: bool,
-    content_storage_allowed: bool,
-) -> UndeliveredDisposition {
-    if message_type == "headline" || !persistence_allowed {
-        return UndeliveredDisposition::Drop;
-    }
-    if !matches!(message_type, "normal" | "chat") {
-        return UndeliveredDisposition::RejectCancel;
-    }
-    if !content_storage_allowed {
-        return UndeliveredDisposition::RejectWait;
-    }
-    UndeliveredDisposition::StoreOffline
+    northstar_message_core::classify_direct_delivery(
+        has_explicit_no_store_hint(root),
+        offline_storage_permitted(root),
+    )
 }
 
 fn carbon_resource_selected(jid: &str, enabled: bool, excluded: &[Option<&str>]) -> bool {
-    enabled && !excluded.iter().flatten().any(|excluded| jid == *excluded)
+    northstar_xep_0280::resource_selected(jid, enabled, excluded)
 }
 
 /// Version 1 peers can only return an uncorrelated legacy delivered-count.
@@ -2015,6 +1960,13 @@ pub(crate) async fn send_received_carbons_for_state(
     delivered: Option<&str>,
     forwarded: &str,
 ) {
+    if !state
+        .config
+        .xmpp_extensions
+        .enabled(northstar_xep_0280::XEP_ID)
+    {
+        return;
+    }
     let Some(peer) = carbon_forwarded_sender(forwarded) else {
         tracing::warn!(%recipient, direction = "received", "suppressed a Carbon whose forwarded sender was not a canonical JID");
         return;
@@ -2137,21 +2089,11 @@ pub(crate) async fn send_received_carbons_for_state(
 }
 
 fn carbon_forwarded_sender(forwarded: &str) -> Option<String> {
-    let document = roxmltree::Document::parse(forwarded).ok()?;
-    let root = document.root_element();
-    (root.tag_name().name() == "message")
-        .then(|| root.attribute("from"))
-        .flatten()
-        .and_then(|from| crate::jid::canonicalize(from).ok())
+    northstar_xep_0280::forwarded_sender(forwarded)
 }
 
 fn carbon_forwarded_recipient(forwarded: &str) -> Option<String> {
-    let document = roxmltree::Document::parse(forwarded).ok()?;
-    let root = document.root_element();
-    (root.tag_name().name() == "message")
-        .then(|| root.attribute("to"))
-        .flatten()
-        .and_then(|to| crate::jid::canonicalize(to).ok())
+    northstar_xep_0280::forwarded_recipient(forwarded)
 }
 
 /// Return the exact client-controlled commitment used by PoW v2. Routing uses

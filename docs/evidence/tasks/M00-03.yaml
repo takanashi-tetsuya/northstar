@@ -1,0 +1,504 @@
+schema_version: "1.0"
+task:
+  id: "M00-03"
+  title: "Establish race-free test listener ownership and structured readiness"
+  status: "in-progress"
+  branch: "dev"
+  integration_branch: "dev"
+  base_commit: "033d5f26f2dfbb6398cf8e8131165e2210087c17"
+  acceptance_state: "pending-exact-dev-ci"
+scope:
+  guarantees:
+    - "A fixture does not claim that a released numeric port is reserved."
+    - "Child-owned listeners publish resolved addresses only through a nonce- and PID-bound readiness record."
+    - "The test activation path remains explicit, loopback-bound, and unavailable to ordinary production startup."
+    - "A direct fixture parent exit is not treated as group completion while a private-group descendant remains alive."
+    - "A failed database suite does not hide later isolated suites in the same declared shard."
+  exclusions:
+    - "This task does not weaken HTTPS, TLS, account-deletion, data-isolation, or collection-child-limit assertions."
+    - "Windows inherited-handle activation remains unimplemented until its named control channel has equivalent ownership proof."
+work_units:
+  completed:
+    - id: "M00-03.W1"
+      result: "Harness readiness protocol, bounded in-process handoff, and exclusive pre-bound test listeners."
+    - id: "M00-03.W2"
+      result: "Runtime listener ownership, nonce-bound child readiness, and XEP-0487 migration away from the repeated port allocator."
+    - id: "M00-03.W3"
+      result: "Linux-only XEP-0487 socket activation: root retains the exclusive loopback 443 listener until a non-root TLS child writes a nonce-, PID-, UID-, and endpoint-bound acknowledgement."
+  reopened:
+    - id: "M00-03.W4"
+      implementation_commits:
+        - "3afa0e4cd971830246464dc73708c2eb95d6df32"
+        - "b482b580be4ac852ac2561e01c3b05da12a7bc86"
+      result: "The prior process-group implementation used direct-child completion as a terminal condition. The repair now requires group quiescence, bounded TERM-to-KILL cleanup, bounded output drain, and explicit cancellation propagation. The database-shard runner also emits one terminal result per declared suite after ordinary failures, and distinguishes cancellation from not-run. Exact-dev Linux evidence remains required."
+      reopened_by:
+        run: "33958038598"
+        attempt: 1
+        observation: "Run 69 exposed the need to distinguish direct child completion from complete process-group termination."
+  in_progress:
+    - id: "M00-03.W5"
+      implementation_commits:
+        - "6be5a7a"
+        - "c901f5e"
+        - "52ba501"
+        - "8b6143d"
+        - "2cf6104"
+        - "2dac7ca"
+        - "ab622c8"
+        - "2063372"
+        - "66f1732"
+        - "3536bed"
+        - "b55e0f2"
+        - "ebea305"
+        - "a71a016"
+        - "a1b5934"
+        - "da5995e"
+        - "6cc8e54"
+      result: "The identified W5 fixture migrations are implemented: MIX runtime, MIX federation, two-domain S2S, integration/load, component, browser, message-PoW, moderation, OMEMO, profile-storage, PubSub-wire, MUC Redis, cluster Redis TLS/mTLS, and the local database-role fixture use child-owned endpoints, stable relays, or private Unix sockets. Public origins are checked through fixture-owned relays, and a shared atomic target handoff prevents partial target reads. The required Linux execution evidence is still pending."
+      implementation_scope_completed:
+        - "cluster two-node Redis TLS/mTLS and Northstar listener fixture"
+        - "stable public-origin relay handoff for migrated runtime fixtures"
+        - "bounded relay startup diagnostic cleanup"
+      audit_limit: "Fixture implementation is not pressure evidence. The S2S/MIX matrix does not establish cluster/Redis pressure, and cluster/Redis behavior requires its own bounded Linux run."
+      required_validation:
+        - "50 parallel dual-node fixtures for 20 ordinary-CI rounds without EADDRINUSE."
+        - "100 scheduled-stress rounds without EADDRINUSE."
+        - "Occupied-port, invalid readiness nonce/PID/address, and three child-crash phase probes."
+        - "Listener tests with --test-threads=16 without sleep-based synchronization."
+        - "Independent, isolated, bounded results for Privacy, HTTP Upload, MUC cluster, PubSub outbox, and PubSub wire."
+local_validation:
+  passed:
+    - "cargo check --locked --bin rust-xmpp-server"
+    - "cargo test --locked test_listener_activation_is_explicit_and_loopback_only"
+    - "cargo test --locked readiness_publication_is_atomic_and_refuses_overwrite"
+    - "cargo test --locked runtime_listener_inventory_uses_bound_ephemeral_addresses"
+    - "cargo test -p northstar-web-surface --locked"
+    - "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+    - "bash -n scripts/xep0487-runtime-wsl.sh scripts/github-ci-run.sh scripts/check-github-ci-run.sh"
+    - "python scripts/check-github-ci-summary.py (local interpreter at the time of execution)"
+    - "scripts/xep0487-socket-activation.py --self-test (local interpreter at the time of execution)"
+    - "node scripts/check-stateful-database-ci.mjs"
+    - "bash scripts/test-stateful-database-ci.sh"
+    - "cargo test -p northstar-test-harness --all-targets --locked (6 passed)"
+    - "Git Bash syntax validation for the migrated MIX/S2S fixture scripts and readiness helper"
+    - "Git Bash syntax validation for component, browser, message-PoW, moderation, OMEMO, profile-storage, PubSub-wire, MUC Redis, and local database-role fixture migrations"
+    - "cargo fmt --check and cargo check --locked after the component/browser migration"
+    - "cargo test --locked --offline config::tests::development_database_role_override_accepts_only_local_redis_endpoints -- --exact (1 passed)"
+    - "scripts/pubsub-db-wsl.sh after 6a0ba75 (14 of 14 focused PubSub/PEP/vCard checks passed in an isolated PostgreSQL fixture)"
+    - "scripts/pie-db-wsl.sh after 426f72c (isolated account-deletion fixture passed with an explicitly bound upload capacity policy)"
+    - "Git Bash syntax/input validation for the listener stress driver, loopback PostgreSQL capacity bounds, and private-worker lifecycle scripts"
+    - "cargo check --workspace --all-targets --all-features --locked after the relay lifecycle implementation"
+    - "Git Bash syntax validation plus scripts/test-listener-readiness.sh for the shared atomic relay-target handoff"
+  deferred:
+    - "The full Linux process-group regression suite, including the real parent-cancellation probe, requires GitHub Actions evidence because this host lacks a usable WSL/POSIX Python environment."
+    - "The W5 20 x 50 regular and 100 x 50 scheduled two-node pressure matrices require an isolated Linux PostgreSQL fixture and remain unexecuted locally. These specific S2S/MIX matrix targets do not configure Redis; cluster/Redis pressure remains separately unproven."
+candidate_preparation:
+  plan: "N00-N07 bounded candidate preparation (2026-09-07); this record does not promote M00-03."
+  source_identity:
+    branch: "dev"
+    base_commit: "fd5a8af493c989267377be75247a9aabeffce140"
+    base_tree: "c1b5035ceac7c64f7ba16923d8bd09dc7ce77465"
+    result_commit: null
+    source_state: "uncommitted-worktree"
+    source_input_fingerprint: "sha256-utf8-lf-record-manifest-v1:5e0bc259cdbb7efa0fdd38a53713bad61fa517fedd04effed49aca6a0ce64094"
+    source_input_file_count: 2860
+    source_input_includes_untracked: "migrations/0138_sm_mix_teardown_catalog.sql"
+  change_ownership:
+    M00-03:
+      - "scripts/check-outbound-xml-construction.mjs: SQL/XML classifier and positive/negative gate fixtures"
+      - "scripts/check-architecture-boundaries.mjs: reviewed permit-owner negative fixture"
+      - "docs/evidence/README.md and M00-03 evidence scope records"
+    M00-04:
+      - "migrations/0138_sm_mix_teardown_catalog.sql and deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql"
+      - "src/db/schema.rs and src/db/role_attestation.rs"
+      - "scripts/check-migration-versions.sh and database-role/release documentation"
+      - "docs/evidence/tasks/M00-04.yaml"
+    M00-05-and-v13:
+      - "crates/northstar-xmpp-types/src/jid.rs and src/db/archive.rs"
+      - "src/db/mix.rs, src/services/mix.rs, src/xmpp/protocol/mix.rs"
+      - "src/bosh.rs, src/cluster.rs, src/outbound-adjacent protocol paths, src/db/sm.rs, src/services/sm.rs, src/db/replay.rs, src/services/replay.rs, src/xmpp/mod.rs, src/xmpp/protocol.rs, and src/xmpp/protocol/sm.rs"
+      - "docs/evidence/tasks/M00-05.yaml and docs/evidence/tasks/V13-MIX-HANDOFF.yaml"
+    shared-documentation:
+      - "docs/KNOWN_ISSUES.md, docs/PRODUCTION_OPERATIONS.md, docs/PROGRAM_RESPONSIBILITIES.md, docs/RELEASE_CHECKLIST.md, and docs/TRACEABILITY.md"
+  preserved_untracked_user_artifacts:
+    - ".tmp-listener-full-matrix.sh"
+    - ".tmp-mix-family.result-dir"
+    - ".tmp-mix-matrix.result-dir"
+    - ".tmp-run-full-mix-matrix.sh"
+    - ".tmp-run-mix-family.sh"
+    - "privilege-matrix.json"
+  excluded_from_source_fingerprint:
+    - "target/ and other build outputs"
+    - "candidate receipts/logs/artifacts produced after the source manifest"
+    - "the preserved untracked user artifacts listed above"
+  reported_vs_observed:
+    historical_ci: "reported/historical only; no earlier GitHub run is evidence for this uncommitted candidate."
+    current_static_and_pure_unit: "N07 records only the exact static and pure-unit receipts listed below; no runtime result is inferred."
+    runtime: "not-run: safety-pause; no WSL, Docker, database, wire, cross-node, SM/BOSH hand-off, recovery, permission, or pressure execution."
+  n07_candidate_receipts:
+    source_fingerprint:
+      algorithm: "sha256-utf8-lf-record-manifest-v1"
+      value: "5e0bc259cdbb7efa0fdd38a53713bad61fa517fedd04effed49aca6a0ce64094"
+      file_count: 2860
+      excludes: "build/evidence outputs and the preserved user artifacts enumerated above"
+    passed_static:
+      - "cargo fmt --all -- --check"
+      - "cargo check --workspace --all-targets --all-features --locked --offline"
+      - "cargo clippy --workspace --all-targets --all-features --locked --offline -- -D warnings"
+      - "node scripts/check-outbound-xml-construction.mjs"
+      - "node scripts/check-architecture-boundaries.mjs"
+      - "node scripts/check-documentation-consistency.mjs"
+      - "node scripts/check-process-isolation.mjs"
+      - "node scripts/check-runtime-migration-boundary.mjs"
+      - "node scripts/check-session-lifecycle-boundary.mjs"
+      - "node scripts/check-i18n.mjs"
+      - "node scripts/check-locales.mjs"
+    passed_pure_unit:
+      root_binary_tests: 21
+      xmpp_types_tests: 2
+      coverage: "session-authority diagnostic bounds/fail-closed behavior; compiled migration ledger parity; DNS/JID octet boundaries; MIX scheduler/cancellation models"
+    incomplete_or_paused:
+      - "scripts/check-migration-versions.sh was source-reviewed and its compiled-MIGRATOR parity test passed, but the Git-Bash invocation did not produce a bounded terminal receipt; it is not counted as passed evidence."
+      - "All database, migration, role/permission, WSL, Docker, network, two-node, Stream Management, BOSH, recovery, pressure, fuzz, and chaos checks remain not-run: safety-pause."
+evidence:
+  # This is the newest fully completed observation. Run-specific records below
+  # retain the earlier Run 69 evidence rather than treating it as evidence for
+  # this later tree.
+  exact_dev_commit: "6af75a68c05b92a723d7a75fb07158a4e7d50f55"
+  workflow_runs:
+    - id: "33958038598"
+      attempt: 1
+      exact_dev_commit: "fef174a2a8888278d118491d3d8e0fcace01ad56"
+      jobs:
+        - id: "101284814336"
+          name: "Isolated PostgreSQL and Redis invariants (auth-identity)"
+          conclusion: "success"
+        - id: "101284814172"
+          name: "Isolated PostgreSQL and Redis invariants (abuse-delivery)"
+          conclusion: "success"
+        - id: "101284814205"
+          name: "Isolated PostgreSQL and Redis invariants (collaboration-storage)"
+          conclusion: "failure"
+        - id: "101284814259"
+          name: "Isolated PostgreSQL and Redis invariants (pubsub-federation)"
+          conclusion: "failure"
+        - id: "101284814324"
+          name: "Privilege-separated XEP-0487 HTTPS discovery"
+          conclusion: "success"
+    - id: "33963557616"
+      attempt: 1
+      exact_dev_commit: "f367a930253a33c2ac1d5d7475ce540d5d6434f8"
+      conclusion: "failure"
+      jobs:
+        - id: "101299555858"
+          name: "Isolated PostgreSQL and Redis invariants (auth-identity)"
+          conclusion: "failure"
+        - id: "101299555902"
+          name: "Isolated PostgreSQL and Redis invariants (abuse-delivery)"
+          conclusion: "failure"
+        - id: "101299555846"
+          name: "Isolated PostgreSQL and Redis invariants (collaboration-storage)"
+          conclusion: "failure"
+        - id: "101299555844"
+          name: "Isolated PostgreSQL and Redis invariants (pubsub-federation)"
+          conclusion: "failure"
+        - id: "101299555906"
+          name: "Listener/readiness stress (regular 20x50 · federation)"
+          conclusion: "failure"
+        - id: "101299555839"
+          name: "Listener/readiness stress (regular 20x50 · mix-federation)"
+          conclusion: "failure"
+        - id: "101299555788"
+          name: "Privilege-separated XEP-0487 HTTPS discovery"
+          conclusion: "success"
+  database_suite_observations:
+    - run:
+        id: "33958038598"
+        attempt: 1
+        exact_dev_commit: "fef174a2a8888278d118491d3d8e0fcace01ad56"
+      total: 32
+      summary:
+        passed: 25
+        failed: 2
+        not_run: 5
+      passed:
+        - suite_id: "auth-admin"
+        - suite_id: "admin-session-cleanup"
+        - suite_id: "authentication-service"
+        - suite_id: "api-operations"
+        - suite_id: "api-pages"
+        - suite_id: "migration-upgrade"
+        - suite_id: "migration-0056-compatibility"
+        - suite_id: "rfc7622-identity"
+        - suite_id: "identity-audit"
+        - suite_id: "jid-identity"
+        - suite_id: "authorization-jid-identity"
+        - suite_id: "push-jid-identity"
+        - suite_id: "mix-jid-identity"
+        - suite_id: "session-jid-identity"
+        - suite_id: "profile-jid-identity"
+        - suite_id: "abuse-reporting"
+        - suite_id: "abuse-key-deployment"
+        - suite_id: "message-pow"
+        - suite_id: "push-delivery"
+        - suite_id: "offline-replay"
+        - suite_id: "retention"
+        - suite_id: "stream-management"
+        - suite_id: "s2s"
+        - suite_id: "roster-service"
+        - suite_id: "muc"
+      failed:
+        - suite_id: "pie"
+          failed_stage: "fixture upload_slots preparation before account deletion"
+          observed_error: "upload storage capacity policy is not fully bound"
+          remediation: "Bind and validate the isolated fixture capacity policy; retain fail-closed production policy enforcement and account-deletion assertions."
+        - suite_id: "pubsub"
+          failed_stage: "initial association preparation in repeated_associate_is_idempotent_after_a_graph_lock_wait"
+          observed_error: "pubsub collection child limit exceeded"
+          remediation: "Inspect initial edge state and trigger semantics at children_max=1; retain the configured limit and idempotency assertion."
+      not_run:
+        - suite_id: "privacy"
+          blocked_by: "collaboration-storage runner fail-fast after pie"
+        - suite_id: "http-upload"
+          blocked_by: "collaboration-storage runner fail-fast after pie"
+        - suite_id: "muc-cluster"
+          blocked_by: "collaboration-storage runner fail-fast after pie"
+        - suite_id: "pubsub-outbox"
+          blocked_by: "pubsub-federation runner fail-fast after pubsub"
+        - suite_id: "pubsub-wire"
+          blocked_by: "pubsub-federation runner fail-fast after pubsub"
+    - run:
+        id: "33963557616"
+        attempt: 1
+        exact_dev_commit: "f367a930253a33c2ac1d5d7475ce540d5d6434f8"
+      total: 32
+      summary:
+        passed: 26
+        failed: 5
+        timeout: 1
+        not_run: 0
+      passed:
+        - suite_id: "auth-admin"
+        - suite_id: "admin-session-cleanup"
+        - suite_id: "authentication-service"
+        - suite_id: "api-operations"
+        - suite_id: "api-pages"
+        - suite_id: "migration-0056-compatibility"
+        - suite_id: "rfc7622-identity"
+        - suite_id: "identity-audit"
+        - suite_id: "jid-identity"
+        - suite_id: "authorization-jid-identity"
+        - suite_id: "push-jid-identity"
+        - suite_id: "mix-jid-identity"
+        - suite_id: "session-jid-identity"
+        - suite_id: "profile-jid-identity"
+        - suite_id: "abuse-reporting"
+        - suite_id: "abuse-key-deployment"
+        - suite_id: "message-pow"
+        - suite_id: "push-delivery"
+        - suite_id: "offline-replay"
+        - suite_id: "retention"
+        - suite_id: "stream-management"
+        - suite_id: "roster-service"
+        - suite_id: "muc"
+        - suite_id: "privacy"
+        - suite_id: "pubsub"
+        - suite_id: "pubsub-outbox"
+      failed:
+        - suite_id: "migration-upgrade"
+          failed_stage: "baseline_0013_upgrades_through_the_real_domain_migrator"
+          observed_error: "The migration-upgrade authority check found a non-extension application SQL/PLpgSQL function without exactly one migrator-owned fixed installation search_path."
+          remediation: "Investigate the generated migration function ownership/search_path contract without weakening the immutable baseline assertion."
+        - suite_id: "s2s"
+          failed_stage: "scoped_claims_are_cross_worker_ordered_and_component_safe"
+          observed_error: "The federated output unexpectedly contained a2 after the cross-worker ordering assertion."
+          remediation: "Trace S2S/component claim ordering and delivery fencing; retain the assertion that stale a2 output is absent."
+        - suite_id: "pie"
+          failed_stage: "account_deletion_atomically_cancels_local_reverse_rosters post-deletion authority check"
+          observed_error: "personal_message_admissions left=1/right=0 after account deletion."
+          remediation: "Repair the admission-row cleanup/authority contract while retaining account-deletion atomicity assertions."
+        - suite_id: "muc-cluster"
+          failed_stage: "MUC cluster database command startup"
+          observed_error: "The command exited 1 immediately without a usable diagnostic line."
+          remediation: "Repair the cluster fixture command/diagnostic lifecycle and then obtain an isolated bounded execution result."
+        - suite_id: "pubsub-wire"
+          failed_stage: "payload namespace mismatch validation"
+          observed_error: "The wrong payload namespace returned conflict/precondition-not-met instead of invalid-payload."
+          remediation: "Preserve node policy and authorization checks while mapping the payload namespace failure to the specific XEP-0060 invalid-payload condition."
+      timeout:
+        - suite_id: "http-upload"
+          failed_stage: "account_delete_and_upload_mutations_share_retryable_ledger_first_order"
+          observed_error: "The suite reached its 600-second command deadline."
+          remediation: "Diagnose the upload capacity/cleanup ledger ordering and cleanup progress under the fixture; do not increase the suite deadline."
+      not_run: []
+  xep_0487_observations:
+    - run:
+        id: "33958038598"
+        attempt: 1
+        exact_dev_commit: "fef174a2a8888278d118491d3d8e0fcace01ad56"
+      job_id: "101284814324"
+      conclusion: "success"
+      status: "separate-from-the-32-database-suite-count"
+    - run:
+        id: "33963557616"
+        attempt: 1
+        exact_dev_commit: "f367a930253a33c2ac1d5d7475ce540d5d6434f8"
+      job_id: "101299555788"
+      conclusion: "success"
+      status: "separate-from-the-32-database-suite-count"
+  artifacts:
+    - id: "9967064147"
+      name: "stateful-database-collaboration-storage-diagnostics-33958038598"
+      digest: "sha256:cc4317a47c9791e9d17a4c7dac45426bebd3101e508f381b375e9c1d8c5c0888"
+    - id: "9967124442"
+      name: "stateful-database-pubsub-federation-diagnostics-33958038598"
+      digest: "sha256:f74540c844523ac179149d41c7e3a2f50d3f4b3275fcf3e016929b8488b6174a"
+    - id: "9968954969"
+      name: "listener-readiness-regular-federation-diagnostics-33963557616"
+      digest: "sha256:bc151302ff70528e23a07850994bbf41d40483a1e165e7e630486167bd4475ae"
+    - id: "9968936998"
+      name: "listener-readiness-regular-mix-federation-diagnostics-33963557616"
+      digest: "sha256:b64372db3d9b1fd38bf415eae32acc616d95715dff18819a2e6d79b1a88cf5df"
+    - id: "9968886218"
+      name: "stateful-database-collaboration-storage-diagnostics-33963557616"
+      digest: "sha256:e088b15584abc756ac4be98aa02ee2ad5ce68f028db9e121159a7e30b8c5ce69"
+    - id: "9968849632"
+      name: "stateful-database-pubsub-federation-diagnostics-33963557616"
+      digest: "sha256:ca231ed673dd84576d6fdc89c87f15397a7a7f94b57e201dee0c0455dfb52068"
+    - id: "9968771315"
+      name: "stateful-database-auth-identity-diagnostics-33963557616"
+      digest: "sha256:e4432dd937f0beb4057f7aabacbed8edd901abd30d23ead0df79012e416f56f1"
+    - id: "9968767776"
+      name: "stateful-database-abuse-delivery-diagnostics-33963557616"
+      digest: "sha256:7044314805c461cbfde8be32bc64ff1ced9b2c0568c87c2621c0365ebc9775e8"
+  post_run_remediation:
+    source_run:
+      id: "33958038598"
+      attempt: 1
+      exact_dev_commit: "fef174a2a8888278d118491d3d8e0fcace01ad56"
+    pie:
+      commits:
+        - "426f72c4852b34feef9bd9f6ee5d69e0cda446c9"
+      finding: "The Run 69 failure occurred while the account-deletion fixture prepared upload_slots, before the deletion assertion ran. The fixture now explicitly binds and checks its isolated upload capacity policy; the production fail-closed capacity guard is unchanged."
+      isolated_result: "scripts/pie-db-wsl.sh passed after the policy binding repair."
+    pubsub:
+      commits:
+        - "eb0032878a11cb16c504907bc03102d8197732fe"
+        - "6a0ba7545a6fdd72765cdb780ecaff69884a54ca"
+      finding: "At children_max=1, an update of the same collection edge was incorrectly counted as a new child by the quota trigger. The migration preserves the configured limit: an identical edge update returns without recounting, while a true move performs prospective quota/cycle/depth checks. The subsequent vCard fixture failure was a missing parent PEP node before a composite-FK subscription insert; the parent is now created before the subscription, without weakening the FK."
+      isolated_result: "scripts/pubsub-db-wsl.sh completed 14 of 14 focused checks after both repairs."
+    supervisor_and_shards:
+      commits:
+        - "3afa0e4cd971830246464dc73708c2eb95d6df32"
+        - "b482b580be4ac852ac2561e01c3b05da12a7bc86"
+        - "6cc8e548361d13a2d866e9ead66a6708f91f951e"
+      finding: "The supervisor and shard runner now have explicit source-level regression coverage for parent-exit residual groups, TERM-ignoring descendants, held output pipes, nested cancellation, low-output forwarding, ordinary suite failure continuation, timeout continuation, and cancellation/not-run finalization. Relay startup diagnostics also reap an isolated process group with bounded TERM-to-KILL collection rather than reading a held pipe indefinitely. Linux execution evidence is still pending."
+    listener_migrations:
+      commits:
+        - "6be5a7a"
+        - "c901f5e"
+        - "52ba501"
+        - "8b6143d"
+        - "2cf6104"
+        - "2dac7ca"
+        - "ab622c8"
+        - "2063372"
+        - "66f1732"
+        - "3536bed"
+        - "b55e0f2"
+        - "ebea305"
+        - "a71a016"
+        - "a1b5934"
+        - "da5995e"
+        - "6cc8e54"
+      finding: "The migrated fixtures retain their original protocol and security assertions while replacing released port allocation with nonce/PID-bound child readiness, stable public-origin relays, or private Unix sockets. Mutable relay targets now share one same-directory atomic handoff contract; one-shot readiness proofs remain create-only. The regular and scheduled W5 matrices are wired but not yet evidenced on an exact dev commit."
+  baseline_comparison:
+    baseline_commit: "e02503b5d4a5491bb57002f4a5261552f4ec6772"
+    baseline_run: "33928852176"
+    comparison:
+      - category: "Run 69 stateful database shards"
+        baseline: "cancelled before suite-level terminal results"
+        current: "25 passed, 2 failed, 5 not-run with explicit blockers"
+        attribution: "Neither current PIE nor PubSub failure is claimed inherited or newly introduced until its root cause is compared after the isolated fixture repairs; the baseline lacked an executable suite-level outcome."
+      - category: "XEP-0487 privileged discovery"
+        baseline: "cancelled"
+        current: "success in both Run 69 and Run 70"
+        attribution: "Improved exact-SHA evidence, not final task acceptance."
+      - category: "Two-domain S2S, container build, role boundary, protocol integration, MIX, disaster recovery, architecture quality"
+        baseline: "failed"
+        current: "failed"
+        attribution: "Same job-level failure category on both runs; each requires its planned M00-04 or M00-05 root-cause record rather than a generic historical label."
+      - category: "Run 70 database-shard terminalization"
+        baseline: "The baseline database job was cancelled before it emitted suite-level terminal results."
+        current: "26 passed, 5 failed, 1 timeout and 0 not-run across all 32 declared suites."
+        attribution: "Run 70 proves that ordinary failures and a per-suite deadline no longer suppress later suites in the same shard. It does not prove the W4 supervisor repair: the exact-dev Linux regression cases still require their own successful run."
+  run_70_follow_up:
+    source_run:
+      id: "33963557616"
+      attempt: 1
+      exact_dev_commit: "f367a930253a33c2ac1d5d7475ce540d5d6434f8"
+    result: "Run 70 is a failed observation, not acceptance evidence. It supersedes Run 69 only as the newest observed dev tree; Run 69 remains the historical source for the original PubSub collection-edge and upload-fixture findings."
+    required_before_manual_acceptance:
+      - "Run the full Linux W4 supervisor regression suite against the repaired exact dev commit, including parent-first exit, TERM-ignoring descendants, held output pipes, nested cancellation, and low-output forwarding."
+      - "Obtain independent isolated bounded results for Privacy, HTTP Upload, MUC cluster, PubSub outbox, and PubSub wire without removing any suite or increasing a deadline."
+      - "Complete the W5 regular and scheduled listener/readiness pressure matrices on the exact dev tree."
+      - "Resolve each Run 70 suite failure by its stated invariant, then obtain a fresh exact-SHA CI observation."
+  run_73_observation:
+    source_run:
+      id: "33998876791"
+      attempt: 1
+      exact_dev_commit: "6af75a68c05b92a723d7a75fb07158a4e7d50f55"
+    classification: "Failed observation only. It neither accepts M00-03 nor supplies evidence for the uncommitted listener and migration repairs."
+    listener_entry_failures:
+      jobs:
+        - id: "101394068177"
+          fixture: "federation"
+        - id: "101394068267"
+          fixture: "mix-federation"
+      failed_stage: "database fixture attestation before templates or workers"
+      observed_error: "inet_server_addr() rendered 127.0.0.1/32 while the fixture comparison expected unqualified 127.0.0.1."
+      follow_up: "The next candidate validates host(inet_server_addr()), explicit PostgreSQL boolean results, the current CARGO_TARGET_DIR build output before database creation, and a retained parent diagnostic artifact. It first gates 1x1 and 1x2 Linux paths before either pressure matrix."
+    collaboration_storage:
+      job_id: "101394068175"
+      current_passes:
+        - suite_id: "pie"
+          status: "passed"
+          note: "The prior upload-policy fixture failure is historical only; it is not a current PIE failure."
+        - suite_id: "privacy"
+          status: "passed"
+          note: "The prior not-run record is historical only; Privacy is no longer blocked in this observation."
+      separately_registered_business_failures:
+        - id: "upload-object-id-conflict-target"
+          suite_id: "http-upload"
+          failed_stage: "expired upload cleanup admission"
+          root_cause: "0131 northstar_upload_admit_expired_cleanup RETURNS TABLE(object_id), making ON CONFLICT(object_id) ambiguous in PL/pgSQL."
+          owning_work_unit: "Upload SQL authority"
+          required_root_fix: "Forward migration using ON CONFLICT ON CONSTRAINT upload_cleanup_queue_pkey DO NOTHING; preserve the result-column contract."
+          excluded_from: "M00-03 listener and fixture-preflight scope"
+        - id: "upload-retained-bytes-batch-delete"
+          suite_id: "http-upload"
+          failed_stage: "capacity ledger cleanup"
+          root_cause: "0105 uses an AFTER ROW DELETE trigger, so a multi-row delete can make each deleted job appear to be the last projection and decrement retained bytes repeatedly."
+          owning_work_unit: "Upload capacity-ledger correctness"
+          required_root_fix: "Forward migration to a BEFORE ROW DELETE trigger with a final-projection predicate that excludes OLD.id; do not clamp the ledger or weaken its check constraint."
+          excluded_from: "M00-03 listener and fixture-preflight scope"
+        - id: "muc-cluster-destination-authority"
+          suite_id: "muc-cluster"
+          failed_stage: "signed cluster destination lookup"
+          root_cause: "The isolated test nodes did not establish the real process-authority lifecycle; the existing signer correctly failed closed. Direct mutation paths also need durable operation/outbox authority before Redis wakeup."
+          owning_work_unit: "MUC authority and durable outbox"
+          required_root_fix: "Exercise the real authority lifecycle in the fixture, then route role, affiliation, and policy mutations through cluster_muc_operations/outbox rather than mutating Redis before signed publication."
+          excluded_from: "M00-03 listener and fixture-preflight scope"
+    migration_0132_integrity:
+      historical_pre_fix_commit: "b588a0af99f3e523098ab4cd12c1c7b19f6981dc"
+      historical_pre_fix_sha384: "878db593eff69e873434c109ed78211f2039fedf36076026a635f69add974f6f5f43c6a062a010ce48c8a102e0cfe6d5"
+      current_sha384: "3bb9cc8cbda0798d78eb1f22b99a2076bdc6ed321aa59564e7c88faaffe8fbb4b0159ff6a6cc346a1d32769a408d535d"
+      observed_application_evidence: "No universal deployment claim is made. The pending isolated regression reconstructs the historical body, expects its format() failure, and requires no successful version-132 ledger row before applying the corrected source."
+      required_validation: "Empty schema, real 0131 upgrade, corrected rerun, and synthetic old-checksum rejection remain required on the next isolated Linux migration-upgrade suite."
+  notes:
+    - "Run 69 is evidence of observed state, not accepted-bootstrap evidence."
+    - "Run 70 (33963557616, attempt 1) ended naturally on f367a930253a33c2ac1d5d7475ce540d5d6434f8. Its 32 database suites are counted once as 26 passed, 5 failed, 1 timeout and 0 not-run; XEP-0487 is recorded separately."
+    - "The old collection item race passed in Run 69; the PubSub failure phase was first association preparation."
+    - "Every suite id appears once within its own run observation. XEP-0487 is intentionally recorded separately from the 32 database suites."
+    - "M00-03 remains in-progress and is not accepted-bootstrap. Exact-SHA Linux evidence for the W4 supervisor repair, the independent five previously blocked suites, the cluster fixture, and the W5 pressure matrix is required before manual acceptance. Final M00 ratification remains deferred to M00-G1 on one tree with two complete required-check runs."
+    - "Run 73 confirms PIE and Privacy pass on 6af75a6. The three separately registered Upload/MUC failures are not relabeled as M00-03 fixture failures and do not broaden this preflight repair into an unrelated authority change."

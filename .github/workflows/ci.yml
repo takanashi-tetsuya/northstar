@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      contract_baseline_sha:
+        description: "Immutable commit SHA used for the manual contract compatibility comparison"
+        required: true
+        type: string
   schedule:
     - cron: "23 18 * * 6"
 
@@ -11,14 +16,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A pull request has one supersedable validation lane.  Pushes intentionally
+  # use their run id instead: a stalled or timed-out historical dev/main run
+  # must not serialize a later exact-SHA validation run behind it.
+  #
+  # This controls scheduling only.  It does not weaken required jobs, replace
+  # per-test deadlines, or turn a cancelled run into passing evidence.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  rust-quality:
-    name: Rust quality gates
+  rust-fmt:
+    name: Rust fmt
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 10
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -30,30 +41,271 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
           rustup default 1.97.1
 
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check independent fuzz workspace formatting
+        run: cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+
+  rust-check:
+    name: Rust compile checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
+      - name: Install pinned Rust 1.97.1 tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+
+      - name: Check all targets
+        run: cargo check --workspace --all-targets --all-features --locked
+
+      - name: Compile every parser fuzz target without executing fuzz inputs
+        run: cargo check --manifest-path fuzz/Cargo.toml --bins --locked
+
+  rust-test:
+    name: Rust test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "true"
+
+      - name: Install pinned Rust 1.97.1 tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+
+      - name: Run tests
+        run: cargo test --workspace --all-targets --all-features --locked
+
+  rust-clippy:
+    name: Rust clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
+      - name: Install pinned Rust 1.97.1 tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+
+      - name: Deny Clippy warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  rust-build:
+    name: Rust build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
+      - name: Install pinned Rust 1.97.1 tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+
+      - name: Build all workspace binaries
+        run: cargo build --workspace --bins --locked
+
+  rust-quality:
+    name: Rust quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs:
+      - rust-fmt
+      - rust-check
+      - rust-test
+      - rust-clippy
+      - rust-build
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
+      - name: Install pinned Rust 1.97.1 tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+
       - name: Verify license metadata
         run: |
           grep -F 'license = "AGPL-3.0-only"' Cargo.toml
           grep -F 'GNU AFFERO GENERAL PUBLIC LICENSE' LICENSE
+
+      - name: Validate structured service catalog
+        run: cargo run --locked -p catalog-validator -- validate --strict
+
+      - name: Audit Program 6 merge convergence
+        run: |
+          node scripts/check-program6-convergence.mjs \
+            --base aa2b0df03bed53bc6a032c5a5ac74374bb62167b \
+            --checkpoint 94cb2622934d1329905b982e26377176f18a44bb \
+            --merge e02503b5d4a5491bb57002f4a5261552f4ec6772 \
+            --output "$RUNNER_TEMP/program6-convergence.json" \
+            --quiet
+          node tests/governance/program6-convergence/run.mjs
+
+      - name: Validate database bootstrap and recovery policy
+        run: |
+          cargo run --locked -p restore-verifier -- --catalog catalog/restore-order.yaml
+          cargo run --locked -p db-bootstrap -- \
+            --catalog catalog/data-ownership.yaml \
+            --output "$RUNNER_TEMP/northstar-role-bootstrap.sql"
+
+      - name: Validate Kafka topic and ACL policy
+        run: |
+          cargo run --locked -p kafka-policy-generator -- \
+            --catalog catalog/topics.yaml \
+            --output "$RUNNER_TEMP/northstar-kafka-policy.json"
+
+      - name: Validate architecture boundaries and generated graphs
+        run: |
+          node scripts/generate-crate-catalog.mjs
+          git diff --exit-code -- catalog/crates.yaml
+          cargo run --locked -p architecture-validator -- validate --write
+          git diff --exit-code -- docs/architecture/generated
+
+      - name: Validate XEP plugin architecture
+        run: |
+          node scripts/check-plugin-architecture.mjs
+          node scripts/test-plugin-architecture.mjs
 
       - name: Validate unique database migration versions
         run: |
           sh scripts/check-migration-versions.sh
           sh scripts/check-compose-config-mapping.sh
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Check all targets
-        run: cargo check --all-targets --all-features --locked
-
-      - name: Run tests
-        run: cargo test --all-targets --all-features --locked
-
-      - name: Deny Clippy warnings
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
-
       - name: Verify generated TLS identities and fail-closed CRL handling
         run: bash scripts/runtime-tls-test-wsl.sh
+
+  contracts-quality:
+    name: Wire contracts (Buf)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Buf
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: "1.50.0"
+          github_token: ${{ github.token }}
+
+      - name: Record contract toolchain and tree
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "current_sha=$(git rev-parse HEAD)"
+          echo "current_contract_tree=$(git rev-parse HEAD:contracts/proto)"
+          buf --version
+
+      - name: Check Buf formatting
+        run: buf format -d --exit-code
+
+      - name: Lint Buf wire contracts
+        run: buf lint
+
+      - name: Verify generated contract drift
+        run: |
+          buf generate
+          git diff --exit-code -- crates/foundation-contracts/src/generated
+
+  contracts-compatibility:
+    name: Contract compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source and the compatibility baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Buf
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: "1.50.0"
+          github_token: ${{ github.token }}
+
+      - name: Detect breaking wire contract changes
+        shell: bash
+        env:
+          CONTRACT_BASELINE_SHA: ${{ inputs.contract_baseline_sha }}
+          CONTRACT_EVENT_BEFORE: ${{ github.event.before }}
+          CONTRACT_EVENT_NAME: ${{ github.event_name }}
+          CONTRACT_HEAD_SHA: ${{ github.sha }}
+          CONTRACT_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CONTRACT_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          resolution="$(bash scripts/resolve-contract-baseline.sh)"
+          printf '%s\n' "$resolution"
+          baseline_sha="$(awk -F= '$1 == "baseline_sha" { print $2 }' <<<"$resolution")"
+          test -n "$baseline_sha"
+          temp_branch="northstar-contract-baseline-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-$$"
+          temp_ref="refs/heads/${temp_branch}"
+          cleanup() {
+            git update-ref -d "$temp_ref"
+          }
+          trap cleanup EXIT
+          git update-ref "$temp_ref" "$baseline_sha"
+          echo "current_sha=$(git rev-parse HEAD)"
+          echo "current_contract_tree=$(git rev-parse HEAD:contracts/proto)"
+          echo "baseline_sha=$baseline_sha"
+          echo "baseline_contract_tree=$(git rev-parse "$baseline_sha:contracts/proto")"
+          buf --version
+          buf breaking contracts/proto --against ".git#branch=${temp_branch},subdir=contracts/proto"
 
   dependency-audit:
     name: RustSec dependency audit
@@ -64,6 +316,27 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Install pinned Rust for the audit tool
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+
+      - name: Restore pinned audit tool
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-rust1.97.1-v0.22.2-locked
+
+      - name: Install and verify the locked audit tool
+        run: |
+          set -euo pipefail
+          if [[ "$(cargo audit --version 2>/dev/null || true)" != "cargo-audit-audit 0.22.2" ]]; then
+            cargo install cargo-audit --version 0.22.2 --locked --force
+          fi
+          audit_version="$(cargo audit --version)"
+          printf '%s\n' "$audit_version"
+          [[ "$audit_version" == "cargo-audit-audit 0.22.2" ]]
 
       - name: Audit Cargo.lock
         uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
@@ -167,26 +440,60 @@ jobs:
           node scripts/check-tracked-sensitive-files.mjs --include-untracked
           node scripts/check-runtime-migration-boundary.mjs
           node scripts/check-architecture-boundaries.mjs
+          node --test scripts/test-mix-outbox-boundaries.mjs
           node scripts/check-session-lifecycle-boundary.mjs
           node scripts/check-documentation-consistency.mjs
           node scripts/check-outbound-xml-construction.mjs
+          node scripts/check-parser-fuzz-coverage.mjs
+          node scripts/test-parser-fuzz-coverage.mjs
+          node scripts/check-ci-required.mjs --workflow-only
+          node --test scripts/test-ci-release-gates.mjs
+          python3 scripts/test-release-package.py
+          node scripts/check-subserver-boundaries.mjs
+          node --test scripts/test-subserver-boundaries.mjs
+          node --test scripts/test-cluster-signing-key.mjs
+          python3 scripts/test-cluster-signing-envelope.py
+          node scripts/check-stateful-database-ci.mjs
           node scripts/omemo-security-tests.mjs
           node scripts/check-i18n.mjs
           node scripts/check-locales.mjs
+          node scripts/check-microservice-catalog.mjs
 
       - name: Check operational script syntax
         run: |
           find scripts -maxdepth 1 -type f -name '*.sh' -exec bash -n {} +
           find scripts -maxdepth 1 -type f -name '*.py' -exec python3 -m py_compile {} +
+          find scripts/lib -type f -name '*.sh' -exec bash -n {} +
+          python3 -m py_compile scripts/test-listener-relay.py
+          python3 scripts/wait-test-readiness.py --self-test
+          python3 scripts/test-listener-relay.py --self-test
+          python3 scripts/test-redis-tls-unix-relay.py --self-test
+          python3 scripts/test-cluster-tls-rejection.py --self-test
+          python3 scripts/test-cluster-sm-client.py
+          python3 scripts/test-cluster-fault-observations.py
+          python3 scripts/test-cluster-version-probes.py
+          python3 scripts/test-cluster-ack-pause.py
+          python3 scripts/test-cluster-takeover-expiry.py
+          bash scripts/test-listener-readiness.sh
+          python3 scripts/xep0487-socket-activation.py --self-test
           python3 scripts/check-github-ci-summary.py
           bash scripts/check-github-ci-run.sh
+          python3 scripts/test-ci-console-startup.py
+          python3 scripts/test-run-test-with-servers.py
+          bash scripts/test-github-ci-supervisor.sh
+          bash scripts/test-listener-stress-worker.sh
+          python3 scripts/test-listener-stress-phases.py
+          python3 scripts/test-listener-startup-scheduler.py
+          python3 scripts/test-mix-federation-coordination.py
+          python3 scripts/check-runtime-test-profile.py --manifest Cargo.toml
+          python3 scripts/test-runtime-test-profile.py
+          bash scripts/test-stateful-database-ci.sh
           bash scripts/check-database-role-boundaries.sh
           bash scripts/test-postgres-client-wrapper.sh
 
       - name: Test certificate and secret handling
         run: |
-          sudo apt-get update
-          sudo apt-get install -y age
+          bash scripts/ci-install-ubuntu-packages.sh age
           bash scripts/test-certificate-security.sh
           sudo bash scripts/test-secret-security.sh
           bash scripts/test-log-security.sh
@@ -210,6 +517,7 @@ jobs:
             prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac \
             check rules /etc/northstar-monitoring/alerts.yml
           docker compose -f docker-compose.yml -f deploy/docker-compose.components.yml config --quiet
+          docker compose -f docker-compose.yml -f deploy/docker-compose.subservers.yml config --quiet
           docker compose -f docker-compose.yml -f deploy/docker-compose.backup-security.yml config --quiet
           docker compose -f docker-compose.yml -f deploy/docker-compose.backup-security.yml -f deploy/docker-compose.backup-age.yml config --quiet
           release_config="$(mktemp)"
@@ -356,8 +664,8 @@ jobs:
         with:
           toolchain: 1.97.1
 
-      - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Install PostgreSQL server and client fixture tools
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql postgresql-client
 
       - name: Reconcile, migrate, and prove workload denials
         env:
@@ -367,6 +675,11 @@ jobs:
           PGHOST: 127.0.0.1
           PGPORT: "5432"
         run: bash scripts/database-role-boundary-db-ci.sh
+
+      - name: Prove independent maintenance authority on a private PostgreSQL cluster
+        run: >-
+          python3 scripts/maintenance-subserver-wsl.py
+          --server "$GITHUB_WORKSPACE/target/debug/rust-xmpp-server"
 
   protocol-integration:
     name: PostgreSQL protocol integration
@@ -378,6 +691,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
       - name: Start loopback-only PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
 
@@ -387,7 +706,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client
 
       - name: Run isolated protocol integration
         env:
@@ -424,7 +743,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client
 
       - name: Run the single-node production design envelope
         env:
@@ -456,7 +775,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL and Redis clients
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client redis-server redis-tools
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client redis-server redis-tools
 
       - name: Populate the locked offline dependency cache
         run: cargo fetch --locked
@@ -473,14 +792,32 @@ jobs:
         run: bash scripts/loopback-postgres-ci.sh stop
 
   stateful-database-integration:
-    name: Isolated PostgreSQL and Redis invariants
+    name: Isolated PostgreSQL and Redis invariants (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    # Each shard receives its own runner and loopback-only PostgreSQL
+    # fixture.  Isolation is what makes this parallelism safe; no shard is
+    # given a shared schema, listener, or Redis namespace.
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        shard:
+          - auth-identity
+          - abuse-delivery
+          - collaboration-storage
+          - pubsub-federation
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
 
       - name: Start loopback-only PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
@@ -491,50 +828,30 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL and Redis clients
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client redis-server redis-tools
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client redis-server redis-tools
 
       - name: Populate the locked offline dependency cache
         run: cargo fetch --locked
 
-      - name: Run isolated database and conflict suites
+      - name: Run isolated database and conflict suite shard
         env:
           XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
+          # This is a shard-level safety net.  The runner below places a
+          # shorter, explicit deadline around every suite and retains a
+          # redacted transcript when it expires.
+          NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS: "1800"
         run: |
-          # Service-layer persistence fences previously exercised only by the
-          # release validation list; they share this job's build cache and run
-          # strictly serially against the single disposable postgres service.
-          bash scripts/github-ci-run.sh "Auth/admin database" bash scripts/auth-admin-db-wsl.sh
-          bash scripts/github-ci-run.sh "Admin session cleanup database" bash scripts/admin-session-cleanup-db-wsl.sh
-          bash scripts/github-ci-run.sh "Authentication service database" bash scripts/authentication-service-db-wsl.sh
-          bash scripts/github-ci-run.sh "Abuse reporting database" bash scripts/abuse-reporting-db-wsl.sh
-          bash scripts/github-ci-run.sh "Abuse key deployment database" bash scripts/abuse-key-deployment-db-wsl.sh
-          bash scripts/github-ci-run.sh "Message PoW database" bash scripts/message-pow-db-wsl.sh
-          bash scripts/github-ci-run.sh "API operations database" bash scripts/api-operations-db-wsl.sh
-          bash scripts/github-ci-run.sh "API pages database" bash scripts/api-pages-db-wsl.sh
-          bash scripts/github-ci-run.sh "Migration upgrade" bash scripts/migration-upgrade-wsl.sh
-          bash scripts/github-ci-run.sh "Migration 0056 compatibility" bash scripts/migration-0056-db-wsl.sh
-          bash scripts/github-ci-run.sh "RFC 7622 identity database" bash scripts/rfc7622-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Identity audit database" bash scripts/identity-audit-db-wsl.sh
-          bash scripts/github-ci-run.sh "JID identity database" bash scripts/jid-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Authorization JID identity database" bash scripts/authorization-jid-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Push JID identity database" bash scripts/push-jid-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Push delivery database" bash scripts/push-delivery-db-wsl.sh
-          bash scripts/github-ci-run.sh "MIX JID identity database" bash scripts/mix-jid-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Session JID identity database" bash scripts/session-jid-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Profile JID identity database" bash scripts/profile-jid-identity-db-wsl.sh
-          bash scripts/github-ci-run.sh "Roster service database" bash scripts/roster-service-db-wsl.sh
-          bash scripts/github-ci-run.sh "MUC database" bash scripts/muc-db-wsl.sh
-          bash scripts/github-ci-run.sh "PIE database" bash scripts/pie-db-wsl.sh
-          bash scripts/github-ci-run.sh "Privacy database" bash scripts/privacy-db-wsl.sh
-          bash scripts/github-ci-run.sh "Offline replay database" bash scripts/offline-replay-db-wsl.sh
-          bash scripts/github-ci-run.sh "PubSub database" bash scripts/pubsub-db-wsl.sh
-          bash scripts/github-ci-run.sh "PubSub outbox database" bash scripts/pubsub-outbox-db-wsl.sh
-          bash scripts/github-ci-run.sh "PubSub wire integration" bash scripts/pubsub-wire-wsl.sh
-          bash scripts/github-ci-run.sh "Retention database" bash scripts/retention-db-wsl.sh
-          bash scripts/github-ci-run.sh "Stream Management database" bash scripts/sm-db-wsl.sh
-          bash scripts/github-ci-run.sh "S2S database" bash scripts/s2s-db-wsl.sh
-          bash scripts/github-ci-run.sh "HTTP Upload database" bash scripts/upload-db-wsl.sh
-          bash scripts/github-ci-run.sh "MUC cluster database" bash scripts/muc-cluster-wsl.sh
+          bash scripts/github-ci-run.sh "Stateful database ${{ matrix.shard }}" \
+            bash scripts/stateful-database-ci.sh "${{ matrix.shard }}"
+
+      - name: Upload failed database shard diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stateful-database-${{ matrix.shard }}-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/northstar-ci-diagnostics/*.redacted.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Stop loopback-only PostgreSQL fixture
         if: always()
@@ -550,6 +867,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
       - name: Start loopback-only PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
 
@@ -559,7 +882,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client
 
       - name: Populate the locked offline dependency cache
         run: cargo fetch --locked
@@ -594,6 +917,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
       - name: Start loopback-only PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
 
@@ -603,7 +932,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh postgresql-client
 
       - name: Verify SASL EXTERNAL federation
         env:
@@ -628,6 +957,326 @@ jobs:
         if: always()
         run: bash scripts/loopback-postgres-ci.sh stop
 
+  listener-diagnostics:
+    name: Listener diagnostic preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check diagnostic and cleanup regressions
+        run: |
+          python3 scripts/test-github-ci-failure-marker.py
+          python3 scripts/test-listener-control-observer.py
+          python3 scripts/test-listener-readiness-observed.py
+          python3 scripts/test-listener-stress-diagnostics.py
+          python3 scripts/test-listener-database-cleanup.py
+          python3 scripts/test-fixture-certificate-cache.py
+          python3 scripts/test-ci-runtime-artifact.py
+          node scripts/test-ci-performance.mjs
+
+      - name: Identify PostgreSQL tool platform
+        id: pg_platform
+        run: |
+          . /etc/os-release
+          printf 'version=%s-%s\n' "$ID" "$VERSION_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private PostgreSQL 17 tools
+        id: pg_tools
+        continue-on-error: true
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/northstar-pg17-tools
+          key: pg17-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.pg_platform.outputs.version }}-${{ hashFiles('scripts/ci-postgres17-tools.sh') }}
+
+      - name: Install PostgreSQL build prerequisites
+        if: steps.pg_tools.outputs.cache-hit != 'true'
+        run: bash scripts/ci-install-ubuntu-packages.sh bison flex
+
+      - name: Prepare private PostgreSQL 17 tools
+        run: bash scripts/ci-postgres17-tools.sh "$RUNNER_TEMP/northstar-pg17-tools"
+
+      - name: Verify observer and cleanup against real PostgreSQL 17
+        run: |
+          export PATH="$RUNNER_TEMP/northstar-pg17-tools/bin:$PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/northstar-pg17-tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          python3 scripts/test-listener-control-observer-pg17.py --pg-bin "$RUNNER_TEMP/northstar-pg17-tools/bin"
+
+  # A small, real two-node path is a gate, not evidence for the full stress
+  # envelope.  It catches setup, template, listener, and cleanup regressions
+  # before either regular 20x50 or scheduled 100x50 capacity work begins.
+  listener-readiness-stress-smoke:
+    name: Listener/readiness smoke (1x1 then 1x2 · ${{ matrix.fixture }})
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        fixture:
+          - federation
+          - mix-federation
+    env:
+      # This remains an isolated loopback fixture.  It is intentionally sized
+      # only for the 1x1 and 1x2 proofs below, not the pressure matrix.
+      NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "32"
+      NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
+      NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
+      NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS: "0"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: runtime-test
+          save: "${{ matrix.fixture == 'federation' }}"
+
+      - name: Start isolated loopback PostgreSQL fixture
+        run: bash scripts/loopback-postgres-ci.sh start
+
+      - name: Install pinned Rust 1.97.1
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
+        with:
+          toolchain: 1.97.1
+
+      - name: Install PostgreSQL client and listener diagnostic tools
+        run: bash scripts/ci-install-ubuntu-packages.sh iproute2 postgresql-client
+
+      - name: Populate the locked dependency cache
+        run: cargo fetch --locked
+
+      - name: Prove one round with one pair
+        env:
+          XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
+          XMPP_TEST_OFFLINE: "false"
+        run: >-
+          bash scripts/listener-readiness-stress-wsl.sh
+          --mode regular --fixture "${{ matrix.fixture }}" --rounds 1 --pairs 1
+
+      - name: Prove one round with two pairs
+        env:
+          XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
+          XMPP_TEST_OFFLINE: "false"
+        run: >-
+          bash scripts/listener-readiness-stress-wsl.sh
+          --mode regular --fixture "${{ matrix.fixture }}" --rounds 1 --pairs 2
+
+      - name: Package verified runtime for this CI run
+        if: matrix.fixture == 'federation'
+        run: |
+          cargo build --locked --profile runtime-test --message-format=json-render-diagnostics --bin rust-xmpp-server > "$RUNNER_TEMP/runtime-build.jsonl"
+          python3 scripts/ci-runtime-artifact.py pack \
+            --bundle "$RUNNER_TEMP/northstar-runtime-fixture" \
+            --binary "$GITHUB_WORKSPACE/target/runtime-test/rust-xmpp-server" \
+            --build-log "$RUNNER_TEMP/runtime-build.jsonl"
+
+      - name: Upload verified runtime for this CI run
+        if: matrix.fixture == 'federation'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: listener-runtime-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/northstar-runtime-fixture/
+          compression-level: 1
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload failed listener/readiness smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: listener-readiness-smoke-${{ matrix.fixture }}-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/northstar-ci-diagnostics/*.redacted.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Stop isolated loopback PostgreSQL fixture
+        if: always()
+        run: bash scripts/loopback-postgres-ci.sh stop
+
+  listener-readiness-stress-regular:
+    name: Listener/readiness stress (regular 20x50 · ${{ matrix.fixture }})
+    needs: [listener-readiness-stress-smoke, listener-diagnostics]
+    if: >-
+      ${{ (github.event_name == 'push' || github.event_name == 'pull_request') &&
+          needs.listener-readiness-stress-smoke.result == 'success' &&
+          needs.listener-diagnostics.result == 'success' }}
+    runs-on: ubuntu-latest
+    # This is a capacity ceiling only. Every fixture worker has its own
+    # process-group deadline inside the stress driver, so a hung child cannot
+    # consume a round until GitHub's job-level timeout.
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        fixture:
+          - federation
+          - mix-federation
+    env:
+      # The stress driver queries the built binary's runtime-pool manifest and
+      # adds the MIX fixture's one direct control connection per pair. 672 is
+      # therefore checked against a 650-connection 50-pair requirement plus
+      # one dedicated observer connection, without generic headroom.
+      NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "672"
+      NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
+      NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
+      NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS: "0"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download smoke runtime from this CI run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: listener-runtime-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/northstar-runtime-fixture
+          digest-mismatch: error
+
+      - name: Start isolated loopback PostgreSQL fixture
+        run: bash scripts/loopback-postgres-ci.sh start
+
+      - name: Install pinned Rust 1.97.1
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
+        with:
+          toolchain: 1.97.1
+
+      # These S2S/MIX fixtures have no Redis configuration.  Do not start an
+      # unused cache and mistake that for cluster-runtime coverage; Redis
+      # pressure remains owned by the cluster/MUC fixture work.
+      - name: Install PostgreSQL client and listener diagnostic tools
+        run: bash scripts/ci-install-ubuntu-packages.sh iproute2 postgresql-client libpq5
+
+      - name: Run required regular listener/readiness matrix
+        id: listener_matrix
+        env:
+          XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
+          XMPP_TEST_OFFLINE: "false"
+          NORTHSTAR_RUNTIME_ARTIFACT_DIR: ${{ runner.temp }}/northstar-runtime-fixture
+        run: >-
+          python3 scripts/listener-readiness-observed-wsl.py
+          --mode regular --fixture "${{ matrix.fixture }}" --rounds 20 --pairs 50
+
+      - name: Upload failed listener/readiness diagnostics
+        if: ${{ failure() && steps.listener_matrix.outputs.driver_succeeded != 'true' && steps.listener_matrix.outputs.driver_started != 'false' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: listener-readiness-regular-${{ matrix.fixture }}-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/northstar-ci-diagnostics/*.redacted.log
+          # The stress parent and every supervised worker must retain a
+          # redacted artifact on failure.  Do not report a green upload step
+          # when a preflight/template failure produced no usable evidence.
+          # A successful workload with failed observer diagnostics has no
+          # business-failure log; its required evidence is uploaded below.
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload bounded control observer evidence
+        if: ${{ always() && steps.listener_matrix.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: listener-control-observer-${{ matrix.fixture }}-${{ github.run_id }}
+          # No salts, temporary publication files, SQL or raw database names.
+          path: |
+            ${{ runner.temp }}/northstar-ci-diagnostics/listener-control-observer.*/observer/observations.jsonl
+            ${{ runner.temp }}/northstar-ci-diagnostics/listener-control-observer.*/observer/observer-ready.json
+            ${{ runner.temp }}/northstar-ci-diagnostics/listener-control-observer.*/observer/observer-result.json
+            ${{ runner.temp }}/northstar-ci-diagnostics/listener-control-observer.*/wrapper-result.json
+            ${{ runner.temp }}/northstar-ci-diagnostics/listener-control-observer.*/first-failure.json
+            ${{ runner.temp }}/northstar-ci-diagnostics/listener-control-observer.*/database-map.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Stop isolated loopback PostgreSQL fixture
+        if: always()
+        run: bash scripts/loopback-postgres-ci.sh stop
+
+  listener-readiness-stress-scheduled:
+    name: Scheduled listener/readiness stress (100x50 · ${{ matrix.fixture }})
+    needs: [listener-readiness-stress-smoke, listener-diagnostics]
+    if: >-
+      ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+          needs.listener-readiness-stress-smoke.result == 'success' &&
+          needs.listener-diagnostics.result == 'success' }}
+    runs-on: ubuntu-latest
+    # The 100-round workload remains unchanged. This limit bounds only the
+    # host capacity for the scheduled evidence run; worker deadlines remain
+    # enforced by the private process-group supervisor in the driver.
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        fixture:
+          - federation
+          - mix-federation
+    env:
+      # Match the regular 50-pair runtime-pool plus fixture-control budget;
+      # this is host capacity, not a relaxation of the 100x50 matrix.
+      NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "672"
+      NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
+      NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
+      NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS: "0"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download smoke runtime from this CI run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: listener-runtime-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/northstar-runtime-fixture
+          digest-mismatch: error
+
+      - name: Start isolated loopback PostgreSQL fixture
+        run: bash scripts/loopback-postgres-ci.sh start
+
+      - name: Install pinned Rust 1.97.1
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
+        with:
+          toolchain: 1.97.1
+
+      # These S2S/MIX fixtures have no Redis configuration.  Do not start an
+      # unused cache and mistake that for cluster-runtime coverage; Redis
+      # pressure remains owned by the cluster/MUC fixture work.
+      - name: Install PostgreSQL client and listener diagnostic tools
+        run: bash scripts/ci-install-ubuntu-packages.sh iproute2 postgresql-client
+
+      - name: Run required scheduled listener/readiness matrix
+        env:
+          XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
+          XMPP_TEST_OFFLINE: "false"
+          NORTHSTAR_RUNTIME_ARTIFACT_DIR: ${{ runner.temp }}/northstar-runtime-fixture
+        run: >-
+          bash scripts/listener-readiness-stress-wsl.sh
+          --mode scheduled --fixture "${{ matrix.fixture }}" --rounds 100 --pairs 50
+
+      - name: Upload failed listener/readiness diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: listener-readiness-scheduled-${{ matrix.fixture }}-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/northstar-ci-diagnostics/*.redacted.log
+          # Keep the scheduled evidence lane equally strict: an upload action
+          # only succeeds after an actual redacted diagnostic exists.
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Stop isolated loopback PostgreSQL fixture
+        if: always()
+        run: bash scripts/loopback-postgres-ci.sh stop
+
   xep0487-integration:
     name: Privilege-separated XEP-0487 HTTPS discovery
     runs-on: ubuntu-latest
@@ -638,6 +1287,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore Rust compiler work
+        uses: ./.github/actions/rust-build-cache
+        with:
+          profile: debug
+          save: "false"
+
       - name: Start loopback-only PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
 
@@ -647,12 +1302,18 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install isolated fixture tools
-        run: sudo apt-get update && sudo apt-get install -y iproute2 postgresql-client util-linux
+        run: bash scripts/ci-install-ubuntu-packages.sh iproute2 postgresql-client util-linux
 
       - name: Build Northstar without privileges
         run: cargo build --locked
 
       - name: Bind only the isolated HTTPS fixture as root
+        env:
+          # The fixture has internal second-scale readiness and request
+          # deadlines. This command budget is deliberately larger than all
+          # valid scenarios, but far below the job-level fallback, so a future
+          # lifecycle regression preserves a useful command-level transcript.
+          NORTHSTAR_CI_COMMAND_TIMEOUT_SECONDS: "900"
         run: |
           bash scripts/github-ci-run.sh "XEP-0487 privileged HTTPS runtime" sudo env \
             XEP0487_RUNTIME_UID="$(id -u)" \
@@ -661,6 +1322,18 @@ jobs:
             XMPP_TEST_SYSTEM_TOOLCHAIN=true \
             XMPP_TEST_OFFLINE=false \
             bash scripts/xep0487-runtime-wsl.sh
+
+      - name: Upload failed XEP-0487 diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: xep0487-command-diagnostics-${{ github.run_id }}
+          # The wrapper retains raw logs only on the ephemeral runner. Upload
+          # its separately redacted copy, never a potentially credential-rich
+          # command transcript.
+          path: ${{ runner.temp }}/northstar-ci-diagnostics/*.redacted.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Stop loopback-only PostgreSQL fixture
         if: always()
@@ -677,9 +1350,52 @@ jobs:
           persist-credentials: false
 
       - name: Install private PostgreSQL test tools
-        run: sudo apt-get update && sudo apt-get install -y age postgresql postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh age postgresql postgresql-client
 
       - name: Run backup, verification, and restore
         run: >-
           bash scripts/github-ci-run.sh "Disaster-recovery drill"
           bash scripts/backup-restore-wsl.sh
+
+  ci-required:
+    name: CI required
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - rust-fmt
+      - rust-check
+      - rust-test
+      - rust-clippy
+      - rust-build
+      - rust-quality
+      - contracts-quality
+      - contracts-compatibility
+      - dependency-audit
+      - dependency-policy
+      - protocol-fuzz
+      - web-static
+      - container-build
+      - database-role-boundary
+      - protocol-integration
+      - production-envelope
+      - heavy-runtime-envelope
+      - stateful-database-integration
+      - mix-integration
+      - federation-integration
+      - listener-readiness-stress-smoke
+      - listener-diagnostics
+      - listener-readiness-stress-regular
+      - listener-readiness-stress-scheduled
+      - xep0487-integration
+      - disaster-recovery
+    steps:
+      - name: Check out the evaluated source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Require every applicable job to succeed
+        env:
+          CI_REQUIRED_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/check-ci-required.mjs

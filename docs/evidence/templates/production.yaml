@@ -1,0 +1,15 @@
+service_id: example-service
+status: production
+last_verified_commit: 0000000
+required_checks:
+  - catalog-validator
+  - capacity
+  - security-audit
+  - disaster-recovery
+  - interoperability
+  - external-audit
+artifacts:
+  - docs/evidence/runs/<run-id>/capacity.txt
+  - docs/evidence/runs/<run-id>/security-audit.txt
+  - docs/evidence/runs/<run-id>/disaster-recovery.txt
+notes: "Production requires a signed release, external audit, and an observation window."

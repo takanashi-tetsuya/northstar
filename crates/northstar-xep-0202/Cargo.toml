@@ -1,0 +1,19 @@
+[package]
+name = "northstar-xep-0202"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Capability-free XEP-0202 Entity Time wire parsing, validation, and builder"
+publish = false
+
+[package.metadata.northstar-xep]
+id = 202
+route-ids = [
+    "iq-get|urn:xmpp:time|time",
+]
+worker-ids = []
+
+[dependencies]
+northstar-xep-core = { path = "../northstar-xep-core" }
+roxmltree = "0.20"

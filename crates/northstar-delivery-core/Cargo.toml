@@ -1,0 +1,13 @@
+[package]
+name = "northstar-delivery-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Capability-free durable delivery identities and SM entries for Northstar"
+publish = false
+
+[dependencies]
+northstar-xmpp-types = { path = "../northstar-xmpp-types" }
+roxmltree = "0.20"
+uuid = "1.12"

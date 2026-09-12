@@ -1,0 +1,14 @@
+[package]
+name = "northstar-archive-application"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Typed commands, validation rules, and repository contracts for Northstar message archive management"
+publish = false
+
+[dependencies]
+northstar-archive-core = { path = "../northstar-archive-core" }
+northstar-xmpp-types = { path = "../northstar-xmpp-types" }
+chrono = { version = "0.4" }
+uuid = { version = "1.12", features = ["v4"] }

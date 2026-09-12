@@ -2,6 +2,7 @@ pub(crate) mod account;
 pub(crate) mod admin_commands;
 pub(crate) mod authentication;
 pub(crate) mod blocking;
+pub(crate) mod durable_outbox;
 pub(crate) mod extdisco;
 pub(crate) mod mam;
 pub(crate) mod messaging;

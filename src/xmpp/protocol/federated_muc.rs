@@ -209,8 +209,12 @@ struct FederatedMessageRequest {
 }
 
 impl FederatedMessageRequest {
-    fn from_node(root: Node<'_, '_>, raw: &str) -> Self {
-        let validation_error = validate_routed_message(root)
+    fn from_node(
+        root: Node<'_, '_>,
+        raw: &str,
+        extensions: &crate::xmpp::extensions::ExtensionRuntime,
+    ) -> Self {
+        let validation_error = validate_routed_message(root, extensions)
             .err()
             .map(|condition| (stanza_error_type(condition), condition));
         let invites = root
@@ -326,6 +330,7 @@ type FederatedMamQuery = super::mam::ParsedMamQuery;
 
 enum FederatedIqPayload {
     Ping,
+    PingError,
     DiscoInfo {
         node: Option<String>,
     },
@@ -372,7 +377,13 @@ impl FederatedIqRequest {
                 let name = child.tag_name().name();
                 let namespace = child.tag_name().namespace().unwrap_or_default();
                 match (name, namespace, kind) {
-                    ("ping", "urn:xmpp:ping", "get") => FederatedIqPayload::Ping,
+                    ("ping", northstar_xep_0199::NAMESPACE, "get") => {
+                        if northstar_xep_0199::parse_ping_element(child).is_ok() {
+                            FederatedIqPayload::Ping
+                        } else {
+                            FederatedIqPayload::PingError
+                        }
+                    }
                     ("query", "http://jabber.org/protocol/disco#info", "get") => {
                         if child
                             .attributes()
@@ -1898,7 +1909,7 @@ pub(crate) fn federated_muc_message<'a>(
     raw: &str,
 ) -> impl std::future::Future<Output = Result<Option<String>>> + Send + 'a {
     let authenticated_domain = authenticated_domain.to_owned();
-    let request = FederatedMessageRequest::from_node(root, raw);
+    let request = FederatedMessageRequest::from_node(root, raw, &state.config.xmpp_extensions);
     async move {
         federated_muc_message_owned(state, &authenticated_domain, connection_id, request).await
     }
@@ -2954,7 +2965,7 @@ async fn federated_muc_message_owned(
                         invitee_domain,
                         &invitation,
                         Some(&room_jid),
-                        state.federation.outbox_policy().into(),
+                        state.federation.outbox_policy(),
                         cluster_authority.as_ref(),
                     )
                     .await
@@ -3163,16 +3174,16 @@ async fn federated_muc_message_owned(
         clustered: state.cluster.is_enabled(),
         expected_room_epoch: room.room_epoch,
         principal: MucActorPrincipal::Federated {
-            bare_jid: &actor_bare_jid,
-            authenticated_domain,
+            bare_jid: actor_bare_jid.clone(),
+            authenticated_domain: authenticated_domain.to_owned(),
         },
-        actor_scope: &actor_scope,
-        full_jid: &actor_full_jid,
-        nick: &own.nick,
+        actor_scope: actor_scope.clone(),
+        full_jid: actor_full_jid.clone(),
+        nick: own.nick.clone(),
         occupant_incarnation: own.cluster_epoch,
         connection_uuid: own.connection_id,
-        expected_role: &own.role,
-        expected_affiliation: &current_affiliation,
+        expected_role: own.role.clone(),
+        expected_affiliation: current_affiliation.clone(),
         cluster_target,
     };
     if let Some(target_id) = author_retraction {
@@ -3347,11 +3358,11 @@ async fn federated_muc_message_owned(
             .admit_local_discussion(MucDiscussion {
                 id: stable_id,
                 room_id: room.id,
-                actor_scope: &actor_scope,
-                origin_id,
-                sender_jid: &actor_full_jid,
-                nick: &own.nick,
-                stanza: &archive,
+                actor_scope: actor_scope.clone(),
+                origin_id: origin_id.map(str::to_owned),
+                sender_jid: actor_full_jid.clone(),
+                nick: own.nick.clone(),
+                stanza: archive.clone(),
                 encrypted,
                 archive: archive_enabled,
                 retention_days: state.config.muc_mam_retention_days,
@@ -3473,6 +3484,27 @@ async fn federated_muc_iq_owned(
             "item-not-found",
         ));
     }
+    if matches!(request.payload, FederatedIqPayload::Ping)
+        && !state
+            .config
+            .xmpp_extensions
+            .enabled(northstar_xep_0199::XEP_ID)
+    {
+        return Ok(federated_error(
+            &request.stanza,
+            from,
+            "cancel",
+            "service-unavailable",
+        ));
+    }
+    if matches!(request.payload, FederatedIqPayload::PingError) {
+        return Ok(federated_error(
+            &request.stanza,
+            from,
+            "modify",
+            "bad-request",
+        ));
+    }
 
     if service_request {
         let payload = match request.payload {
@@ -3491,16 +3523,36 @@ async fn federated_muc_iq_owned(
                     "http://jabber.org/protocol/muc",
                     "http://jabber.org/protocol/muc#unique",
                     "http://jabber.org/protocol/rsm",
-                    "urn:xmpp:mam:2",
-                    "urn:xmpp:mam:2#extended",
                     "urn:xmpp:occupant-id:0",
                     "urn:xmpp:message-moderate:1",
                     "urn:xmpp:message-retract:1",
                     "urn:xmpp:message-retract:1#tombstone",
-                    "urn:xmpp:ping",
                     "urn:xmpp:sid:0",
                 ] {
                     query.push_child(XmlElement::new("feature").attr("var", feature));
+                }
+                if state
+                    .config
+                    .xmpp_extensions
+                    .enabled(northstar_xep_0313::XEP_ID)
+                {
+                    query.push_child(
+                        XmlElement::new("feature")
+                            .attr("var", northstar_xep_0313::DISCO_FEATURE_MAM),
+                    );
+                    query.push_child(
+                        XmlElement::new("feature")
+                            .attr("var", northstar_xep_0313::DISCO_FEATURE_MAM_EXTENDED),
+                    );
+                }
+                if state
+                    .config
+                    .xmpp_extensions
+                    .enabled(northstar_xep_0199::XEP_ID)
+                {
+                    query.push_child(
+                        XmlElement::new("feature").attr("var", northstar_xep_0199::NAMESPACE),
+                    );
                 }
                 query.finish()
             }
@@ -3663,14 +3715,11 @@ async fn federated_muc_iq_owned(
                     .attr("type", "text")
                     .attr("name", room.title.as_deref().unwrap_or(&room.localpart)),
             );
-        for feature in [
+        let mut features = vec![
             "http://jabber.org/protocol/disco#info".to_owned(),
             "http://jabber.org/protocol/disco#items".to_owned(),
             "http://jabber.org/protocol/muc".to_owned(),
             "http://jabber.org/protocol/rsm".to_owned(),
-            "urn:xmpp:mam:2".to_owned(),
-            "urn:xmpp:mam:2#extended".to_owned(),
-            "urn:xmpp:ping".to_owned(),
             "urn:xmpp:sid:0".to_owned(),
             "urn:xmpp:occupant-id:0".to_owned(),
             "urn:xmpp:message-moderate:1".to_owned(),
@@ -3716,8 +3765,25 @@ async fn federated_muc_iq_owned(
                     "unsecured"
                 }
             ),
-        ] {
+        ];
+        if state
+            .config
+            .xmpp_extensions
+            .enabled(northstar_xep_0313::XEP_ID)
+        {
+            features.push(northstar_xep_0313::DISCO_FEATURE_MAM.to_owned());
+            features.push(northstar_xep_0313::DISCO_FEATURE_MAM_EXTENDED.to_owned());
+        }
+        for feature in features {
             payload.push_child(XmlElement::new("feature").attr("var", feature));
+        }
+        if state
+            .config
+            .xmpp_extensions
+            .enabled(northstar_xep_0199::XEP_ID)
+        {
+            payload
+                .push_child(XmlElement::new("feature").attr("var", northstar_xep_0199::NAMESPACE));
         }
         let payload = payload.finish();
         return Ok(Some(federated_iq_result(
@@ -4050,6 +4116,18 @@ async fn federated_muc_iq_owned(
             | FederatedIqPayload::MamMetadata
             | FederatedIqPayload::MamError(_)
     ) {
+        if !state
+            .config
+            .xmpp_extensions
+            .enabled(northstar_xep_0313::XEP_ID)
+        {
+            return Ok(federated_error(
+                &request.stanza,
+                from,
+                "cancel",
+                "feature-not-implemented",
+            ));
+        }
         let joined = state
             .muc_occupants_for(&room_jid)
             .iter()
@@ -6473,16 +6551,16 @@ async fn federated_muc_moderate(
                 clustered: state.cluster.is_enabled(),
                 expected_room_epoch: room.room_epoch,
                 principal: MucActorPrincipal::Federated {
-                    bare_jid: &actor_scope,
-                    authenticated_domain: &authenticated_domain,
+                    bare_jid: actor_scope.clone(),
+                    authenticated_domain: authenticated_domain.clone(),
                 },
-                actor_scope: &actor_scope,
-                full_jid: &moderator.full_jid,
-                nick: &moderator.nick,
+                actor_scope: actor_scope.clone(),
+                full_jid: moderator.full_jid.clone(),
+                nick: moderator.nick.clone(),
                 occupant_incarnation: moderator.cluster_epoch,
                 connection_uuid: moderator.connection_id,
-                expected_role: &moderator.role,
-                expected_affiliation: &current_affiliation,
+                expected_role: moderator.role.clone(),
+                expected_affiliation: current_affiliation.clone(),
                 cluster_target,
             },
         })
@@ -6562,18 +6640,27 @@ pub(crate) async fn federated_muc_connection_closed(
 mod tests {
     use super::*;
 
+    fn extension_runtime() -> crate::xmpp::extensions::ExtensionRuntime {
+        crate::xmpp::extensions::ExtensionRuntime::resolve(
+            crate::xmpp::extensions::ExtensionSwitches::default(),
+        )
+    }
+
     #[test]
     fn federated_mediated_invites_preserve_original_carbon_eligibility() {
         let invite = "<message from='alice@remote.test/Phone' to='room@conference.example.test'><x xmlns='http://jabber.org/protocol/muc#user'><invite to='bob@example.test'/></x></message>";
         let document = roxmltree::Document::parse(invite).unwrap();
+        let extensions = extension_runtime();
         assert!(
-            FederatedMessageRequest::from_node(document.root_element(), invite).carbon_eligible
+            FederatedMessageRequest::from_node(document.root_element(), invite, &extensions)
+                .carbon_eligible
         );
 
         let private = "<message from='alice@remote.test/Phone' to='room@conference.example.test'><x xmlns='http://jabber.org/protocol/muc#user'><invite to='bob@example.test'/></x><private xmlns='urn:xmpp:carbons:2'/></message>";
         let document = roxmltree::Document::parse(private).unwrap();
         assert!(
-            !FederatedMessageRequest::from_node(document.root_element(), private).carbon_eligible
+            !FederatedMessageRequest::from_node(document.root_element(), private, &extensions)
+                .carbon_eligible
         );
 
         // XEP-0334 explicitly says no-copy never overrides RFC 6121 handling
@@ -6582,7 +6669,7 @@ mod tests {
         let bare_no_copy = "<message from='alice@remote.test/Phone' to='room@conference.example.test'><x xmlns='http://jabber.org/protocol/muc#user'><invite to='bob@example.test'/></x><no-copy xmlns='urn:xmpp:hints'/></message>";
         let document = roxmltree::Document::parse(bare_no_copy).unwrap();
         assert!(
-            FederatedMessageRequest::from_node(document.root_element(), bare_no_copy)
+            FederatedMessageRequest::from_node(document.root_element(), bare_no_copy, &extensions,)
                 .carbon_eligible
         );
     }

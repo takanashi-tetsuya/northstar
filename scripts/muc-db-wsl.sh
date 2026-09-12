@@ -194,3 +194,6 @@ cargo test --locked --offline \
 cargo test --locked --offline \
   db::muc::tests::history_identity_and_mutations_are_atomic_under_replay_and_failure \
   -- --ignored --nocapture
+cargo test --locked --offline \
+  db::cluster_muc::tests::postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete \
+  -- --ignored --exact --nocapture

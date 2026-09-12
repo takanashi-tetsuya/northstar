@@ -263,6 +263,9 @@ async fn execute_admin_session_cleanup(
 }
 
 async fn run_one(state: &Arc<AppState>, worker_id: Uuid) -> Result<bool> {
+    if !db::operation_work_pending(&state.pool, worker_id, LEASE_SECONDS).await? {
+        return Ok(false);
+    }
     let mut tx = state.pool.begin().await?;
     let Some(lease) = db::claim_operation_in_tx(&mut tx, worker_id, LEASE_SECONDS).await? else {
         tx.commit().await?;

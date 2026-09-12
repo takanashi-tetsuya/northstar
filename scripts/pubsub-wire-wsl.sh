@@ -35,6 +35,24 @@ cleanup() {
   if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; fi
   if [[ -n "$http_relay_pid" ]]; then kill "$http_relay_pid" 2>/dev/null || true; wait "$http_relay_pid" 2>/dev/null || true; fi
   if [[ $status -ne 0 && -f "$runtime_dir/server.log" ]]; then tail -n 200 "$runtime_dir/server.log" >&2 || true; fi
+  if [[ $status -ne 0 ]]; then
+    # Preserve bounded queue/lease facts before dropping this owned schema.
+    # No payloads or credentials are part of the diagnostic projection.
+    PGPASSWORD=xmpp-test-password PGOPTIONS='-c statement_timeout=2000' \
+      psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
+      --no-psqlrc --set ON_ERROR_STOP=1 --command "
+        SELECT clock_timestamp() AS pubsub_failure_observed_at;
+        SELECT delivery_kind, count(*) AS pending,
+               count(*) FILTER (WHERE lease_until > clock_timestamp()) AS leased,
+               min(next_attempt_at) AS next_attempt_at, max(lease_until) AS lease_until
+          FROM \"$schema\".pubsub_event_outbox GROUP BY delivery_kind;
+        SELECT count(*) AS digest_pending,
+               count(*) FILTER (WHERE claimed_until > clock_timestamp()) AS digest_leased,
+               min(deliver_after) AS deliver_after, max(claimed_until) AS claimed_until
+          FROM \"$schema\".pubsub_digest_queue;
+        SELECT count(*) AS pubsub_dead_letters FROM \"$schema\".pubsub_event_dead_letters;
+      " >&2 || true
+  fi
   PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
     --set ON_ERROR_STOP=1 --command "DROP SCHEMA IF EXISTS \"$schema\" CASCADE" >/dev/null 2>&1 || status=1
   remains="$(PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \

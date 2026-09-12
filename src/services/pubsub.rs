@@ -4166,11 +4166,6 @@ impl PubSubService {
         let _database_turn = self.durable_outbox_database_turn().await;
         db::acknowledge_pubsub_digests(&self.pool, ids).await
     }
-
-    pub(crate) async fn cleanup_expired_subscriptions(&self, limit: i64) -> Result<u64> {
-        let _database_turn = self.durable_outbox_database_turn().await;
-        db::cleanup_expired_subscriptions(&self.pool, limit).await
-    }
 }
 
 const NS_PUBSUB_EVENT: &str = "http://jabber.org/protocol/pubsub#event";

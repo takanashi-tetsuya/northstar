@@ -1591,6 +1591,9 @@ fn take_response_payload(
         if let Some(receipt) = stanza.transport_receipt {
             transport_receipts.push(receipt);
         }
+        if let Some(receipt) = stanza.transport_write_receipt {
+            transport_receipts.push(receipt);
+        }
         if let Some(source) = stanza.durable_source {
             sources.push(source);
         }

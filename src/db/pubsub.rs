@@ -4224,6 +4224,35 @@ pub async fn enqueue_pubsub_digest(
 }
 
 pub async fn claim_due_pubsub_digests(pool: &PgPool, limit: i64) -> Result<Vec<DuePubSubDigest>> {
+    // Empty queues do not need a mutation transaction on every one-second
+    // worker tick. This is only a scheduling hint: a positive result still
+    // enters the original bounded transaction and claims with SKIP LOCKED.
+    // Do not cache a negative result; newly due rows are seen next tick.
+    // Keep UPDATE revocation and read-only mode visible even without work.
+    let (may_update, writable, has_due): (bool, bool, bool) = tokio::time::timeout(
+        PUBSUB_POOL_ACQUIRE_TIMEOUT,
+        sqlx::query_as(
+            "SELECT has_table_privilege('pubsub_digest_queue', 'UPDATE'),
+                    current_setting('transaction_read_only') = 'off',
+                    EXISTS(SELECT 1 FROM pubsub_digest_queue
+                            WHERE deliver_after <= NOW()
+                              AND (claimed_until IS NULL OR claimed_until <= NOW()))",
+        )
+        .fetch_one(pool),
+    )
+    .await
+    .map_err(|_| PubSubMutationBusy)??;
+    anyhow::ensure!(
+        may_update,
+        "PubSub digest queue UPDATE authority is unavailable"
+    );
+    anyhow::ensure!(
+        writable,
+        "PubSub digest queue requires a writable transaction"
+    );
+    if !has_due {
+        return Ok(Vec::new());
+    }
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     let rows = sqlx::query(
         "WITH due AS (
@@ -5972,6 +6001,150 @@ mod integration_tests {
         config_pool.close().await;
         delete_pool.close().await;
         delete_unsubscribe_pool.close().await;
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+    async fn digest_idle_preflight_preserves_leases_and_authority_errors() {
+        let url = std::env::var("TEST_DATABASE_URL")
+            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+        // One connection owns this entire temporary namespace. Pin every
+        // replacement connection too: losing the temporary table must fail
+        // instead of falling back to a persistent application relation.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    sqlx::query("SET search_path TO pg_temp, pg_catalog")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(&url)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TEMP TABLE pubsub_digest_queue (
+            id UUID PRIMARY KEY, subscription_node_id UUID NOT NULL,
+            subscriber_jid TEXT NOT NULL, event_xml TEXT NOT NULL,
+            show_values TEXT[], deliver_after TIMESTAMPTZ NOT NULL,
+            claimed_until TIMESTAMPTZ
+        )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(claim_due_pubsub_digests(&pool, 10)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let node = Uuid::new_v4();
+        let future = Uuid::new_v4();
+        let leased = Uuid::new_v4();
+        let unclaimed = Uuid::new_v4();
+        let expired = Uuid::new_v4();
+        sqlx::query("INSERT INTO pubsub_digest_queue
+            (id,subscription_node_id,subscriber_jid,event_xml,deliver_after,claimed_until)
+            VALUES ($1,$3,'reader@example.test','<future/>',NOW()+INTERVAL '1 hour',NULL),
+                   ($2,$3,'reader@example.test','<leased/>',NOW()-INTERVAL '1 hour',NOW()+INTERVAL '1 hour')")
+            .bind(future).bind(leased).bind(node)
+            .execute(&pool).await.unwrap();
+        assert!(claim_due_pubsub_digests(&pool, 10)
+            .await
+            .unwrap()
+            .is_empty());
+        sqlx::query("INSERT INTO pubsub_digest_queue
+            (id,subscription_node_id,subscriber_jid,event_xml,deliver_after,claimed_until)
+            VALUES ($1,$3,'reader@example.test','<unclaimed/>',NOW()-INTERVAL '1 minute',NULL),
+                   ($2,$3,'reader@example.test','<expired/>',NOW()-INTERVAL '1 minute',NOW()-INTERVAL '1 second')")
+            .bind(unclaimed).bind(expired).bind(node)
+            .execute(&pool).await.unwrap();
+        let claimed = claim_due_pubsub_digests(&pool, 10).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(
+            claimed[0].ids.iter().copied().collect::<BTreeSet<_>>(),
+            BTreeSet::from([unclaimed, expired])
+        );
+        assert!(claim_due_pubsub_digests(&pool, 10)
+            .await
+            .unwrap()
+            .is_empty());
+        let protected: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pubsub_digest_queue WHERE id=ANY($1) AND claimed_until>NOW()",
+        )
+        .bind(vec![unclaimed, expired, leased])
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(protected, 3);
+
+        // A preceding empty result is not cached across worker ticks.
+        sqlx::query(
+            "UPDATE pubsub_digest_queue SET deliver_after=NOW()-INTERVAL '1 second' WHERE id=$1",
+        )
+        .bind(future)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let newly_due = claim_due_pubsub_digests(&pool, 10).await.unwrap();
+        assert_eq!(newly_due.len(), 1);
+        assert_eq!(newly_due[0].ids, vec![future]);
+
+        // Use a built-in read-only role on this temporary relation. Empty
+        // queues must still reject lost UPDATE authority. RESET precedes
+        // assertions so the connection never retains the borrowed role.
+        sqlx::query("TRUNCATE pubsub_digest_queue")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Production uses a persistent table. This temporary-only fixture
+        // checks the explicit mode guard, not PostgreSQL's separate allowance
+        // for writes to temporary tables in read-only transactions.
+        sqlx::query("SET default_transaction_read_only = on")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let read_only = claim_due_pubsub_digests(&pool, 10).await;
+        sqlx::query("SET default_transaction_read_only = off")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(read_only
+            .unwrap_err()
+            .to_string()
+            .contains("writable transaction"));
+        assert!(claim_due_pubsub_digests(&pool, 10)
+            .await
+            .unwrap()
+            .is_empty());
+        sqlx::query("GRANT SELECT ON pubsub_digest_queue TO pg_read_all_data")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("SET ROLE pg_read_all_data")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let denied = claim_due_pubsub_digests(&pool, 10).await;
+        sqlx::query("RESET ROLE").execute(&pool).await.unwrap();
+        assert!(denied.unwrap_err().to_string().contains("UPDATE authority"));
+
+        sqlx::query("DROP TABLE pubsub_digest_queue")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(claim_due_pubsub_digests(&pool, 10).await.is_err());
+        let held = pool.acquire().await.unwrap();
+        let busy =
+            tokio::time::timeout(Duration::from_secs(4), claim_due_pubsub_digests(&pool, 10))
+                .await
+                .expect("the read-only preflight must bound its pool wait")
+                .unwrap_err();
+        assert!(busy.downcast_ref::<PubSubMutationBusy>().is_some());
+        drop(held);
         pool.close().await;
     }
 

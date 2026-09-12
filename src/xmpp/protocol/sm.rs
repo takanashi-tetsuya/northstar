@@ -246,22 +246,25 @@ impl ProtocolSession {
         };
         self.sm_capacity = Some(capacity);
         match self
-            .state
-            .sm_service()
-            .create_session(SmSessionCreationRequest {
-                token_hash: &token_hash,
-                user_id: user.id,
-                auth_generation: user.auth_generation,
-                full_jid: &full_jid,
-                resource,
-                server_domain: &self.state.config.domain,
-                connection_id: self.connection_id,
-                snapshot: &snapshot,
-                ttl_seconds: negotiated_max,
-                live_lease_seconds: self.state.config.sm_live_lease_seconds,
-                max_per_account: self.state.config.max_sessions_per_account,
-                max_global: self.state.config.sm_max_resumable_sessions,
-            })
+            .live_session_ownership
+            .attempt(
+                self.state
+                    .sm_service()
+                    .create_session(SmSessionCreationRequest {
+                        token_hash: &token_hash,
+                        user_id: user.id,
+                        auth_generation: user.auth_generation,
+                        full_jid: &full_jid,
+                        resource,
+                        server_domain: &self.state.config.domain,
+                        connection_id: self.connection_id,
+                        snapshot: &snapshot,
+                        ttl_seconds: negotiated_max,
+                        live_lease_seconds: self.state.config.sm_live_lease_seconds,
+                        max_per_account: self.state.config.max_sessions_per_account,
+                        max_global: self.state.config.sm_max_resumable_sessions,
+                    }),
+            )
             .await
         {
             Ok(SmSessionCreationOutcome::Created { id, ownership }) => {
@@ -437,9 +440,8 @@ impl ProtocolSession {
                 .as_ref()
                 .map(|(_, subscription)| subscription.probe_stamp());
             match self
-                .state
-                .sm_service()
-                .claim_resume(SmResumeClaimRequest {
+                .live_session_ownership
+                .attempt(self.state.sm_service().claim_resume(SmResumeClaimRequest {
                     token_hash: &token_hash,
                     user_id: current_user.id,
                     peer_ip: self.peer_ip,
@@ -447,7 +449,7 @@ impl ProtocolSession {
                     ip_binding: &self.state.config.sm_ip_binding,
                     require_same_device: self.state.config.sm_require_same_device,
                     claim_lease_seconds: self.state.config.sm_claim_lease_seconds,
-                })
+                }))
                 .await?
             {
                 SmResumeClaimOutcome::Claimed(claim) => {

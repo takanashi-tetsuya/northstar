@@ -31,7 +31,10 @@ service-control observation (1). Every node sharing `northstar_runtime` must
 still keep the sum of **all** these pool maxima below 64 with headroom for
 rolling overlap. Larger/multi-tenant deployments need separately attested
 runtime roles and an explicit capacity plan; raising the role limit to
-unbounded is not a supported scaling mechanism.
+unbounded is not a supported scaling mechanism. In the split deployment,
+`serve core` further limits its primary pool to 57, reserving three connections
+for the separate maintenance process. Both processes still use the runtime
+role; see [subserver ownership and budgets](SUBSERVERS.md).
 
 ## Localhost owner-only development mode
 

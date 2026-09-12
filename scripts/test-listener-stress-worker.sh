@@ -123,13 +123,10 @@ for required_parent_function in \
   grep -Fq "$required_parent_function()" "$driver" \
     || { echo "listener stress driver no longer has $required_parent_function" >&2; exit 1; }
 done
-# `--phase-parent-status` deliberately returns one while a valid worker is
-# still reaching its signed-ready point.  Preserve that status through the
-# shell conditional: `$?` after an `if` without an `else` is the compound
-# conditional's status, not the Python command's one, and would kill every
-# worker before the parent can issue its release.
-grep -Fq $'    else\n      phase_status=$?\n    fi\n    if ((phase_status == 0)); then' "$driver" \
-  || { echo "listener stress MIX barrier no longer preserves a normal pending-status result" >&2; exit 1; }
+# The persistent coordinator owns pending status, process identities, and its
+# single deadline. Its fail-closed behavior is exercised by the Python tests.
+grep -Fq -- '--phase-parent-await-release' "$driver" \
+  || { echo "listener stress MIX barrier lost its persistent coordinator" >&2; exit 1; }
 for required_phase_env in \
   NORTHSTAR_MIX_FEDERATION_PHASE_CONTROL_DIR \
   NORTHSTAR_MIX_FEDERATION_PHASE_RUN_NONCE \
@@ -138,8 +135,8 @@ for required_phase_env in \
   grep -Fq "$required_phase_env" "$driver" \
     || { echo "listener stress driver no longer passes $required_phase_env to MIX workers" >&2; exit 1; }
 done
-grep -Fq 'publish_setup_barrier_ready_and_wait' "$mix_federation_driver" \
-  || { echo "MIX fixture no longer waits for the parent-owned setup barrier" >&2; exit 1; }
+grep -Fq 'run_mix_federation_phase setup-entry' "$mix_federation_driver" \
+  || { echo "MIX fixture no longer enters setup through its parent-owned barrier" >&2; exit 1; }
 grep -Fq 'publish_listener_ledger' "$mix_federation_driver" \
   || { echo "MIX fixture no longer records owned listener identities" >&2; exit 1; }
 grep -Fq 'fixture_forget_listener_owner "$pid_b"' "$mix_federation_driver" \
@@ -193,13 +190,19 @@ if [[ "$(grep -Fc 'psql -h "$database_host" -p "$database_port"' "$mix_federatio
 fi
 mix_start_a_line="$(grep -n '^start_a$' "$mix_federation_driver" | tail -n 1 | cut -d: -f1 || true)"
 mix_start_b_line="$(grep -n '^start_b$' "$mix_federation_driver" | head -n 1 | cut -d: -f1 || true)"
-mix_setup_line="$(grep -n '^run_mix_federation_phase setup$' "$mix_federation_driver" | cut -d: -f1 || true)"
-mix_barrier_line="$(grep -n '^publish_setup_barrier_ready_and_wait$' "$mix_federation_driver" | cut -d: -f1 || true)"
+# Reject duplicate setup entries, an entry before all-live, and a second legacy
+# setup call. The Python CLI regressions exercise the signed gate inside entry.
+mix_setup_line="$(grep -n '^run_mix_federation_phase setup-entry$' "$mix_federation_driver" | cut -d: -f1 || true)"
+mix_barrier_line="$(grep -nFx 'fixture_stress_phase_barrier "$project_dir" live "$pid_a" "$pid_b"' "$mix_federation_driver" | cut -d: -f1 || true)"
 [[ "$mix_start_a_line" =~ ^[1-9][0-9]*$ && "$mix_start_b_line" =~ ^[1-9][0-9]*$ \
    && "$mix_setup_line" =~ ^[1-9][0-9]*$ && "$mix_barrier_line" =~ ^[1-9][0-9]*$ \
    && "$mix_start_a_line" -lt "$mix_start_b_line" && "$mix_start_b_line" -lt "$mix_barrier_line" \
    && "$mix_barrier_line" -lt "$mix_setup_line" ]] \
-  || { echo "MIX federation fixture can invoke setup before every pair is parent-released" >&2; exit 1; }
+  || { echo "MIX federation fixture requires exactly one setup entry after all-live release" >&2; exit 1; }
+if grep -Fxq 'run_mix_federation_phase setup' "$mix_federation_driver"; then
+  echo "MIX federation fixture bypasses its combined setup entry" >&2
+  exit 1
+fi
 mix_federation_python="$project_dir/scripts/mix-federation-runtime-wsl.py"
 grep -Fq 'def required_fixture_http_port(name: str)' "$mix_federation_python" \
   || { echo "MIX federation verifier no longer validates its dynamically supplied relay ports" >&2; exit 1; }
@@ -215,6 +218,9 @@ grep -Fq 'try:' "$mix_federation_python" \
   || { echo "MIX federation verifier no longer protects caller fixture environment restoration" >&2; exit 1; }
 grep -Fq 'finally:' "$mix_federation_python" \
   || { echo "MIX federation verifier no longer restores caller fixture environment after import failure" >&2; exit 1; }
+python3 "$project_dir/scripts/test-listener-stress-diagnostics.py"
+python3 "$project_dir/scripts/test-listener-readiness-observed.py"
+python3 "$project_dir/scripts/test-listener-control-observer.py"
 python3 "$mix_federation_python" --phase-self-test
 federation_python="$project_dir/scripts/federation-wsl.py"
 integration_python="$project_dir/scripts/integration-wsl.py"
@@ -240,10 +246,10 @@ for lane in regular scheduled; do
   if ! awk -v lane="$lane" '
     $0 == "  listener-readiness-stress-" lane ":" { in_job = 1; next }
     in_job && /^  [a-zA-Z0-9_-]+:$/ { exit }
-    in_job && /needs: listener-readiness-stress-smoke/ { found = 1; exit }
+    in_job && /needs: \[listener-readiness-stress-smoke, listener-diagnostics\]/ { found = 1; exit }
     END { exit !found }
   ' "$workflow"; then
-    echo "listener stress $lane lane no longer waits for its isolated 1x1/1x2 proof" >&2
+    echo "listener stress $lane lane no longer waits for smoke and diagnostic preflight" >&2
     exit 1
   fi
 done

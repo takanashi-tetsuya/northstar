@@ -966,16 +966,113 @@ pub async fn authorize_operation_effect_in_tx(
     }
 }
 
-pub async fn claim_operation_in_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    worker_id: Uuid,
-    lease_seconds: i64,
-) -> Result<Option<OperationLease>> {
+fn validate_operation_claim(worker_id: Uuid, lease_seconds: i64) -> Result<()> {
     anyhow::ensure!(!worker_id.is_nil(), "worker id must not be nil");
     anyhow::ensure!(
         (5..=300).contains(&lease_seconds),
         "invalid operation lease"
     );
+    Ok(())
+}
+
+/// Avoid an empty claim transaction without caching the absence of work.
+/// Every pending/running row must reach the original claim path: even a future
+/// retry or a live lease can need authorization, cancellation or expiry work.
+/// The same statement checks the empty claim's schema/ACL dependencies and
+/// writable transaction state; losing authority must never look like idleness.
+pub async fn operation_work_pending<'e, E>(
+    executor: E,
+    worker_id: Uuid,
+    lease_seconds: i64,
+) -> Result<bool>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
+    validate_operation_claim(worker_id, lease_seconds)?;
+    let row = sqlx::query(
+        "WITH required(name,read_columns,write_columns,select_all) AS (VALUES
+             ('api_operation_journal',
+              ARRAY['id','authorization_policy','status','point_of_no_return_at',
+                    'lease_expires_at','actor_subject_id','actor_auth_generation',
+                    'created_at','cancel_requested_at','attempts','max_attempts',
+                    'deadline_at','next_attempt_at'],
+              ARRAY['status','worker_id','lease_token','lease_expires_at',
+                    'attempts','updated_at'], TRUE),
+             ('users', ARRAY['id','auth_generation','is_admin','is_disabled'],
+              ARRAY[]::TEXT[], FALSE),
+             ('api_operation_targets',
+              ARRAY['operation_id','status','lease_expires_at',
+                    'point_of_no_return_at','deadline_at'],
+              ARRAY[]::TEXT[], FALSE)
+         ), relations AS (
+             SELECT required.*,pg_catalog.to_regclass(name) AS relation_id
+             FROM required
+         )
+         SELECT EXISTS(SELECT 1 FROM api_operation_journal
+                       WHERE status IN ('pending','running')) AS has_work,
+                pg_catalog.current_setting('transaction_read_only')='off' AS writable,
+                (SELECT bool_and(COALESCE(
+                    relation.relation_id IS NOT NULL
+                    AND pg_catalog.has_schema_privilege(
+                        current_user,table_info.relnamespace,'USAGE')
+                    AND NOT EXISTS (
+                        SELECT 1 FROM pg_catalog.unnest(
+                            relation.read_columns || relation.write_columns
+                        ) AS expected(name)
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM pg_catalog.pg_attribute AS column_info
+                            WHERE column_info.attrelid=relation.relation_id
+                              AND column_info.attnum>0 AND NOT column_info.attisdropped
+                              AND column_info.attname=expected.name
+                        )
+                    )
+                    AND CASE WHEN pg_catalog.has_table_privilege(
+                        current_user,relation.relation_id,'SELECT') THEN TRUE
+                    ELSE COALESCE((
+                        SELECT bool_and(pg_catalog.has_column_privilege(
+                            current_user,relation.relation_id,column_info.attnum,'SELECT'))
+                        FROM pg_catalog.pg_attribute AS column_info
+                        WHERE column_info.attrelid=relation.relation_id
+                          AND column_info.attnum>0 AND NOT column_info.attisdropped
+                          AND (relation.select_all
+                               OR column_info.attname=ANY(relation.read_columns))
+                    ),FALSE) END
+                    AND CASE WHEN pg_catalog.cardinality(relation.write_columns)=0 THEN TRUE
+                    WHEN pg_catalog.has_table_privilege(
+                        current_user,relation.relation_id,'UPDATE') THEN TRUE
+                    ELSE COALESCE((
+                        SELECT bool_and(pg_catalog.has_column_privilege(
+                            current_user,relation.relation_id,column_info.attnum,'UPDATE'))
+                        FROM pg_catalog.pg_attribute AS column_info
+                        WHERE column_info.attrelid=relation.relation_id
+                          AND column_info.attnum>0 AND NOT column_info.attisdropped
+                          AND column_info.attname=ANY(relation.write_columns)
+                    ),FALSE) END,
+                    FALSE))
+                 FROM relations AS relation
+                 LEFT JOIN pg_catalog.pg_class AS table_info
+                   ON table_info.oid=relation.relation_id) AS authority_valid",
+    )
+    .fetch_one(executor)
+    .await
+    .context("could not inspect durable operation work")?;
+    anyhow::ensure!(
+        row.try_get::<bool, _>("writable")?,
+        "durable operation database is read-only"
+    );
+    anyhow::ensure!(
+        row.try_get::<bool, _>("authority_valid")?,
+        "durable operation claim permissions or schema are unavailable"
+    );
+    Ok(row.try_get("has_work")?)
+}
+
+pub async fn claim_operation_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    worker_id: Uuid,
+    lease_seconds: i64,
+) -> Result<Option<OperationLease>> {
+    validate_operation_claim(worker_id, lease_seconds)?;
     expire_exhausted_operations_in_tx(tx, 64).await?;
     reject_revoked_operations_in_tx(tx, 64).await?;
     let lease_token = Uuid::new_v4();
@@ -2276,6 +2373,8 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Barrier;
 
+    include!("api_operations_idle_tests.rs");
+
     #[test]
     fn muc_operation_jids_must_be_canonical_bare_room_keys() {
         assert!(validate_operation_payload(
@@ -2381,10 +2480,42 @@ mod tests {
         .is_err());
     }
 
+    fn test_pool_options() -> sqlx::postgres::PgPoolOptions {
+        let role = std::env::var("TEST_DATABASE_ROLE").ok();
+        let expected_schema = std::env::var("TEST_DATABASE_SCHEMA")
+            .expect("set TEST_DATABASE_SCHEMA to the isolated API operation fixture schema");
+        assert!(expected_schema
+            .strip_prefix("northstar_api_operations_it_")
+            .is_some_and(
+                |suffix| suffix.len() == 32 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+            ));
+        sqlx::postgres::PgPoolOptions::new().after_connect(move |connection, _| {
+            let role = role.clone();
+            let expected_schema = expected_schema.clone();
+            Box::pin(async move {
+                if let Some(role) = role {
+                    sqlx::query("SELECT pg_catalog.set_config('role',$1,FALSE)")
+                        .bind(role)
+                        .execute(&mut *connection)
+                        .await?;
+                }
+                let schema: Option<String> = sqlx::query_scalar("SELECT current_schema()")
+                    .fetch_one(&mut *connection)
+                    .await?;
+                if schema.as_deref() != Some(expected_schema.as_str()) {
+                    return Err(sqlx::Error::Protocol(
+                        "API operation tests require their random isolated schema on every connection".into(),
+                    ));
+                }
+                Ok(())
+            })
+        })
+    }
+
     async fn test_pool() -> PgPool {
         let url = std::env::var("TEST_DATABASE_URL")
             .expect("set TEST_DATABASE_URL to a random isolated PostgreSQL schema");
-        let pool = sqlx::postgres::PgPoolOptions::new()
+        let pool = test_pool_options()
             .max_connections(12)
             .connect(&url)
             .await

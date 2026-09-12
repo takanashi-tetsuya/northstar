@@ -4,6 +4,22 @@ This document maps the current implementation to its security and persistence
 boundaries. Protocol support claims belong in [../XEP_MATRIX.md](../XEP_MATRIX.md);
 operational procedures belong in [PRODUCTION_OPERATIONS.md](PRODUCTION_OPERATIONS.md).
 
+The binary supports combined operation or independent core and maintenance
+processes over shared PostgreSQL. [Subserver ownership](SUBSERVERS.md) specifies
+their exact capabilities, health boundaries and deployment lifecycle. Core
+retains all live-session authority; maintenance receives only retention policy,
+a bounded database pool and metrics.
+
+Durable MIX delivery uses retained PostgreSQL commit and reconnect notifications
+to request a fresh authorized claim. Consecutive empty claims schedule recovery
+scans after 250 ms, 500 ms, then at most one second. A notification or completed
+delivery restores immediate claiming; newly claimed work restores the fast
+cadence. A missed notification, lease expiry or timed retry can therefore add
+up to 750 ms of discovery delay compared with the previous fixed 250 ms scan.
+PAM results have no dedicated commit notification and retain their fixed 250 ms
+scan. Database-turn deadlines, lease fences and worker health requirements are
+unchanged; an idle timer alone never marks a worker healthy.
+
 ## Module map
 
 ```mermaid
@@ -564,6 +580,28 @@ a node's mounted keys or epoch do not match that authority. Rotation retains the
 previous key until the minimum overlap and all durable challenge/admission
 references have expired; PostgreSQL stores only purpose-separated key IDs, not
 the HMAC key material.
+
+The PubSub digest worker retains its one-second polling interval and five-second
+health watchdog. An empty tick uses one read-only eligibility query under the
+existing shared database permit instead of opening a mutation transaction. The
+query checks the same due/lease predicate, verifies UPDATE privilege and rejects
+read-only transaction mode even when no row is due. Its two-second caller deadline
+includes pool acquisition; it does not assert immediate cancellation of
+server-side SQL. A negative result
+is never cached, so new work is discovered on the next normal tick. A positive
+result still uses the original bounded transaction, SKIP LOCKED and claim lease;
+concurrent claimers and authorization errors retain their existing semantics.
+
+The durable API operation executor also avoids opening a claim transaction when
+the journal has no pending or running operation. Its repository preflight checks
+the original empty path's schema and column privileges and rejects read-only
+transaction mode. A negative result is not cached: the existing 250 ms idle
+interval discovers later work. Every pending or running operation, including a
+future retry, active lease, cancellation, expired or revoked operation, still
+enters the original expiry, authorization and claim logic. The executor keeps
+claim and target initialization in one transaction, with the original lease and
+effect fences. Neither idle preflight is a guarantee that write locks will be
+available when actual work arrives.
 
 ## Evidence classification
 

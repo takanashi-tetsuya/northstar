@@ -12,6 +12,7 @@ import re
 import socket
 import ssl
 import subprocess
+import sys
 import time
 
 
@@ -20,6 +21,24 @@ spec = importlib.util.spec_from_file_location("northstar_integration", ROOT / "i
 fixture = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(fixture)
+
+# Reuse the same checked, crash-released fixture login slots as the MIX
+# matrix. Importing this module does not initialize endpoints or run probes.
+admission_spec = importlib.util.spec_from_file_location(
+    "northstar_federation_stress_admission", ROOT / "mix-federation-runtime-wsl.py"
+)
+stress_admission = importlib.util.module_from_spec(admission_spec)
+sys.modules[admission_spec.name] = stress_admission
+assert admission_spec.loader is not None
+admission_spec.loader.exec_module(stress_admission)
+stress_admission.LOGIN_SLOT_CONFIGURATION = stress_admission.login_slot_configuration_from_environment()
+
+phase_spec = importlib.util.spec_from_file_location(
+    "northstar_federation_stress_phases", ROOT / "listener-stress-phases.py"
+)
+stress_phases = importlib.util.module_from_spec(phase_spec)
+assert phase_spec.loader is not None
+phase_spec.loader.exec_module(stress_phases)
 
 PASSWORD = "federation-password-123"
 ALICE = "alice_fed"
@@ -687,15 +706,32 @@ def endpoint(port: int, xmpp_port: int, domain: str) -> None:
 
 
 def register(username: str) -> None:
-    status, result = fixture.register_account(username, PASSWORD)
+    with stress_admission.fixture_phase_auth_admission():
+        with stress_admission.authentication_attempt() as attempt:
+            status, result = fixture.register_account(username, PASSWORD, deadline=attempt.deadline)
     fixture.check(status == 201, f"registration failed: {status} {result}")
 
 
-def run() -> None:
+def connect(username: str, resource: str):
+    with stress_admission.fixture_phase_auth_admission():
+        with stress_admission.authentication_attempt() as attempt:
+            return fixture.XmppWebSocket(username, PASSWORD, resource, deadline=attempt.deadline)
+
+
+def run(server_pids: tuple[int, ...] = ()) -> None:
+    # Publish from the initialized client, while its sibling-server monitor
+    # is already bound to both process handles. The parent verifies the same
+    # nonce, child birth times and worker ancestry before admitting more pairs.
+    # No transport or credential work starts until every pair is live.
+    stress_phases.wait_for_fixture_phase("live", server_pids)
     verify_starttls_failure_boundary()
     verify_c2s_transport_boundaries()
     verify_s2s_transport_boundaries()
     verify_s2s_authentication_boundaries()
+    # Every pair completes the original concurrent transport probes before a
+    # faster pair begins password work. This process publishes its own PID
+    # and stays alive at the barrier, before taking any authentication slot.
+    stress_phases.wait_for_fixture_phase("transport")
     endpoint(
         required_test_port("FEDERATION_TEST_HTTP_PORT_A"),
         required_test_port("FEDERATION_TEST_CLIENT_PORT_A"),
@@ -703,8 +739,9 @@ def run() -> None:
     )
     fixture.wait_ready()
     register(ALICE)
-    verify_c2s_authenticated_limits()
-    alice = fixture.XmppWebSocket(ALICE, PASSWORD, "alice-federation")
+    with stress_admission.fixture_phase_auth_admission():
+        verify_c2s_authenticated_limits()
+    alice = connect(ALICE, "alice-federation")
 
     endpoint(
         required_test_port("FEDERATION_TEST_HTTP_PORT_B"),
@@ -713,7 +750,7 @@ def run() -> None:
     )
     fixture.wait_ready()
     register(BOB)
-    bob = fixture.XmppWebSocket(BOB, PASSWORD, "bob-federation")
+    bob = connect(BOB, "bob-federation")
 
     # RFC 6121 distinguishes connected, available, and interested resources.
     # Subscription approvals and roster pushes are delivered to interested
@@ -1486,7 +1523,7 @@ def run() -> None:
         required_test_port("FEDERATION_TEST_CLIENT_PORT_A"),
         "localhost",
     )
-    alice_carbon = fixture.XmppWebSocket(ALICE, PASSWORD, "alice-federation-carbon")
+    alice_carbon = connect(ALICE, "alice-federation-carbon")
     alice_carbon.send(
         "<iq xmlns='jabber:client' type='set' id='fed-carbon-enable-a'>"
         "<enable xmlns='urn:xmpp:carbons:2'/></iq>"
@@ -1503,7 +1540,7 @@ def run() -> None:
         required_test_port("FEDERATION_TEST_CLIENT_PORT_B"),
         "remote.localhost",
     )
-    bob_carbon = fixture.XmppWebSocket(BOB, PASSWORD, "bob-federation-carbon")
+    bob_carbon = connect(BOB, "bob-federation-carbon")
     bob_carbon.send(
         "<iq xmlns='jabber:client' type='set' id='fed-carbon-enable-b'>"
         "<enable xmlns='urn:xmpp:carbons:2'/></iq>"
@@ -1876,7 +1913,7 @@ def run() -> None:
         required_test_port("FEDERATION_TEST_CLIENT_PORT_B"),
         "remote.localhost",
     )
-    bob = fixture.XmppWebSocket(BOB, PASSWORD, "bob-federation-reconnected")
+    bob = connect(BOB, "bob-federation-reconnected")
     offline, _ = bob.receive_until("fed-offline", timeout=20)
     fixture.check(
         fixture.omemo_payload_b64("FEDERATED-OFFLINE-CIPHERTEXT") in offline
@@ -1901,4 +1938,4 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    run(tuple(stress_phases.positive(pid) for pid in sys.argv[1:]))

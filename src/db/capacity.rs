@@ -393,14 +393,26 @@ async fn deployment_capacity_authority_is_consistent(
                          AND allocation.shard = shard.shard
                    )
               )
-              AND NOT EXISTS(SELECT 1 FROM expected_entities EXCEPT SELECT 1 FROM actual_entities)
-              AND NOT EXISTS(SELECT 1 FROM actual_entities EXCEPT SELECT 1 FROM expected_entities)
+              AND NOT EXISTS(
+                  SELECT resource_kind, entity_id FROM expected_entities
+                  EXCEPT SELECT resource_kind, entity_id FROM actual_entities
+              )
+              AND NOT EXISTS(
+                  SELECT resource_kind, entity_id FROM actual_entities
+                  EXCEPT SELECT resource_kind, entity_id FROM expected_entities
+              )
               AND NOT EXISTS(
                   SELECT 1 FROM deployment_session_leases
                    WHERE lease_until <= clock_timestamp()
               )
-              AND NOT EXISTS(SELECT 1 FROM expected_counters EXCEPT SELECT 1 FROM actual_counters)
-              AND NOT EXISTS(SELECT 1 FROM actual_counters EXCEPT SELECT 1 FROM expected_counters)"#,
+              AND NOT EXISTS(
+                  SELECT resource_kind, owner_id, used FROM expected_counters
+                  EXCEPT SELECT resource_kind, owner_id, used FROM actual_counters
+              )
+              AND NOT EXISTS(
+                  SELECT resource_kind, owner_id, used FROM actual_counters
+                  EXCEPT SELECT resource_kind, owner_id, used FROM expected_counters
+              )"#,
     )
     .bind(configured.accounts)
     .bind(configured.muc_rooms)
@@ -1009,6 +1021,196 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; uses only transaction-local temporary tables"]
+    async fn postgres_capacity_audit_compares_complete_entity_and_counter_sets() {
+        let url = std::env::var("TEST_DATABASE_URL")
+            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect(&url)
+            .await
+            .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        // The production audit resolves every business table inside this one
+        // connection's temporary namespace. A missing table cannot fall back
+        // to a persistent schema, including one supplied through the URL.
+        sqlx::raw_sql(
+            "SET LOCAL search_path=pg_temp,pg_catalog;
+             SET LOCAL statement_timeout='5s';
+             SET LOCAL lock_timeout='1s';
+             CREATE TEMP TABLE users(id UUID PRIMARY KEY) ON COMMIT DROP;
+             CREATE TEMP TABLE muc_rooms(
+                 id UUID PRIMARY KEY, destroyed_at TIMESTAMPTZ, owner_id UUID
+             ) ON COMMIT DROP;
+             CREATE TEMP TABLE deployment_session_leases(
+                 lease_id UUID PRIMARY KEY, user_id UUID NOT NULL,
+                 lease_until TIMESTAMPTZ NOT NULL
+             ) ON COMMIT DROP;
+             CREATE TEMP TABLE sm_resume_sessions(
+                 id UUID PRIMARY KEY, user_id UUID NOT NULL
+             ) ON COMMIT DROP;
+             CREATE TEMP TABLE deployment_capacity_shards(
+                 resource_kind TEXT NOT NULL, shard SMALLINT NOT NULL,
+                 capacity BIGINT NOT NULL, used BIGINT NOT NULL,
+                 PRIMARY KEY(resource_kind,shard)
+             ) ON COMMIT DROP;
+             CREATE TEMP TABLE deployment_capacity_allocations(
+                 resource_kind TEXT NOT NULL, entity_id UUID NOT NULL,
+                 shard SMALLINT NOT NULL, PRIMARY KEY(resource_kind,entity_id)
+             ) ON COMMIT DROP;
+             CREATE TEMP TABLE deployment_account_capacity(
+                 resource_kind TEXT NOT NULL, owner_id UUID NOT NULL,
+                 used BIGINT NOT NULL, PRIMARY KEY(resource_kind,owner_id)
+             ) ON COMMIT DROP;
+             INSERT INTO deployment_capacity_shards(resource_kind,shard,capacity,used)
+             SELECT kind,shard,1,0
+               FROM unnest(ARRAY['account','muc_room','live_session','sm_session']) kind
+               CROSS JOIN generate_series(0,63) shard;",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        assert!(sqlx::query_scalar::<_, bool>(
+            "SELECT current_schema()=(pg_my_temp_schema()::regnamespace)::text"
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap());
+        let authority = DeploymentCapacityConfiguration {
+            epoch: 1,
+            accounts: 64,
+            muc_rooms: 64,
+            muc_rooms_per_owner: 64,
+            live_sessions: 64,
+            sessions_per_account: 64,
+            resumable_sessions: 64,
+        };
+        assert!(
+            deployment_capacity_authority_is_consistent(&mut tx, authority)
+                .await
+                .unwrap()
+        );
+        sqlx::raw_sql(
+            "INSERT INTO users(id) VALUES
+                 ('00000000-0000-0000-0000-000000000001'),
+                 ('00000000-0000-0000-0000-000000000002');
+             INSERT INTO sm_resume_sessions(id,user_id) VALUES
+                 ('00000000-0000-0000-0000-000000000011','00000000-0000-0000-0000-000000000001'),
+                 ('00000000-0000-0000-0000-000000000012','00000000-0000-0000-0000-000000000001'),
+                 ('00000000-0000-0000-0000-000000000013','00000000-0000-0000-0000-000000000002');
+             INSERT INTO deployment_capacity_allocations(resource_kind,entity_id,shard) VALUES
+                 ('account','00000000-0000-0000-0000-000000000001',0),
+                 ('account','00000000-0000-0000-0000-000000000002',1),
+                 ('sm_session','00000000-0000-0000-0000-000000000011',0),
+                 ('sm_session','00000000-0000-0000-0000-000000000012',1),
+                 ('sm_session','00000000-0000-0000-0000-000000000013',2);
+             UPDATE deployment_capacity_shards
+                SET used=1 WHERE (resource_kind='account' AND shard IN (0,1))
+                             OR (resource_kind='sm_session' AND shard IN (0,1,2));
+             INSERT INTO deployment_account_capacity(resource_kind,owner_id,used) VALUES
+                 ('sm_session','00000000-0000-0000-0000-000000000001',2),
+                 ('sm_session','00000000-0000-0000-0000-000000000002',1);",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        assert!(
+            deployment_capacity_authority_is_consistent(&mut tx, authority)
+                .await
+                .unwrap()
+        );
+        let corruptions = [
+            (
+                "different entity with unchanged nonempty counts and shard usage",
+                "UPDATE deployment_capacity_allocations
+                    SET entity_id='00000000-0000-0000-0000-000000000099'
+                  WHERE entity_id='00000000-0000-0000-0000-000000000011'",
+            ),
+            (
+                "different kinds with unchanged per-kind counts and shard usage",
+                "UPDATE deployment_capacity_allocations
+                    SET resource_kind=CASE resource_kind
+                        WHEN 'account' THEN 'sm_session' ELSE 'account' END
+                  WHERE entity_id IN ('00000000-0000-0000-0000-000000000001',
+                                      '00000000-0000-0000-0000-000000000011')",
+            ),
+            (
+                "different owner with unchanged counter count and total usage",
+                "UPDATE deployment_account_capacity
+                    SET owner_id='00000000-0000-0000-0000-000000000099'
+                  WHERE owner_id='00000000-0000-0000-0000-000000000001'",
+            ),
+            (
+                "different counter usage with unchanged nonempty row count",
+                "UPDATE deployment_account_capacity SET used=3
+                  WHERE owner_id='00000000-0000-0000-0000-000000000001'",
+            ),
+            (
+                "swapped owner usage with unchanged row count and total usage",
+                "UPDATE deployment_account_capacity SET used=3-used",
+            ),
+            (
+                "different counter kind with unchanged count and total usage",
+                "UPDATE deployment_account_capacity SET resource_kind='live_session'",
+            ),
+            (
+                "missing allocation with its shard counter kept consistent",
+                "DELETE FROM deployment_capacity_allocations
+                  WHERE entity_id='00000000-0000-0000-0000-000000000013';
+                 UPDATE deployment_capacity_shards SET used=0
+                  WHERE resource_kind='sm_session' AND shard=2",
+            ),
+            (
+                "extra allocation with its shard counter kept consistent",
+                "INSERT INTO deployment_capacity_allocations(resource_kind,entity_id,shard)
+                 VALUES('sm_session','00000000-0000-0000-0000-000000000099',3);
+                 UPDATE deployment_capacity_shards SET used=1
+                  WHERE resource_kind='sm_session' AND shard=3",
+            ),
+            (
+                "missing owner counter while both sets remain nonempty",
+                "DELETE FROM deployment_account_capacity
+                  WHERE owner_id='00000000-0000-0000-0000-000000000001'",
+            ),
+            (
+                "extra owner counter while both sets remain nonempty",
+                "INSERT INTO deployment_account_capacity(resource_kind,owner_id,used)
+                 VALUES('sm_session','00000000-0000-0000-0000-000000000099',1)",
+            ),
+        ];
+        for (case, mutation) in corruptions {
+            sqlx::query("SAVEPOINT capacity_audit_case")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::raw_sql(mutation).execute(&mut *tx).await.unwrap();
+            assert!(
+                !deployment_capacity_authority_is_consistent(&mut tx, authority)
+                    .await
+                    .unwrap(),
+                "audit accepted {case}"
+            );
+            sqlx::query("ROLLBACK TO SAVEPOINT capacity_audit_case")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query("RELEASE SAVEPOINT capacity_audit_case")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            assert!(
+                deployment_capacity_authority_is_consistent(&mut tx, authority)
+                    .await
+                    .unwrap(),
+                "baseline did not recover after {case}"
+            );
+        }
+        tx.rollback().await.unwrap();
+        pool.close().await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

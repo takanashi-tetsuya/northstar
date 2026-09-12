@@ -49,6 +49,7 @@ pub(crate) struct BidiS2sSession {
     /// grants a generic relay capability.
     local_domain: String,
     sender: mpsc::Sender<FederationEnvelope>,
+    disconnect: tokio_util::sync::CancellationToken,
 }
 
 impl BidiS2sSession {
@@ -56,11 +57,13 @@ impl BidiS2sSession {
         connection_id: uuid::Uuid,
         local_domain: String,
         sender: mpsc::Sender<FederationEnvelope>,
+        disconnect: tokio_util::sync::CancellationToken,
     ) -> Self {
         Self {
             connection_id,
             local_domain,
             sender,
+            disconnect,
         }
     }
 }

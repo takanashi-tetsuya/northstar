@@ -1,12 +1,10 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use northstar_xml_framing as framing;
+use northstar_xmpp_types::jid;
 use roxmltree::Document;
 
-#[path = "../../src/xmpp/framing.rs"]
-mod framing;
-#[path = "../../src/jid.rs"]
-mod jid;
 #[path = "../../src/xmpp/stanza_validation.rs"]
 mod stanza_validation;
 

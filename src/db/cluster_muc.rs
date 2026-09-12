@@ -158,6 +158,17 @@ impl ClusterMucPrincipal {
     }
 }
 
+// Actor and occupancy addresses may contain a resource. Project the parsed
+// address structurally; parse_bare/canonicalize_bare deliberately reject a
+// resource and remain required for the authenticated principal itself.
+fn muc_address_bare_jid(address: &str) -> Result<String> {
+    Ok(crate::jid::CanonicalJid::parse(address)?.bare())
+}
+
+fn muc_principal_owns_address(address: &str, principal: &ClusterMucPrincipal) -> Result<bool> {
+    Ok(muc_address_bare_jid(address)? == principal.bare_jid())
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ClusterMucOccupancy {
     pub room_id: Uuid,
@@ -948,7 +959,7 @@ pub async fn claim_cluster_muc_occupancy(
         "MUC full JID must be canonical"
     );
     anyhow::ensure!(
-        crate::jid::canonicalize_bare(&full_jid)? == request.principal.bare_jid(),
+        muc_principal_owns_address(&full_jid, &request.principal)?,
         "MUC full JID does not belong to the authorized principal"
     );
     let lease_seconds = validate_lease(request.lease)?;
@@ -1507,7 +1518,7 @@ pub async fn transition_cluster_muc_occupancy(
         "new_connection_epoch": new_connection_epoch,
         "sm_session_id": sm_session_id,
     });
-    let actor_bare_jid = crate::jid::canonicalize_bare(&target.full_jid)?;
+    let actor_bare_jid = muc_address_bare_jid(&target.full_jid)?;
     insert_operation_and_outbox(
         &mut tx,
         OperationRecord {
@@ -1861,7 +1872,7 @@ async fn mutate_cluster_muc_affiliation_in_tx(
     );
     let actor_full_jid = crate::jid::canonicalize(actor_full_jid)?;
     anyhow::ensure!(
-        crate::jid::canonicalize_bare(&actor_full_jid)? == actor.bare_jid(),
+        muc_principal_owns_address(&actor_full_jid, actor)?,
         "MUC affiliation actor does not own the authenticated full JID"
     );
     let (action, reserved_nick) = match mutation {
@@ -2336,7 +2347,7 @@ pub async fn update_cluster_muc_config(
     principal.validate()?;
     let actor_full_jid = crate::jid::canonicalize(actor_full_jid)?;
     anyhow::ensure!(
-        crate::jid::canonicalize_bare(&actor_full_jid)? == principal.bare_jid(),
+        muc_principal_owns_address(&actor_full_jid, principal)?,
         "MUC configuration actor does not belong to the authorized principal"
     );
     let digest = request_digest(&json!({
@@ -2778,7 +2789,7 @@ pub async fn apply_cluster_muc_affiliations_batch(
     actor.validate()?;
     let actor_full_jid = crate::jid::canonicalize(actor_full_jid)?;
     anyhow::ensure!(
-        crate::jid::canonicalize_bare(&actor_full_jid)? == actor.bare_jid(),
+        muc_principal_owns_address(&actor_full_jid, actor)?,
         "MUC affiliation actor does not own the authenticated full JID"
     );
     if changes.is_empty() {
@@ -4304,7 +4315,10 @@ pub async fn cleanup_cluster_muc_history(
 }
 
 pub async fn dead_letter_expired_cluster_muc_outbox(pool: &PgPool, limit: i64) -> Result<u64> {
-    let mut tx = pool.begin().await?;
+    // PostgreSQL runs this single data-modifying statement in one implicit
+    // transaction. A failed dead-letter insert still rolls back every removal
+    // and its capacity triggers, without separate BEGIN/COMMIT round trips on
+    // each empty maintenance pass.
     let moved = sqlx::query(
         "WITH victims AS (
              SELECT delivery_id FROM cluster_muc_event_outbox
@@ -4327,10 +4341,9 @@ pub async fn dead_letter_expired_cluster_muc_outbox(pool: &PgPool, limit: i64) -
          ON CONFLICT(delivery_id) DO NOTHING",
     )
     .bind(limit.clamp(1, 1000))
-    .execute(&mut *tx)
+    .execute(pool)
     .await?
     .rows_affected();
-    tx.commit().await?;
     Ok(moved)
 }
 
@@ -4341,20 +4354,18 @@ pub async fn cluster_muc_outbox_snapshot(pool: &PgPool) -> Result<ClusterMucOutb
                 COUNT(*) FILTER (WHERE claim_token IS NOT NULL
                                   AND lease_until>clock_timestamp())::BIGINT AS claimed_rows,
                 COALESCE(EXTRACT(EPOCH FROM clock_timestamp()-MIN(created_at)),0)::BIGINT
-                    AS oldest_age_seconds
+                    AS oldest_age_seconds,
+                (SELECT COUNT(*)::BIGINT FROM cluster_muc_event_dead_letters)
+                    AS dead_letter_rows
            FROM cluster_muc_event_outbox",
     )
     .fetch_one(pool)
     .await?;
-    let dead_letter_rows =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*)::BIGINT FROM cluster_muc_event_dead_letters")
-            .fetch_one(pool)
-            .await?;
     Ok(ClusterMucOutboxSnapshot {
         queued_rows: row.get("queued_rows"),
         expired_rows: row.get("expired_rows"),
         claimed_rows: row.get("claimed_rows"),
-        dead_letter_rows,
+        dead_letter_rows: row.get("dead_letter_rows"),
         oldest_age_seconds: row.get("oldest_age_seconds"),
     })
 }
@@ -4889,6 +4900,68 @@ mod delivery_handoff_schema_tests {
 mod tests {
     use super::*;
 
+    #[test]
+    fn resource_addresses_keep_the_authenticated_muc_account() {
+        let principal = ClusterMucPrincipal::Local {
+            user_id: Uuid::new_v4(),
+            bare_jid: "alice@example.test".into(),
+        };
+        principal.validate().unwrap();
+        for address in [
+            "alice@example.test/desktop",
+            "alice@example.test/desktop/other@example.test",
+        ] {
+            assert_eq!(muc_address_bare_jid(address).unwrap(), "alice@example.test");
+            assert!(muc_principal_owns_address(address, &principal).unwrap());
+        }
+    }
+
+    #[test]
+    fn a_muc_resource_cannot_impersonate_another_principal() {
+        let principal = ClusterMucPrincipal::Federated {
+            bare_jid: "alice@example.test".into(),
+            authenticated_domain: "example.test".into(),
+        };
+        principal.validate().unwrap();
+        for address in [
+            "bob@example.test/alice@example.test",
+            "alice@other.example/desktop",
+        ] {
+            assert!(!muc_principal_owns_address(address, &principal).unwrap());
+        }
+    }
+
+    #[test]
+    fn actor_projection_preserves_existing_bare_address_inputs() {
+        let principal = ClusterMucPrincipal::Local {
+            user_id: Uuid::new_v4(),
+            bare_jid: "alice@example.test".into(),
+        };
+        assert!(muc_principal_owns_address("alice@example.test", &principal).unwrap());
+        assert_eq!(
+            muc_address_bare_jid("alice@example.test").unwrap(),
+            "alice@example.test"
+        );
+    }
+
+    #[test]
+    fn muc_actor_projection_still_rejects_malformed_addresses() {
+        for address in ["", "alice@example.test/", "alice@example.test/\n"] {
+            assert!(muc_address_bare_jid(address).is_err());
+        }
+    }
+
+    #[test]
+    fn authenticated_muc_principals_still_require_strict_bare_jids() {
+        let principal = ClusterMucPrincipal::Local {
+            user_id: Uuid::new_v4(),
+            bare_jid: "alice@example.test/desktop".into(),
+        };
+        assert!(principal.validate().is_err());
+        assert!(!muc_principal_owns_address("alice@example.test/desktop", &principal).unwrap());
+        assert!(crate::jid::canonicalize_bare("alice@example.test/desktop").is_err());
+    }
+
     fn occupancy(nick: &str, incarnation: Uuid, connection: Uuid) -> ClusterMucOccupancy {
         ClusterMucOccupancy {
             room_id: Uuid::from_u128(1),
@@ -5070,6 +5143,141 @@ mod tests {
             !migration.to_ascii_lowercase().contains("public."),
             "cluster authority migration must remain isolated-schema safe"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires TEST_DATABASE_URL; uses connection-local temporary tables"]
+    async fn postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete() {
+        let url = std::env::var("TEST_DATABASE_URL")
+            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .max_lifetime(None)
+            .idle_timeout(None)
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    // A replacement connection must fail on absent temporary
+                    // tables, never resolve an application's persistent tables.
+                    sqlx::query("SET search_path TO pg_temp, pg_catalog")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(&url)
+            .await
+            .unwrap();
+        // Exercise the production queries and PostgreSQL statement rollback.
+        // Full deployment capacity/authority triggers remain covered by the
+        // migrated-schema cluster fixture, not these minimal temporary tables.
+        sqlx::raw_sql(
+            "CREATE TEMP TABLE cluster_muc_event_outbox (
+                 delivery_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                 operation_id UUID NOT NULL DEFAULT gen_random_uuid(),
+                 room_id UUID NOT NULL DEFAULT gen_random_uuid(),
+                 room_epoch UUID NOT NULL DEFAULT gen_random_uuid(),
+                 event_sequence BIGINT NOT NULL DEFAULT 1,
+                 event_id UUID NOT NULL DEFAULT gen_random_uuid(),
+                 target_node_id TEXT NOT NULL DEFAULT 'test-node',
+                 recipient_occupant_incarnation UUID NOT NULL DEFAULT gen_random_uuid(),
+                 payload_digest BYTEA NOT NULL DEFAULT decode(repeat('00',32),'hex'),
+                 capacity_shard INTEGER NOT NULL DEFAULT 0,
+                 attempt_count INTEGER NOT NULL DEFAULT 0,
+                 created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()-INTERVAL '1 minute',
+                 expires_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()+INTERVAL '1 hour',
+                 claim_token UUID,
+                 lease_until TIMESTAMPTZ
+             );
+             CREATE TEMP TABLE cluster_muc_event_dead_letters AS
+                 SELECT delivery_id,operation_id,room_id,room_epoch,event_sequence,event_id,
+                        target_node_id,recipient_occupant_incarnation,payload_digest,
+                        capacity_shard,attempt_count,''::TEXT AS terminal_reason,created_at
+                   FROM cluster_muc_event_outbox WITH NO DATA;
+             ALTER TABLE cluster_muc_event_dead_letters ADD PRIMARY KEY(delivery_id);
+             ALTER TABLE cluster_muc_event_dead_letters ADD CONSTRAINT reject_expired
+                 CHECK (terminal_reason <> 'expired');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let empty = cluster_muc_outbox_snapshot(&pool).await.unwrap();
+        assert_eq!(empty.queued_rows, 0);
+        assert_eq!(empty.expired_rows, 0);
+        assert_eq!(empty.claimed_rows, 0);
+        assert_eq!(empty.dead_letter_rows, 0);
+        assert_eq!(empty.oldest_age_seconds, 0);
+        assert_eq!(
+            dead_letter_expired_cluster_muc_outbox(&pool, 10)
+                .await
+                .unwrap(),
+            0
+        );
+
+        sqlx::query(
+            "INSERT INTO cluster_muc_event_outbox(expires_at,attempt_count,claim_token,lease_until)
+             VALUES (clock_timestamp()-INTERVAL '1 minute',0,NULL,NULL),
+                    (clock_timestamp()+INTERVAL '1 hour',16,NULL,NULL),
+                    (clock_timestamp()+INTERVAL '1 hour',0,gen_random_uuid(),
+                     clock_timestamp()+INTERVAL '1 hour'),
+                    (clock_timestamp()+INTERVAL '1 hour',0,NULL,NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let error = dead_letter_expired_cluster_muc_outbox(&pool, 10)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("reject_expired"));
+        let unchanged = cluster_muc_outbox_snapshot(&pool).await.unwrap();
+        assert_eq!(
+            unchanged.queued_rows, 4,
+            "failed INSERT must roll back all removals"
+        );
+        assert_eq!(unchanged.expired_rows, 1);
+        assert_eq!(unchanged.claimed_rows, 1);
+        assert_eq!(unchanged.dead_letter_rows, 0);
+        assert!(unchanged.oldest_age_seconds >= 60);
+
+        sqlx::query("ALTER TABLE cluster_muc_event_dead_letters DROP CONSTRAINT reject_expired")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            dead_letter_expired_cluster_muc_outbox(&pool, 0)
+                .await
+                .unwrap(),
+            1
+        );
+        let limited = cluster_muc_outbox_snapshot(&pool).await.unwrap();
+        assert_eq!(limited.queued_rows, 3);
+        assert_eq!(limited.expired_rows, 0);
+        assert_eq!(limited.claimed_rows, 1);
+        assert_eq!(limited.dead_letter_rows, 1);
+        assert_eq!(
+            dead_letter_expired_cluster_muc_outbox(&pool, 10)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            dead_letter_expired_cluster_muc_outbox(&pool, 10)
+                .await
+                .unwrap(),
+            0
+        );
+        let complete = cluster_muc_outbox_snapshot(&pool).await.unwrap();
+        assert_eq!(complete.queued_rows, 2);
+        assert_eq!(complete.claimed_rows, 1);
+        assert_eq!(complete.dead_letter_rows, 2);
+        let reasons: Vec<String> = sqlx::query_scalar(
+            "SELECT terminal_reason FROM cluster_muc_event_dead_letters ORDER BY terminal_reason",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reasons, ["attempt_limit", "expired"]);
+        pool.close().await;
     }
 
     #[tokio::test(flavor = "current_thread")]

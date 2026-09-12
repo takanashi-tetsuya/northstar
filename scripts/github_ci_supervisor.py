@@ -14,9 +14,12 @@ from __future__ import annotations
 import argparse
 import ctypes
 import dataclasses
+import errno
+import json
 import os
 import select
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -31,11 +34,105 @@ OUTPUT_DRAIN_SECONDS = 5.0
 OUTPUT_STOP_SECONDS = 1.0
 KILL_REAP_SECONDS = 2.0
 CONSOLE_FORWARD_SECONDS = 1.0
+CONSOLE_START_SECONDS = 5.0
 CONSOLE_STOP_SECONDS = 1.0
 DEFAULT_MAX_LOG_BYTES = 16 * 1024 * 1024
 MIN_MAX_LOG_BYTES = 1024
 MAX_MAX_LOG_BYTES = 64 * 1024 * 1024
 PR_SET_CHILD_SUBREAPER = 36
+FAILURE_MARKER_ENV = "NORTHSTAR_LISTENER_STRESS_FAILURE_MARKER"
+FAILURE_MARKER_MAX_BYTES = 1024
+FAILURE_MARKER_CAUSES = frozenset({
+    "command_exit", "deadline", "lifecycle", "startup", "parent_cancel",
+})
+
+
+def _rename_noreplace(directory_fd: int, source: str, destination: str) -> None:
+    """Publish a complete inode without any later link-count/ctime change.
+
+    Linux and filesystem support are required. Neither plain rename nor a
+    hardlink/unlink fallback preserves the marker reader's integrity contract.
+    """
+    try:
+        rename = ctypes.CDLL(None, use_errno=True).renameat2
+    except AttributeError:
+        raise OSError(errno.ENOSYS, "atomic marker publication unavailable") from None
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
+                       ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(directory_fd, os.fsencode(source), directory_fd,
+              os.fsencode(destination), 1) != 0:  # RENAME_NOREPLACE
+        raise OSError(ctypes.get_errno(), "atomic marker publication failed")
+
+
+def _failure_marker_notice(phase: str) -> None:
+    try:
+        print(f"phase={phase} diagnostic_only=true", file=sys.stderr)
+    except (OSError, ValueError):
+        # Diagnostic reporting must not interrupt the existing signal/reap path.
+        pass
+
+
+def publish_failure_marker(cause: str, marker_path: str | Path | None = None) -> bool:
+    """Publish diagnostic evidence once, without changing command authority.
+
+    A complete, bounded record is renamed into a private directory atomically.
+    Competing publishers never replace the first record or follow its symlink.
+    Failure is reported using fixed text only; no configured path is echoed.
+    """
+    configured_path = marker_path if marker_path is not None else os.environ.get(FAILURE_MARKER_ENV)
+    if not configured_path:
+        return True
+    directory_fd: int | None = None
+    temporary_name: str | None = None
+    try:
+        marker_path = Path(configured_path)
+        if (cause not in FAILURE_MARKER_CAUSES or not marker_path.is_absolute()
+                or marker_path.name != "first-failure.json"):
+            raise ValueError("invalid marker configuration")
+        directory_fd = os.open(
+            marker_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        directory = os.fstat(directory_fd)
+        if directory.st_uid != os.geteuid() or stat.S_IMODE(directory.st_mode) != 0o700:
+            raise ValueError("marker directory is not private")
+        record = {
+            "schema_version": 1, "cause": cause,
+            "monotonic_ns": time.monotonic_ns(), "realtime_ns": time.time_ns(),
+        }
+        data = (json.dumps(record, separators=(",", ":")) + "\n").encode("ascii")
+        if len(data) > FAILURE_MARKER_MAX_BYTES:
+            raise ValueError("marker byte limit")
+        temporary_name = ".first-failure." + os.urandom(16).hex() + ".tmp"
+        descriptor = os.open(
+            temporary_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600, dir_fd=directory_fd,
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+        try:
+            _rename_noreplace(directory_fd, temporary_name, marker_path.name)
+            temporary_name = None
+        except FileExistsError:
+            # The observer independently validates the winning record. An
+            # occupied path never grants cleanup or business permission here.
+            pass
+        return True
+    except (OSError, ValueError):
+        _failure_marker_notice("command_failure_marker_unavailable")
+        return False
+    finally:
+        if directory_fd is not None:
+            try:
+                if temporary_name is not None:
+                    os.unlink(temporary_name, dir_fd=directory_fd)
+            except OSError:
+                _failure_marker_notice("command_failure_marker_cleanup_failed")
+            finally:
+                try:
+                    os.close(directory_fd)
+                except OSError:
+                    _failure_marker_notice("command_failure_marker_cleanup_failed")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -185,6 +282,9 @@ def console_forwarder_main(argv: list[str]) -> int:
     if not args.console_forwarder or args.input_fd < 0 or args.acknowledgement_fd < 0:
         return 2
     try:
+        # Startup is separate from delivery: importing this module on a busy
+        # runner must not consume the first frame's stdout-write deadline.
+        os.write(args.acknowledgement_fd, b"\x00")
         while True:
             payload = read_console_forwarder_frame(args.input_fd)
             if payload is None:
@@ -204,6 +304,28 @@ def console_forwarder_main(argv: list[str]) -> int:
                 os.write(args.acknowledgement_fd, b"\x01")
     except (BrokenPipeError, OSError, ValueError):
         return 1
+
+
+def wait_console_forwarder_ready(forwarder: ConsoleForwarder) -> None:
+    """Require the writer's startup byte before starting any fixture output."""
+
+    deadline = time.monotonic() + CONSOLE_START_SECONDS
+    while True:
+        if forwarder.process.poll() is not None:
+            raise OSError(errno.EIO, "console forwarder exited before readiness")
+        try:
+            ready = os.read(forwarder.acknowledgement_read_fd, 1)
+        except BlockingIOError:
+            ready = None
+        if ready == b"\x00":
+            return
+        if ready is not None:
+            raise OSError(errno.EIO, "console forwarder readiness protocol failed")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(errno.ETIMEDOUT, "console forwarder startup deadline")
+        select.select([forwarder.acknowledgement_read_fd], [], [],
+                      min(POLL_INTERVAL_SECONDS, remaining))
 
 
 def spawn_console_forwarder() -> ConsoleForwarder:
@@ -242,6 +364,7 @@ def spawn_console_forwarder() -> ConsoleForwarder:
             input_write_fd=input_write_fd,
             acknowledgement_read_fd=acknowledgement_read_fd,
         )
+        wait_console_forwarder_ready(forwarder)
         spawned = True
         return forwarder
     except Exception:
@@ -1154,8 +1277,18 @@ def finalize_output(
 
 def main() -> int:
     args = parse_args()
+    marker_path = os.environ.get(FAILURE_MARKER_ENV)
+    marker_attempted = False
+
+    def mark_failure(cause: str) -> None:
+        nonlocal marker_attempted
+        if marker_path and not marker_attempted:
+            marker_attempted = True
+            publish_failure_marker(cause, marker_path)
 
     def finish_without_child(status: int, termination: str) -> int:
+        if status != 0:
+            mark_failure("parent_cancel" if termination == "parent_signal" else "startup")
         return status if write_outcome(args.outcome_file, termination) else 1
 
     if os.name != "posix":
@@ -1255,12 +1388,23 @@ def main() -> int:
                     flush=True,
                 )
                 return finish_without_child(1, "console_forwarder_spawn_failed")
+            if interrupted_by:
+                return finish_without_child(
+                    128 + int(interrupted_by[-1]), "parent_signal"
+                )
             try:
+                command_environment = None
+                if marker_path:
+                    # This supervisor owns the configured command's result.
+                    # An expected negative nested probe must not publish first.
+                    command_environment = os.environ.copy()
+                    command_environment.pop(FAILURE_MARKER_ENV, None)
                 process = subprocess.Popen(
                     args.command,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
+                    env=command_environment,
                 )
             except FileNotFoundError:
                 print(
@@ -1310,6 +1454,10 @@ def main() -> int:
             )
             while True:
                 direct_returncode = process.poll()
+                if direct_returncode is not None and direct_returncode != 0 and not interrupted_by:
+                    # Publish before group scans, draining, TERM/KILL or the
+                    # driver's sequential pair waits can obscure this instant.
+                    mark_failure("command_exit")
                 # The direct process itself is a member of its private group;
                 # retaining that fact makes a partially hidden procfs fail
                 # closed rather than prematurely reporting completion.
@@ -1325,6 +1473,7 @@ def main() -> int:
                     break
                 if interrupted_by:
                     termination_reason = f"parent_signal_{interrupted_by[-1].name.lower()}"
+                    mark_failure("parent_cancel")
                     print(
                         "phase=command_cancelled_by_parent "
                         f"pid={process.pid} signal={interrupted_by[-1].name} "
@@ -1335,6 +1484,7 @@ def main() -> int:
                     break
                 if console_forwarder.process.poll() is not None:
                     termination_reason = "console_forwarder_exit"
+                    mark_failure("lifecycle")
                     print(
                         "phase=command_console_forwarder_exit_detected "
                         f"pid={console_forwarder.process.pid} "
@@ -1346,6 +1496,7 @@ def main() -> int:
                 copy_failure = output_state.failure()
                 if copy_failure is not None:
                     termination_reason = f"output_copy_{copy_failure}"
+                    mark_failure("lifecycle")
                     if copy_failure == "log_limit":
                         print(
                             "phase=command_output_log_limit_reached "
@@ -1365,6 +1516,7 @@ def main() -> int:
                     break
                 if group_alive is None:
                     termination_reason = "group_identity_visibility_unavailable"
+                    mark_failure("lifecycle")
                     print(
                         "phase=command_group_identity_visibility_unavailable "
                         f"pid={process.pid} reason=direct_child_completed "
@@ -1379,6 +1531,7 @@ def main() -> int:
                     # A successful shell exit is not successful fixture
                     # completion if children remain in its private group.
                     termination_reason = "direct_child_exited_with_residual_group"
+                    mark_failure("lifecycle")
                     residual_group_detected = True
                     print(
                         "phase=command_parent_exited_with_residual_group "
@@ -1391,6 +1544,7 @@ def main() -> int:
                 if deadline is not None and time.monotonic() >= deadline:
                     expired = True
                     termination_reason = "deadline"
+                    mark_failure("deadline")
                     print(
                         "phase=command_deadline_reached "
                         f"pid={process.pid} timeout_seconds={args.timeout_seconds} "
@@ -1402,6 +1556,9 @@ def main() -> int:
                 time.sleep(POLL_INTERVAL_SECONDS)
 
             if termination_reason is not None:
+                mark_failure(
+                    "parent_cancel" if interrupted_by else "deadline" if expired else "lifecycle"
+                )
                 cleanup_attempted = True
                 cleanup_completed = terminate_group(
                     process.pid,
@@ -1428,6 +1585,7 @@ def main() -> int:
                         )
                     )
                     if group_alive is None:
+                        mark_failure("lifecycle")
                         cleanup_attempted = True
                         cleanup_completed = terminate_group(
                             process.pid,
@@ -1437,6 +1595,7 @@ def main() -> int:
                             direct_child=process,
                         ) and cleanup_completed
                     elif group_alive:
+                        mark_failure("lifecycle")
                         cleanup_attempted = True
                         cleanup_completed = terminate_group(
                             process.pid,
@@ -1558,7 +1717,12 @@ def main() -> int:
         final_status = 128 + (-returncode) if returncode < 0 else returncode
         final_termination = termination_reason or "normal"
 
-    return final_status if write_outcome(args.outcome_file, final_termination) else 1
+    if final_status != 0:
+        mark_failure("parent_cancel" if interrupted_by else "lifecycle")
+    if not write_outcome(args.outcome_file, final_termination):
+        mark_failure("lifecycle")
+        return 1
+    return final_status
 
 
 if __name__ == "__main__":

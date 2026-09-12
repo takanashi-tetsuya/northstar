@@ -214,6 +214,8 @@ run_exact_ignored() {
 run_exact_ignored \
   db::pubsub::integration_tests::graph_cycle_subscription_quota_and_digest_claim_are_atomic
 run_exact_ignored \
+  db::pubsub::integration_tests::digest_idle_preflight_preserves_leases_and_authority_errors
+run_exact_ignored \
   db::pubsub::integration_tests::mutation_authority_and_stale_preconditions_are_checked_in_transaction
 run_exact_ignored \
   db::pubsub::integration_tests::publish_audience_is_linearizable_with_unsubscribe

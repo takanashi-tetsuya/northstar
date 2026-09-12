@@ -64,8 +64,15 @@ enum RunState {
 enum AttemptExit {
     Finished(Result<()>),
     Panicked(String),
-    HeartbeatExpired(Duration),
-    ConsecutiveErrors { count: u32, error: String },
+    HeartbeatExpired {
+        limit: Duration,
+        watchdog_delay: Duration,
+        max_attempt_watchdog_delay: Duration,
+    },
+    ConsecutiveErrors {
+        count: u32,
+        error: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -552,6 +559,10 @@ impl WorkerRegistry {
                     watchdog_period,
                 );
                 watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                // Delay schedules a fresh deadline after a late tick. Retain
+                // earlier observations so a timely terminal tick cannot hide
+                // a previous scheduling delay in this attempt.
+                let mut max_attempt_watchdog_delay = Duration::ZERO;
                 loop {
                     tokio::select! {
                         _ = cancel.cancelled() => {
@@ -586,7 +597,11 @@ impl WorkerRegistry {
                                 break AttemptExit::ConsecutiveErrors { count, error };
                             }
                         }
-                        _ = watchdog.tick() => {
+                        scheduled = watchdog.tick() => {
+                            let watchdog_delay = tokio::time::Instant::now()
+                                .saturating_duration_since(scheduled);
+                            max_attempt_watchdog_delay =
+                                max_attempt_watchdog_delay.max(watchdog_delay);
                             if let Some((count, error)) = self.consecutive_error(
                                 name,
                                 attempt_generation,
@@ -595,7 +610,11 @@ impl WorkerRegistry {
                             }
                             if let Some(limit) = max_silence {
                                 if self.heartbeat_expired(name, attempt_generation, limit) {
-                                    break AttemptExit::HeartbeatExpired(limit);
+                                    break AttemptExit::HeartbeatExpired {
+                                        limit,
+                                        watchdog_delay,
+                                        max_attempt_watchdog_delay,
+                                    };
                                 }
                             }
                         }
@@ -626,10 +645,24 @@ impl WorkerRegistry {
                 AttemptExit::Finished(Ok(())) => "worker returned unexpectedly".to_owned(),
                 AttemptExit::Finished(Err(error)) => error.to_string(),
                 AttemptExit::Panicked(error) => format!("panic: {error}"),
-                AttemptExit::HeartbeatExpired(limit) => format!(
-                    "worker heartbeat exceeded the {} ms silence limit",
-                    limit.as_millis()
-                ),
+                AttemptExit::HeartbeatExpired {
+                    limit,
+                    watchdog_delay,
+                    max_attempt_watchdog_delay,
+                } => {
+                    tracing::warn!(
+                        worker = name,
+                        heartbeat_limit_ms = limit.as_millis() as u64,
+                        watchdog_tick_delay_ms = watchdog_delay.as_millis() as u64,
+                        max_attempt_watchdog_tick_delay_ms =
+                            max_attempt_watchdog_delay.as_millis() as u64,
+                        "worker heartbeat expired at watchdog observation"
+                    );
+                    format!(
+                        "worker heartbeat exceeded the {} ms silence limit",
+                        limit.as_millis()
+                    )
+                }
                 AttemptExit::ConsecutiveErrors { count, error } => {
                     format!("worker reported {count} consecutive business-health errors: {error}")
                 }
@@ -1374,6 +1407,135 @@ mod tests {
         }
         wait_for(|| attempts.load(Ordering::SeqCst) >= 3).await;
         shutdown(&registry, &cancel).await;
+    }
+
+    #[tokio::test]
+    async fn delayed_watchdog_observation_preserves_expiry_and_shutdown_semantics() {
+        use tracing::instrument::WithSubscriber;
+
+        // Keep two registered dispatchers while capturing. With only one,
+        // tracing's callsite cache uses the registering thread's default;
+        // a parallel test without a subscriber can otherwise cache `never`.
+        // This dispatch is retained locally and never installed as a default.
+        let _uncaptured_dispatch = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::new());
+
+        #[derive(Clone)]
+        struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for LogBuffer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        struct DropWitness {
+            cancel: CancellationToken,
+            dropped: Arc<AtomicBool>,
+            cancelled_at_drop: Arc<AtomicBool>,
+        }
+
+        impl Drop for DropWitness {
+            fn drop(&mut self) {
+                self.cancelled_at_drop
+                    .store(self.cancel.is_cancelled(), Ordering::SeqCst);
+                self.dropped.store(true, Ordering::SeqCst);
+            }
+        }
+
+        for normal_shutdown in [false, true] {
+            let registry = WorkerRegistry::new();
+            let cancel = CancellationToken::new();
+            let dropped = Arc::new(AtomicBool::new(false));
+            let cancelled_at_drop = Arc::new(AtomicBool::new(false));
+            let logs = LogBuffer(Arc::new(Mutex::new(Vec::new())));
+            let captured = logs.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .without_time()
+                .with_writer(move || captured.clone())
+                .finish();
+            let name = "test-delayed-watchdog";
+            registry.register_observer(name, WorkerCriticality::Critical);
+            let factory: WorkerFactory = Arc::new({
+                let cancel = cancel.clone();
+                let dropped = Arc::clone(&dropped);
+                let cancelled_at_drop = Arc::clone(&cancelled_at_drop);
+                move |_| {
+                    let witness = DropWitness {
+                        cancel: cancel.clone(),
+                        dropped: Arc::clone(&dropped),
+                        cancelled_at_drop: Arc::clone(&cancelled_at_drop),
+                    };
+                    Box::pin(async move {
+                        let _witness = witness;
+                        std::future::pending::<Result<()>>().await
+                    })
+                }
+            });
+            let exit = async {
+                let supervisor = Arc::clone(&registry).run_supervisor(
+                    name,
+                    WorkerCriticality::Critical,
+                    WorkerMode::Continuous,
+                    Some(Duration::from_millis(30)),
+                    WorkerShutdown::Immediate,
+                    cancel.clone(),
+                    factory,
+                );
+                tokio::pin!(supervisor);
+                assert!(futures::poll!(&mut supervisor).is_pending());
+                // Withhold polling of the real supervisor past its 10 ms tick
+                // and 30 ms heartbeat bound, without blocking the executor.
+                tokio::time::sleep(Duration::from_millis(40)).await;
+                if normal_shutdown {
+                    cancel.cancel();
+                }
+                tokio::time::timeout(Duration::from_secs(1), supervisor)
+                    .await
+                    .expect("the delayed watchdog must keep its original expiry bound")
+            }
+            .with_subscriber(subscriber)
+            .await;
+            assert!(dropped.load(Ordering::SeqCst));
+            assert_eq!(cancelled_at_drop.load(Ordering::SeqCst), normal_shutdown);
+            assert!(cancel.is_cancelled());
+            let events: Vec<serde_json::Value> = String::from_utf8(logs.0.lock().unwrap().clone())
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            let observations: Vec<_> = events
+                .iter()
+                .filter(|event| {
+                    event["fields"]["message"] == "worker heartbeat expired at watchdog observation"
+                })
+                .collect();
+            if normal_shutdown {
+                assert_eq!(exit, SupervisorExit::Cancelled);
+                assert!(observations.is_empty());
+                assert!(registry.critical_failure().is_none());
+            } else {
+                assert_eq!(exit, SupervisorExit::TerminalFailure);
+                assert_eq!(observations.len(), 1);
+                let fields = &observations[0]["fields"];
+                assert_eq!(fields["worker"], name);
+                assert_eq!(fields["heartbeat_limit_ms"], 30);
+                assert!(fields["watchdog_tick_delay_ms"].as_u64().unwrap() >= 20);
+                assert_eq!(
+                    fields["max_attempt_watchdog_tick_delay_ms"],
+                    fields["watchdog_tick_delay_ms"]
+                );
+                assert_eq!(
+                    registry.critical_failure().as_deref(),
+                    Some("critical worker test-delayed-watchdog failed: worker heartbeat exceeded the 30 ms silence limit")
+                );
+            }
+        }
     }
 
     #[tokio::test]

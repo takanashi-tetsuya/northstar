@@ -644,7 +644,7 @@ async fn prune_empty_mix_delivery_events_tx(
     // recipient delete always leaves one. Avoid scanning/sorting the complete
     // event table on every worker tick. A skipped locked orphan keeps its
     // recipient fact during the subsequent drain and is retried later.
-    sqlx::query(
+    let candidates: Vec<Uuid> = sqlx::query_scalar(
         "WITH candidates AS (
              SELECT DISTINCT event.event_id
                FROM mix_delivery_capacity_releases release
@@ -658,8 +658,8 @@ async fn prune_empty_mix_delivery_events_tx(
                 )
               ORDER BY event.event_id
               LIMIT $1
-         ), locked AS (
-             SELECT event.event_id
+         )
+         SELECT event.event_id
                FROM mix_delivery_events event
                JOIN candidates candidate USING(event_id)
               WHERE NOT EXISTS(
@@ -667,23 +667,36 @@ async fn prune_empty_mix_delivery_events_tx(
                          WHERE recipient.event_id=event.event_id
                     )
               ORDER BY event.event_id
-              FOR UPDATE OF event SKIP LOCKED
-         )
-         DELETE FROM mix_delivery_events event USING locked
-          WHERE event.event_id=locked.event_id
+              FOR UPDATE OF event SKIP LOCKED",
+    )
+    .bind(limit.clamp(1, 4_096))
+    .fetch_all(&mut **transaction)
+    .await?;
+    // Requeue can renew an existing orphan event and append a recipient
+    // after our candidate snapshot. Recheck only after holding its row lock
+    // with a fresh statement snapshot, or ON DELETE CASCADE could discard
+    // that newly committed recipient along with the formerly empty event.
+    if !candidates.is_empty() {
+        sqlx::query(
+            "DELETE FROM mix_delivery_events event
+          WHERE event.event_id=ANY($1::uuid[])
             AND NOT EXISTS(
                 SELECT 1 FROM mix_delivery_recipients recipient
                  WHERE recipient.event_id=event.event_id
             )",
-    )
-    .bind(limit.clamp(1, 4_096))
-    .execute(&mut **transaction)
-    .await?;
+        )
+        .bind(&candidates)
+        .execute(&mut **transaction)
+        .await?;
+    }
     Ok(())
 }
 
 async fn prune_empty_mix_delivery_events(pool: &PgPool, limit: i64) -> Result<()> {
     let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *transaction)
+        .await?;
     prune_empty_mix_delivery_events_tx(&mut transaction, limit).await?;
     transaction.commit().await?;
     Ok(())
@@ -1055,9 +1068,18 @@ async fn dead_letter_expired_mix_deliveries(pool: &PgPool, limit: i64) -> Result
 }
 
 async fn prune_empty_mix_delivery_sequences(pool: &PgPool, limit: i64) -> Result<()> {
-    sqlx::query(
-        "WITH empty AS (
-             SELECT authority.recipient_jid
+    let mut transaction = pool.begin().await?;
+    // The producer updates this authority before inserting its recipients.
+    // A single SELECT/DELETE statement can retain a snapshot from before that
+    // producer committed, then lock its updated authority and still consider
+    // it empty. Hold the candidate locks across a second READ COMMITTED
+    // statement so the emptiness check sees every producer that beat us to
+    // the lock; later producers must wait until this transaction finishes.
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *transaction)
+        .await?;
+    let candidates: Vec<String> = sqlx::query_scalar(
+        "SELECT authority.recipient_jid
                FROM mix_delivery_recipient_sequences authority
               WHERE NOT EXISTS(
                         SELECT 1 FROM mix_delivery_recipients live
@@ -1068,14 +1090,29 @@ async fn prune_empty_mix_delivery_sequences(pool: &PgPool, limit: i64) -> Result
                          WHERE dead.recipient_jid=authority.recipient_jid
                     )
               ORDER BY authority.recipient_jid
-              LIMIT $1 FOR UPDATE SKIP LOCKED
-         )
-         DELETE FROM mix_delivery_recipient_sequences authority USING empty
-          WHERE authority.recipient_jid=empty.recipient_jid",
+              LIMIT $1 FOR UPDATE SKIP LOCKED",
     )
     .bind(limit.clamp(1, 1_024))
-    .execute(pool)
+    .fetch_all(&mut *transaction)
     .await?;
+    if !candidates.is_empty() {
+        sqlx::query(
+            "DELETE FROM mix_delivery_recipient_sequences authority
+              WHERE authority.recipient_jid=ANY($1::text[])
+                AND NOT EXISTS(
+                    SELECT 1 FROM mix_delivery_recipients live
+                     WHERE live.recipient_jid=authority.recipient_jid
+                )
+                AND NOT EXISTS(
+                    SELECT 1 FROM mix_delivery_dead_letters dead
+                     WHERE dead.recipient_jid=authority.recipient_jid
+                )",
+        )
+        .bind(&candidates)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
     Ok(())
 }
 
@@ -1100,6 +1137,39 @@ pub async fn claim_mix_deliveries(
     limit: i64,
     max_bytes: i64,
 ) -> Result<Vec<ClaimedMixDelivery>> {
+    let mut connection = pool.acquire().await?;
+    // PostgreSQL locks every relation used by the full claim even when the
+    // queue is empty. Its joins and indexes exceed PG17's fast-path lock
+    // budget, making otherwise idle servers contend in the shared lock
+    // manager. A narrow committed read avoids that work on the empty path.
+    // A racing insertion is handled by the retained delivery wake or the
+    // unchanged bounded recovery scan; a nonempty queue still uses every
+    // lease, transport-owner and ordering predicate below.
+    // Checking catalog privileges takes no locks on the joined application
+    // tables. Only the normal, writable runtime role may take the shortcut;
+    // otherwise the original claim below decides the result. In particular,
+    // retain its read-only/permission errors and support for column grants.
+    let (authorized, pending): (bool, bool) = sqlx::query_as(
+        "SELECT current_setting('transaction_read_only') = 'off'
+                AND (SELECT bool_and(has_table_privilege(relation, privilege))
+                       FROM (VALUES
+                         ('mix_delivery_recipients', 'SELECT'),
+                         ('mix_delivery_recipients', 'UPDATE'),
+                         ('mix_delivery_events', 'SELECT'),
+                         ('mix_delivery_recipient_sequences', 'SELECT'),
+                         ('mix_delivery_recipient_sequences', 'UPDATE'),
+                         ('sm_resume_stanzas', 'SELECT'),
+                         ('sm_resume_sessions', 'SELECT'),
+                         ('mix_bosh_delivery_fences', 'SELECT'),
+                         ('mix_cluster_delivery_fences', 'SELECT')
+                       ) required(relation, privilege)),
+                EXISTS(SELECT 1 FROM mix_delivery_recipients)",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if authorized && !pending {
+        return Ok(Vec::new());
+    }
     let rows = sqlx::query(
         "WITH candidates AS (
              SELECT recipient.delivery_id,
@@ -1171,7 +1241,7 @@ pub async fn claim_mix_deliveries(
     .bind(limit.clamp(1, 128))
     .bind(max_bytes.clamp(65_536, 16_777_216))
     .bind(MIX_DELIVERY_LEASE_SECONDS)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
     Ok(rows
         .into_iter()
@@ -8205,6 +8275,9 @@ pub async fn reconcile_expired_remote_pam(
 }
 
 pub async fn claim_pam_results(pool: &PgPool, limit: i64) -> Result<Vec<ClaimedPamResult>> {
+    // Keep the ordered statements in separate autocommit transactions while
+    // avoiding a second pool checkout between expiry cleanup and claiming.
+    let mut connection = pool.acquire().await?;
     sqlx::query(
         "WITH expired AS (
              SELECT operation_id FROM mix_pam_operations
@@ -8220,7 +8293,7 @@ pub async fn claim_pam_results(pool: &PgPool, limit: i64) -> Result<Vec<ClaimedP
                 lease_token=NULL,lease_until=NULL,updated_at=clock_timestamp()
            FROM expired WHERE operation.operation_id=expired.operation_id",
     )
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
     let rows = sqlx::query(
         "WITH candidates AS (
@@ -8256,8 +8329,9 @@ pub async fn claim_pam_results(pool: &PgPool, limit: i64) -> Result<Vec<ClaimedP
     )
     .bind(limit.clamp(1, 64))
     .bind(MIX_PAM_RESULT_LEASE_SECONDS)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
+    drop(connection);
     Ok(rows
         .into_iter()
         .map(|row| ClaimedPamResult {
@@ -8760,6 +8834,10 @@ mod delivery_capacity_integration_tests {
 }
 
 #[cfg(test)]
+#[path = "mix_sequence_retention_tests.rs"]
+mod delivery_sequence_retention_integration_tests;
+
+#[cfg(test)]
 mod delivery_route_wake_integration_tests {
     use super::*;
     use crate::db;
@@ -8779,7 +8857,7 @@ mod delivery_route_wake_integration_tests {
     /// Insert through the same fenced capacity boundary used by production.
     /// The caller selects a sequence explicitly so the ordering regression can
     /// exercise a dead-letter predecessor and a deferred live successor.
-    async fn insert_delivery(
+    pub(super) async fn insert_delivery(
         pool: &PgPool,
         recipient: &str,
         delivery_sequence: i64,
@@ -8880,7 +8958,8 @@ mod delivery_route_wake_integration_tests {
         assert_eq!(
             sqlx::query(
                 "UPDATE mix_delivery_events
-                    SET expires_at=clock_timestamp()-INTERVAL '1 second'
+                    SET created_at=clock_timestamp()-INTERVAL '2 seconds',
+                        expires_at=clock_timestamp()-INTERVAL '1 second'
                   WHERE event_id=$1",
             )
             .bind(expired_event_id)
@@ -8934,6 +9013,19 @@ mod delivery_route_wake_integration_tests {
                 .any(|row| row.delivery_id == live_delivery_id),
             "successor becomes eligible after terminalization removes its head"
         );
+        let successor = claimed
+            .into_iter()
+            .find(|row| row.delivery_id == live_delivery_id)
+            .unwrap();
+        assert!(
+            acknowledge_mix_delivery(&pool, successor.delivery_id, successor.lease_token)
+                .await
+                .unwrap()
+        );
+        reconcile_mix_delivery_capacity_committed(&pool)
+            .await
+            .unwrap();
+        audit_mix_delivery_capacity_ledger(&pool).await.unwrap();
     }
 
     #[tokio::test]

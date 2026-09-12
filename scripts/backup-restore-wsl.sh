@@ -77,6 +77,12 @@ chmod 600 "$password_file"
   --wait start >/dev/null
 cluster_started=true
 
+# Exercise the exact SQL generator before the expensive lifecycle matrix.
+# File-fed psql exposes malformed quotes immediately instead of leaving the
+# interactive restore coordinator waiting forever for the next SQL byte.
+PGPASSWORD="$bootstrap_password" PGHOST="$socket_dir" PGUSER="$bootstrap_role" \
+  PGDATABASE=postgres python3 "$project_dir/scripts/test-restore-session-protocol.py" --postgres
+
 export NORTHSTAR_FIXTURE_MIGRATOR_PASSWORD="$migrator_password"
 export NORTHSTAR_FIXTURE_RUNTIME_PASSWORD="$runtime_password"
 export NORTHSTAR_FIXTURE_COMMAND_PASSWORD="$command_password"
@@ -256,11 +262,12 @@ read_canonical_probe() {
   PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
     PGDATABASE="$database_name" "$postgres_bin/psql" --no-psqlrc \
     --tuples-only --no-align --set ON_ERROR_STOP=1 \
-    --set=probe_user_id="$user_id" \
-    --command="SELECT users.display_name || '|' || vcards.payload
+    --set=probe_user_id="$user_id" <<'PSQL'
+SELECT users.display_name || '|' || vcards.payload
                  FROM public.users
                  JOIN public.vcards ON vcards.user_id=users.id
-                WHERE users.id=:'probe_user_id'::pg_catalog.uuid"
+                WHERE users.id=:'probe_user_id'::pg_catalog.uuid;
+PSQL
 }
 
 canonical_probe_presence() {
@@ -271,12 +278,13 @@ canonical_probe_presence() {
   PGPASSWORD="$database_password" PGHOST="$socket_dir" PGUSER="$database_role" \
     PGDATABASE="$database_name" "$postgres_bin/psql" --no-psqlrc \
     --tuples-only --no-align --set ON_ERROR_STOP=1 \
-    --set=probe_user_id="$user_id" \
-    --command="SELECT (SELECT count(*) FROM public.users
+    --set=probe_user_id="$user_id" <<'PSQL'
+SELECT (SELECT count(*) FROM public.users
                          WHERE id=:'probe_user_id'::pg_catalog.uuid)::text
                       || '|' ||
                       (SELECT count(*) FROM public.vcards
-                         WHERE user_id=:'probe_user_id'::pg_catalog.uuid)::text"
+                         WHERE user_id=:'probe_user_id'::pg_catalog.uuid)::text;
+PSQL
 }
 
 apply_repository_migrations northstar_backup_source

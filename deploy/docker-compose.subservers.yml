@@ -1,0 +1,61 @@
+# Source-build deployment: use together with the repository's docker-compose.yml.
+# Both processes use the same migration ledger and runtime PostgreSQL role.
+services:
+  xmpp:
+    command: ["/usr/local/bin/xmpp-server", "serve", "core"]
+    depends_on:
+      maintenance:
+        condition: service_healthy
+    stop_grace_period: 30s
+
+  maintenance:
+    build:
+      context: .
+      args:
+        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-0.2.0}
+        VCS_REF: ${NORTHSTAR_VCS_REF:-unknown}
+    depends_on:
+      database-grants:
+        condition: service_completed_successfully
+    entrypoint: ["/usr/local/bin/xmpp-server"]
+    command: ["serve", "maintenance"]
+    user: "10001:10001"
+    init: true
+    environment:
+      NORTHSTAR_DISABLE_DOTENV: "true"
+      XMPP_DOMAIN: ${XMPP_DOMAIN:-localhost}
+      DATABASE_URL_FILE: /run/secrets/runtime_database_url
+      MAINTENANCE_BIND: 127.0.0.1:9092
+      OFFLINE_MESSAGE_TTL_DAYS: ${OFFLINE_MESSAGE_TTL_DAYS:-30}
+      MAM_RETENTION_DAYS: ${MAM_RETENTION_DAYS:-365}
+      MUC_MAM_RETENTION_DAYS: ${MUC_MAM_RETENTION_DAYS:-365}
+      AUDIT_LOG_RETENTION_DAYS: ${AUDIT_LOG_RETENTION_DAYS:-730}
+      RETENTION_CLEANUP_BATCH_SIZE: ${RETENTION_CLEANUP_BATCH_SIZE:-1000}
+      RETENTION_CLEANUP_INTERVAL_SECONDS: ${RETENTION_CLEANUP_INTERVAL_SECONDS:-60}
+      RUST_LOG: ${RUST_LOG:-info}
+    secrets:
+      - runtime_database_url
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/xmpp-server", "--healthcheck", "127.0.0.1:9092"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    restart: unless-stopped
+    stop_grace_period: 20s
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - backend

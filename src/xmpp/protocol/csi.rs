@@ -37,7 +37,8 @@ fn defer_stanza(
 ) -> Option<crate::outbound::OutboundItem> {
     let metadata = StanzaMetadata {
         is_durable: item.durable_source.is_some(),
-        has_transport_receipt: item.transport_receipt.is_some(),
+        has_transport_receipt: item.transport_receipt.is_some()
+            || item.transport_write_receipt.is_some(),
         is_carbon: false,
         custom_bypass: false,
     };
@@ -131,6 +132,26 @@ mod tests {
         assert_eq!(forwarded.stanza, item.stanza);
         assert_eq!(forwarded.durable_source, item.durable_source);
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn shutdown_write_confirmation_bypasses_inactive_csi_without_faking_ownership() {
+        let mut queue = default_queue();
+        let (receipt, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let item = OutboundItem::with_transport_write_receipt(
+            "<presence from='room@conference.example.test/Alice' type='unavailable'><x xmlns='http://jabber.org/protocol/muc#user'><status code='332'/></x></presence>".to_owned(),
+            receipt,
+        );
+        let forwarded = defer_stanza(&mut queue, item)
+            .expect("shutdown notification must bypass inactive CSI deferral");
+        assert!(queue.is_empty());
+        forwarded.confirm_transport_ownership();
+        assert!(matches!(
+            received.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        forwarded.confirm_transport_write();
+        assert_eq!(received.try_recv(), Ok(()));
     }
 
     #[test]

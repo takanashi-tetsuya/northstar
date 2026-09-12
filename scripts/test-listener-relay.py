@@ -258,6 +258,62 @@ def self_test() -> None:
             raise RuntimeError("relay readiness publication overwrote an existing record")
         if occupied_readiness_file.read_bytes() != occupied_payload:
             raise RuntimeError("relay readiness publication changed an existing record")
+        # Keep the startup-failure path honest: the direct child exits first,
+        # while its descendant ignores TERM and retains inherited diagnostic
+        # pipes.  An atomically published ready file removes scheduling luck:
+        # the descendant has installed its handler and inherited the pipe
+        # before we wait for its direct parent to exit.
+        stubborn_child_ready = directory / "stubborn-child.ready"
+        stubborn_child_program = (
+            "import os, pathlib, signal, sys, time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "sys.stderr.write('relay-startup-stubborn-descendant\\n'); "
+            "sys.stderr.flush(); "
+            "ready = pathlib.Path(sys.argv[1]); temporary = ready.with_suffix('.tmp'); "
+            "temporary.write_text(str(os.getpid()), encoding='ascii'); "
+            "os.link(temporary, ready); temporary.unlink(); time.sleep(60)"
+        )
+        stubborn_parent_program = (
+            "import subprocess, sys; "
+            f"subprocess.Popen([sys.executable, '-c', {stubborn_child_program!r}, sys.argv[1]]); "
+            "sys.stderr.write('relay-startup-parent-exited\\n'); "
+            "sys.stderr.flush()"
+        )
+        stubborn = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                stubborn_parent_program,
+                str(stubborn_child_ready),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            startup_deadline = time.monotonic() + 2
+            while not stubborn_child_ready.exists() and time.monotonic() < startup_deadline:
+                time.sleep(0.01)
+            if not stubborn_child_ready.exists():
+                raise RuntimeError("relay startup descendant did not become ready")
+            try:
+                stubborn_child_pid = int(
+                    stubborn_child_ready.read_text(encoding="ascii").strip()
+                )
+            except ValueError as error:
+                raise RuntimeError("relay startup descendant published an invalid PID") from error
+            if os.name == "posix" and os.getpgid(stubborn_child_pid) != stubborn.pid:
+                raise RuntimeError("relay startup descendant escaped its private process group")
+            while stubborn.poll() is None and time.monotonic() < startup_deadline:
+                time.sleep(0.01)
+            if stubborn.poll() != 0:
+                raise RuntimeError("relay startup parent did not exit after launching its descendant")
+        finally:
+            stubborn_diagnostics = terminate_and_collect(stubborn, grace_seconds=0.25)
+        if "relay-startup-stubborn-descendant" not in stubborn_diagnostics:
+            raise RuntimeError("relay startup diagnostic cleanup was not bounded")
+
         first_upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         first_upstream.bind(("127.0.0.1", 0))
         first_upstream.listen(1)
@@ -298,58 +354,6 @@ def self_test() -> None:
         second_thread = threading.Thread(target=serve_second_upstream, daemon=True)
         first_thread.start()
         second_thread.start()
-
-        # Keep the startup-failure path honest: the direct child exits first,
-        # while its descendant ignores TERM and retains inherited diagnostic
-        # pipes.  A ready file removes scheduling luck from this regression:
-        # the descendant has installed its handler and inherited the pipe
-        # before we wait for its direct parent to exit.
-        stubborn_child_ready = directory / "stubborn-child.ready"
-        stubborn_child_program = (
-            "import os, pathlib, signal, sys, time; "
-            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()), encoding='ascii'); "
-            "sys.stderr.write('relay-startup-stubborn-descendant\\n'); "
-            "sys.stderr.flush(); time.sleep(60)"
-        )
-        stubborn_parent_program = (
-            "import subprocess, sys; "
-            f"subprocess.Popen([sys.executable, '-c', {stubborn_child_program!r}, sys.argv[1]]); "
-            "sys.stderr.write('relay-startup-parent-exited\\n'); "
-            "sys.stderr.flush()"
-        )
-        stubborn = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                stubborn_parent_program,
-                str(stubborn_child_ready),
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
-        startup_deadline = time.monotonic() + 2
-        while not stubborn_child_ready.exists() and time.monotonic() < startup_deadline:
-            time.sleep(0.01)
-        if not stubborn_child_ready.exists():
-            raise RuntimeError("relay startup descendant did not become ready")
-        try:
-            stubborn_child_pid = int(
-                stubborn_child_ready.read_text(encoding="ascii").strip()
-            )
-        except ValueError as error:
-            raise RuntimeError("relay startup descendant published an invalid PID") from error
-        if os.name == "posix" and os.getpgid(stubborn_child_pid) != stubborn.pid:
-            raise RuntimeError("relay startup descendant escaped its private process group")
-        while stubborn.poll() is None and time.monotonic() < startup_deadline:
-            time.sleep(0.01)
-        if stubborn.poll() != 0:
-            raise RuntimeError("relay startup parent did not exit after launching its descendant")
-        stubborn_diagnostics = terminate_and_collect(stubborn, grace_seconds=0.25)
-        if "relay-startup-stubborn-descendant" not in stubborn_diagnostics:
-            raise RuntimeError("relay startup diagnostic cleanup was not bounded")
 
         command = [
             sys.executable,

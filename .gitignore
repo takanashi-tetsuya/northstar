@@ -1,4 +1,6 @@
 /target
+# Cargo workspaces and standalone crate builds may also create nested targets.
+**/target/
 /target-wsl
 /target-*/
 /fuzz/target

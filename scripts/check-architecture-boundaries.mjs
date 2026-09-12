@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readSubserverSources, verifySubserverBoundaries } from './check-subserver-boundaries.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -367,7 +368,7 @@ const runtimeControlPoolConstruction = structBody(state, 'fn runtime_control_poo
 for (const invariant of [
   'max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
   'min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)',
-  'acquire_timeout(RUNTIME_CONTROL_POOL_ACQUIRE_TIMEOUT)',
+  'acquire_timeout(attempt_budget)',
   'db::pin_public_application_schema(options)',
 ]) {
   if (!runtimeControlPoolConstruction.includes(invariant)) {
@@ -379,12 +380,21 @@ for (const [call, description] of [
   ['runtime_control_snapshot', 'runtime administration and federation refresh'],
   ['poll_admin_service_control', 'XEP-0133 service-control refresh'],
 ]) {
-  if (!new RegExp(`match db::${call}\\(&mut connection\\)`, 's').test(runtimeControlRefresh)) {
+  const observer = call === 'runtime_control_snapshot'
+    ? String.raw`\s*,\s*\|phase\|\s*\{\s*diagnostics\.database_read\(phase\)\s*\}\s*,?`
+    : '';
+  if (!new RegExp(`match db::${call}\\(\\s*&mut connection${observer}\\s*\\)`, 's').test(runtimeControlRefresh)) {
     throw new Error(`${description} must use the coordinator-owned control connection`);
   }
   if (new RegExp(`${call}\\(&state\\.(?:pool|runtime_control_pool)\\)`).test(runtimeControlRefresh)) {
     throw new Error(`${description} must not acquire from a traffic or shared control pool`);
   }
+}
+if ((runtimeControlRefresh.match(/let\s+max_silence\s*=/g) ?? []).length !== 1
+    || !/let max_silence = Duration::from_secs\(5\);/.test(runtimeControlRefresh)
+    || !/"runtime-control-refresh",\s*crate::workers::WorkerCriticality::Critical,\s*crate::workers::WorkerMode::Continuous,\s*Some\(max_silence\),/s.test(runtimeControlRefresh)
+    || !/RuntimeControlDiagnostics::new\(diagnostic_cancel,\s*max_silence\)/s.test(runtimeControlRefresh)) {
+  throw new Error('runtime-control diagnostics and supervision must share the unchanged five-second silence bound');
 }
 if (!/"runtime-control-refresh"/.test(runtimeControlRefresh)) {
   throw new Error('runtime control reads must share one supervised control-plane worker');
@@ -393,13 +403,19 @@ if (/fn start_runtime_(?:federation_policy|admin_setting)_refresh\(|fn start_ser
   throw new Error('independent runtime control workers can contend for the one-connection control pool');
 }
 const runtimeControlReservation = structBody(state, 'pub(crate) async fn reserve_runtime_control_connection(');
+const runtimeControlConnectOptions = structBody(state, 'fn runtime_control_connect_options(');
+if (runtimeControlConnectOptions.replace(/\s+/g, '') !== 'Ok(database_url.parse::<PgConnectOptions>()?.application_name("northstar-runtime-control"))') {
+  throw new Error('runtime-control connection identity must only label the original parsed database URL');
+}
 for (const invariant of [
-  'runtime_control_pool_options(config)',
-  '.connect(&config.database_url)',
+  'runtime_control_pool_options(config, attempt_budget)',
+  'let connect_options = runtime_control_connect_options(&config.database_url)?;',
+  '.connect_with(connect_options.clone())',
   'attest_development_database_is_loopback',
   'attest_runtime_role',
   'RUNTIME_CONTROL_STARTUP_RETRY_BUDGET',
-  'runtime_control_startup_retry_delay',
+  'runtime_control_startup_connect(deadline,',
+  'tokio::time::timeout_at(deadline,',
 ]) {
   if (!runtimeControlReservation.includes(invariant)) {
     throw new Error(`runtime-control startup reservation lost required invariant: ${invariant}`);
@@ -408,14 +424,38 @@ for (const invariant of [
 if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/s.test(runtimeControlReservation)) {
   throw new Error('runtime-control startup reservation must retain its one dedicated connection');
 }
-if (!/Err\(sqlx::Error::PoolTimedOut\)\s+if\s+Instant::now\(\)\s*<\s*retry_deadline/s.test(runtimeControlReservation)) {
-  throw new Error('runtime-control startup may retry only the bounded pool-timeout admission case');
+const runtimeControlConnect = structBody(state, 'async fn runtime_control_startup_connect<');
+if (!/startup_database_connect\(\s*deadline,\s*RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET,/.test(runtimeControlConnect)) {
+  throw new Error('runtime-control must use bounded startup admission with its handshake limit');
+}
+const runtimeControlAdmission = structBody(state, 'async fn startup_database_connect<');
+for (const invariant of [
+  'tokio::time::timeout_at(deadline,',
+  'deadline.saturating_duration_since(tokio::time::Instant::now())',
+  'remaining.min(attempt_limit)',
+  'tokio::time::timeout(attempt_budget, connect(attempt_budget))',
+  'runtime_control_startup_retry_delay(attempts, std::process::id())',
+  '.min(remaining)',
+  'Err(sqlx::Error::PoolTimedOut) =>',
+  'Err(error) => return Err(error)',
+]) {
+  if (!runtimeControlAdmission.replace(/\s+/g, '').includes(invariant.replace(/\s+/g, ''))) {
+    throw new Error(`runtime-control startup lost a bounded admission invariant: ${invariant}`);
+  }
+}
+if (!/const RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(3\)/.test(state)
+    || !/const RUNTIME_CONTROL_STARTUP_RETRY_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(15\)/.test(state)) {
+  throw new Error('runtime-control cold handshake remains at most 3 s within one absolute 15 s admission budget');
 }
 const appStateConstruction = structBody(state, 'pub async fn new(');
 if (!/pub async fn new\([\s\S]*?runtime_control_connection\s*:\s*PoolConnection<Postgres>/.test(state)) {
   throw new Error('AppState must receive the already-reserved runtime-control connection');
 }
-const runtimeMain = structBody(mainSource, 'async fn main()');
+const terminalMain = structBody(mainSource, 'async fn main()');
+if (terminalMain.replace(/\s+/g, '') !== 'logging::report_result(run().await)') {
+  throw new Error('main must report its final result through the bounded console owner');
+}
+const runtimeMain = structBody(mainSource, 'async fn run()');
 const mainRuntimeControlReservation = runtimeMain.indexOf('state::reserve_runtime_control_connection(&config).await?');
 const mainPrimaryPoolConstruction = runtimeMain.indexOf('let pool_options = PgPoolOptions::new()');
 if (mainRuntimeControlReservation < 0 || mainPrimaryPoolConstruction < 0
@@ -432,7 +472,7 @@ if (!/self\.service_shutdown\s*\.set\(cancel\)/s.test(serviceControlInstallation
 for (const invariant of [
   'state.config.enable_xmpp_service_control',
   'state.service_shutdown.get().is_some()',
-  'heartbeat.error(error)',
+  'report_runtime_control_health(&heartbeat, observed_database, first_error)',
 ]) {
   if (!runtimeControlRefresh.includes(invariant)) {
     throw new Error(`runtime control coordinator lost a fail-closed XEP-0133 invariant: ${invariant}`);
@@ -441,7 +481,7 @@ for (const invariant of [
 if (!/service_control_applies\(\s*state\.process_started_at,\s*&control\s*,?\s*\)/s.test(runtimeControlRefresh)) {
   throw new Error('runtime control coordinator must retain the XEP-0133 process/generation authority check');
 }
-if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtime` | exactly 1 reserved connection; 500 ms per-attempt cold-start bound plus a 15 s jittered `PoolTimedOut` admission window before traffic startup |')) {
+if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtime` | exactly 1 reserved connection; at most 3 s per initial handshake within one absolute 15 s admission deadline, including jitter, role attestation and reservation |')) {
   throw new Error('program responsibility model must document the dedicated runtime control pool');
 }
 const mixProtocol = read('src/xmpp/protocol/mix.rs');
@@ -449,129 +489,238 @@ const mixProtocolProduction = productionWithoutCfgTestModules(
   mixProtocol,
   'src/xmpp/protocol/mix.rs',
 );
-const mixOutboxQueue = structBody(mixProtocolProduction, 'enum MixOutboxQueue');
-for (const lane of ['Delivery', 'PamResult']) {
-  if (!new RegExp(`^\\s*${lane}\\s*,?\\s*$`, 'm').test(mixOutboxQueue)) {
-    throw new Error(`MIX outbox must retain an independent ${lane} lane`);
+export function verifyMixOutboxLifecycle(mixProtocol) {
+  // Match executable source shape rather than comments, string descriptions or
+  // cfg(test) examples. This uses the same bounded masking convention as the
+  // subserver source gate, not a general Rust parser.
+  const mixProtocolProduction = productionWithoutCfgTestModules(
+    mixProtocol, 'src/xmpp/protocol/mix.rs',
+  ).replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"/g,
+    (text) => text.replace(/[^\r\n]/g, ' '));
+  const mixOutboxQueue = structBody(mixProtocolProduction, 'enum MixOutboxQueue');
+  for (const lane of ['Delivery', 'PamResult']) {
+    if (!new RegExp(`^\\s*${lane}\\s*,?\\s*$`, 'm').test(mixOutboxQueue)) {
+      throw new Error(`MIX outbox must retain an independent ${lane} lane`);
+    }
+  }
+  if (!/const\s+PAM_RESULT_MAX_CONCURRENCY\s*:\s*usize\s*=\s*2\s*;/.test(mixProtocolProduction)) {
+    throw new Error('MIX PAM-result lane must remain capped at two concurrent deliveries');
+  }
+  const mixLaneBudgets = structBody(mixProtocolProduction, 'const fn mix_outbox_lane_budgets(');
+  if (
+    !/let\s+pam_budget\s*=\s*if\s+background_budget\s*<\s*PAM_RESULT_MAX_CONCURRENCY\s*\{\s*background_budget\s*\}\s*else\s*\{\s*PAM_RESULT_MAX_CONCURRENCY\s*\};/s.test(
+      mixLaneBudgets,
+    ) ||
+    !/\(\s*background_budget\s*,\s*pam_budget\s*\)/.test(mixLaneBudgets)
+  ) {
+    throw new Error(
+      'MIX outbox lane budgets must give delivery the typed budget and PAM its independent cap',
+    );
+  }
+  const mixClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
+  const mixClaimArmMarkers = [
+    'MixOutboxQueue::Delivery =>',
+    'MixOutboxQueue::PamResult =>',
+  ];
+  const mixDeliveryClaimArm = matchArm(
+    mixClaimWork,
+    mixClaimArmMarkers,
+    'MixOutboxQueue::Delivery =>',
+    'MIX outbox claim',
+  );
+  const mixPamClaimArm = matchArm(
+    mixClaimWork,
+    mixClaimArmMarkers,
+    'MixOutboxQueue::PamResult =>',
+    'MIX outbox claim',
+  );
+  if (
+    !/\.claim_mix_deliveries\s*\(/.test(mixDeliveryClaimArm) ||
+    /\.claim_pam_results\s*\(/.test(mixDeliveryClaimArm) ||
+    !/\.claim_pam_results\s*\(/.test(mixPamClaimArm) ||
+    /\.claim_mix_deliveries\s*\(/.test(mixPamClaimArm)
+  ) {
+    throw new Error('MIX delivery and PAM lanes must claim only their own durable work; no fallback');
+  }
+  const mixProcessWork = structBody(mixProtocolProduction, 'fn process_mix_outbox_work(');
+  if (
+    !/MixOutboxWork\s*::\s*Delivery\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*Delivery\s*,[\s\S]*?process_claimed_mix_delivery\s*\(/.test(
+      mixProcessWork,
+    ) ||
+    !/MixOutboxWork\s*::\s*PamResult\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*PamResult\s*,[\s\S]*?process_claimed_pam_result\s*\(/.test(
+      mixProcessWork,
+    )
+  ) {
+    throw new Error('MIX outbox work must stay in its claimed delivery or PAM lane');
+  }
+  const mixOutboxLaneWorker = structBody(mixProtocolProduction, 'async fn run_mix_outbox_lane(');
+  const mixOutboxClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
+  const mixOutboxClaim = structBody(mixProtocolProduction, 'fn process_mix_outbox_claim(');
+  const mixOutboxMaintenance = structBody(mixProtocolProduction, 'fn process_mix_outbox_maintenance(');
+  if (
+    !/FuturesUnordered\s*::\s*<\s*MixOutboxTask\s*>\s*::\s*new\s*\(\s*\)/.test(
+      mixOutboxLaneWorker,
+    ) ||
+    !/claim_task\s*=\s*Some\s*\(\s*process_mix_outbox_claim\s*\(/.test(
+      mixOutboxLaneWorker,
+    ) ||
+    !/in_flight\s*\.\s*push\s*\(\s*process_mix_outbox_work\s*\(/.test(mixOutboxLaneWorker) ||
+    !/maintenance_task\s*=\s*Some\s*\(\s*process_mix_outbox_maintenance\s*\(/.test(
+      mixOutboxLaneWorker,
+    ) ||
+    !/next_mix_outbox_progress\s*\(\s*&mut\s+in_flight\s*,\s*&mut\s+claim_task\s*,\s*&mut\s+maintenance_task\s*\)/.test(
+      mixOutboxLaneWorker,
+    ) ||
+    !/claim_mix_outbox_work\s*\(\s*&state\s*,\s*&stop_claiming\s*,\s*&cancel\s*,\s*queue\s*,\s*available\s*,?\s*\)/.test(
+      mixOutboxClaim,
+    ) ||
+    countMatches(mixOutboxClaimWork, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 2 ||
+    countMatches(mixDeliveryClaimArm, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 1 ||
+    countMatches(mixPamClaimArm, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 1 ||
+    !/cancellable_mix_outbox_turn\s*\(\s*&cancel\s*,/.test(mixOutboxMaintenance) ||
+    !/maintain_mix_delivery_retention\s*\(\s*\)/.test(mixOutboxMaintenance)
+  ) {
+    throw new Error('each MIX outbox lane must keep claims and maintenance independently bounded, cancellation-aware, and jointly polled');
+  }
+  const joinMixOutboxLanes = structBody(mixProtocolProduction, 'async fn join_mix_outbox_lanes');
+  if (
+    !/tokio\s*::\s*select!/.test(joinMixOutboxLanes) ||
+    !/lane_cancel\s*\.\s*cancel\s*\(\s*\)/.test(joinMixOutboxLanes) ||
+    !/pam\s*\.\s*await/.test(joinMixOutboxLanes) ||
+    !/delivery\s*\.\s*await/.test(joinMixOutboxLanes)
+  ) {
+    throw new Error('MIX lane join must cancel and drain its peer before surfacing a terminal lane result');
+  }
+  const startMixOutbox = structBody(mixProtocolProduction, 'pub(crate) fn start_mix_delivery_outbox(');
+  const deliveryLaneStart = startMixOutbox.search(/let\s+delivery\s*=\s*run_mix_outbox_lane\s*\(/);
+  const pamLaneStart = startMixOutbox.search(/let\s+pam\s*=\s*run_mix_outbox_lane\s*\(/);
+  const laneJoin = startMixOutbox.search(/join_mix_outbox_lanes\s*\(\s*cancel\s*,\s*lane_cancel\s*,\s*delivery\s*,\s*pam\s*,?\s*\)\s*\.\s*await/);
+  if (deliveryLaneStart < 0 || pamLaneStart < 0 || laneJoin < 0 || deliveryLaneStart > pamLaneStart) {
+    throw new Error('MIX outbox startup must construct delivery and PAM lanes before joining them');
+  }
+  const deliveryLaneStartBody = startMixOutbox.slice(deliveryLaneStart, pamLaneStart);
+  const pamLaneStartBody = startMixOutbox.slice(pamLaneStart, laneJoin);
+  if (
+    !deliveryLaneStartBody.includes('MixOutboxQueue::Delivery') ||
+    !deliveryLaneStartBody.includes('delivery_budget') ||
+    deliveryLaneStartBody.includes('MixOutboxQueue::PamResult') ||
+    !pamLaneStartBody.includes('MixOutboxQueue::PamResult') ||
+    !pamLaneStartBody.includes('pam_budget') ||
+    pamLaneStartBody.includes('MixOutboxQueue::Delivery') ||
+    /\b(?:delivery|pam)\s*\.\s*await\b/.test(startMixOutbox)
+  ) {
+    throw new Error('MIX outbox lanes must start separately without delivery/PAM fallback or head-of-line blocking');
+  }
+  const mixNoHolTest = structBody(
+    mixProtocol,
+    'async fn pam_lane_starts_while_a_delivery_lane_waits_on_external_io(',
+  );
+  if (
+    !mixNoHolTest.includes('join_mix_outbox_lanes(') ||
+    !/timeout\s*\([\s\S]*?pam_started_rx\s*\)/.test(mixNoHolTest)
+  ) {
+    throw new Error('MIX must retain a regression test proving slow delivery cannot head-of-line block PAM');
+  }
+
+  // Source-shape checks complement the Rust race tests; they do not prove Rust
+  // semantics. Inspect production bodies, never test fixtures or comment text.
+  const compact = (source) => source.replace(/\s+/g, '').replace(/,\)/g, ')');
+  const requireMix = (condition, message) => {
+    if (!condition) throw new Error('MIX lifecycle boundary: ' + message);
+  };
+  for (const [name, seconds] of [
+    ['MIX_OUTBOX_DRAIN_GRACE', 14],
+    ['MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE', 5],
+    ['MIX_OUTBOX_ATTEMPT_DEADLINE', 20],
+  ]) {
+    requireMix(compact(mixProtocolProduction).includes(
+      'const' + name + ':Duration=Duration::from_secs(' + seconds + ');'),
+    'keep the reviewed ' + name + ' deadline');
+  }
+  const claimAdmission = compact(structBody(mixProtocolProduction, 'async fn drainable_mix_outbox_claim<'));
+  requireMix(claimAdmission ===
+    'ifstop_claiming.is_cancelled(){returnOk(Vec::new());}cancellable_mix_outbox_turn(cancel,claim).await',
+  'claim admission must stop before polling and preserve only hard cancellation after the claim begins');
+  const claimTurn = compact(structBody(mixProtocolProduction, 'async fn cancellable_mix_outbox_turn<'));
+  requireMix(claimTurn ===
+    'bounded_mix_outbox_turn(cancel,tokio::time::Instant::now()+MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE,turn).await',
+  'claims must retain their five-second bounded hard-cancellation turn');
+  const boundedTurn = compact(structBody(mixProtocolProduction, 'async fn bounded_mix_outbox_turn<'));
+  requireMix(boundedTurn.includes('ifcancel.is_cancelled(){returnErr(MixOutboxShutdown.into());}') &&
+    boundedTurn.includes('tokio::select!{biased;_=cancel.cancelled()=>Err(MixOutboxShutdown.into()),') &&
+    boundedTurn.includes('_=tokio::time::sleep_until(deadline)=>Err(MixOutboxDeadlineElapsed.into()),') &&
+    boundedTurn.includes('result=turn=>result'),
+  'bounded turns must prioritize hard cancellation and retain the original absolute deadline');
+  const lane = compact(mixOutboxLaneWorker);
+  requireMix(lane.includes('ifaccepting&&(stop_claiming.is_cancelled()||cancel.is_cancelled()){accepting=false;}') &&
+    lane.includes('_=stop_claiming.cancelled(),ifaccepting=>{accepting=false;}') &&
+    lane.includes('_=cancel.cancelled(),ifaccepting=>{accepting=false;}'),
+  'lane admission must close for either parent stop or hard cancellation');
+  requireMix(lane.includes('ifaccepting&&claim_task.is_none()&&maintenance_task.is_none()&&in_flight.len()<concurrency&&tokio::time::Instant::now()>=claim_schedule.next_claim{') &&
+    lane.includes('process_mix_outbox_claim(Arc::clone(&state),stop_claiming.clone(),cancel.clone(),queue,available)') &&
+    lane.includes('process_mix_outbox_work(Arc::clone(&state),work,cancel.clone())'),
+  'new claims require open bounded admission; pending claims and work keep the independent hard token');
+  requireMix(lane.includes('if!accepting{maintenance_task.take();}') &&
+    lane.includes('if!accepting&&in_flight.is_empty()&&claim_task.is_none(){returnmatchterminal_error{') &&
+    !/(?:claim_task|in_flight)\s*\.\s*(?:take|clear)\s*\(/.test(mixOutboxLaneWorker) &&
+    !/claim_task[\s\S]*?\.as_mut\(\)[\s\S]*?\.await/.test(mixOutboxLaneWorker),
+  'graceful drain must retain claimed work and claim responses while dropping maintenance');
+  const progress = compact(structBody(mixProtocolProduction, 'async fn next_mix_outbox_progress('));
+  requireMix(progress.includes('tokio::select!{biased;') &&
+    progress.includes('in_flight.next(),if!in_flight.is_empty()=>') &&
+    progress.includes('},ifclaim.is_some()=>{claim.take();MixOutboxProgress::Claim(outcome)') &&
+    progress.includes('},ifmaintenance.is_some()=>{maintenance.take();MixOutboxProgress::Maintenance(outcome)'),
+  'claim, maintenance and owned delivery must remain jointly polled');
+  for (const [finished, peer] of [['delivery', 'pam'], ['pam', 'delivery']]) {
+    const branch = compact(structBody(joinMixOutboxLanes, finished + '_result = &mut ' + finished + ' =>'));
+    const expected = 'if' + finished + '_result.is_err()||!stop_claiming.is_cancelled(){lane_cancel.cancel();}' +
+      'let' + peer + '_result=' + peer + '.await;' + finished + '_result?;' + peer + '_result';
+    requireMix(branch === expected,
+      finished + ' lane must preserve a normal stopped peer and hard-cancel errors or unexpected exits');
+  }
+  requireMix(countMatches(joinMixOutboxLanes, /lane_cancel\s*\.\s*cancel\s*\(/g) === 2,
+    'peer hard cancellation belongs only to the two guarded join branches');
+  const startup = compact(startMixOutbox);
+  const attemptFactory = structBody(startMixOutbox, 'move |heartbeat|');
+  const attemptBody = compact(structBody(attemptFactory, 'async move'));
+  const freshTokenOffset = attemptBody.indexOf('letlane_cancel=tokio_util::sync::CancellationToken::new();');
+  requireMix(freshTokenOffset >= 0 && freshTokenOffset < attemptBody.indexOf('run_mix_outbox_lane('),
+    'every supervised attempt must construct its own independent hard token before starting lanes');
+  requireMix(startup.includes('letlane_cancel=tokio_util::sync::CancellationToken::new();') &&
+    !/\.child_token\s*\(/.test(startMixOutbox) &&
+    startup.includes('run_mix_outbox_lane(Arc::clone(&state),cancel.clone(),lane_cancel.clone(),MixOutboxQueue::Delivery,delivery_budget,true,heartbeat.clone())') &&
+    startup.includes('run_mix_outbox_lane(state,cancel.clone(),lane_cancel.clone(),MixOutboxQueue::PamResult,pam_budget,false,heartbeat)') &&
+    startup.includes('join_mix_outbox_lanes(cancel,lane_cancel,delivery,pam).await'),
+  'production lanes must share a fresh independent hard token and receive the parent stop separately');
+  requireMix(startup.includes('registry.supervise_draining(,crate::workers::WorkerCriticality::Restartable,crate::workers::WorkerMode::Continuous,Some(Duration::from_secs(30)),MIX_OUTBOX_DRAIN_GRACE,cancel.clone(),'),
+  'supervisor must enforce the existing 14-second whole-worker drain');
+  for (const name of ['process_claimed_mix_delivery', 'process_claimed_pam_result']) {
+    const attempt = compact(structBody(mixProtocolProduction, 'async fn ' + name + '('));
+    requireMix(attempt.includes('letattempt_deadline=tokio::time::Instant::now()+MIX_OUTBOX_ATTEMPT_DEADLINE;') &&
+      attempt.includes('bounded_mix_outbox_turn(&cancel,attempt_deadline,'),
+    name + ' must share its original attempt deadline with final durable transitions');
+  }
+
+}
+
+verifyMixOutboxLifecycle(mixProtocol);
+
+const commandPoolConstruction = structBody(state, 'pub async fn new(');
+for (const invariant of [
+  'let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;',
+  'startup_database_connect( auxiliary_pool_deadline, AUXILIARY_POOL_ACQUIRE_TIMEOUT, "XEP-0133 command",',
+  'startup_database_connect( auxiliary_pool_deadline, AUXILIARY_POOL_ACQUIRE_TIMEOUT, "OMEMO recovery poll",',
+  'tokio::time::timeout_at(auxiliary_pool_deadline,',
+]) {
+  if (!commandPoolConstruction.replace(/\s+/g, '').includes(invariant.replace(/\s+/g, ''))) {
+    throw new Error(`auxiliary pools must share bounded startup admission: ${invariant}`);
   }
 }
-if (!/const\s+PAM_RESULT_MAX_CONCURRENCY\s*:\s*usize\s*=\s*2\s*;/.test(mixProtocolProduction)) {
-  throw new Error('MIX PAM-result lane must remain capped at two concurrent deliveries');
+if (countMatches(commandPoolConstruction, /\.acquire_timeout\(AUXILIARY_POOL_ACQUIRE_TIMEOUT\)/g) !== 2
+    || !/const AUXILIARY_POOL_ACQUIRE_TIMEOUT:\s*Duration\s*=\s*Duration::from_secs\(2\)/.test(state)
+    || !/const AUXILIARY_POOL_STARTUP_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(15\)/.test(state)) {
+  throw new Error('auxiliary pools retain a 2 s acquisition policy within a shared 15 s startup window');
 }
-const mixLaneBudgets = structBody(mixProtocolProduction, 'const fn mix_outbox_lane_budgets(');
-if (
-  !/let\s+pam_budget\s*=\s*if\s+background_budget\s*<\s*PAM_RESULT_MAX_CONCURRENCY\s*\{\s*background_budget\s*\}\s*else\s*\{\s*PAM_RESULT_MAX_CONCURRENCY\s*\};/s.test(
-    mixLaneBudgets,
-  ) ||
-  !/\(\s*background_budget\s*,\s*pam_budget\s*\)/.test(mixLaneBudgets)
-) {
-  throw new Error(
-    'MIX outbox lane budgets must give delivery the typed budget and PAM its independent cap',
-  );
-}
-const mixClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
-const mixClaimArmMarkers = [
-  'MixOutboxQueue::Delivery =>',
-  'MixOutboxQueue::PamResult =>',
-];
-const mixDeliveryClaimArm = matchArm(
-  mixClaimWork,
-  mixClaimArmMarkers,
-  'MixOutboxQueue::Delivery =>',
-  'MIX outbox claim',
-);
-const mixPamClaimArm = matchArm(
-  mixClaimWork,
-  mixClaimArmMarkers,
-  'MixOutboxQueue::PamResult =>',
-  'MIX outbox claim',
-);
-if (
-  !/\.claim_mix_deliveries\s*\(/.test(mixDeliveryClaimArm) ||
-  /\.claim_pam_results\s*\(/.test(mixDeliveryClaimArm) ||
-  !/\.claim_pam_results\s*\(/.test(mixPamClaimArm) ||
-  /\.claim_mix_deliveries\s*\(/.test(mixPamClaimArm)
-) {
-  throw new Error('MIX delivery and PAM lanes must claim only their own durable work; no fallback');
-}
-const mixProcessWork = structBody(mixProtocolProduction, 'fn process_mix_outbox_work(');
-if (
-  !/MixOutboxWork\s*::\s*Delivery\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*Delivery\s*,[\s\S]*?process_claimed_mix_delivery\s*\(/.test(
-    mixProcessWork,
-  ) ||
-  !/MixOutboxWork\s*::\s*PamResult\s*\([^)]*\)\s*=>\s*\(\s*MixOutboxQueue\s*::\s*PamResult\s*,[\s\S]*?process_claimed_pam_result\s*\(/.test(
-    mixProcessWork,
-  )
-) {
-  throw new Error('MIX outbox work must stay in its claimed delivery or PAM lane');
-}
-const mixOutboxLaneWorker = structBody(mixProtocolProduction, 'async fn run_mix_outbox_lane(');
-const mixOutboxClaimWork = structBody(mixProtocolProduction, 'async fn claim_mix_outbox_work(');
-const mixOutboxClaim = structBody(mixProtocolProduction, 'fn process_mix_outbox_claim(');
-const mixOutboxMaintenance = structBody(mixProtocolProduction, 'fn process_mix_outbox_maintenance(');
-if (
-  !/FuturesUnordered\s*::\s*<\s*MixOutboxTask\s*>\s*::\s*new\s*\(\s*\)/.test(
-    mixOutboxLaneWorker,
-  ) ||
-  !/claim_task\s*=\s*Some\s*\(\s*process_mix_outbox_claim\s*\(/.test(
-    mixOutboxLaneWorker,
-  ) ||
-  !/in_flight\s*\.\s*push\s*\(\s*process_mix_outbox_work\s*\(/.test(mixOutboxLaneWorker) ||
-  !/maintenance_task\s*=\s*Some\s*\(\s*process_mix_outbox_maintenance\s*\(/.test(
-    mixOutboxLaneWorker,
-  ) ||
-  !/next_mix_outbox_progress\s*\(\s*&mut\s+in_flight\s*,\s*&mut\s+claim_task\s*,\s*&mut\s+maintenance_task\s*\)/.test(
-    mixOutboxLaneWorker,
-  ) ||
-  !/claim_mix_outbox_work\s*\(\s*&state\s*,\s*&cancel\s*,\s*queue\s*,\s*available\s*\)/.test(
-    mixOutboxClaim,
-  ) ||
-  !/cancellable_mix_outbox_turn\s*\(\s*cancel\s*,/.test(mixOutboxClaimWork) ||
-  !/cancellable_mix_outbox_turn\s*\(\s*&cancel\s*,/.test(mixOutboxMaintenance) ||
-  !/maintain_mix_delivery_retention\s*\(\s*\)/.test(mixOutboxMaintenance)
-) {
-  throw new Error('each MIX outbox lane must keep claims and maintenance independently bounded, cancellation-aware, and jointly polled');
-}
-const joinMixOutboxLanes = structBody(mixProtocolProduction, 'async fn join_mix_outbox_lanes');
-if (
-  !/tokio\s*::\s*select!/.test(joinMixOutboxLanes) ||
-  !/lane_cancel\s*\.\s*cancel\s*\(\s*\)/.test(joinMixOutboxLanes) ||
-  !/pam\s*\.\s*await/.test(joinMixOutboxLanes) ||
-  !/delivery\s*\.\s*await/.test(joinMixOutboxLanes)
-) {
-  throw new Error('MIX lane join must cancel and drain its peer before surfacing a terminal lane result');
-}
-const startMixOutbox = structBody(mixProtocolProduction, 'pub(crate) fn start_mix_delivery_outbox(');
-const deliveryLaneStart = startMixOutbox.indexOf('let delivery = run_mix_outbox_lane(');
-const pamLaneStart = startMixOutbox.indexOf('let pam = run_mix_outbox_lane(');
-const laneJoin = startMixOutbox.indexOf('join_mix_outbox_lanes(lane_cancel, delivery, pam).await');
-if (deliveryLaneStart < 0 || pamLaneStart < 0 || laneJoin < 0 || deliveryLaneStart > pamLaneStart) {
-  throw new Error('MIX outbox startup must construct delivery and PAM lanes before joining them');
-}
-const deliveryLaneStartBody = startMixOutbox.slice(deliveryLaneStart, pamLaneStart);
-const pamLaneStartBody = startMixOutbox.slice(pamLaneStart, laneJoin);
-if (
-  !deliveryLaneStartBody.includes('MixOutboxQueue::Delivery') ||
-  !deliveryLaneStartBody.includes('delivery_budget') ||
-  deliveryLaneStartBody.includes('MixOutboxQueue::PamResult') ||
-  !pamLaneStartBody.includes('MixOutboxQueue::PamResult') ||
-  !pamLaneStartBody.includes('pam_budget') ||
-  pamLaneStartBody.includes('MixOutboxQueue::Delivery') ||
-  /\b(?:delivery|pam)\s*\.\s*await\b/.test(startMixOutbox)
-) {
-  throw new Error('MIX outbox lanes must start separately without delivery/PAM fallback or head-of-line blocking');
-}
-const mixNoHolTest = structBody(
-  mixProtocol,
-  'async fn pam_lane_starts_while_a_delivery_lane_waits_on_external_io(',
-);
-if (
-  !mixNoHolTest.includes('join_mix_outbox_lanes(') ||
-  !/timeout\s*\([\s\S]*?pam_started_rx\s*\)/.test(mixNoHolTest)
-) {
-  throw new Error('MIX must retain a regression test proving slow delivery cannot head-of-line block PAM');
-}
-const commandPoolConstruction = structBody(state, 'pub async fn new(');
 const commandPoolModeMatch = structBody(
   commandPoolConstruction,
   'let command_pool = match config.admin_command_pool_mode',
@@ -645,7 +794,10 @@ for (const invariant of [
   'runtime_connections_per_child=$((database_max_connections + runtime_auxiliary_connections))',
   'readonly stress_child_count=$((pairs * 2))',
   'fixture_control_connections_per_pair=1',
-  'required_fixture_connections=$((stress_child_count * runtime_connections_per_child + fixture_control_connections))',
+  'required_fixture_connections=$((stress_child_count * runtime_connections_per_child + fixture_control_connections + observer_connections))',
+  'observer_connections="${NORTHSTAR_LISTENER_STRESS_OBSERVER_CONNECTIONS:-0}"',
+  'case "$observer_connections" in 0|1)',
+  'publish_observer_round_map()',
   'assert_fixture_connection_capacity()',
   "SHOW max_connections;",
   'fixture_actual_max_connections >= required_fixture_connections',
@@ -2634,13 +2786,14 @@ const supervisedWorkerContracts = [
   { name: 'account-deletion-recovery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(1_200))', draining: false },
   { name: 'upload-storage-reconciliation', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(600))', draining: false },
   { name: 'archive-retention', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(retention_max_silence)', draining: false },
+  { name: 'pubsub-subscription-cleanup', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(subscription_cleanup::MAX_SILENCE)', draining: false },
   { name: 'admin-session-cleanup', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(90))', draining: false },
   { name: 'redis-pubsub', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(45))', draining: false },
   { name: 'cluster-maintenance', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(90))', draining: false },
   { name: 'cluster-failure-policy', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(std::time::Duration::from_secs(15))', draining: false },
   { name: 'cluster-muc-outbox', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: false },
   { name: 'locked-muc-expiry', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(20))', draining: false },
-  { name: 'runtime-control-refresh', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(5))', draining: false },
+  { name: 'runtime-control-refresh', criticality: 'Critical', mode: 'Continuous', watchdog: 'Some(max_silence)', draining: false },
   { name: 'sm-authority-listener', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(15))', draining: false },
   { name: 'sm-suspension-recovery', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(30))', draining: true },
   { name: 'caps-side-effects', criticality: 'Restartable', mode: 'Continuous', watchdog: 'Some(Duration::from_secs(60))', draining: true },
@@ -2659,6 +2812,7 @@ const workerResponsibilityEvidence = {
   'account-deletion-recovery': ['src/main.rs', '`main`', '1,200 s'],
   'upload-storage-reconciliation': ['src/main.rs', '`main`', '600 s'],
   'archive-retention': ['src/main.rs', '`main`', 'derived retention'],
+  'pubsub-subscription-cleanup': ['src/main.rs', '`main`, standalone only', '110 s'],
   'admin-session-cleanup': ['src/main.rs', '`main`', '90 s'],
   'redis-pubsub': ['src/main.rs', '`main`, cluster only', '45 s'],
   'cluster-maintenance': ['src/main.rs', '`main`, cluster only', '90 s'],
@@ -2677,11 +2831,12 @@ const workerResponsibilityEvidence = {
 };
 const workerDocumentBehaviorEvidence = {
   'abuse-key-deployment-authority': ['first returned validation error/timeout'],
-  'upload-storage-reconciliation': ['three consecutive DB/provider/backlog reports'],
+  'upload-storage-reconciliation': ['three consecutive DB/provider/backlog reports', 'waiting ticks only pulse'],
   'cluster-maintenance': ['authentication or user-agent login generation'],
   'cluster-failure-policy': ['any terminal attempt or silence cancels'],
   'cluster-muc-outbox': ['in every mode', 'single-node PostgreSQL maintenance'],
   'sm-authority-listener': ['5 s liveness tick'],
+  'pubsub-subscription-cleanup': ['60 s', '40 s', '1,000', 'delivery'],
 };
 const productionRustSources = [];
 const pendingResponsibilitySources = [path.join(root, 'src')];
@@ -2699,12 +2854,18 @@ while (pendingResponsibilitySources.length > 0) {
     }
   }
 }
-const productionRustSource = productionRustSources.map(({ source }) => source).join('\n');
-const workerRegistrationMatches = [
-  ...productionRustSource.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g),
-];
-const composedWorkers = workerRegistrationMatches.map((match) => match[2]);
-assertExactUniqueInventory('supervised-worker', composedWorkers, supervisedWorkers);
+// Maintenance is an independently selected process role. Qualify only that
+// reviewed composition root; a duplicate in any other source still fails.
+// The companion gate proves the explicit standalone guard, early maintenance
+// return and exact maintenance capability/worker inventory before this allow.
+verifySubserverBoundaries(readSubserverSources());
+const roleIdentity = (relative, name) => relative === 'src/subservers.rs' ? `maintenance/${name}` : name;
+const composedWorkers = productionRustSources.flatMap(({ relative, source }) =>
+  [...source.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g)]
+    .map((match) => roleIdentity(relative, match[2])),
+);
+assertExactUniqueInventory('supervised-worker', composedWorkers, [...supervisedWorkers,
+  'maintenance/archive-retention', 'maintenance/pubsub-subscription-cleanup']);
 for (const contract of supervisedWorkerContracts) {
   const [expectedSource, documentedOwner, documentedWatchdog] =
     workerResponsibilityEvidence[contract.name] ?? [];
@@ -2763,14 +2924,12 @@ for (const contract of supervisedWorkerContracts) {
     }
   }
 }
-const healthObservers = [
-  ...productionRustSource.matchAll(/\.register_observer\(\s*"([^"]+)"/g),
-].map((match) => match[1]);
-if (healthObservers.length !== 1 || healthObservers[0] !== 'session-cleanup') {
-  throw new Error(
-    `production health-observer inventory differs from the reviewed responsibility model: ${healthObservers.join(', ')}`,
-  );
-}
+const healthObservers = productionRustSources.flatMap(({ relative, source }) =>
+  [...source.matchAll(/\.register_observer\(\s*"([^"]+)"/g)]
+    .map((match) => roleIdentity(relative, match[1])),
+);
+assertExactUniqueInventory('health-observer', healthObservers,
+  ['session-cleanup', 'maintenance/maintenance-ownership']);
 const sessionCleanupRow = responsibilityDocument
   .split(/\r?\n/)
   .find((line) => line.includes('| `session-cleanup` |'));

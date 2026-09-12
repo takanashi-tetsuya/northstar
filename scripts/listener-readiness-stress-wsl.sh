@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Exercise the migrated child-owned listener fixtures under deliberate parallel
-# startup pressure.  This is an explicit W5 stress target, not a substitute
-# for the normal protocol suites: every worker runs a complete two-node MIX or
-# federation fixture and records its own isolated transcript.  Each worker is
-# privately process-group supervised; an expired worker is a failure, never a
-# reason to retry, serialize, or quietly skip part of the prescribed matrix.
+# runtime pressure after CPU-bounded cold-start batches. Every worker still
+# runs a complete two-node MIX or federation fixture, and all pairs are live
+# before business release. This does not claim simultaneous whole-fleet cold
+# start capacity. Each worker is privately process-group supervised; failure
+# never retries a worker or removes a pair from the prescribed matrix.
 
 set -euo pipefail
 
@@ -16,6 +16,10 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$project_dir/target-wsl}"
 fi
 cd "$project_dir"
+source "$project_dir/scripts/lib/runtime-test-profile.sh"
+# This capacity lane always measures optimized code with development checks.
+# Child fixtures receive the exact same profile; ordinary integrations use dev.
+fixture_select_runtime_profile runtime-test
 
 mode="regular"
 fixture="federation"
@@ -69,6 +73,12 @@ runtime_primary_min_connections=""
 runtime_primary_max_connections=""
 fixture_control_connections_per_pair=0
 fixture_control_connections=""
+observer_connections="${NORTHSTAR_LISTENER_STRESS_OBSERVER_CONNECTIONS:-0}"
+case "$observer_connections" in 0|1) ;; *)
+  echo "listener stress observer connections must be 0 or 1" >&2
+  exit 2
+  ;;
+esac
 required_fixture_connections=""
 fixture_actual_max_connections=""
 [[ "$worker_timeout_seconds" =~ ^[1-9][0-9]*$ ]] \
@@ -97,11 +107,11 @@ database_min_connections=$((10#$database_min_connections))
 readonly stress_child_count=$((pairs * 2))
 
 effective_cpu_count() {
-  # Respect a cgroup CPU quota when one exists. `nproc` alone reports the host
-  # topology inside some CI containers and would recreate the oversubscription
-  # this resource contract is meant to prevent.
+  # nproc respects the process affinity/cpuset; getconf reports the whole
+  # machine even when this fixture is assigned fewer CPUs. Also clamp by a
+  # cgroup quota, which need not match the number of allowed processors.
   local host_count quota period quota_count v1_quota v1_period
-  host_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || printf '1')"
+  host_count="$(env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')"
   [[ "$host_count" =~ ^[1-9][0-9]*$ ]] || host_count=1
   quota_count="$host_count"
   if [[ -r /sys/fs/cgroup/cpu.max ]]; then
@@ -129,6 +139,10 @@ effective_cpu_count() {
 # unchanged.  Passing the value explicitly also prevents an ambient shell
 # setting from silently changing the matrix's resource contract.
 effective_cpu_count="$(effective_cpu_count)"
+database_cleanup_jobs=$effective_cpu_count
+((database_cleanup_jobs >= 1)) || database_cleanup_jobs=1
+((database_cleanup_jobs <= 4)) || database_cleanup_jobs=4
+startup_pair_limit="$(python3 "$project_dir/scripts/listener-stress-phases.py" --startup-pair-concurrency "$effective_cpu_count" "$pairs")"
 readonly scheduler_reserved_cpus=$(((effective_cpu_count + 3) / 4))
 available_scheduler_cpus=$((effective_cpu_count - scheduler_reserved_cpus))
 ((available_scheduler_cpus >= 1)) || available_scheduler_cpus=1
@@ -188,6 +202,7 @@ if ! mkdir -p -- "$diagnostic_root"; then
 fi
 runtime_dir="$(mktemp -d /tmp/northstar-listener-stress.XXXXXX)"
 runtime_dir_resolved="$(readlink -f -- "$runtime_dir")"
+mkdir --mode=0700 -- "$runtime_dir/certificates"
 diagnostic_root_resolved="$(readlink -f -- "$diagnostic_root")"
 case "$diagnostic_root_resolved" in
   "$runtime_dir_resolved"|"$runtime_dir_resolved"/*)
@@ -208,6 +223,11 @@ readonly parent_diagnostic_max_bytes=524288
 readonly parent_phase_log_tail_bytes=131072
 declare -a workers=()
 declare -a worker_groups=()
+declare -a round_logs=()
+declare -a failed_worker_logs=()
+declare -a failure_log_priority=()
+failure_log_round=""
+failure_log_priority_captured=false
 declare -a round_databases=()
 declare -a template_databases=()
 declare -a cleanup_debt=()
@@ -218,6 +238,31 @@ mix_login_slot_dir=""
 mix_phase_dir=""
 mix_phase_run_nonce=""
 mix_phase_round=""
+startup_phase_dir=""
+startup_phase_nonce=""
+parent_stage=""
+parent_stage_started_ns=""
+
+parent_stage_begin() {
+  parent_stage="$1"
+  parent_stage_started_ns="$(python3 -c 'import time; print(time.monotonic_ns())')"
+}
+
+parent_stage_end() {
+  [[ -n "$parent_stage" ]] || return 0
+  local timing
+  timing="$(python3 - "$parent_stage" "$parent_stage_started_ns" "${round:-0}" "$fixture" "$1" <<'PY_STAGE_TIMING'
+import json, sys, time
+phase, start, round_number, fixture, status = sys.argv[1:]
+print('listener_stress_timing=' + json.dumps(dict(
+    phase=phase, round=int(round_number), fixture=fixture, status=int(status),
+    elapsed_ms=round((time.monotonic_ns()-int(start))/1e6, 3)), separators=(',', ':')))
+PY_STAGE_TIMING
+)" || return 1
+  parent_stage=""
+  printf '%s\n' "$timing"
+  record_parent_diagnostic "$timing"
+}
 
 # Every stress worker must own two independent database states: one for each
 # federated domain.  Applying the normal migrator from 50 workers would be
@@ -288,6 +333,30 @@ fixture_database_psql() {
     --set ON_ERROR_STOP=1 "$@"
 }
 
+publish_parent_failure_marker() {
+  [[ -n "${NORTHSTAR_LISTENER_STRESS_FAILURE_MARKER:-}" ]] || return 0
+  python3 - "$project_dir" <<'PY_OBSERVER_FAILURE'
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts")
+from github_ci_supervisor import publish_failure_marker
+if not publish_failure_marker("lifecycle"):
+    print("listener_observer_error=parent_failure_marker_unavailable", file=sys.stderr)
+PY_OBSERVER_FAILURE
+}
+
+publish_observer_round_map() {
+  [[ "$observer_connections" == 1 ]] || return 0
+  local pair key
+  {
+    for ((pair = 1; pair <= pairs; pair++)); do
+      key="${round}:${pair}"
+      printf '%s\tA\t%s\n' "$pair" "${pair_database_a[$key]}"
+      printf '%s\tB\t%s\n' "$pair" "${pair_database_b[$key]}"
+    done
+  } | python3 "$project_dir/scripts/listener-readiness-observed-wsl.py" \
+    --publish-round-map "$round" --map-pairs "$pairs"
+}
+
 record_parent_diagnostic() {
   # All callers pass fixed phase labels or generated private database names.
   # Raw command output is written only inside the 0700 runtime directory and is
@@ -295,9 +364,85 @@ record_parent_diagnostic() {
   printf '%s\n' "$*" >>"$parent_diagnostic_raw" || true
 }
 
-initialize_mix_federation_login_slots() {
-  [[ "$fixture" == mix-federation ]] || return 0
+record_host_pressure() {
+  # Fixed kernel counters only: no environment, process arguments, or SQL text.
+  # Sample at phase boundaries and on failure, without a concurrent observer.
+  python3 - "$1" >>"$parent_diagnostic_raw" 2>&1 <<'PY' || true
+import json, os, re, sys, time
+from pathlib import Path
 
+result = {"phase": sys.argv[1], "monotonic_ns": time.monotonic_ns()}
+def numeric_fields(path, allowed):
+    values = {}
+    try:
+        with Path(path).open() as stream:
+            for line in stream.read(16384).splitlines():
+                fields = line.replace(":", "").split()
+                if len(fields) >= 2 and fields[0] in allowed and fields[1].isdigit():
+                    values[fields[0]] = int(fields[1])
+    except OSError as error:
+        values["read_errno"] = error.errno
+    return values
+
+cpus = os.sched_getaffinity(0)
+result["cpu_ticks"] = {}
+with Path("/proc/stat").open() as stream:
+    for line in stream.read(16384).splitlines():
+        fields = line.split()
+        if fields and re.fullmatch(r"cpu[0-9]+", fields[0]) and int(fields[0][3:]) in cpus:
+            result["cpu_ticks"][fields[0]] = [int(value) for value in fields[1:9]]
+result["memory_kib"] = numeric_fields("/proc/meminfo", {"MemTotal", "MemAvailable", "SwapTotal", "SwapFree"})
+for category in ("cpu", "memory", "io"):
+    try:
+        with Path(f"/proc/pressure/{category}").open() as stream:
+            result[f"{category}_pressure_us"] = {
+                match.group(1): int(match.group(2))
+                for match in re.finditer(r"^(some|full) .*?total=([0-9]+)$", stream.read(4096), re.MULTILINE)
+            }
+    except OSError as error:
+        result[f"{category}_pressure_errno"] = error.errno
+result["cgroup_memory_events"] = numeric_fields("/sys/fs/cgroup/memory.events", {"low", "high", "max", "oom", "oom_kill", "oom_group_kill"})
+result["cgroup_cpu_stat"] = numeric_fields("/sys/fs/cgroup/cpu.stat", {"usage_usec", "user_usec", "system_usec", "nr_periods", "nr_throttled", "throttled_usec"})
+# Attribute a CPU burst without collecting process arguments, environment,
+# database names, or command text. These cumulative totals can be compared
+# across phase boundaries while the same 100 servers remain live. Counts and
+# truncation flags make process exits or an incomplete sample visible.
+process_started = time.monotonic_ns()
+process_budget_ns = 250_000_000
+process_limit = 4096
+groups = {name: {"count": 0, "cpu_ticks": 0} for name in ("server", "postgres", "python", "other")}
+scanned = unreadable = 0
+truncated = False
+with os.scandir("/proc") as entries:
+    for entry in entries:
+        if not entry.name.isdecimal():
+            continue
+        if scanned >= process_limit or time.monotonic_ns() - process_started >= process_budget_ns:
+            truncated = True
+            break
+        scanned += 1
+        try:
+            with Path(entry.path, "stat").open() as stream:
+                raw = stream.read(4096)
+            prefix, fields = raw.rsplit(")", 1)
+            command = prefix.split("(", 1)[1]
+            fields = fields.split()
+            ticks = int(fields[11]) + int(fields[12])
+            group = ("server" if command.startswith("rust-xmpp") else
+                     "postgres" if command == "postgres" else
+                     "python" if re.fullmatch(r"python(?:[0-9]+(?:\.[0-9]+)?)?", command) else "other")
+            groups[group]["count"] += 1
+            groups[group]["cpu_ticks"] += ticks
+        except (OSError, ValueError, IndexError):
+            unreadable += 1
+result["process_cpu"] = {"groups": groups, "tick_hz": os.sysconf("SC_CLK_TCK"),
+                         "scanned": scanned, "unreadable": unreadable, "truncated": truncated,
+                         "elapsed_ns": time.monotonic_ns() - process_started}
+print("host_pressure=" + json.dumps(result, sort_keys=True, separators=(",", ":")))
+PY
+}
+
+initialize_mix_federation_login_slots() {
   local slot index resolved_slot_dir expected_slot
   mix_login_slot_dir="$runtime_dir/mix-federation-login-slots"
   mkdir --mode=0700 -- "$mix_login_slot_dir" || return 1
@@ -338,58 +483,21 @@ initialize_mix_federation_phase_barrier() {
   record_parent_diagnostic "phase=mix-federation-setup-barrier round=$round status=initialized pairs=$pairs"
 }
 
-mix_phase_worker_leaders_alive() {
-  local pid state
-  for pid in "${workers[@]}"; do
-    state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
-    [[ -n "$state" && "$state" != Z* ]] || return 1
-  done
-}
-
 await_mix_federation_setup_barrier() {
   [[ "$fixture" == mix-federation ]] || return 0
 
-  local expected_pairs="$1" deadline phase_status phase_log
+  local expected_pairs="$1"
   [[ "$expected_pairs" =~ ^[1-9][0-9]*$ && "$mix_phase_round" =~ ^[1-9][0-9]*$ \
      && -n "$mix_phase_dir" && "$mix_phase_run_nonce" =~ ^[0-9a-f]{64}$ ]] || return 1
-  deadline=$((SECONDS + worker_timeout_seconds))
-  phase_log="$runtime_dir/parent-mix-federation-setup-barrier-status.raw.log"
-  while ((SECONDS < deadline)); do
-    # A status of one is the normal "not every pair has published ready"
-    # state.  Capture it inside the conditional: reading `$?` after a failed
-    # `if` with no `else` observes the status of the compound `if` (zero),
-    # which would incorrectly classify normal barrier polling as a fatal
-    # record error and tear down the workers before they can publish.
-    if python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --phase-parent-status \
-      "$mix_phase_dir" "$mix_phase_run_nonce" "$mix_phase_round" "$expected_pairs" >"$phase_log" 2>&1; then
-      phase_status=0
-    else
-      phase_status=$?
-    fi
-    if ((phase_status == 0)); then
-      if ! run_parent_phase "mix-federation-setup-barrier-release-r$mix_phase_round" \
-        python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --phase-parent-release \
-        "$mix_phase_dir" "$mix_phase_run_nonce" "$mix_phase_round" "$expected_pairs"; then
-        return 1
-      fi
-      record_parent_diagnostic "phase=mix-federation-setup-barrier round=$mix_phase_round status=released pairs=$expected_pairs"
-      return 0
-    fi
-    if ((phase_status != 1)); then
-      record_parent_phase_failure "mix-federation-setup-barrier-status-r$mix_phase_round" "$phase_status" "$phase_log"
-      echo "listener stress MIX setup barrier rejected a readiness record" >&2
-      return 1
-    fi
-    if ! mix_phase_worker_leaders_alive; then
-      record_parent_diagnostic "phase=mix-federation-setup-barrier round=$mix_phase_round status=worker_exited_before_release"
-      echo "listener stress MIX worker exited before the all-pair setup release" >&2
-      return 1
-    fi
-    sleep 0.025
-  done
-  record_parent_diagnostic "phase=mix-federation-setup-barrier round=$mix_phase_round status=deadline"
-  echo "listener stress MIX setup barrier did not receive every signed readiness record" >&2
-  return 1
+  # One coordinator retains the deadline and process identities across polls;
+  # pending pairs do not create a new interpreter and ps process for every tick.
+  if ! run_parent_phase "mix-federation-setup-barrier-release-r$mix_phase_round" \
+    python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --phase-parent-await-release \
+    "$mix_phase_dir" "$mix_phase_run_nonce" "$mix_phase_round" "$expected_pairs" \
+    "$worker_timeout_seconds" "${workers[@]}"; then
+    return 1
+  fi
+  record_parent_diagnostic "phase=mix-federation-setup-barrier round=$mix_phase_round status=released pairs=$expected_pairs"
 }
 
 verify_mix_federation_listener_ledger() {
@@ -503,29 +611,64 @@ record_cleanup_debt() {
   record_parent_diagnostic "phase=cleanup resource=database resource_name=$database_name ownership=fixture-verified state=$reason"
 }
 
+capture_failure_log_priority() {
+  # Freeze the selection before parent cancellation makes every worker exit.
+  # This is diagnostic evidence only; it never authorizes cleanup or release.
+  [[ "$failure_log_priority_captured" == false ]] || return 0
+  failure_log_priority_captured=true
+  failure_log_round="${round:-}"
+  [[ "$failure_log_round" =~ ^[1-9][0-9]*$ ]] || failure_log_round=""
+  failure_log_priority=("${failed_worker_logs[@]}")
+  local index log pid process_stat process_fields process_state
+  for index in "${!round_logs[@]}"; do
+    log="${round_logs[$index]}"
+    pid="${workers[$index]:-}"
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+    if ! kill -0 "$pid" 2>/dev/null; then
+      failure_log_priority+=("$log")
+    elif IFS= read -r process_stat <"/proc/$pid/stat" 2>/dev/null; then
+      process_fields="${process_stat##*) }"
+      process_state="${process_fields%% *}"
+      if [[ "$process_state" == Z || "$process_state" == X ]]; then
+        failure_log_priority+=("$log")
+      fi
+    fi
+  done
+}
+
 append_runtime_log_tails() {
-  # Worker commands own their individual redacted supervisor artifacts.  This
-  # parent-side artifact supplements them with a bounded selection of local
-  # lifecycle logs, without echoing potentially credential-rich raw logs into
-  # the job console during cleanup.
-  local log collected=0
-  while IFS= read -r -d '' log; do
+  # Prefer the failed workers and current round, rather than spending the
+  # bounded artifact on lexically early logs from already successful rounds.
+  capture_failure_log_priority
+  local log index truncated=false
+  local -a selected=()
+  local -A seen=()
+  for log in "${failure_log_priority[@]}" "${round_logs[@]}" "$runtime_dir"/*.log; do
+    [[ -f "$log" && ! -L "$log" ]] || continue
+    [[ "$log" == "$runtime_dir/"* && "${log#"$runtime_dir/"}" != */* ]] || continue
     [[ "$log" == "$parent_diagnostic_raw" || "$log" == "$runtime_dir/parent-diagnostics.final.raw.log" ]] && continue
-    if (( collected >= 12 )); then
-      record_parent_diagnostic "runtime_log_tails_truncated=true retained=$collected"
+    # The authority producer retains its separate bounded snapshots below.
+    [[ "${log##*/}" == mix-federation-authority-*.raw.log ]] && continue
+    [[ -z "${seen[$log]+present}" ]] || continue
+    seen["$log"]=1
+    if (( ${#selected[@]} >= 12 )); then
+      truncated=true
       break
     fi
-    record_parent_diagnostic "--- runtime_log=$(basename "$log") bounded_tail ---"
+    selected+=("$log")
+  done
+  if [[ "$truncated" == true ]]; then
+    record_parent_diagnostic "runtime_log_tails_truncated=true retained=${#selected[@]}"
+  fi
+  # The final artifact takes a bounded suffix. Write the highest priority
+  # worker last so older/sibling logs cannot evict the first failure.
+  # Array iteration has no producer pipe to break when the 12-log cap is hit.
+  for ((index = ${#selected[@]} - 1; index >= 0; index--)); do
+    log="${selected[$index]}"
+    record_parent_diagnostic "--- runtime_log=${log##*/} bounded_tail ---"
     tail -c 32768 -- "$log" >>"$parent_diagnostic_raw" || true
     printf '\n' >>"$parent_diagnostic_raw" || true
-    collected=$((collected + 1))
-  # Authority snapshots are already copied into the parent transcript by
-  # `append_mix_federation_database_snapshots`.  Keeping their raw scratch
-  # files in this generic 12-log selection used to evict the actual worker
-  # transcripts precisely when a high-parallelism run failed, making the
-  # retained artifact unable to explain the worker failure.
-  done < <(find "$runtime_dir" -maxdepth 1 -type f -name '*.log' \
-    ! -name 'mix-federation-authority-*.raw.log' -print0 | LC_ALL=C sort -z)
+  done
 
   # Detailed claim eligibility is the last-resort evidence for a durable MIX
   # stall. Append it after ordinary worker logs so the final bounded artifact
@@ -547,6 +690,16 @@ append_runtime_log_tails() {
     [[ -f "$log" && ! -L "$log" ]] || continue
     record_parent_diagnostic "--- mix_federation_dead_letter_detail=$(basename "$log") retained_tail ---"
     tail -c 32768 -- "$log" >>"$parent_diagnostic_raw" || true
+    printf '\n' >>"$parent_diagnostic_raw" || true
+  done
+
+  # A delayed S2S head can hide every successor from the normal claim scan.
+  # Preserve the separate, content-free head view after the worker tails;
+  # its producer selects at most 32 heads in each of four private databases.
+  for log in "$runtime_dir"/mix-federation-authority-s2s-head-detail-*.raw.log; do
+    [[ -f "$log" && ! -L "$log" ]] || continue
+    record_parent_diagnostic "--- mix_federation_s2s_fifo_head_detail=$(basename "$log") retained_tail ---"
+    tail -c 16384 -- "$log" >>"$parent_diagnostic_raw" || true
     printf '\n' >>"$parent_diagnostic_raw" || true
   done
 }
@@ -654,6 +807,7 @@ append_mix_federation_database_snapshots() {
       if (( detail_database_count < detail_database_limit )); then
         append_mix_federation_recipient_claim_detail "$database_name" "$own_domain"
         append_mix_federation_dead_letter_detail "$database_name"
+        append_mix_federation_s2s_fifo_head_detail "$database_name"
         detail_database_count=$((detail_database_count + 1))
       fi
     fi
@@ -672,6 +826,7 @@ append_mix_federation_database_snapshots() {
       esac
       append_mix_federation_recipient_claim_detail "$database_name" "$own_domain"
       append_mix_federation_dead_letter_detail "$database_name"
+      append_mix_federation_s2s_fifo_head_detail "$database_name"
       detail_database_count=$((detail_database_count + 1))
     done
     record_parent_diagnostic "mix_federation_claim_detail_selection=fallback_unattributed databases=$detail_database_count"
@@ -831,6 +986,56 @@ append_mix_federation_dead_letter_detail() {
   fi
 }
 
+append_mix_federation_s2s_fifo_head_detail() {
+  # Run only for the same bounded database selection as the MIX details.
+  # This independent read-only query cannot suppress those other snapshots.
+  # Never select a stanza, raw domain/JID, error, or token into its output.
+  local database_name="$1" detail_snapshot status
+  private_database_name_is_valid "$database_name" || return 1
+  detail_snapshot="$runtime_dir/mix-federation-authority-s2s-head-detail-${database_name}.raw.log"
+  if PGCONNECT_TIMEOUT=5 \
+    PGOPTIONS='-c statement_timeout=5000 -c lock_timeout=2000 -c default_transaction_read_only=on' \
+    fixture_database_psql "$database_name" --no-psqlrc --tuples-only --no-align \
+    --field-separator='|' --command "
+      WITH snapshot_clock AS MATERIALIZED (SELECT clock_timestamp() AS now_at),
+      heads AS (
+        SELECT DISTINCT ON (queued.target_domain)
+               queued.target_domain,queued.id,queued.enqueue_sequence,
+               queued.attempt_count,queued.next_attempt_at,
+               queued.lock_token,queued.locked_until,
+               count(*) OVER (PARTITION BY queued.target_domain) - 1 AS successor_count
+          FROM s2s_outbox queued
+          CROSS JOIN snapshot_clock clock
+         WHERE queued.expires_at > clock.now_at
+         ORDER BY queued.target_domain,queued.enqueue_sequence
+         LIMIT 32
+      )
+      SELECT 's2s_fifo_head_detail_v1',
+             substr(md5(head.target_domain),1,16),substr(md5(head.id::text),1,16),
+             head.enqueue_sequence,head.attempt_count,
+             (head.next_attempt_at <= clock.now_at) AS retry_due,
+             CEIL(GREATEST(0,EXTRACT(EPOCH FROM (head.next_attempt_at - clock.now_at))))::bigint
+               AS seconds_until_due,
+             CASE WHEN head.lock_token IS NULL AND head.locked_until > clock.now_at THEN 'time_only'
+                  WHEN head.lock_token IS NULL THEN 'none'
+                  WHEN head.locked_until > clock.now_at THEN 'active'
+                  ELSE 'expired' END AS lease_state,
+             head.successor_count
+        FROM heads head
+        CROSS JOIN snapshot_clock clock
+       ORDER BY head.target_domain,head.enqueue_sequence;
+    " >"$detail_snapshot" 2>&1; then
+    record_parent_diagnostic "--- mix_federation_s2s_fifo_head_detail database=$database_name bounded ---"
+    tail -c 16384 -- "$detail_snapshot" >>"$parent_diagnostic_raw" || true
+    printf '\n' >>"$parent_diagnostic_raw" || true
+  else
+    status=$?
+    record_parent_diagnostic "mix_federation_s2s_fifo_head_detail database=$database_name status=query_failed exit_status=$status"
+    tail -c 4096 -- "$detail_snapshot" >>"$parent_diagnostic_raw" || true
+    printf '\n' >>"$parent_diagnostic_raw" || true
+  fi
+}
+
 retain_parent_diagnostic_artifact() {
   local exit_status="$1" source_file artifact temporary_artifact target_artifact debt
 
@@ -839,6 +1044,10 @@ retain_parent_diagnostic_artifact() {
     printf 'listener_readiness_stress_failure=true\n'
     printf 'fixture=%s mode=%s exit_status=%s\n' "$fixture" "$mode" "$exit_status"
     printf 'first_failure_phase=%s\n' "${parent_failure_phase:-unknown}"
+    printf 'failure_round=%s\n' "${failure_log_round:-unknown}"
+    if (( ${#failure_log_priority[@]} > 0 )); then
+      printf 'priority_worker_log=%s\n' "${failure_log_priority[0]##*/}"
+    fi
     if (( ${#cleanup_debt[@]} > 0 )); then
       printf 'cleanup_debt_count=%s\n' "${#cleanup_debt[@]}"
       for debt in "${cleanup_debt[@]}"; do
@@ -870,6 +1079,7 @@ retain_parent_diagnostic_artifact() {
       printf 'listener_readiness_stress_failure=true\n'
       printf 'fixture=%s mode=%s exit_status=%s\n' "$fixture" "$mode" "$exit_status"
       printf 'first_failure_phase=%s\n' "${parent_failure_phase:-unknown}"
+      printf 'failure_round=%s\n' "${failure_log_round:-unknown}"
       for debt in "${cleanup_debt[@]}"; do
         printf 'cleanup_debt=%s\n' "$debt"
       done
@@ -950,7 +1160,7 @@ assert_fixture_connection_capacity() {
   ((fixture_actual_max_connections >= required_fixture_connections)) || {
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=database-capacity-attestation
     record_parent_diagnostic "phase=database-capacity-attestation status=insufficient required=$required_fixture_connections actual=$fixture_actual_max_connections"
-    echo "fixture PostgreSQL max_connections=$fixture_actual_max_connections is below the required $required_fixture_connections for $stress_child_count children × $runtime_connections_per_child runtime connections plus $fixture_control_connections fixture-control connections" >&2
+    echo "fixture PostgreSQL max_connections=$fixture_actual_max_connections is below the required $required_fixture_connections for $stress_child_count children × $runtime_connections_per_child runtime connections plus $fixture_control_connections fixture-control and $observer_connections observer connections" >&2
     return 1
   }
   record_parent_diagnostic "phase=database-capacity-attestation status=validated actual=$fixture_actual_max_connections required=$required_fixture_connections"
@@ -1200,14 +1410,35 @@ provision_pair_databases() {
 }
 
 drop_round_databases() {
-  local database_name failed=0
+  local database_name cleanup_status failed=0 helper_status=0
   local -a remaining=()
-  for database_name in "${round_databases[@]}"; do
-    if ! drop_private_database "$database_name"; then
-      remaining+=("$database_name")
-      failed=1
-    fi
-  done
+  ((${#round_databases[@]} > 0)) || return 0
+  # This follows worker shutdown attempts, retaining the scoped FORCE backstop
+  # on failure. The original list is retained until every result is checked;
+  # malformed/missing output forgets nothing.
+  local result="$runtime_dir/database-cleanup-result.json"
+  local verified="$runtime_dir/database-cleanup-verified.tsv"
+  printf '%s\n' "${round_databases[@]}" | python3 "$project_dir/scripts/listener-database-cleanup.py" \
+    --prefix "$database_prefix" --port "$database_fixture_port" --jobs "$database_cleanup_jobs" \
+    >"$result" 2>>"$parent_diagnostic_raw" || helper_status=$?
+  if ! printf '%s\n' "${round_databases[@]}" | python3 "$project_dir/scripts/listener-database-cleanup.py" \
+    --prefix "$database_prefix" --verify-result "$result" >"$verified" 2>>"$parent_diagnostic_raw"; then
+    for database_name in "${round_databases[@]}"; do
+      record_cleanup_debt "$database_name" cleanup-result-unavailable
+    done
+    return 1
+  fi
+  while IFS=$'\t' read -r database_name cleanup_status; do
+    case "$cleanup_status" in
+      dropped|absent) ;;
+      *)
+        remaining+=("$database_name")
+        record_cleanup_debt "$database_name" "$cleanup_status"
+        failed=1
+        ;;
+    esac
+  done <"$verified"
+  ((helper_status == 0)) || failed=1
   round_databases=("${remaining[@]}")
   if (( failed == 0 )); then
     pair_database_a=()
@@ -1300,7 +1531,15 @@ reap_workers() {
 
 start_stress_worker() {
   local round="$1" pair="$2" log_file="$3" database_a="$4" database_b="$5" control_file worker_pid worker_group candidate_pgid candidate_sid
-  local -a fixture_environment=()
+  local -a fixture_environment=(
+    "NORTHSTAR_RUNTIME_TEST_PROFILE=$fixture_cargo_profile"
+    "NORTHSTAR_LISTENER_STRESS_PHASE_DIR=$startup_phase_dir"
+    "NORTHSTAR_LISTENER_STRESS_PHASE_NONCE=$startup_phase_nonce"
+    "NORTHSTAR_LISTENER_STRESS_PHASE_ROUND=$round"
+    "NORTHSTAR_LISTENER_STRESS_PHASE_PAIR=$pair"
+    "NORTHSTAR_MIX_FEDERATION_LOGIN_SLOT_DIR=$mix_login_slot_dir"
+    "NORTHSTAR_MIX_FEDERATION_LOGIN_SLOT_COUNT=$login_slot_count"
+  )
   private_database_name_is_valid "$database_a" && private_database_name_is_valid "$database_b" || {
     echo "listener stress worker received an invalid private database name" >&2
     return 1
@@ -1312,8 +1551,6 @@ start_stress_worker() {
       return 1
     }
     fixture_environment+=(
-      "NORTHSTAR_MIX_FEDERATION_LOGIN_SLOT_DIR=$mix_login_slot_dir"
-      "NORTHSTAR_MIX_FEDERATION_LOGIN_SLOT_COUNT=$login_slot_count"
       "NORTHSTAR_MIX_FEDERATION_PHASE_CONTROL_DIR=$mix_phase_dir"
       "NORTHSTAR_MIX_FEDERATION_PHASE_RUN_NONCE=$mix_phase_run_nonce"
       "NORTHSTAR_MIX_FEDERATION_PHASE_ROUND=$mix_phase_round"
@@ -1329,6 +1566,8 @@ start_stress_worker() {
       "NORTHSTAR_LISTENER_STRESS_DATABASE_B=$database_b" \
       "NORTHSTAR_LISTENER_STRESS_DATABASE_HOST=$database_fixture_host" \
       "NORTHSTAR_LISTENER_STRESS_DATABASE_PORT=$database_fixture_port" \
+      "NORTHSTAR_LISTENER_STRESS_CERTIFICATE_CACHE=$runtime_dir/certificates/pair-$pair" \
+      "NORTHSTAR_LISTENER_STRESS_CERTIFICATE_SCOPE=$database_prefix:$pair" \
       "DATABASE_MAX_CONNECTIONS=$database_max_connections" \
       "DATABASE_MIN_CONNECTIONS=$database_min_connections" \
       "TOKIO_WORKER_THREADS=$tokio_worker_threads" \
@@ -1359,10 +1598,14 @@ start_stress_worker() {
 cleanup() {
   status=$?
   trap - EXIT INT TERM
+  parent_stage_end "$status" || status=1
   # Do this before any potentially slow database cleanup.  A migration or
   # preflight failure must leave redacted evidence even if its later cleanup
   # cannot make progress; the artifact is refreshed below once cleanup returns.
   if ((status != 0)); then
+    capture_failure_log_priority
+    publish_parent_failure_marker || true
+    record_host_pressure failure-before-cleanup
     if ! retain_parent_diagnostic_artifact "$status"; then
       echo "listener stress failed to retain its initial sanitized parent diagnostic artifact" >&2
       status=1
@@ -1434,15 +1677,20 @@ resolve_current_build_binary() {
     configured_target_dir="$project_dir/$configured_target_dir"
   fi
 
-  # Compile exactly once and resolve the binary immediately afterwards.  Cargo
-  # fingerprints make a successful build authoritative even when the file was
-  # already up to date; there is no fallback to an unrelated/default target
-  # directory or a previously discovered executable.
-  cargo_args=(--locked)
+  # Compile once locally, or verify the smoke binary from this exact CI run.
+  # Both paths enforce the runtime profile and resolve the selected executable
+  # immediately; an invalid artifact must fail without a fallback build.
+  run_parent_phase preflight-profile python3 "$project_dir/scripts/check-runtime-test-profile.py" \
+    --manifest "$project_dir/Cargo.toml" --check-environment || return 1
+  cargo_args=(--locked --profile "$fixture_cargo_profile" --message-format=json-render-diagnostics)
   [[ "${XMPP_TEST_OFFLINE:-true}" == false ]] || cargo_args+=(--offline)
-  run_parent_phase preflight-build cargo build "${cargo_args[@]}" --bin rust-xmpp-server || return 1
-
-  candidate="$configured_target_dir/debug/rust-xmpp-server"
+  candidate="$configured_target_dir/$fixture_cargo_profile_directory/rust-xmpp-server"
+  if [[ -n "${NORTHSTAR_RUNTIME_ARTIFACT_DIR:-}" ]]; then
+    run_parent_phase preflight-runtime-artifact python3 "$project_dir/scripts/ci-runtime-artifact.py" restore \
+      --bundle "$NORTHSTAR_RUNTIME_ARTIFACT_DIR" --binary "$candidate" || return 1
+  else
+    run_parent_phase preflight-build cargo build "${cargo_args[@]}" --bin rust-xmpp-server || return 1
+  fi
   if [[ ! -f "$candidate" || ! -x "$candidate" ]]; then
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=preflight-binary
     record_parent_diagnostic "phase=preflight-binary status=missing_or_not_executable"
@@ -1456,14 +1704,19 @@ resolve_current_build_binary() {
     echo "listener stress could not resolve its current build output" >&2
     return 1
   fi
-  if [[ "$resolved_binary" != "$resolved_target_dir/debug/rust-xmpp-server" ]]; then
+  if [[ "$resolved_binary" != "$resolved_target_dir/$fixture_cargo_profile_directory/rust-xmpp-server" ]]; then
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=preflight-binary
     record_parent_diagnostic "phase=preflight-binary status=resolved_outside_expected_target"
     echo "listener stress refused a binary resolved outside CARGO_TARGET_DIR" >&2
     return 1
   fi
+  if [[ -z "${NORTHSTAR_RUNTIME_ARTIFACT_DIR:-}" ]]; then
+    run_parent_phase preflight-build-profile python3 "$project_dir/scripts/check-runtime-test-profile.py" \
+      --build-log "$runtime_dir/parent-preflight-build.raw.log" \
+      --binary "$resolved_binary" --source "$project_dir/src/main.rs" || return 1
+  fi
   binary="$resolved_binary"
-  record_parent_diagnostic "phase=preflight-binary status=validated target_directory=$resolved_target_dir"
+  record_parent_diagnostic "phase=preflight-binary status=validated profile=$fixture_cargo_profile opt_level=2 debug_assertions=true overflow_checks=true target_directory=$resolved_target_dir"
 }
 
 load_runtime_connection_budget() {
@@ -1553,29 +1806,33 @@ print("|".join(str(document[key]) for key in (
   esac
   runtime_connections_per_child=$((database_max_connections + runtime_auxiliary_connections))
   fixture_control_connections=$((pairs * fixture_control_connections_per_pair))
-  required_fixture_connections=$((stress_child_count * runtime_connections_per_child + fixture_control_connections))
-  record_parent_diagnostic "phase=preflight-runtime-budget status=validated schema_version=$schema_version primary_min=$runtime_primary_min_connections primary_max=$runtime_primary_max_connections auxiliary=$runtime_auxiliary_connections fixture_control_per_pair=$fixture_control_connections_per_pair required=$required_fixture_connections"
+  required_fixture_connections=$((stress_child_count * runtime_connections_per_child + fixture_control_connections + observer_connections))
+  record_parent_diagnostic "phase=preflight-runtime-budget status=validated schema_version=$schema_version primary_min=$runtime_primary_min_connections primary_max=$runtime_primary_max_connections auxiliary=$runtime_auxiliary_connections fixture_control_per_pair=$fixture_control_connections_per_pair observer_connections=$observer_connections required=$required_fixture_connections"
 }
 
 # This is deliberately before database attestation, template creation, and any
 # worker provisioning.  A missing or wrong build artifact is a build failure,
 # never a database or listener failure.
+parent_stage_begin build
 resolve_current_build_binary
+parent_stage_end 0
 load_runtime_connection_budget
 assert_private_database_fixture
 assert_fixture_connection_capacity
-record_parent_diagnostic "phase=preflight-resource-profile status=selected profile=$resource_profile effective_cpu_count=$effective_cpu_count tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count fixture_max_connections=$fixture_actual_max_connections"
-echo "listener stress profile: resource_profile=$resource_profile worker_timeout_seconds=$worker_timeout_seconds database_max_connections=$database_max_connections database_min_connections=$database_min_connections runtime_auxiliary_connections=$runtime_auxiliary_connections runtime_connections_per_child=$runtime_connections_per_child stress_child_count=$stress_child_count fixture_control_connections_per_pair=$fixture_control_connections_per_pair fixture_control_connections=$fixture_control_connections required_fixture_connections=$required_fixture_connections fixture_max_connections=$fixture_actual_max_connections effective_cpu_count=$effective_cpu_count scheduler_reserved_cpus=$scheduler_reserved_cpus tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count"
+record_parent_diagnostic "phase=preflight-resource-profile status=selected profile=$resource_profile effective_cpu_count=$effective_cpu_count tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count fixture_max_connections=$fixture_actual_max_connections startup_pair_limit=$startup_pair_limit"
+echo "listener stress profile: resource_profile=$resource_profile worker_timeout_seconds=$worker_timeout_seconds database_max_connections=$database_max_connections database_min_connections=$database_min_connections runtime_auxiliary_connections=$runtime_auxiliary_connections runtime_connections_per_child=$runtime_connections_per_child stress_child_count=$stress_child_count fixture_control_connections_per_pair=$fixture_control_connections_per_pair fixture_control_connections=$fixture_control_connections observer_connections=$observer_connections required_fixture_connections=$required_fixture_connections fixture_max_connections=$fixture_actual_max_connections effective_cpu_count=$effective_cpu_count scheduler_reserved_cpus=$scheduler_reserved_cpus tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count startup_pair_limit=$startup_pair_limit"
 if ! initialize_mix_federation_login_slots; then
   [[ -n "$parent_failure_phase" ]] || parent_failure_phase=mix-federation-login-slots
   record_parent_diagnostic "phase=mix-federation-login-slots status=failed"
   echo "listener stress could not initialize private MIX authentication slots" >&2
   exit 1
 fi
+parent_stage_begin templates
 create_migration_template "$template_database_a" localhost
 create_migration_template "$template_database_b" remote.localhost
 quiesce_migration_template "$template_database_a"
 quiesce_migration_template "$template_database_b"
+parent_stage_end 0
 echo "listener stress database templates ready: fixture=$fixture"
 
 failed=0
@@ -1583,10 +1840,12 @@ for ((round = 1; round <= rounds; round++)); do
   workers=()
   worker_groups=()
   round_logs=()
+  failed_worker_logs=()
   round_databases=()
   pair_database_a=()
   pair_database_b=()
   failed_pair_databases=()
+  parent_stage_begin provision
   for ((pair = 1; pair <= pairs; pair++)); do
     if ! provision_pair_databases "$round" "$pair"; then
       echo "listener stress could not provision private databases: fixture=$fixture round=$round pair=$pair" >&2
@@ -1595,20 +1854,30 @@ for ((round = 1; round <= rounds; round++)); do
     fi
   done
   if ((failed != 0)); then
+    parent_stage_end 1
     drop_round_databases || true
     exit 1
   fi
+  parent_stage_end 0
+  parent_stage_begin preparation
   if ! initialize_mix_federation_phase_barrier "$round"; then
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=mix-federation-setup-barrier
     record_parent_diagnostic "phase=mix-federation-setup-barrier round=$round status=initialization_failed"
     echo "listener stress could not initialize its parent-owned MIX setup barrier: round=$round" >&2
     exit 1
   fi
+  startup_phase_dir="$runtime_dir/startup-phase-r$round"
+  startup_phase_nonce="$(openssl rand -hex 32)"
+  run_parent_phase "fixture-preparation-init-r$round" \
+    python3 "$project_dir/scripts/listener-stress-phases.py" init \
+    "$startup_phase_dir" "$startup_phase_nonce" "$round" "$pairs" "$$" "$startup_pair_limit"
   for ((pair = 1; pair <= pairs; pair++)); do
     log="$runtime_dir/${fixture}.round-${round}.pair-${pair}.log"
+    mkdir -p --mode=0700 -- "$runtime_dir/certificates/pair-$pair"
     round_logs+=("$log")
     key="${round}:${pair}"
     if ! start_stress_worker "$round" "$pair" "$log" "${pair_database_a[$key]}" "${pair_database_b[$key]}"; then
+      failed_worker_logs+=("$log")
       echo "listener stress worker could not establish private session ownership: fixture=$fixture round=$round pair=$pair" >&2
       failed_pair_databases["${pair_database_a[$key]}"]=1
       failed_pair_databases["${pair_database_b[$key]}"]=1
@@ -1622,6 +1891,36 @@ for ((round = 1; round <= rounds; round++)); do
   if ((failed != 0)); then
     exit 1
   fi
+  if ! publish_observer_round_map; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase=observer-case-map
+    exit 2
+  fi
+  # Prepare every pair first, then admit CPU-bounded batches of cold starts.
+  # Each pair keeps its startup slot through both A and B nonce/HTTP readiness.
+  # Earlier live children remain supervised while later batches start; only
+  # the all-pair live barrier below permits transport or business work.
+  run_parent_phase "fixture-preparation-release-r$round" \
+    python3 "$project_dir/scripts/listener-stress-phases.py" release \
+    "$startup_phase_dir" "$startup_phase_nonce" "$round" prepared \
+    "$worker_timeout_seconds" "${workers[@]}"
+  record_parent_diagnostic "phase=fixture-preparation round=$round status=released pairs=$pairs"
+  parent_stage_end 0
+  parent_stage_begin startup
+  run_parent_phase "all-pair-live-release-r$round" \
+    python3 "$project_dir/scripts/listener-stress-phases.py" release \
+    "$startup_phase_dir" "$startup_phase_nonce" "$round" live \
+    "$worker_timeout_seconds" "${workers[@]}"
+  record_parent_diagnostic "phase=all-pair-live-barrier fixture=$fixture round=$round status=released pairs=$pairs children=$stress_child_count startup_pair_limit=$startup_pair_limit"
+  record_host_pressure "all-pair-live-r$round"
+  parent_stage_end 0
+  parent_stage_begin workload
+  if [[ "$fixture" == federation ]]; then
+    run_parent_phase "federation-transport-release-r$round" \
+      python3 "$project_dir/scripts/listener-stress-phases.py" release \
+      "$startup_phase_dir" "$startup_phase_nonce" "$round" transport \
+      "$worker_timeout_seconds" "${workers[@]}"
+    record_parent_diagnostic "phase=federation-transport-barrier round=$round status=released pairs=$pairs"
+  fi
   if ! await_mix_federation_setup_barrier "${#workers[@]}"; then
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=mix-federation-setup-barrier
     failed=1
@@ -1629,6 +1928,7 @@ for ((round = 1; round <= rounds; round++)); do
   fi
   for ((pair = 1; pair <= ${#workers[@]}; pair++)); do
     if ! wait "${workers[$((pair - 1))]}"; then
+      failed_worker_logs+=("${round_logs[$((pair - 1))]}")
       echo "listener stress worker failed: fixture=$fixture round=$round pair=$pair" >&2
       [[ -n "$parent_failure_phase" ]] || parent_failure_phase=worker-exit
       record_parent_diagnostic "phase=worker-exit fixture=$fixture round=$round pair=$pair status=nonzero log=$(basename "${round_logs[$((pair - 1))]}")"
@@ -1662,10 +1962,14 @@ for ((round = 1; round <= rounds; round++)); do
   if ((failed != 0)); then
     append_mix_federation_database_snapshots
   fi
+  parent_stage_end "$failed"
+  parent_stage_begin cleanup
   if ! drop_round_databases; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase=round-database-cleanup
     echo "listener stress could not remove every private worker database: fixture=$fixture round=$round" >&2
     failed=1
   fi
+  parent_stage_end "$failed"
   workers=()
   worker_groups=()
   if grep -E 'EADDRINUSE|Address already in use|bind-close-launch' "${round_logs[@]}" >/dev/null 2>&1; then

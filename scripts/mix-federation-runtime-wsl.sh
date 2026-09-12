@@ -13,6 +13,9 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
 fi
 cd "$project_dir"
 source "$project_dir/scripts/lib/test-listener-readiness.sh"
+source "$project_dir/scripts/lib/runtime-test-profile.sh"
+source "$project_dir/scripts/lib/test-fixture-certificates.sh"
+fixture_select_runtime_profile "${NORTHSTAR_RUNTIME_TEST_PROFILE:-dev}"
 
 stress_database_a="${NORTHSTAR_LISTENER_STRESS_DATABASE_A:-}"
 stress_database_b="${NORTHSTAR_LISTENER_STRESS_DATABASE_B:-}"
@@ -180,15 +183,6 @@ publish_listener_ledger() {
   python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --listener-ledger-record "${entries[@]}"
 }
 
-publish_setup_barrier_ready_and_wait() {
-  [[ "$phase_barrier_enabled" == true ]] || return 0
-  publish_listener_ledger
-  python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --phase-publish-ready
-  echo "MIX federation setup barrier: pair=$phase_pair ready"
-  python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" --phase-await-release
-  echo "MIX federation setup barrier: pair=$phase_pair released"
-}
-
 cleanup() {
   status=$?
   trap - EXIT INT TERM
@@ -233,7 +227,7 @@ cleanup() {
   # This keeps a cleanup-only ownership failure explainable rather than
   # suppressing logs because the original business phase happened to pass.
   if [[ $status -ne 0 ]]; then
-    for log in "$runtime_dir/a.log" "$runtime_dir/b.log" "$runtime_dir/relay-a.log" "$runtime_dir/relay-b.log" "$runtime_dir/relay-a-http.log" "$runtime_dir/relay-b-http.log"; do [[ ! -f "$log" ]] || { echo "--- $log ---" >&2; tail -n 200 "$log" >&2; }; done
+    for log in "$runtime_dir/a.log" "$runtime_dir/b-before-restart.log" "$runtime_dir/b.log" "$runtime_dir/relay-a.log" "$runtime_dir/relay-b.log" "$runtime_dir/relay-a-http.log" "$runtime_dir/relay-b-http.log"; do [[ ! -f "$log" ]] || { echo "--- $log ---" >&2; tail -n 200 "$log" >&2; }; done
   fi
   case "$runtime_dir" in
     /tmp/northstar-mix-fed.*) rm -rf -- "$runtime_dir" ;;
@@ -259,12 +253,17 @@ if [[ "$fixture_preprovisioned" != true ]]; then
 fi
 mkdir -p "$runtime_dir/certs" "$runtime_dir/uploads-a" "$runtime_dir/uploads-b" \
   "$runtime_dir/logs-a" "$runtime_dir/logs-b"
-openssl req -x509 -newkey rsa:3072 -nodes -days 1 -subj "/CN=Northstar MIX Federation CA" -addext "basicConstraints=critical,CA:TRUE,pathlen:0" -addext "keyUsage=critical,keyCertSign,cRLSign" -keyout "$runtime_dir/certs/ca.key" -out "$runtime_dir/certs/ca.crt" >/dev/null 2>&1
+fixture_certificates_restore mix-federation "$runtime_dir/certs"
+if [[ "$fixture_certificates_reused" == false ]]; then
+  openssl req -x509 -newkey rsa:3072 -nodes -days 1 -subj "/CN=Northstar MIX Federation CA" -addext "basicConstraints=critical,CA:TRUE,pathlen:0" -addext "keyUsage=critical,keyCertSign,cRLSign" -keyout "$runtime_dir/certs/ca.key" -out "$runtime_dir/certs/ca.crt" >/dev/null 2>&1
+fi
 for side in a b; do
   if [[ "$side" == a ]]; then domain=localhost; mix=mix.localhost; else domain=remote.localhost; mix=mix.remote.localhost; fi
-  openssl req -new -newkey rsa:3072 -nodes -subj "/CN=$domain" -addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=serverAuth,clientAuth" -addext "subjectAltName=DNS:$domain,DNS:$mix" -keyout "$runtime_dir/certs/$side.key" -out "$runtime_dir/certs/$side.csr" >/dev/null 2>&1
-  openssl x509 -req -days 1 -in "$runtime_dir/certs/$side.csr" -CA "$runtime_dir/certs/ca.crt" -CAkey "$runtime_dir/certs/ca.key" -CAcreateserial -copy_extensions copy -out "$runtime_dir/certs/$side.crt" >/dev/null 2>&1
-  openssl x509 -in "$runtime_dir/certs/ca.crt" -outform PEM >>"$runtime_dir/certs/$side.crt"
+  if [[ "$fixture_certificates_reused" == false ]]; then
+    openssl req -new -newkey rsa:3072 -nodes -subj "/CN=$domain" -addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=serverAuth,clientAuth" -addext "subjectAltName=DNS:$domain,DNS:$mix" -keyout "$runtime_dir/certs/$side.key" -out "$runtime_dir/certs/$side.csr" >/dev/null 2>&1
+    openssl x509 -req -days 1 -in "$runtime_dir/certs/$side.csr" -CA "$runtime_dir/certs/ca.crt" -CAkey "$runtime_dir/certs/ca.key" -CAcreateserial -copy_extensions copy -out "$runtime_dir/certs/$side.crt" >/dev/null 2>&1
+    openssl x509 -in "$runtime_dir/certs/ca.crt" -outform PEM >>"$runtime_dir/certs/$side.crt"
+  fi
   chmod 0600 "$runtime_dir/certs/$side.key"
   openssl rand -base64 -out "$runtime_dir/api-control-$side.secret" 48
   openssl rand -base64 -out "$runtime_dir/dialback-$side.secret" 48
@@ -273,6 +272,8 @@ for side in a b; do
   chmod 0600 "$runtime_dir/api-control-$side.secret" "$runtime_dir/dialback-$side.secret" \
     "$runtime_dir/fast-token-$side.secret" "$runtime_dir/dummy-scram-$side.secret"
 done
+chmod 0600 "$runtime_dir/certs"/*
+fixture_certificates_save mix-federation "$runtime_dir/certs"
 
 # Both Northstar children own their own ephemeral S2S listeners.  Their
 # startup-only federation DNS overrides point at relay children which have
@@ -290,11 +291,11 @@ fixture_start_tcp_relay "$project_dir" "$runtime_dir" a-http relay-a-http "$targ
 fixture_start_tcp_relay "$project_dir" "$runtime_dir" b-http relay-b-http "$target_b_http" \
   "$runtime_dir/relay-b-http.log" relay_b_http_pid relay_b_http_port
 
-cargo_args=(--locked); [[ "${XMPP_TEST_OFFLINE:-true}" == false ]] || cargo_args+=(--offline)
+cargo_args=(--locked --profile "$fixture_cargo_profile"); [[ "${XMPP_TEST_OFFLINE:-true}" == false ]] || cargo_args+=(--offline)
 if [[ "${NORTHSTAR_MIX_FEDERATION_SKIP_BUILD:-false}" != true ]]; then
   cargo build "${cargo_args[@]}"
 fi
-binary="${CARGO_TARGET_DIR:-$project_dir/target}/debug/rust-xmpp-server"
+binary="${CARGO_TARGET_DIR:-$project_dir/target}/$fixture_cargo_profile_directory/rust-xmpp-server"
 [[ -x "$binary" ]] || { echo "MIX federation runtime binary is missing: $binary" >&2; exit 1; }
 database_url_a="postgres://xmpp_test:xmpp-test-password@$database_host:$database_port/$database_name_a?options=-csearch_path%3D$schema_a"
 database_url_b="postgres://xmpp_test:xmpp-test-password@$database_host:$database_port/$database_name_b?options=-csearch_path%3D$schema_b"
@@ -310,9 +311,10 @@ fi
 export ABUSE_STATE_ALLOW_EPHEMERAL=true
 
 start_a() {
-  local readiness_file="$runtime_dir/a.ready.json" readiness_nonce
+  local readiness_file="$runtime_dir/a.ready.json" readiness_nonce startup_deadline
   readiness_nonce="$(openssl rand -hex 16)"
   rm -f -- "$readiness_file" "$target_a_tls" "$target_a_http"
+  startup_deadline="$(fixture_startup_deadline "$project_dir")"
   env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost DATABASE_URL="$database_url_a" \
     XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 \
     S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
@@ -326,21 +328,22 @@ start_a() {
     FEDERATION_EXTRA_ROOT_CERT_PATH="$runtime_dir/certs/ca.crt" LOG_FORMAT=json RUST_LOG="$fixture_rust_log" \
     "$binary" >"$runtime_dir/a.log" 2>&1 &
   pid_a=$!
-  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_a" || return 1
+  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_a" "$startup_deadline" || return 1
   http_a_backend="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
   s2s_tls_a="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" s2s-tls)"
   fixture_publish_relay_target "$target_a_tls" "$s2s_tls_a"
   fixture_publish_relay_target "$target_a_http" "$http_a_backend"
   http_a="$relay_a_http_port"
   fixture_assert_private_log_dir a "$pid_a"
-  curl --silent --fail "http://127.0.0.1:$http_a_backend/readyz" >/dev/null
-  curl --silent --fail "http://127.0.0.1:$http_a/readyz" >/dev/null
+  fixture_wait_for_http_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_a" "$startup_deadline" \
+    "http://127.0.0.1:$http_a_backend/readyz" "http://127.0.0.1:$http_a/readyz" || return 1
   fixture_assert_public_url "$http_a" "https://127.0.0.1:$relay_a_http_port"
 }
 start_b() {
-  local readiness_file="$runtime_dir/b.ready.json" readiness_nonce
+  local readiness_file="$runtime_dir/b.ready.json" readiness_nonce startup_deadline
   readiness_nonce="$(openssl rand -hex 16)"
   rm -f -- "$readiness_file" "$target_b_tls" "$target_b_http"
+  startup_deadline="$(fixture_startup_deadline "$project_dir")"
   env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=remote.localhost DATABASE_URL="$database_url_b" \
     XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 \
     S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 \
@@ -354,15 +357,15 @@ start_b() {
     FEDERATION_EXTRA_ROOT_CERT_PATH="$runtime_dir/certs/ca.crt" LOG_FORMAT=json RUST_LOG="$fixture_rust_log" \
     "$binary" >"$runtime_dir/b.log" 2>&1 &
   pid_b=$!
-  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_b" || return 1
+  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_b" "$startup_deadline" || return 1
   http_b_backend="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
   s2s_tls_b="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" s2s-tls)"
   fixture_publish_relay_target "$target_b_tls" "$s2s_tls_b"
   fixture_publish_relay_target "$target_b_http" "$http_b_backend"
   http_b="$relay_b_http_port"
   fixture_assert_private_log_dir b "$pid_b"
-  curl --silent --fail "http://127.0.0.1:$http_b_backend/readyz" >/dev/null
-  curl --silent --fail "http://127.0.0.1:$http_b/readyz" >/dev/null
+  fixture_wait_for_http_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$pid_b" "$startup_deadline" \
+    "http://127.0.0.1:$http_b_backend/readyz" "http://127.0.0.1:$http_b/readyz" || return 1
   fixture_assert_public_url "$http_b" "https://127.0.0.1:$relay_b_http_port"
 }
 
@@ -401,7 +404,9 @@ fixture_assert_private_log_dir() {
     echo "MIX federation child log directory escapes fixture runtime: $resolved_log_dir" >&2
     return 1
   }
-  tr '\0' '\n' <"/proc/$pid/environ" | grep -Fxq "LOG_DIR=$log_dir" || {
+  # Consume the full environment: grep -q can close a large CI environment
+  # pipe early, making tr's SIGPIPE look like a missing field under pipefail.
+  tr '\0' '\n' <"/proc/$pid/environ" | grep -Fx -- "LOG_DIR=$log_dir" >/dev/null || {
     echo "MIX federation child did not inherit its fixture-private LOG_DIR: $side" >&2
     return 1
   }
@@ -421,13 +426,25 @@ fixture_assert_private_log_dir() {
   return 1
 }
 
+# Every pair has its certificates, migrated databases and four live relays
+# before any Northstar startup deadline begins. Relay readiness never waits
+# for a server target, so preparation has no dependency on the later release.
+fixture_stress_phase_barrier "$project_dir" prepared
 start_a
 start_b
+# Capture this pair's exact listeners while its bounded startup slot is held.
+# The live barrier then rechecks both server identities before business release.
+publish_listener_ledger
+fixture_stress_phase_barrier "$project_dir" live "$pid_a" "$pid_b"
 echo "MIX federation schemas: $schema_a $schema_b"
 echo "MIX federation ports: http=$http_a,$http_b s2s-tls=$s2s_tls_a,$s2s_tls_b pids=$pid_a,$pid_b"
-publish_setup_barrier_ready_and_wait
-run_mix_federation_phase setup
+# One interpreter loads both domain modules, publishes signed readiness,
+# waits for the existing parent release, and executes setup exactly once.
+run_mix_federation_phase setup-entry
 fixture_stop_child "$pid_b" "B before durable enqueue"
+# Retain the stopped incarnation's bounded diagnostic tail. Starting B again
+# opens b.log for truncation; preserve the earlier worker and shutdown evidence.
+mv -- "$runtime_dir/b.log" "$runtime_dir/b-before-restart.log"
 fixture_forget_listener_owner "$pid_b"
 pid_b=""
 run_mix_federation_phase enqueue

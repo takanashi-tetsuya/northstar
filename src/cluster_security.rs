@@ -20,7 +20,8 @@ use zeroize::Zeroizing;
 pub const SIGNED_PROTOCOL_VERSION: u16 = 8;
 const ENVELOPE_LIFETIME_SECONDS: i64 = 10;
 pub(crate) const CLOCK_SKEW_SECONDS: i64 = 5;
-const MAX_PEERS: usize = 128;
+pub(crate) const MAX_PEERS: usize = 128;
+pub(crate) const MAX_NODE_ID_BYTES: usize = 128;
 const MAX_ALLOWED_KINDS: usize = 32;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -276,8 +277,9 @@ pub fn load_configuration(
     let staged_next_key_id = staged_next_public.as_ref().map(key_id);
     let staged_next_public_key_sha256 = staged_next_public.as_ref().map(public_key_digest);
     anyhow::ensure!(
-        staged_next_key_id.as_ref() != Some(&current_key_id)
-            && staged_next_key_id != previous_key_id,
+        staged_next_key_id.as_ref().is_none_or(|next| {
+            next != &current_key_id && previous_key_id.as_ref() != Some(next)
+        }),
         "cluster staged-next key must differ from current and previous keys"
     );
 
@@ -413,7 +415,7 @@ fn decode_public_key(value: &str) -> Result<[u8; 32]> {
 
 fn validate_node_id(node_id: &str) -> Result<()> {
     anyhow::ensure!(
-        (1..=128).contains(&node_id.len())
+        (1..=MAX_NODE_ID_BYTES).contains(&node_id.len())
             && node_id
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')),
@@ -575,13 +577,7 @@ impl SignedClusterEnvelope {
                 "cluster source mismatch"
             );
         }
-        anyhow::ensure!(
-            self.expires_at > self.issued_at
-                && self.expires_at.saturating_sub(self.issued_at) <= ENVELOPE_LIFETIME_SECONDS
-                && self.issued_at <= now.saturating_add(CLOCK_SKEW_SECONDS)
-                && self.expires_at >= now.saturating_sub(CLOCK_SKEW_SECONDS),
-            "cluster envelope is outside its validity window"
-        );
+        let public_key = self.current_verification_key(peers, now)?;
         anyhow::ensure!(
             uuid::Uuid::parse_str(&self.event_id).is_ok(),
             "cluster event ID is invalid"
@@ -611,6 +607,29 @@ impl SignedClusterEnvelope {
             infer_kind(&self.payload)? == self.kind,
             "cluster command kind does not match its payload"
         );
+        let signature = URL_SAFE_NO_PAD
+            .decode(&self.signature)
+            .context("cluster signature is not base64url")?;
+        UnparsedPublicKey::new(&ED25519, public_key)
+            .verify(&self.signing_bytes()?, &signature)
+            .map_err(|_| anyhow::anyhow!("cluster Ed25519 signature verification failed"))?;
+        Ok(())
+    }
+
+    /// Recheck mutable authorization for an envelope whose immutable contents
+    /// and signature have already passed `verify`. Key IDs bind the public key.
+    pub(crate) fn current_verification_key(
+        &self,
+        peers: &HashMap<String, PeerVerifier>,
+        now: i64,
+    ) -> Result<[u8; 32]> {
+        anyhow::ensure!(
+            self.expires_at > self.issued_at
+                && self.expires_at.saturating_sub(self.issued_at) <= ENVELOPE_LIFETIME_SECONDS
+                && self.issued_at <= now.saturating_add(CLOCK_SKEW_SECONDS)
+                && self.expires_at >= now.saturating_sub(CLOCK_SKEW_SECONDS),
+            "cluster envelope is outside its validity window"
+        );
         let peer = peers
             .get(&self.source_node)
             .context("cluster source node is not allowlisted")?;
@@ -625,13 +644,7 @@ impl SignedClusterEnvelope {
         let public_key = peer
             .key(&self.key_id, self.key_epoch)
             .context("cluster signing key ID or epoch is not authorized")?;
-        let signature = URL_SAFE_NO_PAD
-            .decode(&self.signature)
-            .context("cluster signature is not base64url")?;
-        UnparsedPublicKey::new(&ED25519, public_key)
-            .verify(&self.signing_bytes()?, &signature)
-            .map_err(|_| anyhow::anyhow!("cluster Ed25519 signature verification failed"))?;
-        Ok(())
+        Ok(*public_key)
     }
 
     fn signing_bytes(&self) -> Result<Vec<u8>> {
@@ -915,6 +928,90 @@ pub(crate) fn test_prepared_staged_pair(
 mod tests {
     use super::*;
     use ring::rand::SystemRandom;
+
+    #[test]
+    fn local_signing_configuration_accepts_absent_rotation_and_rejects_reused_keys() {
+        use std::io::Write;
+        struct Files(std::path::PathBuf);
+        impl Drop for Files {
+            fn drop(&mut self) {
+                for name in ["current", "current-public", "previous", "next", "peers"] {
+                    let _ = std::fs::remove_file(self.0.join(name));
+                }
+                let _ = std::fs::remove_dir(&self.0);
+            }
+        }
+        let files = Files(
+            std::env::temp_dir().join(format!("northstar-local-rotation-{}", uuid::Uuid::new_v4())),
+        );
+        std::fs::create_dir(&files.0).unwrap();
+        let write = |name: &str, content: &[u8]| {
+            let path = files.0.join(name);
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            options.open(&path).unwrap().write_all(content).unwrap();
+            path
+        };
+        let make_key = || {
+            let private = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+            let pair = Ed25519KeyPair::from_pkcs8(private.as_ref()).unwrap();
+            (private, URL_SAFE_NO_PAD.encode(pair.public_key().as_ref()))
+        };
+        let (current_private, current_public) = make_key();
+        let (_, previous_public) = make_key();
+        let (_, next_public) = make_key();
+        let (_, peer_public) = make_key();
+        let private = write(
+            "current",
+            URL_SAFE_NO_PAD.encode(current_private.as_ref()).as_bytes(),
+        );
+        let current = write("current-public", current_public.as_bytes());
+        let previous = write("previous", previous_public.as_bytes());
+        let next = write("next", next_public.as_bytes());
+        let peers = write(
+            "peers",
+            serde_json::to_vec(&serde_json::json!({
+                "namespace": "cluster.localhost", "nodes": [{
+                    "node_id": "node-b", "key_epoch": 1,
+                    "current_public_key": peer_public, "allowed_kinds": ["ack"]
+                }]
+            }))
+            .unwrap()
+            .as_slice(),
+        );
+        for (previous_path, next_path, valid) in [
+            (None, None, true),
+            (Some(&previous), None, true),
+            (None, Some(&next), true),
+            (Some(&previous), Some(&next), true),
+            (None, Some(&current), false),
+            (Some(&previous), Some(&previous), false),
+            (Some(&current), None, false),
+        ] {
+            let result = load_configuration(ClusterSecurityConfiguration {
+                namespace: "cluster.localhost",
+                node_id: Some("node-a"),
+                private_key_file: Some(&private),
+                peer_keys_file: Some(&peers),
+                previous_public_key_file: previous_path.map(|path| path.as_path()),
+                staged_next_public_key_file: next_path.map(|path| path.as_path()),
+                key_epoch: 1,
+                failure_policy: "fail_closed",
+                safety_lease_seconds: 120,
+            });
+            assert_eq!(
+                result.is_ok(),
+                valid,
+                "unexpected optional rotation validation: {:?}",
+                result.err()
+            );
+        }
+    }
 
     fn fixture() -> (Arc<ClusterSigner>, HashMap<String, PeerVerifier>) {
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();

@@ -978,6 +978,7 @@ async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
         }
     };
     send(io, &item.stanza).await?;
+    item.confirm_transport_write();
     if !managed_by_sm {
         // The MIX source, if any, was already rotated to a writer-private
         // socket fence before this write. A generic MUC receipt still waits
@@ -1684,6 +1685,7 @@ async fn websocket_record_and_send_item(
     {
         return false;
     }
+    item.confirm_transport_write();
     if !managed_by_sm {
         // See the TCP writer above. A direct MIX source was fenced before
         // this WebSocket frame write; only generic receipts remain tied to

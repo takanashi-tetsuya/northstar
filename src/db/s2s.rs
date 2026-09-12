@@ -81,6 +81,86 @@ pub enum S2sFailureDisposition {
     LeaseLost,
 }
 
+/// Observation of one target's FIFO head for a process-local authenticated
+/// route recovery hint. This is not a delivery lease or routing authority.
+/// Keep stanza contents out of Debug output; the caller must validate their
+/// exact source and target against the authenticated connection before waking.
+pub(crate) struct S2sRouteRecoveryHead {
+    pub(crate) id: Uuid,
+    pub(crate) target_domain: String,
+    pub(crate) stanza: String,
+    pub(crate) attempt_count: i32,
+    pub(crate) retry_due: bool,
+    pub(crate) claim_in_flight: bool,
+}
+
+/// Observe the oldest unexpired row even while it is leased or in backoff.
+/// Filtering either state would let a recovery hint bind to a successor.
+pub(crate) async fn s2s_route_recovery_head(
+    pool: &PgPool,
+    canonical_target: &str,
+) -> Result<Option<S2sRouteRecoveryHead>> {
+    let row = sqlx::query(
+        "SELECT id, target_domain, stanza, attempt_count,
+                next_attempt_at <= NOW() AS retry_due,
+                (lock_token IS NOT NULL OR COALESCE(locked_until > NOW(), FALSE)) AS claim_in_flight
+         FROM s2s_outbox
+         WHERE target_domain = $1 AND expires_at > NOW()
+         ORDER BY enqueue_sequence
+         LIMIT 1",
+    )
+    .bind(canonical_target)
+    .fetch_optional(pool)
+    .await?;
+    row.map(|row| {
+        Ok(S2sRouteRecoveryHead {
+            id: row.try_get("id")?,
+            target_domain: row.try_get("target_domain")?,
+            stanza: row.try_get("stanza")?,
+            attempt_count: row.try_get("attempt_count")?,
+            retry_due: row.try_get("retry_due")?,
+            claim_in_flight: row.try_get("claim_in_flight")?,
+        })
+    })
+    .transpose()
+}
+
+/// Accelerate only the observed, unleased FIFO head and attempt. The caller
+/// owns the one-use authenticated-route hint; ordinary claiming still owns
+/// token creation, attempt accounting, FIFO, and every delivery decision.
+/// A lease, including an expired token not yet cleared by its owner, is never
+/// modified here. A later failure/claim cannot be mistaken for this attempt.
+pub(crate) async fn wake_s2s_route_recovery_head(
+    pool: &PgPool,
+    id: Uuid,
+    target_domain: &str,
+    expected_attempt: i32,
+) -> Result<bool> {
+    Ok(sqlx::query(
+        "UPDATE s2s_outbox AS current
+         SET next_attempt_at = NOW()
+         WHERE current.id = $1 AND current.target_domain = $2
+           AND current.attempt_count = $3
+           AND current.expires_at > NOW()
+           AND current.lock_token IS NULL
+           AND (current.locked_until IS NULL OR current.locked_until <= NOW())
+           AND current.next_attempt_at > NOW()
+           AND NOT EXISTS (
+               SELECT 1 FROM s2s_outbox AS earlier
+               WHERE earlier.target_domain = current.target_domain
+                 AND earlier.expires_at > NOW()
+                 AND earlier.enqueue_sequence < current.enqueue_sequence
+           )",
+    )
+    .bind(id)
+    .bind(target_domain)
+    .bind(expected_attempt)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn enqueue_s2s_outbox(
     pool: &PgPool,
@@ -501,6 +581,404 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn route_recovery_test_pool() -> (PgPool, PgPool, String) {
+        let url = std::env::var("TEST_DATABASE_URL")
+            .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+        let admin = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        let schema = format!("s2s_route_recovery_test_{}", Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        eprintln!("isolated_schema_created={schema}");
+        let connection_schema = schema.clone();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(6)
+            .after_connect(move |connection, _| {
+                let statement = format!("SET search_path TO {connection_schema}");
+                Box::pin(async move {
+                    sqlx::query(&statement).execute(connection).await?;
+                    Ok(())
+                })
+            })
+            .connect(&url)
+            .await
+            .unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        (admin, pool, schema)
+    }
+
+    async fn close_route_recovery_test_pool(admin: PgPool, pool: PgPool, schema: String) {
+        pool.close().await;
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+    }
+
+    async fn recovery_row_except_due(pool: &PgPool, id: Uuid) -> String {
+        sqlx::query_scalar(
+            "SELECT (to_jsonb(outbox) - 'next_attempt_at')::TEXT
+             FROM s2s_outbox AS outbox WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
+    async fn route_recovery_wakes_only_the_observed_fifo_head_and_attempt() {
+        let (admin, pool, schema) = route_recovery_test_pool().await;
+        let target = "recovery.remote.test";
+        assert!(s2s_route_recovery_head(&pool, target)
+            .await
+            .unwrap()
+            .is_none());
+        let head_id = enqueue_s2s_outbox(
+            &pool,
+            target,
+            "<message from='sender@local.test' to='peer@recovery.remote.test' id='head'/>",
+            None,
+            300,
+            100,
+            1_000_000,
+            100,
+        )
+        .await
+        .unwrap();
+        let successor_id = enqueue_s2s_outbox(
+            &pool,
+            target,
+            "<message from='sender@local.test' to='peer@recovery.remote.test' id='successor'/>",
+            None,
+            300,
+            100,
+            1_000_000,
+            100,
+        )
+        .await
+        .unwrap();
+        // Make the successor independently eligible for a wake except for
+        // FIFO. An already-due successor would not exercise that predicate.
+        sqlx::query(
+            "UPDATE s2s_outbox SET next_attempt_at=NOW()+INTERVAL '10 minutes' WHERE id=$1",
+        )
+        .bind(successor_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let domains = vec![target.to_owned()];
+        let mut claimed = claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let first = claimed.remove(0);
+        assert_eq!(first.id, head_id);
+        assert_eq!(
+            fail_s2s_outbox(&pool, &first, "injected route outage", 60, 60, 200, false)
+                .await
+                .unwrap(),
+            S2sFailureDisposition::RetryScheduled
+        );
+        let observed = s2s_route_recovery_head(&pool, target)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(observed.id, head_id);
+        assert_eq!(observed.target_domain, target);
+        assert!(observed.stanza.contains("id='head'"));
+        assert_eq!(observed.attempt_count, first.attempt_count);
+        assert!(!observed.retry_due);
+        assert!(!observed.claim_in_flight);
+        assert!(claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(!wake_s2s_route_recovery_head(
+            &pool,
+            head_id,
+            "other.remote.test",
+            first.attempt_count
+        )
+        .await
+        .unwrap());
+        assert!(
+            !wake_s2s_route_recovery_head(&pool, head_id, target, first.attempt_count + 1)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !wake_s2s_route_recovery_head(&pool, successor_id, target, 0)
+                .await
+                .unwrap()
+        );
+        let protected = recovery_row_except_due(&pool, head_id).await;
+        assert!(
+            wake_s2s_route_recovery_head(&pool, head_id, target, first.attempt_count)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            recovery_row_except_due(&pool, head_id).await,
+            protected,
+            "recovery must change only the due timestamp"
+        );
+        assert!(
+            !wake_s2s_route_recovery_head(&pool, head_id, target, first.attempt_count)
+                .await
+                .unwrap(),
+            "the same due head must not consume a second recovery write"
+        );
+        let mut claimed = claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let recovered = claimed.remove(0);
+        assert_eq!(recovered.id, head_id);
+        assert_eq!(recovered.attempt_count, first.attempt_count + 1);
+        assert_ne!(recovered.lock_token, first.lock_token);
+        assert!(!complete_s2s_outbox(&pool, first.id, first.lock_token)
+            .await
+            .unwrap());
+        assert_eq!(
+            fail_s2s_outbox(&pool, &first, "stale owner", 60, 60, 200, false)
+                .await
+                .unwrap(),
+            S2sFailureDisposition::LeaseLost
+        );
+        assert_eq!(
+            fail_s2s_outbox(
+                &pool,
+                &recovered,
+                "later independent failure",
+                60,
+                60,
+                200,
+                false
+            )
+            .await
+            .unwrap(),
+            S2sFailureDisposition::RetryScheduled
+        );
+        assert!(
+            !wake_s2s_route_recovery_head(&pool, head_id, target, first.attempt_count)
+                .await
+                .unwrap(),
+            "an old observation must not override a later attempt's backoff"
+        );
+        assert!(
+            !s2s_route_recovery_head(&pool, target)
+                .await
+                .unwrap()
+                .unwrap()
+                .retry_due
+        );
+        // Only a new observation may authorize a new recovery opportunity.
+        assert!(
+            wake_s2s_route_recovery_head(&pool, head_id, target, recovered.attempt_count)
+                .await
+                .unwrap()
+        );
+        let mut claimed = claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let final_head = claimed.remove(0);
+        assert_eq!(final_head.id, head_id);
+        assert!(
+            complete_s2s_outbox(&pool, final_head.id, final_head.lock_token)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !wake_s2s_route_recovery_head(&pool, head_id, target, recovered.attempt_count)
+                .await
+                .unwrap(),
+            "a completed head's hint must not move to its successor"
+        );
+        assert_eq!(
+            s2s_route_recovery_head(&pool, target)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            successor_id
+        );
+        assert!(wake_s2s_route_recovery_head(&pool, successor_id, target, 0)
+            .await
+            .unwrap());
+        let mut claimed = claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let successor = claimed.remove(0);
+        assert_eq!(successor.id, successor_id);
+        assert!(
+            complete_s2s_outbox(&pool, successor.id, successor.lock_token)
+                .await
+                .unwrap()
+        );
+        assert!(s2s_route_recovery_head(&pool, target)
+            .await
+            .unwrap()
+            .is_none());
+        close_route_recovery_test_pool(admin, pool, schema).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
+    async fn route_recovery_waits_for_lease_failure_commit_and_preserves_fencing() {
+        let (admin, pool, schema) = route_recovery_test_pool().await;
+        let target = "leased-recovery.remote.test";
+        let head_id = enqueue_s2s_outbox(
+            &pool, target,
+            "<message from='sender@local.test' to='peer@leased-recovery.remote.test' id='leased-head'/>",
+            None, 300, 100, 1_000_000, 100,
+        ).await.unwrap();
+        let domains = vec![target.to_owned()];
+        let mut claimed = claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let first = claimed.remove(0);
+        let mut blocker = pool.begin().await.unwrap();
+        let locked: Uuid = sqlx::query_scalar("SELECT id FROM s2s_outbox WHERE id=$1 FOR UPDATE")
+            .bind(head_id)
+            .fetch_one(&mut *blocker)
+            .await
+            .unwrap();
+        assert_eq!(locked, head_id);
+        let fail_pool = pool.clone();
+        let failing_item = first.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let failing = tokio::spawn(async move {
+            started_tx.send(()).unwrap();
+            fail_s2s_outbox(
+                &fail_pool,
+                &failing_item,
+                "failure commit held by row lock",
+                60,
+                60,
+                200,
+                false,
+            )
+            .await
+        });
+        started_rx.await.unwrap();
+        // The row lock makes it impossible for the real failure operation to
+        // commit before this route-recovery observation, without a sleep or
+        // a test-only replacement for the production failure SQL.
+        let observed = s2s_route_recovery_head(&pool, target)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(observed.id, head_id);
+        assert_eq!(observed.attempt_count, first.attempt_count);
+        assert!(observed.claim_in_flight);
+        assert!(!failing.is_finished());
+        assert!(!tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            wake_s2s_route_recovery_head(&pool, head_id, target, observed.attempt_count),
+        )
+        .await
+        .expect("a leased head must be rejected without waiting for its blocked failure")
+        .unwrap());
+        let token_before_commit: Uuid =
+            sqlx::query_scalar("SELECT lock_token FROM s2s_outbox WHERE id=$1")
+                .bind(head_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(token_before_commit, first.lock_token);
+        blocker.commit().await.unwrap();
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), failing)
+                .await
+                .expect("releasing the blocker must let the real failure commit")
+                .unwrap()
+                .unwrap(),
+            S2sFailureDisposition::RetryScheduled
+        );
+        let after_commit = s2s_route_recovery_head(&pool, target)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!after_commit.claim_in_flight);
+        assert!(!after_commit.retry_due);
+        assert_eq!(after_commit.attempt_count, observed.attempt_count);
+        let protected = recovery_row_except_due(&pool, head_id).await;
+        assert!(
+            wake_s2s_route_recovery_head(&pool, head_id, target, observed.attempt_count)
+                .await
+                .unwrap(),
+            "a retained hint must work after the old lease's failure commits"
+        );
+        assert_eq!(recovery_row_except_due(&pool, head_id).await, protected);
+        let mut claimed = claim_due_s2s_outbox_for_domains(&pool, 10, 120, &domains)
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let recovered = claimed.remove(0);
+        assert_eq!(recovered.id, head_id);
+        assert_ne!(recovered.lock_token, first.lock_token);
+        assert!(!complete_s2s_outbox(&pool, first.id, first.lock_token)
+            .await
+            .unwrap());
+        // Even an expired timestamp is not permission to clear an old token.
+        // Keep due in the future so this exercises fencing, not the no-op
+        // guard for rows that are already eligible for an ordinary claim.
+        sqlx::query("UPDATE s2s_outbox SET locked_until=NOW()-INTERVAL '1 second', next_attempt_at=NOW()+INTERVAL '10 minutes' WHERE id=$1")
+            .bind(head_id).execute(&pool).await.unwrap();
+        let expired_claim = s2s_route_recovery_head(&pool, target)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(expired_claim.claim_in_flight);
+        assert!(!expired_claim.retry_due);
+        let protected = recovery_row_except_due(&pool, head_id).await;
+        assert!(
+            !wake_s2s_route_recovery_head(&pool, head_id, target, recovered.attempt_count)
+                .await
+                .unwrap()
+        );
+        assert_eq!(recovery_row_except_due(&pool, head_id).await, protected);
+        assert_eq!(
+            fail_s2s_outbox(
+                &pool,
+                &recovered,
+                "clear only the owning expired token",
+                60,
+                60,
+                200,
+                false
+            )
+            .await
+            .unwrap(),
+            S2sFailureDisposition::RetryScheduled
+        );
+        // A fully unleased but expired row must remain invisible and cannot
+        // be revived by an otherwise matching recovery observation.
+        sqlx::query("UPDATE s2s_outbox SET created_at=NOW()-INTERVAL '2 hours', expires_at=NOW()-INTERVAL '1 hour' WHERE id=$1")
+            .bind(head_id).execute(&pool).await.unwrap();
+        assert!(s2s_route_recovery_head(&pool, target)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(
+            !wake_s2s_route_recovery_head(&pool, head_id, target, recovered.attempt_count)
+                .await
+                .unwrap()
+        );
+        close_route_recovery_test_pool(admin, pool, schema).await;
+    }
 
     #[test]
     fn durable_message_retries_keep_one_authoritative_identity() {

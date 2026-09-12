@@ -47,23 +47,52 @@ const OMEMO_POLL_MAX_ACTIVE_IPS: usize = 65_536;
 /// process from observing committed administration settings under a saturated
 /// main pool. XEP-0133 uses the same control-plane capability when enabled,
 /// but does not own the capability itself.
-const RUNTIME_CONTROL_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_millis(500);
+// This is an initial connection/SCRAM handshake budget, not the runtime
+// policy polling interval. Repeatedly cancelling half-second handshakes under
+// a cold-start cohort can prevent any of them from reaching authentication.
+const RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET: Duration = Duration::from_secs(3);
 /// A process has no traffic listeners while this bounded admission window is
 /// active.  It exists specifically to de-correlate a cold-start cohort from a
 /// short, per-attempt pool deadline; it is not a runtime worker retry policy.
 const RUNTIME_CONTROL_STARTUP_RETRY_BUDGET: Duration = Duration::from_secs(15);
 const RUNTIME_CONTROL_STARTUP_RETRY_MAX_DELAY: Duration = Duration::from_millis(500);
+// Auxiliary pools retain their two-second acquisition policy while serving.
+// Only initial handshakes may retry, within one shared admission window.
+const AUXILIARY_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(2);
+const AUXILIARY_POOL_STARTUP_BUDGET: Duration = Duration::from_secs(15);
 
-fn runtime_control_pool_options(config: &Config) -> PgPoolOptions {
+/// Fixed concurrency keeps one slow transport from blocking other shutdown
+/// notices without spawning tasks or increasing the root's total deadline.
+pub(crate) async fn count_shutdown_notification_completions<I, F>(notifications: I) -> usize
+where
+    I: IntoIterator<Item = F>,
+    F: std::future::Future<Output = bool>,
+{
+    use futures::StreamExt;
+    futures::stream::iter(notifications)
+        .buffer_unordered(16)
+        .fold(0, |confirmed, written| async move {
+            confirmed + usize::from(written)
+        })
+        .await
+}
+
+fn runtime_control_pool_options(config: &Config, attempt_budget: Duration) -> PgPoolOptions {
     let options = PgPoolOptions::new()
         .max_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)
         .min_connections(SERVICE_CONTROL_POOL_MAX_CONNECTIONS)
-        .acquire_timeout(RUNTIME_CONTROL_POOL_ACQUIRE_TIMEOUT);
+        .acquire_timeout(attempt_budget);
     if config.database_allow_unsafe_role_for_development {
         options
     } else {
         db::pin_public_application_schema(options)
     }
+}
+
+fn runtime_control_connect_options(database_url: &str) -> Result<PgConnectOptions, sqlx::Error> {
+    Ok(database_url
+        .parse::<PgConnectOptions>()?
+        .application_name("northstar-runtime-control"))
 }
 
 fn runtime_control_startup_retry_delay(attempt: u32, process_id: u32) -> Duration {
@@ -83,6 +112,583 @@ fn runtime_control_startup_retry_delay(attempt: u32, process_id: u32) -> Duratio
     )
 }
 
+async fn runtime_control_startup_connect<T, Connect, ConnectFuture>(
+    deadline: tokio::time::Instant,
+    connect: Connect,
+) -> anyhow::Result<T>
+where
+    Connect: FnMut(Duration) -> ConnectFuture,
+    ConnectFuture: std::future::Future<Output = Result<T, sqlx::Error>>,
+{
+    startup_database_connect(
+        deadline,
+        RUNTIME_CONTROL_STARTUP_CONNECT_ATTEMPT_BUDGET,
+        "runtime-control",
+        connect,
+    )
+    .await
+}
+
+async fn startup_database_connect<T, Connect, ConnectFuture>(
+    deadline: tokio::time::Instant,
+    attempt_limit: Duration,
+    pool_name: &'static str,
+    mut connect: Connect,
+) -> anyhow::Result<T>
+where
+    Connect: FnMut(Duration) -> ConnectFuture,
+    ConnectFuture: std::future::Future<Output = Result<T, sqlx::Error>>,
+{
+    let mut attempts = 0_u32;
+    let admission = tokio::time::timeout_at(deadline, async {
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(sqlx::Error::PoolTimedOut);
+            }
+            let attempt_budget = remaining.min(attempt_limit);
+            attempts = attempts.saturating_add(1);
+            let result = tokio::time::timeout(attempt_budget, connect(attempt_budget))
+                .await
+                .unwrap_or(Err(sqlx::Error::PoolTimedOut));
+            match result {
+                Ok(pool) => return Ok(pool),
+                Err(sqlx::Error::PoolTimedOut) => {
+                    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                    let delay = runtime_control_startup_retry_delay(attempts, std::process::id())
+                        .min(remaining);
+                    tokio::time::sleep(delay).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })
+    .await
+    .unwrap_or(Err(sqlx::Error::PoolTimedOut));
+    admission.with_context(|| {
+        format!("could not create isolated {pool_name} database pool after {attempts} bounded startup admission attempts")
+    })
+}
+
+#[cfg(test)]
+mod runtime_control_startup_tests {
+    use super::{
+        runtime_control_connect_options, runtime_control_startup_connect, startup_database_connect,
+    };
+    use std::sync::{
+        atomic::{AtomicBool, AtomicU32, Ordering},
+        Arc,
+    };
+    use std::time::Duration;
+
+    #[test]
+    fn control_connection_identification_preserves_url_transport_and_schema_options() {
+        let url = "postgres://fixture_user@127.0.0.1:6543/fixture_db?sslmode=verify-full&application_name=caller-name&options=-csearch_path%3Dfixture_schema%2Cpublic%20-cstatement_timeout%3D5000";
+        let original = url.parse::<sqlx::postgres::PgConnectOptions>().unwrap();
+        let control = runtime_control_connect_options(url).unwrap();
+        assert_eq!(
+            control.get_application_name(),
+            Some("northstar-runtime-control")
+        );
+        assert_eq!(original.get_application_name(), Some("caller-name"));
+        assert_eq!(control.get_host(), original.get_host());
+        assert_eq!(control.get_port(), original.get_port());
+        assert_eq!(control.get_username(), original.get_username());
+        assert_eq!(control.get_database(), original.get_database());
+        assert!(matches!(
+            control.get_ssl_mode(),
+            sqlx::postgres::PgSslMode::VerifyFull
+        ));
+        assert_eq!(control.get_options(), original.get_options());
+        assert_eq!(
+            control.get_options(),
+            Some("-csearch_path=fixture_schema,public -cstatement_timeout=5000")
+        );
+        assert!(runtime_control_connect_options("not a database URL").is_err());
+    }
+
+    #[tokio::test]
+    async fn slow_initial_handshake_finishes_without_half_second_cancellation() {
+        let attempts = AtomicU32::new(0);
+        let result = runtime_control_startup_connect(
+            tokio::time::Instant::now() + Duration::from_secs(15),
+            |budget| {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                assert!(budget > Duration::from_millis(500));
+                assert!(budget <= Duration::from_secs(3));
+                async {
+                    tokio::time::sleep(Duration::from_millis(750)).await;
+                    Ok(7_u32)
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, 7);
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn remaining_admission_budget_cancels_an_incomplete_handshake() {
+        struct CancellationWitness(Arc<AtomicBool>);
+        impl Drop for CancellationWitness {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let attempts = AtomicU32::new(0);
+        let result: anyhow::Result<()> = runtime_control_startup_connect(
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            |budget| {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                assert!(budget <= Duration::from_secs(1));
+                let witness = CancellationWitness(Arc::clone(&cancelled));
+                async move {
+                    let _witness = witness;
+                    std::future::pending().await
+                }
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(cancelled.load(Ordering::Relaxed));
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn admission_retries_pool_timeouts_but_never_authentication_or_protocol_errors() {
+        let attempts = AtomicU32::new(0);
+        runtime_control_startup_connect(
+            tokio::time::Instant::now() + Duration::from_secs(2),
+            |_| {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    if attempt == 0 {
+                        Err(sqlx::Error::PoolTimedOut)
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+        attempts.store(0, Ordering::Relaxed);
+        let result: anyhow::Result<()> = runtime_control_startup_connect(
+            tokio::time::Instant::now() + Duration::from_secs(2),
+            |_| {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                async {
+                    Err(sqlx::Error::Protocol(
+                        "fixture authentication rejected".into(),
+                    ))
+                }
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn expired_admission_never_starts_a_new_connection() {
+        let result: anyhow::Result<()> = runtime_control_startup_connect(
+            tokio::time::Instant::now() - Duration::from_millis(1),
+            |_| async { panic!("connection was attempted after its admission deadline") },
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn auxiliary_pools_share_the_remaining_deadline_and_cancel_inflight_connect() {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        startup_database_connect(deadline, Duration::from_secs(2), "command", |_| async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let result: anyhow::Result<()> =
+            startup_database_connect(deadline, Duration::from_secs(2), "OMEMO", |budget| {
+                assert!(budget < Duration::from_secs(2));
+                std::future::pending()
+            })
+            .await;
+        assert!(result.unwrap_err().to_string().contains("OMEMO"));
+        let result: anyhow::Result<()> =
+            startup_database_connect(deadline, Duration::from_secs(2), "command", |_| async {
+                panic!("a later pool must not reset an exhausted shared deadline")
+            })
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn auxiliary_pool_retry_preserves_its_acquisition_limit() {
+        let attempts = AtomicU32::new(0);
+        startup_database_connect(
+            tokio::time::Instant::now() + Duration::from_secs(15),
+            Duration::from_secs(2),
+            "OMEMO",
+            |budget| {
+                assert_eq!(budget, Duration::from_secs(2));
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    if attempt == 0 {
+                        Err(sqlx::Error::PoolTimedOut)
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeControlPhase {
+    Idle,
+    SettingsRead,
+    RulesRead,
+    PolicyApply,
+    ServiceControlRead,
+}
+
+impl RuntimeControlPhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::SettingsRead => "settings-read",
+            Self::RulesRead => "rules-read",
+            Self::PolicyApply => "policy-apply",
+            Self::ServiceControlRead => "service-control-read",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeControlStall {
+    phase: RuntimeControlPhase,
+    phase_elapsed: Duration,
+    heartbeat_elapsed: Duration,
+}
+
+/// Observation only: a stalled attempt is dropped before its supervisor sets
+/// the root cancellation token. Normal root shutdown must not produce a warning.
+struct RuntimeControlDiagnostics {
+    phase: RuntimeControlPhase,
+    phase_started: tokio::time::Instant,
+    last_reported: tokio::time::Instant,
+    max_silence: Duration,
+    root_cancel: CancellationToken,
+    #[cfg(test)]
+    captured: Option<Arc<std::sync::Mutex<Vec<RuntimeControlStall>>>>,
+}
+
+impl RuntimeControlDiagnostics {
+    fn new(root_cancel: CancellationToken, max_silence: Duration) -> Self {
+        let now = tokio::time::Instant::now();
+        Self {
+            phase: RuntimeControlPhase::Idle,
+            phase_started: now,
+            last_reported: now,
+            max_silence,
+            root_cancel,
+            #[cfg(test)]
+            captured: None,
+        }
+    }
+
+    fn enter(&mut self, phase: RuntimeControlPhase) {
+        self.phase = phase;
+        self.phase_started = tokio::time::Instant::now();
+    }
+
+    fn database_read(&mut self, phase: db::RuntimeControlReadPhase) {
+        self.enter(match phase {
+            db::RuntimeControlReadPhase::Settings => RuntimeControlPhase::SettingsRead,
+            db::RuntimeControlReadPhase::Rules => RuntimeControlPhase::RulesRead,
+        });
+    }
+
+    /// Call only after the existing heartbeat report; this changes no health.
+    fn reported(&mut self) {
+        let now = tokio::time::Instant::now();
+        self.last_reported = now;
+        self.phase = RuntimeControlPhase::Idle;
+        self.phase_started = now;
+    }
+
+    fn stalled(&self) -> Option<RuntimeControlStall> {
+        if self.root_cancel.is_cancelled() {
+            return None;
+        }
+        let now = tokio::time::Instant::now();
+        let heartbeat_elapsed = now.saturating_duration_since(self.last_reported);
+        (heartbeat_elapsed > self.max_silence).then(|| RuntimeControlStall {
+            phase: self.phase,
+            phase_elapsed: now.saturating_duration_since(self.phase_started),
+            heartbeat_elapsed,
+        })
+    }
+}
+
+impl Drop for RuntimeControlDiagnostics {
+    fn drop(&mut self) {
+        let Some(stall) = self.stalled() else {
+            return;
+        };
+        tracing::warn!(
+            phase = stall.phase.label(),
+            phase_elapsed_ms = stall.phase_elapsed.as_millis() as u64,
+            heartbeat_elapsed_ms = stall.heartbeat_elapsed.as_millis() as u64,
+            "runtime-control attempt dropped after heartbeat silence"
+        );
+        #[cfg(test)]
+        if let Some(captured) = &self.captured {
+            captured.lock().unwrap().push(stall);
+        }
+    }
+}
+
+fn report_runtime_control_health(
+    heartbeat: &crate::workers::WorkerHeartbeat,
+    observed_database: bool,
+    error: Option<anyhow::Error>,
+) {
+    if let Some(error) = error {
+        heartbeat.error(error);
+    } else if observed_database {
+        heartbeat.ok();
+    } else {
+        // With XEP-0133 control disabled, alternate ticks perform no query.
+        // They prove scheduler liveness only, never database/ownership health.
+        // Clearing an error here would let a dead reserved connection alternate
+        // error/ok forever, concealing loss of the standalone retention lock.
+        heartbeat.pulse();
+    }
+}
+
+#[cfg(test)]
+mod runtime_control_health_tests {
+    use super::report_runtime_control_health;
+    use crate::workers::{WorkerCriticality, WorkerMode, WorkerRegistry};
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn idle_ticks_cannot_reset_a_broken_control_connection() {
+        let workers = WorkerRegistry::new();
+        let cancel = CancellationToken::new();
+        workers.supervise(
+            "test-runtime-control-loss",
+            WorkerCriticality::Critical,
+            WorkerMode::Continuous,
+            None,
+            cancel.clone(),
+            |heartbeat| async move {
+                for _ in 0..3 {
+                    report_runtime_control_health(
+                        &heartbeat,
+                        true,
+                        Some(anyhow::anyhow!("fixture connection closed")),
+                    );
+                    report_runtime_control_health(&heartbeat, false, None);
+                }
+                std::future::pending().await
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(2), cancel.cancelled())
+            .await
+            .expect("idle ticks concealed a broken reserved connection");
+        assert!(workers.critical_failure().is_some());
+        assert!(workers
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await
+            .is_clean());
+    }
+
+    #[tokio::test]
+    async fn successful_database_reads_can_restore_control_health() {
+        let workers = WorkerRegistry::new();
+        let cancel = CancellationToken::new();
+        let (complete, mut observed) = tokio::sync::mpsc::channel(1);
+        workers.supervise(
+            "test-runtime-control-recovery",
+            WorkerCriticality::Critical,
+            WorkerMode::Continuous,
+            None,
+            cancel.clone(),
+            move |heartbeat| {
+                let complete = complete.clone();
+                async move {
+                    for _ in 0..2 {
+                        report_runtime_control_health(
+                            &heartbeat,
+                            true,
+                            Some(anyhow::anyhow!("fixture query failed")),
+                        );
+                        report_runtime_control_health(&heartbeat, false, None);
+                    }
+                    report_runtime_control_health(&heartbeat, true, None);
+                    for _ in 0..2 {
+                        report_runtime_control_health(
+                            &heartbeat,
+                            true,
+                            Some(anyhow::anyhow!("fixture query failed")),
+                        );
+                        report_runtime_control_health(&heartbeat, false, None);
+                    }
+                    let _ = complete.send(()).await;
+                    std::future::pending().await
+                }
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(2), observed.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!cancel.is_cancelled());
+        assert!(workers.readiness_error().is_none());
+        cancel.cancel();
+        assert!(workers
+            .shutdown_and_join(&cancel, Duration::from_secs(1))
+            .await
+            .is_clean());
+    }
+
+    fn diagnostic_guard(
+        root_cancel: CancellationToken,
+    ) -> (
+        super::RuntimeControlDiagnostics,
+        std::sync::Arc<std::sync::Mutex<Vec<super::RuntimeControlStall>>>,
+    ) {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut guard = super::RuntimeControlDiagnostics::new(root_cancel, Duration::from_secs(5));
+        guard.captured = Some(std::sync::Arc::clone(&captured));
+        (guard, captured)
+    }
+
+    #[tokio::test]
+    async fn dropped_pending_control_turn_reports_its_actual_phase() {
+        use super::RuntimeControlPhase;
+        for phase in [
+            RuntimeControlPhase::SettingsRead,
+            RuntimeControlPhase::RulesRead,
+            RuntimeControlPhase::PolicyApply,
+            RuntimeControlPhase::Idle,
+            RuntimeControlPhase::ServiceControlRead,
+        ] {
+            let (mut guard, captured) = diagnostic_guard(CancellationToken::new());
+            let (entered, observed) = tokio::sync::oneshot::channel();
+            let task = tokio::spawn(async move {
+                match phase {
+                    RuntimeControlPhase::SettingsRead => {
+                        guard.database_read(crate::db::RuntimeControlReadPhase::Settings);
+                    }
+                    RuntimeControlPhase::RulesRead => {
+                        guard.database_read(crate::db::RuntimeControlReadPhase::Rules);
+                    }
+                    other => guard.enter(other),
+                }
+                guard.phase_started -= Duration::from_secs(6);
+                guard.last_reported -= Duration::from_secs(6);
+                entered.send(()).unwrap();
+                std::future::pending::<()>().await;
+                drop(guard);
+            });
+            observed.await.unwrap();
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            let reports = captured.lock().unwrap();
+            assert_eq!(reports.len(), 1);
+            assert_eq!(reports[0].phase, phase);
+            assert!(reports[0].phase_elapsed >= Duration::from_secs(6));
+            assert!(reports[0].heartbeat_elapsed >= Duration::from_secs(6));
+        }
+    }
+
+    #[tokio::test]
+    async fn normal_shutdown_drops_a_stalled_control_turn_without_warning() {
+        let root_cancel = CancellationToken::new();
+        let (mut guard, captured) = diagnostic_guard(root_cancel.clone());
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            guard.database_read(crate::db::RuntimeControlReadPhase::Rules);
+            guard.phase_started -= Duration::from_secs(6);
+            guard.last_reported -= Duration::from_secs(6);
+            entered.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(guard);
+        });
+        observed.await.unwrap();
+        root_cancel.cancel();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(captured.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn short_control_phases_do_not_reset_total_heartbeat_silence() {
+        let (mut guard, captured) = diagnostic_guard(CancellationToken::new());
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let (next_phase, continue_turn) = tokio::sync::oneshot::channel();
+        let (changed, change_observed) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            guard.database_read(crate::db::RuntimeControlReadPhase::Settings);
+            guard.last_reported -= Duration::from_secs(6);
+            entered.send(()).unwrap();
+            continue_turn.await.unwrap();
+            guard.database_read(crate::db::RuntimeControlReadPhase::Rules);
+            guard.phase_started -= Duration::from_secs(2);
+            changed.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(guard);
+        });
+        observed.await.unwrap();
+        next_phase.send(()).unwrap();
+        change_observed.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let reports = captured.lock().unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].phase, super::RuntimeControlPhase::RulesRead);
+        assert!(reports[0].phase_elapsed >= Duration::from_secs(2));
+        assert!(reports[0].heartbeat_elapsed >= Duration::from_secs(6));
+        assert!(reports[0].heartbeat_elapsed > reports[0].phase_elapsed);
+    }
+
+    #[tokio::test]
+    async fn an_existing_health_report_resets_only_the_diagnostic_clock() {
+        let (mut guard, captured) = diagnostic_guard(CancellationToken::new());
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let (report, continue_turn) = tokio::sync::oneshot::channel();
+        let (reported, report_observed) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            guard.database_read(crate::db::RuntimeControlReadPhase::Settings);
+            guard.last_reported -= Duration::from_secs(6);
+            entered.send(()).unwrap();
+            continue_turn.await.unwrap();
+            guard.reported();
+            reported.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(guard);
+        });
+        observed.await.unwrap();
+        report.send(()).unwrap();
+        report_observed.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(captured.lock().unwrap().is_empty());
+    }
+}
+
 /// Establish the one process-owned control-plane connection before the
 /// traffic pool or any startup reconciliation can take database capacity.
 ///
@@ -93,38 +699,29 @@ fn runtime_control_startup_retry_delay(attempt: u32, process_id: u32) -> Duratio
 pub(crate) async fn reserve_runtime_control_connection(
     config: &Config,
 ) -> anyhow::Result<PoolConnection<Postgres>> {
-    let retry_deadline = Instant::now() + RUNTIME_CONTROL_STARTUP_RETRY_BUDGET;
-    let mut attempts = 0_u32;
-    let runtime_control_pool = loop {
-        attempts = attempts.saturating_add(1);
-        match runtime_control_pool_options(config)
-            .connect(&config.database_url)
-            .await
-        {
-            Ok(pool) => break pool,
-            Err(sqlx::Error::PoolTimedOut) if Instant::now() < retry_deadline => {
-                tokio::time::sleep(runtime_control_startup_retry_delay(
-                    attempts,
-                    std::process::id(),
-                ))
-                .await;
-            }
-            Err(error) => {
-                return Err(anyhow::Error::new(error).context(format!(
-                    "could not create isolated runtime-control database pool after {attempts} bounded startup admission attempts"
-                )));
-            }
+    let deadline = tokio::time::Instant::now() + RUNTIME_CONTROL_STARTUP_RETRY_BUDGET;
+    let connect_options = runtime_control_connect_options(&config.database_url)?;
+    let runtime_control_pool = runtime_control_startup_connect(deadline, |attempt_budget| {
+        runtime_control_pool_options(config, attempt_budget).connect_with(connect_options.clone())
+    })
+    .await?;
+    // Attestation and final ownership transfer share the same absolute startup
+    // deadline. A completed handshake alone never authorizes serving traffic.
+    tokio::time::timeout_at(deadline, async {
+        if config.database_allow_unsafe_role_for_development {
+            crate::db::attest_development_database_is_loopback(&runtime_control_pool).await?;
+        } else {
+            crate::db::attest_runtime_role(&runtime_control_pool).await?;
         }
-    };
-    if config.database_allow_unsafe_role_for_development {
-        crate::db::attest_development_database_is_loopback(&runtime_control_pool).await?;
-    } else {
-        crate::db::attest_runtime_role(&runtime_control_pool).await?;
-    }
-    runtime_control_pool
-        .acquire()
-        .await
-        .context("could not reserve the runtime-control database connection")
+        runtime_control_pool
+            .acquire()
+            .await
+            .context("could not reserve the runtime-control database connection")
+    })
+    .await
+    .context(
+        "runtime-control role attestation/reservation exceeded its startup admission deadline",
+    )?
 }
 
 fn admit_omemo_poll_ip_window(window: &mut VecDeque<Instant>, now: Instant) -> bool {
@@ -721,6 +1318,29 @@ fn append_suspended_muc_suffix_to_snapshot(
 }
 
 impl SuspendedMucEndpoint {
+    fn try_send_live_write_notification(
+        &self,
+        stanza: String,
+        receipt: tokio::sync::mpsc::UnboundedSender<()>,
+    ) -> anyhow::Result<bool> {
+        let route = self
+            .route
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let SuspendedMucRoute::Live(sender) = &*route else {
+            // A write-only completion cannot transfer into durable or volatile
+            // SM storage, nor cross a concurrent Live-to-Transitioning fence.
+            return Ok(false);
+        };
+        match sender.try_send_with_transport_write_receipt(stanza, receipt) {
+            Ok(()) => Ok(true),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Ok(false),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                anyhow::bail!("live SM shutdown recipient queue is full")
+            }
+        }
+    }
+
     #[cfg(test)]
     pub fn new(sm_session_id: uuid::Uuid) -> Self {
         Self::new_collecting(sm_session_id, 0, 0)
@@ -991,6 +1611,13 @@ impl FederationWritePolicy {
     }
 
     async fn refresh(&self, enabled: bool) -> bool {
+        // An unchanged observation linearizes at this acquire load. It must
+        // not wait behind a socket write merely to publish the same value.
+        // Actual transitions still drain and fence writes under the gate.
+        let previous = self.island_mode.load(Ordering::Acquire);
+        if previous == enabled {
+            return previous;
+        }
         let _write_guard = self.gate.write().await;
         self.island_mode.swap(enabled, Ordering::AcqRel)
     }
@@ -1134,6 +1761,7 @@ pub struct AppState {
     upload_storage_namespace_sha256: [u8; 32],
     upload_authority_generation: UploadAuthorityGeneration,
     upload_safety_gate: Arc<UploadSafetyGate>,
+    upload_startup_audits: crate::upload_worker::StartupAuditHandoff,
     pub federation: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.
@@ -1377,8 +2005,9 @@ impl AppState {
     }
 
     /// Refresh the cached island-mode value and return the previous value.
-    /// The exclusive delivery guard waits for any in-flight stanza write and
-    /// blocks queued writers until they can observe the new policy.
+    /// Unchanged observations do not wait for socket writes. Actual changes
+    /// take the exclusive delivery guard, drain in-flight stanza writes, and
+    /// fence queued writers until they can observe the new policy.
     async fn refresh_island_mode(&self, enabled: bool) -> bool {
         self.federation_write_policy.refresh(enabled).await
     }
@@ -1504,16 +2133,25 @@ impl AppState {
             process_secret.zeroize();
             keyrings?
         };
+        let startup_phase = crate::logging::StartupPhase::begin("mix_delivery_capacity_audit");
         db::audit_mix_delivery_capacity_ledger(&pool)
             .await
             .context("MIX delivery capacity ledger failed startup reconciliation")?;
+        startup_phase.complete();
+        let startup_phase = crate::logging::StartupPhase::begin("mix_pam_capacity_audit");
         db::audit_mix_pam_operation_capacity(&pool)
             .await
             .context("MIX-PAM operation capacity authority failed startup audit")?;
+        startup_phase.complete();
+        let upload_startup_phase =
+            crate::logging::StartupPhase::begin("upload_storage_initialization");
+        let upload_startup_audits;
         let (upload_safety_gate, upload_namespace, upload_authority_generation, upload_store) =
             if config.upload_mode.keeps_storage_runtime() {
                 let upload_safety_gate = UploadSafetyGate::new();
                 let upload_namespace = upload_storage_namespace_id(&config)?;
+                let startup_phase =
+                    crate::logging::StartupPhase::begin("upload_namespace_and_policy");
                 let namespace_generation = db::validate_upload_storage_backend(
                     &pool,
                     &config.upload_storage_backend,
@@ -1536,6 +2174,9 @@ impl AppState {
                     namespace: namespace_generation,
                     capacity_policy: capacity_policy_generation,
                 };
+                startup_phase.complete();
+                let startup_phase = crate::logging::StartupPhase::begin("upload_authority_audit");
+                let authority_audit_started_at = tokio::time::Instant::now();
                 let authority_audit = db::audit_upload_capacity_authority(
                     &pool,
                     config.upload_storage_max_pending_jobs,
@@ -1554,6 +2195,10 @@ impl AppState {
                         authority_audit.violation_count()
                     );
                 }
+                startup_phase.complete();
+                let startup_phase =
+                    crate::logging::StartupPhase::begin("upload_ledger_reconciliation");
+                let ledger_audit_started_at = tokio::time::Instant::now();
                 let capacity_reconciliation = db::reconcile_upload_capacity_ledger(&pool)
                     .await
                     .context("could not reconcile upload capacity facts before storage startup")?;
@@ -1567,6 +2212,7 @@ impl AppState {
                         capacity_reconciliation.mismatch_count()
                     );
                 }
+                startup_phase.complete();
                 upload_safety_gate.establish(upload_authority_generation, recovery_draining);
                 let upload_store: Arc<dyn UploadStore> = match config
                     .upload_storage_backend
@@ -1599,25 +2245,27 @@ impl AppState {
                             tokio::time::Instant::now() + Duration::from_secs(30);
                         for (object_id, claim_token) in startup_stages {
                             let remaining = startup_cleanup_deadline
-                        .checked_duration_since(tokio::time::Instant::now())
-                        .context(
-                            "upload staging reconciliation exceeded its startup time budget",
-                        )?;
+                            .checked_duration_since(tokio::time::Instant::now())
+                            .context(
+                                "upload staging reconciliation exceeded its startup time budget",
+                            )?;
                             if tokio::time::timeout(
-                        remaining,
-                        db::upload_claim_is_live(&pool, object_id, claim_token),
-                    )
-                    .await
-                    .context("upload staging lease verification exceeded its startup time budget")?
-                    .context("failed to verify an upload staging lease")?
-                    {
-                        continue;
-                    }
-                            let remaining = startup_cleanup_deadline
-                        .checked_duration_since(tokio::time::Instant::now())
+                            remaining,
+                            db::upload_claim_is_live(&pool, object_id, claim_token),
+                        )
+                        .await
                         .context(
-                            "upload staging reconciliation exceeded its startup time budget",
-                        )?;
+                            "upload staging lease verification exceeded its startup time budget",
+                        )?
+                        .context("failed to verify an upload staging lease")?
+                        {
+                            continue;
+                        }
+                            let remaining = startup_cleanup_deadline
+                            .checked_duration_since(tokio::time::Instant::now())
+                            .context(
+                                "upload staging reconciliation exceeded its startup time budget",
+                            )?;
                             if tokio::time::timeout(
                                 remaining,
                                 guarded.abort(
@@ -1673,6 +2321,17 @@ impl AppState {
                     }
                     _ => unreachable!("upload backend was validated by Config"),
                 };
+                upload_startup_audits =
+                    crate::upload_worker::StartupAuditHandoff::after_successful_audits(
+                        upload_authority_generation,
+                        [
+                            config.upload_storage_max_pending_jobs,
+                            config.upload_storage_max_retained_files,
+                            config.upload_storage_max_retained_bytes,
+                        ],
+                        authority_audit_started_at,
+                        ledger_audit_started_at,
+                    );
                 (
                     upload_safety_gate,
                     upload_namespace,
@@ -1695,6 +2354,7 @@ impl AppState {
                 tracing::info!(
                     "upload capability disabled; skipping storage authority, object-store and reconciliation initialization"
                 );
+                upload_startup_audits = crate::upload_worker::StartupAuditHandoff::default();
                 (
                     UploadSafetyGate::disabled(),
                     [0_u8; 32],
@@ -1705,6 +2365,7 @@ impl AppState {
                     None,
                 )
             };
+        upload_startup_phase.complete();
         let extdisco_service = crate::services::extdisco::ExtDiscoService::new(
             config.raw.turn_shared_secret.take(),
             config.turn_credentials_ttl_seconds,
@@ -2065,6 +2726,7 @@ impl AppState {
             config.pep_max_nodes_per_account,
             config.pep_max_storage_bytes_per_account,
         );
+        let auxiliary_pool_deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;
         let command_pool = match config.admin_command_pool_mode {
             // The explicit loopback-only exception has no independent
             // PostgreSQL principal.  A second PgPool with the same unsafe
@@ -2076,29 +2738,48 @@ impl AppState {
                     PgPoolOptions::new()
                         .max_connections(4)
                         .min_connections(0)
-                        .acquire_timeout(Duration::from_secs(2)),
+                        .acquire_timeout(AUXILIARY_POOL_ACQUIRE_TIMEOUT),
                 );
-                let command_pool = command_pool_options
-                    .connect(&config.admin_command_database_url)
-                    .await
-                    .context("could not create bounded XEP-0133 command database pool")?;
-                crate::db::attest_admin_command_role(&command_pool).await?;
+                let command_pool = startup_database_connect(
+                    auxiliary_pool_deadline,
+                    AUXILIARY_POOL_ACQUIRE_TIMEOUT,
+                    "XEP-0133 command",
+                    |_| {
+                        command_pool_options
+                            .clone()
+                            .connect(&config.admin_command_database_url)
+                    },
+                )
+                .await?;
+                tokio::time::timeout_at(auxiliary_pool_deadline, async {
+                    crate::db::attest_admin_command_role(&command_pool).await?;
+                    anyhow::Ok(())
+                })
+                .await
+                .context("command role attestation exceeded its startup admission deadline")??;
                 command_pool
             }
         };
         let omemo_recovery_pool_options = PgPoolOptions::new()
             .max_connections(OMEMO_RECOVERY_POOL_MAX_CONNECTIONS)
             .min_connections(0)
-            .acquire_timeout(Duration::from_secs(2));
+            .acquire_timeout(AUXILIARY_POOL_ACQUIRE_TIMEOUT);
         let omemo_recovery_pool_options = if config.database_allow_unsafe_role_for_development {
             omemo_recovery_pool_options
         } else {
             crate::db::pin_public_application_schema(omemo_recovery_pool_options)
         };
-        let omemo_recovery_poll_pool = omemo_recovery_pool_options
-            .connect(&config.database_url)
-            .await
-            .context("could not create isolated OMEMO recovery poll database pool")?;
+        let omemo_recovery_poll_pool = startup_database_connect(
+            auxiliary_pool_deadline,
+            AUXILIARY_POOL_ACQUIRE_TIMEOUT,
+            "OMEMO recovery poll",
+            |_| {
+                omemo_recovery_pool_options
+                    .clone()
+                    .connect(&config.database_url)
+            },
+        )
+        .await?;
         let sm_authority_schema: String = sqlx::query_scalar("SELECT current_schema()")
             .fetch_one(&pool)
             .await
@@ -2180,6 +2861,7 @@ impl AppState {
             upload_storage_namespace_sha256: upload_namespace,
             upload_authority_generation,
             upload_safety_gate,
+            upload_startup_audits,
             federation,
             component_credentials,
             components,
@@ -2442,6 +3124,12 @@ impl AppState {
         &self.upload_safety_gate
     }
 
+    pub(crate) fn take_upload_startup_audits(
+        &self,
+    ) -> Option<crate::upload_worker::SuccessfulStartupAudits> {
+        self.upload_startup_audits.take()
+    }
+
     pub(crate) fn upload_service(&self) -> &crate::services::upload::UploadService {
         self.upload_service
             .as_ref()
@@ -2651,16 +3339,21 @@ impl AppState {
     ) {
         let weak = Arc::downgrade(&state);
         let connection = Arc::new(tokio::sync::Mutex::new(Some(connection)));
+        let max_silence = Duration::from_secs(5);
+        let diagnostic_cancel = cancel.clone();
         state.worker_registry().supervise(
             "runtime-control-refresh",
             crate::workers::WorkerCriticality::Critical,
             crate::workers::WorkerMode::Continuous,
-            Some(Duration::from_secs(5)),
+            Some(max_silence),
             cancel,
             move |heartbeat| {
                 let weak = weak.clone();
                 let connection = Arc::clone(&connection);
+                let diagnostic_cancel = diagnostic_cancel.clone();
                 async move {
+                    let mut diagnostics =
+                        RuntimeControlDiagnostics::new(diagnostic_cancel, max_silence);
                     let mut connection = connection.lock().await.take().ok_or_else(|| {
                         anyhow::anyhow!(
                             "runtime-control coordinator was restarted after its reserved connection ended"
@@ -2682,9 +3375,16 @@ impl AppState {
                         };
 
                         let mut first_error = None;
+                        let mut observed_database = false;
                         if refresh_policy {
-                            match db::runtime_control_snapshot(&mut connection).await {
+                            observed_database = true;
+                            match db::runtime_control_snapshot(&mut connection, |phase| {
+                                diagnostics.database_read(phase)
+                            })
+                            .await
+                            {
                                 Ok((island_mode, registration_closed, blacklist, whitelist)) => {
+                                    diagnostics.enter(RuntimeControlPhase::PolicyApply);
                                     let was_island = state.refresh_island_mode(island_mode).await;
                                     state.apply_registration_closed(registration_closed);
                                     if island_mode && !was_island {
@@ -2708,6 +3408,8 @@ impl AppState {
                         if state.config.enable_xmpp_service_control
                             && state.service_shutdown.get().is_some()
                         {
+                            observed_database = true;
+                            diagnostics.enter(RuntimeControlPhase::ServiceControlRead);
                             match db::poll_admin_service_control(&mut connection).await {
                                 Ok(Some(control))
                                     if service_control_applies(
@@ -2740,11 +3442,8 @@ impl AppState {
                             }
                         }
 
-                        if let Some(error) = first_error {
-                            heartbeat.error(error);
-                        } else {
-                            heartbeat.ok();
-                        }
+                        report_runtime_control_health(&heartbeat, observed_database, first_error);
+                        diagnostics.reported();
                         refresh_policy = !refresh_policy;
                     }
                 }
@@ -3029,7 +3728,7 @@ impl AppState {
     }
 
     pub async fn deliver_to_muc_occupant(&self, occupant: &MucOccupant, stanza: String) -> bool {
-        self.deliver_to_muc_occupant_inner(occupant, stanza, None)
+        self.deliver_to_muc_occupant_inner(occupant, stanza, None, None)
             .await
     }
 
@@ -3044,7 +3743,7 @@ impl AppState {
     ) -> anyhow::Result<bool> {
         let (receipt, mut received) = tokio::sync::mpsc::unbounded_channel();
         let accepted = self
-            .deliver_to_muc_occupant_inner(occupant, stanza, Some(receipt))
+            .deliver_to_muc_occupant_inner(occupant, stanza, Some(receipt), None)
             .await;
         if !accepted {
             return Ok(false);
@@ -3071,6 +3770,7 @@ impl AppState {
         occupant: &MucOccupant,
         stanza: String,
         receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+        write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) -> bool {
         let senders = roxmltree::Document::parse(&stanza)
             .ok()
@@ -3107,12 +3807,17 @@ impl AppState {
                 return false;
             }
         }
-        self.deliver_to_muc_occupant_unchecked_result_with_receipt(occupant, stanza, receipt)
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(?error, "failed to deliver a MUC stanza");
-                false
-            })
+        self.deliver_to_muc_occupant_unchecked_result_with_receipt(
+            occupant,
+            stanza,
+            receipt,
+            write_receipt,
+        )
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(?error, "failed to deliver a MUC stanza");
+            false
+        })
     }
 
     /// Rebuild only the delivery endpoint for an immutable clustered MUC
@@ -3230,7 +3935,7 @@ impl AppState {
         occupant: &MucOccupant,
         stanza: String,
     ) -> anyhow::Result<bool> {
-        self.deliver_to_muc_occupant_unchecked_result_with_receipt(occupant, stanza, None)
+        self.deliver_to_muc_occupant_unchecked_result_with_receipt(occupant, stanza, None, None)
             .await
     }
 
@@ -3239,6 +3944,7 @@ impl AppState {
         occupant: &MucOccupant,
         stanza: String,
         receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+        write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) -> anyhow::Result<bool> {
         // Installing the session gate precedes the per-room endpoint swaps.
         // Consulting it first makes that multi-entry transition atomic from
@@ -3325,12 +4031,39 @@ impl AppState {
                 }
             }
         }
+        if write_receipt.is_some() {
+            let membership = JoinedMucMembership {
+                nick: occupant.nick.clone(),
+                cluster_epoch: occupant.cluster_epoch,
+            };
+            if self
+                .validated_local_muc_occupant(
+                    &occupant.full_jid,
+                    occupant.connection_id,
+                    &occupant.room_jid,
+                    &membership,
+                )
+                .is_none()
+            {
+                return Ok(false);
+            }
+        }
         if let Some(suspended) = session_gate {
             return self
-                .deliver_to_suspended_muc_endpoint(&suspended, stanza, receipt)
+                .deliver_to_suspended_muc_endpoint(&suspended, stanza, receipt, write_receipt)
                 .await;
         }
         match &occupant.endpoint {
+            MucOccupantEndpoint::Local(sender) if write_receipt.is_some() => {
+                let receipt = write_receipt.expect("write receipt was present");
+                match sender.try_send_with_transport_write_receipt(stanza, receipt) {
+                    Ok(()) => Ok(true),
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Ok(false),
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        anyhow::bail!("local MUC shutdown recipient queue is full")
+                    }
+                }
+            }
             MucOccupantEndpoint::Local(sender) => match receipt {
                 Some(receipt) => match sender.try_send_with_transport_receipt(stanza, receipt) {
                     Ok(()) => Ok(true),
@@ -3348,7 +4081,7 @@ impl AppState {
                 },
             },
             MucOccupantEndpoint::Suspended(suspended) => {
-                self.deliver_to_suspended_muc_endpoint(suspended, stanza, receipt)
+                self.deliver_to_suspended_muc_endpoint(suspended, stanza, receipt, None)
                     .await
             }
             MucOccupantEndpoint::Federated {
@@ -3374,7 +4107,11 @@ impl AppState {
         suspended: &Arc<SuspendedMucEndpoint>,
         stanza: String,
         receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+        write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) -> anyhow::Result<bool> {
+        if let Some(receipt) = write_receipt {
+            return suspended.try_send_live_write_notification(stanza, receipt);
+        }
         let mut stanza = Some(stanza);
         let mut receipt = receipt;
         let volatile_source_id = uuid::Uuid::new_v4();
@@ -4234,18 +4971,18 @@ impl AppState {
         Ok(delivered)
     }
 
-    /// Give every locally-owned MUC endpoint the XEP-0045 system-shutdown
-    /// status before listener cancellation tears transports down. One self
-    /// unavailable per occupancy avoids an O(n²) room broadcast during the
-    /// bounded graceful-shutdown window.
+    /// Give live locally-owned MUC endpoints XEP-0045 system-shutdown status.
+    /// Count only completed TCP/WS writes or BOSH client response ACKs; SM
+    /// persistence alone cannot satisfy this process-local completion. The
+    /// root supervises the whole loop under one bounded, cancellable window.
     pub async fn notify_muc_system_shutdown(&self) -> usize {
         let occupants = self
             .muc_occupants
             .iter()
+            .filter(|entry| matches!(&entry.value().endpoint, MucOccupantEndpoint::Local(_)))
             .map(|entry| entry.value().clone())
             .collect::<Vec<_>>();
-        let mut delivered = 0;
-        for occupant in occupants {
+        count_shutdown_notification_completions(occupants.into_iter().map(|occupant| async move {
             let serialized = SerializableMucOccupant::from(&occupant);
             let stanza = crate::xmpp::xml_util::muc_presence_stanza_with_status(
                 &serialized,
@@ -4259,9 +4996,12 @@ impl AppState {
                 None,
                 None,
             );
-            delivered += usize::from(self.deliver_to_muc_occupant(&occupant, stanza).await);
-        }
-        delivered
+            let (receipt, mut received) = tokio::sync::mpsc::unbounded_channel();
+            self.deliver_to_muc_occupant_inner(&occupant, stanza, None, Some(receipt))
+                .await
+                && received.recv().await.is_some()
+        }))
+        .await
     }
 
     pub fn suspend_local_muc_occupants(
@@ -5698,6 +6438,60 @@ mod session_key_tests {
     }
 
     #[test]
+    fn live_sm_shutdown_write_receipt_does_not_cross_the_suspension_fence() {
+        let (sender, mut outbound) = tokio::sync::mpsc::channel(2);
+        let endpoint = SuspendedMucEndpoint::new_live(
+            uuid::Uuid::new_v4(),
+            crate::outbound::OutboundSender::new(sender),
+        );
+        let (receipt, mut completion) = tokio::sync::mpsc::unbounded_channel();
+        assert!(endpoint
+            .try_send_live_write_notification("<presence/>".to_owned(), receipt)
+            .unwrap());
+        let item = outbound.try_recv().unwrap();
+        item.confirm_transport_ownership();
+        assert!(matches!(
+            completion.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        item.confirm_transport_write();
+        assert_eq!(completion.try_recv(), Ok(()));
+
+        begin_suspended_muc_route_transition(&endpoint, 0, 0);
+        let (receipt, mut completion) = tokio::sync::mpsc::unbounded_channel();
+        assert!(!endpoint
+            .try_send_live_write_notification("<presence/>".to_owned(), receipt)
+            .unwrap());
+        assert!(matches!(
+            completion.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
+        assert!(matches!(
+            outbound.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
+        assert_eq!(endpoint.buffer.try_lock().unwrap().bytes, 0);
+    }
+
+    #[test]
+    fn suspended_sm_shutdown_write_receipt_is_never_persisted_or_confirmed() {
+        for endpoint in [
+            SuspendedMucEndpoint::new_collecting(uuid::Uuid::new_v4(), 0, 0),
+            SuspendedMucEndpoint::new_durable(uuid::Uuid::new_v4()),
+        ] {
+            let (receipt, mut completion) = tokio::sync::mpsc::unbounded_channel();
+            assert!(!endpoint
+                .try_send_live_write_notification("<presence/>".to_owned(), receipt)
+                .unwrap());
+            assert!(matches!(
+                completion.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+            ));
+            assert!(endpoint.buffer.try_lock().unwrap().stanzas.is_empty());
+        }
+    }
+
+    #[test]
     fn route_removal_signal_retains_the_exact_terminal_state_for_late_subscribers() {
         let connection_id = uuid::Uuid::new_v4();
         let signal = RouteIncarnationSignal::new(connection_id);
@@ -5709,6 +6503,94 @@ mod session_key_tests {
             *late.borrow(),
             "subscribing after compare-and-remove must not lose the terminal event"
         );
+    }
+
+    #[tokio::test]
+    async fn unchanged_island_refresh_does_not_wait_for_held_read_guard() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        for enabled in [false, true] {
+            let policy = FederationWritePolicy::new(enabled);
+            let held_read = if enabled {
+                // A raw reader also proves the true no-op does not acquire
+                // the exclusive gate; delivery itself is already forbidden.
+                policy.gate.read().await
+            } else {
+                policy.permit().await.expect("federation starts enabled")
+            };
+            let mut refresh = std::pin::pin!(policy.refresh(enabled));
+            let mut context = Context::from_waker(Waker::noop());
+            assert_eq!(refresh.as_mut().poll(&mut context), Poll::Ready(enabled));
+            assert_eq!(policy.enabled(), enabled);
+            drop(held_read);
+        }
+    }
+
+    #[tokio::test]
+    async fn island_refresh_transition_fences_queued_delivery_despite_concurrent_noop() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        let policy = FederationWritePolicy::new(false);
+        let held_read = policy.permit().await.expect("federation starts enabled");
+        let mut transition = std::pin::pin!(policy.refresh(true));
+        let mut queued_delivery = std::pin::pin!(policy.permit());
+        let mut context = Context::from_waker(Waker::noop());
+        assert_eq!(transition.as_mut().poll(&mut context), Poll::Pending);
+        assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
+
+        let mut unchanged = std::pin::pin!(policy.refresh(false));
+        assert_eq!(unchanged.as_mut().poll(&mut context), Poll::Ready(false));
+        assert!(!policy.enabled());
+        assert_eq!(transition.as_mut().poll(&mut context), Poll::Pending);
+        assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
+
+        drop(held_read);
+        assert_eq!(transition.as_mut().poll(&mut context), Poll::Ready(false));
+        assert!(policy.enabled());
+        assert!(matches!(
+            queued_delivery.as_mut().poll(&mut context),
+            Poll::Ready(None)
+        ));
+    }
+
+    #[tokio::test]
+    async fn island_refresh_reopening_waits_for_gate_and_returns_locked_previous_value() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        for concurrent_apply in [false, true] {
+            let policy = FederationWritePolicy::new(true);
+            let held_read = policy.gate.read().await;
+            let mut earlier_apply = std::pin::pin!(policy.apply(false));
+            let mut context = Context::from_waker(Waker::noop());
+            if concurrent_apply {
+                assert_eq!(earlier_apply.as_mut().poll(&mut context), Poll::Pending);
+            }
+            let mut transition = std::pin::pin!(policy.refresh(false));
+            let mut queued_delivery = std::pin::pin!(policy.permit());
+            assert_eq!(transition.as_mut().poll(&mut context), Poll::Pending);
+            assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
+            assert!(policy.enabled());
+
+            drop(held_read);
+            if concurrent_apply {
+                assert_eq!(earlier_apply.as_mut().poll(&mut context), Poll::Ready(()));
+                assert!(queued_delivery.as_mut().poll(&mut context).is_pending());
+            }
+            // The slow path returns the swap's value after the exclusive
+            // wait, including when an earlier apply changed the initial read.
+            assert_eq!(
+                transition.as_mut().poll(&mut context),
+                Poll::Ready(!concurrent_apply)
+            );
+            assert!(!policy.enabled());
+            assert!(matches!(
+                queued_delivery.as_mut().poll(&mut context),
+                Poll::Ready(Some(_))
+            ));
+        }
     }
 
     #[tokio::test]

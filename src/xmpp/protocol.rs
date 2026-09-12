@@ -394,6 +394,23 @@ fn client_stream_limits_feature(transport: ClientTransport, authenticated: bool)
     }
 }
 
+/// Ownership evidence survives a failed or cancelled database reply.
+#[derive(Default)]
+struct LiveSessionOwnership {
+    attempted: bool,
+}
+
+impl LiveSessionOwnership {
+    async fn attempt<T>(&mut self, operation: impl std::future::Future<Output = T>) -> T {
+        self.attempted = true;
+        operation.await
+    }
+
+    fn may_own(&self) -> bool {
+        self.attempted
+    }
+}
+
 pub struct ProtocolSession {
     pub(crate) state: Arc<AppState>,
     pub(crate) outbound: crate::outbound::OutboundSender,
@@ -507,6 +524,10 @@ pub struct ProtocolSession {
     /// Stable owner of the durable stream row.  A resumed transport gets a
     /// fresh value so a late checkpoint from the old connection cannot win.
     pub(crate) connection_id: uuid::Uuid,
+    /// Monotonic evidence that this connection attempted durable capacity
+    /// ownership. Set before the first database await: an error or cancelled
+    /// response does not prove that its exact lease was never committed.
+    live_session_ownership: LiveSessionOwnership,
     /// 0 active, 1 owned by explicit/fallback cleanup, 2 atomically superseded
     /// by the exact XEP-0198 claimant.
     pub(crate) route_lifecycle: Arc<AtomicU8>,
@@ -593,6 +614,7 @@ impl ProtocolSession {
             _certificate_session: None,
             disconnect: tokio_util::sync::CancellationToken::new(),
             connection_id: uuid::Uuid::new_v4(),
+            live_session_ownership: LiveSessionOwnership::default(),
             route_lifecycle: Arc::new(AtomicU8::new(0)),
             local_quiesced: false,
             post_actions: std::sync::Mutex::new(PostActionSupervisor::default()),
@@ -1911,6 +1933,7 @@ impl ProtocolSession {
 
         let plan = crate::services::session_cleanup::SessionCleanupPlan {
             connection_id: self.connection_id,
+            may_own_live_session: self.live_session_ownership.may_own(),
             mix_presence_gate: Arc::clone(&self.mix_presence_gate),
             account,
             registered_key: self.registered_key.take(),
@@ -2040,6 +2063,43 @@ mod legacy_sasl_wire_tests {
         PostActionSupervisor, ResumePayload,
     };
     use roxmltree::Document;
+
+    #[test]
+    fn durable_ownership_is_marked_before_polling_and_survives_cancellation() {
+        use std::future::Future;
+        let mut ownership = super::LiveSessionOwnership::default();
+        assert!(!ownership.may_own());
+        let polled = std::cell::Cell::new(false);
+        let mut attempt = Box::pin(ownership.attempt(async {
+            polled.set(true);
+            std::future::pending::<()>().await;
+        }));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(attempt.as_mut().poll(&mut context).is_pending());
+        drop(attempt);
+        assert!(polled.get());
+        assert!(
+            ownership.may_own(),
+            "cancelled replies cannot prove that no lease committed"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_and_retried_ownership_attempts_never_reset_durable_cleanup_evidence() {
+        let mut ownership = super::LiveSessionOwnership::default();
+        let result = ownership
+            .attempt(async { Err::<(), _>("unknown commit outcome") })
+            .await;
+        assert!(result.is_err());
+        assert!(ownership.may_own());
+        // The same marker wraps binding, SM creation and resume claims. A
+        // rejected retry cannot clear an earlier possibly committed lease.
+        let rejected = ownership.attempt(async { false }).await;
+        assert!(!rejected);
+        assert!(ownership.may_own());
+        ownership.attempt(async {}).await;
+        assert!(ownership.may_own());
+    }
 
     fn document(xml: &str) -> Document<'_> {
         Document::parse(xml).unwrap()

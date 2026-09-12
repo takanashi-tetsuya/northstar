@@ -35,6 +35,9 @@ The shorter root [architecture and security model](../ARCHITECTURE.md) is the
 public overview; this directory's architecture document is the implementation
 map.
 
+[Independent subservers](SUBSERVERS.md) defines the core/maintenance process
+split, shared database ownership, deployment and rollback procedure.
+
 ## Repository map
 
 | Path | Ownership |

@@ -71,6 +71,44 @@ balancer or container orchestrator should reach `/readyz` directly on the
 private application network; never publish that database-backed path through
 the public Caddy virtual host.
 
+## Console log delivery
+
+Core and standalone retain their existing text/JSON formatting, ANSI policy,
+`RUST_LOG` filter and rolling-file output. Maintenance retains its JSON stdout
+output and environment filter without loading the core configuration or keys.
+Both console paths use one dedicated, lossy writer thread: at most 256 complete
+formatted events of at most 64 KiB are queued (16 MiB of queued payload, plus
+one event in the consumer). An oversized event is dropped whole, never emitted
+as a partial JSON record. Formatting still takes place on the calling thread;
+this boundary limits console buffering and device I/O, not the size of arbitrary
+application values before formatting. The rolling-file sink's policy is unchanged.
+
+The existing private metrics endpoints expose
+`xmpp_console_log_dropped_events_total` with fixed reasons `queue_full_or_closed`
+and `oversized`, plus the queue and event-size limits. These counts describe
+console admission losses, not successful persistence at the output device.
+For core/standalone, inspect the rolling-file sink when the console receiver
+falls behind; maintenance has no rolling-file sink.
+
+The process entrypoint owns every logging guard through service teardown. Each
+flush runs in one shutdown helper and is given a total 2.5 seconds;
+`xmpp_logging_shutdown_failures_total` records helper timeout or spawn failure
+in process memory. Metrics endpoints may already be closed at this final stage,
+so these final counts are not a guaranteed last scrape. A stalled OS write
+cannot safely be cancelled: an overdue helper is released by process exit and
+remaining console/file events may be lost. Logging teardown never waits indefinitely
+for a stopped stdout/stderr consumer, including the logger library's own
+shutdown diagnostic. This isolates a known blocking-I/O path; it is not evidence
+that console logging caused any particular federation readiness failure.
+
+An entrypoint error keeps its nonzero exit status and original Debug diagnostic
+through a separate final bounded stderr report, avoiding Rust Result termination
+printing synchronously after logger teardown. This adds at most one final sink
+and one further 2.5-second flush budget on the error path; no subscriber or
+configuration is reinitialized. Oversized terminal diagnostics are replaced by
+a fixed size-limit message, not a partial diagnostic. CLI help/version output
+and arbitrary panic output are outside this tracing and final-error boundary.
+
 ## WebSocket reverse proxy
 
 RFC 7395 authentication must run over WSS. The application HTTP listener is

@@ -296,6 +296,37 @@ pub(crate) async fn deliver_blocking_presence_change(
     changed_patterns: &[String],
     available: bool,
 ) {
+    let _ = deliver_blocking_presence_change_with_remote(
+        state,
+        owner,
+        roster_targets,
+        changed_patterns,
+        available,
+        |node_id, target, delivery| async move {
+            let _ = state
+                .cluster
+                .send_to_node_available_presence(&node_id, &target, &delivery)
+                .await;
+            Ok(())
+        },
+    )
+    .await;
+}
+
+/// The cluster listener prepares remote replies in its current command turn,
+/// then waits for their receipts without blocking the PubSub reader.
+pub(crate) async fn deliver_blocking_presence_change_with_remote<F, Fut>(
+    state: &Arc<AppState>,
+    owner: &str,
+    roster_targets: &[String],
+    changed_patterns: &[String],
+    available: bool,
+    mut send_remote: F,
+) -> Result<()>
+where
+    F: FnMut(String, String, String) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
     for (from, session) in state
         .session_entries_for(owner)
         .into_iter()
@@ -342,10 +373,7 @@ pub(crate) async fn deliver_blocking_presence_change(
                 if let Ok(nodes) = state.cluster.lookup_nodes(&target).await {
                     for node_id in nodes {
                         if node_id != state.cluster.node_id {
-                            let _ = state
-                                .cluster
-                                .send_to_node_available_presence(&node_id, &target, &delivery)
-                                .await;
+                            send_remote(node_id, target.clone(), delivery.clone()).await?;
                         }
                     }
                 }
@@ -360,6 +388,7 @@ pub(crate) async fn deliver_blocking_presence_change(
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

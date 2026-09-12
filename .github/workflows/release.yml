@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - 'codex/release-*'
     tags:
       - "v*"
   workflow_dispatch:
@@ -80,15 +81,15 @@ jobs:
               fi
             done
             grep -F "## [$package_version] -" CHANGELOG.md >/dev/null || {
-              echo "CHANGELOG.md has no dated $package_version release heading" >&2
+              echo "CHANGELOG.md has no finalized $package_version release heading" >&2
               exit 1
             }
             grep -F "**Package version:** \`$package_version\`" "$release_series_changelog" >/dev/null || {
               echo "$release_series_changelog does not identify package $package_version" >&2
               exit 1
             }
-            grep -F "current release is \`$package_version\`" README.md >/dev/null || {
-              echo "README.md does not identify $package_version as the current release" >&2
+            grep -F "current package version is \`$package_version\`" README.md >/dev/null || {
+              echo "README.md does not identify package $package_version" >&2
               exit 1
             }
           fi
@@ -118,9 +119,36 @@ jobs:
             echo "Dry run for $commit; no GHCR package or GitHub Release will be published." >>"$GITHUB_STEP_SUMMARY"
           fi
 
+  release-qualification:
+    name: Qualify exact release commit
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+
+      - name: Require signed main tag and successful exact-commit CI
+        if: needs.prepare.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: node scripts/verify-release-ci.mjs
+
+      - name: Record build-only qualification for non-tag runs
+        if: needs.prepare.outputs.publish != 'true'
+        run: echo 'Build-only run; release CI qualification is required before publication.' >> "$GITHUB_STEP_SUMMARY"
+
   build-binaries:
     name: Build ${{ matrix.label }} package
-    needs: prepare
+    needs: [prepare, release-qualification]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -141,6 +169,8 @@ jobs:
       CARGO_INCREMENTAL: "0"
       RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
       SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}
+      # Keep the native Windows package independent of the Visual C++ runtime.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
     steps:
       - name: Check out immutable source commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -149,11 +179,49 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Install Python for portable packaging and fixture preflight
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Restore Windows fixture tools before compilation
+        if: runner.os == 'Windows'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/northstar-release-pg17
+          key: release-pg17-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner }}-${{ hashFiles('scripts/ci-postgres17-tools.sh', 'scripts/ci-postgres17-windows.ps1') }}
+
+      - name: Verify restricted Windows PostgreSQL fixture before compilation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/ci-postgres17-windows.ps1 -Prefix "$env:RUNNER_TEMP/northstar-release-pg17"
+          python scripts/test-release-postgres-windows.py --pg-bin "$env:RUNNER_TEMP/northstar-release-pg17/bin"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PostgreSQL fixture preflight failed' }
+
       - name: Install pinned Rust 1.97.1 target
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-25
         with:
           toolchain: 1.97.1
           targets: ${{ matrix.target }}
+
+      - name: Restore native release compiler work
+        continue-on-error: true
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Explicit --target builds host build scripts and proc macros in target/release.
+          # Share compiler work by configuration instead of uploading it for
+          # every source commit. The locked Cargo build below always runs.
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+            target/release
+            !target/release/incremental
+            target/${{ matrix.target }}/release
+            !target/${{ matrix.target }}/release/incremental
+          key: native-release-v2-${{ runner.os }}-${{ matrix.runner }}-${{ matrix.target }}-1.97.1-crt-static-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '.cargo/config*', 'rust-toolchain*') }}-shared
+          restore-keys: |
+            native-release-v2-${{ runner.os }}-${{ matrix.runner }}-${{ matrix.target }}-1.97.1-crt-static-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '.cargo/config*', 'rust-toolchain*') }}-
 
       - name: Build locked release binary
         run: cargo build --release --locked --target ${{ matrix.target }}
@@ -183,83 +251,19 @@ jobs:
             throw "binary version mismatch: expected '$expected', got '$actual'"
           }
 
-      - name: Package complete Linux distribution
+      - name: Strip Linux release binary
         if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          asset="northstar-${RELEASE_VERSION}-linux-amd64.tar.gz"
-          raw_asset="northstar-${RELEASE_VERSION}-linux-amd64"
-          stage="$RUNNER_TEMP/northstar-linux-amd64"
+        run: strip "target/${{ matrix.target }}/release/rust-xmpp-server"
 
-          mkdir -p dist "$stage/web" "$stage/third_party/swagger-ui"
-          strip "target/${{ matrix.target }}/release/rust-xmpp-server"
-          install -m 0755 "target/${{ matrix.target }}/release/rust-xmpp-server" "dist/$raw_asset"
-          install -m 0755 "dist/$raw_asset" "$stage/xmpp-server"
-          install -m 0644 .env.example README.md LICENSE THIRD_PARTY_NOTICES.md "$stage/"
-          cp -a web/. "$stage/web/"
-          cp -a third_party/swagger-ui/dist "$stage/third_party/swagger-ui/"
-          install -m 0644 third_party/swagger-ui/LICENSE third_party/swagger-ui/NOTICE \
-            "$stage/third_party/swagger-ui/"
-
-          tar --sort=name --format=posix \
-            --pax-option=delete=atime,delete=ctime \
-            --mtime="@$SOURCE_DATE_EPOCH" \
-            --owner=0 --group=0 --numeric-owner \
-            -C "$stage" -cf - . \
-            | gzip -n >"dist/$asset"
-          tar -tzf "dist/$asset" | grep -Fx './xmpp-server' >/dev/null
-          tar -tzf "dist/$asset" | grep -Fx './web/index.html' >/dev/null
-          tar -tzf "dist/$asset" | grep -Fx './third_party/swagger-ui/dist/swagger-ui.css' >/dev/null
-          tar -tzf "dist/$asset" | grep -Fx './.env.example' >/dev/null
-
-      - name: Package complete Windows distribution
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $asset = "northstar-$env:RELEASE_VERSION-windows-amd64.zip"
-          $rawAsset = "northstar-$env:RELEASE_VERSION-windows-amd64.exe"
-          $stage = Join-Path $env:RUNNER_TEMP 'northstar-windows-amd64'
-          New-Item -ItemType Directory -Force -Path dist, $stage | Out-Null
-
-          Copy-Item -LiteralPath "target\${{ matrix.target }}\release\rust-xmpp-server.exe" `
-            -Destination (Join-Path dist $rawAsset)
-          Copy-Item -LiteralPath (Join-Path dist $rawAsset) `
-            -Destination (Join-Path $stage 'xmpp-server.exe')
-          Copy-Item -LiteralPath web -Destination $stage -Recurse
-          New-Item -ItemType Directory -Force -Path (Join-Path $stage 'third_party\swagger-ui') | Out-Null
-          Copy-Item -LiteralPath 'third_party\swagger-ui\dist' `
-            -Destination (Join-Path $stage 'third_party\swagger-ui') -Recurse
-          Copy-Item -LiteralPath 'third_party\swagger-ui\LICENSE', `
-            'third_party\swagger-ui\NOTICE' -Destination (Join-Path $stage 'third_party\swagger-ui')
-          Copy-Item -LiteralPath '.env.example', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md' `
-            -Destination $stage
-
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $archive = Join-Path (Resolve-Path dist) $asset
-          [System.IO.Compression.ZipFile]::CreateFromDirectory(
-            $stage,
-            $archive,
-            [System.IO.Compression.CompressionLevel]::Optimal,
-            $false
-          )
-          $zip = [System.IO.Compression.ZipFile]::OpenRead($archive)
-          try {
-            $entries = $zip.Entries.FullName
-            foreach ($required in @(
-              'xmpp-server.exe',
-              'web/index.html',
-              'third_party/swagger-ui/dist/swagger-ui.css',
-              '.env.example'
-            )) {
-              if ($entries -notcontains $required) {
-                throw "release archive is missing $required"
-              }
-            }
-          } finally {
-            $zip.Dispose()
-          }
+      - name: Package complete native distribution
+        run: >-
+          python scripts/release-package.py pack
+          --binary "target/${{ matrix.target }}/release/rust-xmpp-server${{ runner.os == 'Windows' && '.exe' || '' }}"
+          --target "${{ matrix.id }}"
+          --version "${{ needs.prepare.outputs.version }}"
+          --commit "${{ needs.prepare.outputs.commit }}"
+          --epoch "${{ needs.prepare.outputs.source_date_epoch }}"
+          --output dist
 
       - name: Preserve package for release assembly
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -270,14 +274,105 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+  verify-native-packages:
+    name: Verify downloaded ${{ matrix.id }} package
+    needs: [prepare, build-binaries]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-amd64
+            runner: ubuntu-22.04
+            archive: .tar.gz
+            executable: ''
+          - id: windows-amd64
+            runner: windows-2022
+            archive: .zip
+            executable: .exe
+    steps:
+      - name: Check out verification tools at the exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+
+      - name: Install Python for native package verification
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Download this run's native package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-binary-${{ matrix.id }}
+          path: dist
+          digest-mismatch: error
+
+      - name: Verify package contents and extracted executable
+        run: >-
+          python scripts/release-package.py verify
+          --archive "dist/northstar-${{ needs.prepare.outputs.version }}-${{ matrix.id }}${{ matrix.archive }}"
+          --binary "dist/northstar-${{ needs.prepare.outputs.version }}-${{ matrix.id }}${{ matrix.executable }}"
+          --target "${{ matrix.id }}"
+          --version "${{ needs.prepare.outputs.version }}"
+          --commit "${{ needs.prepare.outputs.commit }}"
+          --output "${{ runner.temp }}/northstar-extracted"
+
+      - name: Restore private PostgreSQL test tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/northstar-release-pg17
+          key: release-pg17-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner }}-${{ hashFiles('scripts/ci-postgres17-tools.sh', 'scripts/ci-postgres17-windows.ps1') }}
+
+      - name: Prepare private Linux PostgreSQL tools
+        if: runner.os == 'Linux'
+        run: |
+          bash scripts/ci-install-ubuntu-packages.sh bison flex
+          bash scripts/ci-postgres17-tools.sh "$RUNNER_TEMP/northstar-release-pg17"
+
+      - name: Prepare private Windows PostgreSQL tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci-postgres17-windows.ps1 -Prefix "$env:RUNNER_TEMP/northstar-release-pg17"
+
+      - name: Prove extracted Linux runtime startup and assets
+        if: runner.os == 'Linux'
+        run: |
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/northstar-release-pg17/lib"
+          python scripts/release-native-smoke.py \
+            --package "$RUNNER_TEMP/northstar-extracted" \
+            --pg-bin "$RUNNER_TEMP/northstar-release-pg17/bin" \
+            --evidence "$RUNNER_TEMP/release-evidence/linux-amd64.json"
+
+      - name: Prove extracted Windows runtime startup and assets
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >-
+          python scripts/release-native-smoke.py
+          --package "$env:RUNNER_TEMP/northstar-extracted"
+          --pg-bin "$env:RUNNER_TEMP/northstar-release-pg17/bin"
+          --evidence "$env:RUNNER_TEMP/release-evidence/windows-amd64.json"
+
+      - name: Preserve native runtime verification evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-native-evidence-${{ matrix.id }}
+          path: ${{ runner.temp }}/release-evidence/${{ matrix.id }}.json
+          if-no-files-found: error
+          retention-days: 14
+
   publish-images:
-    name: Publish ${{ matrix.image }} image
-    if: needs.prepare.outputs.publish == 'true'
-    needs: prepare
+    name: Build and verify ${{ matrix.image }} image
+    needs: [prepare, release-qualification, build-binaries, verify-native-packages]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
+      actions: read
       packages: write
       id-token: write
       attestations: write
@@ -299,7 +394,16 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Revalidate current release evidence before publishing images
+        if: needs.prepare.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: node scripts/verify-release-ci.mjs
+
       - name: Log in to GHCR
+        if: needs.prepare.outputs.publish == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -319,7 +423,7 @@ jobs:
             type=raw,value=${{ needs.prepare.outputs.version }}
             type=raw,value=sha-${{ needs.prepare.outputs.short_sha }}
 
-      - name: Build and push linux/amd64 image
+      - name: Build linux/amd64 image; publish only for a qualified tag
         id: image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -327,24 +431,102 @@ jobs:
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
           pull: true
-          push: true
-          tags: ${{ steps.metadata.outputs.tags }}
+          push: ${{ needs.prepare.outputs.publish == 'true' }}
+          load: ${{ needs.prepare.outputs.publish != 'true' }}
+          tags: ${{ needs.prepare.outputs.publish == 'true' && steps.metadata.outputs.tags || format('northstar-release-test:{0}', needs.prepare.outputs.commit) }}
           build-args: |
             NORTHSTAR_VERSION=${{ needs.prepare.outputs.version }}
             VCS_REF=${{ needs.prepare.outputs.commit }}
-          provenance: mode=max
-          sbom: true
+          provenance: ${{ needs.prepare.outputs.publish == 'true' && 'mode=max' || 'false' }}
+          sbom: ${{ needs.prepare.outputs.publish == 'true' }}
           cache-from: type=gha,scope=release-${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=release-${{ matrix.image }}
 
       - name: Sign and publish image provenance
+        if: needs.prepare.outputs.publish == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/${{ needs.prepare.outputs.owner }}/${{ matrix.image }}
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
 
+      - name: Select exact image and verify fresh anonymous pull for publication
+        id: checked-image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH_RELEASE: ${{ needs.prepare.outputs.publish }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          IMAGE_NAME: ghcr.io/${{ needs.prepare.outputs.owner }}/${{ matrix.image }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="northstar-release-test:$RELEASE_COMMIT"
+          if [[ "$PUBLISH_RELEASE" == true ]]; then
+            [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+            image="$IMAGE_NAME@$IMAGE_DIGEST"
+            anonymous_config="$(mktemp -d "$RUNNER_TEMP/northstar-anonymous-docker.XXXXXXXX")"
+            trap 'rm -rf -- "$anonymous_config"' EXIT
+            DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/amd64 "$image"
+            gh attestation verify "oci://$image" --repo "$GITHUB_REPOSITORY"
+          fi
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Verify platform, labels, default user, entrypoint and required files
+        run: >-
+          python3 scripts/release-image-check.py
+          --image '${{ steps.checked-image.outputs.image }}'
+          --name '${{ matrix.image }}'
+          --version '${{ needs.prepare.outputs.version }}'
+          --commit '${{ needs.prepare.outputs.commit }}'
+          --evidence 'image-evidence/${{ matrix.image }}.json'
+
+      - name: Download matching Linux package for container asset comparison
+        if: matrix.image == 'northstar'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-binary-linux-amd64
+          path: dist
+          digest-mismatch: error
+
+      - name: Verify and extract matching Linux package
+        if: matrix.image == 'northstar'
+        run: >-
+          python3 scripts/release-package.py verify
+          --archive 'dist/northstar-${{ needs.prepare.outputs.version }}-linux-amd64.tar.gz'
+          --binary 'dist/northstar-${{ needs.prepare.outputs.version }}-linux-amd64'
+          --target linux-amd64 --version '${{ needs.prepare.outputs.version }}'
+          --commit '${{ needs.prepare.outputs.commit }}'
+          --output '${{ runner.temp }}/northstar-container-assets'
+
+      - name: Restore private PostgreSQL tools for container smoke
+        if: matrix.image == 'northstar'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/northstar-release-pg17
+          key: release-container-pg17-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-postgres17-tools.sh') }}
+
+      - name: Prove default container migration, startup and served assets
+        if: matrix.image == 'northstar'
+        run: |
+          bash scripts/ci-install-ubuntu-packages.sh bison flex
+          bash scripts/ci-postgres17-tools.sh "$RUNNER_TEMP/northstar-release-pg17"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/northstar-release-pg17/lib"
+          python3 scripts/release-native-smoke.py \
+            --package "$RUNNER_TEMP/northstar-container-assets" \
+            --pg-bin "$RUNNER_TEMP/northstar-release-pg17/bin" \
+            --image '${{ steps.checked-image.outputs.image }}' \
+            --evidence image-evidence/container-runtime.json
+
+      - name: Preserve exact image verification evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-image-evidence-${{ matrix.image }}
+          path: image-evidence/*.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Record immutable image digest
+        if: needs.prepare.outputs.publish == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -355,6 +537,7 @@ jobs:
             >'image-digest/${{ matrix.image }}.txt'
 
       - name: Preserve image digest for release assembly
+        if: needs.prepare.outputs.publish == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-image-digest-${{ matrix.image }}
@@ -368,10 +551,12 @@ jobs:
       always() &&
       needs.prepare.result == 'success' &&
       needs.build-binaries.result == 'success' &&
-      (needs.prepare.outputs.publish != 'true' || needs.publish-images.result == 'success')
+      needs.verify-native-packages.result == 'success' &&
+      needs.publish-images.result == 'success'
     needs:
       - prepare
       - build-binaries
+      - verify-native-packages
       - publish-images
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -380,12 +565,26 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - name: Check out immutable evidence assembly tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+
       - name: Download platform packages
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-binary-*
           path: dist
           merge-multiple: true
+
+      - name: Download successful native verification evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-native-evidence-*
+          path: native-evidence
+          merge-multiple: true
+          digest-mismatch: error
 
       - name: Download published image digests
         if: needs.prepare.outputs.publish == 'true'
@@ -395,11 +594,20 @@ jobs:
           path: image-digests
           merge-multiple: true
 
+      - name: Download successful image verification evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-image-evidence-*
+          path: image-evidence
+          merge-multiple: true
+          digest-mismatch: error
+
       - name: Generate and verify SHA-256 checksums
         shell: bash
         env:
           PUBLISH_RELEASE: ${{ needs.prepare.outputs.publish }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
         run: |
           set -euo pipefail
           linux_asset="northstar-${RELEASE_VERSION}-linux-amd64.tar.gz"
@@ -412,7 +620,12 @@ jobs:
           test -f "dist/$windows_binary"
           test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 4
 
-          assets=("$linux_asset" "$linux_binary" "$windows_asset" "$windows_binary")
+          python3 scripts/release-evidence.py \
+            --directory native-evidence --output dist/RELEASE-EVIDENCE.json \
+            --image-directory image-evidence --published "$PUBLISH_RELEASE" \
+            --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+          assets=("$linux_asset" "$linux_binary" "$windows_asset" "$windows_binary" RELEASE-EVIDENCE.json)
           if [[ "$PUBLISH_RELEASE" == true ]]; then
             mapfile -t digest_files < <(find image-digests -maxdepth 1 -type f -name '*.txt' | sort)
             test "${#digest_files[@]}" -eq 3
@@ -453,6 +666,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      actions: read
     steps:
       - name: Re-check immutable release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -466,6 +680,19 @@ jobs:
         with:
           name: verified-release-assets-${{ needs.prepare.outputs.version }}
           path: dist
+
+      - name: Revalidate release evidence before preparing the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_QUALIFICATION_FILE: release-qualification.json
+        run: node scripts/verify-release-ci.mjs
+
+      - name: Render reviewable draft notes from exact release evidence
+        run: >-
+          python3 scripts/release-notes.py --qualification release-qualification.json
+          --evidence dist/RELEASE-EVIDENCE.json --output release-notes.md
 
       - name: Create or update draft and upload assets
         shell: bash
@@ -495,7 +722,7 @@ jobs:
               --verify-tag
               --draft
               --title "Northstar $RELEASE_VERSION"
-              --generate-notes
+              --notes-file release-notes.md
             )
             gh "${create_options[@]}"
           else
@@ -506,11 +733,111 @@ jobs:
             release_id="$(jq -r '.id' <<<"$release_json")"
             gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
               -f name="Northstar $RELEASE_VERSION" \
+              -F body=@release-notes.md \
               -F draft=true \
               -F prerelease=false >/dev/null
           fi
 
           gh release upload "$RELEASE_TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" --clobber
-          echo "Draft release $RELEASE_TAG is ready for manual review and publication." \
+          echo "Draft release $RELEASE_TAG uploaded; independent fresh-download verification follows." \
             >>"$GITHUB_STEP_SUMMARY"
+
+  verify-draft-downloads:
+    name: Verify fresh ${{ matrix.id }} draft download
+    if: needs.prepare.outputs.publish == 'true'
+    needs: [prepare, prepare-draft-release]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      attestations: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-amd64
+            runner: ubuntu-22.04
+            archive: .tar.gz
+            executable: ''
+          - id: windows-amd64
+            runner: windows-2022
+            archive: .zip
+            executable: .exe
+    steps:
+      - name: Check out immutable verification source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+
+      - name: Install Python for download verification
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Download from the draft Release and verify every asset's provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir downloaded
+          for asset in downloaded/*; do
+            gh attestation verify "$asset" --repo "$GITHUB_REPOSITORY"
+          done
+
+      - name: Verify complete downloaded set and exact release identity
+        run: >-
+          python scripts/release-download.py --directory downloaded
+          --version '${{ needs.prepare.outputs.version }}'
+          --commit '${{ needs.prepare.outputs.commit }}'
+
+      - name: Extract downloaded native archive and execute its version check
+        run: >-
+          python scripts/release-package.py verify
+          --archive 'downloaded/northstar-${{ needs.prepare.outputs.version }}-${{ matrix.id }}${{ matrix.archive }}'
+          --binary 'downloaded/northstar-${{ needs.prepare.outputs.version }}-${{ matrix.id }}${{ matrix.executable }}'
+          --target '${{ matrix.id }}' --version '${{ needs.prepare.outputs.version }}'
+          --commit '${{ needs.prepare.outputs.commit }}'
+          --output '${{ runner.temp }}/northstar-fresh-release'
+
+  finalize-draft:
+    name: Mark verified draft ready for manual publication
+    if: needs.prepare.outputs.publish == 'true'
+    needs: [prepare, verify-draft-downloads]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Check out immutable release tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+
+      - name: Download this run's verified release evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verified-release-assets-${{ needs.prepare.outputs.version }}
+          path: dist
+          digest-mismatch: error
+
+      - name: Revalidate CI and finalize the unpublished draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_QUALIFICATION_FILE: release-qualification.json
+        run: |
+          set -euo pipefail
+          node scripts/verify-release-ci.mjs
+          python3 scripts/release-notes.py --qualification release-qualification.json \
+            --evidence dist/RELEASE-EVIDENCE.json --output release-notes.md --verified
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft --notes-file release-notes.md
+          echo "All release preparation checks passed. Draft $RELEASE_TAG is ready for the maintainer to publish." >> "$GITHUB_STEP_SUMMARY"

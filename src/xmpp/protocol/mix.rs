@@ -45,9 +45,9 @@ const MAM_NS: &str = "urn:xmpp:mam:2";
 const MAX_CHANNELS_PER_OWNER: i64 = 100;
 const MAX_ITEMS_PAGE: i64 = 200;
 
-// Main grants background workers 15 seconds to join. MIX delivery cancellation
-// releases claimed leases immediately, leaving one second for the supervisor
-// and registry to record the terminal health transition.
+// Main grants background workers 15 seconds to join. Stop admission first and
+// let bounded claims and owned deliveries drain for 14 seconds. The supervisor
+// then drops unfinished work; an uncertain lease recovers only through expiry.
 const MIX_OUTBOX_DRAIN_GRACE: Duration = Duration::from_secs(14);
 /// A claimed delivery may have already crossed a process or network boundary,
 /// so its lease is the recovery authority.  Keep the entire local attempt —
@@ -55,9 +55,9 @@ const MIX_OUTBOX_DRAIN_GRACE: Duration = Duration::from_secs(14);
 /// deadline.  A later worker can safely recover a fenced row after its lease
 /// expires; this worker must never retain its lane indefinitely.
 const MIX_OUTBOX_ATTEMPT_DEADLINE: Duration = Duration::from_secs(20);
-/// Claim and maintenance turns have no claimed lease to recover.  Bound them
-/// separately so a pool acquire or database wait cannot make a worker appear
-/// healthy while it has stopped making progress.
+/// Bound claim and maintenance turns separately so a pool acquire or database
+/// wait cannot make a worker appear healthy while progress has stopped. A
+/// claim whose commit response is lost may still own a lease in PostgreSQL.
 const MIX_OUTBOX_UNCLAIMED_DB_TURN_DEADLINE: Duration = Duration::from_secs(5);
 /// Retention has a fixed deadline owned by the worker lifecycle, rather than
 /// by individual delivery wakes.  Recreating this deadline after every claim
@@ -81,6 +81,44 @@ const PAM_RESULT_MAX_CONCURRENCY: usize = 2;
 enum MixOutboxQueue {
     Delivery,
     PamResult,
+}
+
+/// Only delivery has a retained commit/reconnect wake. Its empty recovery
+/// scans may back off to one second; PAM retains the fixed 250 ms cadence.
+struct MixClaimSchedule {
+    next_claim: tokio::time::Instant,
+    empty_delay: Duration,
+    max_empty_delay: Duration,
+}
+
+impl MixClaimSchedule {
+    const BASE_DELAY: Duration = Duration::from_millis(250);
+
+    fn starting_at(queue: MixOutboxQueue, now: tokio::time::Instant) -> Self {
+        Self {
+            next_claim: now,
+            empty_delay: Self::BASE_DELAY,
+            max_empty_delay: match queue {
+                MixOutboxQueue::Delivery => Duration::from_secs(1),
+                MixOutboxQueue::PamResult => Self::BASE_DELAY,
+            },
+        }
+    }
+
+    fn record_claim(&mut self, now: tokio::time::Instant, has_work: bool) {
+        if has_work {
+            self.empty_delay = Self::BASE_DELAY;
+        }
+        self.next_claim = now + self.empty_delay;
+        if !has_work {
+            self.empty_delay = (self.empty_delay * 2).min(self.max_empty_delay);
+        }
+    }
+
+    fn record_progress(&mut self, now: tokio::time::Instant) {
+        self.empty_delay = Self::BASE_DELAY;
+        self.next_claim = now;
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,6 +169,7 @@ enum MixOutboxWork {
 /// correlated PAM reply.
 async fn claim_mix_outbox_work(
     state: &AppState,
+    stop_claiming: &tokio_util::sync::CancellationToken,
     cancel: &tokio_util::sync::CancellationToken,
     queue: MixOutboxQueue,
     budget: usize,
@@ -139,7 +178,8 @@ async fn claim_mix_outbox_work(
         .expect("MIX outbox background budget is bounded by its fixed maximum");
     match queue {
         MixOutboxQueue::Delivery => {
-            let deliveries = cancellable_mix_outbox_turn(
+            let deliveries = drainable_mix_outbox_claim(
+                stop_claiming,
                 cancel,
                 state
                     .mix_service()
@@ -151,7 +191,8 @@ async fn claim_mix_outbox_work(
                 .map(MixOutboxWork::Delivery)
                 .collect())
         }
-        MixOutboxQueue::PamResult => Ok(cancellable_mix_outbox_turn(
+        MixOutboxQueue::PamResult => Ok(drainable_mix_outbox_claim(
+            stop_claiming,
             cancel,
             state.mix_service().claim_pam_results(claim_limit),
         )
@@ -185,17 +226,20 @@ fn process_mix_outbox_work(
     })
 }
 
-/// Start a bounded claim as its own future. A claim has no delivery lease
-/// until it returns, but it can wait on a database/pool gate. Keeping it in
-/// the same progress set as already-claimed work prevents the wait from
-/// parking a task which must run to release that gate.
+/// Keep the bounded claim in the same progress set as already-claimed work.
+/// It may commit a lease before returning its token, so ordinary admission
+/// shutdown must keep polling it; only hard cancellation or its deadline can
+/// leave that unknown token for lease recovery.
 fn process_mix_outbox_claim(
     state: Arc<AppState>,
+    stop_claiming: tokio_util::sync::CancellationToken,
     cancel: tokio_util::sync::CancellationToken,
     queue: MixOutboxQueue,
     available: usize,
 ) -> MixOutboxClaimTask {
-    Box::pin(async move { claim_mix_outbox_work(&state, &cancel, queue, available).await })
+    Box::pin(async move {
+        claim_mix_outbox_work(&state, &stop_claiming, &cancel, queue, available).await
+    })
 }
 
 /// Start one bounded maintenance page without parking already-claimed work.
@@ -527,6 +571,21 @@ async fn cancellable_mix_outbox_turn<T>(
         turn,
     )
     .await
+}
+
+/// Do not issue a new claim once admission closes. An already-polled claim
+/// keeps the same five-second database budget and returns its exact tokens
+/// during graceful shutdown. Hard cancellation still leaves any uncertain
+/// commit fenced for lease expiry; no token is guessed or released in Drop.
+async fn drainable_mix_outbox_claim<T>(
+    stop_claiming: &tokio_util::sync::CancellationToken,
+    cancel: &tokio_util::sync::CancellationToken,
+    claim: impl std::future::Future<Output = Result<Vec<T>>>,
+) -> Result<Vec<T>> {
+    if stop_claiming.is_cancelled() {
+        return Ok(Vec::new());
+    }
+    cancellable_mix_outbox_turn(cancel, claim).await
 }
 
 /// Drive the externally visible part of one claimed durable row while keeping
@@ -3106,6 +3165,7 @@ fn record_mix_post_commit_failure(
 /// safe because archive replay continues to the same stanza-id delivery.
 async fn run_mix_outbox_lane(
     state: Arc<AppState>,
+    stop_claiming: tokio_util::sync::CancellationToken,
     cancel: tokio_util::sync::CancellationToken,
     queue: MixOutboxQueue,
     concurrency: usize,
@@ -3117,11 +3177,12 @@ async fn run_mix_outbox_lane(
     // Install the retained receiver before the first claim.  Any committed
     // recipient INSERT/DELETE that races a later wait remains observable, and
     // the delivery lane therefore does not rely on Tokio timer scheduling for
-    // prompt progress.  The 250 ms scan below remains the durable recovery
-    // path across PostgreSQL listener outages and process crashes.
+    // prompt progress. Empty delivery scans back off from 250 ms to at most
+    // one second, retaining durable recovery across listener outages, expired
+    // leases and retry deadlines. PAM has no such wake and stays at 250 ms.
     let mut delivery_wake = matches!(queue, MixOutboxQueue::Delivery)
         .then(|| state.mix_service().subscribe_delivery_wake());
-    let mut next_claim = tokio::time::Instant::now();
+    let mut claim_schedule = MixClaimSchedule::starting_at(queue, tokio::time::Instant::now());
     // Startup must first make already-committed user delivery eligible.
     // Retention work is important but cannot be allowed to put a maintenance
     // page ahead of the first claimed live MIX event on a small pool.
@@ -3137,8 +3198,13 @@ async fn run_mix_outbox_lane(
         // on an admission gate or pool acquire makes no forward progress.
         let mut healthy_progress = false;
         let mut failed_attempt_progress = false;
-        if accepting && cancel.is_cancelled() {
+        if accepting && (stop_claiming.is_cancelled() || cancel.is_cancelled()) {
             accepting = false;
+        }
+        if !accepting {
+            // Maintenance owns no external delivery handoff. Drop its wait
+            // to leave database admission available to the draining work.
+            maintenance_task.take();
         }
         if accepting
             && maintain
@@ -3155,11 +3221,12 @@ async fn run_mix_outbox_lane(
             && claim_task.is_none()
             && maintenance_task.is_none()
             && in_flight.len() < concurrency
-            && tokio::time::Instant::now() >= next_claim
+            && tokio::time::Instant::now() >= claim_schedule.next_claim
         {
             let available = concurrency - in_flight.len();
             claim_task = Some(process_mix_outbox_claim(
                 Arc::clone(&state),
+                stop_claiming.clone(),
                 cancel.clone(),
                 queue,
                 available,
@@ -3179,6 +3246,9 @@ async fn run_mix_outbox_lane(
 
         tokio::select! {
             biased;
+            _ = stop_claiming.cancelled(), if accepting => {
+                accepting = false;
+            }
             _ = cancel.cancelled(), if accepting => {
                 accepting = false;
             }
@@ -3188,7 +3258,7 @@ async fn run_mix_outbox_lane(
                         // A finished row has released one lane slot. Claim again
                         // in the next loop turn instead of imposing the idle
                         // recovery cadence on an already-known backlog.
-                        next_claim = tokio::time::Instant::now();
+                        claim_schedule.record_progress(tokio::time::Instant::now());
                         if let Err(error) = outcome {
                             // A claimed row retains its fenced lease and is retried
                             // by the row-level completion path; one recipient must
@@ -3203,6 +3273,7 @@ async fn run_mix_outbox_lane(
                     MixOutboxProgress::Claim(outcome) => {
                         match outcome {
                             Ok(claimed) => {
+                                claim_schedule.record_claim(tokio::time::Instant::now(), !claimed.is_empty());
                                 for work in claimed {
                                     in_flight.push(process_mix_outbox_work(
                                         Arc::clone(&state),
@@ -3211,8 +3282,6 @@ async fn run_mix_outbox_lane(
                                     ));
                                 }
                                 debug_assert!(in_flight.len() <= concurrency);
-                                next_claim = tokio::time::Instant::now()
-                                    + Duration::from_millis(250);
                                 // An empty claim still completed one bounded,
                                 // authoritative database turn.
                                 healthy_progress = true;
@@ -3252,7 +3321,7 @@ async fn run_mix_outbox_lane(
                     // asks the lane to run the normal fenced PostgreSQL
                     // claim immediately instead of waiting for its recovery
                     // scan.
-                    next_claim = tokio::time::Instant::now();
+                    claim_schedule.record_progress(tokio::time::Instant::now());
                 } else {
                     terminal_error = Some(anyhow::anyhow!(
                         "MIX delivery wake broker unexpectedly closed"
@@ -3261,7 +3330,7 @@ async fn run_mix_outbox_lane(
                     cancel.cancel();
                 }
             }
-            _ = tokio::time::sleep_until(next_claim), if accepting && claim_task.is_none() && maintenance_task.is_none() && in_flight.len() < concurrency => {}
+            _ = tokio::time::sleep_until(claim_schedule.next_claim), if accepting && claim_task.is_none() && maintenance_task.is_none() && in_flight.len() < concurrency => {}
         }
         if healthy_progress {
             heartbeat.ok();
@@ -3279,10 +3348,13 @@ async fn run_mix_outbox_lane(
 /// Both lanes are intentionally continuous.  A plain `join` therefore turns a
 /// failure in either lane into a silent hang: the failed future completes, but
 /// the healthy peer continues polling forever and the supervisor never sees
-/// the failure.  Cancel the shared child token as soon as either lane ends,
-/// then await the peer so it can defer any claimed lease through its ordinary
-/// shutdown path before returning the original result to the supervisor.
+/// the failure. An error or unexpected early return hard-cancels the peer.
+/// During ordinary admission shutdown, however, an empty lane must let its
+/// peer finish already-issued claims and owned work inside the supervisor's
+/// existing drain budget. Unknown or transferred tokens are never released
+/// by the joiner.
 async fn join_mix_outbox_lanes<D, P>(
+    stop_claiming: tokio_util::sync::CancellationToken,
     lane_cancel: tokio_util::sync::CancellationToken,
     delivery: D,
     pam: P,
@@ -3295,13 +3367,17 @@ where
     tokio::pin!(pam);
     tokio::select! {
         delivery_result = &mut delivery => {
-            lane_cancel.cancel();
+            if delivery_result.is_err() || !stop_claiming.is_cancelled() {
+                lane_cancel.cancel();
+            }
             let pam_result = pam.await;
             delivery_result?;
             pam_result
         }
         pam_result = &mut pam => {
-            lane_cancel.cancel();
+            if pam_result.is_err() || !stop_claiming.is_cancelled() {
+                lane_cancel.cancel();
+            }
             let delivery_result = delivery.await;
             pam_result?;
             delivery_result
@@ -3327,9 +3403,14 @@ pub(crate) fn start_mix_delivery_outbox(
             async move {
                 let (delivery_budget, pam_budget) =
                     mix_outbox_lane_budgets(state.mix_service().outbox_background_budget());
-                let lane_cancel = cancel.child_token();
+                // Server shutdown stops admission without discarding an
+                // in-progress claim response or delivery. Lane failures use
+                // a fresh, independent hard-cancel token for this attempt;
+                // the supervisor still bounds the whole drain to 14 seconds.
+                let lane_cancel = tokio_util::sync::CancellationToken::new();
                 let delivery = run_mix_outbox_lane(
                     Arc::clone(&state),
+                    cancel.clone(),
                     lane_cancel.clone(),
                     MixOutboxQueue::Delivery,
                     delivery_budget,
@@ -3338,6 +3419,7 @@ pub(crate) fn start_mix_delivery_outbox(
                 );
                 let pam = run_mix_outbox_lane(
                     state,
+                    cancel.clone(),
                     lane_cancel.clone(),
                     MixOutboxQueue::PamResult,
                     pam_budget,
@@ -3345,10 +3427,10 @@ pub(crate) fn start_mix_delivery_outbox(
                     heartbeat,
                 );
                 // Both protocol lanes may wait on external I/O concurrently,
-                // but MixService serializes their database turns.  If either
-                // lane exits, the joiner cancels and drains the peer before
-                // surfacing the original result to the restartable supervisor.
-                join_mix_outbox_lanes(lane_cancel, delivery, pam).await
+                // but MixService serializes their database turns. The joiner
+                // preserves normal draining and surfaces an abnormal lane
+                // exit to the restartable supervisor.
+                join_mix_outbox_lanes(cancel, lane_cancel, delivery, pam).await
             }
         },
     );
@@ -7664,6 +7746,64 @@ mod tests {
     use crate::services::mix::MamRsmPage;
 
     #[tokio::test]
+    async fn delivery_idle_scan_stays_bounded_and_retained_commits_bypass_backoff() {
+        let broker = crate::services::mix::MixDeliveryWakeBroker::for_test();
+        let mut wake = Some(broker.subscribe());
+        let mut now = tokio::time::Instant::now();
+        let mut schedule = MixClaimSchedule::starting_at(MixOutboxQueue::Delivery, now);
+        assert_eq!(schedule.next_claim, now);
+        for delay_ms in [250, 500, 1000, 1000, 1000] {
+            schedule.record_claim(now, false);
+            assert_eq!(schedule.next_claim - now, Duration::from_millis(delay_ms));
+            now = schedule.next_claim;
+        }
+        // A commit races the worker's next wait. The retained generation must
+        // win without waiting for the recovery timer or trusting the payload
+        // as permission to deliver; the next step is a fresh database claim.
+        now = tokio::time::Instant::now();
+        schedule.record_claim(now, false);
+        broker.publish_local_commit();
+        tokio::select! {
+            biased;
+            open = wait_for_mix_delivery_wake(&mut wake) => {
+                assert!(open);
+                schedule.record_progress(now);
+            }
+            _ = tokio::time::sleep_until(schedule.next_claim) => {
+                panic!("retained commit waited for the idle recovery timer")
+            }
+        }
+        assert_eq!(schedule.next_claim, now);
+        schedule.record_claim(now, false);
+        assert_eq!(schedule.next_claim - now, MixClaimSchedule::BASE_DELAY);
+    }
+
+    #[test]
+    fn actual_delivery_work_restores_the_fast_claim_cadence() {
+        let now = tokio::time::Instant::now();
+        let mut schedule = MixClaimSchedule::starting_at(MixOutboxQueue::Delivery, now);
+        for _ in 0..5 {
+            schedule.record_claim(now, false);
+        }
+        schedule.record_claim(now, true);
+        assert_eq!(schedule.next_claim - now, MixClaimSchedule::BASE_DELAY);
+        schedule.record_progress(now);
+        assert_eq!(schedule.next_claim, now);
+        schedule.record_claim(now, false);
+        assert_eq!(schedule.next_claim - now, MixClaimSchedule::BASE_DELAY);
+    }
+
+    #[test]
+    fn pam_without_a_commit_wake_keeps_its_original_scan_latency() {
+        let now = tokio::time::Instant::now();
+        let mut schedule = MixClaimSchedule::starting_at(MixOutboxQueue::PamResult, now);
+        for _ in 0..100 {
+            schedule.record_claim(now, false);
+            assert_eq!(schedule.next_claim - now, Duration::from_millis(250));
+        }
+    }
+
+    #[tokio::test]
     async fn durable_local_mix_delivery_requires_transport_ownership_and_closes_failed_routes() {
         let source = crate::outbound::MixDelivery {
             delivery_id: Uuid::from_u128(1),
@@ -7891,6 +8031,137 @@ mod tests {
         assert!(claim.is_none());
     }
 
+    #[tokio::test]
+    async fn stopped_mix_lane_does_not_issue_another_claim() {
+        let stop_claiming = tokio_util::sync::CancellationToken::new();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        stop_claiming.cancel();
+        let claimed = drainable_mix_outbox_claim::<Uuid>(&stop_claiming, &cancel, async {
+            anyhow::bail!("shutdown must not poll a new database claim")
+        })
+        .await
+        .expect("an unstarted claim has no lease to recover");
+        assert!(claimed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn graceful_stop_recovers_a_committed_mix_claim_response() {
+        let stop_claiming = tokio_util::sync::CancellationToken::new();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let token = Uuid::new_v4();
+        let (committed_tx, committed_rx) = tokio::sync::oneshot::channel();
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        let task_stop = stop_claiming.clone();
+        let task = tokio::spawn(async move {
+            drainable_mix_outbox_claim(&task_stop, &cancel, async move {
+                // The database has committed this exact token, but the
+                // response has not reached the lane when shutdown starts.
+                committed_tx.send(()).unwrap();
+                response_rx.await.unwrap();
+                Ok(vec![token])
+            })
+            .await
+        });
+        committed_rx.await.unwrap();
+        stop_claiming.cancel();
+        response_tx.send(()).unwrap();
+        let claimed = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("graceful stop must continue polling the bounded claim")
+            .unwrap()
+            .expect("a committed response must not be discarded by admission shutdown");
+        assert_eq!(claimed, vec![token]);
+    }
+
+    #[tokio::test]
+    async fn hard_cancel_still_discards_an_unknown_mix_claim_response() {
+        let stop_claiming = tokio_util::sync::CancellationToken::new();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let task_cancel = cancel.clone();
+        let (committed_tx, committed_rx) = tokio::sync::oneshot::channel();
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            drainable_mix_outbox_claim(&stop_claiming, &task_cancel, async move {
+                committed_tx.send(()).unwrap();
+                response_rx.await.unwrap();
+                Ok(vec![Uuid::new_v4()])
+            })
+            .await
+        });
+        committed_rx.await.unwrap();
+        cancel.cancel();
+        let error = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("hard cancellation must still bound an uncertain claim")
+            .unwrap()
+            .expect_err("an unknown committed token must remain for durable lease recovery");
+        assert!(mix_outbox_is_shutting_down(&error));
+        assert!(
+            response_tx.send(()).is_err(),
+            "pending response future was not dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn graceful_empty_pam_lane_preserves_delivery_claim_and_effect_drain() {
+        let stop_claiming = tokio_util::sync::CancellationToken::new();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let delivery_stop = stop_claiming.clone();
+        let delivery_cancel = cancel.clone();
+        let pam_stop = stop_claiming.clone();
+        let (committed_tx, committed_rx) = tokio::sync::oneshot::channel();
+        let (pam_stopped_tx, pam_stopped_rx) = tokio::sync::oneshot::channel();
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        let token = Uuid::new_v4();
+        let joined = tokio::spawn(async move {
+            join_mix_outbox_lanes(
+                stop_claiming,
+                cancel,
+                async move {
+                    let claimed =
+                        drainable_mix_outbox_claim(&delivery_stop, &delivery_cancel, async move {
+                            committed_tx.send(()).unwrap();
+                            response_rx.await.unwrap();
+                            Ok(vec![token])
+                        })
+                        .await?;
+                    assert_eq!(claimed, vec![token]);
+                    let deadline = tokio::time::Instant::now() + MIX_OUTBOX_ATTEMPT_DEADLINE;
+                    let outcome = run_claimed_mix_effect_with_lease(
+                        delivery_cancel.clone(),
+                        deadline,
+                        MIX_OUTBOX_LEASE_RENEWAL_INTERVAL,
+                        async { Ok(token) },
+                        || Box::pin(async { panic!("immediate work needs no renewal") }),
+                    )
+                    .await?;
+                    assert_eq!(outcome, Some(token));
+                    // The final acknowledgement/defer database turn uses
+                    // the same exact token and original attempt deadline.
+                    let finalized =
+                        bounded_mix_outbox_turn(&delivery_cancel, deadline, async { Ok(token) })
+                            .await?;
+                    assert_eq!(finalized, token);
+                    Ok(())
+                },
+                async move {
+                    committed_rx.await.unwrap();
+                    pam_stop.cancel();
+                    pam_stopped_tx.send(()).unwrap();
+                    Ok(())
+                },
+            )
+            .await
+        });
+        pam_stopped_rx.await.unwrap();
+        response_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), joined)
+            .await
+            .expect("an empty stopped PAM lane must not strand the delivery lane")
+            .unwrap()
+            .expect("normal shutdown must preserve the delivery lane's hard-cancel token");
+    }
+
     #[test]
     fn mix_outbox_lane_budgets_preserve_the_pam_window() {
         assert_eq!(mix_outbox_lane_budgets(1), (1, 1));
@@ -7964,6 +8235,7 @@ mod tests {
         let lane_cancel = tokio_util::sync::CancellationToken::new();
         let joined = tokio::spawn(async move {
             join_mix_outbox_lanes(
+                tokio_util::sync::CancellationToken::new(),
                 lane_cancel,
                 async move {
                     let _ = delivery_started_tx.send(());
@@ -7999,6 +8271,7 @@ mod tests {
         let result = tokio::time::timeout(
             Duration::from_secs(1),
             join_mix_outbox_lanes(
+                tokio_util::sync::CancellationToken::new(),
                 lane_cancel,
                 async move {
                     peer_started_rx

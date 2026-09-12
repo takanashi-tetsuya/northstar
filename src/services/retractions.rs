@@ -870,34 +870,6 @@ impl RetractionService {
             tombstones: tombstones.len(),
         })
     }
-
-    /// Remove expired replay evidence after all durable projections complete.
-    /// The fixed 30-day expiry is created by migration 0102; pending S2S or
-    /// C2S ownership always wins over the clock.
-    pub(crate) async fn purge_expired_intents(&self, batch_size: i64) -> Result<u64> {
-        anyhow::ensure!(
-            (1..=10_000).contains(&batch_size),
-            "retraction intent cleanup batch size must be between 1 and 10000"
-        );
-        Ok(sqlx::query(
-            "WITH expired AS MATERIALIZED (
-                 SELECT id FROM personal_retraction_intents
-                  WHERE expires_at < clock_timestamp()
-                    AND s2s_outbox_id IS NULL
-                    AND c2s_delivery_id IS NULL
-                  ORDER BY expires_at,id
-                  LIMIT $1
-                  FOR UPDATE SKIP LOCKED
-             )
-             DELETE FROM personal_retraction_intents intent
-             USING expired
-             WHERE intent.id=expired.id",
-        )
-        .bind(batch_size)
-        .execute(&self.pool)
-        .await?
-        .rows_affected())
-    }
 }
 
 fn normalize_delivery_projection<'a>(
@@ -2228,7 +2200,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert_eq!(service.purge_expired_intents(10).await.unwrap(), 0);
+        assert_eq!(
+            db::purge_expired_retraction_intents(&service.pool, 10)
+                .await
+                .unwrap(),
+            0
+        );
         sqlx::query("DELETE FROM offline_messages WHERE id=$1")
             .bind(delivery_id)
             .execute(&pool)
@@ -2242,7 +2219,12 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(cleared, (true, None));
-        assert_eq!(service.purge_expired_intents(10).await.unwrap(), 1);
+        assert_eq!(
+            db::purge_expired_retraction_intents(&service.pool, 10)
+                .await
+                .unwrap(),
+            1
+        );
 
         let capacity_target = Uuid::new_v4();
         sqlx::query(
@@ -2953,7 +2935,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert_eq!(service.purge_expired_intents(10).await.unwrap(), 1);
+        assert_eq!(
+            db::purge_expired_retraction_intents(&service.pool, 10)
+                .await
+                .unwrap(),
+            1
+        );
         let retained_outbox_intent: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM personal_retraction_intents WHERE action_id='action-1'",
         )

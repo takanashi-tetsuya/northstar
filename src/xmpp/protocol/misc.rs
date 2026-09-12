@@ -623,15 +623,14 @@ impl ProtocolSession {
         // across nodes during an epoch-fenced rolling limit change and would
         // count only this process's resources.
         match self
-            .state
-            .sm_service()
-            .reserve_binding(
+            .live_session_ownership
+            .attempt(self.state.sm_service().reserve_binding(
                 self.connection_id,
                 user.id,
                 user.auth_generation,
                 &key,
                 self.state.config.capacity_session_lease_seconds,
-            )
+            ))
             .await?
         {
             BindingReservationOutcome::Reserved => {}

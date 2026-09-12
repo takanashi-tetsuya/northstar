@@ -14,10 +14,12 @@ const MAX_BACKGROUND_DATABASE_TURNS: usize = 16;
 
 /// Clone-shared, FIFO admission for short durable-outbox database turns.
 ///
-/// At least one configured primary-pool connection remains available to
-/// foreground protocol traffic.  A one-connection deployment still permits a
-/// single background recovery turn: withholding all recovery would make the
-/// durable queue permanently unavailable.
+/// When the primary pool has more than one connection, at least one slot is
+/// outside this outbox group's budget. Other users of the shared pool can use
+/// that slot; it is not reserved for foreground traffic or readiness checks.
+/// A one-connection deployment still permits a single background recovery
+/// turn: withholding all recovery would make the durable queue permanently
+/// unavailable.
 #[derive(Clone, Debug)]
 pub(crate) struct DurableOutboxDatabaseAdmission {
     permits: Arc<Semaphore>,

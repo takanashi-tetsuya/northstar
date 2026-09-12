@@ -81,6 +81,61 @@ The Cargo target is named `rust-xmpp-server`; the installed release executable
 is `xmpp-server`. This naming difference does not create separate programs or
 authorities.
 
+## Independently started process roles
+
+The same executable supports the following explicit startup compositions. See
+[Subserver deployment](SUBSERVERS.md) for the supported one-host deployment and
+its Compose overlay. These are independent OS processes; domain services under
+`services/` remain prototypes unless their own support matrix says otherwise.
+
+| Command | Owns | Inputs and secret authority | Excluded capability |
+| --- | --- | --- | --- |
+| no command or `serve standalone` | compatible combined server with embedded archive and subscription cleanup workers | general runtime configuration and existing core secrets | cannot coexist with another retention owner for the same database/schema |
+| `serve core` | existing public listeners, sessions, routing, administration and remaining core workers | general runtime configuration and existing core secrets | does not register archive or subscription cleanup |
+| `serve maintenance` | archive/audit/offline retention, physical PubSub subscription cleanup and loopback health | database connection, domain, bounded retention policy; skips `.env` and does not load core signing/keyring configuration | no `AppState`, public listener, session or routing authority |
+
+Supported split deployment runs one core and one maintenance process against a
+shared PostgreSQL runtime role. This is process/secret separation, while the
+runtime credential retains the existing broad database grants. It is not
+per-domain database privilege isolation. The archive context holds only a
+pool, immutable retention policy, metrics and a readiness handle. The separate
+subscription cleanup context holds the same existing pool, narrow counters and
+its own readiness handle. Its health server receives only the two read-only
+readiness handles, registry and metrics.
+The production source gate fixes this capability inventory. Maintenance uses
+three connections at most; the core primary-pool cap is derived from the
+existing runtime-role limit minus four auxiliary core connections and three
+maintenance connections (currently 57). The overlay retains the core default of 32.
+
+Every retention entry point claims the same database/schema-scoped PostgreSQL
+session advisory lock before activating work. Standalone retains the lock on
+its already reserved runtime-control connection, without reserving another
+primary-pool slot. Maintenance holds one of its three connections. Both close
+the physical session when ownership ends. Maintenance probes that exact session
+every five seconds with a three-second query deadline; loss cancels and joins
+both cleanup workers. Standalone uses the existing critical runtime-control coordinator:
+idle ticks only pulse liveness and cannot clear preceding database failures.
+
+This is bounded detection and cancellation, with possible **bounded overlap**
+after ownership-connection loss. Work already submitted through another pool
+connection is not fenced by the advisory session. Existing bounded batches,
+legal-hold checks and idempotent deletion remain required; the lock does not
+provide an exactly-once transaction guarantee. The experimental cluster fixture
+uses a standalone node A and core-only node B, including restarts; that mixed
+fixture is not an additional supported deployment topology.
+
+| Process-qualified worker/observer | Registration owner | Criticality / mode | Stall watchdog | Shutdown | Owned work and health |
+| --- | --- | --- | --- | --- | --- |
+| `maintenance/archive-retention` | `serve maintenance` | restartable / continuous | 2 × retention interval + 60 s | immediate | bounded archive/audit/offline cleanup; readiness requires a complete successful pass and drops at the first failed or incomplete pass |
+| `maintenance/pubsub-subscription-cleanup` | `serve maintenance` | restartable / continuous | 110 s | immediate | physical expired-subscription cleanup every 60 s, with a 40 s total pass budget and 1,000-row batches; readiness drops during a pending or failed pass and only its own successful pass restores it |
+| `maintenance-ownership` | `serve maintenance` main loop | critical health observer; **no task/factory** | none; exact locked-session probe every 5 s with 3 s deadline | immediate | first probe failure cancels the process; no pool-substituted ownership check |
+
+Maintenance exposes only loopback `/healthz`, `/readyz` and `/metrics`; readiness
+requires both independently successful cleanup passes and healthy supervision.
+It does not query PostgreSQL or disclose failure details. Its listener caps active
+connections at 16, headers at 4 KiB and each request at two seconds. Cancellation
+closes the listener and joins/aborts every accepted connection.
+
 ## Runtime layers
 
 | Layer | Accepted input | Owned capability | Explicitly forbidden | Transaction or failure boundary | Supervisor | Actual isolation | Remaining shared authority |
@@ -118,8 +173,9 @@ handlers access them through purpose-specific methods rather than field access.
 
 ## Runtime process topology and failure ownership
 
-The long-lived server is one OS process but has two distinct supervision
-planes. Top-level service tasks are availability-critical listeners/engines: an
+The core or standalone server process has two distinct supervision planes.
+Maintenance has its separate composition described above. Top-level service
+tasks are availability-critical listeners/engines: an
 unexpected return cancels the whole process. Registry workers have a declared
 criticality, heartbeat contract and restart policy. Neither plane may detach a
 task whose disappearance would change accepted behavior.
@@ -154,8 +210,9 @@ shutdown and request/body-sidecar lifetimes.
 | `deployment-capacity-lease-reaper` | `main` | restartable / continuous | 120 s | immediate | elect one transaction-scoped PostgreSQL advisory-lock holder to reap expired deployment session leases | a busy peer causes a no-op election result; unexpected database failure degrades readiness and retries without cancelling healthy local routes |
 | `background-maintenance` | `main` | restartable / continuous | 180 s | immediate | bounded expiry/cleanup for sessions, FAST, SM, admin and auxiliary state | readiness degrades and the guardian rebuilds the attempt with backoff |
 | `account-deletion-recovery` | `main` | restartable / continuous | 1,200 s | immediate | resume fenced account deletion, SM teardown and storage reconciliation | readiness degrades and the durable claim is retried by a rebuilt attempt |
-| `upload-storage-reconciliation` | `main` | critical / continuous | 600 s | immediate | reconcile slot/object/cleanup authority and storage namespace | proven authority drift, watchdog expiry, or the critical business-health error threshold (currently three consecutive DB/provider/backlog reports) cancels the service; an individual transient report marks health before object I/O |
-| `archive-retention` | `main` | restartable / continuous | derived retention maximum-silence interval | immediate | claim and apply archive lifecycle policy in bounded batches | readiness degrades and the claim-safe attempt restarts |
+| `upload-storage-reconciliation` | `main` | critical / continuous | 600 s | immediate | reconcile slot/object/cleanup authority and storage namespace | proven authority drift, watchdog expiry, or the critical business-health error threshold (currently three consecutive DB/provider/backlog reports) cancels the service; a catalog or ledger read error closes upload writes and readiness; waiting ticks only pulse liveness until the respective 15 s or 60 s retry; they neither recount nor clear failures; confirmed violations retain per-tick termination even when the other audit is waiting |
+| `archive-retention` | `main`, standalone only | restartable / continuous | derived retention maximum-silence interval | immediate | after startup ownership claim, apply archive lifecycle policy in bounded batches | readiness degrades and the claim-safe attempt restarts; core explicitly omits this registration |
+| `pubsub-subscription-cleanup` | `main`, standalone only | restartable / continuous | 110 s | immediate | after the shared startup ownership claim, physically clean expired subscriptions every 60 s with a 40 s total pass budget and 1,000-row batches, independently of delivery admission | registry health follows the restartable-worker policy; core omits this registration and logical expiration checks remain in force |
 | `admin-session-cleanup` | `main` | critical / continuous | 90 s | immediate | revoke credential generations and exact live connections | failure or silence cancels the service rather than delaying security revocation |
 | `redis-pubsub` | `main`, cluster only | restartable / continuous | 45 s | immediate | receive authenticated route/control hints | cluster readiness degrades and the listener restarts; Redis never becomes durable authority |
 | `cluster-maintenance` | `main`, cluster only | restartable / continuous | 90 s | immediate | renew/reconcile PostgreSQL node/route leases and disconnect sessions whose authentication or user-agent login generation is stale | cluster readiness degrades and lease-safe work restarts; failure also removes this secondary credential-revocation reconciliation path |
@@ -167,18 +224,18 @@ inputs. They use the same registry and shutdown token; being registered outside
 
 | Worker/observer name | Registration owner | Criticality / mode | Stall watchdog | Shutdown | Owned recovery/work | Forbidden shortcut |
 | --- | --- | --- | --- | --- | --- | --- |
-| `session-cleanup` | `AppState` observer registration | restartable health observer; **no task/factory** | none | not applicable | synchronous per-session cleanup reports success/error into readiness | describing it as a restartable loop or hiding repeated cleanup errors |
+| `session-cleanup` | `AppState` observer registration | restartable health observer; **no task/factory** | none | not applicable | bounded per-session cleanup reports errors or actual successful work into readiness; an empty report is neutral | describing it as a restartable loop or hiding repeated cleanup errors |
 | `sm-authority-listener` | `SmService` startup | restartable / continuous | 15 s, fed by a 5 s liveness tick even when LISTEN is quiet | immediate | consume durable SM authority and schema-only MIX delivery wake hints; each consumer reclaims its own fenced row/generation | treating notification silence as failure or a notification as authority without the durable generation |
 | `sm-suspension-recovery` | session-cleanup service startup | restartable / continuous | 30 s | drain up to 5 s | recover suspended SM/MUC endpoint teardown and replay ownership | dropping a claimed suffix on cancellation |
 | `caps-side-effects` | Caps subsystem startup | restartable / continuous | 60 s | bounded `CAPS_EFFECT_DRAIN_GRACE` | execute pending verified capability/PEP/MIX effects with no-lost-wakeup rescan | declaring work complete because a bounded hint queue filled |
 | `mix-iq-relay-expiry` | MIX protocol capability startup | restartable / continuous | 10 s | immediate | expire exact pending IQ relays and route generations | expiring a replacement relay by stale timer identity |
-| `mix-delivery-outbox` | MIX capability startup | restartable / continuous | 30 s | bounded `MIX_OUTBOX_DRAIN_GRACE` | claim and deliver durable MIX event outbox rows through independent delivery and PAM-result lanes; every background database turn races cancellation and an abandoned fenced lease recovers by expiry | treating live fan-out as outbox acknowledgement, allowing a slow delivery lane to delay PAM results, or waiting indefinitely for a database turn during shutdown |
+| `mix-delivery-outbox` | MIX capability startup | restartable / continuous | 30 s | bounded `MIX_OUTBOX_DRAIN_GRACE` | claim and deliver durable MIX event outbox rows through independent delivery and PAM-result lanes; shutdown stops new claims and drains already-started bounded work for up to 14 s; hard cancellation or an unknown completion retains the fenced lease until expiry | treating live fan-out as outbox acknowledgement, allowing a slow delivery lane to delay PAM results, or waiting indefinitely for a database turn during shutdown |
 | `mix-presence-recovery` | MIX capability startup | restartable / one-shot | 90 s | immediate | rebuild eligible MIX presence after startup | running indefinitely or inventing participants absent durable authority |
-| `pubsub-digest-delivery` | PubSub capability startup | restartable / continuous | 5 s | immediate | deliver due digest batches from durable queue state | losing work when an in-memory wake is dropped |
+| `pubsub-digest-delivery` | PubSub capability startup | restartable / continuous | 5 s | immediate | deliver due digest batches from durable queue state | losing work when an in-memory wake is dropped or reclaiming physical subscription cleanup inside the five-second delivery worker |
 | `pubsub-event-outbox-delivery` | PubSub capability startup | restartable / continuous | 30 s | immediate | deliver/retry durable PubSub/PEP mutation events | publishing before the mutation/outbox transaction commits |
 | `cluster-muc-outbox` | cluster MUC startup, unconditionally registered | restartable / continuous | 30 s | immediate | in every mode expire/recover PostgreSQL MUC occupancy, dead-letter/history and metric state; with clustering also bridge durable MUC outbox events to authenticated cluster delivery | making Redis publication the durable completion record or skipping single-node PostgreSQL maintenance |
 | `locked-muc-expiry` | `AppState` MUC startup | restartable / continuous | 20 s | immediate | expire locked empty-room creation windows | deleting an occupied/replacement room from a stale observation |
-| `runtime-control-refresh` | process startup reserves the connection; `AppState` transfers it to runtime-control startup | critical / continuous | 5 s | immediate | before traffic startup, reserve and attest one connection; only a 500 ms cold-start `PoolTimedOut` is retried with bounded per-process jitter, while all other setup errors fail immediately; then sequentially refresh durable federation rules and security-relevant administration settings each second, and observe XEP-0133 service control every 500 ms when enabled | allowing traffic-adjacent startup work to exhaust the control connection, pooling a runtime control read after activation, splitting control-plane reads into competing workers, silently retaining a superseded security setting, continuing with stale allow/deny authority, or keeping listeners available after committed shutdown control changes |
+| `runtime-control-refresh` | process startup reserves the connection; `AppState` transfers it to runtime-control startup | critical / continuous | 5 s | immediate | before traffic startup, reserve and attest one connection; initial handshakes receive at most 3 s, clamped to the remaining absolute 15 s admission budget; only `PoolTimedOut` is retried with bounded per-process jitter, while all other setup errors fail immediately; role attestation and final reservation share the same deadline; then sequentially refresh durable federation rules and security-relevant administration settings each second, and observe XEP-0133 service control every 500 ms when enabled | allowing traffic-adjacent startup work to exhaust the control connection, pooling a runtime control read after activation, splitting control-plane reads into competing workers, silently retaining a superseded security setting, continuing with stale allow/deny authority, or keeping listeners available after committed shutdown control changes |
 
 Criticality is a semantic declaration, not a performance tuning knob. A worker
 is critical only when continuing without it would violate an authority or
@@ -199,6 +256,7 @@ durable state makes restart correct.
 | `WorkerRegistry` guardian | registry supervisor map | registry shutdown gate and retained `JoinHandle` | critical cancels process; restartable degrades readiness and is rebuilt with backoff | claim/lease/outbox makes a new attempt safe; heartbeat proves business progress |
 | connection actor | `ConnectionActorRegistry` | admission-close, per-actor cancellation and bounded reap | affects exact connection; leaked/unfinished actor fails shutdown accounting | protocol reconnect, SM/BOSH replay and route generation define recovery |
 | protocol post-action task | owning `ProtocolSession`/connection actor | session-local `JoinSet` before teardown | connection-scoped error; may close session when ordering cannot be preserved | must not outlive or mutate a replacement connection generation |
+| cluster presence response continuation | current PubSub listener's bounded future queue; one active and at most 15 waiting controls, each at most 4096 responses and 2 MiB response strings plus its existing 2 MiB signed-envelope limit | listener return, rotation, cancellation or panic synchronously drops all futures and pending ACK registrations; no detached tasks | overflow or response error reaches the listener supervisor and degrades readiness; original control ACK waits for actual remote receipts | local command effects retain reader order and remote response batches retain arrival order; deferred sends and final ACK recheck listener epoch and current signed authority without repeating replay admission; presence state can be replayed after recovery |
 | request-scoped sidecar | HTTP/BOSH/upload/operation request owner | request/body cancellation and explicit local join/guard drop | request fails or durable claim remains recoverable | upload lease renewer, body pump and operation lease use exact claim/epoch |
 | blocking/CPU work | bounded semaphore plus caller | caller cancellation/result collection | caller receives failure; permit bounds process-wide pressure | no implicit retry and no open DB transaction across blocking work |
 
@@ -308,11 +366,21 @@ secret authority.
 
 ### Shutdown and failure
 
-1. Stop new admission and mark readiness unhealthy.
-2. Cancel listeners and connection acceptance, then request supervised workers
-   and actors to quiesce through their owned cancellation path.
-3. Publish/retire cluster route and lease state according to the component's
-   fence rules; never infer durable completion from task disappearance.
+1. Close the connection-actor admission gate. Readiness checks this live gate
+   independently of its database cache, including after an in-flight probe.
+2. On SIGTERM or SIGINT, allow up to two seconds for local MUC shutdown
+   notifications, with at most 16 notification futures in flight. TCP confirms
+   write and flush completion, WebSocket confirms its flushed frame send, and
+   BOSH waits for the client's response RID acknowledgement. These separate,
+   process-local completions do not mean application processing; neither
+   channel admission nor SM persistence can confirm them. Slow or unavailable
+   endpoints may close without a confirmed notification. Existing global
+   cancellation, including administrator shutdown, skips this window; a
+   critical cancellation or service-task exit interrupts it immediately.
+3. Cancel actors, listeners and workers through their owned cancellation
+   paths, then quiesce signed cluster publication and release instance
+   authority according to its fence rules. Never infer durable completion
+   from task disappearance.
 4. Join listeners, workers and connection actors within the configured shutdown
    budget. A critical task exit before shutdown remains process-fatal.
 5. PostgreSQL transactions roll back on lost owners; durable claims, outboxes,
@@ -403,6 +471,37 @@ into protocol or API handlers.
 | cluster soft state | Redis envelopes, route hints and local node observations | signed envelope plus PostgreSQL lease revalidation | discard/rebuild from PostgreSQL and live connections | Redis delivery/order is not consensus or durable truth |
 | endpoint-only secret state | OMEMO identity/session keys and device trust | browser/client device | client export/transfer/recovery only | server archive or account password cannot reconstruct it |
 
+A newly authenticated bidirectional S2S stream contributes one process-local
+retry hint for its exact canonical local/remote domain pair and connection
+incarnation. The registry binds that hint to the observed FIFO head and attempt,
+retains it while that same attempt still owns a lease, and consumes it before
+any conditional retry write. Revocation, replacement, changed work, an already
+due head or a mismatched stanza direction cannot reuse the hint. Observation
+and mutation share one five-second turn budget; a failed or uncertain write
+falls back to ordinary durable retry. PostgreSQL alone changes the retry date
+of an unleased, unexpired, unchanged FIFO head. This does not acknowledge
+delivery, rotate a lease, bypass federation policy or change the configured
+120-second S2S lease and exponential retry defaults.
+
+The runtime control coordinator records its fixed in-flight phase and monotonic
+elapsed time when a stalled attempt is dropped before process cancellation.
+This observation neither reports a heartbeat nor changes the five-second
+fail-closed supervision boundary.
+Its reserved PostgreSQL connection uses the fixed application name
+`northstar-runtime-control`, preserving the original connection options and
+connection budget. On heartbeat expiry, the existing watchdog also records
+`watchdog_tick_delay_ms`, the delay between its scheduled tick and observation.
+It also records `max_attempt_watchdog_tick_delay_ms`, the greatest observed
+tick delay over that attempt, including earlier nonterminal ticks. The timer's
+delay policy can schedule a fresh deadline after a late tick, so a zero delay
+on the final tick alone does not exclude earlier scheduling delays. The maximum
+is an observation across the whole attempt, not a measurement of the current
+query or proof of its cause; it neither changes nor resets the heartbeat limit.
+The phase duration includes client polling and network waits; it does not
+measure PostgreSQL execution time. Normal shutdown suppresses both warnings.
+An unchanged federation setting does not wait for socket writes; a real policy
+change retains the exclusive delivery fence.
+
 ## Failure ownership matrix
 
 | Failure point | Component that detects it | Component that decides recovery | Durable evidence | Required terminal behavior |
@@ -437,18 +536,23 @@ delivery receives the service's typed background budget and PAM results are
 capped at two concurrent attempts. Both lanes use the same private,
 clone-shared `Arc<Semaphore>` only for short repository claims, lease changes,
 completion writes and maintenance pages. A delivery claim does not run
-retention cleanup first: an expired head without an active lease or
-SM/BOSH/cluster owner is terminal and cannot delay a live successor; the
-separate supervised maintenance page records its dead letter and reclaims
-orphan state. The permit count equals that typed outbox budget and is released
+retention cleanup first. An expired head without an active lease or
+SM/BOSH/cluster owner becomes eligible for bounded retention; the separate
+supervised maintenance page records its dead letter and removes it before a
+live successor can advance. That page also reclaims orphan state. The permit
+count equals the typed outbox budget and is released
 before any local transport, cluster or federation I/O, so a slow external
 delivery cannot hold a database slot or head-of-line block a PAM result. A
 newly started delivery lane claims due user work before its first maintenance
-page. Each semaphore, pool and query wait races the
-worker's child cancellation token; on cancellation the atomic claimed row is
-left fenced for normal lease-expiry recovery rather than keeping shutdown
-blocked behind an unavailable database. If either lane ends, it cancels and
-drains the peer before the supervisor observes the original result.
+page. Claim and maintenance turns retain their five-second deadlines. Each
+claimed attempt keeps one 20-second budget across its effect, lease renewal and
+final database transition. Normal shutdown stops new claims and lets already-started
+work drain within the existing 14-second window; a normally completed lane does
+not cancel its draining peer. Each in-progress wait still races the independent
+hard-cancellation token. An abnormal lane exit hard-cancels its peer before the
+supervisor observes the original result. A hard cancellation or unknown completion
+leaves any still-owned claim fenced for normal lease-expiry recovery, rather than
+keeping shutdown blocked behind an unavailable database.
 
 Cluster recipient lookup is Redis-backed route authority, not a PostgreSQL
 outbox turn. It therefore has its own bounded Redis deadline and never holds a
@@ -460,8 +564,8 @@ turning into pool exhaustion or an unbounded delivery delay.
 
 | Connection/pool | Role identity | Capacity | Consumers | Failure scope and restriction |
 | --- | --- | --- | --- | --- |
-| primary runtime pool | `northstar_runtime` | configured primary capacity 2..60: one foreground connection remains available while one bounded MIX outbox database turn runs; four of the role's 64 connections are reserved by fixed auxiliary pools | application services, repositories and legacy tracked runtime paths | shared workload pool; pre-pool gates must prevent one actor/NAT from occupying it while waiting |
-| runtime control pool | `northstar_runtime` | exactly 1 reserved connection; 500 ms per-attempt cold-start bound plus a 15 s jittered `PoolTimedOut` admission window before traffic startup | durable administration-settings refresh; XEP-0133 restart/shutdown watcher when enabled | process startup reserves and attests it before constructing the traffic pool; it remains separate from traffic and command pools, so an exhausted workload pool cannot hide committed safety configuration |
+| primary runtime pool | `northstar_runtime` | configured primary capacity 2..57: at least one connection lies outside the durable-outbox group admission budget, but other pool users may occupy it; this is not a dedicated foreground or readiness connection; four of the role's 64 connections are reserved by fixed auxiliary pools and three by an independent maintenance process | application services, repositories and legacy tracked runtime paths | shared workload pool; pre-pool gates must prevent one actor/NAT from occupying it while waiting |
+| runtime control pool | `northstar_runtime` | exactly 1 reserved connection; at most 3 s per initial handshake within one absolute 15 s admission deadline, including jitter, role attestation and reservation | durable administration-settings refresh; XEP-0133 restart/shutdown watcher when enabled | process startup reserves and attests it before constructing the traffic pool; it remains separate from traffic and command pools, so an exhausted workload pool cannot hide committed safety configuration |
 | command pool | `northstar_commands` in production; shared primary runtime identity only in explicit loopback-only unsafe development | maximum 4 in production; no duplicate same-identity command pool in unsafe development | XEP-0133/admin command service only | command-routine manifest only in production; the unsafe-development exception reuses the already-attested primary pool |
 | OMEMO recovery polling pool | `northstar_runtime` | maximum 2 | bounded browser OMEMO recovery polling | isolates long polls from the primary pool but does not create a new DB authority |
 | SM authority listener pool | `northstar_runtime` | maximum 1 | PostgreSQL LISTEN/revalidation for SM authority and schema-only MIX route wakes | notification is a wake hint; the applicable durable row/generation remains authority |

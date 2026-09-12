@@ -24,6 +24,38 @@ sys.modules[SPEC.name] = mix
 SPEC.loader.exec_module(mix)
 
 
+class RestartRecoveryCase(unittest.TestCase):
+    def test_recovery_events_share_one_deadline(self):
+        clock = [100.0]
+        budgets = []
+
+        class Client:
+            def receive(self, timeout):
+                budgets.append(timeout)
+                clock[0] += 20
+                return "unrelated" if len(budgets) == 1 else "recovered"
+
+        inbox = mix.Inbox(Client())
+        with patch.object(mix.time, "monotonic", side_effect=lambda: clock[0]):
+            self.assertEqual(mix.wait_for_restart(inbox, "recovered", 250), "recovered")
+            self.assertEqual(mix.wait_for_restart(inbox, "recovered", 250), "recovered")
+            self.assertEqual(budgets, [150, 130, 110])
+            clock[0] = 250
+            with self.assertRaisesRegex(TimeoutError, "deadline expired"):
+                mix.wait_for_restart(inbox, "recovered", 250)
+            self.assertEqual(len(budgets), 3, "expiry must fail before another socket read")
+
+    def test_transport_timeout_still_fails_recovery(self):
+        class Client:
+            def receive(self, timeout):
+                raise TimeoutError("socket deadline")
+
+        with patch.object(mix.time, "monotonic", return_value=100):
+            with self.assertRaisesRegex(TimeoutError, "shared 150-second S2S lease window") as error:
+                mix.wait_for_restart(mix.Inbox(Client()), "recovered", 250)
+        self.assertIsInstance(error.exception.__cause__, TimeoutError)
+
+
 class CoordinationCase(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="northstar-mix-coordination-test-")

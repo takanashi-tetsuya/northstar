@@ -1305,15 +1305,33 @@ def enqueue() -> None:
     print("MIX federation durable message submitted while remote server is down")
 
 
+def wait_for_restart(inbox: Inbox, marker: str, deadline: float) -> str:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError(f"MIX restart recovery deadline expired before {marker!r}")
+    try:
+        return inbox.wait(marker, timeout=remaining)
+    except TimeoutError as error:
+        raise TimeoutError(
+            f"MIX restart recovery exceeded the shared 150-second S2S lease window: {marker!r}"
+        ) from error
+
+
+# B can stop after committing an S2S claim but before settling it. The
+# replacement must respect that existing 120-second lease, including a
+# queued presence event ahead of later reverse MIX deliveries. Share one
+# lease window plus the existing 30-second delivery allowance across all
+# recovery events; unrelated frames and successive waits cannot restart it.
 def finish() -> None:
     A.wait_ready()
     B.wait_ready()
+    recovery_deadline = time.monotonic() + 150
     with fixture_phase_auth_admission():
         alice_token = login(A, ALICE)
         bob_token = login(B, BOB)
         bob = connect(B, BOB, "finish-b")
         alice = connect(A, ALICE, "finish-a")
-    replayed_live = bob.wait("durable MIX handoff")
+    replayed_live = wait_for_restart(bob, "durable MIX handoff", recovery_deadline)
     check(
         "<result xmlns='urn:xmpp:mam:2'" not in replayed_live,
         f"durable outbox replay unexpectedly arrived as a MAM wrapper: {replayed_live}",
@@ -1325,7 +1343,7 @@ def finish() -> None:
         "<query xmlns='urn:xmpp:mam:2' queryid='fed-durable-query'><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE'><value>urn:xmpp:mam:2</value></field></x><set xmlns='http://jabber.org/protocol/rsm'><max>20</max></set></query>",
     )
     check("<fin " in mam, f"durable MIX MAM query failed: {mam}")
-    durable = bob.wait("durable MIX handoff")
+    durable = wait_for_restart(bob, "durable MIX handoff", recovery_deadline)
     check(
         "<result xmlns='urn:xmpp:mam:2'" in durable,
         f"durable MIX handoff was not committed to channel MAM: {durable}",
@@ -1334,13 +1352,13 @@ def finish() -> None:
         f"<message xmlns='jabber:client' type='groupchat' id='fed-after' to='{CHANNEL}'><body>MIX federation after restart</body></message>",
         alice_token,
     )
-    after = bob.wait("MIX federation after restart")
+    after = wait_for_restart(bob, "MIX federation after restart", recovery_deadline)
     check("type='groupchat'" in after, f"post-restart federated delivery failed: {after}")
     bob.client.send_with_pow(
         f"<message xmlns='jabber:client' type='groupchat' id='fed-reverse' to='{CHANNEL}'><body>MIX reverse after restart</body></message>",
         bob_token,
     )
-    reverse = alice.wait("MIX reverse after restart")
+    reverse = wait_for_restart(alice, "MIX reverse after restart", recovery_deadline)
     check("type='groupchat'" in reverse, f"post-restart reverse delivery failed: {reverse}")
     left = iq(
         alice,

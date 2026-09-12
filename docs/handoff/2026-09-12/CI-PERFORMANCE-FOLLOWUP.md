@@ -437,3 +437,59 @@ task、retry 或 deadline。
 migration checksum 時仍拒絕啟動，最後未完成階段正確為 schema_verification。
 Clippy all-targets 且 `-D warnings`、架構／subserver／migration boundary
 與文件一致性檢查通過；遠端壓測仍待新提交驗證。
+
+## MIX 重啟租約窗口與 CPU 分組診斷（UTC 19:21）
+
+`6ec53af` 的 [release preview 34712140594](https://github.com/takanashi-tetsuya/northstar/actions/runs/34712140594)
+已完成 10 個成功工作和 3 個非 tag 預期跳過工作；Windows／Linux package、
+fresh-runner 下載驗證、三個 Docker image 及組裝全部通過。Docker app
+實際 PG17.11 migration、readiness、web assets 驗證耗時 3221.57 ms。
+Rust test job `103602700512` 已命中精確 `-shared` key，還原
+2,561,878,546 bytes，執行 Cargo test 並通過；結束時未另存逐提交快取。
+這證明前次快取修正跨提交生效，並不表示完整 CI 已全綠。
+
+`2832572` 的 [MIX job 103596225796](https://github.com/takanashi-tetsuya/northstar/actions/runs/34709407193/job/103596225796)
+前 18 輪成功，第 19 輪 pair 5 在 `MIX reverse after restart` 逾時。
+此時 B 的 recipient sequence authority 仍存在，兩筆 own recipient
+分別因未到 retry 時間及 predecessor 尚在而不可 claim；沒有 dead letter。
+B 的 S2S FIFO head 為 sequence 3、attempt 1、retry due、active lease，
+後面另有 9 筆，與先前 authority GC race 不同。附件 `10303239844`
+及 `10303604003` 已驗證 SHA-256，分別為
+`28db28f3c669e8d59be8276859e592d30d3fc6985296e6050ca73ddd7dcad92e`、
+`39aa2db05cdeb05736791bd1e8082e5f3009bf87c2851ca3b3e3ff088e7719e9`。
+
+產品的 S2S claim 預設保留 120 秒；程序可以在已 claim、尚未結算時停止，
+新程序仍須尊重有效租約。原 fixture 的單筆 30 秒等待無法涵蓋此情境。
+現在 restart finish 的配送事件共用 150 秒 monotonic deadline，包含
+既有 120 秒租約及原本 30 秒配送餘量；從 readiness 後、認證前開始，
+不因其他 frame 或後續事件重設。一般 inbox、認證 I/O、readiness、
+worker、observer 的期限和 production lease／FIFO 都未更改。
+
+自有 PG17.11 與當前 `6ec53af` runtime 的實際雙節點驗證，在 B 停止後
+注入一筆已 claim 且仍有完整 120 秒的 S2S FIFO head。固定 6ec53af 的
+舊 client 在 reverse wait 失敗（整輪 53.262 秒）；新 client 通過完整
+durable drain、雙向 delivery、PAM leave、SASL EXTERNAL 和零殘留清理
+（136.920 秒）。125 秒的初始候選窗口仍失敗：租約到期後還需要逐筆
+配送 FIFO successors，因此最終保留原有 30 秒配送餘量，而非只加
+5 秒。兩項截止時間回歸驗證 unrelated frames／下一事件不重設 budget、
+到期不再讀 socket，以及底層 timeout 仍失敗。
+無注入租約的正常雙節點流程 15.692 秒成功，沒有固定等待；36 項 MIX
+協調測試、8 項 failure diagnostics、listener worker lifecycle 契約及其
+既有子測試、CI performance 與文件一致性檢查通過。
+
+`6ec53af` push Federation job `103603945292` 仍在第 1 輪因一次未 drain
+的 observer client_query_deadline 失敗；329 個有效樣本、peak 100、
+0 slow event／disappearance，最大 query 5000.369 ms。沒有較早業務
+marker。既有 phase-boundary host counters 已顯示部分失敗窗口 CPU
+全滿，尚不能歸因某個程序。補充同一時點的 `/proc` 累積 CPU ticks，
+只按 server／postgres／python／other 分組，保留 counts、讀取失敗與
+truncation flag；最多 4096 個程序或 250 ms，沒有新增輪詢程序，亦不
+讀取或輸出 arguments、environment、SQL、身分名稱。本機實際程序
+樣本 545 個、2 server／16 postgres，11.504 ms 完成，無截斷。
+
+本機額外 4 CPU affinity、1×50 的完整 observer 診斷未重現遠端 CPU
+飽和：1149 個有效樣本、peak 100、0 query error，最大 76.136 ms；
+業務仍因部分連線超過既有 idle 限制失敗，不能列作壓測通過。修正
+SQL 靜態抽取範圍後，在空的已遷移資料庫規劃 1514 段 SQL 中的
+1488 段，最高估計 cost 2737.3；upload authority audit 為 1127.15。
+這不是 CI 內部函式／實際資料量的 JIT 排除證據，未據此修改 JIT。

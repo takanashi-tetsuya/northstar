@@ -403,6 +403,41 @@ for category in ("cpu", "memory", "io"):
         result[f"{category}_pressure_errno"] = error.errno
 result["cgroup_memory_events"] = numeric_fields("/sys/fs/cgroup/memory.events", {"low", "high", "max", "oom", "oom_kill", "oom_group_kill"})
 result["cgroup_cpu_stat"] = numeric_fields("/sys/fs/cgroup/cpu.stat", {"usage_usec", "user_usec", "system_usec", "nr_periods", "nr_throttled", "throttled_usec"})
+# Attribute a CPU burst without collecting process arguments, environment,
+# database names, or command text. These cumulative totals can be compared
+# across phase boundaries while the same 100 servers remain live. Counts and
+# truncation flags make process exits or an incomplete sample visible.
+process_started = time.monotonic_ns()
+process_budget_ns = 250_000_000
+process_limit = 4096
+groups = {name: {"count": 0, "cpu_ticks": 0} for name in ("server", "postgres", "python", "other")}
+scanned = unreadable = 0
+truncated = False
+with os.scandir("/proc") as entries:
+    for entry in entries:
+        if not entry.name.isdecimal():
+            continue
+        if scanned >= process_limit or time.monotonic_ns() - process_started >= process_budget_ns:
+            truncated = True
+            break
+        scanned += 1
+        try:
+            with Path(entry.path, "stat").open() as stream:
+                raw = stream.read(4096)
+            prefix, fields = raw.rsplit(")", 1)
+            command = prefix.split("(", 1)[1]
+            fields = fields.split()
+            ticks = int(fields[11]) + int(fields[12])
+            group = ("server" if command.startswith("rust-xmpp") else
+                     "postgres" if command == "postgres" else
+                     "python" if re.fullmatch(r"python(?:[0-9]+(?:\.[0-9]+)?)?", command) else "other")
+            groups[group]["count"] += 1
+            groups[group]["cpu_ticks"] += ticks
+        except (OSError, ValueError, IndexError):
+            unreadable += 1
+result["process_cpu"] = {"groups": groups, "tick_hz": os.sysconf("SC_CLK_TCK"),
+                         "scanned": scanned, "unreadable": unreadable, "truncated": truncated,
+                         "elapsed_ns": time.monotonic_ns() - process_started}
 print("host_pressure=" + json.dumps(result, sort_keys=True, separators=(",", ":")))
 PY
 }

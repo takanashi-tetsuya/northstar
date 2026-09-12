@@ -274,3 +274,21 @@ max query 75.604 ms、0 errors，未重現遠端心跳故障；但本地主機 c
 以及新增的 3 個 GC／empty-claim 案例。38 項 MIX lifecycle boundary
 mutation tests、格式與文件／程序隔離檢查也通過。新 CI 仍需驗證完整
 20×50、角色邊界與所有發佈包。
+
+## 159d521 的 relay 自測競態（UTC 17:20）
+
+[Web static job 103590168253](https://github.com/takanashi-tetsuya/northstar/actions/runs/34707525558/job/103590168253)
+在 relay 自測讀取空 PID 時失敗。子程序直接建立最終 ready 檔後才寫入，
+父程序的 exists 檢查可能讀到未完成內容。改為寫完私有暫存檔後用 link
+原子發布，診斷 flush 先於發布，且所有啟動錯誤均經 finally 回收自有
+process group；此測試完成後才建立網路測試的 socket 和 thread。
+刻意延遲寫入 200 ms 時，新發布方式通過；恢復直接發布則穩定重現
+invalid PID，兩條路徑均確認沒有存活的自有後代。
+
+本地 Python 3.14 的同一組 operational 回歸另揭露 Redis relay 測試 CA
+缺少 keyUsage。補上 critical CA basicConstraints 與 keyCertSign/cRLSign，
+保留完整 TLS 驗證。Python 3.13 起預設嚴格驗證的變更見
+[官方 ssl 文件](https://docs.python.org/3/library/ssl.html#ssl.create_default_context)。
+CI 的整個 operational script step、process-isolation 及文件一致性檢查
+已在本地通過；Rust 程式仍為 159d521，遠端 MIX database/wire/federation
+job 103590168274 已成功，完整 regular 矩陣尚待完成。

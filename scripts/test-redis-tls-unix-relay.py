@@ -254,6 +254,8 @@ def self_test() -> None:
         openssl(
             "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
             "-subj", "/CN=Northstar Relay Test CA",
+            "-addext", "basicConstraints=critical,CA:TRUE",
+            "-addext", "keyUsage=critical,keyCertSign,cRLSign",
             "-keyout", str(ca_key), "-out", str(ca_certificate),
         )
         openssl(

@@ -22,7 +22,11 @@ if (Test-Path -LiteralPath $Prefix) {
     }
     throw 'Existing PostgreSQL test-tools cache is invalid'
 }
-$temporary = Join-Path ([IO.Path]::GetTempPath()) ('northstar-pg17-' + [Guid]::NewGuid().ToString('N'))
+# RUNNER_TEMP may be on D: while the user's temporary directory is on C:.
+# Stage beside the destination so Directory.Move remains on the same volume.
+$parent = [IO.Path]::GetDirectoryName($Prefix)
+[IO.Directory]::CreateDirectory($parent) | Out-Null
+$temporary = Join-Path $parent ('northstar-pg17-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($temporary) | Out-Null
 try {
     $archivePath = Join-Path $temporary 'postgresql.zip'
@@ -66,7 +70,6 @@ try {
         }
     }
     Set-Content -LiteralPath (Join-Path $stage '.binary-sha256') -Value $sha256 -Encoding ascii
-    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Prefix)) | Out-Null
     [IO.Directory]::Move($stage, $Prefix)
     Write-Output "PostgreSQL $version test tools verified"
 } finally {

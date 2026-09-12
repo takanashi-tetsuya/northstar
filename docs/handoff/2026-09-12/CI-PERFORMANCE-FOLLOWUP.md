@@ -73,3 +73,26 @@ state、wait event、query age 及慢查詢事件仍完整採樣。所有心跳�
 測試通過；新增測試以會拋錯的探查函式證明慢 PgSleep 不會進入鎖管理器，
 並以實際 advisory-lock 等待證明正確 blocker PID 仍被保留。新 CI 必須
 完成完整矩陣後，才能判斷這項修正是否解決應用停機。
+
+## dea8ec4 的完整 MIX 結果
+
+[MIX regular job 103557501785](https://github.com/takanashi-tetsuya/northstar/actions/runs/34694967117/job/103557501785)
+於 14:32 UTC 完成全部 20×50，業務及 observer 均通過。矩陣步驟由
+13:01:43 至 14:32:02，耗時 90.317 分鐘；相較基線的 101.604 分鐘，
+縮短約 11.1%。這是完整 MIX 工作負載的比較，不代表 Federation 已修復，
+也不是整個 CI 已通過的結論。兩次共享 runner 的負載不同，仍需後續 run
+確認穩定性。
+
+同 run 執行檔下載 5 秒，驗證／還原階段 3.010 秒，沒有再次編譯。
+第 2 至 20 輪平均 provision 24.076 秒、preparation 89.466 秒、startup
+14.591 秒、workload 132.747 秒、cleanup 7.039 秒。準備與啟動合計
+104.057 秒，低於基線 142.675 秒；業務階段與基線 131.323 秒接近。
+這說明目前大部分改善來自避免重複 fixture 工作，完整矩陣仍由實際業務
+與每輪準備時間主導。
+
+Observer artifact `10299338235` 的 SHA-256 已與 Actions 上傳紀錄核對：
+`ff1b1922a96b3a4d0b8e20f483099582642dee4692472814f06f376c52030f66`。
+共 10,608 個樣本、最高 100 個 runtime backend，9 次採樣錯誤全部恢復，
+沒有連續錯誤、failure marker 或遺失的必要證據；wrapper 的 observer、
+diagnostic、cleanup、case map 和 evidence bounds 均成功。
+此 run 的最終 CI required 仍因已記錄的 Federation 第 11 輪故障失敗。

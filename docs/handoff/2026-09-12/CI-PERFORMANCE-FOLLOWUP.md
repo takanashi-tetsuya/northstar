@@ -606,3 +606,72 @@ scan 前加入 1.1 秒排程延遲，舊案例第二次重現同樣失敗，stde
 `b5a3b9d` 的 [MIX 103608673765](https://github.com/takanashi-tetsuya/northstar/actions/runs/34714000982/job/103608673765)
 完整 20×50 於 UTC 21:02:48 通過，observer、diagnostic、map、cleanup
 均成功；其 Federation 已知 cleanup failure 仍使整體 CI 失敗。
+
+## 首次 main 合約基準與過期開發 CI（UTC 22:43）
+
+`f6c5f97` 的 [PR CI 34719096726](https://github.com/takanashi-tetsuya/northstar/actions/runs/34719096726)
+完整通過 28 個必要工作，4 個 scheduled-only 工作預期跳過；Federation
+及 MIX 均完成全部 20×50，observer／diagnostic／map／cleanup 成功。
+[Release preview 34719094253](https://github.com/takanashi-tetsuya/northstar/actions/runs/34719094253)
+亦通過全部 10 個適用工作，3 個 tag-only 工作預期跳過。fresh Linux、
+Windows 及預設 UID 10001:10001 的 app image 均通過 PG17.11 startup、
+migration、readiness 與 web assets 驗證。這是 preview，尚未發布 GHCR、
+產生 tag-only attestations 或建立真正的 draft Release。
+
+[PR #2](https://github.com/takanashi-tetsuya/northstar/pull/2) 已 squash 合併
+到 `dev` 的 `ee407bf5a1aad5c972344a430f9ba1074048dbea`。GitHub 回報簽章
+有效，檔案樹與 `f6c5f97` 完全相同。新的 dev push
+[34722721446](https://github.com/takanashi-tetsuya/northstar/actions/runs/34722721446)
+尚在壓測。[PR #3](https://github.com/takanashi-tetsuya/northstar/pull/3) 是
+dev → main 的草稿，尚未合併。舊 f6 push 的
+[Federation 103622681943](https://github.com/takanashi-tetsuya/northstar/actions/runs/34719094174/job/103622681943)
+也於 22:37:35 完成全部 20×50 且 wrapper 全過；同一 push 的 MIX 此時仍在執行。
+上述證據不能替代最後 main 提交自己的完整 CI。
+
+PR #3 的 [Contract compatibility 103631528906](https://github.com/takanashi-tetsuya/northstar/actions/runs/34722769749/job/103631528906)
+確定失敗於 resolver：舊 main `894f5e276d95418a722dca7c6900964453cf7165`
+沒有 `contracts/proto`，其歷史也沒有 Protobuf 合約。現在分離首次加入
+與既有比較：既有 module 繼續使用精確 event SHA 跑 Buf `FILE` breaking；
+首次加入必須證明 checkout 完整、baseline 為 HEAD 祖先，而且 baseline
+完整歷史沒有 module 或任何 `.proto`。不接受被刪除／搬移的舊合約、
+shallow history、未知 SHA、錯誤 HEAD 或不存在／非目錄的 current module。
+Buf 1.50.0 實測拒絕 empty image，因此首次加入執行真正的 `buf build`；
+另一個必要 job 繼續執行 format、lint、generated-code drift。
+
+新的 real-Buf 回歸在隔離 Git fixture 驗證：首次加入與相容欄位新增成功，
+無效首次合約、既有欄位型別變更、刪除 message 及刪除 module 必須失敗；
+resolver 另驗證歷史／SHA／路徑負例。實際 ee407bf → 舊 main 的首次加入、
+ee407bf → 合併前 dev 的既有比較均成功。Buf binary 1.50.0 來自官方 release，
+並以同一 release 的 SHA256 manifest 校驗。
+
+本次同時套用先前暫存的排程改善：同一 PR、同一 `codex/*` push 只保留
+最新 CI；`codex/release-*` 的新 push 可取消同分支舊 preview。main/dev、
+tag、scheduled、manual CI 保留各自 run ID；tag release 仍依 tag 序列化
+且不自動取消，manual preview 使用獨立 run ID。這不會追溯取消採用舊
+group 的既有 run，不改任何必要工作、20×50／100×50 或失敗判準。
+六項 CI performance 檢查含實際 workflow expression 的 event/ref 回歸，
+release gates、aggregate coverage、actionlint、文件一致性與 diff 檢查通過。
+
+### 未解決診斷與外部準備
+
+`f62e689` 的舊 [Federation 103621410483](https://github.com/takanashi-tetsuya/northstar/actions/runs/34718313625/job/103621410483)
+前 11 輪通過，第 12 輪因 observer client query 超過 5000.37 ms 而取消。
+all-live 至失敗 8.396 秒使用約 4.00 CPU cores，最後有效觀察為 100 個
+idle／ClientRead，無 SQLSTATE。all-live 分組被截斷，不能據此判定
+PostgreSQL 或 server 的 CPU 占比；根因仍未證實，同一 run 的 MIX 全過。
+
+更正之前本機「4 CPU」描述：早期 helper 在啟動 PostgreSQL 之後才限制
+Python affinity，PostgreSQL 仍可用主機的 16 CPU；這些結果不能當成整個
+fixture 共用 4 CPU 的容量證據。新的 transport-only probe 在最外層
+`taskset -c 0-3`，確認 driver 和 postmaster 都只有這四顆 CPU。全部
+50 pairs 完成四組原始 transport probes，observer 394 樣本、peak 100、
+0 errors、最大 186.06 ms；但 pair 29 cleanup 的 port-number-only
+listener 檢查失敗，因此整個 probe **未通過**。在 barrier 前後完整快照
+之間的 15.114 秒，持續存在的 server／PG／Python 分別累積
+8.71／7.72／4.84 CPU 秒；不包含快照間已退出的短命子程序。
+未重現遠端 observer deadline，沒有據此放寬 deadline 或減少 probe。
+
+main/dev 仍待啟用實際 rulesets，tag 簽署識別資訊與瀏覽器 GitHub 登入
+仍待使用者提供。三個 GHCR 名稱的 anonymous token 請求均為 DENIED，
+無法區分尚不存在或 private；正式流程仍須完成 public digest pulls。
+尚未建立 `v0.2.0` tag，也未發布 GitHub Release。

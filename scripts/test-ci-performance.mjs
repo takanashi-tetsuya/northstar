@@ -1,12 +1,68 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import vm from 'node:vm';
 import { ALWAYS_REQUIRED, verifyWorkflowCoverage } from './ci-required-policy.mjs';
 
 const workflow = fs.readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const cache = fs.readFileSync(new URL('../.github/actions/rust-build-cache/action.yml', import.meta.url), 'utf8');
 const release = fs.readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
 const job = (source, name) => source.split(`  ${name}:\n`)[1]?.split(/^  [a-z][a-z0-9-]*:\s*$/m)[0];
+
+// These scheduling expressions use the shared JS/Actions boolean subset.
+// Evaluate the actual workflow fields so a changed event/ref boundary is tested.
+function scheduling(source, github) {
+  const block = source.split('\nconcurrency:\n')[1].split('\njobs:')[0];
+  const expression = text => vm.runInNewContext(text, {
+    github, startsWith: (value, prefix) => value.startsWith(prefix),
+  }, { timeout: 100 });
+  const group = block.match(/^  group: (.+)$/m)[1].replace(/\$\{\{(.*?)\}\}/g, (_, text) => expression(text));
+  const cancel = expression(block.match(/^  cancel-in-progress: \$\{\{(.*?)\}\}$/m)[1]);
+  return { group, cancel };
+}
+
+test('only superseded PRs and codex pushes share cancellable CI groups', () => {
+  const event = (event_name, ref, run_id = 101, number = 3) => ({
+    workflow: 'CI', event_name, ref, run_id, event: { pull_request: { number } },
+  });
+  for (const [name, ref, cancel] of [
+    ['pull_request', 'refs/pull/3/merge', true],
+    ['push', 'refs/heads/codex/release-contract-baseline', true],
+    ['push', 'refs/heads/codex/fix', true],
+    ['push', 'refs/heads/main', false], ['push', 'refs/heads/dev', false],
+    ['push', 'refs/heads/feature', false], ['push', 'refs/tags/codex/fix', false],
+    ['push', 'refs/tags/v0.2.0', false],
+    ['schedule', 'refs/heads/main', false],
+    ['workflow_dispatch', 'refs/heads/codex/fix', false],
+  ]) {
+    const first = scheduling(workflow, event(name, ref));
+    const next = scheduling(workflow, event(name, ref, 102));
+    assert.equal(first.cancel, cancel, `${name} ${ref}`);
+    assert.equal(first.group === next.group, cancel, `${name} ${ref}`);
+  }
+  assert.notEqual(scheduling(workflow, event('pull_request', '', 101, 3)).group,
+    scheduling(workflow, event('pull_request', '', 102, 4)).group);
+  assert.notEqual(scheduling(workflow, event('push', 'refs/heads/codex/a')).group,
+    scheduling(workflow, event('push', 'refs/heads/codex/b')).group);
+});
+
+test('release previews supersede only matching development pushes; tag runs serialize', () => {
+  const event = (event_name, ref, run_id = 101) => ({ event_name, ref, run_id });
+  for (const [name, ref, cancel, shared] of [
+    ['push', 'refs/heads/codex/release-test', true, true],
+    ['push', 'refs/heads/main', false, true],
+    ['push', 'refs/tags/v0.2.0', false, true],
+    ['workflow_dispatch', 'refs/heads/codex/release-test', false, false],
+    ['workflow_dispatch', 'refs/tags/v0.2.0', false, false],
+  ]) {
+    const first = scheduling(release, event(name, ref));
+    const next = scheduling(release, event(name, ref, 102));
+    assert.equal(first.cancel, cancel, `${name} ${ref}`);
+    assert.equal(first.group === next.group, shared, `${name} ${ref}`);
+  }
+  assert.notEqual(scheduling(release, event('push', 'refs/tags/v0.2.0')).group,
+    scheduling(release, event('push', 'refs/tags/v0.2.1')).group);
+});
 
 function verifyPressureGate(source, name, rounds) {
   const block = job(source, name);

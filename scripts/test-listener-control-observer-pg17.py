@@ -240,6 +240,66 @@ class PostgreSQLIntegration(unittest.TestCase):
         self.assertFalse(result['failure_marker_seen'])
         self.assertEqual([row['type'] for row in records], ['metadata', 'terminal'])
 
+    def test_slow_non_lock_wait_never_enters_lock_manager_probe(self):
+        # Use a throwing probe in this private database to prove CASE short
+        # circuits on a real slow active backend; an empty result alone would
+        # not prove that pg_blocking_pids avoided taking all lock partitions.
+        self.fixture_sql("""
+            CREATE OR REPLACE FUNCTION public.northstar_forbidden_blocker_probe(integer)
+            RETURNS integer[] LANGUAGE plpgsql VOLATILE AS $$
+            BEGIN RAISE EXCEPTION 'unnecessary lock-manager probe'; END $$;
+        """)
+        backend = self.backends[0]
+        backend.stdin.write('SELECT pg_sleep(4);\n')
+        backend.stdin.flush()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            connection = OBSERVER.Libpq(OBSERVER.Limits(10, os.getpid()))
+            self.addCleanup(connection.close)
+            connection.connect()
+            sql = OBSERVER.activity_sql(self.salt).replace(
+                'pg_catalog.pg_blocking_pids(pid)', 'public.northstar_forbidden_blocker_probe(pid)')
+            deadline = time.monotonic() + 3
+            while True:
+                value = connection.query(sql, OBSERVER.validate_sample)
+                target = next(row for row in value['rows'] if row['pid'] == self.identities['A']['pid'])
+                if target['state'] == 'active' and target['query_age_ms'] >= OBSERVER.SLOW_MS:
+                    self.assertEqual(target['wait_event'], 'PgSleep')
+                    self.assertEqual(target['blocking_pids'], [])
+                    break
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(.1)
+
+    def test_actual_heavyweight_lock_retains_blocker_identity(self):
+        # Database-scoped advisory lock: a separate backend in the same
+        # disposable database blocks A, while B remains normally observable.
+        owner = subprocess.Popen([str(PG_BIN / 'psql'), '-XqAt', '-v', 'ON_ERROR_STOP=1'],
+            env={**self.env, 'PGDATABASE': self.databases[0]}, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        try:
+            owner.stdin.write('SELECT pg_advisory_lock(190928); SELECT pg_backend_pid();\n')
+            owner.stdin.flush()
+            self.assertTrue(select.select([owner.stdout], [], [], 5)[0])
+            self.assertEqual(owner.stdout.readline().strip(), '')
+            owner_pid = int(owner.stdout.readline())
+            self.backends[0].stdin.write('SELECT pg_advisory_lock(190928);\n')
+            self.backends[0].stdin.flush()
+            with mock.patch.dict(os.environ, self.env, clear=True):
+                connection = OBSERVER.Libpq(OBSERVER.Limits(10, os.getpid()))
+                self.addCleanup(connection.close)
+                connection.connect()
+                deadline = time.monotonic() + 3
+                while True:
+                    value = connection.query(OBSERVER.activity_sql(self.salt), OBSERVER.validate_sample)
+                    target = next(row for row in value['rows'] if row['pid'] == self.identities['A']['pid'])
+                    if target['wait_event_type'] == 'Lock':
+                        self.assertEqual(target['blocking_pids'], [owner_pid])
+                        self.assertEqual(value['total'], 2)
+                        break
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(.025)
+        finally:
+            self.close_backend(owner)
+
     def test_late_completed_query_is_discarded_and_same_connection_recovers(self):
         with mock.patch.dict(os.environ, self.env, clear=True):
             connection = OBSERVER.Libpq(OBSERVER.Limits(20, os.getpid()))

@@ -173,7 +173,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertNotEqual(m.database_hash(salt, name), m.database_hash('b' * 32, name))
         self.assertIn("application_name='northstar-runtime-control'", sql)
         self.assertIn('LIMIT 128', sql)
-        self.assertIn("wait_event_type='Lock' OR (state='active'", sql)
+        self.assertIn("CASE WHEN wait_event_type='Lock'\n", sql)
         with self.assertRaises(m.ObserverError):
             m.activity_sql("bad' injected")
 

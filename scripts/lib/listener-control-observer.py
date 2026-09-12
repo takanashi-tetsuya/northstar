@@ -373,7 +373,10 @@ SELECT pg_catalog.json_build_object('authorized',
 def activity_sql(salt):
     if not re.fullmatch(r'[0-9a-f]{32}', salt):
         raise ObserverError('invalid_hash_salt')
-    # Two-phase CTE bounds both the JSON and expensive blocking-pid lookups.
+    # Bound the JSON and restrict lock-manager inspection to heavyweight-lock
+    # waiters. pg_blocking_pids cannot explain LWLock, CPU or I/O waits and
+    # takes every lock hash partition itself; calling it for merely slow
+    # active queries can amplify the very LockManager pressure being sampled.
     # Database identity is salted in the server; raw datname never leaves it. The shared run salt maps this pseudonym to
     # the driver-owned case map; only (pid, backend_start) identifies a backend.
     return f"""
@@ -393,7 +396,7 @@ SELECT pg_catalog.json_build_object(
    'database_hash',pg_catalog.md5('{salt}' || ':' || datname),
    'state',state, 'wait_event_type',wait_event_type, 'wait_event',wait_event,
    'query_age_ms',query_age_ms, 'state_age_ms',state_age_ms,
-   'blocking_pids',CASE WHEN wait_event_type='Lock' OR (state='active' AND query_age_ms>={SLOW_MS})
+   'blocking_pids',CASE WHEN wait_event_type='Lock'
                        THEN pg_catalog.pg_blocking_pids(pid) ELSE ARRAY[]::integer[] END
  ) ORDER BY pid,backend_start),'[]'::json)) FROM targets
 """
@@ -621,7 +624,7 @@ def main():
             'slow_query_ms': SLOW_MS, 'pre_seconds': PRE_SECONDS, 'post_seconds': POST_SECONDS,
             'max_rows': MAX_ROWS, 'ring_bytes_limit': RING_BYTES, 'evidence_bytes_limit': TOTAL_BYTES,
             'address_space_bytes_limit': AS_BYTES, 'max_seconds': args.max_seconds,
-            'blocking_pids_sampled_only_for_lock_or_slow_active': True,
+            'blocking_pids_sampled_only_for_heavyweight_lock': True,
             'database_hash_scope': 'md5_run_salt_colon_database_name',
             'backend_identity': ['pid', 'backend_start'],
             'disappearance_is_business_failure': False, 'capture_trigger': 'trusted_first_failure_marker'})

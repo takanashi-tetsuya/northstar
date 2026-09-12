@@ -41,3 +41,35 @@ Regular 20×50、scheduled 100×50、100 個同時存活伺服器與 all-live �
 15 秒 readiness、900 秒 worker deadline 和 5 秒 runtime-control 心跳均未放寬。
 原 Federation 第 8 輪的 runtime-control 故障尚未定位根因；本次改善診斷存活和
 重複 fixture 工作，仍需新 CI 的完整日誌與 PG failure window 判斷應用故障。
+
+## dea8ec4 的實際結果與後續修正
+
+[CI run 34694967117](https://github.com/takanashi-tetsuya/northstar/actions/runs/34694967117)
+的 Federation regular 在第 11 輪、第 40 對 A 節點失敗；前 10 輪通過。
+同 run 的 runtime artifact 在 regular job 中於 5 秒內下載完成，沒有再次編譯。
+第 2 至 10 輪每輪約 3.7 分鐘；完整 20 輪尚未成功，不能將這次提前失敗的
+總時間當成整體加速結果。MIX regular 在這份紀錄提交時仍執行中。
+
+這次 observer 全程有效：4,655 個樣本、最高 100 個 runtime backend、12 次
+採樣錯誤全部由同連線恢復，pre/post failure window 完整。業務退出碼 2
+完整保留，沒有被診斷狀態覆蓋。
+
+失敗節點 `runtime-control-refresh` 在 13:42:07.369 UTC 回報 5,007 ms 心跳
+靜默，當時 `rules-read` 已執行 878 ms。PG 採樣將該節點映射到 backend
+19296，在 13:42:06.225 UTC 的樣本中為 active、`LWLock/LockManager`、
+query age 2,497.826 ms、blocking PIDs 為空。其他節點同時也出現 LockManager
+等待；failure window 沒有顯示此節點的一般 heavyweight lock 阻塞者。
+
+Observer 原先對所有慢 active query 也呼叫 `pg_blocking_pids()`。這個函式
+只能識別 heavyweight lock 阻塞，不能解釋 LWLock/CPU/I/O 等待，而且 PG17
+實作會取得所有 lock hash partition 的共享 LWLock。這可能在高壓下增加
+LockManager 競爭；目前證據不足以宣稱它是這次心跳故障的唯一原因。
+參考 [PG17 函式文件](https://www.postgresql.org/docs/17/functions-info.html) 及
+[GetBlockerStatusData 原始碼](https://github.com/postgres/postgres/blob/REL_17_STABLE/src/backend/storage/lmgr/lock.c)。
+
+修正只在 `wait_event_type='Lock'` 時查詢 blocking PIDs；其他 backend 的
+state、wait event、query age 及慢查詢事件仍完整採樣。所有心跳、採樣期限、
+矩陣規模及失敗條件保持不變。39 個 observer 測試及 12 個真實 PG17 整合
+測試通過；新增測試以會拋錯的探查函式證明慢 PgSleep 不會進入鎖管理器，
+並以實際 advisory-lock 等待證明正確 blocker PID 仍被保留。新 CI 必須
+完成完整矩陣後，才能判斷這項修正是否解決應用停機。

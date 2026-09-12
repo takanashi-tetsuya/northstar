@@ -202,6 +202,7 @@ if ! mkdir -p -- "$diagnostic_root"; then
 fi
 runtime_dir="$(mktemp -d /tmp/northstar-listener-stress.XXXXXX)"
 runtime_dir_resolved="$(readlink -f -- "$runtime_dir")"
+mkdir --mode=0700 -- "$runtime_dir/certificates"
 diagnostic_root_resolved="$(readlink -f -- "$diagnostic_root")"
 case "$diagnostic_root_resolved" in
   "$runtime_dir_resolved"|"$runtime_dir_resolved"/*)
@@ -1530,6 +1531,8 @@ start_stress_worker() {
       "NORTHSTAR_LISTENER_STRESS_DATABASE_B=$database_b" \
       "NORTHSTAR_LISTENER_STRESS_DATABASE_HOST=$database_fixture_host" \
       "NORTHSTAR_LISTENER_STRESS_DATABASE_PORT=$database_fixture_port" \
+      "NORTHSTAR_LISTENER_STRESS_CERTIFICATE_CACHE=$runtime_dir/certificates/pair-$pair" \
+      "NORTHSTAR_LISTENER_STRESS_CERTIFICATE_SCOPE=$database_prefix:$pair" \
       "DATABASE_MAX_CONNECTIONS=$database_max_connections" \
       "DATABASE_MIN_CONNECTIONS=$database_min_connections" \
       "TOKIO_WORKER_THREADS=$tokio_worker_threads" \
@@ -1639,17 +1642,20 @@ resolve_current_build_binary() {
     configured_target_dir="$project_dir/$configured_target_dir"
   fi
 
-  # Compile exactly once and resolve the binary immediately afterwards.  Cargo
-  # fingerprints make a successful build authoritative even when the file was
-  # already up to date; there is no fallback to an unrelated/default target
-  # directory or a previously discovered executable.
+  # Compile once locally, or verify the smoke binary from this exact CI run.
+  # Both paths enforce the runtime profile and resolve the selected executable
+  # immediately; an invalid artifact must fail without a fallback build.
   run_parent_phase preflight-profile python3 "$project_dir/scripts/check-runtime-test-profile.py" \
     --manifest "$project_dir/Cargo.toml" --check-environment || return 1
   cargo_args=(--locked --profile "$fixture_cargo_profile" --message-format=json-render-diagnostics)
   [[ "${XMPP_TEST_OFFLINE:-true}" == false ]] || cargo_args+=(--offline)
-  run_parent_phase preflight-build cargo build "${cargo_args[@]}" --bin rust-xmpp-server || return 1
-
   candidate="$configured_target_dir/$fixture_cargo_profile_directory/rust-xmpp-server"
+  if [[ -n "${NORTHSTAR_RUNTIME_ARTIFACT_DIR:-}" ]]; then
+    run_parent_phase preflight-runtime-artifact python3 "$project_dir/scripts/ci-runtime-artifact.py" restore \
+      --bundle "$NORTHSTAR_RUNTIME_ARTIFACT_DIR" --binary "$candidate" || return 1
+  else
+    run_parent_phase preflight-build cargo build "${cargo_args[@]}" --bin rust-xmpp-server || return 1
+  fi
   if [[ ! -f "$candidate" || ! -x "$candidate" ]]; then
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=preflight-binary
     record_parent_diagnostic "phase=preflight-binary status=missing_or_not_executable"
@@ -1669,9 +1675,11 @@ resolve_current_build_binary() {
     echo "listener stress refused a binary resolved outside CARGO_TARGET_DIR" >&2
     return 1
   fi
-  run_parent_phase preflight-build-profile python3 "$project_dir/scripts/check-runtime-test-profile.py" \
-    --build-log "$runtime_dir/parent-preflight-build.raw.log" \
-    --binary "$resolved_binary" --source "$project_dir/src/main.rs" || return 1
+  if [[ -z "${NORTHSTAR_RUNTIME_ARTIFACT_DIR:-}" ]]; then
+    run_parent_phase preflight-build-profile python3 "$project_dir/scripts/check-runtime-test-profile.py" \
+      --build-log "$runtime_dir/parent-preflight-build.raw.log" \
+      --binary "$resolved_binary" --source "$project_dir/src/main.rs" || return 1
+  fi
   binary="$resolved_binary"
   record_parent_diagnostic "phase=preflight-binary status=validated profile=$fixture_cargo_profile opt_level=2 debug_assertions=true overflow_checks=true target_directory=$resolved_target_dir"
 }
@@ -1816,7 +1824,7 @@ for ((round = 1; round <= rounds; round++)); do
     exit 1
   fi
   parent_stage_end 0
-  parent_stage_begin startup
+  parent_stage_begin preparation
   if ! initialize_mix_federation_phase_barrier "$round"; then
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=mix-federation-setup-barrier
     record_parent_diagnostic "phase=mix-federation-setup-barrier round=$round status=initialization_failed"
@@ -1830,6 +1838,7 @@ for ((round = 1; round <= rounds; round++)); do
     "$startup_phase_dir" "$startup_phase_nonce" "$round" "$pairs" "$$" "$startup_pair_limit"
   for ((pair = 1; pair <= pairs; pair++)); do
     log="$runtime_dir/${fixture}.round-${round}.pair-${pair}.log"
+    mkdir -p --mode=0700 -- "$runtime_dir/certificates/pair-$pair"
     round_logs+=("$log")
     key="${round}:${pair}"
     if ! start_stress_worker "$round" "$pair" "$log" "${pair_database_a[$key]}" "${pair_database_b[$key]}"; then
@@ -1860,6 +1869,8 @@ for ((round = 1; round <= rounds; round++)); do
     "$startup_phase_dir" "$startup_phase_nonce" "$round" prepared \
     "$worker_timeout_seconds" "${workers[@]}"
   record_parent_diagnostic "phase=fixture-preparation round=$round status=released pairs=$pairs"
+  parent_stage_end 0
+  parent_stage_begin startup
   run_parent_phase "all-pair-live-release-r$round" \
     python3 "$project_dir/scripts/listener-stress-phases.py" release \
     "$startup_phase_dir" "$startup_phase_nonce" "$round" live \

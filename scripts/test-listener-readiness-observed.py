@@ -41,7 +41,7 @@ def stop(_sig,_frame):
     stopped=True
 signal.signal(signal.SIGTERM, signal.SIG_IGN if mode=='hang' else stop)
 while not stopped:
-    if mode == 'early':
+    if mode in {'early', 'early_success'} and (out.parent/'driver-running').exists():
         break
     if marker.exists() and mode != 'hang':
         break
@@ -116,7 +116,7 @@ assert os.environ['NORTHSTAR_LISTENER_STRESS_FAILURE_MARKER'].endswith('/first-f
         self.assertTrue(record["diagnostic_ok"])
         self.assertEqual(record["driver_exit_status"], 0)
         self.assertTrue(record["case_map_ok"])
-        self.assertEqual(self.github_output.read_text(), 'driver_succeeded=true\n')
+        self.assertEqual(self.github_output.read_text(), 'driver_succeeded=true\ndriver_started=true\n')
 
     def test_driver_failure_is_preserved_when_observer_also_fails(self):
         result, record = self.run_wrapper("raise SystemExit(7)", "bad")
@@ -124,7 +124,7 @@ assert os.environ['NORTHSTAR_LISTENER_STRESS_FAILURE_MARKER'].endswith('/first-f
         self.assertEqual(record["driver_exit_status"], 7)
         self.assertFalse(record["diagnostic_ok"])
         self.assertTrue((self.control / "first-failure.json").exists())
-        self.assertEqual(self.github_output.read_text(), 'driver_succeeded=false\n')
+        self.assertEqual(self.github_output.read_text(), 'driver_succeeded=false\ndriver_started=true\n')
 
     def test_successful_driver_with_unavailable_or_failed_observer_fails_diagnostics(self):
         for mode in ("unavailable", "bad"):
@@ -133,9 +133,11 @@ assert os.environ['NORTHSTAR_LISTENER_STRESS_FAILURE_MARKER'].endswith('/first-f
                     (self.control / "wrapper-result.json").unlink()
                 result, record = self.run_wrapper("raise SystemExit(0)", mode)
                 self.assertEqual(result.returncode, 2, result.stderr)
-                self.assertEqual(record["driver_exit_status"], 0)
+                self.assertEqual(record["driver_exit_status"], None if mode == 'unavailable' else 0)
                 self.assertFalse(record["diagnostic_ok"])
-                self.assertTrue(self.github_output.read_text().endswith('driver_succeeded=true\n'))
+                self.assertTrue(self.github_output.read_text().endswith(
+                    'driver_succeeded=false\ndriver_started=false\n' if mode == 'unavailable'
+                    else 'driver_succeeded=true\ndriver_started=true\n'))
 
     def test_output_write_failure_preserves_driver_failure(self):
         self.control.joinpath('github-output').mkdir()
@@ -151,17 +153,52 @@ assert os.environ['NORTHSTAR_LISTENER_STRESS_FAILURE_MARKER'].endswith('/first-f
         self.assertEqual(record['error_code'], 'github_output_write_failed')
         self.assertFalse(record['diagnostic_ok'])
 
-    def test_unstarted_driver_cannot_skip_required_failure_logs(self):
+    def test_unstarted_driver_is_explicit_and_remains_failure(self):
         result, record = self.run_wrapper('raise SystemExit(0)', 'no_subreaper')
         self.assertEqual(result.returncode, 2)
         self.assertIsNone(record['driver_exit_status'])
-        self.assertEqual(self.github_output.read_text(), 'driver_succeeded=false\n')
+        self.assertEqual(self.github_output.read_text(), 'driver_succeeded=false\ndriver_started=false\n')
 
-    def test_early_observer_exit_is_reported_once_and_driver_finishes(self):
-        result, record = self.run_wrapper('import time;time.sleep(.3)', 'early')
+    def test_early_observer_exit_cancels_long_driver_promptly(self):
+        started = time.monotonic()
+        source = ('import time;from pathlib import Path;'
+                  f'Path({str(self.control / "driver-running")!r}).touch();time.sleep(60)')
+        result, record = self.run_wrapper(source, 'early')
         self.assertEqual(result.returncode, 2)
-        self.assertEqual(record['driver_exit_status'], 0)
+        self.assertLess(time.monotonic()-started, 4)
+        self.assertTrue(record['driver_cancelled_for_observer'])
+        self.assertEqual(record['error_code'], 'observer_exited_before_driver')
+        self.assertTrue(record['cleanup_ok'])
         self.assertEqual(result.stdout.count('listener_observer_early_exit=2'), 1)
+
+    def test_successful_observer_exit_without_failure_window_cannot_stop_observation(self):
+        source = ('import time;from pathlib import Path;'
+                  f'Path({str(self.control / "driver-running")!r}).touch();time.sleep(60)')
+        result, record = self.run_wrapper(source, 'early_success')
+        self.assertEqual(result.returncode, 2)
+        self.assertTrue(record['driver_cancelled_for_observer'])
+
+    def test_observer_failure_reaps_detached_owned_descendant(self):
+        child_file = self.control / 'detached.pid'
+        child = ('import os,time;from pathlib import Path;'
+                 f'Path({str(child_file)!r}).write_text(str(os.getpid()));'
+                 f'Path({str(self.control / "driver-running")!r}).touch();time.sleep(60)')
+        source = ('import subprocess,sys,time;'
+                  f'subprocess.Popen([sys.executable,"-c",{child!r}],start_new_session=True);time.sleep(60)')
+        result, record = self.run_wrapper(source, 'early')
+        self.assertEqual(result.returncode, 2)
+        self.assertTrue(record['driver_cancelled_for_observer'])
+        self.assertTrue(record['cleanup_ok'])
+        self.assertTrue(child_file.exists())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int(child_file.read_text()), 0)
+
+    def test_unavailable_observer_does_not_launch_driver(self):
+        launched = self.control / 'driver-launched'
+        result, record = self.run_wrapper(f'from pathlib import Path;Path({str(launched)!r}).touch()', 'unavailable')
+        self.assertEqual(result.returncode, 2)
+        self.assertIsNone(record['driver_exit_status'])
+        self.assertFalse(launched.exists())
 
     def test_hung_observer_is_reaped_without_replacing_driver_failure(self):
         begin = time.monotonic()

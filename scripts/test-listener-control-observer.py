@@ -441,7 +441,19 @@ class LibpqTests(unittest.TestCase):
         self.assertEqual(result.exception.code, 'client_query_deadline')
         library.PQgetResult.assert_called_once()
         library.PQclear.assert_called_once_with(11)
-        connection.ready.assert_called_once()
+        self.assertEqual(connection.ready.call_count, 2)
+
+    def test_pending_late_response_drains_within_fixed_grace_and_is_discarded(self):
+        connection, library = self.deadline_connection()
+        library.PQisBusy.side_effect = [1, 1, 0, 0]
+        connection.ready.side_effect = [m.ObserverError('client_query_deadline'), None]
+        with self.assertRaises(m.ObserverError) as result:
+            connection.query('SELECT fixed', m.validate_sample)
+        self.assertEqual(result.exception.code, 'client_query_deadline_drained')
+        first, drain = connection.ready.call_args_list
+        self.assertAlmostEqual(drain.args[1] - first.args[1], 2)
+        self.assertEqual(library.PQgetResult.call_count, 2)
+        library.PQsendQuery.assert_called_once()
 
     def test_drained_late_malformed_sample_still_fails_validation(self):
         connection, _ = self.deadline_connection(value={'query': 'SENSITIVE'})

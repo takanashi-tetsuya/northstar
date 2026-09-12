@@ -48,6 +48,8 @@ def validate_fixture_sources(sources):
             '"$resolved_target_dir/$fixture_cargo_profile_directory/rust-xmpp-server"',
             '--build-log "$runtime_dir/parent-preflight-build.raw.log"',
             '--binary "$resolved_binary" --source "$project_dir/src/main.rs" || return 1',
+            'scripts/ci-runtime-artifact.py" restore',
+            '--bundle "$NORTHSTAR_RUNTIME_ARTIFACT_DIR" --binary "$candidate" || return 1',
         ],
         "federation-wsl.sh": [
             'fixture_select_runtime_profile "${NORTHSTAR_RUNTIME_TEST_PROFILE:-dev}"',

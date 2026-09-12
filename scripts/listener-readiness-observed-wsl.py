@@ -186,6 +186,7 @@ def run_observed(driver_command: list[str], observer_command: list[str], *,
     fatal = None
     adopted_detected = False
     marker_ok = True
+    cancelled_for_observer = False
     if not enable_linux_child_subreaper():
         fatal = "subreaper_unavailable"
     else:
@@ -212,15 +213,34 @@ def run_observed(driver_command: list[str], observer_command: list[str], *,
                 time.sleep(0.05)
             if not observer_ready:
                 fatal = fatal or "observer_unavailable"
-            if STOP_SIGNAL is None:
-                # Observer failure remains visible, but never substitutes a
-                # reduced workload or a retry for the required matrix.
+            if STOP_SIGNAL is None and observer_ready and fatal is None:
+                # Every successful validation still completes the full matrix.
+                # Missing mandatory evidence makes this run fail immediately.
                 driver = subprocess.Popen(driver_command, env=driver_environment, start_new_session=True)
                 observer_exit_reported = False
                 while driver.poll() is None and STOP_SIGNAL is None:
                     if observer.poll() is not None and not observer_exit_reported:
                         print(f"listener_observer_early_exit={observer.returncode}", flush=True)
                         observer_exit_reported = True
+                        completed_window = False
+                        if observer.returncode == 0 and marker.exists():
+                            try:
+                                terminal = read_private_json(output_dir / 'observer-result.json')
+                                completed_window = (terminal.get('observer_ok') is True
+                                                    and terminal.get('post_window_complete') is True
+                                                    and terminal.get('truncated') is False)
+                            except (OSError, ValueError):
+                                pass
+                        if not completed_window:
+                            fatal = 'observer_exited_before_driver'
+                            if driver.poll() is None:
+                                cancelled_for_observer = True
+                                marker_ok = publish_failure_marker('parent_cancel', marker) and marker_ok
+                                cleanup_ok = terminate_owned_direct_child(
+                                    driver, reason='required_observer_failed',
+                                    kill_after_seconds=driver_cancel_wait,
+                                ) and cleanup_ok
+                            break
                     time.sleep(0.1)
                 if STOP_SIGNAL is not None and driver.poll() is None:
                     marker_ok = publish_failure_marker("parent_cancel", marker) and marker_ok
@@ -232,7 +252,7 @@ def run_observed(driver_command: list[str], observer_command: list[str], *,
                     fatal = "driver_cleanup_incomplete"
                 if driver_status != 0:
                     marker_ok = publish_failure_marker("command_exit", marker) and marker_ok
-            else:
+            elif STOP_SIGNAL is not None:
                 driver_status = -STOP_SIGNAL
         except (OSError, ValueError):
             fatal = fatal or "observer_or_driver_startup_failed"
@@ -302,12 +322,13 @@ def run_observed(driver_command: list[str], observer_command: list[str], *,
             evidence_ok = total + RESULT_LIMIT <= TOTAL_EVIDENCE_LIMIT
         except (OSError, ValueError):
             pass
-    # Only an explicitly successful workload may skip the business-failure
-    # transcript upload. Unknown/startup outcomes keep that upload mandatory.
+    # An explicitly unstarted driver has no business transcript. Unknown
+    # wrapper outcomes still keep the workflow's upload mandatory.
     if environment.get("GITHUB_OUTPUT"):
         try:
             with open(environment["GITHUB_OUTPUT"], "a", encoding="ascii") as stream:
                 stream.write("driver_succeeded=" + ("true" if driver_status == 0 else "false") + "\n")
+                stream.write("driver_started=" + ("true" if driver is not None else "false") + "\n")
         except OSError:
             fatal = fatal or "github_output_write_failed"
     diagnostic_ok = evidence_ok and map_ok and observer_ok and cleanup_ok and marker_ok and fatal is None and not adopted_detected
@@ -315,12 +336,15 @@ def run_observed(driver_command: list[str], observer_command: list[str], *,
     # nor replace its original failure with an observer's unrelated exit code.
     exit_status = (128 - driver_status if driver_status is not None and driver_status < 0
                    else driver_status) or (0 if diagnostic_ok else 2)
+    if cancelled_for_observer and driver_status is not None and driver_status < 0:
+        exit_status = 2
     record = dict(schema_version=1, driver_exit_status=driver_status,
                   exit_status=exit_status, observer_ready=observer_ready,
                   observer_ok=observer_ok, diagnostic_ok=diagnostic_ok,
                   marker_ok=marker_ok, cleanup_ok=cleanup_ok, case_map_ok=map_ok,
                   evidence_bounds_ok=evidence_ok,
                   adopted_descendants_detected=adopted_detected, error_code=fatal)
+    record['driver_cancelled_for_observer'] = cancelled_for_observer
     try:
         write_result(control_dir / "wrapper-result.json", record)
     except (OSError, ValueError):

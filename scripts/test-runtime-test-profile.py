@@ -33,7 +33,9 @@ class RuntimeProfileTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     GUARD.validate_fixture_sources(changed)
         for invariant in ['"NORTHSTAR_RUNTIME_TEST_PROFILE=$fixture_cargo_profile"',
-                          '--message-format=json-render-diagnostics', '--check-environment']:
+                          '--message-format=json-render-diagnostics', '--check-environment',
+                          'scripts/ci-runtime-artifact.py" restore',
+                          '--bundle "$NORTHSTAR_RUNTIME_ARTIFACT_DIR" --binary "$candidate" || return 1']:
             changed = dict(sources)
             changed[names[0]] = changed[names[0]].replace(invariant, "")
             with self.assertRaises(ValueError):

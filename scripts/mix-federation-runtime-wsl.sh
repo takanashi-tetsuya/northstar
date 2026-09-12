@@ -14,6 +14,7 @@ fi
 cd "$project_dir"
 source "$project_dir/scripts/lib/test-listener-readiness.sh"
 source "$project_dir/scripts/lib/runtime-test-profile.sh"
+source "$project_dir/scripts/lib/test-fixture-certificates.sh"
 fixture_select_runtime_profile "${NORTHSTAR_RUNTIME_TEST_PROFILE:-dev}"
 
 stress_database_a="${NORTHSTAR_LISTENER_STRESS_DATABASE_A:-}"
@@ -252,12 +253,17 @@ if [[ "$fixture_preprovisioned" != true ]]; then
 fi
 mkdir -p "$runtime_dir/certs" "$runtime_dir/uploads-a" "$runtime_dir/uploads-b" \
   "$runtime_dir/logs-a" "$runtime_dir/logs-b"
-openssl req -x509 -newkey rsa:3072 -nodes -days 1 -subj "/CN=Northstar MIX Federation CA" -addext "basicConstraints=critical,CA:TRUE,pathlen:0" -addext "keyUsage=critical,keyCertSign,cRLSign" -keyout "$runtime_dir/certs/ca.key" -out "$runtime_dir/certs/ca.crt" >/dev/null 2>&1
+fixture_certificates_restore mix-federation "$runtime_dir/certs"
+if [[ "$fixture_certificates_reused" == false ]]; then
+  openssl req -x509 -newkey rsa:3072 -nodes -days 1 -subj "/CN=Northstar MIX Federation CA" -addext "basicConstraints=critical,CA:TRUE,pathlen:0" -addext "keyUsage=critical,keyCertSign,cRLSign" -keyout "$runtime_dir/certs/ca.key" -out "$runtime_dir/certs/ca.crt" >/dev/null 2>&1
+fi
 for side in a b; do
   if [[ "$side" == a ]]; then domain=localhost; mix=mix.localhost; else domain=remote.localhost; mix=mix.remote.localhost; fi
-  openssl req -new -newkey rsa:3072 -nodes -subj "/CN=$domain" -addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=serverAuth,clientAuth" -addext "subjectAltName=DNS:$domain,DNS:$mix" -keyout "$runtime_dir/certs/$side.key" -out "$runtime_dir/certs/$side.csr" >/dev/null 2>&1
-  openssl x509 -req -days 1 -in "$runtime_dir/certs/$side.csr" -CA "$runtime_dir/certs/ca.crt" -CAkey "$runtime_dir/certs/ca.key" -CAcreateserial -copy_extensions copy -out "$runtime_dir/certs/$side.crt" >/dev/null 2>&1
-  openssl x509 -in "$runtime_dir/certs/ca.crt" -outform PEM >>"$runtime_dir/certs/$side.crt"
+  if [[ "$fixture_certificates_reused" == false ]]; then
+    openssl req -new -newkey rsa:3072 -nodes -subj "/CN=$domain" -addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=serverAuth,clientAuth" -addext "subjectAltName=DNS:$domain,DNS:$mix" -keyout "$runtime_dir/certs/$side.key" -out "$runtime_dir/certs/$side.csr" >/dev/null 2>&1
+    openssl x509 -req -days 1 -in "$runtime_dir/certs/$side.csr" -CA "$runtime_dir/certs/ca.crt" -CAkey "$runtime_dir/certs/ca.key" -CAcreateserial -copy_extensions copy -out "$runtime_dir/certs/$side.crt" >/dev/null 2>&1
+    openssl x509 -in "$runtime_dir/certs/ca.crt" -outform PEM >>"$runtime_dir/certs/$side.crt"
+  fi
   chmod 0600 "$runtime_dir/certs/$side.key"
   openssl rand -base64 -out "$runtime_dir/api-control-$side.secret" 48
   openssl rand -base64 -out "$runtime_dir/dialback-$side.secret" 48
@@ -266,6 +272,8 @@ for side in a b; do
   chmod 0600 "$runtime_dir/api-control-$side.secret" "$runtime_dir/dialback-$side.secret" \
     "$runtime_dir/fast-token-$side.secret" "$runtime_dir/dummy-scram-$side.secret"
 done
+chmod 0600 "$runtime_dir/certs"/*
+fixture_certificates_save mix-federation "$runtime_dir/certs"
 
 # Both Northstar children own their own ephemeral S2S listeners.  Their
 # startup-only federation DNS overrides point at relay children which have

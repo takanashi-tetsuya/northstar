@@ -206,15 +206,27 @@ original exit status.
 
 CI restores separate `debug` and `runtime-test` compiler caches, keyed by the
 runner distribution/architecture, Rust version, dependency configuration and
-commit. Rust tests and the Federation smoke job are the two cache producers;
-the pressure jobs reuse smoke's compiler work. Every Cargo command and current
-runtime-profile artifact check still runs. Cache availability never substitutes
-for a successful check. A required diagnostic preflight runs observer, marker,
-wrapper and cleanup regressions, including a private PG17 integration, alongside
-smoke; both must succeed before regular or scheduled pressure begins.
+commit. Rust tests and the Federation smoke job are the two cache producers.
+After both smoke cases pass, Federation packages its current Cargo-validated
+runtime binary for regular and scheduled jobs of the same CI run and attempt.
+Consumers verify the exact checkout SHA, tracked-source digest, runner platform,
+pinned Rust version, runtime profile and binary SHA-256 before restoring the
+executable. A missing or invalid artifact fails preflight without rebuilding.
+Local stress runs still build and validate Cargo's current artifact. Quality
+jobs retain their Cargo commands; cache availability never substitutes for a
+successful check. A required diagnostic preflight runs observer, marker, wrapper,
+cleanup, certificate and artifact regressions, including a private PG17
+integration, alongside smoke; both must succeed before pressure begins.
 
 Each stress run reports monotonic timings for build, templates, provisioning,
-startup, workload and round cleanup, including interrupted stages. Database
+fixture preparation, startup, workload and round cleanup, including interrupted
+stages. Each pair generates its own private RSA-3072 certificates in the first
+round and reuses them only across sequential rounds of that stress run. The
+parent's private temporary directory owns the cache and removes it at exit;
+certificates and keys are never uploaded. Cache scope, expiry, permissions,
+complete file membership and SHA-256 are checked before reuse. Different pairs
+retain independent CAs, every round has fresh application secrets, and the TLS
+identity checks still run. Database
 provisioning remains serial. Round cleanup uses at most four psql clients, capped
 by the effective CPU count, after worker shutdown attempts. Each recorded name
 is checked for fixture ownership before DROP and for absence afterwards; missing
@@ -226,14 +238,19 @@ Startup backends with PostgreSQL's NULL activity state remain visible as NULL,
 with their privilege-gated backend identity and zero activity ages validated;
 they are counted separately, never reported as idle or healthy. Disabled
 tracking and missing visibility still fail diagnostics. The observer keeps its
-2-second server statement timeout and 3-second client query budget. If scheduling
-delays leave an already-completed reply waiting after the client deadline, it
-drains available input without waiting, validates and discards the late sample,
-then requires a fresh sample on the same connection. Pending or malformed replies,
-three consecutive recoverable errors, or shutdown before recovery still fail.
+2-second server statement timeout and 3-second client sample budget. If scheduling
+delays leave a reply pending after the client deadline, it allows at most two
+additional seconds solely to drain that reply through ReadyForQuery. It validates
+and discards the late sample, then requires a fresh sample on the same connection.
+Replies still pending after that bound, malformed replies, three consecutive
+recoverable errors, or shutdown before recovery still fail. An unavailable
+observer prevents workload launch. An observer that fails during the workload
+causes prompt cancellation and cleanup of the owned driver and descendants;
+successful validation still requires every round. A completed, valid observation
+window around an existing workload failure permits its original cleanup to finish.
 Summary timing includes failed samples. Diagnostic-only failures upload the
 bounded observer evidence; business-failure logs remain required unless the
-wrapper explicitly reports a successful workload.
+wrapper explicitly reports a successful workload or that it never launched one.
 
 First-failure records use Linux `renameat2(RENAME_NOREPLACE)` so concurrent
 publishers cannot replace the winner or change its inode during finalization.
@@ -248,7 +265,8 @@ themselves establish the cause of a runtime-control timeout.
 The small observer integration fixture can be run independently with
 `python3 scripts/test-listener-control-observer-pg17.py --pg-bin /path/to/pg17/bin`.
 It starts its own temporary, fsync-enabled PG17 cluster as an ordinary user and
-tests actual waits, case mapping, failure windows and cancellation. It does not
+tests 100 runtime-control connections, delayed replies, actual waits, case mapping,
+failure windows and cancellation. It does not
 run application servers or replace the regular 20-by-50 acceptance matrix.
 The startup scheduler's failure paths are also checked independently of a
 database using controlled child processes.

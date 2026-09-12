@@ -284,6 +284,10 @@ class Libpq:
         if self.lib.PQsendQuery(self.conn, sql.encode('ascii')) != 1:
             raise ObserverError('query_send_failed')
         deadline = time.monotonic() + 3.0
+        # The sample is invalid after three seconds. Allow at most two more
+        # seconds to drain the server's bounded statement-timeout response on
+        # this same connection; never submit another query while it is busy.
+        drain_deadline = deadline + 2.0
         while True:
             status = self.lib.PQflush(self.conn)
             if status == 0:
@@ -300,16 +304,16 @@ class Libpq:
             expired = expired or time.monotonic() >= deadline
             # Consume available input before waiting. After a scheduling delay,
             # a complete response may already be in the socket. The deadline
-            # permits no further wait, only a nonblocking drain to ReadyForQuery.
+            # permits no late sample, only bounded draining to ReadyForQuery.
             if self.lib.PQconsumeInput(self.conn) != 1:
                 raise ObserverError('query_receive_failed')
             while self.lib.PQisBusy(self.conn):
-                if expired:
-                    raise ObserverError('client_query_deadline')
                 try:
-                    self.ready(False, deadline)
+                    self.ready(False, drain_deadline if expired else deadline)
                 except ObserverError as exc:
                     if exc.code != 'client_query_deadline':
+                        raise
+                    if expired:
                         raise
                     expired = True
                 if self.lib.PQconsumeInput(self.conn) != 1:

@@ -950,6 +950,8 @@ jobs:
           python3 scripts/test-listener-readiness-observed.py
           python3 scripts/test-listener-stress-diagnostics.py
           python3 scripts/test-listener-database-cleanup.py
+          python3 scripts/test-fixture-certificate-cache.py
+          python3 scripts/test-ci-runtime-artifact.py
           node scripts/test-ci-performance.mjs
 
       - name: Identify PostgreSQL tool platform
@@ -1043,6 +1045,25 @@ jobs:
           bash scripts/listener-readiness-stress-wsl.sh
           --mode regular --fixture "${{ matrix.fixture }}" --rounds 1 --pairs 2
 
+      - name: Package verified runtime for this CI run
+        if: matrix.fixture == 'federation'
+        run: |
+          cargo build --locked --profile runtime-test --message-format=json-render-diagnostics --bin rust-xmpp-server > "$RUNNER_TEMP/runtime-build.jsonl"
+          python3 scripts/ci-runtime-artifact.py pack \
+            --bundle "$RUNNER_TEMP/northstar-runtime-fixture" \
+            --binary "$GITHUB_WORKSPACE/target/runtime-test/rust-xmpp-server" \
+            --build-log "$RUNNER_TEMP/runtime-build.jsonl"
+
+      - name: Upload verified runtime for this CI run
+        if: matrix.fixture == 'federation'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: listener-runtime-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/northstar-runtime-fixture/
+          compression-level: 1
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Upload failed listener/readiness smoke diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1090,11 +1111,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Restore Rust compiler work
-        uses: ./.github/actions/rust-build-cache
+      - name: Download smoke runtime from this CI run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          profile: runtime-test
-          save: "false"
+          name: listener-runtime-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/northstar-runtime-fixture
+          digest-mismatch: error
 
       - name: Start isolated loopback PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
@@ -1110,20 +1132,18 @@ jobs:
       - name: Install PostgreSQL client and listener diagnostic tools
         run: bash scripts/ci-install-ubuntu-packages.sh iproute2 postgresql-client libpq5
 
-      - name: Populate the locked dependency cache
-        run: cargo fetch --locked
-
       - name: Run required regular listener/readiness matrix
         id: listener_matrix
         env:
           XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
           XMPP_TEST_OFFLINE: "false"
+          NORTHSTAR_RUNTIME_ARTIFACT_DIR: ${{ runner.temp }}/northstar-runtime-fixture
         run: >-
           python3 scripts/listener-readiness-observed-wsl.py
           --mode regular --fixture "${{ matrix.fixture }}" --rounds 20 --pairs 50
 
       - name: Upload failed listener/readiness diagnostics
-        if: ${{ failure() && steps.listener_matrix.outputs.driver_succeeded != 'true' }}
+        if: ${{ failure() && steps.listener_matrix.outputs.driver_succeeded != 'true' && steps.listener_matrix.outputs.driver_started != 'false' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: listener-readiness-regular-${{ matrix.fixture }}-diagnostics-${{ github.run_id }}
@@ -1188,11 +1208,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Restore Rust compiler work
-        uses: ./.github/actions/rust-build-cache
+      - name: Download smoke runtime from this CI run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          profile: runtime-test
-          save: "false"
+          name: listener-runtime-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/northstar-runtime-fixture
+          digest-mismatch: error
 
       - name: Start isolated loopback PostgreSQL fixture
         run: bash scripts/loopback-postgres-ci.sh start
@@ -1208,13 +1229,11 @@ jobs:
       - name: Install PostgreSQL client and listener diagnostic tools
         run: bash scripts/ci-install-ubuntu-packages.sh iproute2 postgresql-client
 
-      - name: Populate the locked dependency cache
-        run: cargo fetch --locked
-
       - name: Run required scheduled listener/readiness matrix
         env:
           XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
           XMPP_TEST_OFFLINE: "false"
+          NORTHSTAR_RUNTIME_ARTIFACT_DIR: ${{ runner.temp }}/northstar-runtime-fixture
         run: >-
           bash scripts/listener-readiness-stress-wsl.sh
           --mode scheduled --fixture "${{ matrix.fixture }}" --rounds 100 --pairs 50

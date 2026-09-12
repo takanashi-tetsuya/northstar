@@ -15,6 +15,7 @@ target_dir="${CARGO_TARGET_DIR:-$project_dir/target}"
 cd "$project_dir"
 source "$project_dir/scripts/lib/test-listener-readiness.sh"
 source "$project_dir/scripts/lib/runtime-test-profile.sh"
+source "$project_dir/scripts/lib/test-fixture-certificates.sh"
 fixture_select_runtime_profile "${NORTHSTAR_RUNTIME_TEST_PROFILE:-dev}"
 
 stress_database_a="${NORTHSTAR_LISTENER_STRESS_DATABASE_A:-}"
@@ -249,40 +250,44 @@ if [[ "$fixture_preprovisioned" != true ]]; then
 fi
 
 mkdir -p "$cert_dir" "$upload_a" "$upload_b" "$runtime_dir/logs-a" "$runtime_dir/logs-b"
-openssl req -x509 -newkey rsa:3072 -nodes -days 1 -subj "/CN=Northstar Federation Test CA" \
-  -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
-  -addext "keyUsage=critical,keyCertSign,cRLSign" \
-  -addext "subjectKeyIdentifier=hash" \
-  -keyout "$cert_dir/federation-ca.key" -out "$cert_dir/federation-ca.crt" >/dev/null 2>&1
-openssl req -new -newkey rsa:3072 -nodes -subj "/CN=localhost" \
-  -addext "basicConstraints=critical,CA:FALSE" \
-  -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
-  -addext "extendedKeyUsage=serverAuth,clientAuth" \
-  -addext "subjectAltName=DNS:localhost,DNS:conference.localhost,DNS:pubsub.localhost" -keyout "$cert_dir/federation-a.key" -out "$cert_dir/federation-a.csr" >/dev/null 2>&1
-openssl x509 -req -days 1 -in "$cert_dir/federation-a.csr" -CA "$cert_dir/federation-ca.crt" \
-  -CAkey "$cert_dir/federation-ca.key" -CAcreateserial -copy_extensions copy \
-  -out "$cert_dir/federation-a-leaf.crt" >/dev/null 2>&1
-openssl req -new -newkey rsa:3072 -nodes -subj "/CN=remote.localhost" \
-  -addext "basicConstraints=critical,CA:FALSE" \
-  -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
-  -addext "extendedKeyUsage=serverAuth,clientAuth" \
-  -addext "subjectAltName=DNS:remote.localhost,DNS:pubsub.remote.localhost" -keyout "$cert_dir/federation-b.key" -out "$cert_dir/federation-b.csr" >/dev/null 2>&1
-openssl x509 -req -days 1 -in "$cert_dir/federation-b.csr" -CA "$cert_dir/federation-ca.crt" \
-  -CAkey "$cert_dir/federation-ca.key" -CAcreateserial -copy_extensions copy \
-  -out "$cert_dir/federation-b-leaf.crt" >/dev/null 2>&1
-openssl req -new -newkey rsa:3072 -nodes -subj "/CN=evil.localhost" \
-  -addext "basicConstraints=critical,CA:FALSE" \
-  -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
-  -addext "extendedKeyUsage=serverAuth,clientAuth" \
-  -addext "subjectAltName=DNS:evil.localhost" -keyout "$cert_dir/federation-evil.key" -out "$cert_dir/federation-evil.csr" >/dev/null 2>&1
-openssl x509 -req -days 1 -in "$cert_dir/federation-evil.csr" -CA "$cert_dir/federation-ca.crt" \
-  -CAkey "$cert_dir/federation-ca.key" -CAcreateserial -copy_extensions copy \
-  -out "$cert_dir/federation-evil.crt" >/dev/null 2>&1
-cp "$cert_dir/federation-a-leaf.crt" "$cert_dir/federation-a.crt"
-cp "$cert_dir/federation-b-leaf.crt" "$cert_dir/federation-b.crt"
-openssl x509 -in "$cert_dir/federation-ca.crt" -outform PEM >>"$cert_dir/federation-a.crt"
-openssl x509 -in "$cert_dir/federation-ca.crt" -outform PEM >>"$cert_dir/federation-b.crt"
-chmod 600 "$cert_dir"/*.key
+fixture_certificates_restore federation "$cert_dir"
+if [[ "$fixture_certificates_reused" == false ]]; then
+  openssl req -x509 -newkey rsa:3072 -nodes -days 1 -subj "/CN=Northstar Federation Test CA" \
+    -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -addext "subjectKeyIdentifier=hash" \
+    -keyout "$cert_dir/federation-ca.key" -out "$cert_dir/federation-ca.crt" >/dev/null 2>&1
+  openssl req -new -newkey rsa:3072 -nodes -subj "/CN=localhost" \
+    -addext "basicConstraints=critical,CA:FALSE" \
+    -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+    -addext "extendedKeyUsage=serverAuth,clientAuth" \
+    -addext "subjectAltName=DNS:localhost,DNS:conference.localhost,DNS:pubsub.localhost" -keyout "$cert_dir/federation-a.key" -out "$cert_dir/federation-a.csr" >/dev/null 2>&1
+  openssl x509 -req -days 1 -in "$cert_dir/federation-a.csr" -CA "$cert_dir/federation-ca.crt" \
+    -CAkey "$cert_dir/federation-ca.key" -CAcreateserial -copy_extensions copy \
+    -out "$cert_dir/federation-a-leaf.crt" >/dev/null 2>&1
+  openssl req -new -newkey rsa:3072 -nodes -subj "/CN=remote.localhost" \
+    -addext "basicConstraints=critical,CA:FALSE" \
+    -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+    -addext "extendedKeyUsage=serverAuth,clientAuth" \
+    -addext "subjectAltName=DNS:remote.localhost,DNS:pubsub.remote.localhost" -keyout "$cert_dir/federation-b.key" -out "$cert_dir/federation-b.csr" >/dev/null 2>&1
+  openssl x509 -req -days 1 -in "$cert_dir/federation-b.csr" -CA "$cert_dir/federation-ca.crt" \
+    -CAkey "$cert_dir/federation-ca.key" -CAcreateserial -copy_extensions copy \
+    -out "$cert_dir/federation-b-leaf.crt" >/dev/null 2>&1
+  openssl req -new -newkey rsa:3072 -nodes -subj "/CN=evil.localhost" \
+    -addext "basicConstraints=critical,CA:FALSE" \
+    -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+    -addext "extendedKeyUsage=serverAuth,clientAuth" \
+    -addext "subjectAltName=DNS:evil.localhost" -keyout "$cert_dir/federation-evil.key" -out "$cert_dir/federation-evil.csr" >/dev/null 2>&1
+  openssl x509 -req -days 1 -in "$cert_dir/federation-evil.csr" -CA "$cert_dir/federation-ca.crt" \
+    -CAkey "$cert_dir/federation-ca.key" -CAcreateserial -copy_extensions copy \
+    -out "$cert_dir/federation-evil.crt" >/dev/null 2>&1
+  cp "$cert_dir/federation-a-leaf.crt" "$cert_dir/federation-a.crt"
+  cp "$cert_dir/federation-b-leaf.crt" "$cert_dir/federation-b.crt"
+  openssl x509 -in "$cert_dir/federation-ca.crt" -outform PEM >>"$cert_dir/federation-a.crt"
+  openssl x509 -in "$cert_dir/federation-ca.crt" -outform PEM >>"$cert_dir/federation-b.crt"
+  chmod 600 "$cert_dir"/*
+fi
+fixture_certificates_save federation "$cert_dir"
 openssl rand -base64 -out "$runtime_dir/fast-token-a.secret" 48
 openssl rand -base64 -out "$runtime_dir/fast-token-b.secret" 48
 openssl rand -base64 -out "$runtime_dir/dummy-scram-a.secret" 48

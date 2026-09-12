@@ -86,7 +86,7 @@ class PostgreSQLIntegration(unittest.TestCase):
         cls.addClassCleanup(cls.log.close)
         cls.server = subprocess.Popen(
             [str(PG_BIN / 'postgres'), '-D', str(cls.root / 'data'), '-k', str(cls.root),
-             '-h', '127.0.0.1', '-p', str(cls.port), '-c', 'max_connections=16',
+             '-h', '127.0.0.1', '-p', str(cls.port), '-c', 'max_connections=128',
              '-c', 'shared_buffers=16MB', '-c', 'fsync=on'],
             env=cls.env, stdout=cls.log, stderr=subprocess.STDOUT, start_new_session=True,
         )
@@ -274,7 +274,50 @@ class PostgreSQLIntegration(unittest.TestCase):
         result, wrapper, _ = self.result(self.start_wrapper('raise SystemExit(0)'), 2, 0)
         self.assertEqual(result['error_code'], 'activity_visibility_incomplete')
         self.assertFalse(wrapper['diagnostic_ok'])
-        self.assertEqual(wrapper['driver_exit_status'], 0)
+        self.assertIsNone(wrapper['driver_exit_status'])
+
+    def test_one_hundred_runtime_backends_are_sampled_without_reconnecting(self):
+        for index in range(98):
+            child = subprocess.Popen([str(PG_BIN / 'psql'), '-XqAt', '-v', 'ON_ERROR_STOP=1'],
+                env={**self.env, 'PGDATABASE': self.databases[index % 2],
+                     'PGAPPNAME': 'northstar-runtime-control'},
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            self.addCleanup(self.close_backend, child)
+            child.stdin.write("SELECT pg_backend_pid();\n")
+            child.stdin.flush()
+            self.assertTrue(select.select([child.stdout], [], [], 5)[0])
+            self.assertGreater(int(child.stdout.readline()), 0)
+        process = self.start_wrapper('import time;time.sleep(5)')
+        result, wrapper, _ = self.result(process, 0, 100)
+        self.assertTrue(wrapper['diagnostic_ok'], wrapper)
+        self.assertGreaterEqual(result['samples'], 8)
+        self.assertEqual(result['sample_errors'], 0)
+
+    def test_pending_server_response_is_drained_then_fresh_sample_recovers(self):
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            connection = OBSERVER.Libpq(OBSERVER.Limits(15, os.getpid()))
+            connection.connect()
+            identity = connection.lib.PQbackendPID(connection.conn)
+            # This is a backend of our disposable cluster, held by this live
+            # connection. Pause it before sending a query to reproduce a busy
+            # socket at the 3 s boundary, then resume within the drain bound.
+            os.kill(identity, signal.SIGSTOP)
+            resumer = subprocess.Popen([sys.executable, '-c',
+                'import os,signal,time;time.sleep(3.3);os.kill(int(__import__("sys").argv[1]),signal.SIGCONT)',
+                str(identity)])
+            try:
+                with self.assertRaises(OBSERVER.ObserverError) as error:
+                    connection.query(OBSERVER.activity_sql(self.salt), OBSERVER.validate_sample)
+                self.assertEqual(error.exception.code, 'client_query_deadline_drained')
+                resumer.wait(timeout=2)
+                self.assertEqual(connection.query(OBSERVER.activity_sql(self.salt), OBSERVER.validate_sample)['total'], 2)
+                self.assertEqual(connection.lib.PQbackendPID(connection.conn), identity)
+            finally:
+                os.kill(identity, signal.SIGCONT)
+                if resumer.poll() is None:
+                    resumer.terminate()
+                    resumer.wait(timeout=2)
+                connection.close()
 
     def cleanup_databases(self, names, jobs):
         prefix = names[0].split('_r')[0]
@@ -348,7 +391,7 @@ class PostgreSQLIntegration(unittest.TestCase):
             self.assertEqual(result['error_code'], 'observer_database_attestation_failed')
             self.assertFalse(wrapper['observer_ready'])
             self.assertFalse(wrapper['diagnostic_ok'])
-            self.assertEqual(wrapper['driver_exit_status'], 0)
+            self.assertIsNone(wrapper['driver_exit_status'])
             self.assertEqual([row['type'] for row in records], ['metadata', 'terminal'])
         finally:
             set_createdb(True)

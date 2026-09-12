@@ -32,7 +32,8 @@ test('diagnostic preflight is required for every event and both pressure matrice
   }
   const diagnostic = job(workflow, 'listener-diagnostics');
   for (const path of ['test-listener-control-observer.py', 'test-listener-readiness-observed.py',
-                      'test-listener-control-observer-pg17.py', 'test-listener-database-cleanup.py']) {
+                      'test-listener-control-observer-pg17.py', 'test-listener-database-cleanup.py',
+                      'test-fixture-certificate-cache.py', 'test-ci-runtime-artifact.py']) {
     assert.ok(diagnostic.includes(`python3 scripts/${path}`));
   }
   // The independent diagnostic job overlaps smoke; no new serial compile gate.
@@ -51,7 +52,7 @@ test('cache restores retain mandatory Cargo commands and checked runtime builds'
     assert.ok(block.indexOf('uses: ./.github/actions/rust-build-cache') < block.indexOf(command));
     assert.doesNotMatch(block, /cache-hit|continue-on-error/);
   }
-  for (const name of ['smoke', 'regular', 'scheduled']) {
+  for (const name of ['smoke']) {
     const block = job(workflow, `listener-readiness-stress-${name}`);
     assert.ok(block.includes('profile: runtime-test'));
     assert.doesNotMatch(block, /cache-hit|continue-on-error/);
@@ -59,6 +60,24 @@ test('cache restores retain mandatory Cargo commands and checked runtime builds'
   const driver = fs.readFileSync(new URL('./listener-readiness-stress-wsl.sh', import.meta.url), 'utf8');
   assert.ok(driver.includes('cargo build "${cargo_args[@]}" --bin rust-xmpp-server'));
   assert.ok(driver.includes('--build-log "$runtime_dir/parent-preflight-build.raw.log"'));
+});
+
+test('pressure jobs restore only the verified smoke artifact from this run', () => {
+  const smoke = job(workflow, 'listener-readiness-stress-smoke');
+  assert.ok(smoke.indexOf('Package verified runtime') > smoke.indexOf('Prove one round with two pairs'));
+  assert.ok(smoke.includes('python3 scripts/ci-runtime-artifact.py pack'));
+  assert.ok(smoke.includes('--build-log "$RUNNER_TEMP/runtime-build.jsonl"'));
+  for (const lane of ['regular', 'scheduled']) {
+    const block = job(workflow, `listener-readiness-stress-${lane}`);
+    assert.match(block, /uses: actions\/download-artifact@[0-9a-f]{40}/);
+    assert.ok(block.includes('name: listener-runtime-${{ github.sha }}-${{ github.run_attempt }}'));
+    assert.ok(block.includes('digest-mismatch: error'));
+    assert.ok(block.includes('NORTHSTAR_RUNTIME_ARTIFACT_DIR: ${{ runner.temp }}/northstar-runtime-fixture'));
+    assert.doesNotMatch(block, /rust-build-cache|cargo fetch|continue-on-error|github-token:|run-id:/);
+  }
+  const driver = fs.readFileSync(new URL('./listener-readiness-stress-wsl.sh', import.meta.url), 'utf8');
+  assert.ok(driver.includes('scripts/ci-runtime-artifact.py" restore'));
+  assert.ok(driver.includes('--bundle "$NORTHSTAR_RUNTIME_ARTIFACT_DIR" --binary "$candidate" || return 1'));
 });
 
 test('cache boundaries include platform, toolchain, profile and dependency configuration', () => {

@@ -88,6 +88,9 @@ run_exact_ignored \
   db::mix::delivery_sequence_retention_integration_tests::empty_delivery_claim_avoids_the_event_lock_and_recovers_after_insert
 
 run_exact_ignored \
+  db::mix::delivery_sequence_retention_integration_tests::empty_delivery_claim_preserves_database_authority_errors
+
+run_exact_ignored \
   db::mix::delivery_route_wake_integration_tests::an_expired_unowned_head_blocks_until_terminalized
 
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \

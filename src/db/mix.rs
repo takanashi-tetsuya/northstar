@@ -1145,10 +1145,29 @@ pub async fn claim_mix_deliveries(
     // A racing insertion is handled by the retained delivery wake or the
     // unchanged bounded recovery scan; a nonempty queue still uses every
     // lease, transport-owner and ordering predicate below.
-    let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mix_delivery_recipients)")
-        .fetch_one(&mut *connection)
-        .await?;
-    if !pending {
+    // Checking catalog privileges takes no locks on the joined application
+    // tables. Only the normal, writable runtime role may take the shortcut;
+    // otherwise the original claim below decides the result. In particular,
+    // retain its read-only/permission errors and support for column grants.
+    let (authorized, pending): (bool, bool) = sqlx::query_as(
+        "SELECT current_setting('transaction_read_only') = 'off'
+                AND (SELECT bool_and(has_table_privilege(relation, privilege))
+                       FROM (VALUES
+                         ('mix_delivery_recipients', 'SELECT'),
+                         ('mix_delivery_recipients', 'UPDATE'),
+                         ('mix_delivery_events', 'SELECT'),
+                         ('mix_delivery_recipient_sequences', 'SELECT'),
+                         ('mix_delivery_recipient_sequences', 'UPDATE'),
+                         ('sm_resume_stanzas', 'SELECT'),
+                         ('sm_resume_sessions', 'SELECT'),
+                         ('mix_bosh_delivery_fences', 'SELECT'),
+                         ('mix_cluster_delivery_fences', 'SELECT')
+                       ) required(relation, privilege)),
+                EXISTS(SELECT 1 FROM mix_delivery_recipients)",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if authorized && !pending {
         return Ok(Vec::new());
     }
     let rows = sqlx::query(

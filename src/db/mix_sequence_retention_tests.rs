@@ -243,3 +243,86 @@ async fn empty_delivery_claim_avoids_the_event_lock_and_recovers_after_insert() 
     owner.close().await;
     result
 }
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database with SET ROLE pg_monitor"]
+async fn empty_delivery_claim_preserves_database_authority_errors() -> Result<()> {
+    let url = std::env::var("TEST_DATABASE_URL")?;
+    let owner = PgPool::connect(&url).await?;
+    let schema = format!("claim_authority_{}", Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&owner)
+        .await?;
+    // Pin the session whose read-only mode and role we temporarily change.
+    // All grants apply only to this disposable schema, never global roles.
+    let options = url.parse::<sqlx::postgres::PgConnectOptions>()?.options([
+        ("search_path", schema.as_str()),
+        ("statement_timeout", "10000"),
+    ]);
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await?;
+    let result: Result<()> = async {
+        crate::db::migrate(&pool).await?;
+        sqlx::query("SET default_transaction_read_only = on")
+            .execute(&pool).await?;
+        let read_only = claim_mix_deliveries(&pool, 1, 65_536).await;
+        sqlx::query("SET default_transaction_read_only = off")
+            .execute(&pool).await?;
+        assert_claim_sqlstate(read_only, "25006")?;
+        anyhow::ensure!(claim_mix_deliveries(&pool, 1, 65_536).await?.is_empty());
+
+        sqlx::query(&format!("GRANT USAGE ON SCHEMA {schema} TO pg_monitor"))
+            .execute(&pool).await?;
+        sqlx::query(&format!("GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO pg_monitor"))
+            .execute(&pool).await?;
+        assert_claim_sqlstate(claim_as_monitor(&pool).await?, "42501")?;
+
+        sqlx::query("GRANT UPDATE(lease_token,lease_until) ON mix_delivery_recipients TO pg_monitor")
+            .execute(&pool).await?;
+        // FOR UPDATE also requires authority-table UPDATE permission.
+        assert_claim_sqlstate(claim_as_monitor(&pool).await?, "42501")?;
+        sqlx::query("GRANT UPDATE(next_sequence) ON mix_delivery_recipient_sequences TO pg_monitor")
+            .execute(&pool).await?;
+        // Legal column grants must still succeed through the original SQL.
+        anyhow::ensure!(claim_as_monitor(&pool).await??.is_empty());
+
+        sqlx::query("GRANT UPDATE ON mix_delivery_recipients,mix_delivery_recipient_sequences TO pg_monitor")
+            .execute(&pool).await?;
+        anyhow::ensure!(claim_as_monitor(&pool).await??.is_empty());
+        sqlx::query("REVOKE SELECT ON mix_delivery_events FROM pg_monitor")
+            .execute(&pool).await?;
+        assert_claim_sqlstate(claim_as_monitor(&pool).await?, "42501")?;
+        Ok(())
+    }.await;
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&owner)
+        .await?;
+    owner.close().await;
+    result
+}
+
+async fn claim_as_monitor(pool: &PgPool) -> Result<Result<Vec<ClaimedMixDelivery>>> {
+    sqlx::query("SET ROLE pg_monitor").execute(pool).await?;
+    let result = claim_mix_deliveries(pool, 1, 65_536).await;
+    sqlx::query("RESET ROLE").execute(pool).await?;
+    Ok(result)
+}
+
+fn assert_claim_sqlstate(result: Result<Vec<ClaimedMixDelivery>>, expected: &str) -> Result<()> {
+    let error = match result {
+        Ok(_) => anyhow::bail!("empty claim hid expected database error {expected}"),
+        Err(error) => error,
+    };
+    let code = error
+        .downcast_ref::<sqlx::Error>()
+        .and_then(sqlx::Error::as_database_error)
+        .and_then(|error| error.code());
+    anyhow::ensure!(
+        code.as_deref() == Some(expected),
+        "unexpected claim error: {error}"
+    );
+    Ok(())
+}

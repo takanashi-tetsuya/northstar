@@ -319,3 +319,37 @@ outcast/restart 檢查及重複投遞檢查均通過。恢復 20 秒等待會失
 outbox 和協議程式與本次來源完全相同。它證明測試期限的可重現問題，
 不替代新提交的完整 CI。腳本語法、process-isolation、migration boundary、
 文件一致性及 workflow required policy 檢查通過。
+
+## MIX 空佇列權限與 Federation observer（UTC 18:06）
+
+檢查 `159d521` 的空佇列優化時，在完成 0142 遷移的私有 PG17.11
+重現權限回歸：原完整 claim 在 read-only session 回傳 SQLSTATE 25006，
+SELECT-only role 回傳 42501；單表 EXISTS 卻在兩者皆回傳 false／成功。
+快速路徑現在先以 catalog 檢查正常 runtime 所需表權限與 transaction
+可寫性；不符合時執行原 claim，讓 PostgreSQL 保留原錯誤，也繼續接受
+原查詢合法的 column grants。SELECT FOR UPDATE 的欄位 UPDATE 權限
+語義見 [PG17 SELECT 文件](https://www.postgresql.org/docs/17/sql-select.html)。
+
+相同實際遷移與量測方式下，含權限檢查的空路徑仍為 8 relation locks，
+全部 fast-path、0 shared-lock-table；原完整 claim 為 48／18／30。
+沒有恢復對無投遞事件表的資料鎖，也沒有變更非空 claim 的 predicates。
+新增實際 Rust 回歸涵蓋 read-only、recipient 與 sequence UPDATE 缺失、
+事件表 SELECT 缺失，以及合法 column grants。新 binary 的 9 個真實
+PG17.11 MIX 回歸全過（5.69 秒），1146 個預設 Rust 測試全過（4.07 秒，
+193 個外部／DB fixture 測試預設忽略）。後者首次因 sandbox 禁止建立
+socket 有 10 個 permission errors；允許自有 loopback listener 後同一
+binary 全過，沒有改動測試。38 項 MIX lifecycle mutation 與 9 項 release
+gate 測試全過，Clippy all-targets 且 `-D warnings` 亦通過。
+
+另 [cfae924 Federation job 103592415811](https://github.com/takanashi-tetsuya/northstar/actions/runs/34707961247/job/103592415811)
+於第 6 輪 transport 階段被 observer 中止。Observer 有 2613 個有效樣本、
+最高 100 backends，10 次錯誤中前 7 次已恢復，最後連續 3 次為 server
+SQLSTATE 57014。最後有效樣本時間為 17:52:54.555 UTC；17:53:04.707
+退出前沒有業務 failure marker，保留 37 個近期有效 context samples。
+這次是必要觀測失效，不能聲稱已發現應用 heartbeat 失敗或指定慢查詢。
+
+已下載並核對 observer artifact `10303300002` 的 SHA-256
+`cce8b46f78dffd7cdb7c5f4709872e949d1c0506398d020cd9d830e9d4ddb103`，
+以及診斷 `10303060535` 的
+`5344bf81dd1953e70df01682a551a8ccb8fa4b9227a8a3e17d79e6b2a2352f35`。
+採樣期限、連續錯誤門檻及 workload 仍維持原要求；尚未定位遠端延遲根因。

@@ -5,6 +5,7 @@ import { ALWAYS_REQUIRED, verifyWorkflowCoverage } from './ci-required-policy.mj
 
 const workflow = fs.readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const cache = fs.readFileSync(new URL('../.github/actions/rust-build-cache/action.yml', import.meta.url), 'utf8');
+const release = fs.readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
 const job = (source, name) => source.split(`  ${name}:\n`)[1]?.split(/^  [a-z][a-z0-9-]*:\s*$/m)[0];
 
 function verifyPressureGate(source, name, rounds) {
@@ -81,6 +82,22 @@ test('pressure jobs restore only the verified smoke artifact from this run', () 
 });
 
 test('cache boundaries include platform, toolchain, profile and dependency configuration', () => {
+  const keys = cache.split('\n').filter(line => /^\s*key: /.test(line));
+  assert.equal(keys.length, 2);
+  assert.equal(keys[0], keys[1], 'producer and consumers must address the same compiler-work bucket');
+  const releaseKeys = release.split('\n').filter(line => /^\s*key: native-release-/.test(line));
+  assert.equal(releaseKeys.length, 1);
+  for (const key of [...keys, ...releaseKeys]) {
+    assert.doesNotMatch(key, /github\.(?:sha|run_id|run_attempt)/,
+      'source revisions must not create another multi-GB compiler cache');
+  }
+  for (const part of ['runner.os', 'matrix.runner', 'matrix.target', '1.97.1-crt-static',
+                      '**/Cargo.lock', '**/Cargo.toml', '.cargo/config*', 'rust-toolchain*']) {
+    assert.ok(releaseKeys[0].includes(part));
+  }
+  const native = job(release, 'build-binaries');
+  assert.ok(native.includes('cargo build --release --locked --target ${{ matrix.target }}'));
+  assert.doesNotMatch(native, /cache-hit/);
   for (const line of cache.split('\n').filter(line => line.includes('rust-v1-'))) {
     for (const part of ['runner.os', 'steps.platform.outputs.version', 'runner.arch', '1.97.1',
                         'inputs.profile', '**/Cargo.lock', '**/Cargo.toml', '.cargo/config*']) {

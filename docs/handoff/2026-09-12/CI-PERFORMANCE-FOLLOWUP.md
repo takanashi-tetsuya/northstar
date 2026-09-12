@@ -353,3 +353,34 @@ SQLSTATE 57014。最後有效樣本時間為 17:52:54.555 UTC；17:53:04.707
 以及診斷 `10303060535` 的
 `5344bf81dd1953e70df01682a551a8ccb8fa4b9227a8a3e17d79e6b2a2352f35`。
 採樣期限、連續錯誤門檻及 workload 仍維持原要求；尚未定位遠端延遲根因。
+
+## 避免逐提交複製大型編譯快取（UTC 18:22）
+
+[8f8275e Rust test job 103597947079](https://github.com/takanashi-tetsuya/northstar/actions/runs/34710377026/job/103597947079)
+成功還原 `2832572` 的 debug cache，大小 2,555,088,912 bytes，接著又以
+`8f8275e` 為 key 存一份。原 composite action 雖称兩個 profile buckets，
+實際 key 尾端包含每個 commit SHA，因此相同配置的每次 push／PR 都可能
+再產生大型 archive。現在 producer 和 consumers 共用一個固定配置 key，
+仍包含 OS、OS version、architecture、Rust 1.97.1、profile、所有 Cargo
+manifest／lockfile 與 Cargo／toolchain 設定雜湊。保留既有 prefix 作為
+首次暖機來源；平台或依賴配置變更仍使用不同 key。
+
+Windows／Linux 原生 release compiler cache 同樣去除逐提交尾碼，保留
+runner image、target triple、static CRT、工具鏈和依賴設定邊界。其原有
+locked、explicit-target Cargo build 每次仍執行。
+
+此快取只省編譯工作，所有 Cargo 命令與來源檢查照常執行；stress runtime
+仍由同一次 run／attempt 的 smoke 產生，精確核對 SHA、tracked source
+digest、profile、toolchain 和 binary digest。沒有把編譯快取當成當前
+artifact，也沒有刪除遠端快取、提高付費容量或改動必要 CI 工作。
+
+`cfae924` 的 Docker app build 另花 6m42s 重新編譯，cache export 約
+179 秒；PG17 工具也 cache miss，之後實際 container migration／readiness／
+assets 驗證成功（2144.09 ms）。這些是可確認的未命中／成本，尚無權讀取
+cache usage API，不能證實該 repo 的容量或淘汰原因。
+[GitHub 官方快取政策](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#usage-limits-and-eviction-policy)
+說明超過配置容量可能反覆淘汰；本次修正直接減少相同配置的 archive 數量。
+
+4 項 CI performance contract、9 項 release gate、5 項 runtime artifact
+身分／篡改回歸、Actionlint 及文件一致性全部通過。新 runner 上的共用 key
+首次建立與後續命中仍需遠端驗證；Rust 與所有測試期限未改動。

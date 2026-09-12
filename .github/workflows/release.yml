@@ -210,6 +210,8 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # Explicit --target builds host build scripts and proc macros in target/release.
+          # Share compiler work by configuration instead of uploading it for
+          # every source commit. The locked Cargo build below always runs.
           path: |
             ~/.cargo/registry
             ~/.cargo/git/db
@@ -217,7 +219,7 @@ jobs:
             !target/release/incremental
             target/${{ matrix.target }}/release
             !target/${{ matrix.target }}/release/incremental
-          key: native-release-v2-${{ runner.os }}-${{ matrix.runner }}-${{ matrix.target }}-1.97.1-crt-static-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '.cargo/config*', 'rust-toolchain*') }}-${{ github.sha }}
+          key: native-release-v2-${{ runner.os }}-${{ matrix.runner }}-${{ matrix.target }}-1.97.1-crt-static-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '.cargo/config*', 'rust-toolchain*') }}-shared
           restore-keys: |
             native-release-v2-${{ runner.os }}-${{ matrix.runner }}-${{ matrix.target }}-1.97.1-crt-static-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '.cargo/config*', 'rust-toolchain*') }}-
 

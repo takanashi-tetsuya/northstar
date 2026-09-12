@@ -39,7 +39,16 @@ production baseline; Windows AMD64 artifacts are for development and evaluation.
   `.env.example`, `README.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, and the
   Swagger UI `LICENSE`/`NOTICE`. Raw binaries are not described as complete
   standalone distributions.
-- [ ] `SHA256SUMS` verifies all four binary assets and `IMAGE_DIGESTS`; the
+- [ ] Archives also contain `.env.development.example`, `docs/INSTALL.md`,
+  `README.zh-TW.md` and `PACKAGE-MANIFEST.json`; the manifest identifies the
+  exact source/target and hashes every distributed file. Windows packages link
+  the Visual C++ runtime statically.
+- [ ] Independent native runners download and extract the packages, migrate
+  a private PostgreSQL 17 cluster, reach readiness within 15 seconds, and serve
+  the matching client, administration and Swagger assets. The application image
+  passes the same test through its real entrypoint and UID 10001.
+- [ ] `SHA256SUMS` verifies all four binary assets, `IMAGE_DIGESTS` and
+  `RELEASE-EVIDENCE.json`; the
   checksum file and packages have GitHub build-provenance attestations. Record
   checksums only from the successful tag run.
 - [ ] `IMAGE_DIGESTS` contains exactly one immutable `name@sha256:digest`
@@ -196,8 +205,9 @@ node scripts/verify-crypto-artifacts.mjs
   `release-preflight.sh --production` only after supplying the intended
   production paths. This is the Compose production profile and fails if Docker
   or a required certificate, secret, role URL or policy tool is unavailable.
-- [ ] A normal `main`-push dry run of `.github/workflows/release.yml` built both
-  AMD64 targets without publishing GHCR images or creating a GitHub Release.
+- [ ] A `main` or `codex/release-*` push dry run of
+  `.github/workflows/release.yml` built and verified both AMD64 targets and all
+  three images without publishing GHCR images or creating a GitHub Release.
   Dry-run workflow artifacts are evidence for that commit only and are not
   public release downloads.
 
@@ -241,23 +251,27 @@ node scripts/verify-crypto-artifacts.mjs
 - [ ] Treat pushing `v0.2.0` as an external publication action: the tag workflow
   pushes the three GHCR images before it prepares the draft GitHub Release. Do
   not push the tag merely to discover whether the release is ready.
-- [ ] Only after ship approval, replace the `Unreleased` markers in
-  `CHANGELOG.md` and `changelog/v0.2.md` with the real release date/status and
-  identify `0.2.0` as the current release in `README.md`. The tag workflow
-  rejects a commit that still carries development-state release markers; do not
-  make these claims early merely to satisfy the gate.
+- [ ] Finalize version-specific release notes in `CHANGELOG.md` and
+  `changelog/v0.2.md`, remove `Unreleased` markers, and identify `0.2.0` as the
+  current package version in `README.md`. Publication status/date belong to the
+  GitHub Release, so preparing an immutable tag/draft never requires claiming
+  that an unpublished release is already public.
 - [ ] Confirm the reviewed release commit is the intended protected-branch
   commit, create the immutable `v0.2.0` tag at that commit, verify
   `v0.2.0^{commit}`, and push only that tag. Never move or reuse a published tag.
 - [ ] Wait for the complete tag-triggered `Release preparation` workflow. It
   must finish successfully and create or update a **draft**, not an already
   public GitHub Release.
-- [ ] From a clean machine, download the draft's four binary assets,
-  `SHA256SUMS`, and `IMAGE_DIGESTS`. Run `sha256sum --check SHA256SUMS` over the
+- [ ] From clean Windows and Linux runners, download the draft's four binary
+  assets, `SHA256SUMS`, `RELEASE-EVIDENCE.json`, and `IMAGE_DIGESTS`.
+  The workflow verifies every downloaded asset's provenance, exact file set,
+  checksums and source identity, then runs the extracted native version check.
+  For an independent manual check, run `sha256sum --check SHA256SUMS` over the
   complete set; on Windows independently compare `Get-FileHash -Algorithm
   SHA256` output with each applicable checksum entry.
-- [ ] Verify GitHub build provenance for the four packages, `IMAGE_DIGESTS`, and
-  `SHA256SUMS`. Provenance is not replaced by downloading a checksum from the
+- [ ] Verify GitHub build provenance for the four binary assets,
+  `IMAGE_DIGESTS`, `RELEASE-EVIDENCE.json` and `SHA256SUMS`.
+  Provenance is not replaced by downloading a checksum from the
   same Release.
 - [ ] Extract both complete archives into empty directories, confirm their
   required runtime/license contents, confirm the extracted executable matches
@@ -275,6 +289,9 @@ node scripts/verify-crypto-artifacts.mjs
   Linux AMD64 is the production baseline, Windows AMD64 is development/evaluation
   only, raw binaries require the matching runtime assets, and no unverified
   checksum, digest or test result is presented as fact.
+- [ ] The complete tag workflow has succeeded, including both fresh-download
+  jobs and `Mark verified draft ready for manual publication`. The Release is
+  still a draft and its body links the exact successful CI and build run.
 - [ ] Publish the draft manually only after every required gate is approved.
   Record the publication URL/date, exact tag commit, workflow run, package
   checksums, image digests, attestations, exceptions and approver.

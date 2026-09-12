@@ -7,8 +7,9 @@ PostgreSQL. It provides XMPP over TCP, Direct TLS, WebSocket and optional BOSH,
 along with federation, group chat, OMEMO-compatible services, a browser client,
 REST administration, anti-abuse controls, logging and metrics.
 
-The current release candidate is `0.2.0` and remains pre-1.0. It has not yet
-been published or received an independent security audit. Review the
+The current package version is `0.2.0` and remains pre-1.0. Publication status
+and dates are recorded in [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases).
+The project has not received an independent security audit. Review the
 [XEP support matrix](XEP_MATRIX.md), [release checklist](docs/RELEASE_CHECKLIST.md)
 and [known limitations](docs/KNOWN_ISSUES.md) before public deployment.
 
@@ -38,7 +39,8 @@ have been reviewed:
 | `northstar-0.2.0-linux-amd64` | Raw Linux AMD64 ELF binary |
 | `northstar-0.2.0-windows-amd64.zip` | Complete Windows AMD64 development/evaluation distribution with `xmpp-server.exe` and the same runtime assets and notices |
 | `northstar-0.2.0-windows-amd64.exe` | Raw Windows AMD64 executable for development/evaluation |
-| `SHA256SUMS` | SHA-256 checksums for the four packages and `IMAGE_DIGESTS` |
+| `SHA256SUMS` | SHA-256 checksums for the four binary assets, `IMAGE_DIGESTS` and `RELEASE-EVIDENCE.json` |
+| `RELEASE-EVIDENCE.json` | Exact source/run identity and successful Windows, Linux and Docker package checks |
 | `IMAGE_DIGESTS` | Exact `name@sha256:digest` references produced for the three GHCR images by a successful tag run |
 
 `AMD64` means the Rust `x86_64` targets. Linux AMD64 is the production
@@ -47,6 +49,11 @@ production deployment. The raw binaries do not contain the runtime Web,
 Swagger UI, configuration, or license files. Use the complete archive, or keep
 the raw binary beside the matching-tag archive contents and run it from that
 directory.
+
+Each complete archive includes `.env.development.example`, `docs/INSTALL.md`,
+and a `PACKAGE-MANIFEST.json` with the source commit and per-file digests.
+The workflow verifies extracted startup against private PostgreSQL 17 on both
+native platforms and the application image.
 
 Download all required files, verify the matching entries in `SHA256SUMS`, and
 verify the GitHub build provenance before execution. On Linux, for example:

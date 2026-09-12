@@ -117,6 +117,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       commit: process.env.RELEASE_COMMIT, tag: process.env.RELEASE_TAG });
     const summary = `Release ${result.tag} qualified at ${result.commit}; CI ${result.ciUrl}, attempt ${result.ciAttempt}.\n`;
     process.stdout.write(summary);
+    if (process.env.RELEASE_QUALIFICATION_FILE) {
+      fs.writeFileSync(process.env.RELEASE_QUALIFICATION_FILE, `${JSON.stringify(result, null, 2)}\n`);
+    }
     if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
   } catch (error) {
     process.stderr.write(`Release blocked: ${error.message}\n`);

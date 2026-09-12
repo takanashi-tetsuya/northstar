@@ -427,6 +427,7 @@ jobs:
           node scripts/test-parser-fuzz-coverage.mjs
           node scripts/check-ci-required.mjs --workflow-only
           node --test scripts/test-ci-release-gates.mjs
+          python3 scripts/test-release-package.py
           node scripts/check-subserver-boundaries.mjs
           node --test scripts/test-subserver-boundaries.mjs
           node --test scripts/test-cluster-signing-key.mjs

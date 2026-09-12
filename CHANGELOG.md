@@ -4,7 +4,13 @@ All notable Northstar changes are documented here. Protocol support claims are
 normative only in [XEP_MATRIX.md](XEP_MATRIX.md), and unresolved release
 boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
-## [0.2.0] - Unreleased
+## [0.2.0] - Release notes (publication date: GitHub Releases)
+
+- Added complete Windows x64 and Linux x64 package manifests and installation
+  instructions, native PostgreSQL startup/resource verification, default-user
+  Docker startup checks, and fresh draft-download checksum/provenance checks.
+  A verified draft is prepared for manual publication; build previews publish
+  neither a Release nor GHCR images.
 
 - Added migration `0139` to repair expired upload-cleanup admission without
   changing its public capability: the queue's named primary-key conflict target

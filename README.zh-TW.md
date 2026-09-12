@@ -6,8 +6,9 @@ Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 伺服器。它提供 TCP、Direct TLS、WebSocket 與選用 BOSH 連線，以及聯邦、
 群聊、OMEMO 相容服務、網頁用戶端、REST 管理、防濫用、日誌及監控。
 
-目前的發行候選版本為 `0.2.0`，仍屬 1.0 之前的版本，尚未正式發行或接受
-獨立安全稽核。公開部署前請閱讀 [XEP 支援矩陣](XEP_MATRIX.md)、
+目前套件版本為 `0.2.0`，仍屬 1.0 之前的版本；發佈狀態與日期以
+[GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) 為準。
+專案尚未接受獨立安全稽核。公開部署前請閱讀 [XEP 支援矩陣](XEP_MATRIX.md)、
 [發行檢查表](docs/RELEASE_CHECKLIST.md)與[已知限制](docs/KNOWN_ISSUES.md)。
 
 其他資料請參閱[文件索引](docs/README.md)、[安全政策](SECURITY.md)、
@@ -33,13 +34,18 @@ Northstar `0.2.0` 通過發行核准後，將透過
 | `northstar-0.2.0-linux-amd64` | 裸 Linux AMD64 ELF binary |
 | `northstar-0.2.0-windows-amd64.zip` | 完整 Windows AMD64 開發／評估套件，包含 `xmpp-server.exe` 及相同的 runtime 資產與授權聲明 |
 | `northstar-0.2.0-windows-amd64.exe` | 供開發／評估使用的裸 Windows AMD64 executable |
-| `SHA256SUMS` | 四個套件與 `IMAGE_DIGESTS` 的 SHA-256 checksum |
+| `SHA256SUMS` | 四個 binary 資產、`IMAGE_DIGESTS` 與 `RELEASE-EVIDENCE.json` 的 SHA-256 checksum |
+| `RELEASE-EVIDENCE.json` | 精確 source/run 身分及 Windows、Linux、Docker 套件驗證結果 |
 | `IMAGE_DIGESTS` | 成功 tag 執行為三個 GHCR 映像產生的精確 `name@sha256:digest` 參照 |
 
 `AMD64` 即 Rust 的 `x86_64` targets。Linux AMD64 是正式環境基線；Windows
 build 僅供開發及評估，不是支援的正式部署平台。裸 binary 不包含執行時所需的
 Web、Swagger UI、設定及授權檔案。請使用完整 archive，或把裸 binary 與同一
 tag archive 的內容放在一起，並從該目錄啟動。
+
+完整 archive 同時附上 `.env.development.example`、`docs/INSTALL.md`，以及
+記錄 source commit 和各檔案 digest 的 `PACKAGE-MANIFEST.json`。Workflow
+會在兩個原生平台及應用映像中，以私有 PostgreSQL 17 驗證實際啟動。
 
 下載所需檔案後，請在執行前核對 `SHA256SUMS` 中的對應項目，並驗證 GitHub
 build provenance。Linux 範例：

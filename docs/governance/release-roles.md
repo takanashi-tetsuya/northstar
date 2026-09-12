@@ -44,11 +44,15 @@ to approve their own PR would not provide usable independent review.
    matching the package version and release documents.
 5. Push the immutable tag after the ship decision. Before artifact builds, the
    workflow verifies tag signature/identity, main ancestry, active branch rules
-   and exact successful CI. Both binary packages must build before GHCR image
-   publication; image jobs recheck current evidence before publication.
+   and exact successful CI. Both binary packages must build and pass native
+   PostgreSQL startup/resource verification before GHCR image publication;
+   image jobs recheck current evidence before publication, then verify public
+   digest pulls, provenance, metadata and application-container startup.
 6. Retain image digests, SBOM/provenance, package checksums and tag run URL.
    Review the draft GitHub Release and perform fresh-download verification from
-   `docs/RELEASE_CHECKLIST.md`. Publish the draft only after those checks.
+   `docs/RELEASE_CHECKLIST.md`. The workflow downloads all draft assets again on
+   fresh Windows and Linux runners and updates the still-unpublished draft only
+   after those checks pass. The maintainer performs the final Publish release click.
 
 The tag workflow publishes GHCR images before creating the draft GitHub
 Release; the draft is not an approval boundary for those images. The gate uses

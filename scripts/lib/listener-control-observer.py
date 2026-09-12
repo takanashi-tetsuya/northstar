@@ -280,7 +280,7 @@ class Libpq:
         if self.lib.PQsetnonblocking(self.conn, 1) != 0:
             raise ObserverError('nonblocking_setup_failed')
 
-    def query(self, sql):
+    def query(self, sql, validator=None):
         if self.lib.PQsendQuery(self.conn, sql.encode('ascii')) != 1:
             raise ObserverError('query_send_failed')
         deadline = time.monotonic() + 3.0
@@ -293,18 +293,39 @@ class Libpq:
             self.ready(True, deadline)
         payload = None
         failure = None
+        expired = False
+        results = 0
         while True:
+            self.limits.check()
+            expired = expired or time.monotonic() >= deadline
+            # Consume available input before waiting. After a scheduling delay,
+            # a complete response may already be in the socket. The deadline
+            # permits no further wait, only a nonblocking drain to ReadyForQuery.
+            if self.lib.PQconsumeInput(self.conn) != 1:
+                raise ObserverError('query_receive_failed')
             while self.lib.PQisBusy(self.conn):
-                self.ready(False, deadline)
+                if expired:
+                    raise ObserverError('client_query_deadline')
+                try:
+                    self.ready(False, deadline)
+                except ObserverError as exc:
+                    if exc.code != 'client_query_deadline':
+                        raise
+                    expired = True
                 if self.lib.PQconsumeInput(self.conn) != 1:
                     raise ObserverError('query_receive_failed')
+                expired = expired or time.monotonic() >= deadline
             result = self.lib.PQgetResult(self.conn)
             if not result:
                 break
             try:
+                results += 1
+                if results > 2:
+                    raise ObserverError('unexpected_result_count')
                 if self.lib.PQresultStatus(result) != 2:
                     state = self.lib.PQresultErrorField(result, ord('C'))
-                    failure = ObserverError('server_query_failed', state.decode('ascii') if state else None)
+                    if failure is None:
+                        failure = ObserverError('server_query_failed', state.decode('ascii') if state else None)
                 elif payload is not None or self.lib.PQntuples(result) != 1 or self.lib.PQnfields(result) != 1:
                     failure = ObserverError('unexpected_result_shape')
                 elif self.lib.PQgetisnull(result, 0, 0):
@@ -319,7 +340,14 @@ class Libpq:
             raise failure
         if payload is None:
             raise ObserverError('missing_result')
-        return json.loads(payload)
+        value = json.loads(payload)
+        if validator is not None:
+            validator(value)
+        if expired or time.monotonic() >= deadline:
+            # Discard this late sample. Only the fully drained connection can
+            # be reused; a subsequent fresh valid sample must prove recovery.
+            raise ObserverError('client_query_deadline_drained')
+        return value
 
     def close(self):
         if self.conn:
@@ -387,7 +415,10 @@ def validate_sample(sample):
             raise ObserverError('invalid_backend_identity')
         if not isinstance(row['database_hash'], str) or not re.fullmatch(r'[0-9a-f]{32}', row['database_hash']):
             raise ObserverError('invalid_database_hash')
-        if row['state'] not in STATES:
+        # PostgreSQL publishes STATE_UNDEFINED as NULL during backend startup.
+        # backend_start above is also privilege-gated: without visibility it
+        # is NULL too, so missing privileges cannot pass as a starting backend.
+        if row['state'] is not None and (not isinstance(row['state'], str) or row['state'] not in STATES):
             raise ObserverError('activity_visibility_incomplete')
         for name in ('wait_event_type', 'wait_event'):
             if row[name] is not None and (not isinstance(row[name], str) or len(row[name]) > 128):
@@ -395,6 +426,8 @@ def validate_sample(sample):
         for name in ('query_age_ms', 'state_age_ms'):
             if type(row[name]) not in (int, float) or not math.isfinite(row[name]) or row[name] < 0:
                 raise ObserverError('invalid_activity_age')
+        if row['state'] is None and (row['query_age_ms'] != 0 or row['state_age_ms'] != 0):
+            raise ObserverError('invalid_starting_backend')
         if not isinstance(row['blocking_pids'], list) or len(row['blocking_pids']) > MAX_ROWS or any(type(pid) is not int or pid <= 0 for pid in row['blocking_pids']):
             raise ObserverError('blocking_pid_limit')
         key = (row['pid'], row['backend_start'])
@@ -429,6 +462,7 @@ class Evidence:
         self.disappearances = 0
         self.ring_byte_evictions = 0
         self.sample_count = 0
+        self.starting_observations = 0
 
     def write(self, record):
         data = record if isinstance(record, bytes) else encoded(record)
@@ -476,6 +510,7 @@ class Evidence:
 
     def sample(self, sample, now, duration_ms):
         validate_sample(sample)
+        self.starting_observations += sum(row['state'] is None for row in sample['rows'])
         self.seq += 1
         self.sample_count += 1
         self.peak = max(self.peak, sample['total'])
@@ -610,10 +645,9 @@ def main():
                 break
             begin = time.monotonic()
             try:
-                sample = connection.query(sql)
+                sample = connection.query(sql, validate_sample)
                 end = time.monotonic()
                 duration_ms = (end - begin) * 1000
-                max_duration_ms = max(max_duration_ms, duration_ms)
                 # Poll before appending/evicting the ring, including when a
                 # marker was published while libpq waited for a response.
                 capture_marker()
@@ -628,14 +662,17 @@ def main():
                 errors += 1
                 consecutive_errors += 1
                 last_sample_error, last_sample_sqlstate = exc.code, exc.sqlstate
-                # Only a completely drained server error is reusable. Unknown
-                # pending, malformed, or client-timeout responses close the
-                # sole connection; there is no reconnect or replay fallback.
-                if exc.code != 'server_query_failed' or consecutive_errors >= 3:
+                # A drained error or discarded, validated late sample leaves
+                # the same connection reusable. Pending/invalid responses fail
+                # immediately; three consecutive recoverable errors also fail.
+                if exc.code not in {'server_query_failed', 'client_query_deadline_drained'} or consecutive_errors >= 3:
                     raise
+            finally:
+                duration_ms = (time.monotonic() - begin) * 1000
+                max_duration_ms = max(max_duration_ms, duration_ms)
+                if duration_ms > INTERVAL * 1000:
+                    gaps += 1
             after = time.monotonic()
-            if after - begin > INTERVAL:
-                gaps += 1
             next_sample = begin + INTERVAL if after <= begin + INTERVAL else after + INTERVAL
     except StopRequested:
         stopped = True
@@ -672,6 +709,7 @@ def main():
             'started_at': started, 'ended_at': utc(), 'stop_signal': STOP_SIGNAL,
             'observer_backend_pid': observer_backend_pid, 'samples': evidence.sample_count,
             'peak_runtime_backends': evidence.peak, 'slow_backend_events': evidence.slow_events,
+            'starting_backend_observations': evidence.starting_observations,
             'backend_disappearances_unclassified': evidence.disappearances,
             'sample_overruns': gaps, 'max_sample_duration_ms': round(max_duration_ms, 3),
             'ring_byte_evictions': evidence.ring_byte_evictions, 'sample_errors': errors,

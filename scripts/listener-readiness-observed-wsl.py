@@ -216,7 +216,11 @@ def run_observed(driver_command: list[str], observer_command: list[str], *,
                 # Observer failure remains visible, but never substitutes a
                 # reduced workload or a retry for the required matrix.
                 driver = subprocess.Popen(driver_command, env=driver_environment, start_new_session=True)
+                observer_exit_reported = False
                 while driver.poll() is None and STOP_SIGNAL is None:
+                    if observer.poll() is not None and not observer_exit_reported:
+                        print(f"listener_observer_early_exit={observer.returncode}", flush=True)
+                        observer_exit_reported = True
                     time.sleep(0.1)
                 if STOP_SIGNAL is not None and driver.poll() is None:
                     marker_ok = publish_failure_marker("parent_cancel", marker) and marker_ok
@@ -298,6 +302,14 @@ def run_observed(driver_command: list[str], observer_command: list[str], *,
             evidence_ok = total + RESULT_LIMIT <= TOTAL_EVIDENCE_LIMIT
         except (OSError, ValueError):
             pass
+    # Only an explicitly successful workload may skip the business-failure
+    # transcript upload. Unknown/startup outcomes keep that upload mandatory.
+    if environment.get("GITHUB_OUTPUT"):
+        try:
+            with open(environment["GITHUB_OUTPUT"], "a", encoding="ascii") as stream:
+                stream.write("driver_succeeded=" + ("true" if driver_status == 0 else "false") + "\n")
+        except OSError:
+            fatal = fatal or "github_output_write_failed"
     diagnostic_ok = evidence_ok and map_ok and observer_ok and cleanup_ok and marker_ok and fatal is None and not adopted_detected
     # A genuine driver failure always wins; diagnostics cannot turn it green,
     # nor replace its original failure with an observer's unrelated exit code.

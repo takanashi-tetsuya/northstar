@@ -1010,7 +1010,7 @@ jobs:
           --mode regular --fixture "${{ matrix.fixture }}" --rounds 20 --pairs 50
 
       - name: Upload failed listener/readiness diagnostics
-        if: failure()
+        if: ${{ failure() && steps.listener_matrix.outputs.driver_succeeded != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: listener-readiness-regular-${{ matrix.fixture }}-diagnostics-${{ github.run_id }}
@@ -1018,6 +1018,8 @@ jobs:
           # The stress parent and every supervised worker must retain a
           # redacted artifact on failure.  Do not report a green upload step
           # when a preflight/template failure produced no usable evidence.
+          # A successful workload with failed observer diagnostics has no
+          # business-failure log; its required evidence is uploaded below.
           if-no-files-found: error
           retention-days: 14
 

@@ -18,11 +18,15 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('observed_entry', ROOT / 'scripts/listener-readiness-observed-wsl.py')
 ENTRY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ENTRY)
+SPEC = importlib.util.spec_from_file_location('control_observer', ROOT / 'scripts/lib/listener-control-observer.py')
+OBSERVER = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(OBSERVER)
 PG_BIN = None
 
 RUNNER = r'''
@@ -47,7 +51,7 @@ raise SystemExit(entry.run_observed(
 
 def environment():
     return {key: value for key, value in os.environ.items()
-            if not key.startswith(('PG', 'NORTHSTAR_LISTENER_STRESS_'))}
+            if key != 'GITHUB_OUTPUT' and not key.startswith(('PG', 'NORTHSTAR_LISTENER_STRESS_'))}
 
 
 class PostgreSQLIntegration(unittest.TestCase):
@@ -231,6 +235,42 @@ class PostgreSQLIntegration(unittest.TestCase):
         self.assertGreaterEqual(result['backend_disappearances_unclassified'], 1)
         self.assertFalse(result['failure_marker_seen'])
         self.assertEqual([row['type'] for row in records], ['metadata', 'terminal'])
+
+    def test_late_completed_query_is_discarded_and_same_connection_recovers(self):
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            connection = OBSERVER.Libpq(OBSERVER.Limits(20, os.getpid()))
+            self.addCleanup(connection.close)
+            connection.connect()
+            identity = connection.lib.PQbackendPID(connection.conn)
+            original_ready = connection.ready
+
+            def delayed_ready(writing, deadline):
+                self.assertFalse(writing)
+                # The server finishes in 100 ms; simulate the observer being
+                # descheduled past its 3 s deadline with data already waiting.
+                time.sleep(3.2)
+                original_ready(writing, deadline)
+
+            connection.ready = delayed_ready
+            sql = "SELECT json_build_object('at','now','total',0,'rows',json_build_array()) FROM pg_sleep(0.1)"
+            with self.assertRaises(OBSERVER.ObserverError) as error:
+                connection.query(sql, OBSERVER.validate_sample)
+            self.assertEqual(error.exception.code, 'client_query_deadline_drained')
+            connection.ready = original_ready
+            value = connection.query(OBSERVER.activity_sql(self.salt), OBSERVER.validate_sample)
+            self.assertEqual(value['total'], 2)
+            self.assertEqual(connection.lib.PQbackendPID(connection.conn), identity)
+
+    def test_disabled_activity_tracking_remains_a_diagnostic_failure(self):
+        backend = self.backends[0]
+        backend.stdin.write("SET track_activities=off; SELECT 'disabled';\n")
+        backend.stdin.flush()
+        self.assertTrue(select.select([backend.stdout], [], [], 5)[0])
+        self.assertEqual(backend.stdout.readline().strip(), 'disabled')
+        result, wrapper, _ = self.result(self.start_wrapper('raise SystemExit(0)'), 2, 0)
+        self.assertEqual(result['error_code'], 'activity_visibility_incomplete')
+        self.assertFalse(wrapper['diagnostic_ok'])
+        self.assertEqual(wrapper['driver_exit_status'], 0)
 
     def test_failed_attestation_cannot_make_successful_driver_green(self):
         def set_createdb(enabled):

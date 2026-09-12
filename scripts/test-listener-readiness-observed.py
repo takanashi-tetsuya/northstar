@@ -41,10 +41,12 @@ def stop(_sig,_frame):
     stopped=True
 signal.signal(signal.SIGTERM, signal.SIG_IGN if mode=='hang' else stop)
 while not stopped:
+    if mode == 'early':
+        break
     if marker.exists() and mode != 'hang':
         break
     time.sleep(.01)
-good = mode != 'bad'
+good = mode not in {'bad', 'early'}
 (out/'observer-result.json').write_text(json.dumps(dict(
     observer_ok=good,truncated=False,observations_bytes=0,post_window_complete=True)))
 raise SystemExit(0 if good else 2)
@@ -62,6 +64,8 @@ for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):
     signal.signal(sig,entry.stop_requested)
 control=Path(control)
 env=dict(os.environ)
+env['GITHUB_OUTPUT']=str(control/'github-output')
+if mode=='no_subreaper':entry.enable_linux_child_subreaper=lambda:False
 env['NORTHSTAR_LISTENER_STRESS_OBSERVER_SALT_FILE']=str(control/'database-hash-salt')
 env['NORTHSTAR_LISTENER_STRESS_OBSERVER_MAP_FILE']=str(control/'database-map.json')
 status=entry.run_observed(
@@ -95,6 +99,7 @@ class ObservedEntryTests(unittest.TestCase):
         return [sys.executable, "-c", RUNNER, str(ROOT), str(self.control), driver_source, mode]
 
     def run_wrapper(self, source, mode="normal"):
+        self.github_output = self.control / 'github-output'
         result = subprocess.run(self.command(source, mode), capture_output=True, text=True, timeout=8)
         record = json.loads((self.control / "wrapper-result.json").read_text())
         self.assertNotIn("xmpp-test-password", result.stdout + result.stderr)
@@ -111,6 +116,7 @@ assert os.environ['NORTHSTAR_LISTENER_STRESS_FAILURE_MARKER'].endswith('/first-f
         self.assertTrue(record["diagnostic_ok"])
         self.assertEqual(record["driver_exit_status"], 0)
         self.assertTrue(record["case_map_ok"])
+        self.assertEqual(self.github_output.read_text(), 'driver_succeeded=true\n')
 
     def test_driver_failure_is_preserved_when_observer_also_fails(self):
         result, record = self.run_wrapper("raise SystemExit(7)", "bad")
@@ -118,6 +124,7 @@ assert os.environ['NORTHSTAR_LISTENER_STRESS_FAILURE_MARKER'].endswith('/first-f
         self.assertEqual(record["driver_exit_status"], 7)
         self.assertFalse(record["diagnostic_ok"])
         self.assertTrue((self.control / "first-failure.json").exists())
+        self.assertEqual(self.github_output.read_text(), 'driver_succeeded=false\n')
 
     def test_successful_driver_with_unavailable_or_failed_observer_fails_diagnostics(self):
         for mode in ("unavailable", "bad"):
@@ -128,6 +135,33 @@ assert os.environ['NORTHSTAR_LISTENER_STRESS_FAILURE_MARKER'].endswith('/first-f
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertEqual(record["driver_exit_status"], 0)
                 self.assertFalse(record["diagnostic_ok"])
+                self.assertTrue(self.github_output.read_text().endswith('driver_succeeded=true\n'))
+
+    def test_output_write_failure_preserves_driver_failure(self):
+        self.control.joinpath('github-output').mkdir()
+        result, record = self.run_wrapper('raise SystemExit(7)')
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(record['error_code'], 'github_output_write_failed')
+        self.assertFalse(record['diagnostic_ok'])
+
+    def test_output_write_failure_fails_successful_driver(self):
+        self.control.joinpath('github-output').mkdir()
+        result, record = self.run_wrapper('raise SystemExit(0)')
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(record['error_code'], 'github_output_write_failed')
+        self.assertFalse(record['diagnostic_ok'])
+
+    def test_unstarted_driver_cannot_skip_required_failure_logs(self):
+        result, record = self.run_wrapper('raise SystemExit(0)', 'no_subreaper')
+        self.assertEqual(result.returncode, 2)
+        self.assertIsNone(record['driver_exit_status'])
+        self.assertEqual(self.github_output.read_text(), 'driver_succeeded=false\n')
+
+    def test_early_observer_exit_is_reported_once_and_driver_finishes(self):
+        result, record = self.run_wrapper('import time;time.sleep(.3)', 'early')
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(record['driver_exit_status'], 0)
+        self.assertEqual(result.stdout.count('listener_observer_early_exit=2'), 1)
 
     def test_hung_observer_is_reaped_without_replacing_driver_failure(self):
         begin = time.monotonic()

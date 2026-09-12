@@ -138,11 +138,28 @@ class EvidenceTests(unittest.TestCase):
 
     def test_row_cap_duplicates_and_invalid_numbers_rejected(self):
         bad = [sample(*(row(i + 1) for i in range(129))), sample(row(), row()),
-               sample(row(state=None)), sample(row(age=float('nan'))), sample(row(age=True))]
+               sample(row(state='disabled')), sample(row(state=[])),
+               sample(row(age=float('nan'))), sample(row(age=True))]
         for value in bad:
             with self.subTest(total=value['total']):
                 with self.assertRaises(m.ObserverError):
                     m.validate_sample(value)
+
+    def test_starting_backend_is_retained_without_becoming_idle_or_slow(self):
+        e, stream = self.make()
+        e.sample(sample(row(state=None)), 100, 1)
+        self.assertEqual(e.starting_observations, 1)
+        self.assertEqual(e.peak, 1)
+        self.assertEqual(e.slow_events, 0)
+        e.capture(marker(), 100)
+        retained = next(item for item in records(stream) if item['type'] == 'sample')
+        self.assertIsNone(retained['rows'][0]['state'])
+
+    def test_starting_backend_requires_visible_identity_and_zero_activity_ages(self):
+        for value in (row(state=None, start=None), row(state=None, age=1),
+                      {**row(state=None), 'state_age_ms': 1}):
+            with self.subTest(value=value), self.assertRaises(m.ObserverError):
+                m.validate_sample(sample(value))
 
     def test_activity_sql_and_driver_hash_share_exact_pseudonym(self):
         import hashlib
@@ -358,6 +375,7 @@ class LibpqTests(unittest.TestCase):
                 library.PQconnectStartParams.assert_not_called()
     def test_server_error_is_raised_only_after_full_response_drain(self):
         library = mock.Mock()
+        library.PQconsumeInput.return_value = 1
         library.PQsendQuery.return_value = 1
         library.PQflush.return_value = 0
         library.PQisBusy.return_value = 0
@@ -373,6 +391,7 @@ class LibpqTests(unittest.TestCase):
 
     def test_pending_response_deadline_never_becomes_reusable_server_error(self):
         library = mock.Mock()
+        library.PQconsumeInput.return_value = 1
         library.PQsendQuery.return_value = 1
         library.PQflush.return_value = 0
         library.PQisBusy.return_value = 1
@@ -385,6 +404,63 @@ class LibpqTests(unittest.TestCase):
         connection.close()
         connection.close()
         library.PQfinish.assert_called_once_with(7)
+
+    def deadline_connection(self, *, pending_tail=False, value=None):
+        library = mock.Mock()
+        library.PQsendQuery.return_value = 1
+        library.PQflush.return_value = 0
+        library.PQconsumeInput.return_value = 1
+        # Initial pending response, then data arrived while ready() was delayed.
+        library.PQisBusy.side_effect = [1, 0, int(pending_tail)]
+        library.PQgetResult.side_effect = [11, None]
+        library.PQresultStatus.return_value = 2
+        library.PQntuples.return_value = library.PQnfields.return_value = 1
+        library.PQgetisnull.return_value = 0
+        data = json.dumps(sample() if value is None else value).encode()
+        library.PQgetlength.return_value = len(data)
+        library.PQgetvalue.return_value = data
+        connection = self.connection(library)
+        connection.ready = mock.Mock(side_effect=m.ObserverError('client_query_deadline'))
+        return connection, library
+
+    def test_already_arrived_late_response_is_drained_and_discarded_without_waiting(self):
+        connection, library = self.deadline_connection()
+        validator = mock.Mock(wraps=m.validate_sample)
+        with self.assertRaises(m.ObserverError) as result:
+            connection.query('SELECT fixed', validator)
+        self.assertEqual(result.exception.code, 'client_query_deadline_drained')
+        validator.assert_called_once_with(sample())
+        self.assertEqual(library.PQgetResult.call_count, 2)
+        library.PQclear.assert_called_once_with(11)
+        connection.ready.assert_called_once()
+
+    def test_late_rows_without_ready_for_query_are_not_reusable(self):
+        connection, library = self.deadline_connection(pending_tail=True)
+        with self.assertRaises(m.ObserverError) as result:
+            connection.query('SELECT fixed', m.validate_sample)
+        self.assertEqual(result.exception.code, 'client_query_deadline')
+        library.PQgetResult.assert_called_once()
+        library.PQclear.assert_called_once_with(11)
+        connection.ready.assert_called_once()
+
+    def test_drained_late_malformed_sample_still_fails_validation(self):
+        connection, _ = self.deadline_connection(value={'query': 'SENSITIVE'})
+        with self.assertRaises(m.ObserverError) as result:
+            connection.query('SELECT fixed', m.validate_sample)
+        self.assertEqual(result.exception.code, 'unexpected_sample_fields')
+
+    def test_later_server_error_cannot_make_an_oversized_response_reusable(self):
+        connection, library = self.deadline_connection()
+        library.PQisBusy.side_effect = None
+        library.PQisBusy.return_value = 0
+        library.PQgetResult.side_effect = [11, 12, None]
+        library.PQresultStatus.side_effect = [2, 7]
+        library.PQgetlength.return_value = m.MAX_SAMPLE_BYTES + 1
+        library.PQresultErrorField.return_value = b'57014'
+        with self.assertRaises(m.ObserverError) as result:
+            connection.query('SELECT fixed', m.validate_sample)
+        self.assertEqual(result.exception.code, 'sample_byte_limit')
+        self.assertEqual(library.PQgetResult.call_count, 3)
 
 
 SPY = r'''
@@ -407,11 +483,15 @@ class Fake:
         self.lib=types.SimpleNamespace(PQbackendPID=lambda c:987,PQlibVersion=lambda:160015)
     def connect(self):
         if case=='connect_failure':raise m.ObserverError('connection_failed')
-    def query(self,sql):
+    def query(self,sql,validator=None):
         if sql==m.attestation_sql():return {'authorized':1 if case=='attestation_wrong_type' else case!='attestation_failure'}
         self.n+=1
         if case=='server_error':raise m.ObserverError('server_query_failed','57014')
         if case=='recovered' and self.n==1:raise m.ObserverError('server_query_failed','57014')
+        if case in {'late_recovered','late_repeated','late_unrecovered'} and (self.n==1 or case=='late_repeated'):
+            clock[0]+=3.2
+            if case=='late_unrecovered':m.on_signal(signal.SIGTERM,None)
+            raise m.ObserverError('client_query_deadline_drained')
         if case=='pending_error':raise m.ObserverError('client_query_deadline')
         if case=='private_field':return {'at':'now','total':1,'rows':[{'query':'SENSITIVE'}]}
         if case=='unrecovered' and self.n==2:
@@ -424,7 +504,7 @@ class Fake:
         if case=='capture' and self.n==4:
             marker_path.unlink()
             m.write_small(marker_path,{'schema_version':1,'cause':'deadline','monotonic_ns':int(clock[0]*1e9),'realtime_ns':1789123456000000000})
-        if case in {'ok','slow','recovered','parent_loss'} and self.n==3:
+        if case in {'ok','slow','recovered','late_recovered','parent_loss'} and self.n==3:
             if case=='parent_loss':m.parent_identity=lambda pid:None
             else:m.on_signal(signal.SIGTERM,None)
         clock[0]+=.05
@@ -446,17 +526,21 @@ result=json.loads((Path(out)/'observer-result.json').read_text())
 records=[json.loads(line) for line in (Path(out)/'observations.jsonl').read_text().splitlines()]
 assert result['fixture_status']=='not_determined_by_observer'
 assert len(instances)==1 and instances[0].closed==1
-success=case in {'ok','slow','recovered','capture'}
+success=case in {'ok','slow','recovered','late_recovered','capture'}
 assert (code==0)==success and result['observer_ok']==success, (case,code,result)
 assert all('SENSITIVE' not in json.dumps(item) for item in records)
 assert all('a'*32 not in json.dumps(item) for item in records)
-if case in {'ok','slow','recovered'}:
+if case in {'ok','slow','recovered','late_recovered'}:
     assert [record['type'] for record in records]==['metadata','terminal']
     assert result['captured_samples']==0 and not result['failure_marker_seen']
 if case=='slow':assert result['slow_backend_events']==1
-if case=='recovered':
+if case in {'recovered','late_recovered'}:
     assert result['sample_errors']==1 and result['recovered_sample_errors']==1 and result['consecutive_sample_errors']==0 and result['error_code'] is None
 if case=='unrecovered':assert result['error_code']=='sample_error_not_recovered'
+if case in {'late_recovered','late_repeated','late_unrecovered'}:
+    assert result['max_sample_duration_ms']>=3200 and result['sample_overruns']>=1
+if case=='late_unrecovered':assert result['error_code']=='sample_error_not_recovered' and result['recovered_sample_errors']==0
+if case=='late_repeated':assert instances[0].n==3 and result['consecutive_sample_errors']==3
 if case=='server_error':assert instances[0].n==3 and result['consecutive_sample_errors']==3
 if case=='pending_error':assert instances[0].n==1
 if case=='parent_loss':assert result['error_code']=='parent_identity_lost'
@@ -488,7 +572,7 @@ class MainTests(unittest.TestCase):
             with self.subTest(case=case): self.run_case(case)
 
     def test_recovered_server_error_and_unrecovered_shutdown(self):
-        for case in ('recovered', 'unrecovered', 'server_error'):
+        for case in ('recovered', 'unrecovered', 'server_error', 'late_recovered', 'late_repeated', 'late_unrecovered'):
             with self.subTest(case=case): self.run_case(case)
 
     def test_pending_connection_and_parent_failures_close_without_reconnect(self):

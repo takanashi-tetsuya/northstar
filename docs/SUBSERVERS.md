@@ -204,6 +204,19 @@ evidence is capped at 8 MiB and 128 backends; incomplete required diagnostics
 fail the wrapper even when the workload succeeds. A workload failure keeps its
 original exit status.
 
+Startup backends with PostgreSQL's NULL activity state remain visible as NULL,
+with their privilege-gated backend identity and zero activity ages validated;
+they are counted separately, never reported as idle or healthy. Disabled
+tracking and missing visibility still fail diagnostics. The observer keeps its
+2-second server statement timeout and 3-second client query budget. If scheduling
+delays leave an already-completed reply waiting after the client deadline, it
+drains available input without waiting, validates and discards the late sample,
+then requires a fresh sample on the same connection. Pending or malformed replies,
+three consecutive recoverable errors, or shutdown before recovery still fail.
+Summary timing includes failed samples. Diagnostic-only failures upload the
+bounded observer evidence; business-failure logs remain required unless the
+wrapper explicitly reports a successful workload.
+
 First-failure records use Linux `renameat2(RENAME_NOREPLACE)` so concurrent
 publishers cannot replace the winner or change its inode during finalization.
 Observer readiness records are also published only after their JSON is complete.

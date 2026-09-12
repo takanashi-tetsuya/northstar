@@ -188,3 +188,89 @@ cleanup 6.933s。observer 11061 samples、peak 100、7 errors／7 recovered，
 仍因 Federation observer 失敗而整體失敗。ZIP artifact `10300876146`
 SHA-256 `db294b749356e9f9dbdce0cb942f99945fc7e8a9231b409c3312e994db6d3a57`
 已下載核對；不將此舊提交的 MIX 成功替代最新 HEAD 資格。
+
+## 508c8a0 發佈預演及新競態證據（UTC 16:41）
+
+[release run 34704411391](https://github.com/takanashi-tetsuya/northstar/actions/runs/34704411391)
+已完成非 tag 預演：Windows／Linux 原生包、三個 linux/amd64 映像、
+實際 migration／readiness／web assets 和 checksum／attestation 彙整全部通過。
+Windows 提前 PG fixture 測試 11 秒；乾淨 runner 上的 Windows 原生 runtime
+驗證 4750 ms，Docker 預設 UID／entrypoint runtime 驗證 1834.021 ms。
+`verified-release-assets-0.2.0` artifact `10301409817` 的 Actions SHA-256
+為 `c2c6da7cfc6ccf840382d8779336ae6a78ab4736ef5599eb213205bee8630fdb`。
+這是 build-only 預演，沒有 GHCR 發布、tag 資格或 GitHub draft 下載證據；
+之後的 Rust 修復仍須以新提交重新驗證。
+
+`616de3b` Federation job `103574886793` 已完整 20×50 通過，observer、
+cleanup、map 和 evidence bounds 全部成功。`508c8a0` Federation job
+`103583281822` 則於第 4 輪 pair 32 B 再現 5499 ms 心跳故障，rules-read
+3123 ms，watchdog 最大排程延遲 1 ms。pidfd monitor 在 server 退出後即
+停止 workload，外層 supervisor 於 16:33:29.182 建立 command_exit marker，
+這次 30 秒前窗涵蓋 16:33:23.676 的實際停機。前窗 backend 6084 最後在
+16:33:20.535 為 idle/ClientRead；其後 observer query 出現可恢復逾期，
+其他 runtime backend 於 16:33:33 出現 LWLock/LockManager 慢等待。
+仍不足以把單一查詢判定為根因。附件 `10301579020`、`10300878612`
+已下載並核對 SHA-256，分別為
+`25ecbbb35f2adf45e104728e6a17475bd21c9a800a4976d32e0a4424766dea06`、
+`ff5c6b9b6c4a778ae7967721b54f99610aad952d323f90b088fad89f96de1d46`。
+
+`9c22e1c` MIX job `103578694527` 第 10 輪 pair 6 等待反向投遞 30 秒失敗。
+其 B 資料庫仍有兩個已到期、無 lease、無 predecessor 的收件人，但各自
+`authority_present=false`，因此 claim 的 authority join 永遠不成立。
+沒有死信、outbox 或 observer 錯誤可解釋這個狀態。診斷／observer 附件
+`10300947769`、`10300578693` 的 SHA-256 已核對：
+`5467bf1bd77f546ac9e6dff4c74deea83206a1689baffaffcaf8d588158e0402`、
+`d5b3a4972396d8f446a52549c928e09a0152752f32a4bb1b7fd6889fefdce260`。
+
+已用 PostgreSQL 17.11 的可更新 view 和 advisory barrier，令舊 GC 查詢先
+取得 snapshot，再讓 producer 更新 authority／插入 recipient 並提交，
+最後放行 GC 的 row lock。舊 sequence GC 穩定留下 1 recipient／0 authority；
+同類舊 event GC 穩定連帶刪除剛 requeue 的 recipient。這與 PG 的
+[Read Committed 跨資料列快照語義](https://www.postgresql.org/docs/17/transaction-iso.html)
+一致，無需放寬任何 deadline 或以機率等待製造競態。
+
+修復先以有界 SKIP LOCKED 查詢持有候選 row locks，再於同一個明確
+READ COMMITTED transaction 的下一個 statement 重新判斷 dependencies。
+排序 authority 的實際 Rust 回歸已通過（1 test，0.24 秒），涵蓋新 live／
+dead-letter 依賴、空 authority 回收、忙碌 producer 與 page bound；event
+路徑及完整編譯／CI 尚待驗證。沒有修改既有 migration 或擴大回收範圍。
+
+本地已安裝隔離 Rust 1.97.1 並重建當時 508c8a0 的 runtime-test binary。
+本地 1×50 Federation 診斷達到 100 個同時存活 server，observer 1275 samples、
+max query 75.604 ms、0 errors，未重現遠端心跳故障；但本地主機 credential
+排隊令案例跨越既有 300 秒 idle 上限而失敗，workload 約 506 秒。
+此結果是診斷資料，不能替代完整 CI 或聲稱本地矩陣通過。
+
+上述 `616de3b` push run 於 16:47:53 UTC 最終為 **success**，兩組
+20×50 與 CI required 均通過（28 successful jobs）；它是完整成功的
+歷史基準，不代表後續已重現的競態不存在，也不能替代新提交資格。
+
+兩個新的實際 Rust GC 回歸已共同通過（2 tests，0.62 秒）。保留原
+程式的 1,146 項預設 Rust 測試亦通過；測試預設忽略的資料庫案例另跑。
+
+進一步在完成實際 0142 遷移的私有 PG17.11 資料庫量測空佇列查詢：
+完整 `claim_mix_deliveries` SQL 持有 48 個 relation locks，18 fast-path、
+30 shared-lock-table；單表 `EXISTS` 則為 8／8／0。兩者使用同一個
+`pg_locks` 自身 backend 量測方式，數字含量測查詢本身的鎖。
+為空佇列加上單表 committed presence read；只有為空才返回，有資料仍
+執行原有完整 lease／transport owner／ordering claim，同一次 pool acquire
+持有的連線用於兩個步驟。沒有缓存空結果、改動 retained wake、掃描間隔
+或 deadline。新增真實 event-table exclusive lock 測試，要求空佇列仍能
+返回，之後提交的正常投遞仍可領取／確認。完整 regression 與新 CI 待驗證。
+
+空佇列真實鎖阻塞／新插入恢復案例及兩個 GC 競態均通過；同一 binary
+的預設 Rust 測試為 1146 passed／192 ignored，Clippy all-targets 且
+`-D warnings` 通過。擴大執行到 8 個 MIX 資料庫案例時，7 個通過，舊
+`an_expired_unowned_head_blocks_until_terminalized` 在測試準備時違反
+`expires_at > created_at`，尚未執行 claim。它先前未列於 CI script。
+改將測試事件的 created_at 和 expires_at 一起設為合法過去時間，保留
+資料庫 constraint，再確認終止後的 successor 並清理其實際 lease／容量；
+新增此 exact ignored test 至正常 MIX CI。這是 fixture 修復，非放寬 expiry
+或 ordering。最終 8 個案例尚待重新編譯驗證。
+
+最終同一份 Rust test binary 已通過 **8 個真實 PG17.11 回歸（2.28 秒）**
+及 **1146 個預設單元測試（4.18 秒；192 個 DB／外部 fixture 測試另行
+忽略）**。8 個回歸包括原容量帳本、4 個 ordering／wake／requeue 案例，
+以及新增的 3 個 GC／empty-claim 案例。38 項 MIX lifecycle boundary
+mutation tests、格式與文件／程序隔離檢查也通過。新 CI 仍需驗證完整
+20×50、角色邊界與所有發佈包。

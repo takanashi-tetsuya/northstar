@@ -78,6 +78,18 @@ run_exact_ignored() {
 run_exact_ignored \
   db::mix::pam_durability_integration_tests::pam_restart_and_result_claims_preserve_authority_and_token_fencing
 
+run_exact_ignored \
+  db::mix::delivery_sequence_retention_integration_tests::sequence_gc_preserves_a_producer_committed_after_its_snapshot
+
+run_exact_ignored \
+  db::mix::delivery_sequence_retention_integration_tests::event_gc_preserves_a_requeue_committed_after_its_snapshot
+
+run_exact_ignored \
+  db::mix::delivery_sequence_retention_integration_tests::empty_delivery_claim_avoids_the_event_lock_and_recovers_after_insert
+
+run_exact_ignored \
+  db::mix::delivery_route_wake_integration_tests::an_expired_unowned_head_blocks_until_terminalized
+
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline \
   db::mix::mam_integration_tests::mix_anon_misc_permissions_are_atomic_and_private \

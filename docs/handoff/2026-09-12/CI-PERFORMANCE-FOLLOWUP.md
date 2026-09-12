@@ -577,3 +577,32 @@ observer 80 個有效樣本、peak 8、0 query errors，最大 2.225 ms，wrappe
 預期值誤留 50，雖業務與 observer 成功，wrapper 正確拒絕；改用既有
 `expected_pairs=4` 參數後完整重跑成功。這是本機修改驗證，不能替代
 遠端完整 20×50 的通過證據。
+
+## 修正 detached-pipe 自測的退出競態（UTC 21:07）
+
+`f62e689` 的 [PR Web static checks 103619660942](https://github.com/takanashi-tetsuya/northstar/actions/runs/34718318965/job/103619660942)
+在既有 supervisor self-test 回報 `external pipe holder was not adopted
+by the subreaper`；相同提交的 push Web static checks 已通過。真正的
+Federation／MIX smoke 及 listener diagnostic preflight 亦通過。
+
+該自測用 `tail -f /dev/null` 保留 inherited stdout，但 tail 會監看輸出
+reader 並在它關閉後自行退出。監督器原本先完成 output finalization，
+再掃描 adopted descendants，因此 tail 的自動退出與掃描會競爭。
+本機 GNU 9.7／uutils 0.8.0 均實測在關閉 reader 後退出；未注入延遲
+時，各自 25 次接管案例全過。只在臨時 supervisor 副本的 adoption
+scan 前加入 1.1 秒排程延遲，舊案例第二次重現同樣失敗，stderr
+保留 `command_output_drain_elapsed`／`command_output_pipe_held`。
+監督器仍正確回報 lifecycle failure，不能把它描述成漏報成功。
+
+自測改用保留同一 FD、繼承 ignored TERM 的 `sleep 30`，不隨 reader
+關閉而退出；仍要求 detached detection、原本 9 秒 containment 上限、
+精確 PID／birth-time 清理、程序消失及 exit 1。相同排程延遲下新案例
+連續三次通過。此變更沒有修改 supervisor 或產品 deadlines，也沒有
+等待完整 30 秒。若 detection 斷言再次失敗，現在會保留最多 16 KiB
+的該案例 stderr，而不是只留下缺少診斷的泛用錯誤。
+完整 `test-github-ci-supervisor.sh`（含其 16 項 marker 回歸）、shell syntax、
+文件一致性與 diff 檢查通過。
+
+`b5a3b9d` 的 [MIX 103608673765](https://github.com/takanashi-tetsuya/northstar/actions/runs/34714000982/job/103608673765)
+完整 20×50 於 UTC 21:02:48 通過，observer、diagnostic、map、cleanup
+均成功；其 Federation 已知 cleanup failure 仍使整體 CI 失敗。

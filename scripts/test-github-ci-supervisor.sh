@@ -562,6 +562,9 @@ assert_pid_gone_or_zombie "$pipe_holding_child" pipe-holding
 # every member of the original group exits. The Linux child subreaper must
 # adopt, identify, and terminate it rather than waiting for a pipe-drain
 # timeout or using a name/global cleanup.
+# Do not use `tail -f`: it monitors stdout and can exit when output finalization
+# closes the reader, racing the later adoption scan. Sleep retains the FD and
+# the inherited ignored TERM until the supervisor contains this exact child.
 external_pipe_child_file="$runtime_dir/external-pipe-child.pid"
 external_pipe_ready_file="$runtime_dir/external-pipe-ready"
 external_pipe_started=$SECONDS
@@ -569,7 +572,7 @@ set +e
 python3 "$supervisor" \
   --timeout-seconds 10 --kill-after-seconds 1 --require-linux-subreaper \
   --log-file "$runtime_dir/external-pipe-holder.log" -- \
-  bash -c "setsid bash -c 'trap \"\" TERM; record_process_identity \"\$\$\" \"\$1\"; printf ready > \"\$2\"; exec tail -f /dev/null' bash \"\$1\" \"\$2\" & for ((attempt = 0; attempt < 100; attempt += 1)); do [[ -s \"\$2\" ]] && exit 0; sleep 0.01; done; exit 70" \
+  bash -c "setsid bash -c 'trap \"\" TERM; record_process_identity \"\$\$\" \"\$1\"; printf ready > \"\$2\"; exec sleep 30' bash \"\$1\" \"\$2\" & for ((attempt = 0; attempt < 100; attempt += 1)); do [[ -s \"\$2\" ]] && exit 0; sleep 0.01; done; exit 70" \
   bash "$external_pipe_child_file" "$external_pipe_ready_file" \
   >"$runtime_dir/external-pipe-holder.stdout" 2>"$runtime_dir/external-pipe-holder.stderr" &
 external_pipe_supervisor_pid=$!
@@ -588,8 +591,10 @@ external_pipe_elapsed=$((SECONDS - external_pipe_started))
 (( external_pipe_elapsed < 9 )) \
   || fail "external pipe-holder containment took $external_pipe_elapsed seconds"
 untrack_pid "$external_pipe_supervisor_pid"
-grep -Fq 'phase=command_detached_descendants_detected' "$runtime_dir/external-pipe-holder.stderr" \
-  || fail 'external pipe holder was not adopted by the subreaper'
+if ! grep -Fq 'phase=command_detached_descendants_detected' "$runtime_dir/external-pipe-holder.stderr"; then
+  tail -c 16384 "$runtime_dir/external-pipe-holder.stderr" >&2
+  fail 'external pipe holder was not adopted by the subreaper'
+fi
 assert_pid_gone_or_zombie "$external_pipe_child" external-pipe-holder
 [[ "$external_pipe_status" == 1 ]] \
   || fail "external pipe holder returned $external_pipe_status, expected 1"

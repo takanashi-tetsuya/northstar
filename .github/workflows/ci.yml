@@ -457,6 +457,7 @@ jobs:
           python3 scripts/xep0487-socket-activation.py --self-test
           python3 scripts/check-github-ci-summary.py
           bash scripts/check-github-ci-run.sh
+          python3 scripts/test-ci-console-startup.py
           bash scripts/test-github-ci-supervisor.sh
           bash scripts/test-listener-stress-worker.sh
           python3 scripts/test-listener-stress-phases.py

@@ -433,11 +433,13 @@ def spawn_blocked_console_forwarder():
     os.close(input_read_fd)
     os.close(acknowledgement_write_fd)
     os.close(blocked_write_fd)
-    return module.ConsoleForwarder(
+    forwarder = module.ConsoleForwarder(
         process=helper,
         input_write_fd=input_write_fd,
         acknowledgement_read_fd=acknowledgement_read_fd,
     )
+    module.wait_console_forwarder_ready(forwarder)
+    return forwarder
 
 try:
     module.subprocess.Popen = record_fixture_popen

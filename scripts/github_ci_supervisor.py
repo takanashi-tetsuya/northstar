@@ -34,6 +34,7 @@ OUTPUT_DRAIN_SECONDS = 5.0
 OUTPUT_STOP_SECONDS = 1.0
 KILL_REAP_SECONDS = 2.0
 CONSOLE_FORWARD_SECONDS = 1.0
+CONSOLE_START_SECONDS = 5.0
 CONSOLE_STOP_SECONDS = 1.0
 DEFAULT_MAX_LOG_BYTES = 16 * 1024 * 1024
 MIN_MAX_LOG_BYTES = 1024
@@ -281,6 +282,9 @@ def console_forwarder_main(argv: list[str]) -> int:
     if not args.console_forwarder or args.input_fd < 0 or args.acknowledgement_fd < 0:
         return 2
     try:
+        # Startup is separate from delivery: importing this module on a busy
+        # runner must not consume the first frame's stdout-write deadline.
+        os.write(args.acknowledgement_fd, b"\x00")
         while True:
             payload = read_console_forwarder_frame(args.input_fd)
             if payload is None:
@@ -300,6 +304,28 @@ def console_forwarder_main(argv: list[str]) -> int:
                 os.write(args.acknowledgement_fd, b"\x01")
     except (BrokenPipeError, OSError, ValueError):
         return 1
+
+
+def wait_console_forwarder_ready(forwarder: ConsoleForwarder) -> None:
+    """Require the writer's startup byte before starting any fixture output."""
+
+    deadline = time.monotonic() + CONSOLE_START_SECONDS
+    while True:
+        if forwarder.process.poll() is not None:
+            raise OSError(errno.EIO, "console forwarder exited before readiness")
+        try:
+            ready = os.read(forwarder.acknowledgement_read_fd, 1)
+        except BlockingIOError:
+            ready = None
+        if ready == b"\x00":
+            return
+        if ready is not None:
+            raise OSError(errno.EIO, "console forwarder readiness protocol failed")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(errno.ETIMEDOUT, "console forwarder startup deadline")
+        select.select([forwarder.acknowledgement_read_fd], [], [],
+                      min(POLL_INTERVAL_SECONDS, remaining))
 
 
 def spawn_console_forwarder() -> ConsoleForwarder:
@@ -338,6 +364,7 @@ def spawn_console_forwarder() -> ConsoleForwarder:
             input_write_fd=input_write_fd,
             acknowledgement_read_fd=acknowledgement_read_fd,
         )
+        wait_console_forwarder_ready(forwarder)
         spawned = True
         return forwarder
     except Exception:
@@ -1361,6 +1388,10 @@ def main() -> int:
                     flush=True,
                 )
                 return finish_without_child(1, "console_forwarder_spawn_failed")
+            if interrupted_by:
+                return finish_without_child(
+                    128 + int(interrupted_by[-1]), "parent_signal"
+                )
             try:
                 command_environment = None
                 if marker_path:

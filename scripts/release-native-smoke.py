@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import socket
 import subprocess
@@ -15,6 +16,13 @@ import urllib.request
 SPEC = importlib.util.spec_from_file_location('readiness', Path(__file__).with_name('wait-test-readiness.py'))
 READINESS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(READINESS)
+
+
+def print_fixture_diagnostics(log, path):
+    """Keep early tool failures observable without emitting configured DSNs."""
+    log.flush()
+    for line in path.read_text(errors='replace').splitlines()[-30:]:
+        print(re.sub(r'postgres(?:ql)?://\S+', '[REDACTED_DATABASE_URL]', line))
 
 
 def run(package, pg_bin, openssl, evidence, image=None):
@@ -42,8 +50,12 @@ def run(package, pg_bin, openssl, evidence, image=None):
             def command(arguments, *, env=environment, cwd=root, timeout=30):
                 return subprocess.run(arguments, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                                       stdout=log, stderr=subprocess.STDOUT, check=True, timeout=timeout)
-            command([tool('initdb'), '-D', str(data), '--username=xmpp_test', '--auth-local=trust',
-                     '--auth-host=scram-sha-256', '--pwfile=' + str(password), '--no-locale', '--encoding=UTF8'])
+            try:
+                command([tool('initdb'), '-D', str(data), '--username=xmpp_test', '--auth-local=trust',
+                         '--auth-host=scram-sha-256', '--pwfile=' + str(password), '--no-locale', '--encoding=UTF8'])
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+                print_fixture_diagnostics(log, root / 'fixture.log')
+                raise
             with socket.socket() as reservation:
                 reservation.bind(('127.0.0.1', 0))
                 port = reservation.getsockname()[1]
@@ -165,11 +177,7 @@ def run(package, pg_bin, openssl, evidence, image=None):
             except BaseException:
                 # Diagnostics contain only this disposable fixture. Redact the
                 # fixed test DSN before emitting a bounded tail to the CI log.
-                log.flush()
-                lines = (root / 'fixture.log').read_text(errors='replace').splitlines()[-30:]
-                import re
-                for line in lines:
-                    print(re.sub(r'postgres(?:ql)?://\S+', '[REDACTED_DATABASE_URL]', line))
+                print_fixture_diagnostics(log, root / 'fixture.log')
                 raise
             finally:
                 try:

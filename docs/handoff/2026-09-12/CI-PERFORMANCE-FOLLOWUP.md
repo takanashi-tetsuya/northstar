@@ -96,3 +96,26 @@ Observer artifact `10299338235` 的 SHA-256 已與 Actions 上傳紀錄核對：
 沒有連續錯誤、failure marker 或遺失的必要證據；wrapper 的 observer、
 diagnostic、cleanup、case map 和 evidence bounds 均成功。
 此 run 的最終 CI required 仍因已記錄的 Federation 第 11 輪故障失敗。
+
+## b998f65 的日誌轉送啟動故障
+
+[Federation job 103572063185](https://github.com/takanashi-tetsuya/northstar/actions/runs/34700460041/job/103572063185)
+在第 1 輪第 41 對的準備階段退出。第一個失敗是 supervisor 的
+`console_delivery_stalled`，該 worker 僅輸出 `listener_certificate_cache=miss`。
+Observer 全程正常、157 個樣本且最高 runtime backend 為 0，說明此時尚未
+進入伺服器執行階段；不能把它歸因於之前的 runtime-control 心跳故障。
+完整診斷 SHA-256：`2afffad6478744537843dc68899c0ec2ca41428ffb75cb1e439762def9eec4c3`；
+observer SHA-256：`9d410d533570f534c96fd6512baf2cc83500fd860213b46b8f2fc9792ccf9db9`。
+
+原 supervisor 啟動轉送子程序後立即啟動 fixture，未先確認轉送端已完成
+Python 匯入與初始化，因此首筆輸出的 1 秒期限包含子程序啟動時間。
+新流程先等待私有 pipe 的獨立啟動確認（最多 5 秒），確認後才啟動 fixture；
+每筆輸出的傳送期限仍為 1 秒，真正阻塞仍失敗，未就緒的 helper 也必須
+終止、回收並關閉管線。收到取消時不再啟動新的 fixture。
+
+四個真實程序測試通過：延遲 1.5 秒才啟動仍可正確傳送兩筆資料、永不就緒、
+錯誤確認位元組、提前退出。後三者皆驗證有界失敗、程序回收與 FD 無洩漏。
+完整 supervisor 回歸（含真正阻塞的 stdout、程序群組與 failure marker）
+通過。移除啟動確認的 mutation 會重現 `console_delivery_stalled`，證明
+修正涵蓋一條可重現的故障路徑；遠端故障沒有 helper 啟動時間紀錄，不能
+據此斷言所有傳送延遲都由啟動造成，仍須完整矩陣驗證。

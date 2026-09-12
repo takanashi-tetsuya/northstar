@@ -2133,17 +2133,25 @@ impl AppState {
             process_secret.zeroize();
             keyrings?
         };
+        let startup_phase = crate::logging::StartupPhase::begin("mix_delivery_capacity_audit");
         db::audit_mix_delivery_capacity_ledger(&pool)
             .await
             .context("MIX delivery capacity ledger failed startup reconciliation")?;
+        startup_phase.complete();
+        let startup_phase = crate::logging::StartupPhase::begin("mix_pam_capacity_audit");
         db::audit_mix_pam_operation_capacity(&pool)
             .await
             .context("MIX-PAM operation capacity authority failed startup audit")?;
+        startup_phase.complete();
+        let upload_startup_phase =
+            crate::logging::StartupPhase::begin("upload_storage_initialization");
         let upload_startup_audits;
         let (upload_safety_gate, upload_namespace, upload_authority_generation, upload_store) =
             if config.upload_mode.keeps_storage_runtime() {
                 let upload_safety_gate = UploadSafetyGate::new();
                 let upload_namespace = upload_storage_namespace_id(&config)?;
+                let startup_phase =
+                    crate::logging::StartupPhase::begin("upload_namespace_and_policy");
                 let namespace_generation = db::validate_upload_storage_backend(
                     &pool,
                     &config.upload_storage_backend,
@@ -2166,6 +2174,8 @@ impl AppState {
                     namespace: namespace_generation,
                     capacity_policy: capacity_policy_generation,
                 };
+                startup_phase.complete();
+                let startup_phase = crate::logging::StartupPhase::begin("upload_authority_audit");
                 let authority_audit_started_at = tokio::time::Instant::now();
                 let authority_audit = db::audit_upload_capacity_authority(
                     &pool,
@@ -2185,6 +2195,9 @@ impl AppState {
                         authority_audit.violation_count()
                     );
                 }
+                startup_phase.complete();
+                let startup_phase =
+                    crate::logging::StartupPhase::begin("upload_ledger_reconciliation");
                 let ledger_audit_started_at = tokio::time::Instant::now();
                 let capacity_reconciliation = db::reconcile_upload_capacity_ledger(&pool)
                     .await
@@ -2199,6 +2212,7 @@ impl AppState {
                         capacity_reconciliation.mismatch_count()
                     );
                 }
+                startup_phase.complete();
                 upload_safety_gate.establish(upload_authority_generation, recovery_draining);
                 let upload_store: Arc<dyn UploadStore> = match config
                     .upload_storage_backend
@@ -2351,6 +2365,7 @@ impl AppState {
                     None,
                 )
             };
+        upload_startup_phase.complete();
         let extdisco_service = crate::services::extdisco::ExtDiscoService::new(
             config.raw.turn_shared_secret.take(),
             config.turn_credentials_ttl_seconds,

@@ -18,6 +18,30 @@ static CONSOLE_COUNTERS: OnceLock<ConsoleCounters> = OnceLock::new();
 static SHUTDOWN_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 static SHUTDOWN_SPAWN_FAILURES: AtomicU64 = AtomicU64::new(0);
 
+/// Startup-only timing, with fixed labels and no configuration or SQL values.
+/// A missing completion leaves the last started phase visible after a failure.
+/// This never adds a task, query, retry, or deadline to the operation it measures.
+pub(crate) struct StartupPhase {
+    name: &'static str,
+    started: std::time::Instant,
+}
+
+impl StartupPhase {
+    pub(crate) fn begin(name: &'static str) -> Self {
+        let started = std::time::Instant::now();
+        tracing::info!(startup_phase = name, "startup phase started");
+        Self { name, started }
+    }
+
+    pub(crate) fn complete(self) {
+        tracing::info!(
+            startup_phase = self.name,
+            elapsed_ms = self.started.elapsed().as_secs_f64() * 1000.0,
+            "startup phase completed"
+        );
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ConsoleCounters {
     queue: ErrorCounter,

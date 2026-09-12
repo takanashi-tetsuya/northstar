@@ -384,3 +384,56 @@ cache usage API，不能證實該 repo 的容量或淘汰原因。
 4 項 CI performance contract、9 項 release gate、5 項 runtime artifact
 身分／篡改回歸、Actionlint 及文件一致性全部通過。新 runner 上的共用 key
 首次建立與後續命中仍需遠端驗證；Rust 與所有測試期限未改動。
+
+## 啟動阶段計時與最新壓測證據（UTC 18:43）
+
+`159d521` 的兩組完整 20×50 現已通過：Federation job `103591122358`
+約 56 分鐘，MIX job `103591122428` 約 69 分鐘，後者 20 輪及 observer
+完整性、清理全部成功。該提交的整體 CI 仍因已於 cfae924 修正的 relay
+自測失敗而為 failure，不能作為當前 release commit 的資格。
+
+`fa61a04` push Rust test job `103599878230` 從 8f8275e 舊配置 key 還原
+2,690,466,255-byte cache，Cargo test compile 20.72 秒，並成功建立
+`-shared` key。PR job `103599969110` 也建立其 PR scope 的共用 key。
+這證實首次暖機／建立，尚不能聲稱後續 exact-key 命中或整體 CI 已縮短。
+
+`cfae924` MIX job `103592415832` 在第 8 輪 pair 50 的 B 節點等待
+backend HTTP `/readyz` 超過原共用 15 秒 deadline。角色檢查訊息為
+18:03:51.835，ABUSE key 訊息為 18:04:01.900，readiness record 為
+18:04:03.578；這 10 秒空白涵蓋 schema／容量／AppState 稽核，現有
+日誌無法細分。Observer 3844 samples、peak 100、1 次已恢復 57014，
+其 61 個 failure samples 與清理完整；前窗多為 idle/ClientRead，不能
+把控制連線樣本當成啟動 primary-pool SQL 的慢查詢證據。附件
+`10302473392`／`10302798033` 已核對 SHA-256：
+`13bbdd9abcb0dc726bd42ac56abec909cd112d569bce53a8fa2eb8fc52fd571b`、
+`0490bce0d7484fd3ba7b258bc34d4e67b5934cf6eba2c912ab46f03ca0b0b577`。
+
+另 `2832572` Federation job `103596225849` 第 7 輪及 `fa61a04`
+Federation job `103600818015` 第 1 輪都因 observer 無法在 3 秒有效期加
+2 秒 drain 內完成而退出；此為單次未 drain 的 client_query_deadline，
+不同於先前連續 3 次已 drain 的 57014。fa61a04 先取得 356 個有效样本，
+最後一個為 18:35:48.204，18:35:54.409 退出，沒有較早業務 marker。
+其 all-live 至 cleanup 前 14.506 秒，CPU usage 增加 57.974 秒，4 核
+idle ticks 均未增加；可用記憶體仍有 6,884,972 KiB，I/O full pressure
+未增加。可確認 CPU 飽和，尚未定位到特定程序／函式，不更改 observer
+或 workload 的期限、並行數與通過判準。
+
+2832572 附件 `10302764409`／`10303730144` 已核對 SHA-256：
+`4445df7aa6aecfb2e4b2b04ed9d8a72bf308722f3834431f12c9d961796ad4b4`、
+`32e6096dbe9c6cfb858d710f3bc7dc4d5419c47219ee67144773f74817a73442`。
+fa61a04 附件 `10303103444`／`10303622363` 同樣已核對：
+`313f52d1e48570f1f22af9dfde08070919c6b3c6fb46d87630dfb1d4c89d0b56`、
+`dd155f4bf951799aa564e4a6336506b19436e5b49266deb888a1379d2c2cfd88`。
+
+為填補啟動診斷空白，新增 12 個固定名稱的 INFO 階段開始／完成事件，
+使用 monotonic elapsed_ms；錯誤或取消會留下未完成的階段。覆蓋控制
+連線預留、primary pool 與角色、schema、deployment capacity、credential
+maintenance、AppState、MIX／PAM／upload 稽核。只經原有 bounded logging
+sink 寫入固定名稱與數字，不收集設定、SQL、身分或憑證，不新增 query、
+task、retry 或 deadline。
+
+新 runtime-test binary 在自有 PG17.11 fixture、primary pool=2、Tokio=1
+通過 328.490 ms 健康啟動，12 個開始／完成事件皆完整。刻意破壞自有
+migration checksum 時仍拒絕啟動，最後未完成階段正確為 schema_verification。
+Clippy all-targets 且 `-D warnings`、架構／subserver／migration boundary
+與文件一致性檢查通過；遠端壓測仍待新提交驗證。

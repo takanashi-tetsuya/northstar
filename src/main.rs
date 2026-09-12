@@ -292,6 +292,7 @@ async fn run() -> Result<()> {
     // every startup database operation.  Runtime policy and service-control
     // authority must survive a cold-start cohort that would otherwise fill
     // the traffic pool before it can establish its own isolated connection.
+    let startup_phase = logging::StartupPhase::begin("runtime_control_reservation");
     let mut runtime_control_connection = state::reserve_runtime_control_connection(&config).await?;
     if process_role.embeds_retention() {
         // Retention ownership shares this already-reserved physical session;
@@ -299,6 +300,8 @@ async fn run() -> Result<()> {
         // cancels this process if the exact connection stops making progress.
         subservers::claim_maintenance_on_connection(&mut runtime_control_connection).await?;
     }
+    startup_phase.complete();
+    let startup_phase = logging::StartupPhase::begin("primary_pool_and_role_attestation");
     let pool_options = PgPoolOptions::new()
         .max_connections(config.database_max_connections)
         .min_connections(config.database_min_connections);
@@ -319,21 +322,27 @@ async fn run() -> Result<()> {
     } else {
         db::attest_runtime_role(&pool).await?;
     }
+    startup_phase.complete();
+    let startup_phase = logging::StartupPhase::begin("schema_verification");
     db::verify_schema(&pool, &config.domain)
         .await
         .context("database schema verification failed")?;
+    startup_phase.complete();
     // Startup reconciliation owns a PostgreSQL advisory lock with its own
     // transaction-local 30-second bound. Do not wrap that authoritative
     // serialization in the much shorter runtime lease-I/O budget: a peer may
     // be legitimately committing the same epoch while this process has not
     // yet received CPU time. The database lock remains fail-closed and is
     // released automatically if its owner dies.
+    let startup_phase = logging::StartupPhase::begin("deployment_capacity_reconciliation");
     db::reconcile_deployment_capacity(
         &pool,
         db::DeploymentCapacityConfiguration::from_config(&config)?,
     )
     .await
     .context("could not establish deployment-wide capacity authority")?;
+    startup_phase.complete();
+    let startup_phase = logging::StartupPhase::begin("credential_maintenance");
     if !config.scram_sha1_enabled {
         let removed = db::clear_scram_sha1_credentials(&pool).await?;
         if removed > 0 {
@@ -341,10 +350,12 @@ async fn run() -> Result<()> {
         }
     }
     db::ensure_bootstrap_admin(&pool, &config).await?;
+    startup_phase.complete();
     let components = components::registry();
     let (federation, federation_rx) =
         s2s::FederationRouter::channel(pool.clone(), &config, components.clone());
     let cancel = CancellationToken::new();
+    let startup_phase = logging::StartupPhase::begin("application_state");
     let state = AppState::new(
         config,
         pool,
@@ -354,6 +365,7 @@ async fn run() -> Result<()> {
         cancel.clone(),
     )
     .await?;
+    startup_phase.complete();
     state.install_service_shutdown(cancel.clone())?;
 
     let worker_registry = Arc::clone(state.worker_registry());

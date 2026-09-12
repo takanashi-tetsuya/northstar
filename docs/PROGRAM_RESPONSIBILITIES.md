@@ -491,6 +491,12 @@ Its reserved PostgreSQL connection uses the fixed application name
 `northstar-runtime-control`, preserving the original connection options and
 connection budget. On heartbeat expiry, the existing watchdog also records
 `watchdog_tick_delay_ms`, the delay between its scheduled tick and observation.
+It also records `max_attempt_watchdog_tick_delay_ms`, the greatest observed
+tick delay over that attempt, including earlier nonterminal ticks. The timer's
+delay policy can schedule a fresh deadline after a late tick, so a zero delay
+on the final tick alone does not exclude earlier scheduling delays. The maximum
+is an observation across the whole attempt, not a measurement of the current
+query or proof of its cause; it neither changes nor resets the heartbeat limit.
 The phase duration includes client polling and network waits; it does not
 measure PostgreSQL execution time. Normal shutdown suppresses both warnings.
 An unchanged federation setting does not wait for socket writes; a real policy

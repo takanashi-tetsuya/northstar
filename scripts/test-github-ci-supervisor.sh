@@ -795,4 +795,5 @@ set -e
 untrack_pid "$low_output_supervisor_pid"
 [[ "$low_output_status" == 0 ]] || fail "low-output fixture returned $low_output_status"
 
+python3 "$project_dir/scripts/test-github-ci-failure-marker.py"
 printf 'GitHub CI supervisor process-group regression tests passed\n'

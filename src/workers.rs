@@ -67,6 +67,7 @@ enum AttemptExit {
     HeartbeatExpired {
         limit: Duration,
         watchdog_delay: Duration,
+        max_attempt_watchdog_delay: Duration,
     },
     ConsecutiveErrors {
         count: u32,
@@ -558,6 +559,10 @@ impl WorkerRegistry {
                     watchdog_period,
                 );
                 watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                // Delay schedules a fresh deadline after a late tick. Retain
+                // earlier observations so a timely terminal tick cannot hide
+                // a previous scheduling delay in this attempt.
+                let mut max_attempt_watchdog_delay = Duration::ZERO;
                 loop {
                     tokio::select! {
                         _ = cancel.cancelled() => {
@@ -595,6 +600,8 @@ impl WorkerRegistry {
                         scheduled = watchdog.tick() => {
                             let watchdog_delay = tokio::time::Instant::now()
                                 .saturating_duration_since(scheduled);
+                            max_attempt_watchdog_delay =
+                                max_attempt_watchdog_delay.max(watchdog_delay);
                             if let Some((count, error)) = self.consecutive_error(
                                 name,
                                 attempt_generation,
@@ -603,7 +610,11 @@ impl WorkerRegistry {
                             }
                             if let Some(limit) = max_silence {
                                 if self.heartbeat_expired(name, attempt_generation, limit) {
-                                    break AttemptExit::HeartbeatExpired { limit, watchdog_delay };
+                                    break AttemptExit::HeartbeatExpired {
+                                        limit,
+                                        watchdog_delay,
+                                        max_attempt_watchdog_delay,
+                                    };
                                 }
                             }
                         }
@@ -637,11 +648,14 @@ impl WorkerRegistry {
                 AttemptExit::HeartbeatExpired {
                     limit,
                     watchdog_delay,
+                    max_attempt_watchdog_delay,
                 } => {
                     tracing::warn!(
                         worker = name,
                         heartbeat_limit_ms = limit.as_millis() as u64,
                         watchdog_tick_delay_ms = watchdog_delay.as_millis() as u64,
+                        max_attempt_watchdog_tick_delay_ms =
+                            max_attempt_watchdog_delay.as_millis() as u64,
                         "worker heartbeat expired at watchdog observation"
                     );
                     format!(
@@ -1512,6 +1526,10 @@ mod tests {
                 assert_eq!(fields["worker"], name);
                 assert_eq!(fields["heartbeat_limit_ms"], 30);
                 assert!(fields["watchdog_tick_delay_ms"].as_u64().unwrap() >= 20);
+                assert_eq!(
+                    fields["max_attempt_watchdog_tick_delay_ms"],
+                    fields["watchdog_tick_delay_ms"]
+                );
                 assert_eq!(
                     registry.critical_failure().as_deref(),
                     Some("critical worker test-delayed-watchdog failed: worker heartbeat exceeded the 30 ms silence limit")

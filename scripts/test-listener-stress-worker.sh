@@ -218,6 +218,9 @@ grep -Fq 'try:' "$mix_federation_python" \
   || { echo "MIX federation verifier no longer protects caller fixture environment restoration" >&2; exit 1; }
 grep -Fq 'finally:' "$mix_federation_python" \
   || { echo "MIX federation verifier no longer restores caller fixture environment after import failure" >&2; exit 1; }
+python3 "$project_dir/scripts/test-listener-stress-diagnostics.py"
+python3 "$project_dir/scripts/test-listener-readiness-observed.py"
+python3 "$project_dir/scripts/test-listener-control-observer.py"
 python3 "$mix_federation_python" --phase-self-test
 federation_python="$project_dir/scripts/federation-wsl.py"
 integration_python="$project_dir/scripts/integration-wsl.py"

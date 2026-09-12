@@ -971,8 +971,8 @@ jobs:
     env:
       # The stress driver queries the built binary's runtime-pool manifest and
       # adds the MIX fixture's one direct control connection per pair. 672 is
-      # therefore checked against a 650-connection 50-pair requirement rather
-      # than treated as unexplained generic headroom.
+      # therefore checked against a 650-connection 50-pair requirement plus
+      # one dedicated observer connection, without generic headroom.
       NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "672"
       NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
@@ -995,17 +995,18 @@ jobs:
       # unused cache and mistake that for cluster-runtime coverage; Redis
       # pressure remains owned by the cluster/MUC fixture work.
       - name: Install PostgreSQL client and listener diagnostic tools
-        run: bash scripts/ci-install-ubuntu-packages.sh iproute2 postgresql-client
+        run: bash scripts/ci-install-ubuntu-packages.sh iproute2 postgresql-client libpq5
 
       - name: Populate the locked dependency cache
         run: cargo fetch --locked
 
       - name: Run required regular listener/readiness matrix
+        id: listener_matrix
         env:
           XMPP_TEST_SYSTEM_TOOLCHAIN: "true"
           XMPP_TEST_OFFLINE: "false"
         run: >-
-          bash scripts/listener-readiness-stress-wsl.sh
+          python3 scripts/listener-readiness-observed-wsl.py
           --mode regular --fixture "${{ matrix.fixture }}" --rounds 20 --pairs 50
 
       - name: Upload failed listener/readiness diagnostics
@@ -1017,6 +1018,22 @@ jobs:
           # The stress parent and every supervised worker must retain a
           # redacted artifact on failure.  Do not report a green upload step
           # when a preflight/template failure produced no usable evidence.
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload bounded control observer evidence
+        if: ${{ always() && steps.listener_matrix.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: listener-control-observer-${{ matrix.fixture }}-${{ github.run_id }}
+          # No salts, temporary publication files, SQL or raw database names.
+          path: |
+            ${{ runner.temp }}/northstar-ci-diagnostics/listener-control-observer.*/observer/observations.jsonl
+            ${{ runner.temp }}/northstar-ci-diagnostics/listener-control-observer.*/observer/observer-ready.json
+            ${{ runner.temp }}/northstar-ci-diagnostics/listener-control-observer.*/observer/observer-result.json
+            ${{ runner.temp }}/northstar-ci-diagnostics/listener-control-observer.*/wrapper-result.json
+            ${{ runner.temp }}/northstar-ci-diagnostics/listener-control-observer.*/first-failure.json
+            ${{ runner.temp }}/northstar-ci-diagnostics/listener-control-observer.*/database-map.json
           if-no-files-found: error
           retention-days: 14
 

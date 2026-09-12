@@ -193,7 +193,32 @@ Both fixture families retain application INFO/WARN/ERROR and inbound S2S
 debug logs, without tracing every idle background polling turn. Failure
 diagnostics retain bounded readiness reasons, warnings and errors.
 Fixed host pressure counters are sampled at the live barrier and before failed
-cleanup; no concurrent resource sampler runs during the workload.
+cleanup. Regular CI additionally uses one dedicated PostgreSQL observer
+connection, sampling at 500 ms intervals. Including that connection, Federation
+requires 601 connections and MIX requires 651, within the fixture's 672 limit.
+The observer attests the fixed loopback test identity before sampling. It keeps
+a 30-second, 2 MiB memory ring and exports rows only around the first failure
+observed by a supervisor, with a fixed 15-second post-window. Normal backend
+disappearance and successful completion produce summaries only. Retained
+evidence is capped at 8 MiB and 128 backends; incomplete required diagnostics
+fail the wrapper even when the workload succeeds. A workload failure keeps its
+original exit status.
+
+First-failure records use Linux `renameat2(RENAME_NOREPLACE)` so concurrent
+publishers cannot replace the winner or change its inode during finalization.
+Observer readiness records are also published only after their JSON is complete.
+Unsupported atomic publication fails explicitly. A per-run private salt maps
+database pseudonyms to round/pair/A-or-B; only PID plus backend start identifies
+a PostgreSQL backend. Neither the salt nor original database names is uploaded.
+These records convey diagnostics, never permission to clean up resources.
+The marker time may follow the underlying fault or fixture cleanup, and query
+duration includes client scheduling and I/O. The observations do not by
+themselves establish the cause of a runtime-control timeout.
+The small observer integration fixture can be run independently with
+`python3 scripts/test-listener-control-observer-pg17.py --pg-bin /path/to/pg17/bin`.
+It starts its own temporary, fsync-enabled PG17 cluster as an ordinary user and
+tests actual waits, case mapping, failure windows and cancellation. It does not
+run application servers or replace the regular 20-by-50 acceptance matrix.
 The startup scheduler's failure paths are also checked independently of a
 database using controlled child processes.
 

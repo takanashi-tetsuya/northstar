@@ -73,6 +73,12 @@ runtime_primary_min_connections=""
 runtime_primary_max_connections=""
 fixture_control_connections_per_pair=0
 fixture_control_connections=""
+observer_connections="${NORTHSTAR_LISTENER_STRESS_OBSERVER_CONNECTIONS:-0}"
+case "$observer_connections" in 0|1) ;; *)
+  echo "listener stress observer connections must be 0 or 1" >&2
+  exit 2
+  ;;
+esac
 required_fixture_connections=""
 fixture_actual_max_connections=""
 [[ "$worker_timeout_seconds" =~ ^[1-9][0-9]*$ ]] \
@@ -213,6 +219,11 @@ readonly parent_diagnostic_max_bytes=524288
 readonly parent_phase_log_tail_bytes=131072
 declare -a workers=()
 declare -a worker_groups=()
+declare -a round_logs=()
+declare -a failed_worker_logs=()
+declare -a failure_log_priority=()
+failure_log_round=""
+failure_log_priority_captured=false
 declare -a round_databases=()
 declare -a template_databases=()
 declare -a cleanup_debt=()
@@ -293,6 +304,30 @@ fixture_database_psql() {
     --username "$database_fixture_user" \
     --dbname "$database_name" \
     --set ON_ERROR_STOP=1 "$@"
+}
+
+publish_parent_failure_marker() {
+  [[ -n "${NORTHSTAR_LISTENER_STRESS_FAILURE_MARKER:-}" ]] || return 0
+  python3 - "$project_dir" <<'PY_OBSERVER_FAILURE'
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts")
+from github_ci_supervisor import publish_failure_marker
+if not publish_failure_marker("lifecycle"):
+    print("listener_observer_error=parent_failure_marker_unavailable", file=sys.stderr)
+PY_OBSERVER_FAILURE
+}
+
+publish_observer_round_map() {
+  [[ "$observer_connections" == 1 ]] || return 0
+  local pair key
+  {
+    for ((pair = 1; pair <= pairs; pair++)); do
+      key="${round}:${pair}"
+      printf '%s\tA\t%s\n' "$pair" "${pair_database_a[$key]}"
+      printf '%s\tB\t%s\n' "$pair" "${pair_database_b[$key]}"
+    done
+  } | python3 "$project_dir/scripts/listener-readiness-observed-wsl.py" \
+    --publish-round-map "$round" --map-pairs "$pairs"
 }
 
 record_parent_diagnostic() {
@@ -514,29 +549,64 @@ record_cleanup_debt() {
   record_parent_diagnostic "phase=cleanup resource=database resource_name=$database_name ownership=fixture-verified state=$reason"
 }
 
+capture_failure_log_priority() {
+  # Freeze the selection before parent cancellation makes every worker exit.
+  # This is diagnostic evidence only; it never authorizes cleanup or release.
+  [[ "$failure_log_priority_captured" == false ]] || return 0
+  failure_log_priority_captured=true
+  failure_log_round="${round:-}"
+  [[ "$failure_log_round" =~ ^[1-9][0-9]*$ ]] || failure_log_round=""
+  failure_log_priority=("${failed_worker_logs[@]}")
+  local index log pid process_stat process_fields process_state
+  for index in "${!round_logs[@]}"; do
+    log="${round_logs[$index]}"
+    pid="${workers[$index]:-}"
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+    if ! kill -0 "$pid" 2>/dev/null; then
+      failure_log_priority+=("$log")
+    elif IFS= read -r process_stat <"/proc/$pid/stat" 2>/dev/null; then
+      process_fields="${process_stat##*) }"
+      process_state="${process_fields%% *}"
+      if [[ "$process_state" == Z || "$process_state" == X ]]; then
+        failure_log_priority+=("$log")
+      fi
+    fi
+  done
+}
+
 append_runtime_log_tails() {
-  # Worker commands own their individual redacted supervisor artifacts.  This
-  # parent-side artifact supplements them with a bounded selection of local
-  # lifecycle logs, without echoing potentially credential-rich raw logs into
-  # the job console during cleanup.
-  local log collected=0
-  while IFS= read -r -d '' log; do
+  # Prefer the failed workers and current round, rather than spending the
+  # bounded artifact on lexically early logs from already successful rounds.
+  capture_failure_log_priority
+  local log index truncated=false
+  local -a selected=()
+  local -A seen=()
+  for log in "${failure_log_priority[@]}" "${round_logs[@]}" "$runtime_dir"/*.log; do
+    [[ -f "$log" && ! -L "$log" ]] || continue
+    [[ "$log" == "$runtime_dir/"* && "${log#"$runtime_dir/"}" != */* ]] || continue
     [[ "$log" == "$parent_diagnostic_raw" || "$log" == "$runtime_dir/parent-diagnostics.final.raw.log" ]] && continue
-    if (( collected >= 12 )); then
-      record_parent_diagnostic "runtime_log_tails_truncated=true retained=$collected"
+    # The authority producer retains its separate bounded snapshots below.
+    [[ "${log##*/}" == mix-federation-authority-*.raw.log ]] && continue
+    [[ -z "${seen[$log]+present}" ]] || continue
+    seen["$log"]=1
+    if (( ${#selected[@]} >= 12 )); then
+      truncated=true
       break
     fi
-    record_parent_diagnostic "--- runtime_log=$(basename "$log") bounded_tail ---"
+    selected+=("$log")
+  done
+  if [[ "$truncated" == true ]]; then
+    record_parent_diagnostic "runtime_log_tails_truncated=true retained=${#selected[@]}"
+  fi
+  # The final artifact takes a bounded suffix. Write the highest priority
+  # worker last so older/sibling logs cannot evict the first failure.
+  # Array iteration has no producer pipe to break when the 12-log cap is hit.
+  for ((index = ${#selected[@]} - 1; index >= 0; index--)); do
+    log="${selected[$index]}"
+    record_parent_diagnostic "--- runtime_log=${log##*/} bounded_tail ---"
     tail -c 32768 -- "$log" >>"$parent_diagnostic_raw" || true
     printf '\n' >>"$parent_diagnostic_raw" || true
-    collected=$((collected + 1))
-  # Authority snapshots are already copied into the parent transcript by
-  # `append_mix_federation_database_snapshots`.  Keeping their raw scratch
-  # files in this generic 12-log selection used to evict the actual worker
-  # transcripts precisely when a high-parallelism run failed, making the
-  # retained artifact unable to explain the worker failure.
-  done < <(find "$runtime_dir" -maxdepth 1 -type f -name '*.log' \
-    ! -name 'mix-federation-authority-*.raw.log' -print0 | LC_ALL=C sort -z)
+  done
 
   # Detailed claim eligibility is the last-resort evidence for a durable MIX
   # stall. Append it after ordinary worker logs so the final bounded artifact
@@ -912,6 +982,10 @@ retain_parent_diagnostic_artifact() {
     printf 'listener_readiness_stress_failure=true\n'
     printf 'fixture=%s mode=%s exit_status=%s\n' "$fixture" "$mode" "$exit_status"
     printf 'first_failure_phase=%s\n' "${parent_failure_phase:-unknown}"
+    printf 'failure_round=%s\n' "${failure_log_round:-unknown}"
+    if (( ${#failure_log_priority[@]} > 0 )); then
+      printf 'priority_worker_log=%s\n' "${failure_log_priority[0]##*/}"
+    fi
     if (( ${#cleanup_debt[@]} > 0 )); then
       printf 'cleanup_debt_count=%s\n' "${#cleanup_debt[@]}"
       for debt in "${cleanup_debt[@]}"; do
@@ -943,6 +1017,7 @@ retain_parent_diagnostic_artifact() {
       printf 'listener_readiness_stress_failure=true\n'
       printf 'fixture=%s mode=%s exit_status=%s\n' "$fixture" "$mode" "$exit_status"
       printf 'first_failure_phase=%s\n' "${parent_failure_phase:-unknown}"
+      printf 'failure_round=%s\n' "${failure_log_round:-unknown}"
       for debt in "${cleanup_debt[@]}"; do
         printf 'cleanup_debt=%s\n' "$debt"
       done
@@ -1023,7 +1098,7 @@ assert_fixture_connection_capacity() {
   ((fixture_actual_max_connections >= required_fixture_connections)) || {
     [[ -n "$parent_failure_phase" ]] || parent_failure_phase=database-capacity-attestation
     record_parent_diagnostic "phase=database-capacity-attestation status=insufficient required=$required_fixture_connections actual=$fixture_actual_max_connections"
-    echo "fixture PostgreSQL max_connections=$fixture_actual_max_connections is below the required $required_fixture_connections for $stress_child_count children × $runtime_connections_per_child runtime connections plus $fixture_control_connections fixture-control connections" >&2
+    echo "fixture PostgreSQL max_connections=$fixture_actual_max_connections is below the required $required_fixture_connections for $stress_child_count children × $runtime_connections_per_child runtime connections plus $fixture_control_connections fixture-control and $observer_connections observer connections" >&2
     return 1
   }
   record_parent_diagnostic "phase=database-capacity-attestation status=validated actual=$fixture_actual_max_connections required=$required_fixture_connections"
@@ -1442,6 +1517,8 @@ cleanup() {
   # preflight failure must leave redacted evidence even if its later cleanup
   # cannot make progress; the artifact is refreshed below once cleanup returns.
   if ((status != 0)); then
+    capture_failure_log_priority
+    publish_parent_failure_marker || true
     record_host_pressure failure-before-cleanup
     if ! retain_parent_diagnostic_artifact "$status"; then
       echo "listener stress failed to retain its initial sanitized parent diagnostic artifact" >&2
@@ -1638,8 +1715,8 @@ print("|".join(str(document[key]) for key in (
   esac
   runtime_connections_per_child=$((database_max_connections + runtime_auxiliary_connections))
   fixture_control_connections=$((pairs * fixture_control_connections_per_pair))
-  required_fixture_connections=$((stress_child_count * runtime_connections_per_child + fixture_control_connections))
-  record_parent_diagnostic "phase=preflight-runtime-budget status=validated schema_version=$schema_version primary_min=$runtime_primary_min_connections primary_max=$runtime_primary_max_connections auxiliary=$runtime_auxiliary_connections fixture_control_per_pair=$fixture_control_connections_per_pair required=$required_fixture_connections"
+  required_fixture_connections=$((stress_child_count * runtime_connections_per_child + fixture_control_connections + observer_connections))
+  record_parent_diagnostic "phase=preflight-runtime-budget status=validated schema_version=$schema_version primary_min=$runtime_primary_min_connections primary_max=$runtime_primary_max_connections auxiliary=$runtime_auxiliary_connections fixture_control_per_pair=$fixture_control_connections_per_pair observer_connections=$observer_connections required=$required_fixture_connections"
 }
 
 # This is deliberately before database attestation, template creation, and any
@@ -1650,7 +1727,7 @@ load_runtime_connection_budget
 assert_private_database_fixture
 assert_fixture_connection_capacity
 record_parent_diagnostic "phase=preflight-resource-profile status=selected profile=$resource_profile effective_cpu_count=$effective_cpu_count tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count fixture_max_connections=$fixture_actual_max_connections startup_pair_limit=$startup_pair_limit"
-echo "listener stress profile: resource_profile=$resource_profile worker_timeout_seconds=$worker_timeout_seconds database_max_connections=$database_max_connections database_min_connections=$database_min_connections runtime_auxiliary_connections=$runtime_auxiliary_connections runtime_connections_per_child=$runtime_connections_per_child stress_child_count=$stress_child_count fixture_control_connections_per_pair=$fixture_control_connections_per_pair fixture_control_connections=$fixture_control_connections required_fixture_connections=$required_fixture_connections fixture_max_connections=$fixture_actual_max_connections effective_cpu_count=$effective_cpu_count scheduler_reserved_cpus=$scheduler_reserved_cpus tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count startup_pair_limit=$startup_pair_limit"
+echo "listener stress profile: resource_profile=$resource_profile worker_timeout_seconds=$worker_timeout_seconds database_max_connections=$database_max_connections database_min_connections=$database_min_connections runtime_auxiliary_connections=$runtime_auxiliary_connections runtime_connections_per_child=$runtime_connections_per_child stress_child_count=$stress_child_count fixture_control_connections_per_pair=$fixture_control_connections_per_pair fixture_control_connections=$fixture_control_connections observer_connections=$observer_connections required_fixture_connections=$required_fixture_connections fixture_max_connections=$fixture_actual_max_connections effective_cpu_count=$effective_cpu_count scheduler_reserved_cpus=$scheduler_reserved_cpus tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count startup_pair_limit=$startup_pair_limit"
 if ! initialize_mix_federation_login_slots; then
   [[ -n "$parent_failure_phase" ]] || parent_failure_phase=mix-federation-login-slots
   record_parent_diagnostic "phase=mix-federation-login-slots status=failed"
@@ -1668,6 +1745,7 @@ for ((round = 1; round <= rounds; round++)); do
   workers=()
   worker_groups=()
   round_logs=()
+  failed_worker_logs=()
   round_databases=()
   pair_database_a=()
   pair_database_b=()
@@ -1699,6 +1777,7 @@ for ((round = 1; round <= rounds; round++)); do
     round_logs+=("$log")
     key="${round}:${pair}"
     if ! start_stress_worker "$round" "$pair" "$log" "${pair_database_a[$key]}" "${pair_database_b[$key]}"; then
+      failed_worker_logs+=("$log")
       echo "listener stress worker could not establish private session ownership: fixture=$fixture round=$round pair=$pair" >&2
       failed_pair_databases["${pair_database_a[$key]}"]=1
       failed_pair_databases["${pair_database_b[$key]}"]=1
@@ -1711,6 +1790,10 @@ for ((round = 1; round <= rounds; round++)); do
   # Exit through the scoped parent cleanup instead of falling into `wait`.
   if ((failed != 0)); then
     exit 1
+  fi
+  if ! publish_observer_round_map; then
+    [[ -n "$parent_failure_phase" ]] || parent_failure_phase=observer-case-map
+    exit 2
   fi
   # Prepare every pair first, then admit CPU-bounded batches of cold starts.
   # Each pair keeps its startup slot through both A and B nonce/HTTP readiness.
@@ -1741,6 +1824,7 @@ for ((round = 1; round <= rounds; round++)); do
   fi
   for ((pair = 1; pair <= ${#workers[@]}; pair++)); do
     if ! wait "${workers[$((pair - 1))]}"; then
+      failed_worker_logs+=("${round_logs[$((pair - 1))]}")
       echo "listener stress worker failed: fixture=$fixture round=$round pair=$pair" >&2
       [[ -n "$parent_failure_phase" ]] || parent_failure_phase=worker-exit
       record_parent_diagnostic "phase=worker-exit fixture=$fixture round=$round pair=$pair status=nonzero log=$(basename "${round_logs[$((pair - 1))]}")"

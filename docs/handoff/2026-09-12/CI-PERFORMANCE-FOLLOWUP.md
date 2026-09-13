@@ -929,3 +929,83 @@ PG17 integration 將 xmpp_test 直接當 bootstrap superuser，無法
 驗證 NOSUPERUSER。完整 14 項 observer／cleanup integration 通過。
 首次完整執行漏設本機 PG17 的 LD_LIBRARY_PATH 而失敗；補上 CI
 同樣的 libpq 路徑後，全部通過（91.168 秒），未改測試期限。
+
+## 2026-09-13：已到達的 observer 回覆與單次控制面查詢
+
+`e0acbea` push `34735732835` 的 Federation `103667481230` 第一輪
+通過，第二輪第 48 對 A 節點先失敗。新的診斷保留其完整錯誤：
+03:47:05.460799 UTC，critical `runtime-control-refresh` 超過原有
+5000 ms 心跳界線；當時 rules-read phase 2571 ms，距前次心跳
+5802 ms。03:47:04.412778 UTC 同一節點的非 critical
+pubsub-digest-delivery 也曾超時。父 barrier 隨後失敗，observer
+直到 03:47:17.429291 UTC 才報 client deadline，不能倒置因果。
+
+失敗附件 `10311092938`（SHA-256
+`3e7d6ce54fc6102fa642d901858b65a40688a0dac77fbf5ead8e39574eb5c312`）
+與 observer `10310823518`（SHA-256
+`7b907ad48f80294b8fea9f1775bc30df48a4523266545d15ae86fe9504c8b7c9`）
+已下載並驗證。case map 將該節點映射至 backend PID 2817、
+backend_start 03:46:46.949842 UTC；03:47:04.957350 UTC 的樣本中，
+它是 idle / ClientRead，query age 2092.925 ms、state age
+2092.852 ms、無 blocking PID。這支持檢查客戶端接收與排程延遲，
+不支持把這次失敗歸因於該查詢持續執行兩秒或 heavyweight lock。
+
+控制面刷新現在在同一保留連線上用一個 UNION ALL statement 讀取
+兩個投影，讓設定與規則共用 MVCC snapshot，並減少一次串行往返。
+缺少必要設定仍失敗；規則順序、policy apply、service-control
+polling、完整刷新後才更新健康的規則，以及 5 秒心跳界線未放寬。
+診斷 phase 對應為 snapshot-read。
+
+六項 Rust control-health 測試、45 項 subserver boundary 回歸及
+architecture 檢查通過。Rust fmt 與 all-targets Clippy（runtime-test
+profile、`-D warnings`）亦通過。實際 PG17 的三項管理命令測試通過，包含
+新增的空規則、兩個設定旗標、blacklist／whitelist 排序與必要設定
+遺失回歸。臨時測試適配器前兩次分別停在原腳本固定 5432、隔離
+叢集尚未建立 xmpp_test 的環境檢查；建立測試角色自有資料庫並
+使用本次隨機埠後，三項測試才完整執行通過，schema 已移除。
+
+隔離 pgbench 使用 4 CPUs、100 連線、4 client threads、prepared
+queries、空 federation rules，交錯執行前後版本各三次，每次
+20000 次完整刷新。平均延遲的中位數由 2.586 ms 降至 2.092 ms
+（約 19.1%）；這是 SQL 微量測，不能當成遠端整體壓測的改善比例。
+
+另外，實際 PG17 重現新 observer 連線收到 100-row 回覆時，若
+客戶端延後至 5.2 秒才執行，一次 PQconsumeInput 尚未讀完整個
+socket 中的回覆，原實作便回報 client_query_deadline；失敗時
+仍有 11671 bytes 可立即讀取。已暖機的連線則能正確排空並捨棄。
+這是 [libpq 分段讀取行為](https://raw.githubusercontent.com/postgres/postgres/REL_17_STABLE/src/interfaces/libpq/fe-misc.c)
+造成的已重現邊界問題，尚未證明它造成先前的遠端 observer failure。
+
+observer 現在於等待期限耗盡後，最多額外進行 32 次立即可讀的
+nonblocking reads，不再等待新資料；仍捨棄逾時樣本，要求同一
+連線的新樣本恢復，未完成或超過上限仍失敗。原有 3+2 秒等待
+預算、資料與結果上限、無 reconnect、三次連續錯誤規則均保持。
+44 項 observer 單元測試及完整 15 項 PG17 integration 通過
+（119.939 秒）；同一個新增實際回歸在原 `e0acbea` observer
+確實得到預期的 client_query_deadline assertion failure。
+
+`e0acbea` release preview `34735732791` 已完整通過 10 項工作，
+三項 tag-only 工作按預期跳過。Windows／Linux fresh package
+驗證為 `103668120635`／`103668120643`；Docker app
+`103668193183` 驗證 linux/amd64、UID 10001 與實際 entrypoint。
+組裝產物 `10310444714`，113427653 bytes，SHA-256
+`c41c541ed41d4ed0f16efeea1b6cf61cc769cc8902984089397be608cb55f9cf`。
+這些仍是該舊提交的 preview，不是實際 draft Release 或新修正的證據。
+
+兩項新修正的本機 4 CPU、1×50 Federation 完整回歸已通過。
+provision 55061.908 ms、preparation 168626.136 ms、startup
+12250.454 ms、workload 688775.566 ms、cleanup 14079.696 ms，
+各階段 status 0。observer 1887 樣本、peak 100、0 errors、最大
+109.852 ms；wrapper 的 observer／diagnostic／marker／cleanup／
+map／bounds 全部成功，無 adopted descendants。這輪整體耗時
+沒有顯示相對先前本機回歸的加速，不能用 SQL 微量測代替它。
+
+首次啟動這項回歸時，runtime-test binary 編譯已成功（300075.605
+ms），但本機 16 GB tmpfs 的 /tmp 用滿，provision 後第 19 個
+worker 未能建立 private session，後續診斷寫入也遭 ENOSPC。
+原失敗記錄保留；該次未通過業務階段。只移除本工作已完成 Rust
+單元測試的可重建 debug cache（5.2 GB），待原隔離 PG 清理結束
+並恢復 7.7 GB 空間後，才重新完整執行上述成功回歸。
+
+04:27 UTC 查詢時，`e0acbea` 的 push MIX 與 PR 兩組完整壓測
+仍在執行；它們不是新修正的 CI 結果。

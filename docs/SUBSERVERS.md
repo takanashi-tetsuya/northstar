@@ -133,6 +133,13 @@ while serving. The windows bound those initialization phases, not all startup
 work; the listener fixture independently retains its total 15-second readiness
 deadline.
 
+The runtime-control worker reads administration flags and federation rules with
+one SQL statement on its reserved connection. Both projections share one MVCC
+snapshot, with no second query round trip during a refresh. Missing required
+settings still fail the read. Policy application, service-control polling and
+the existing five-second heartbeat health boundary remain in the same worker;
+entering a query phase does not report successful health.
+
 Core owns upload authority and capacity auditing. Startup completes both audits
 before accepting traffic. Its first upload worker may use those successful
 observations once, scheduling the next catalog audit from the original audit
@@ -246,7 +253,10 @@ tracking and missing visibility still fail diagnostics. The observer keeps its
 delays leave a reply pending after the client deadline, it allows at most two
 additional seconds solely to drain that reply through ReadyForQuery. It validates
 and discards the late sample, then requires a fresh sample on the same connection.
-Replies still pending after that bound, malformed replies, three consecutive
+If libpq's input buffer holds only part of an already-arrived response, the
+observer may make at most 32 additional nonblocking reads of immediately readable
+socket data after the wait budget. It never waits for further bytes or accepts
+the late sample. Replies still incomplete after that bounded drain, malformed replies, three consecutive
 recoverable errors, or shutdown before recovery still fail. An unavailable
 observer prevents workload launch. An observer that fails during the workload
 causes prompt cancellation and cleanup of the owned driver and descendants;

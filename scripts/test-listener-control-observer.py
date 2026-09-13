@@ -361,6 +361,7 @@ class LibpqTests(unittest.TestCase):
         connection.conn = 7
         connection.lib = library
         connection.limits = mock.Mock()
+        connection.readable_now = mock.Mock(return_value=False)
         return connection
 
     def test_connect_pins_read_only_search_path_and_fixed_loopback(self):
@@ -476,6 +477,39 @@ class LibpqTests(unittest.TestCase):
         self.assertAlmostEqual(drain.args[1] - first.args[1], 2)
         self.assertEqual(library.PQgetResult.call_count, 2)
         library.PQsendQuery.assert_called_once()
+
+    def test_completed_large_late_response_drains_already_buffered_fragments(self):
+        connection, library = self.deadline_connection()
+        library.PQisBusy.side_effect = [1, 1, 1, 0, 0]
+        connection.readable_now.return_value = True
+        with self.assertRaises(m.ObserverError) as result:
+            connection.query('SELECT fixed', m.validate_sample)
+        self.assertEqual(result.exception.code, 'client_query_deadline_drained')
+        self.assertEqual(connection.readable_now.call_count, 2)
+        self.assertEqual(library.PQgetResult.call_count, 2)
+        library.PQsendQuery.assert_called_once()
+
+    def test_readable_but_unfinished_late_response_has_fixed_drain_bound(self):
+        connection, library = self.deadline_connection()
+        library.PQisBusy.side_effect = None
+        library.PQisBusy.return_value = 1
+        connection.readable_now.return_value = True
+        with self.assertRaises(m.ObserverError) as result:
+            connection.query('SELECT fixed', m.validate_sample)
+        self.assertEqual(result.exception.code, 'client_query_deadline')
+        self.assertEqual(connection.readable_now.call_count, m.MAX_BUFFERED_DRAIN_READS)
+        self.assertEqual(library.PQconsumeInput.call_count, m.MAX_BUFFERED_DRAIN_READS + 2)
+        library.PQgetResult.assert_not_called()
+        library.PQsendQuery.assert_called_once()
+
+    def test_buffered_drain_never_waits_for_more_socket_input(self):
+        library = mock.Mock()
+        library.PQsocket.return_value = 9
+        connection = self.connection(library)
+        with mock.patch.object(m.select, 'select', return_value=([9], [], [])) as readiness:
+            self.assertTrue(m.Libpq.readable_now(connection))
+        readiness.assert_called_once_with([9], [], [], 0)
+        connection.limits.check.assert_called_once()
 
     def test_drained_late_malformed_sample_still_fails_validation(self):
         connection, _ = self.deadline_connection(value={'query': 'SENSITIVE'})

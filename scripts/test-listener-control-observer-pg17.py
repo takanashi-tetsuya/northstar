@@ -343,7 +343,7 @@ class PostgreSQLIntegration(unittest.TestCase):
         self.assertFalse(wrapper['diagnostic_ok'])
         self.assertIsNone(wrapper['driver_exit_status'])
 
-    def test_one_hundred_runtime_backends_are_sampled_without_reconnecting(self):
+    def start_one_hundred_runtime_backends(self):
         for index in range(98):
             child = subprocess.Popen([str(PG_BIN / 'psql'), '-XqAt', '-v', 'ON_ERROR_STOP=1'],
                 env={**self.env, 'PGDATABASE': self.databases[index % 2],
@@ -354,11 +354,46 @@ class PostgreSQLIntegration(unittest.TestCase):
             child.stdin.flush()
             self.assertTrue(select.select([child.stdout], [], [], 5)[0])
             self.assertGreater(int(child.stdout.readline()), 0)
+
+    def test_one_hundred_runtime_backends_are_sampled_without_reconnecting(self):
+        self.start_one_hundred_runtime_backends()
         process = self.start_wrapper('import time;time.sleep(5)')
         result, wrapper, _ = self.result(process, 0, 100)
         self.assertTrue(wrapper['diagnostic_ok'], wrapper)
         self.assertGreaterEqual(result['samples'], 8)
         self.assertEqual(result['sample_errors'], 0)
+
+    def test_large_completed_response_after_drain_deadline_is_discarded(self):
+        self.start_one_hundred_runtime_backends()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            connection = OBSERVER.Libpq(OBSERVER.Limits(20, os.getpid()))
+            self.addCleanup(connection.close)
+            connection.connect()
+            identity = connection.lib.PQbackendPID(connection.conn)
+            original_ready = connection.ready
+            delayed = False
+
+            def delayed_ready(writing, deadline):
+                nonlocal delayed
+                self.assertFalse(writing)
+                if not delayed:
+                    delayed = True
+                    # A new libpq connection has not grown its input buffer
+                    # for a 100-row response yet. PostgreSQL finishes while
+                    # the observer is descheduled past both wait deadlines.
+                    time.sleep(5.2)
+                original_ready(writing, deadline)
+
+            connection.ready = delayed_ready
+            sql = OBSERVER.activity_sql(self.salt).replace(
+                ' FROM targets\n', ' FROM targets CROSS JOIN pg_sleep(0.1)\n')
+            with self.assertRaises(OBSERVER.ObserverError) as error:
+                connection.query(sql, OBSERVER.validate_sample)
+            self.assertEqual(error.exception.code, 'client_query_deadline_drained')
+            connection.ready = original_ready
+            value = connection.query(OBSERVER.activity_sql(self.salt), OBSERVER.validate_sample)
+            self.assertEqual(value['total'], 100)
+            self.assertEqual(connection.lib.PQbackendPID(connection.conn), identity)
 
     def test_pending_server_response_is_drained_then_fresh_sample_recovers(self):
         with mock.patch.dict(os.environ, self.env, clear=True):

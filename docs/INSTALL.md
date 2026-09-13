@@ -1,5 +1,8 @@
 # Install Northstar 0.2.0
 
+Packages become available on [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases)
+when the maintainer publishes the Release.
+
 Use the complete archive for your platform: `northstar-0.2.0-linux-amd64.tar.gz`
 or `northstar-0.2.0-windows-amd64.zip`. Both include the Web client, Swagger UI,
 configuration examples and license notices. The raw executable requires these

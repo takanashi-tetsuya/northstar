@@ -1,5 +1,4 @@
-# Northstar branch protection should require review by these code owners.
-# Replace placeholder owners with your actual GitHub handles/teams if different.
+# Review routing; merge requirements are defined by repository rulesets.
 
 # Global governance and release-critical files
 *                                    @takanashi-tetsuya

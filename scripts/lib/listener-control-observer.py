@@ -289,10 +289,8 @@ class Libpq:
             raise ObserverError('nonblocking_setup_failed')
 
     def prepare_activity(self, salt):
-        # Parsing/planning pg_stat_activity for every 500 ms sample adds
-        # avoidable catalog work under the same load we are observing. Only
-        # the plan is reused: EXECUTE still runs in a fresh transaction and
-        # obtains a fresh backend-status snapshot on this one connection.
+        # Reuse the plan to reduce overhead at the 500 ms sampling interval.
+        # Each EXECUTE reads a fresh backend snapshot in a new transaction.
         self.query('PREPARE northstar_control_observer_sample AS ' + activity_sql(salt),
                    command=True)
         return 'EXECUTE northstar_control_observer_sample'
@@ -401,12 +399,10 @@ SELECT pg_catalog.json_build_object('authorized',
 def activity_sql(salt):
     if not re.fullmatch(r'[0-9a-f]{32}', salt):
         raise ObserverError('invalid_hash_salt')
-    # Bound the JSON and restrict lock-manager inspection to heavyweight-lock
-    # waiters. pg_blocking_pids cannot explain LWLock, CPU or I/O waits and
-    # takes every lock hash partition itself; calling it for merely slow
-    # active queries can amplify the very LockManager pressure being sampled.
-    # Database identity is salted in the server; raw datname never leaves it. The shared run salt maps this pseudonym to
-    # the driver-owned case map; only (pid, backend_start) identifies a backend.
+    # Query blockers only for heavyweight-lock waits: pg_blocking_pids takes
+    # every lock hash partition and would add contention for other wait types.
+    # Hash database names inside PostgreSQL; the shared salt links them to the
+    # driver's case map. Identify backends by (pid, backend_start).
     return f"""
 WITH targets AS MATERIALIZED (
   SELECT pid,backend_start,datname,state,wait_event_type,wait_event,
@@ -581,8 +577,8 @@ class Evidence:
         current = {(row['pid'], row['backend_start']) for row in sample['rows']}
         slow = {(row['pid'], row['backend_start']) for row in sample['rows']
                 if row['state'] == 'active' and row['query_age_ms'] >= SLOW_MS}
-        # These events are not evidence of a fixture failure. In particular,
-        # round teardown legitimately removes every backend in a cohort.
+        # Count these events without triggering failure capture; normal round
+        # teardown removes all backends in a cohort.
         self.slow_events += len(slow - self.previous_slow)
         self.disappearances += len(self.previous - current)
         self.flush_captured_ring()

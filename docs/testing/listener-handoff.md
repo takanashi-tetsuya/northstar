@@ -37,8 +37,8 @@ child with `pass_fds`, and keeps its own descriptor open until the child has:
 The supervisor verifies every acknowledgement field and its filesystem
 ownership before it releases the root-owned descriptor. It also terminates the
 child process group on signal, startup failure, or acknowledgement timeout.
-The server product does not implement descriptor activation, and Windows does
-not claim equivalent inherited-handle support.
+Descriptor activation is limited to this Unix fixture. The server product and
+Windows fixture do not support it.
 
 The shared verifier is:
 

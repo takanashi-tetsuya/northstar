@@ -140,9 +140,9 @@ fields and, across the production protocol tree (excluding `#[cfg(test)]` code),
 sqlx:: / 0 PgPool`. Importing or aliasing database symbols is rejected so an
 import cannot hide authority. These zero protocol/database ceilings must remain
 zero; the nine public `AppState` capabilities may only decrease as narrower
-domain ports replace them. This is a static structure invariant, not proof that
-the API, services, workers or repositories have perfect transaction boundaries
-or subsystem-specific database roles. `messaging.rs` additionally has semantic
+domain ports replace them. API, service, worker and repository transaction
+boundaries require separate runtime checks; subsystem-specific database roles
+remain incomplete. `messaging.rs` additionally has semantic
 gates forbidding raw pool access and bypasses of `MessageService`.
 
 `AppState` no longer exposes raw FAST or Dialback key bytes, REST cursor and

@@ -760,10 +760,8 @@ async fn migration_0132_pre_fix_failure_leaves_no_ledger_row_and_current_checksu
         .as_ref()
         .to_vec();
 
-    // The b588 body fails inside its normal transactional migration before
-    // SQLx can insert a successful ledger record. This establishes the local
-    // recovery invariant; it deliberately does not claim anything about an
-    // independently administered database that has not been inspected.
+    // The b588 body fails within its migration transaction, leaving no
+    // successful SQLx ledger entry.
     let pre_fix_error = pre_fix.run(&pool).await.unwrap_err();
     assert!(
         pre_fix_error

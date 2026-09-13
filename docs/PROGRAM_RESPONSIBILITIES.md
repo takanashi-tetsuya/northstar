@@ -395,10 +395,9 @@ are zeroized where implemented. The process does **not** globally erase the
 original OS environment, so directly supplied environment secrets can remain
 observable through the host/process boundary for the process lifetime. Prefer
 file-mounted secrets. Key/password bytes must never be rendered into logs or
-normal command arguments. Maintenance wrappers explicitly close inherited file
-descriptors and scrub the child environment before executing database clients;
-that child-specific guarantee is not a claim that the parent environment was
-cleared.
+normal command arguments. Maintenance wrappers close inherited file descriptors
+and scrub the child environment before executing database clients; the parent
+environment remains unchanged.
 
 ## Domain responsibility matrix
 
@@ -749,7 +748,7 @@ not be copied into new work.
 
 ## Residual coupling and reduction order
 
-These are current architecture debts, not hidden isolation claims:
+Remaining architecture work:
 
 1. The nine public `AppState` fields still form a broad same-process authority.
 2. Operation/background paths still hold `Arc<AppState>` where narrower ports
@@ -794,8 +793,7 @@ These are current architecture debts, not hidden isolation claims:
     role/capability attestation.
 15. File-backed secrets are preferred, but inline environment secrets are not
     removed from the parent OS environment after parsing. Eliminating that
-    exposure requires a launcher/exec handoff or file-only production policy,
-    not a documentation claim that Rust zeroization can erase inherited env.
+    exposure requires a launcher/exec handoff or file-only production policy.
 
 Further reduction should proceed in this order: move direct REST transactions
 behind application services, extract embedded service/runtime persistence into

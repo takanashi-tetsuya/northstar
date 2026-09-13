@@ -70,8 +70,8 @@ checked only for an explicit archive banner.
 ## Core protocol evidence
 
 Each row points to the narrowest repository harness that includes the named
-profile. A harness reference does not claim that it ran for the current commit;
-the release evidence record must retain its exit result and environment.
+profile. Record the tested commit, exit result and environment with release
+evidence.
 
 | Standard | Automated evidence |
 | --- | --- |

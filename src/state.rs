@@ -4356,21 +4356,16 @@ impl AppState {
         &self.omemo_recovery_poll_pool
     }
 
-    /// Revoke every local live route and every durable resumable XMPP session
-    /// for an account before returning.  Other nodes receive the committed
-    /// authorization-generation fence over Redis; if that control path is
-    /// unavailable, their 30-second PostgreSQL maintenance sweep provides the
-    /// bounded fallback rather than pretending remote socket teardown was
-    /// synchronously acknowledged.
+    /// Revoke local account routes and request durable SM revocation.
+    /// Remote nodes receive the generation fence over Redis, with a 30-second
+    /// maintenance sweep as fallback while PostgreSQL remains available.
     pub async fn disconnect_account(&self, user_id: uuid::Uuid, bare_account_jid: &str) {
         self.revoke_local_account_routes(user_id, bare_account_jid, None);
         if let Err(error) = self.revoke_user_sm_sessions_with_teardown(user_id).await {
             tracing::error!(?error, %user_id, "failed to revoke durable SM sessions");
         }
-        // The credential mutation has already committed at this point.  A
-        // failed Redis control must therefore be reported and retried by the
-        // generation maintenance sweep, never surfaced as a fake mutation
-        // failure to the client.
+        // Credentials are already committed. Log a Redis notification failure
+        // and let the generation sweep retry without failing the mutation.
         let generation = match db::find_user_by_id(&self.pool, user_id).await {
             Ok(Some(user)) => user.auth_generation,
             Ok(None) => i64::MAX,

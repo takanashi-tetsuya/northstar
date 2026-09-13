@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# N08-R08 only: provision two current, domain-specific template databases in
-# the parent-owned loopback PostgreSQL cluster, clone each once, then prove
-# strict runtime startup and a concrete no-DDL boundary in each clone.  This
-# intentionally does not use the listener stress driver: that driver exercises
-# a separate development-role contract and is not evidence for strict roles.
+# N08-R08: migrate and clone two domain-specific templates in a private loopback
+# PostgreSQL cluster. Verify runtime startup and DDL rejection in each clone
+# using production role restrictions.
 
 set -Eeuo pipefail
 set +x

@@ -13,8 +13,7 @@ function requireBoundary(condition, message) {
   if (!condition) throw new Error(`subserver boundary: ${message}`);
 }
 
-// Source-shape regression gate, not a proof of Rust semantics. Preserve offsets
-// while masking comments and normal string literals for brace/token inspection.
+// Preserve token offsets while masking comments and normal string literals.
 function codeOnly(source) {
   return source.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"/g,
     (text) => text.replace(/[^\n]/g, ' '));

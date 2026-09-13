@@ -6,6 +6,15 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 ## [0.2.0] - Release notes (publication date: GitHub Releases)
 
+- Reduced runtime-control query work by reading settings and federation rules
+  in one SQL snapshot. The pressure observer prepares its activity query once
+  and reads fresh backend state on every sample, with bounded timeout recovery.
+- Reused verified runtime binaries within each CI run and private fixture
+  certificates across stress rounds. Added phase timings, coordinated client
+  admission and bounded cleanup while retaining the full stress matrices.
+- Updated installation, release, governance and validation documents; added
+  the human/AI collaboration notice and streamlined third-party attribution
+  and source comments.
 - Added complete Windows x64 and Linux x64 package manifests and installation
   instructions, native PostgreSQL startup/resource verification, default-user
   Docker startup checks, and fresh draft-download checksum/provenance checks.

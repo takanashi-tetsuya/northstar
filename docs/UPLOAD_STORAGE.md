@@ -3,9 +3,8 @@
 This document is the authoritative storage contract for XEP-0363 uploads. It
 describes both the secure single-process filesystem backend and the shared
 S3-compatible backend introduced by migration `0091_shared_upload_storage`.
-An implementation in this checkout is not, by itself, evidence that a specific
-cloud, MinIO release, latency envelope or disaster-recovery procedure has been
-qualified. Those are release gates listed below.
+Qualify the chosen provider, version, latency envelope and recovery procedure
+using the release gates below.
 
 ## Backends and deployment boundary
 
@@ -147,12 +146,10 @@ for nullable identity fields). The fixed-search-path trigger then clears the
 slot's reservation in the same transaction. An exact `ON CONFLICT` replay is
 neutral; a changed projection is rejected by immutable-identity guards and
 cannot consume another slot's debt. Queue-table mutation is not granted to
-`PUBLIC`. The current packaged deployment still runs migrations and runtime
-queries through the configured database owner, so this is defense in depth,
-not a claim that queue DML has already been separated from the application.
-A future non-owner runtime role must receive an explicit minimal grant set,
-while schema migrations use separate credentials; this release does not
-revoke connection TEMP privileges or pretend that role split is complete.
+`PUBLIC`. Production deployments use separate migrator and runtime credentials.
+The runtime role is a non-owner without CREATE or TEMP privileges, but retains
+DML on mutable application tables, including upload queues. Subsystem-specific
+queue roles remain future work; see [database roles](DATABASE_ROLES.md).
 
 New-slot admission evaluates `pending + debt`, locks that one row with a 50 ms lock timeout (then
 the account row in fixed order), enforces configured retained-file/byte
@@ -201,10 +198,9 @@ creating a delete marker) rather than targeting an arbitrary historical
 version. Northstar verifies that the committed version is current before
 deletion and verifies that the current key is absent afterwards. Noncurrent
 versions therefore belong to the provider backup/retention boundary and must
-have a reviewed expiration or Object Lock policy. Do not claim cryptographic
-erasure or immediate destruction of noncurrent provider versions. A future
-client API that supports version-qualified delete is required before that
-boundary can be closed inside Northstar.
+have a reviewed expiration or Object Lock policy. Deleting the current key leaves
+historical versions subject to that policy. Northstar needs a version-qualified
+delete API to remove them directly.
 
 An unversioned compatible store returns no version identifier. Northstar still
 binds the canonical attempt key, exact size and SHA-256 and fails closed on a
@@ -283,9 +279,8 @@ boundary remains; it must never be described as E2EE.
 ## Backup and restore boundary
 
 The repository's backup format v2 and `backup.sh` archive **local** committed
-upload files and validate them against a PostgreSQL snapshot. They do not and
-must not claim to include S3 bytes. Running the same tar workflow while using
-the S3 backend creates, at most, a database/control-plane backup.
+upload files and validate them against a PostgreSQL snapshot. S3 objects require
+a separate backup; a database/control-plane dump alone is incomplete.
 
 An S3 deployment needs two coordinated artifacts:
 

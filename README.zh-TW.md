@@ -2,6 +2,8 @@
 
 # Northstar XMPP 伺服器
 
+> 本專案由人類與 AI 協作開發。
+
 Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 伺服器。它提供 TCP、Direct TLS、WebSocket 與選用 BOSH 連線，以及聯邦、
 群聊、OMEMO 相容服務、網頁用戶端、REST 管理、防濫用、日誌及監控。
@@ -23,10 +25,10 @@ Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 
 ### 發行套件
 
-Northstar `0.2.0` 通過發行核准後，將透過
+Northstar `0.2.0` 套件將在維護者發佈 Release 後，透過
 [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases)
-提供下列預定檔案。在 tag workflow 建立 draft，且 checksum、provenance 與
-映像 digest 完成審核前，請勿視為已提供：
+提供下載。Tag workflow 會先建立包含下列檔案的草稿，並驗證 checksum、
+provenance 與映像 digest：
 
 | 資產 | 用途 |
 |---|---|
@@ -100,7 +102,9 @@ secret files 及公信憑證。
 
 OMEMO 加密由相容的用戶端完成。正確加密時，Northstar 只路由及封存密文 XMPP 封裝，並不持有用戶端的 OMEMO 私鑰。預設的 `REQUIRE_ENCRYPTED_ARCHIVE=true` 會拒絕把明文訊息本文寫入個人或群組封存，也會在保存 OMEMO stanza 前移除誤附的明文 sibling。
 
-這不等於絕對「零知識」。伺服器必然能看見路由中繼資料、帳號與房間成員關係、時間與大小、用戶端主動送出的明文，以及使用者刻意附在檢舉中的證據。擁有主機或資料庫權限的管理員可以檢視這些伺服器可見資訊。端到端隱私也取決於裝置指紋驗證、用戶端安全與正確的 TLS 部署。
+伺服器可見的資訊包括路由中繼資料、帳號與房間成員關係、訊息時間與大小、
+用戶端送出的明文，以及檢舉附帶的證據。擁有主機或資料庫權限的管理員可以
+檢視這些資訊。端到端隱私取決於用戶端安全、裝置金鑰驗證及 TLS 部署。
 
 
 ## 功能

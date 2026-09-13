@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# Exercise the migrated child-owned listener fixtures under deliberate parallel
-# runtime pressure after CPU-bounded cold-start batches. Every worker still
-# runs a complete two-node MIX or federation fixture, and all pairs are live
-# before business release. This does not claim simultaneous whole-fleet cold
-# start capacity. Each worker is privately process-group supervised; failure
-# never retries a worker or removes a pair from the prescribed matrix.
+# Run complete two-node MIX or federation fixtures concurrently after batched
+# startup. All pairs must be live before protocol work begins. Each worker has
+# its own supervised process group; a failed worker fails the full matrix.
 
 set -euo pipefail
 
@@ -50,10 +47,8 @@ esac
   exit 2
 }
 
-# A 50-pair round starts 100 real Northstar children. The primary-pool limit
-# is a stress-only setting. The fixed auxiliary pool
-# facts are queried from the freshly built binary below, rather than copied
-# here as a second hand-maintained architecture contract.
+# A 50-pair round starts 100 Northstar children. Only the primary-pool limit
+# is overridden for stress; auxiliary pool sizes come from the built binary.
 worker_timeout_seconds="${NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS:-900}"
 database_max_connections="${NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS:-2}"
 database_min_connections="${NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS:-0}"
@@ -264,19 +259,11 @@ PY_STAGE_TIMING
   record_parent_diagnostic "$timing"
 }
 
-# Every stress worker must own two independent database states: one for each
-# federated domain.  Applying the normal migrator from 50 workers would be
-# deliberately serialized by the production database-policy advisory lock.
-# Instead, this CI/local-loopback-only harness migrates two empty templates
-# exactly once, then makes disposable physical database copies for the workers.
-# The fixtures still perform their normal runtime ledger/canonicalizer checks;
-# they simply receive an already-migrated private database rather than asking
-# a live worker to contend for production's migration fence.
-# A local developer may bind the disposable Docker PostgreSQL fixture to a
-# different loopback port (for example 55432) when 5432 belongs to another
-# local service. Only that endpoint is configurable: the test control role,
-# its non-production password, and the control database stay fixed so this
-# harness cannot be redirected at an arbitrary local PostgreSQL identity.
+# Migrate one template per domain, then give each worker private database copies.
+# This avoids serial migration-lock contention across 50 workers while keeping
+# normal runtime ledger and canonicalizer checks.
+# The loopback port is configurable for local port conflicts. The fixed test
+# role, password and control database restrict this to a disposable fixture.
 database_fixture_host="${NORTHSTAR_LISTENER_STRESS_DATABASE_HOST:-127.0.0.1}"
 database_fixture_port="${NORTHSTAR_LISTENER_STRESS_DATABASE_PORT:-5432}"
 readonly database_fixture_user=xmpp_test

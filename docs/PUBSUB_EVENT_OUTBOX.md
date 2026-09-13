@@ -36,9 +36,8 @@ compatibility projection can race (subscription SubIDs, affiliation-driven
 transitions, legacy bookmark projection) are revalidated while the mutation is
 locked; a changed snapshot aborts instead of committing mismatched event bytes.
 
-This gives concurrent requests a clear order: event snapshot/acceptance first,
-later subscription mutation second. It does not claim that PostgreSQL commit
-timestamps form a user-visible total order across unrelated nodes.
+Event acceptance fixes its audience before later subscription mutations.
+Unrelated nodes have no shared user-visible total order.
 
 ## Worker and failure behavior
 

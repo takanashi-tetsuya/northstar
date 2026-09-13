@@ -982,9 +982,8 @@ def run() -> None:
     privacy_clear, _ = alice_b.receive_until("cluster-sent-carbon-privacy-clear")
     fixture.check("type='result'" in privacy_clear, "cross-node Carbon privacy reset failed")
 
-    # A server stanza-id is an XEP-0359 identity, not evidence that an
-    # offline row exists. Cross-node no-store must therefore remain volatile
-    # even though the recipient delivery is annotated with such an ID.
+    # A stanza-id can accompany volatile delivery. Cross-node no-store must
+    # leave the durable queue unchanged.
     durable_before = metric_value(
         METRICS_B, "xmpp_online_queue_durable_acceptances_total"
     )
@@ -1347,9 +1346,8 @@ def run() -> None:
     )
     alice_b.receive_until("post-destroy-rejoin")
 
-    # A real process termination must notify each locally-owned MUC occupant
-    # with XEP-0045 status 332 before the transport is drained. This is wire
-    # evidence, not merely a unit call of the shutdown helper.
+    # Process shutdown must send XEP-0045 status 332 to local MUC occupants
+    # before draining their transports.
     shutdown_room = f"shutdown-room@conference.{DOMAIN}"
     alice_a.send(
         f"<presence xmlns='jabber:client' to='{shutdown_room}/Alice'>"
@@ -1775,10 +1773,8 @@ def run_faults() -> None:
         subscriber.terminate()
         subscriber.wait(timeout=5)
 
-    # A late response to a completed fault request can rotate either listener.
-    # Reuse the same absolute recovery budget, then send one fresh message.
-    # A message accepted durably while routing is unavailable is legitimately
-    # offline; it does not prove that the current route has recovered.
+    # Late fault responses can rotate either listener. Wait within the same
+    # recovery budget, then send a fresh message to verify the live route.
     fixture.check(
         wait_for_cluster_recovery((HTTP_A, HTTP_B), deadline),
         "cluster nodes did not recover before the fresh correlated delivery probe",

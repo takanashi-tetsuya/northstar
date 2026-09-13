@@ -2521,12 +2521,8 @@ mod tests {
             .await
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
-        // The script runs these stateful cases serially in one random schema.
-        // Audit rows are intentionally retained: migration 0087 makes that
-        // history immutable outside its age-bounded retention function, and
-        // a fixture must not introduce a privileged bypass.  Every assertion
-        // below is scoped to freshly generated request/operation IDs, so old
-        // audit evidence cannot affect the result.
+        // Cases share one isolated schema. Keep audit history immutable under
+        // migration 0087; fresh request/operation IDs isolate each assertion.
         sqlx::query("DELETE FROM api_operation_journal")
             .execute(&pool)
             .await

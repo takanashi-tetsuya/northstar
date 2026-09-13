@@ -1,5 +1,8 @@
 # CI 耗時修復實作
 
+> 更新至 2026-09-13：預備查詢源提交 `b1a1655` 的兩組完整 CI 已通過，
+> PR #6 已合併為 `dev` 提交 `761c569`。最新結果與附件校驗值見文末。
+
 本文件接續 [耗時調查](CI-TIMING-INVESTIGATION.md)，記錄使用者要求繼續後的實作。
 基線為 `0c4ca9d9c442d94589620aee51fabaf66f4bfd03`。以下是工程紀錄，不新增操作授權。
 
@@ -1066,3 +1069,43 @@ subserver／architecture 檢查通過。新增實際回歸確認預備查詢能
 短暫 DataFileRead 判為失敗；改成在原三秒期限內等待目標狀態，
 完整重跑後才成功。此量測證明觀測開銷下降，尚不能代替新提交的
 完整 CI，也不證明它已解決遠端五秒中止。
+
+## 2026-09-13：預備查詢完整 CI 通過，PR #6 合併
+
+源提交 `b1a1655b3da5e1a0a13bb427d9b5c1db85c180fe` 的
+[push CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34745032268)
+與 [PR CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34745073283)
+均完整通過，各有 28 個成功工作與 4 個事件政策預期跳過的工作。
+兩個 CI required 工作分別為 `103700502130`、
+`103701016395`，均確認 26 個必要工作群組成功。
+
+四組 Federation／MIX regular 20×50 共完成 80 輪、408 個階段，
+退出狀態均成功。Observer 記錄 33,093 次有效取樣、24 次錯誤，全部恢復。
+各組 observer、wrapper、diagnostic、failure-marker 與 cleanup 檢查通過；
+沒有 business failure marker 或 adopted descendants。下列附件均已下載並
+核對 GitHub 記錄的 SHA-256：
+
+| 工作 | 有效取樣 | 錯誤／恢復 | 附件 ID | 附件 SHA-256 |
+| --- | ---: | ---: | --- | --- |
+| [push Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/34745032268/job/103692486161) | 6,478 | 2/2 | 10314965570 | `e42bf1d4abbe7a7db07fa7483e304fe984d461a1764d3f2c5cf8821c642d8e05` |
+| [push MIX](https://github.com/takanashi-tetsuya/northstar/actions/runs/34745032268/job/103692486146) | 8,633 | 0/0 | 10315340774 | `cc351e6cee2d67ebbd1430c178ed8a1bf50f0d3fa493f2207a0418d2cf2faa5a` |
+| [PR Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/34745073283/job/103692616333) | 8,543 | 15/15 | 10315350806 | `b5043bc7db9c44958fd368915ab04c34fab7efe3224402e71ee60f92c9e4c399` |
+| [PR MIX](https://github.com/takanashi-tetsuya/northstar/actions/runs/34745073283/job/103692616363) | 9,439 | 7/7 | 10315395993 | `3cba64eec5ea8f2d878654d0e9d021a8e0d73aa025a8efaa42e6704c9d082099` |
+
+四個壓測工作的耗時依序為 54 分 58 秒、72 分 23 秒、73 分 23 秒和
+79 分 38 秒。預備查詢的微量測改善已由前節記錄；這四組成功結果仍不足以
+判定先前五秒中止的底層原因，或量化整體 CI 加速比例。
+
+[PR #6](https://github.com/takanashi-tetsuya/northstar/pull/6) 由維護者於
+2026-09-13 09:08:58 UTC 合併至 `dev`，產生已驗證簽章的提交
+`761c56919cbca300bf4cd83dfc38ac03ab7659f6`。其 tree
+`3e63088a66d4d433d84d577880c5ca810bb54eee` 與上述源提交相同。
+截至 09:20 UTC，合併提交的
+[push CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34749019591)
+與 [PR CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34749024326)
+仍在執行。
+
+此紀錄只涵蓋上述提交。文件整理與 main 發佈候選需由各自的 CI 驗證；
+正式簽名標籤、GHCR 映像與 Release 草稿尚未建立。後續依
+[發佈流程](../../governance/release-roles.md)驗證最終 main 與製品，
+由維護者執行最後的 Publish release。

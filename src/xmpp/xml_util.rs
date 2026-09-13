@@ -130,9 +130,8 @@ pub(crate) fn strict_xdata_submit(
         if value.len() > 4_096 {
             return Err(());
         }
-        // XEP-0004 requires receivers to ignore unknown submitted fields. We
-        // still validate their bounded wire shape above so an ignored field
-        // cannot become an XML-smuggling or memory-amplification primitive.
+        // XEP-0004 ignores unknown fields; validate their shape and size first
+        // so they remain subject to the same input limits.
         if variable != "FORM_TYPE" && !allowed_fields.contains(&variable) {
             continue;
         }
@@ -1198,9 +1197,8 @@ pub(crate) fn validate_delivery_receipts(root: Node<'_, '_>) -> Result<(), &'sta
         .map_err(|_| "bad-request")
 }
 
-/// Validate bounded, unambiguous wire shapes for server-visible modern
-/// message extensions. Northstar routes and archives these end-to-end client
-/// payloads; it does not pretend to render or decrypt them.
+/// Validate message-extension wire shapes before routing and archiving.
+/// Rendering and decryption belong to the client.
 pub(crate) fn validate_modern_message_payloads(root: Node<'_, '_>) -> Result<(), &'static str> {
     validate_processing_hints(root)?;
     validate_private_carbon_marker(root)?;

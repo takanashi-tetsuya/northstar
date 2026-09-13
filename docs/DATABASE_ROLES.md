@@ -416,10 +416,9 @@ Those probes assert that:
   decoy, proving identifier-safe isolated-schema behavior rather than merely
   testing `format('%I', ...)`.
 
-Passing this job proves separation from superuser/owner/DDL powers, exact
-immutable-history/capability manifests, and a table-level account-authority
-boundary. It does not claim subsystem-specific least privilege for every other
-mutable application table.
+This job verifies separation from superuser/owner/DDL powers, exact
+immutable-history/capability manifests, and the table-level account-authority
+boundary. Other mutable application tables still share the runtime role.
 
 ## Deliberate residual limitations
 

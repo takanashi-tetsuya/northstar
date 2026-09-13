@@ -1,8 +1,9 @@
 # Release identity and trust roles
 
-Northstar is maintained by `@takanashi-tetsuya`. These roles divide work and
-evidence, not people by assumption. The maintainer currently performs every
-role; neither self-review nor CI is an independent security audit.
+Northstar is maintained by `@takanashi-tetsuya`, with AI assistance in
+development and validation. The maintainer owns source review, signing,
+repository settings and release publication, and currently performs each role
+below.
 
 ## Responsibilities
 
@@ -13,10 +14,8 @@ role; neither self-review nor CI is an independent security audit.
 | Operations owner | Rehearse migration, backup/restore and rollback; approve the deployment window | Deployment/recovery credentials, separate from runtime identities |
 | Emergency operator | Record incident/exception, recover service and restore protection | Explicit break-glass authority, never routine CI bypass |
 
-No second human approval is required. The PR and release record must state the
-maintainer's results for each responsibility, limitations and outstanding
-external qualification. CODEOWNERS routes ownership; requiring its sole owner
-to approve their own PR would not provide usable independent review.
+The PR and release record must include results for each responsibility and
+outstanding validation. Branch rules require no outside approval.
 
 ## Release credentials
 
@@ -66,8 +65,7 @@ failed CI and stale run attempts block publication. Correct the failure and
 complete CI; do not disable gates or silently select older green evidence.
 Do not reuse published tags or assets as corrected evidence.
 
-The maintainer controls settings, workflow source and tags. This policy reduces
-accidental release and authority mistakes; it does not claim separation of
-personnel or protection against takeover of that entire identity. Independent
-audit and target-environment evidence remain separate qualifications. Rollback
-follows the documented data-safe procedure and recorded incident decision.
+The maintainer controls settings, workflow source and tags. Compromise of that
+identity can compromise the release process. Independent audit and deployment
+validation remain separate requirements. Follow the recovery procedure and
+record the incident decision when rolling back.

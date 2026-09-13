@@ -15,7 +15,7 @@ queries require an authorization snapshot and retention policy.
 | Unawareness | documented retention, export and deletion behavior in operator UI |
 | Non-compliance | policy snapshots, retention classes, moderation appeal/audit trail |
 
-The server cannot recover OMEMO plaintext and must not claim it can.  A web
+OMEMO private keys remain on client devices. A web
 client delivered by the same origin remains subject to that origin's release
 chain; high-assurance deployments should distribute a separately signed
 client.

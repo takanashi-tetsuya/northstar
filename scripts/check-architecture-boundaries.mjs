@@ -262,10 +262,8 @@ const publicFieldNames = [
   ...appState.matchAll(/^\s*pub\s+([A-Za-z_][A-Za-z0-9_]*)\s*:/gm),
 ].map((match) => match[1]);
 
-// These ceilings capture the 2026-08-29 debt baseline. They are monotonic
-// budgets, not a claim that the current architecture is sufficiently narrow.
-// New work must use an application service instead of increasing either
-// number; the ceilings should be lowered as vertical slices are extracted.
+// Public capability counts may only decrease as service boundaries narrow.
+// New work must use application services without raising these ceilings.
 const MAX_APP_STATE_PUBLIC_FIELDS = 9;
 const MAX_APP_STATE_CRATE_PUBLIC_FIELDS = 0;
 const EXPECTED_APP_STATE_PUBLIC_CAPABILITIES = [
@@ -622,8 +620,7 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     throw new Error('MIX must retain a regression test proving slow delivery cannot head-of-line block PAM');
   }
 
-  // Source-shape checks complement the Rust race tests; they do not prove Rust
-  // semantics. Inspect production bodies, never test fixtures or comment text.
+  // Inspect production bodies; exclude fixtures and comments from these checks.
   const compact = (source) => source.replace(/\s+/g, '').replace(/,\)/g, ')');
   const requireMix = (condition, message) => {
     if (!condition) throw new Error('MIX lifecycle boundary: ' + message);

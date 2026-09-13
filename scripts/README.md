@@ -85,6 +85,12 @@ Pong frames remain outside XMPP assertions and do not restart receive budgets.
 Live-child checks read the current process state and birth time together on
 every pass; they do not cache identities or relax phase ownership checks.
 
+The required PostgreSQL observer prepares its query once, then samples fresh
+backend state on the same attested connection. It retains the 3-second sample
+budget, bounded late-response drain and consecutive-error policy described in
+[subserver diagnostics](../docs/SUBSERVERS.md). CI preflight runs both unit and
+private PostgreSQL regressions before starting the pressure matrix.
+
 Capacity runs explicitly build the `runtime-test` Cargo profile and use
 `$CARGO_TARGET_DIR/runtime-test/rust-xmpp-server`. This profile inherits `dev`,
 uses optimization level 2, and keeps debug assertions, integer overflow checks
@@ -112,7 +118,7 @@ they never retry a business operation or extend a runtime health deadline.
 | Entry point | Purpose |
 | --- | --- |
 | `release-preflight.sh` | Full repository quality/dependency policy plus optional Compose production certificate, secret, role and image checks; `--production` requires Docker |
-| `.github/workflows/release.yml` | On ordinary `main` pushes, builds dry-run Linux/Windows AMD64 packages; on an exact version tag, publishes three GHCR images, generates `SHA256SUMS`, `IMAGE_DIGESTS` and provenance, and prepares a draft GitHub Release for manual review |
+| `.github/workflows/release.yml` | `main` / `codex/release-*` pushes and manual runs build a preview. A qualified version tag publishes three GHCR images, generates packages, `SHA256SUMS`, `IMAGE_DIGESTS`, `RELEASE-EVIDENCE.json` and provenance, and prepares a draft Release |
 | `release-runtime-validation.sh` | Umbrella runtime suite; do not run unattended in a sensitive environment |
 | `create-production-secrets.sh` | Create the file-backed production secret set in a protected external directory |
 | `reconcile-database-roles.sh` / `reconcile-database-grants.sh` | Bootstrap and attest PostgreSQL role separation |
@@ -130,11 +136,12 @@ The `0.2.0` workflow names its complete packages
 `northstar-0.2.0-windows-amd64.zip`; it also emits raw
 `northstar-0.2.0-linux-amd64` and
 `northstar-0.2.0-windows-amd64.exe` binaries. A successful tag run creates or
-updates a draft Release—it does not authorize or perform final GitHub Release
-publication. The tag run does push the three GHCR images, so pushing the tag is
-itself a publication-sensitive action. Review the four package checksums, the
-three exact GHCR references in `IMAGE_DIGESTS`, and the GitHub provenance before
-publishing the draft. Never invent or copy a hash from a different workflow run.
+updates a draft Release and publishes the three GHCR images. Fresh Windows and
+Linux jobs download all seven draft assets and verify checksums, attestations
+and native executables. Review `RELEASE-EVIDENCE.json`, the three exact image
+references in `IMAGE_DIGESTS`, and the successful workflow before publishing
+the draft. `SHA256SUMS` covers the four binary assets and both evidence files.
+The maintainer performs the final Publish release action.
 
 The root `build.sh`, `build_and_start.sh`, `start_server.sh`, `start.bat` and
 `Makefile` targets are compatibility wrappers for local development. They do
@@ -159,8 +166,7 @@ steps in the repository README instead.
 - `load-1000-*`: capacity-envelope tests, not a production SLA.
 
 Use disposable credentials, loopback/isolated ports and a database that the
-script explicitly accepts as a test target. A script's existence is not evidence
-that it passed for the current release artifact.
+script accepts as a test target. Record the tested commit, environment and result.
 
 ## Cybersecurity-sensitive and destructive validation
 

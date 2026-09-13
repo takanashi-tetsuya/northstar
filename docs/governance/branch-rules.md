@@ -1,9 +1,7 @@
 # Branch rules and required checks
 
-Northstar has one maintainer, `@takanashi-tetsuya`. Pull requests preserve a
-reviewable change and its evidence; they do not require a second person to
-approve the maintainer's own work. CODEOWNERS identifies responsibility and
-review routing, not independent review or separation of personnel.
+Northstar is maintained by `@takanashi-tetsuya`. Pull requests record review
+and validation; CODEOWNERS routes changes to the maintainer.
 
 ## Required branch policy
 
@@ -18,11 +16,11 @@ Both `main` and `dev` require:
   with strict up-to-date checks.
 - No branch deletion, force pushes, or configured bypass actors.
 
-The reviewable API payload is [branch-ruleset.json](branch-ruleset.json).
-It is proposed until installed and verified in GitHub Settings; checking it
-into Git does not activate protection. Public API inspection on 2026-09-10
-found no repository rulesets and both branches unprotected. Do not carry that
-historical observation forward after a future settings change.
+Live API verification on 2026-09-13 confirmed active
+[branch ruleset 23116470](https://github.com/takanashi-tetsuya/northstar/rules/23116470)
+for `main` and `dev`, with the requirements above and no bypass actors.
+The corresponding API payload is [branch-ruleset.json](branch-ruleset.json).
+Recheck the live rules before each release.
 
 ## Stable CI result
 
@@ -62,16 +60,16 @@ tag, fork and unrelated-branch runs cannot qualify publication. A newer failed,
 cancelled or running trusted run blocks reuse of older green evidence.
 Main-push release builds remain build-only and are not ship approval.
 
-`scripts/verify-release-ci.mjs` also checks effective `main` branch rules.
-GHCR publication remains blocked until the branch ruleset is actually enabled.
+`scripts/verify-release-ci.mjs` also requires active, effective `main` branch rules.
 The workflow revalidates tag and CI evidence immediately before publishing
-images, after both binary builds succeed. The repository owner and anyone able
-to change Actions source/settings remain in the supply-chain trust boundary;
-this is not independent protection against a compromised owner.
+images, after both binary builds succeed. Release integrity depends on the
+repository owner and anyone able to change Actions source or settings.
 
-[release-tag-ruleset.json](release-tag-ruleset.json) prevents updates and deletion
-of `v*` tags. Creation remains possible for the maintainer. A tag push requests
-external publication and must not be used merely to discover readiness.
+[Tag ruleset 23133333](https://github.com/takanashi-tetsuya/northstar/rules/23133333),
+also verified active on 2026-09-13, prevents updates and deletion of `v*` tags
+with no bypass actors. Its payload is [release-tag-ruleset.json](release-tag-ruleset.json).
+Creation remains possible for the maintainer. Pushing a version tag starts
+GHCR publication and draft Release preparation.
 
 ## Apply and verify
 
@@ -98,5 +96,4 @@ which effective branch rules do not fully show. See GitHub's
 Routine work must not bypass these rules. The maintainer records any emergency
 settings change with an incident, reason, compensating controls, rollback
 condition and restoration of protection before handoff. Record who performed
-security, release and recovery checks even when one person performs all three.
-Never describe this as independent approval.
+security, release and recovery checks.

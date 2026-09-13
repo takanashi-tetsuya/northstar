@@ -26,8 +26,8 @@ the Rust adapter tests agree on the same commit.
 An incompatible semantic or wire change creates a new package (`v2`) and a
 documented dual-stack window.  The old package remains available until all
 consumers have migrated and the deprecation date is recorded.  A PR must show
-the Buf breaking report and the generated-file diff; a local Rust build alone
-is not sufficient evidence.
+the Buf breaking report and the generated-file diff alongside its Rust build
+results.
 
 ## Release artifacts
 

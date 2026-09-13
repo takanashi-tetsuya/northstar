@@ -2,11 +2,9 @@
 
 ## Project status
 
-Northstar is an early-stage XMPP server. It has extensive repository-local
-tests and explicit security boundaries, but it has not completed an independent
-security audit and must not be presented as certified or universally
-production-safe. The supported deployment baseline is one Linux host and one
-Northstar process with PostgreSQL; multi-node Redis mode remains experimental.
+Northstar is a pre-1.0 XMPP server and has not completed an independent security
+audit. The supported deployment baseline is one Linux host and one Northstar
+process with PostgreSQL; multi-node Redis mode remains experimental.
 
 See [the known-issues register](docs/KNOWN_ISSUES.md), [security and architecture
 model](ARCHITECTURE.md), [production operations](docs/PRODUCTION_OPERATIONS.md)

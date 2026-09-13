@@ -1067,11 +1067,8 @@ pub fn pin_public_application_schema(options: PgPoolOptions) -> PgPoolOptions {
     })
 }
 
-/// The development escape hatch is intentionally narrower than simply
-/// skipping role attestation. The caller must already have proved that the
-/// deployment uses a reserved test domain and loopback listeners; this final
-/// database-side check prevents that escape hatch from being pointed at a
-/// shared or remote PostgreSQL server.
+/// Verify the development database is local before allowing relaxed roles.
+/// The caller must first verify a reserved test domain and loopback listeners.
 pub async fn attest_development_database_is_loopback(pool: &PgPool) -> Result<()> {
     let server_address: Option<String> =
         sqlx::query_scalar("SELECT pg_catalog.inet_server_addr()::text")

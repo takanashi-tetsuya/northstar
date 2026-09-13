@@ -1,9 +1,8 @@
 # Backup, restore, and deletion propagation
 
-Backups are a recovery input, not proof that a restore is safe. The canonical
-logical-database order, dependencies, encryption, PITR/WAL, retention, and
-post-restore fence checks live in `catalog/restore-order.yaml` and are checked
-by `restore-verifier`.
+The microservice prototype's logical-database order, dependencies, encryption,
+PITR/WAL, retention, and post-restore fence checks live in
+`catalog/restore-order.yaml` and are checked by `restore-verifier`.
 
 ## Required backup properties
 
@@ -28,5 +27,5 @@ legal-hold, audit, outbox, or deletion-ledger records.
 
 The restore verifier rejects missing encryption, WAL, deletion-ledger or fence
 metadata, duplicate phases, unknown dependencies, and dependency inversions.
-Automated restore drills still need to run against the real PostgreSQL/backup
-provider; a green catalog check is not an RPO/RTO guarantee.
+Measure RPO/RTO with restore drills against the target PostgreSQL and backup
+provider. For the current server, follow [backup security](../BACKUP_SECURITY.md).

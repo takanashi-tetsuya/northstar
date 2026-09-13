@@ -600,16 +600,12 @@ jobs:
               return 1
             fi
           }
-          # The official PostgreSQL entrypoint intentionally starts as root to
-          # initialize mounted storage, then drops to this image-owned account.
-          # Replacing that entrypoint with `id` would bypass the drop and only
-          # observe 0:0, so validate the account the entrypoint actually uses.
+          # PostgreSQL initializes storage as root, then drops privileges.
+          # Validate the account selected by its entrypoint.
           assert_image_account_identity PostgreSQL \
             postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73 \
             postgres 70 70
-          # Compose deliberately overrides Grafana to the numeric 472:0
-          # capability used by its mode-0600 secret and writable volumes. Test
-          # that deployed identity, not an incidental /etc/passwd group name.
+          # Match Grafana's Compose UID:GID and its secret/volume permissions.
           assert_effective_container_identity Grafana \
             grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63 \
             472:0 472 0
@@ -990,9 +986,8 @@ jobs:
           export LD_LIBRARY_PATH="$RUNNER_TEMP/northstar-pg17-tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           python3 scripts/test-listener-control-observer-pg17.py --pg-bin "$RUNNER_TEMP/northstar-pg17-tools/bin"
 
-  # A small, real two-node path is a gate, not evidence for the full stress
-  # envelope.  It catches setup, template, listener, and cleanup regressions
-  # before either regular 20x50 or scheduled 100x50 capacity work begins.
+  # Catch setup, template, listener and cleanup regressions before starting
+  # the regular 20x50 or scheduled 100x50 matrix.
   listener-readiness-stress-smoke:
     name: Listener/readiness smoke (1x1 then 1x2 · ${{ matrix.fixture }})
     if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

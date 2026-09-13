@@ -288,7 +288,16 @@ class Libpq:
         if self.lib.PQsetnonblocking(self.conn, 1) != 0:
             raise ObserverError('nonblocking_setup_failed')
 
-    def query(self, sql, validator=None):
+    def prepare_activity(self, salt):
+        # Parsing/planning pg_stat_activity for every 500 ms sample adds
+        # avoidable catalog work under the same load we are observing. Only
+        # the plan is reused: EXECUTE still runs in a fresh transaction and
+        # obtains a fresh backend-status snapshot on this one connection.
+        self.query('PREPARE northstar_control_observer_sample AS ' + activity_sql(salt),
+                   command=True)
+        return 'EXECUTE northstar_control_observer_sample'
+
+    def query(self, sql, validator=None, *, command=False):
         if self.lib.PQsendQuery(self.conn, sql.encode('ascii')) != 1:
             raise ObserverError('query_send_failed')
         deadline = time.monotonic() + 3.0
@@ -342,10 +351,13 @@ class Libpq:
                 results += 1
                 if results > 2:
                     raise ObserverError('unexpected_result_count')
-                if self.lib.PQresultStatus(result) != 2:
+                if self.lib.PQresultStatus(result) != (1 if command else 2):
                     state = self.lib.PQresultErrorField(result, ord('C'))
                     if failure is None:
                         failure = ObserverError('server_query_failed', state.decode('ascii') if state else None)
+                elif command:
+                    if results != 1 or self.lib.PQntuples(result) != 0 or self.lib.PQnfields(result) != 0:
+                        failure = ObserverError('unexpected_result_shape')
                 elif payload is not None or self.lib.PQntuples(result) != 1 or self.lib.PQnfields(result) != 1:
                     failure = ObserverError('unexpected_result_shape')
                 elif self.lib.PQgetisnull(result, 0, 0):
@@ -358,9 +370,9 @@ class Libpq:
                 self.lib.PQclear(result)
         if failure:
             raise failure
-        if payload is None:
+        if (command and results != 1) or (not command and payload is None):
             raise ObserverError('missing_result')
-        value = json.loads(payload)
+        value = None if command else json.loads(payload)
         if validator is not None:
             validator(value)
         if expired or time.monotonic() >= deadline:
@@ -669,7 +681,7 @@ def main():
         if not isinstance(attested, dict) or set(attested) != {'authorized'} or attested['authorized'] is not True:
             raise ObserverError('observer_database_attestation_failed')
         observer_backend_pid = connection.lib.PQbackendPID(connection.conn)
-        sql = activity_sql(salt)
+        sql = connection.prepare_activity(salt)
         next_sample = time.monotonic()
         while True:
             limits.check()

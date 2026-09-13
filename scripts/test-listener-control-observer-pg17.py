@@ -247,6 +247,43 @@ class PostgreSQLIntegration(unittest.TestCase):
         self.assertFalse(result['failure_marker_seen'])
         self.assertEqual([row['type'] for row in records], ['metadata', 'terminal'])
 
+    def test_prepared_activity_retains_fresh_state_and_backend_disappearance(self):
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            connection = OBSERVER.Libpq(OBSERVER.Limits(15, os.getpid()))
+            self.addCleanup(connection.close)
+            connection.connect()
+            observer_pid = connection.lib.PQbackendPID(connection.conn)
+            sql = connection.prepare_activity(self.salt)
+            initial = connection.query(sql, OBSERVER.validate_sample)
+            self.assertEqual(initial['total'], 2)
+            original = next(row for row in initial['rows'] if row['pid'] == self.identities['A']['pid'])
+            self.assertEqual(original['state'], 'idle')
+            self.backends[0].stdin.write('SELECT pg_sleep(2);\n')
+            self.backends[0].stdin.flush()
+            deadline = time.monotonic() + 3
+            while True:
+                current = connection.query(sql, OBSERVER.validate_sample)
+                active = next(row for row in current['rows'] if row['pid'] == original['pid'])
+                # A cold backend can read a catalog page before entering
+                # pg_sleep. Wait for the requested state within the original
+                # bound instead of mistaking that intermediate I/O for stale
+                # prepared-query results.
+                if active['state'] == 'active' and active['wait_event'] == 'PgSleep':
+                    self.assertEqual(active['backend_start'], original['backend_start'])
+                    self.assertEqual(active['database_hash'], original['database_hash'])
+                    break
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(.025)
+            self.close_backend(self.backends[1])
+            while True:
+                current = connection.query(sql, OBSERVER.validate_sample)
+                if current['total'] == 1:
+                    self.assertEqual(current['rows'][0]['pid'], original['pid'])
+                    break
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(.025)
+            self.assertEqual(connection.lib.PQbackendPID(connection.conn), observer_pid)
+
     def test_slow_non_lock_wait_never_enters_lock_manager_probe(self):
         # Use a throwing probe in this private database to prove CASE short
         # circuits on a real slow active backend; an empty result alone would

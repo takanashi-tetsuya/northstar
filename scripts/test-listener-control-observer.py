@@ -428,6 +428,31 @@ class LibpqTests(unittest.TestCase):
         connection.close()
         library.PQfinish.assert_called_once_with(7)
 
+    def test_preparation_requires_one_complete_command_response(self):
+        for statuses, expected in (([1], None), ([1, 1], 'unexpected_result_shape'),
+                                   ([2], 'server_query_failed'), ([], 'missing_result')):
+            with self.subTest(statuses=statuses):
+                library = mock.Mock()
+                library.PQsendQuery.return_value = 1
+                library.PQconsumeInput.return_value = 1
+                library.PQflush.return_value = 0
+                library.PQisBusy.return_value = 0
+                library.PQgetResult.side_effect = list(range(11, 11 + len(statuses))) + [None]
+                library.PQresultStatus.side_effect = statuses
+                library.PQresultErrorField.return_value = None
+                library.PQntuples.return_value = 0
+                library.PQnfields.return_value = 0
+                connection = self.connection(library)
+                if expected:
+                    with self.assertRaises(m.ObserverError) as result:
+                        connection.prepare_activity('a' * 32)
+                    self.assertEqual(result.exception.code, expected)
+                else:
+                    self.assertEqual(connection.prepare_activity('a' * 32),
+                                     'EXECUTE northstar_control_observer_sample')
+                self.assertEqual(library.PQclear.call_count, len(statuses))
+                self.assertEqual(library.PQgetResult.call_count, len(statuses) + 1)
+
     def deadline_connection(self, *, pending_tail=False, value=None):
         library = mock.Mock()
         library.PQsendQuery.return_value = 1
@@ -456,6 +481,18 @@ class LibpqTests(unittest.TestCase):
         self.assertEqual(library.PQgetResult.call_count, 2)
         library.PQclear.assert_called_once_with(11)
         connection.ready.assert_called_once()
+
+    def test_late_or_undrained_preparation_cannot_start_sampling(self):
+        for pending_tail in (False, True):
+            with self.subTest(pending_tail=pending_tail):
+                connection, library = self.deadline_connection(pending_tail=pending_tail)
+                library.PQresultStatus.return_value = 1
+                library.PQntuples.return_value = library.PQnfields.return_value = 0
+                with self.assertRaises(m.ObserverError) as result:
+                    connection.prepare_activity('a' * 32)
+                self.assertEqual(result.exception.code, 'client_query_deadline' if pending_tail
+                                 else 'client_query_deadline_drained')
+                library.PQgetvalue.assert_not_called()
 
     def test_late_rows_without_ready_for_query_are_not_reusable(self):
         connection, library = self.deadline_connection(pending_tail=True)
@@ -551,6 +588,9 @@ class Fake:
         self.lib=types.SimpleNamespace(PQbackendPID=lambda c:987,PQlibVersion=lambda:160015)
     def connect(self):
         if case=='connect_failure':raise m.ObserverError('connection_failed')
+    def prepare_activity(self,salt):
+        if case=='prepare_failure':raise m.ObserverError('server_query_failed','57014')
+        return 'EXECUTE northstar_control_observer_sample'
     def query(self,sql,validator=None):
         if sql==m.attestation_sql():return {'authorized':1 if case=='attestation_wrong_type' else case!='attestation_failure'}
         self.n+=1
@@ -611,6 +651,10 @@ if case=='late_unrecovered':assert result['error_code']=='sample_error_not_recov
 if case=='late_repeated':assert instances[0].n==3 and result['consecutive_sample_errors']==3
 if case=='server_error':assert instances[0].n==3 and result['consecutive_sample_errors']==3
 if case=='pending_error':assert instances[0].n==1
+if case=='prepare_failure':
+    assert instances[0].n==0 and result['samples']==0
+    assert result['error_code']=='server_query_failed'
+    assert not (Path(out)/'observer-ready.json').exists()
 if case=='pending_after_samples':
     assert result['error_code']=='client_query_deadline' and not result['failure_marker_seen']
     assert result['observer_context_samples']==2 and result['captured_samples']==0
@@ -649,7 +693,7 @@ class MainTests(unittest.TestCase):
             with self.subTest(case=case): self.run_case(case)
 
     def test_pending_connection_and_parent_failures_close_without_reconnect(self):
-        for case in ('pending_error', 'pending_after_samples', 'connect_failure', 'parent_loss', 'attestation_failure', 'attestation_wrong_type', 'overall_deadline'):
+        for case in ('pending_error', 'pending_after_samples', 'connect_failure', 'prepare_failure', 'parent_loss', 'attestation_failure', 'attestation_wrong_type', 'overall_deadline'):
             with self.subTest(case=case): self.run_case(case)
 
     def test_marker_capture_auto_exits_at_original_deadline(self):

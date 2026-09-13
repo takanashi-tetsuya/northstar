@@ -16,7 +16,8 @@ command -v ps >/dev/null || { echo "ps is required for listener stress lifecycle
 # before it can silently leave a nested CI supervisor or fixture session
 # behind.  The dynamic test then proves the same private-session topology on
 # Linux with a TERM-ignoring descendant.
-grep -Fq 'setsid bash "$project_dir/scripts/lib/test-listener-stress-worker.sh" "$control_file"' "$driver" \
+grep -Fq 'setsid taskset --cpu-list "$workload_cpu_set"' "$driver" \
+  && grep -Fq 'bash "$project_dir/scripts/lib/test-listener-stress-worker.sh" "$control_file"' "$driver" \
   || { echo "listener stress driver no longer launches verified private sessions" >&2; exit 1; }
 grep -Fq 'bash "$project_dir/scripts/github-ci-run.sh"' "$driver" \
   || { echo "listener stress driver no longer uses the bounded CI supervisor per worker" >&2; exit 1; }

@@ -1,7 +1,7 @@
 # CI 耗時修復實作
 
-> 更新至 2026-09-13：預備查詢源提交 `b1a1655` 的兩組完整 CI 已通過，
-> PR #6 已合併為 `dev` 提交 `761c569`。最新結果與附件校驗值見文末。
+> 更新至 2026-09-13：PR #7 的兩組 CI 結果不一致，push 的 Federation
+> 再次出現 observer 逾時。最新 CPU 分配修正與驗證見文末。
 
 本文件接續 [耗時調查](CI-TIMING-INVESTIGATION.md)，記錄使用者要求繼續後的實作。
 基線為 `0c4ca9d9c442d94589620aee51fabaf66f4bfd03`。以下是工程紀錄，不新增操作授權。
@@ -1109,3 +1109,43 @@ subserver／architecture 檢查通過。新增實際回歸確認預備查詢能
 正式簽名標籤、GHCR 映像與 Release 草稿尚未建立。後續依
 [發佈流程](../../governance/release-roles.md)驗證最終 main 與製品，
 由維護者執行最後的 Publish release。
+
+
+## 2026-09-13：落實壓測 worker 的 CPU 預留
+
+`664ff89` 的 [push CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34749896516)
+在 Federation 第 7 輪失敗。Observer 查詢未能在 5 秒內收完整個回覆，
+wrapper 隨後取消工作；其餘適用工作與 MIX 20×50 通過。
+同提交的 [PR CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34749922456)
+完成 28 success／4 expected skips，兩項 20×50 與 CI required 均成功。
+[發佈預演](https://github.com/takanashi-tetsuya/northstar/actions/runs/34749896509)
+亦完成 10 success／3 tag-only skips。
+
+失敗期間的 8.257 秒內，四顆 CPU 累積使用 32.928 秒。有效前窗沒有
+heavyweight lock 等待；較早 `761c569` 的 PR Federation 第 14 輪則捕捉到
+多個控制連線等待 `LWLock/LockManager`，最長接近 4 秒。這些結果支持
+排查共用 runner 的排程與資料庫競爭，尚不足以確定所有逾時的單一根因。
+
+原 `scheduler_reserved_cpus` 只參與 Tokio 執行緒數計算，100 個 server
+及 fixture helpers 仍可用滿四顆 CPU。現在於 worker session 啟動時套用
+CPU affinity：四 CPU runner 的 worker 後代共用三顆，PostgreSQL、
+observer 與 parent 保留完整四顆；單 CPU 主機共用唯一 CPU。選擇依
+實際 inherited affinity 與 effective CPU budget 計算，日誌輸出
+`workload_cpu_set`。矩陣、100 server all-live 屏障及所有期限保持原值。
+CPU affinity 不預留 cgroup quota，也不能隔離其他主機負載。
+
+新增真實程序回歸經過 production worker launcher 和 CI supervisor，
+確認後代繼承 CPU set、parent affinity 不變；移除 taskset 的 mutation
+確實使測試失敗。稀疏 CPU set、quota 較小與單 CPU 邊界亦有覆蓋。
+
+本機將整個 fixture（含 postmaster）限制在同一組四顆 CPU，完整執行
+5×50 Federation，25 個逐輪階段均成功，總觀測時間 501.750 秒。
+100 台存活 server 的 affinity 均為 `0,1,2`，PostgreSQL／observer
+為 `0,1,2,3`。Observer 1,003 次有效採樣、peak 100、0 errors，最大
+78.173 ms；wrapper 的診斷、清理、case map 與容量限制均成功。
+25 項 startup scheduler、37 項 phase、12 項 diagnostics、完整 worker
+lifecycle、6 項 CI performance contract 與 9 項 release gate 測試通過。
+
+同配置的 MIX 1×50 亦完整通過；observer 262 samples、peak 100、
+0 errors，最大 20.444 ms，wrapper 檢查全過。遠端新提交的
+完整 20×50 結果仍是此次修正的最終 CI 驗證。

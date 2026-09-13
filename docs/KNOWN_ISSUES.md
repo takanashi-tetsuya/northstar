@@ -67,17 +67,15 @@ CI 验证隔离环境中的代码与运行行为；生产环境、公网互操�
 
 ## 发布候选验证记录（2026-09-13）
 
-源提交 `b1a1655b3da5e1a0a13bb427d9b5c1db85c180fe` 的
-[push CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34745032268)
-与 [PR CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34745073283)
-均通过：各 28 个成功工作，4 个按事件策略跳过的工作，包含 `CI required`。
-范围包括 Rust 质量检查、数据库迁移与权限、协议和恢复回归，以及完整的
-Federation/MIX regular 20×50 矩阵。四组压力测试共完成 80 轮、408 个阶段；
-observer 记录 33,093 次有效取样，24 次错误全部恢复。
+`664ff89` 的 [PR CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34749922456)
+通过全部适用检查，包括 Federation/MIX regular 20×50 和 `CI required`。
+同提交的 [push CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34749896516)
+在 Federation 第 7 轮出现 observer 查询超时，MIX 通过。这类间歇故障在
+文件更新前的 `761c569` 也曾发生。
 
-[PR #6](https://github.com/takanashi-tetsuya/northstar/pull/6) 已合并到 `dev`，
-提交为 `761c56919cbca300bf4cd83dfc38ac03ab7659f6`，与上述源提交具有相同 tree。
-详细日志、附件校验值与历史失败见 [CI 验证记录](handoff/2026-09-12/CI-PERFORMANCE-FOLLOWUP.md)。
+当前修正为压力测试 worker 设置 CPU affinity，落实原有的数据库／observer
+CPU 预留，需由新提交的完整 CI 验证稳定性。历史结果、日志与本地验证见
+[CI 验证记录](handoff/2026-09-12/CI-PERFORMANCE-FOLLOWUP.md)。
 
 定时 fuzz、production/cluster load envelope 和 scheduled stress 属于定时或
 手动 CI；普通 push/PR 按策略跳过这些工作。最终发布还需要精确 `main` 提交的

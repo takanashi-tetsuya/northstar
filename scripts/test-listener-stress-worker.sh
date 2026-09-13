@@ -153,7 +153,7 @@ fi
 grep -Fq 'must be set together' \
   "$project_dir/scripts/mix-federation-runtime-wsl.py" \
   || { echo "MIX federation login-slot configuration no longer fails closed on a partial environment" >&2; exit 1; }
-grep -Fq 'with claim_login_slot(LOGIN_SLOT_CONFIGURATION, timeout_seconds=None):' \
+grep -Fq 'with claim_login_slot(LOGIN_SLOT_CONFIGURATION, timeout_seconds=None, on_wait=on_wait):' \
   "$project_dir/scripts/mix-federation-runtime-wsl.py" \
   || { echo "MIX federation fixture no longer separates phase admission from credential I/O" >&2; exit 1; }
 for phase in setup enqueue finish; do

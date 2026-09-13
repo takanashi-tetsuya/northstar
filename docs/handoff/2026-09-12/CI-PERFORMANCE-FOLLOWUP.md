@@ -799,3 +799,13 @@ workload 339667.509 ms、cleanup 485.267 ms 均 status 0，observer
 validator 傳入實際 1 pair 驗證為 true；臨時程式已修正參數，但沒有
 重跑或將原始 wrapper 結果改成成功。這是額外的真實 queue／keepalive
 業務證據；完整 wrapper 成功證據仍以先前 1×50 run 為準。
+
+修復已提交為 `fe82a5f`。push CI `34728864767`、PR CI `34728866857`
+的 Web static checks 均在 `test-listener-stress-worker.sh` 失敗：舊靜態
+契約仍逐字要求沒有 `on_wait` 參數的 `claim_login_slot` 呼叫。更新該
+斷言以保留 `timeout_seconds=None` 並要求 forwarding callback，沒有
+移除檢查或改動 runtime。已補跑 CI「Check operational script syntax」
+全部 29 個命令（worker 群組獨立執行，其餘 28 個按原順序執行），
+全部通過；worker 群組含 8 diagnostics／20 observed-entry／41 observer
+測試及實際子程序生命週期清理。這補上先前 96 項測試未涵蓋的舊
+靜態契約。新的提交仍須取得完整遠端 CI 證據。

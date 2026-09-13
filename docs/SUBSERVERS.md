@@ -251,6 +251,13 @@ window around an existing workload failure permits its original cleanup to finis
 Summary timing includes failed samples. Diagnostic-only failures upload the
 bounded observer evidence; business-failure logs remain required unless the
 wrapper explicitly reports a successful workload or that it never launched one.
+If cancellation arrives after workload failure has already started driver cleanup,
+the driver finishes that cleanup within the existing supervisor TERM-to-KILL
+budget and retains the original nonzero status. Cancellation during otherwise
+successful cleanup still fails the run. A dead nested phase publisher reports
+its pair index, so its owned worker transcript gets priority even while the outer
+worker is still alive. The existing log count, byte limits and redaction apply;
+the pair index grants no signal or resource-cleanup authority.
 
 First-failure records use Linux `renameat2(RENAME_NOREPLACE)` so concurrent
 publishers cannot replace the winner or change its inode during finalization.

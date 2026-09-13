@@ -150,6 +150,21 @@ if sys.argv[5] == "prepared":
             phases.release(self.directory, self.nonce, 1, "transport", 1, [first.pid, second.pid])
         self.assertFalse((self.directory / "transport-release.json").exists())
 
+    def test_dead_nested_publisher_identifies_its_pair_without_releasing_transport(self):
+        self.mark_live_release()
+        publisher = self.spawn_worker(2, "transport")
+        publisher.terminate()
+        publisher.communicate(timeout=3)
+        # The assigned outer worker (this process) survives its publisher.
+        result = subprocess.run([
+            sys.executable, str(ROOT / "listener-stress-phases.py"), "release",
+            str(self.directory), self.nonce, "1", "transport", "1",
+            str(os.getppid()), str(os.getpid()),
+        ], capture_output=True, text=True, timeout=3)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("listener_stress_failed_pair=2\n", result.stderr)
+        self.assertFalse((self.directory / "transport-release.json").exists())
+
     def test_python_phase_environment_is_all_or_none(self):
         with patch.dict(os.environ, {}, clear=True), patch.object(phases, "worker") as wait:
             phases.wait_for_fixture_phase("transport")

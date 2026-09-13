@@ -809,3 +809,69 @@ validator 傳入實際 1 pair 驗證為 true；臨時程式已修正參數，但
 全部通過；worker 群組含 8 diagnostics／20 observed-entry／41 observer
 測試及實際子程序生命週期清理。這補上先前 96 項測試未涵蓋的舊
 靜態契約。新的提交仍須取得完整遠端 CI 證據。
+
+## 2026-09-13：第 18 輪故障與取消期間的日誌保留
+
+後續查明 `3b1c099` 的 push CI `34726111044` 已完整通過：28 success、
+4 skips，Federation 與 MIX 均完成 20×50，required aggregate 成功。
+這是歷史提交的證據，不能替代最新提交的驗證。
+
+`15c7b3d` 的 release preview `34729253959` 完成 10 success、3 tag-only
+skips。Windows／Linux fresh runner 與 Docker 預設 entrypoint 的 PG17.11
+startup、migration、readiness、web assets 全部通過；組裝產物 artifact
+`10308457995` 的 SHA-256 為
+`39fa109c492bdc32b9e3098dfa08497fbdeb84f466493ce11bf42bb8e8ec5c32`。
+尚未建立正式 tag、GHCR 發佈或實際 draft Release。
+
+最新 push CI `34729253947` 的 Federation `103650472608` 完整 20×50
+通過，耗時 53m10s；PR CI `34729256042` 的 MIX `103649715440` 也完成
+20×50，耗時 55m52s。但 PR Federation `103649715403` 在第 18 輪失敗。
+push MIX `103650472637` 隨後於 02:41:29 UTC 通過完整 20×50，
+required aggregate `103661058298` 於 02:41:38 UTC 成功，push 全部
+28 success／4 skips；PR 仍因 Federation 失敗而不合格。
+
+push MIX 總耗時 91m25s。其 20 輪 phase 合計為 provision 8.36 分鐘、
+preparation 27.30、startup 4.82、workload 47.32、cleanup 2.42；
+runtime artifact 檢查僅 3.055 秒。相同提交的 PR MIX 對應合計為
+7.04／12.87／0.88／29.86／4.14 分鐘，兩者皆回報 4 個 effective CPU、
+1 login slot、2 startup pairs，全部 20 輪 phase status 0 且 wrapper
+檢查全過。慢速 run 在每一輪的 preparation／startup／workload 都較慢，
+並非單次卡住或重編譯；資料尚不足以判定底層 runner 硬體或排程根因。
+
+PR 第 18 輪 all-live 後，`federation-transport-release-r18` 在
+02:06:49.549 UTC 回報 `fixture exited before phase release`，parent
+first-failure marker 為 02:06:49.880707 UTC。observer 最後成功樣本在
+02:06:49.433512 UTC；它於 02:06:54.893915 UTC 才因 client query
+deadline 失敗。因此 observer failure 晚於已知的 fixture failure。
+02:06:55.2659 UTC wrapper 傳送 TERM 時，parent 已在 cleanup，卻已
+恢復 TERM 預設處理，結果 exit -15；只留下 parent 初始附件，沒有
+保留工作程序完成清理後的日誌，wrapper 也偵測到 adopted descendants。
+兩個失敗附件已按 GitHub SHA-256 校驗：`10310230683`
+`7da64a125912a739d8740986917fb0a7dafebb44bb5a6f1994aaa69f05e50019`；
+`10310240669`
+`330ab56ad9c4463b33ef7ff0df3639565e3801d6799639a9962ab4b5bb33a291`。
+
+現在 cleanup 保留 INT／TERM handler：不重入 cleanup，保留原始
+非零結果；成功 cleanup 期間收到訊號仍回報 130／143。外層原有
+45 秒 TERM-to-KILL budget、工作程序停止與資料庫清理限制均不變。
+phase helper 另輸出已退出 publisher 的 pair index，parent 僅用經過
+範圍檢查的 index 選取自有日誌，使仍在清理的外層 worker 不會遮蔽
+真正失敗的 pair。12 份、每份 32768 bytes、總量 524288 bytes 和
+redaction 限制不變；診斷 index 不授權 signal 或資源操作。
+
+使用實際 production cleanup 函式的控制訊號回歸，在原始 `15c7b3d`
+確實得到 `-15 != 7`，修正版保留 exit 7、晚到的首個 fixture 錯誤、
+移除自有 runtime 目錄並遮蔽秘密；成功 cleanup 收到 INT／TERM 的
+非零退出亦通過。真實 nested publisher 退出、外層 leader 仍活著的
+CLI 回歸確認 pair index 正確且不釋放 transport barrier。
+CI operational step 全部 29 個命令通過，包含 12 diagnostics、
+20 observed-wrapper、41 observer，以及 23 startup／37 phase／37 MIX
+regressions。這些修正證明取消期間的診斷保留，尚未證明首個 fixture
+退出原因已修復。
+
+最後幾筆 PG 樣本顯示 pair 15 B 的 runtime-control backend 處於
+idle／ClientRead，query age 最後到 6122.853 ms；這與 5 秒 critical
+heartbeat 失效相容，但失去 worker 日誌，不能證明它就是退出程序或
+確認根因。XML 分幀器已保存增量 cursor，不支持每次重新掃描整個
+1 MiB stanza 的猜測。正在使用修正版執行完整 4 CPU、5×50 Federation
+本機診斷；沒有增加 heartbeat／observer／認證期限或縮減遠端矩陣。

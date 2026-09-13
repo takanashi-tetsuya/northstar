@@ -512,10 +512,21 @@ verify_mix_federation_listener_ledger() {
 }
 
 record_parent_phase_failure() {
-  local phase="$1" status="$2" phase_log="$3"
+  local phase="$1" status="$2" phase_log="$3" line pair
   [[ -n "$parent_failure_phase" ]] || parent_failure_phase="$phase"
   record_parent_diagnostic "phase=$phase status=$status"
   if [[ -s "$phase_log" ]]; then
+    # A nested phase publisher can exit while its worker leader is still
+    # cleaning up. The validated pair index selects only an already-owned
+    # transcript; it never authorizes a signal or a resource operation.
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^listener_stress_failed_pair=([1-9][0-9]{0,4})$ ]]; then
+        pair="${BASH_REMATCH[1]}"
+        if ((10#$pair <= ${#round_logs[@]})); then
+          failed_worker_logs+=("${round_logs[$((10#$pair - 1))]}")
+        fi
+      fi
+    done < <(tail -c "$parent_phase_log_tail_bytes" -- "$phase_log")
     record_parent_diagnostic "--- phase=$phase bounded_output_tail ---"
     tail -c "$parent_phase_log_tail_bytes" -- "$phase_log" >>"$parent_diagnostic_raw" || true
     printf '\n' >>"$parent_diagnostic_raw" || true
@@ -1597,7 +1608,13 @@ start_stress_worker() {
 
 cleanup() {
   status=$?
-  trap - EXIT INT TERM
+  trap - EXIT
+  # An observer failure can send TERM after a fixture failure has already
+  # started cleanup. Keep that cleanup running within the supervisor's
+  # existing TERM-to-KILL budget so it can retain the original worker logs.
+  # Do not re-enter cleanup or overwrite an earlier failure with the signal.
+  trap 'if ((status == 0)); then status=130; fi' INT
+  trap 'if ((status == 0)); then status=143; fi' TERM
   parent_stage_end "$status" || status=1
   # Do this before any potentially slow database cleanup.  A migration or
   # preflight failure must leave redacted evidence even if its later cleanup

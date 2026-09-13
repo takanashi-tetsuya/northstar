@@ -8,8 +8,10 @@ import json
 from pathlib import Path
 import re
 import shlex
+import signal
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -26,7 +28,7 @@ def function(name: str) -> str:
 
 
 FUNCTIONS = "\n".join(function(name) for name in (
-    "record_parent_diagnostic", "capture_failure_log_priority",
+    "record_parent_diagnostic", "record_parent_phase_failure", "capture_failure_log_priority",
     "append_runtime_log_tails", "retain_parent_diagnostic_artifact",
 ))
 
@@ -47,7 +49,8 @@ class DiagnosticsTests(unittest.TestCase):
         path.chmod(0o600)
         return path
 
-    def invoke(self, body: str) -> tuple[str, str]:
+    def invoke(self, body: str, *, expected_status: int = 0,
+               cancel: signal.Signals | None = None) -> tuple[str, str]:
         script = "\n".join((
             "set -euo pipefail", "umask 077",
             f"project_dir={shlex.quote(str(PROJECT))}",
@@ -56,6 +59,7 @@ class DiagnosticsTests(unittest.TestCase):
             'parent_diagnostic_raw="$runtime_dir/parent-diagnostics.raw.log"',
             ': >"$parent_diagnostic_raw"',
             "parent_diagnostic_max_bytes=524288",
+            "parent_phase_log_tail_bytes=131072",
             "parent_diagnostic_artifact=''",
             "fixture=federation", "mode=regular", "round=3",
             "parent_failure_phase=federation-transport-release-r3",
@@ -64,16 +68,73 @@ class DiagnosticsTests(unittest.TestCase):
             "failure_log_round=''", "failure_log_priority_captured=false",
             FUNCTIONS, body,
         ))
-        result = subprocess.run(
-            ["bash", "-c", script], capture_output=True, text=True, timeout=15,
+        process = subprocess.Popen(
+            ["bash", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             env={**os.environ, "LC_ALL": "C", "GITHUB_STEP_SUMMARY": ""},
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("Broken pipe", result.stderr)
+        try:
+            if cancel is not None:
+                deadline = time.monotonic() + 5
+                while not (self.base / "cleanup-waiting").exists():
+                    self.assertIsNone(process.poll(), "driver exited before cleanup was ready")
+                    self.assertLess(time.monotonic(), deadline, "cleanup never reached its wait")
+                    time.sleep(0.01)
+                process.send_signal(cancel)
+                (self.base / "finish-cleanup").touch()
+            output, error = process.communicate(timeout=15)
+        finally:
+            if process.poll() is None:
+                (self.base / "finish-cleanup").touch()
+                process.kill()
+                process.communicate(timeout=3)
+        self.assertEqual(process.returncode, expected_status, error)
+        self.assertNotIn("Broken pipe", error)
         artifacts = list(self.output.glob("*.redacted.log"))
-        self.assertEqual(len(artifacts), 1, result.stderr)
+        self.assertEqual(len(artifacts), 1, error)
         self.assertEqual(artifacts[0].stat().st_mode & 0o777, 0o600)
-        return artifacts[0].read_text(encoding="utf-8"), result.stdout
+        return artifacts[0].read_text(encoding="utf-8"), output
+
+    def check_interrupted_cleanup(self, initial_status: int, cancel: signal.Signals,
+                                  expected_status: int) -> None:
+        runtime = tempfile.TemporaryDirectory(prefix="northstar-listener-stress.")
+        self.addCleanup(runtime.cleanup)
+        self.runtime = Path(runtime.name)
+        self.log("worker.log", "INITIAL_WORKER_OUTPUT\n")
+        body = "\n".join((
+            f"control={shlex.quote(str(self.base))}",
+            'round_logs=("$runtime_dir/worker.log")',
+            'failed_worker_logs=("${round_logs[0]}")',
+            'workers=("$$")',
+            'parent_stage_end() { return 0; }',
+            'publish_parent_failure_marker() { return 0; }',
+            'record_host_pressure() { record_parent_diagnostic "cleanup pressure snapshot"; }',
+            'signal_worker_groups() { return 0; }',
+            'wait_for_workers_to_stop() {',
+            '  : >"$control/cleanup-waiting"',
+            '  while [[ ! -f "$control/finish-cleanup" ]]; do sleep .01; done',
+            '  printf "ORIGINAL_FIXTURE_ERROR\\nAuthorization: Bearer CLEANUP_SECRET_SENTINEL\\n" >>"${round_logs[0]}"',
+            '}',
+            'reap_workers() { return 0; }',
+            'drop_round_databases() { return 0; }',
+            'drop_template_databases() { return 0; }',
+            function("cleanup"),
+            'trap cleanup EXIT',
+            f'exit {initial_status}',
+        ))
+        text, _ = self.invoke(body, expected_status=expected_status, cancel=cancel)
+        self.assertIn(f"exit_status={expected_status}\n", text)
+        self.assertIn("ORIGINAL_FIXTURE_ERROR", text)
+        self.assertNotIn("CLEANUP_SECRET_SENTINEL", text)
+        self.assertFalse(self.runtime.exists(), "interrupted cleanup left its runtime directory")
+
+    def test_second_term_during_cleanup_preserves_failure_and_worker_artifact(self):
+        self.check_interrupted_cleanup(7, signal.SIGTERM, 7)
+
+    def test_term_during_success_cleanup_still_fails_after_retaining_logs(self):
+        self.check_interrupted_cleanup(0, signal.SIGTERM, 143)
+
+    def test_int_during_success_cleanup_still_fails_after_retaining_logs(self):
+        self.check_interrupted_cleanup(0, signal.SIGINT, 130)
 
     def test_exited_worker_precedes_current_round_and_snapshot_survives_cleanup(self):
         for pair in range(1, 51):
@@ -102,6 +163,26 @@ retain_parent_diagnostic_artifact 2
         self.assertIn("priority_worker_log=federation.round-3.pair-49.log\n", text)
         self.assertIn("CURRENT_PAIR_49\n", text)
         self.assertNotIn("HISTORICAL_ROUND", text)
+        self.assertEqual(text.count("--- runtime_log="), 12)
+
+    def test_nested_publisher_failure_preserves_its_log_while_all_leaders_are_alive(self):
+        for pair in range(1, 51):
+            self.log(f"federation.round-3.pair-{pair}.log", f"CURRENT_PAIR_{pair}\n")
+        self.log("phase.raw.log", "listener_stress_failed_pair=0\n"
+                 "listener_stress_failed_pair=51\nlistener_stress_failed_pair=999999999999\n"
+                 "listener_stress_failed_pair=../../outside\nlistener_stress_failed_pair=49\n")
+        text, _ = self.invoke(r"""
+for ((pair=1;pair<=50;pair++)); do
+  round_logs+=("$runtime_dir/federation.round-3.pair-$pair.log")
+  workers+=("$$")
+done
+record_parent_phase_failure federation-transport-release-r3 2 "$runtime_dir/phase.raw.log"
+[[ "${#failed_worker_logs[@]}" == 1 ]]
+append_runtime_log_tails
+retain_parent_diagnostic_artifact 2
+""")
+        self.assertIn("priority_worker_log=federation.round-3.pair-49.log\n", text)
+        self.assertIn("CURRENT_PAIR_49\n", text)
         self.assertEqual(text.count("--- runtime_log="), 12)
 
     def test_explicit_failure_outranks_other_finished_workers_without_duplicate_tails(self):

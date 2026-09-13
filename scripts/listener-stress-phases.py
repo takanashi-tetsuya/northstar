@@ -21,6 +21,12 @@ PHASES = ("prepared", "live", "transport")
 POLL_SECONDS = 0.025
 
 
+class PhasePublisherExited(ValueError):
+    def __init__(self, phase: str, pair: int):
+        super().__init__(f"fixture exited before phase release: phase={phase} pair={pair}")
+        self.pair = pair
+
+
 def positive(value: str) -> int:
     if re.fullmatch(r"[1-9][0-9]{0,9}", value) is None:
         raise ValueError("phase identity must be a positive integer")
@@ -218,7 +224,7 @@ def all_prepared(directory: Path, config: dict, phase: str, leaders: list[int] |
         if type(pid) is not int or pid <= 0 or record != expected:
             raise ValueError("phase readiness identity does not match")
         if not process_alive(pid):
-            raise ValueError("fixture exited before phase release")
+            raise PhasePublisherExited(phase, pair)
         if leaders is not None and not belongs_to_worker(pid, leaders[pair - 1]):
             raise ValueError("phase publisher does not belong to its assigned worker")
     return complete
@@ -340,5 +346,7 @@ if __name__ == "__main__":
     try:
         main(sys.argv[1:])
     except (OSError, ValueError, TimeoutError) as error:
+        if isinstance(error, PhasePublisherExited):
+            print(f"listener_stress_failed_pair={error.pair}", file=sys.stderr)
         print(f"listener stress phase rejected: {error}", file=sys.stderr)
         sys.exit(2)

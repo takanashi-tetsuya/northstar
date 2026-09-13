@@ -76,6 +76,12 @@ runs diagnose failures and do not replace evidence from the complete CI matrix.
 The MIX restart recovery window begins once the pair acquires its authentication
 lane. Authentication and all four recovery events share the same 150 seconds;
 waiting behind other pairs remains subject to the existing worker deadline.
+Federation registers both accounts before admitting its initial two client
+connections together. Later Carbon/reconnect admission sends WebSocket Ping
+to existing clients at most once per minute while waiting, so fixture queueing
+does not leave them idle past the unchanged 300-second server limit. Waiting
+callbacks hold no admission slot or metadata descriptor; send failures fail the fixture.
+Pong frames remain outside XMPP assertions and do not restart receive budgets.
 Live-child checks read the current process state and birth time together on
 every pass; they do not cache identities or relax phase ownership checks.
 

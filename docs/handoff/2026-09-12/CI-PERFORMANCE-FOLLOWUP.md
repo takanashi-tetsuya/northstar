@@ -737,3 +737,65 @@ peak 100、0 errors、最大 21.033 ms，wrapper 全部成功且無 adopted desc
 自有 socket 的執行環境中，未改期限即可通過。沒有將此環境差異當成
 遠端 readiness 的已知根因。GitHub 設定頁仍停在登入畫面，main/dev
 rulesets、tag signing identifier 和正式 GHCR anonymous pull 尚待完成。
+
+## 2026-09-13：Federation 連線排隊與真實 keepalive 驗證
+
+`3b1c099` 的 [release preview 34726110875](https://github.com/takanashi-tetsuya/northstar/actions/runs/34726110875)
+完成 10 success／3 tag-only skips。Windows／Linux fresh runner 的 PG17.11
+startup、migration、readiness、web assets 均通過，分別 4719／1325.762 ms；
+Docker app 預設 entrypoint 同樣通過，4258.439 ms，linux/amd64、10001:10001。
+兩個 native build 都命中同分支共享 cache；Linux 還原 394 MiB 約 6 秒，
+其後 workspace rebuild 6m11s，伺服器本體約 6m04s。Windows build 10m37s。
+這批 compiler cache 已運作，但不能消除專案程式重新編譯；preview 沒有
+正式 tag qualification、GHCR publication 或 actual draft Release。
+
+舊 dev `ee407bf` push 的 MIX `103632600650` 最後通過完整 20×50；舊 PR #3
+的 Federation `103633629151` 也通過完整 20×50。但它們各自 workflow
+還有其他必要工作失敗，不能視為全部 CI 通過。`3b1c099` 的 push
+`34726111044` 和 PR `34726112193` 此時均為 25 success／4 skips，兩項
+20×50 在 2026-09-13 00:40 UTC 查詢時尚在執行。
+
+本機 `3b1c099` 的完整 4 CPU、1×50 Federation 診斷啟動與四组 transport
+斷言通過，observer 1100 樣本、peak 100、0 errors、最大 74.89 ms，
+但整體失敗。保留的 6 份業務失敗中，3 份在 `initial-roster-a` 收到
+policy-violation／close，另 3 份在 `fed-a-b` 遇到同樣關閉。第一種是在
+Alice 已連線後仍排隊註冊／連接 Bob；其中一對 Alice／Bob 的 authentication
+記錄相差約 409 秒。第二種是在新 Carbon client 的認證名額排隊期間，
+既有 Alice／Bob 超過 300 秒閒置限制。另 pair 16 的業務全過但 cleanup
+報告 port 41489 仍在 LISTEN；稍後唯讀 `ss` 已看不到該埠，尚不能判定
+是重用或其他原因，沒有改動 listener cleanup 判準。wrapper 的診斷與
+清理檢查本身皆成功，並不表示 fixture business／listener assertions 成功。
+
+此輪相位檔案的時間戳顯示 transport 約 13.193 秒；連續 CPU sampler
+完整落在其中的 6 個區間合計 12.252 秒，server／PG／Python 分別累積
+7.73／6.23／5.23 CPU 秒。它不包含區間間已退出的短命程序，也不能
+替代遠端遭截斷的分組資料；沒有重現遠端 observer 的 5 秒 query failure。
+
+現在先完成雙方註冊，再一次取得 admission 建立初始兩條連線；第二條
+認證失敗會關閉第一條。後續 Carbon／reconnect 等待名額時，由同一執行緒
+每 60 秒對既有 clients 發送 WebSocket Ping。callback 只在未取得名額、
+且沒有持有 slot／metadata descriptor 時執行；傳送失敗直接使 fixture
+失敗。伺服器原有 WebSocket peer-traffic idle tracker 處理 Ping，300 秒
+idle limit 不變；Pong 不進入 XMPP stanza assertions，也不重設 receive
+deadline。取得名額後才開始新 credential exchange 原有 10 秒 deadline；
+900 秒 worker 監督、runtime heartbeat、所有 transport／業務斷言均維持。
+
+新增 170 秒分段排隊回歸在舊 initial setup 確實失敗；新 setup 通過。
+另外覆蓋 360 秒排隊中的 Ping 節奏、傳送失敗阻止新認證、第二條連線
+失敗清理，以及 Pong 不重設接收期限。23 startup／36 phase／37 MIX
+coordination 測試、真實 flock admission 自測與文件一致性通過。含 keepalive 的
+完整 4 CPU 1×50 Federation 通過：workload 49930.984 ms、cleanup
+1629.761 ms，observer 189 樣本、peak 100、0 errors、最大 113.031 ms，
+wrapper 全部成功。先前及此次連 preparation／provision 也有大幅速度
+差異，因此不能把整體耗時差異全歸功於登入修正。
+
+只針對自有雙節點 fixture 的真實 flock 排隊注入也已完成：Carbon
+認證名額被佔用 320.264708 秒期間，既有 Alice／Bob 收到 5 輪共 10 個
+實際 WebSocket Ping；釋放名額後完整 Federation 業務斷言通過。
+workload 339667.509 ms、cleanup 485.267 ms 均 status 0，observer
+689 樣本、peak 2、0 errors、最大 2.826 ms。產品 300 秒閒置限制未改。
+原始 wrapper exit 2、case_map_ok=false：臨時 1-pair 診斷程式漏傳
+`expected_pairs=1`，導致按預設 50-pair 驗證。保存的原始案例表以同一
+validator 傳入實際 1 pair 驗證為 true；臨時程式已修正參數，但沒有
+重跑或將原始 wrapper 結果改成成功。這是額外的真實 queue／keepalive
+業務證據；完整 wrapper 成功證據仍以先前 1×50 run 為準。

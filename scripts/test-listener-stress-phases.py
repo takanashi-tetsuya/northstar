@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Small phase/admission regressions; no Northstar, database, or network load."""
 
-from contextlib import contextmanager, redirect_stderr
+from contextlib import contextmanager, ExitStack, redirect_stderr
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import importlib.util
 import io
@@ -374,6 +374,162 @@ finally:
 
 
 class AuthenticationTests(unittest.TestCase):
+    def test_queued_reauthentication_keeps_existing_clients_alive_without_using_auth_budget(self):
+        federation = load_module("federation_queued_keepalive_test", ROOT / "federation-wsl.py")
+        clock = [100.0]
+        admitted = [False]
+        pings = []
+
+        class Client:
+            last_activity = 100.0
+
+            def send(client, text, opcode):
+                self.assertFalse(admitted[0])
+                self.assertLess(clock[0] - client.last_activity, 300)
+                self.assertEqual((text, opcode), ("", 9))
+                client.last_activity = clock[0]
+                pings.append(clock[0])
+
+        @contextmanager
+        def lane(*, on_wait):
+            for _ in range(12):
+                clock[0] += 30
+                on_wait()
+            admitted[0] = True
+            try:
+                yield
+            finally:
+                admitted[0] = False
+
+        def authenticate(*args, deadline):
+            self.assertTrue(admitted[0])
+            self.assertEqual(deadline, clock[0] + 10)
+            return "connected"
+
+        with patch.object(federation, "time", SimpleNamespace(monotonic=lambda: clock[0])), \
+                patch.object(federation.stress_admission, "time", SimpleNamespace(monotonic=lambda: clock[0])), \
+                patch.object(federation.stress_admission, "fixture_phase_auth_admission", lane), \
+                patch.object(federation.fixture, "XmppWebSocket", authenticate):
+            self.assertEqual(federation.connect("alice", "carbon", keepalive=(Client(), Client())), "connected")
+        self.assertEqual(pings, [t for t in (160, 220, 280, 340, 400, 460) for _ in range(2)])
+        self.assertFalse(admitted[0])
+
+    def test_keepalive_failure_fails_admission_before_new_authentication(self):
+        federation = load_module("federation_keepalive_failure_test", ROOT / "federation-wsl.py")
+        clock = [100.0]
+
+        @contextmanager
+        def lane(*, on_wait):
+            clock[0] += 60
+            on_wait()
+            yield
+
+        def disconnected(*args, **kwargs):
+            raise BrokenPipeError("existing fixture client closed")
+
+        with patch.object(federation, "time", SimpleNamespace(monotonic=lambda: clock[0])), \
+                patch.object(federation.stress_admission, "fixture_phase_auth_admission", lane), \
+                patch.object(federation.fixture, "XmppWebSocket") as authenticate:
+            with self.assertRaisesRegex(BrokenPipeError, "existing fixture client closed"):
+                federation.connect("alice", "carbon", keepalive=(SimpleNamespace(send=disconnected),))
+            authenticate.assert_not_called()
+
+    def test_pong_frames_do_not_become_stanzas_or_reset_the_receive_deadline(self):
+        federation = load_module("federation_pong_deadline_test", ROOT / "federation-wsl.py")
+        clock = [100.0]
+        timeouts = []
+        wire = bytearray(b"\x8a\x00\x8a\x00\x81\x05ready")
+
+        class Socket:
+            def settimeout(self, seconds):
+                timeouts.append(seconds)
+
+            def recv(self, count):
+                clock[0] += 0.05
+                data = bytes(wire[:count])
+                del wire[:count]
+                return data
+
+        client = object.__new__(federation.fixture.XmppWebSocket)
+        client.sock = Socket()
+        client._construction_deadline = None
+        with patch.object(federation.fixture, "time", SimpleNamespace(monotonic=lambda: clock[0])):
+            self.assertEqual(client.receive(timeout=2), "ready")
+        self.assertEqual(timeouts, sorted(timeouts, reverse=True))
+        self.assertLess(timeouts[-1], timeouts[0])
+        self.assertEqual(timeouts[0], 2)
+
+    def initialize_with_queue(self, fail_b=False):
+        federation = load_module("federation_initial_pair_test", ROOT / "federation-wsl.py")
+        clock = [100.0]
+        active = [False]
+        domain = [None]
+        clients = []
+        registrations = []
+
+        @contextmanager
+        def lane():
+            self.assertFalse(active[0], "a batch must not acquire its own lane again")
+            clock[0] += 170
+            active[0] = True
+            try:
+                yield
+            finally:
+                active[0] = False
+
+        def exchange(username, password, *resource, deadline):
+            self.assertTrue(active[0])
+            self.assertEqual(deadline, clock[0] + 10)
+            expected_domain = "localhost" if username == federation.ALICE else "remote.localhost"
+            self.assertEqual(domain[0], expected_domain)
+            clock[0] += 1
+            if not resource:
+                registrations.append(username)
+                return 201, {}
+            self.assertIn(username, registrations)
+            if username == federation.BOB and fail_b:
+                raise TimeoutError("Bob authentication failed")
+            client = SimpleNamespace(born=clock[0], closed=False)
+            client.close = lambda: setattr(client, "closed", True)
+            clients.append(client)
+            return client
+
+        def limits():
+            self.assertTrue(active[0])
+            self.assertEqual(domain[0], "localhost")
+
+        with ExitStack() as stack:
+            for target, name, value in (
+                (federation, "endpoint", lambda http, tcp, host: domain.__setitem__(0, host)),
+                (federation, "required_test_port", lambda name: 12345),
+                (federation, "verify_c2s_authenticated_limits", limits),
+                (federation.fixture, "wait_ready", lambda: None),
+                (federation.fixture, "register_account", exchange),
+                (federation.fixture, "XmppWebSocket", exchange),
+                (federation.stress_admission, "fixture_phase_auth_admission", lane),
+                (federation.stress_admission, "time", SimpleNamespace(monotonic=lambda: clock[0])),
+            ):
+                stack.enter_context(patch.object(target, name, value))
+            if fail_b:
+                with self.assertRaisesRegex(TimeoutError, "Bob authentication failed"):
+                    federation.initialize_clients()
+            else:
+                self.assertEqual(federation.initialize_clients(), tuple(clients))
+        self.assertFalse(active[0])
+        return clock[0], clients
+
+    def test_initial_pair_survives_admission_queue_without_extending_server_idle_limit(self):
+        now, clients = self.initialize_with_queue()
+        self.assertEqual(len(clients), 2)
+        for client in clients:
+            self.assertLess(now - client.born, 300, "an established client expired while its peer queued")
+            self.assertFalse(client.closed)
+
+    def test_failed_second_authentication_closes_the_first_client_and_releases_lane(self):
+        _now, clients = self.initialize_with_queue(fail_b=True)
+        self.assertEqual(len(clients), 1)
+        self.assertTrue(clients[0].closed)
+
     def test_federation_reuses_lane_before_strict_credential_deadline(self):
         federation = load_module("federation_phase_test", ROOT / "federation-wsl.py")
         active = False

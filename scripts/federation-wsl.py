@@ -712,10 +712,69 @@ def register(username: str) -> None:
     fixture.check(status == 201, f"registration failed: {status} {result}")
 
 
-def connect(username: str, resource: str):
+def _connect_admitted(username: str, resource: str):
+    with stress_admission.authentication_attempt() as attempt:
+        return fixture.XmppWebSocket(username, PASSWORD, resource, deadline=attempt.deadline)
+
+
+def admission_keepalive(clients):
+    next_ping = time.monotonic() + 60
+
+    def waiting():
+        nonlocal next_ping
+        now = time.monotonic()
+        if now < next_ping:
+            return
+        # WebSocket Ping is peer traffic for the server's existing idle
+        # tracker. Pong frames are already consumed by XmppWebSocket.receive
+        # without becoming XMPP stanzas or resetting a receive deadline.
+        # This runs synchronously only while admission is unavailable.
+        for client in clients:
+            client.send("", opcode=9)
+        next_ping = time.monotonic() + 60
+
+    return waiting
+
+
+def connect(username: str, resource: str, *, keepalive=()):
+    options = {"on_wait": admission_keepalive(keepalive)} if keepalive else {}
+    with stress_admission.fixture_phase_auth_admission(**options):
+        return _connect_admitted(username, resource)
+
+
+def initialize_clients():
+    a_endpoint = (
+        required_test_port("FEDERATION_TEST_HTTP_PORT_A"),
+        required_test_port("FEDERATION_TEST_CLIENT_PORT_A"),
+        "localhost",
+    )
+    b_endpoint = (
+        required_test_port("FEDERATION_TEST_HTTP_PORT_B"),
+        required_test_port("FEDERATION_TEST_CLIENT_PORT_B"),
+        "remote.localhost",
+    )
+    endpoint(*a_endpoint)
+    fixture.wait_ready()
+    register(ALICE)
     with stress_admission.fixture_phase_auth_admission():
-        with stress_admission.authentication_attempt() as attempt:
-            return fixture.XmppWebSocket(username, PASSWORD, resource, deadline=attempt.deadline)
+        verify_c2s_authenticated_limits()
+    endpoint(*b_endpoint)
+    fixture.wait_ready()
+    register(BOB)
+
+    # Finish registration before creating either long-lived client. Admit the
+    # two connections together so Alice cannot spend the server's 300-second
+    # idle window waiting behind other pairs before Bob can connect.
+    with stress_admission.fixture_phase_auth_admission():
+        endpoint(*a_endpoint)
+        alice = _connect_admitted(ALICE, "alice-federation")
+        try:
+            endpoint(*b_endpoint)
+            bob = _connect_admitted(BOB, "bob-federation")
+        except BaseException:
+            alice.close()
+            raise
+    return alice, bob
 
 
 def run(server_pids: tuple[int, ...] = ()) -> None:
@@ -732,25 +791,7 @@ def run(server_pids: tuple[int, ...] = ()) -> None:
     # faster pair begins password work. This process publishes its own PID
     # and stays alive at the barrier, before taking any authentication slot.
     stress_phases.wait_for_fixture_phase("transport")
-    endpoint(
-        required_test_port("FEDERATION_TEST_HTTP_PORT_A"),
-        required_test_port("FEDERATION_TEST_CLIENT_PORT_A"),
-        "localhost",
-    )
-    fixture.wait_ready()
-    register(ALICE)
-    with stress_admission.fixture_phase_auth_admission():
-        verify_c2s_authenticated_limits()
-    alice = connect(ALICE, "alice-federation")
-
-    endpoint(
-        required_test_port("FEDERATION_TEST_HTTP_PORT_B"),
-        required_test_port("FEDERATION_TEST_CLIENT_PORT_B"),
-        "remote.localhost",
-    )
-    fixture.wait_ready()
-    register(BOB)
-    bob = connect(BOB, "bob-federation")
+    alice, bob = initialize_clients()
 
     # RFC 6121 distinguishes connected, available, and interested resources.
     # Subscription approvals and roster pushes are delivered to interested
@@ -1523,7 +1564,7 @@ def run(server_pids: tuple[int, ...] = ()) -> None:
         required_test_port("FEDERATION_TEST_CLIENT_PORT_A"),
         "localhost",
     )
-    alice_carbon = connect(ALICE, "alice-federation-carbon")
+    alice_carbon = connect(ALICE, "alice-federation-carbon", keepalive=(alice, bob))
     alice_carbon.send(
         "<iq xmlns='jabber:client' type='set' id='fed-carbon-enable-a'>"
         "<enable xmlns='urn:xmpp:carbons:2'/></iq>"
@@ -1540,7 +1581,7 @@ def run(server_pids: tuple[int, ...] = ()) -> None:
         required_test_port("FEDERATION_TEST_CLIENT_PORT_B"),
         "remote.localhost",
     )
-    bob_carbon = connect(BOB, "bob-federation-carbon")
+    bob_carbon = connect(BOB, "bob-federation-carbon", keepalive=(alice, bob, alice_carbon))
     bob_carbon.send(
         "<iq xmlns='jabber:client' type='set' id='fed-carbon-enable-b'>"
         "<enable xmlns='urn:xmpp:carbons:2'/></iq>"
@@ -1913,7 +1954,7 @@ def run(server_pids: tuple[int, ...] = ()) -> None:
         required_test_port("FEDERATION_TEST_CLIENT_PORT_B"),
         "remote.localhost",
     )
-    bob = connect(BOB, "bob-federation-reconnected")
+    bob = connect(BOB, "bob-federation-reconnected", keepalive=(alice,))
     offline, _ = bob.receive_until("fed-offline", timeout=20)
     fixture.check(
         fixture.omemo_payload_b64("FEDERATED-OFFLINE-CIPHERTEXT") in offline

@@ -1194,3 +1194,53 @@ Phase boundary 同時記錄主機 TCP timeout/retransmit/drop 累積數。
 
 [發佈預演](https://github.com/takanashi-tetsuya/northstar/actions/runs/34754851172)
 完成 10 success／3 tag-only skips。完整 CI 尚未全綠，不能據此建立正式標籤。
+
+## 2026-09-13：TCP 證據指向 PostgreSQL 端的等待
+
+`2f0a676` 的 [push Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/34756492651/job/103723213377)
+在第 2 輪失敗；[PR Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/34756494803/job/103722709967)
+通過前 8 輪後，在第 9 輪失敗。兩次均由 observer 的
+`client_query_deadline` 先觸發取消，尚未留下先於取消的應用程序故障。
+
+兩條 observer 連線的 `total_retrans`、`unacked`、`lost` 都是零。
+逾時時，最後送出資料和收到 ACK 都在約 5 秒前，最後收到資料在
+5.403／5.432 秒前。請求已抵達對端 TCP stack，卻未收到 PostgreSQL
+回應；這將調查範圍縮小到資料庫端，但仍不能區分排程與內部等待。
+Push 共 736 samples、1 error；PR 共 2,962 samples、4 errors，
+其中 3 次曾完成排空並恢復。兩次清理、case map 與證據大小檢查均成功。
+
+本地改用 CI 相同 digest 的 PostgreSQL 17.11 Alpine 映像，在四 CPU、
+672 connections 配置完成 5×50：1,739 samples、0 errors，最大
+148.771 ms。這包含最初 252 秒的執行檔重建；測試環境、容器和
+其匿名資料卷已清理。
+
+在同樣四 CPU 上再加入兩個有期限的 CPU 負載程序，前兩輪通過，
+第 3 輪有兩組因 WebSocket 關閉失敗。其中一組服務留下
+`runtime-control-refresh` 五秒 heartbeat 逾時；observer 的一次查詢
+則收到 PostgreSQL statement timeout，排空後恢復。其餘採樣正常，
+wrapper、清理與證據檢查通過。獨立的程序計數顯示，這次慢查詢的
+backend 連續多次處於 runnable 狀態而未增加 CPU 用量，隨後累計
+2,677.951 ms runqueue 等待；容器的節流次數為零。
+這證實本地高負載會延遲 PostgreSQL 排程，尚不能直接認定遠端原因相同。
+負載程序與測試容器均已清理。
+
+新增的診斷先驗證 postmaster PID／start tick，再以 namespace PID
+找到 observer backend。每次查詢保存 CPU 與 runqueue 累積計數差，
+等待期間最多讀取五次程序狀態。核心未提供排程計數、程序已退出、
+PID 重用或讀取失敗時標記 unavailable。
+可讀取 cgroup v2 時，另保留 PostgreSQL 容器本身的 CPU 用量、節流、
+配額及權重；主機總量不能代替容器的資源限制。
+沿用原本的 libpq 連線、SQL 與期限，沒有新增資料庫查詢或背景程序。
+56 項單元測試、16 項真實 PG17、20 項 wrapper 與 6 項 CI performance
+測試通過；短時容器測試驗證了 PID 對應、伺服器逾時與同連線恢復。
+
+| 證據 | Artifact ID | SHA-256 |
+| --- | --- | --- |
+| push 診斷 | 10317743608 | `1b4a3b2f281e3d804710fb2448ad9d4452139aff81effa77f4ea2381766afff3` |
+| push observer | 10317079680 | `dca19887b279e850ee30f196baaea2d48190cc9402e72ba27eccd25597ff4be5` |
+| PR 診斷 | 10317969012 | `eef880598f83502a1299804550d2db07cdf7b2d334831baa7c5bdf18f3f2eaff` |
+| PR observer | 10318440132 | `993045d7282683132a8f66c0459339e0a685c6d0f6cc6fb68a7d02d352f8e08f` |
+
+此提交的兩條協定整合測試均通過，包含 Upload 重送檢查。
+[發佈預演](https://github.com/takanashi-tetsuya/northstar/actions/runs/34756492600)
+也完成 10 success／3 tag-only skips；完整 CI 仍因 Federation 失敗而未通過。

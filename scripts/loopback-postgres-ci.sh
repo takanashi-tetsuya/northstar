@@ -84,5 +84,28 @@ if [[ "$fixture_ready" != true ]]; then
   exit 1
 fi
 
+# Retain the owning postmaster identity so the observer can map container
+# backend IDs to host processes.
+fixture_ready=false
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  postgres_host_pid="$(docker inspect --format '{{.State.Pid}}' "$container_name")"
+  python3 - "$postgres_host_pid" "$GITHUB_ENV" <<'PY'
+from pathlib import Path
+import sys
+
+pid = int(sys.argv[1])
+if pid <= 1:
+    raise SystemExit('invalid PostgreSQL fixture process')
+raw = Path(f'/proc/{pid}/stat').read_text()
+fields = raw.rsplit(')', 1)[1].split()
+if raw.split('(', 1)[1].rsplit(')', 1)[0] != 'postgres' or fields[0] in {'Z', 'X'}:
+    raise SystemExit('PostgreSQL fixture process is not live')
+started = int(fields[19])
+with Path(sys.argv[2]).open('a') as stream:
+    stream.write(f'NORTHSTAR_CI_POSTGRES_HOST_PID={pid}\n')
+    stream.write(f'NORTHSTAR_CI_POSTGRES_START_TICKS={started}\n')
+PY
+fi
+fixture_ready=true
 trap - EXIT
 echo "loopback PostgreSQL fixture ready on 127.0.0.1:5432 max_connections=$max_connections"

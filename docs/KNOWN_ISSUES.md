@@ -67,16 +67,18 @@ CI 验证隔离环境中的代码与运行行为；生产环境、公网互操�
 
 ## 发布候选验证记录（2026-09-13）
 
-`9bbc4a2` 的 [push CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34754851173)
-与 [PR CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34754853108)
-均在 Federation 第 1 轮触发 runtime-control 心跳超时；observer 完整保留了
-失败窗口。限制 worker CPU affinity 未改善问题，已撤回。原 `664ff89`
-的 PR CI 曾完整通过，但 push 的 observer 超时，间歇故障仍未关闭。
+`2f0a676` 的 [push Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/34756492651/job/103723213377)
+与 [PR Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/34756494803/job/103722709967)
+分别在第 2、9 轮发生 observer 查询逾时。请求已获 TCP 确认，连线没有重传，
+五秒内未收到回应；仍需区分 PostgreSQL 内部等待与 CPU 排程延迟。
+此前限制 worker CPU affinity 未改善故障，已撤回。
 
-PR 的 HTTP Upload 重送检查另有失败。测试未处理 API 已定义的暂时忙碌
+先前 HTTP Upload 重送检查未处理 API 已定义的暂时忙碌
 响应；现在仅对 `409 upload_in_progress` 遵守 `Retry-After`，共用十秒
 重试预算。真实 PostgreSQL 锁竞争测试已验证恢复、内容冲突及重送次数上限。
-控制连接逾时新增 TCP 计数器诊断，仍须由后续完整 CI 验证。
+`2f0a676` 的 push、PR 协定整合测试均已通过，Windows、Linux 与 Docker
+发布预演也通过。Observer 另加入 PostgreSQL 程序排程诊断；Federation
+间歇故障仍未关闭。
 日志和验证方法见 [CI 验证记录](handoff/2026-09-12/CI-PERFORMANCE-FOLLOWUP.md)。
 
 定时 fuzz、production/cluster load envelope 和 scheduled stress 属于定时或

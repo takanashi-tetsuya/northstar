@@ -16,6 +16,17 @@ Phase diagnostics also record host TCP retransmissions, timeouts and drops.
 These counters contain no endpoints or packet contents and do not determine
 whether the workload passed.
 
+In CI, the fixture records its postmaster's host PID and kernel start tick.
+The observer uses that identity and the backend's namespace PID to find the
+corresponding host process. Query diagnostics include CPU time, runnable-state
+samples and scheduler wait counters, with at most five pending samples per
+query. Missing or zeroed scheduler counters are reported as unavailable.
+The counters are cumulative deltas and may include waiting charged after the
+query began. Missing process access is also reported as unavailable. These reads
+use procfs and preserve the existing connection and query deadlines.
+When cgroup v2 counters are readable, `container_cpu` records the PostgreSQL
+container's CPU use, throttling, quota and weight for that query interval.
+
 Several active fixture listeners may request `:0` on the same loopback address.
 Each request is a separate kernel allocation rather than an attempt to share a
 fixed listener. Fixed bind addresses still fail configuration validation when

@@ -184,14 +184,6 @@ fn observe_post_action_join(
     }
 }
 
-fn reserve_sasl_attempt(attempts: &mut u8) -> bool {
-    if *attempts >= MAX_SASL_ATTEMPTS_PER_STREAM {
-        return false;
-    }
-    *attempts += 1;
-    true
-}
-
 pub enum Action {
     Send(String),
     SendMany(Vec<String>),
@@ -402,6 +394,23 @@ fn client_stream_limits_feature(transport: ClientTransport, authenticated: bool)
     }
 }
 
+/// Ownership evidence survives a failed or cancelled database reply.
+#[derive(Default)]
+struct LiveSessionOwnership {
+    attempted: bool,
+}
+
+impl LiveSessionOwnership {
+    async fn attempt<T>(&mut self, operation: impl std::future::Future<Output = T>) -> T {
+        self.attempted = true;
+        operation.await
+    }
+
+    fn may_own(&self) -> bool {
+        self.attempted
+    }
+}
+
 pub struct ProtocolSession {
     pub(crate) state: Arc<AppState>,
     pub(crate) outbound: crate::outbound::OutboundSender,
@@ -417,7 +426,7 @@ pub struct ProtocolSession {
     /// Whether this transport has a currently open XML stream. STARTTLS and
     /// legacy SASL both invalidate it and require a fresh opening tag before
     /// any further negotiation or application stanza is accepted.
-    pub(crate) stream_opened: bool,
+    pub(crate) negotiation: northstar_session_core::StreamNegotiation,
     pub(crate) authenticated: Option<crate::services::authentication::AuthenticatedAccount>,
     pub(crate) authenticated_at: Option<std::time::Instant>,
     pub(crate) full_jid: Option<String>,
@@ -450,7 +459,7 @@ pub struct ProtocolSession {
     pub(crate) show: Arc<AtomicU8>,
     pub(crate) blocklist_requested: Arc<AtomicBool>,
     pub(crate) roster_requested: Arc<AtomicBool>,
-    pub(crate) roster_sync: Arc<crate::services::roster::RosterSyncGate>,
+    pub(crate) roster_sync: Arc<northstar_roster_application::RosterSyncGate>,
     pub(crate) mix_roster_annotations: Arc<AtomicBool>,
     /// XEP-0016 active list is scoped to this resource/session. `None` means
     /// the account default applies. Sharing it with `OnlineSession` lets
@@ -460,9 +469,8 @@ pub struct ProtocolSession {
     pub(crate) directed_presence: Arc<DashSet<String>>,
     pub(crate) last_presence: Arc<std::sync::RwLock<Option<String>>>,
     pub(crate) joined_rooms: Arc<dashmap::DashMap<String, crate::state::JoinedMucMembership>>,
-    pub(crate) csi_active: bool,
-    pub(crate) csi_deferred: VecDeque<csi::DeferredStanza>,
-    pub(crate) csi_deferred_bytes: usize,
+    pub(crate) csi_state: northstar_xep_0352::CsiStateMachine,
+    pub(crate) csi_deferred: northstar_xep_0352::DeferredQueue<crate::outbound::OutboundItem>,
     /// Bind 2 clients catch up through MAM metadata and must never receive the
     /// legacy offline queue again on their initial presence.
     pub(crate) bind2_mam_catchup: bool,
@@ -487,23 +495,11 @@ pub struct ProtocolSession {
         Option<Option<crate::services::authentication::AuthenticationFence>>,
     pub(crate) legacy_sasl_awaiting_initial_response: bool,
     pub(crate) sasl2_state: Option<sasl2::Sasl2Context>,
-    /// Number of SASL exchanges initiated on the current XML stream. RFC
-    /// 6120 requires a finite retry ceiling; the sixth attempt is rejected by
-    /// closing the stream with policy-violation.
-    pub(crate) sasl_attempts: u8,
     /// Active XEP-0389 challenge transport. A response is accepted only after
     /// this connection selected an advertised flow and received a challenge.
     pub(crate) ibr_flow: Option<ibr::IbrFlowTransport>,
     /// One unauthenticated transport may bootstrap at most one account. After
     /// a successful XEP-0077/XEP-0389 registration only SASL is expected.
-    pub(crate) registration_completed: bool,
-    /// Canonical localpart from the client's stream `from`. FAST requires it
-    /// and all SASL2 mechanisms cross-check it when supplied.
-    pub(crate) stream_from: Option<String>,
-    /// RFC 6120 default language selected by the current XML stream.  It is
-    /// copied onto inbound stanzas which omit their own `xml:lang` before the
-    /// stanza crosses the C2S routing boundary.
-    pub(crate) stream_language: Option<String>,
     pub(crate) user_agent_id: Option<uuid::Uuid>,
     pub(crate) user_agent_epoch: Option<i64>,
     /// Proof that credential-side effects already committed. It is retained
@@ -528,6 +524,10 @@ pub struct ProtocolSession {
     /// Stable owner of the durable stream row.  A resumed transport gets a
     /// fresh value so a late checkpoint from the old connection cannot win.
     pub(crate) connection_id: uuid::Uuid,
+    /// Monotonic evidence that this connection attempted durable capacity
+    /// ownership. Set before the first database await: an error or cancelled
+    /// response does not prove that its exact lease was never committed.
+    live_session_ownership: LiveSessionOwnership,
     /// 0 active, 1 owned by explicit/fallback cleanup, 2 atomically superseded
     /// by the exact XEP-0198 claimant.
     pub(crate) route_lifecycle: Arc<AtomicU8>,
@@ -563,7 +563,7 @@ impl ProtocolSession {
             peer_ip,
             connected_at: std::time::Instant::now(),
             last_activity: Arc::new(std::sync::RwLock::new(std::time::Instant::now())),
-            stream_opened: false,
+            negotiation: northstar_session_core::StreamNegotiation::default(),
             authenticated: None,
             authenticated_at: None,
             full_jid: None,
@@ -579,16 +579,15 @@ impl ProtocolSession {
             show: Arc::new(AtomicU8::new(0)),
             blocklist_requested: Arc::new(AtomicBool::new(false)),
             roster_requested: Arc::new(AtomicBool::new(false)),
-            roster_sync: Arc::new(crate::services::roster::RosterSyncGate::default()),
+            roster_sync: Arc::new(northstar_roster_application::RosterSyncGate::default()),
             mix_roster_annotations: Arc::new(AtomicBool::new(false)),
             privacy_active: Arc::new(std::sync::RwLock::new(None)),
             privacy_requested: Arc::new(AtomicBool::new(false)),
             directed_presence: Arc::new(DashSet::new()),
             last_presence: Arc::new(std::sync::RwLock::new(None)),
             joined_rooms: Arc::new(dashmap::DashMap::new()),
-            csi_active: true,
-            csi_deferred: VecDeque::new(),
-            csi_deferred_bytes: 0,
+            csi_state: northstar_xep_0352::CsiStateMachine::new(),
+            csi_deferred: csi::default_queue(),
             bind2_mam_catchup: false,
             sm_enabled: false,
             sm_db_id: None,
@@ -604,11 +603,7 @@ impl ProtocolSession {
             sasl_scram_fence: None,
             legacy_sasl_awaiting_initial_response: false,
             sasl2_state: None,
-            sasl_attempts: 0,
             ibr_flow: None,
-            registration_completed: false,
-            stream_from: None,
-            stream_language: None,
             user_agent_id: None,
             user_agent_epoch: None,
             pending_credential_commit: None,
@@ -619,6 +614,7 @@ impl ProtocolSession {
             _certificate_session: None,
             disconnect: tokio_util::sync::CancellationToken::new(),
             connection_id: uuid::Uuid::new_v4(),
+            live_session_ownership: LiveSessionOwnership::default(),
             route_lifecycle: Arc::new(AtomicU8::new(0)),
             local_quiesced: false,
             post_actions: std::sync::Mutex::new(PostActionSupervisor::default()),
@@ -801,7 +797,10 @@ impl ProtocolSession {
     }
 
     pub(crate) fn begin_sasl_attempt(&mut self) -> Option<Action> {
-        if !reserve_sasl_attempt(&mut self.sasl_attempts) {
+        if !self
+            .negotiation
+            .reserve_sasl_attempt(MAX_SASL_ATTEMPTS_PER_STREAM)
+        {
             self.sasl_state = None;
             self.sasl_scram_fence = None;
             self.legacy_sasl_awaiting_initial_response = false;
@@ -812,7 +811,7 @@ impl ProtocolSession {
     }
 
     pub async fn record_outbound(&mut self, stanza: &str) -> Result<()> {
-        self.record_outbound_with_delivery(stanza, None).await
+        self.record_outbound_with_source(stanza, None).await
     }
 
     /// Record one transport item before it crosses the socket boundary.
@@ -823,23 +822,36 @@ impl ProtocolSession {
         &mut self,
         item: &crate::outbound::OutboundItem,
     ) -> Result<bool> {
-        let managed_by_sm = durable_delivery_managed_by_sm(
-            self.sm_enabled,
-            &item.stanza,
-            item.durable_delivery.is_some(),
+        anyhow::ensure!(
+            item.validate_durable_source_shape(),
+            "outbound item has an invalid durable source/hand-off shape"
         );
-        self.record_outbound_with_delivery(&item.stanza, item.durable_delivery)
+        let managed_by_sm = durable_delivery_managed_by_sm(
+            self.sm_enabled && self.sm_db_id.is_some(),
+            &item.stanza,
+            item.durable_source.is_some(),
+        );
+        self.record_outbound_with_source(&item.stanza, item.durable_source)
             .await?;
         if managed_by_sm {
-            item.confirm_transport_ownership();
+            if item.mix_delivery().is_some() {
+                let session_id = self
+                    .sm_db_id
+                    .context("XEP-0198 MIX ownership was not persisted")?;
+                item.complete_mix_handoff(crate::outbound::MixTransportCompletion::SmPersisted {
+                    session_id,
+                });
+            } else {
+                item.confirm_transport_ownership();
+            }
         }
         Ok(managed_by_sm)
     }
 
-    async fn record_outbound_with_delivery(
+    async fn record_outbound_with_source(
         &mut self,
         stanza: &str,
-        durable_delivery: Option<crate::outbound::DurableDelivery>,
+        durable_source: Option<crate::outbound::TransportOwnershipSource>,
     ) -> Result<()> {
         self.state
             .metrics
@@ -877,12 +889,12 @@ impl ProtocolSession {
             }
             self.sm_outbound_h = self.sm_outbound_h.wrapping_add(1);
             self.sm_unacked
-                .push_back(crate::outbound::SmUnackedStanza::with_delivery(
+                .push_back(crate::outbound::SmUnackedStanza::with_source(
                     stanza.to_owned(),
-                    durable_delivery,
+                    durable_source,
                 ));
             self.checkpoint_sm().await?;
-        } else if durable_delivery.is_some() {
+        } else if durable_source.is_some() {
             // With SM disabled, counted RFC 6120 stanzas are legitimately
             // completed at the transport write boundary. Non-counted control
             // elements always use that path as well. Only an active SM session
@@ -1032,7 +1044,7 @@ impl ProtocolSession {
             self.sm_resume_allowed = false;
             anyhow::bail!("XEP-0198 process memory capacity reached");
         }
-        let updated = tokio::time::timeout(
+        let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             self.state.sm_service().checkpoint_session(
                 id,
@@ -1046,14 +1058,35 @@ impl ProtocolSession {
         )
         .await
         .context("XEP-0198 checkpoint database operation timed out")??;
-        anyhow::ensure!(updated, "durable XEP-0198 stream lease was lost");
+        anyhow::ensure!(outcome.updated, "durable XEP-0198 stream lease was lost");
+        // A checkpoint can rotate a MIX lease while atomically transferring
+        // the stanza into the SM queue.  Keep the process-resident replay
+        // queue on that exact new lease: a later acknowledgement must never
+        // consume the old worker lease.
+        self.apply_sm_ownership_resolution(&outcome.ownership);
         Ok(())
+    }
+
+    pub(crate) fn apply_sm_ownership_resolution(
+        &mut self,
+        resolution: &crate::services::sm::SmQueueOwnershipResolution,
+    ) {
+        Self::apply_sm_ownership_resolution_to_unacked(&mut self.sm_unacked, resolution);
+    }
+
+    pub(crate) fn apply_sm_ownership_resolution_to_unacked(
+        stanzas: &mut VecDeque<crate::outbound::SmUnackedStanza>,
+        resolution: &crate::services::sm::SmQueueOwnershipResolution,
+    ) {
+        for stanza in stanzas {
+            stanza.source = resolution.resolve_source(stanza.source);
+        }
     }
 
     pub(crate) fn open_stream(&self) -> String {
         let to = self
-            .stream_from
-            .as_ref()
+            .negotiation
+            .stream_from()
             .map(|username| format!("{}@{}", username, self.state.config.domain));
         if self.websocket {
             let _ = self.outbound.try_send(self.features());
@@ -1094,10 +1127,23 @@ impl ProtocolSession {
                 );
             }
             features.push_child(XmlElement::namespaced("ver", "urn:xmpp:features:rosterver"));
-            if !self.sm_enabled {
-                features.push_child(XmlElement::namespaced("sm", "urn:xmpp:sm:3"));
+            if !self.sm_enabled
+                && self
+                    .state
+                    .config
+                    .xmpp_extensions
+                    .enabled(northstar_xep_0198::XEP_ID)
+            {
+                features.push_child(XmlElement::namespaced("sm", northstar_xep_0198::NAMESPACE));
             }
-            features.push_child(XmlElement::namespaced("csi", "urn:xmpp:csi:0"));
+            if self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0352::XEP_ID)
+            {
+                features.push_child(XmlElement::namespaced("csi", northstar_xep_0352::NAMESPACE));
+            }
             push_generated_feature(&mut features, &limits, "stream limits");
             return features.finish();
         }
@@ -1419,8 +1465,8 @@ impl ProtocolSession {
                 }
                 let legacy_stream_identity_mismatch = self.sasl2_state.is_none()
                     && self
-                        .stream_from
-                        .as_deref()
+                        .negotiation
+                        .stream_from()
                         .is_some_and(|stream_from| stream_from != username);
                 let user_result = if sasl_mech.name() == "PLAIN" {
                     let password = data_opt.take();
@@ -1522,8 +1568,7 @@ impl ProtocolSession {
                         // and all other post-authentication traffic must wait
                         // for a fresh client stream opening. SASL2 is handled
                         // above and deliberately keeps the stream open.
-                        self.stream_opened = false;
-                        self.stream_language = None;
+                        self.negotiation.require_new_stream();
                         let mut success =
                             XmlElement::namespaced("success", "urn:ietf:params:xml:ns:xmpp-sasl");
                         if sasl_mech.name().starts_with("SCRAM-") {
@@ -1888,6 +1933,7 @@ impl ProtocolSession {
 
         let plan = crate::services::session_cleanup::SessionCleanupPlan {
             connection_id: self.connection_id,
+            may_own_live_session: self.live_session_ownership.may_own(),
             mix_presence_gate: Arc::clone(&self.mix_presence_gate),
             account,
             registered_key: self.registered_key.take(),
@@ -2013,10 +2059,47 @@ fn durable_delivery_managed_by_sm(
 mod legacy_sasl_wire_tests {
     use super::{
         client_stream_limits_feature, drop_requires_local_quiesce, durable_delivery_managed_by_sm,
-        legacy_sasl_auth, legacy_sasl_payload, reserve_sasl_attempt, resource_bind_deadline_for,
-        Action, ClientTransport, PostActionSupervisor, ResumePayload,
+        legacy_sasl_auth, legacy_sasl_payload, resource_bind_deadline_for, Action, ClientTransport,
+        PostActionSupervisor, ResumePayload,
     };
     use roxmltree::Document;
+
+    #[test]
+    fn durable_ownership_is_marked_before_polling_and_survives_cancellation() {
+        use std::future::Future;
+        let mut ownership = super::LiveSessionOwnership::default();
+        assert!(!ownership.may_own());
+        let polled = std::cell::Cell::new(false);
+        let mut attempt = Box::pin(ownership.attempt(async {
+            polled.set(true);
+            std::future::pending::<()>().await;
+        }));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(attempt.as_mut().poll(&mut context).is_pending());
+        drop(attempt);
+        assert!(polled.get());
+        assert!(
+            ownership.may_own(),
+            "cancelled replies cannot prove that no lease committed"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_and_retried_ownership_attempts_never_reset_durable_cleanup_evidence() {
+        let mut ownership = super::LiveSessionOwnership::default();
+        let result = ownership
+            .attempt(async { Err::<(), _>("unknown commit outcome") })
+            .await;
+        assert!(result.is_err());
+        assert!(ownership.may_own());
+        // The same marker wraps binding, SM creation and resume claims. A
+        // rejected retry cannot clear an earlier possibly committed lease.
+        let rejected = ownership.attempt(async { false }).await;
+        assert!(!rejected);
+        assert!(ownership.may_own());
+        ownership.attempt(async {}).await;
+        assert!(ownership.may_own());
+    }
 
     fn document(xml: &str) -> Document<'_> {
         Document::parse(xml).unwrap()
@@ -2113,16 +2196,6 @@ mod legacy_sasl_wire_tests {
                 "accepted {xml}"
             );
         }
-    }
-
-    #[test]
-    fn caps_each_xml_stream_at_five_sasl_attempts() {
-        let mut attempts = 0;
-        for _ in 0..5 {
-            assert!(reserve_sasl_attempt(&mut attempts));
-        }
-        assert!(!reserve_sasl_attempt(&mut attempts));
-        assert_eq!(attempts, 5);
     }
 
     #[test]

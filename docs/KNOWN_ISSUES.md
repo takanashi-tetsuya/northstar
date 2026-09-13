@@ -1,8 +1,10 @@
 # Northstar 当前剩余妥协、设计边界与发布门禁
 
-> 基线：2026-09-02 当前工作区；迁移 `0126`–`0128`、XEP-0198 事件通知与 XEP-0115 observation 重构已经进入代码，但发布前仍须对最终提交重新保存完整门禁证据。
-> 定位：这是当前唯一的剩余问题与妥协清单。已经解决的历史问题属于 changelog 或历史验收报告，不应继续出现在这里。
-> 证据边界：仓库测试和静态检查不等于生产环境、公网互操作或独立安全认证。按用户要求，本轮没有执行可能触发 cybersecurity 拦截的 fuzz、畸形/对抗网络流量、故障注入、攻击式反滥用验证或极限负载；这些项目已移至 [MANUAL_SECURITY_VALIDATION.md](MANUAL_SECURITY_VALIDATION.md) 供授权操作者在隔离环境中手动执行。
+本文记录 Northstar 0.2.0 的已知限制与待完成验收。迁移链为 `0001`–`0142`，
+共 141 项，保留有意缺号 `0021`。已解决问题见 [changelog](../CHANGELOG.md)。
+
+CI 验证隔离环境中的代码与运行行为；生产环境、公网互操作和独立安全审计
+需要各自的验收记录。手动测试方法见 [MANUAL_SECURITY_VALIDATION.md](MANUAL_SECURITY_VALIDATION.md)。
 
 ## 如何理解下表
 
@@ -23,6 +25,7 @@
 | ARCH-XML | 已跟踪的运行时外发 XML 生成点已全部使用结构化构造边界，但门禁仍是静态启发式检查 | 已大幅缓解的架构债务 | **主运行时路径已关闭；审计范围可继续扩大** | `check-outbound-xml-construction.mjs` 对所有列入基线的协议、传输、联邦、组件、集群及相关服务生产文件报告 `current=0, baseline=0`。这阻止已知高风险文字字面量回归，但不是 XML 语义或注入安全证明；例如离线管理工具 `pie.rs` 仍有经转义审阅的专用序列化器，不在这个运行时门禁的全量声明内 | 保持每个运行时生成器的零基线，新增生成点必须纳入门禁；对 PIE 等专用序列化器单独建立 fragment/QName/转义不变式与恶意输入回归，不得将“静态基线为零”宣传为形式化安全证明 |
 | ARCH-SVC | 应用服务边界已从协议层收回数据库权限，但 `AppState` 与服务/仓储层的能力划分仍可继续收紧 | 架构债务 | **可逐步关闭** | 最新纯静态门禁结果为 `AppState=9 public fields`，协议树为 `0 db authority refs / 0 db domain-model refs / 0 state.pool / 0 sqlx:: / 0 PgPool refs`。九个公开字段仍包括配置、通用数据库池、集群、会话/MUC 路由、指标、联邦、反滥用和 TLS 能力。协议层的直接持久化耦合已归零，但不代表 API、应用服务、工作器或仓储层已经按进程/数据库角色做到完全最小权限，也不证明事务与副作用的所有故障窗口已穷尽 | 继续将九个公开能力收窄为领域端口，分离 API/工作器/业务库角色并使事务由应用服务统一所有；CI 的 `9/0/0/0/0/0` 基线只能下降不能提高，并需增加服务/API 层的相应能力门禁 |
 | ARCH-CLU | Redis 多节点控制面不是共识系统，活跃 socket/worker 仍属于单个进程 | 架构债务＋刻意范围 | **可显著改善，不能在现架构中证明为共识** | PostgreSQL 保存权威 fence、lease、outbox、key epoch 和 replay fence；Redis 只承担实时控制与唤醒。账号禁用、删除或改密在本节点立即撤销路由并同步撤销 durable SM；Redis 控制失败但 PostgreSQL 健康时，其他节点依赖下一次 30 秒 generation sweep 关闭旧 socket，因此存在约一个 sweep 的有界窗口。若 PostgreSQL 同时不可用，窗口可延长且安全关键 worker/readiness 必须反映故障。非对称分区、进程崩溃和短暂 authority cache 窗仍需要完整故障证明，因此多节点模式保持 `Experimental` | 若要晋升，需 durable revocation journal/ACK 或成熟共识与线性化控制面，并完成任意 Redis/PostgreSQL 分区、split-brain、滚动版本、schema expand/contract、SIGKILL、managed failover 和 RPO/RTO 验证；否则永久保留“实验性而非共识系统”，不得无条件声称跨节点“立即撤销” |
+| ARCH-CLU-V13 | durable MIX cross-node hand-off 的 wire contract 升至 v13，旧节点不能滚动兼容 | 刻意 fail-closed 安全设计 | **协议扩展后可改善；当前必须保留** | v13 将一个精确 MIX recipient lease 随签名命令传送。目标节点先在 PostgreSQL 中将它旋转为 node/request fence，随后只能转交至 socket fence、XEP-0198 或 BOSH owner；只有该 typed hand-off 才会确认 source durable row。v12 及更旧节点不理解这一语义，因此混合节点会拒绝并保留重试行，绝不会把“写入远端内存队列”误报成已投递 | 部署时先停用/排空跨节点 MIX 交付，再将所有节点升级为同一 v13 release 后恢复；若要支持滚动升级，必须设计带版本协商、双写确认与旧节点安全拒绝的 expand/contract 过程，不能静默降级 hand-off 语义 |
 | ARCH-CLU-VOLATILE | 部分跨节点事件仍是软状态 | 架构债务＋刻意设计 | **按事件类型决定** | 可存储的 `normal`/`chat` direct message、文档列明的特定邀请、PubSub/PEP mutation、MUC 管理操作和已进入 durable admission 的 S2S/component message 有 PostgreSQL 持久投影；普通 MUC groupchat 只有 archive 加 best-effort Redis 实时扇出，普通 presence、MUC presence/typing、Carbons 及部分 roster/presence 通知在故障时可能丢失或稍后收敛 | 对必须可靠的事件建立有界 recipient-snapshot outbox、稳定 ID 和 ACK；presence/typing 等瞬态状态是否持久化必须先做产品与隐私决策，不能笼统承诺“集群零丢失” |
 | ARCH-CLU-MUC | 混合 affiliation＋role、一次修改多个 role 的 MUC 管理 IQ 被原子拒绝 | 架构债务＋安全取舍 | **可关闭** | 服务器拒绝无法由一个现有事务安全表达的复杂形状，避免部分成功、错误受众和权限漂移；普通单类管理操作正常 | 建立统一的批量 operation/authorization/audience 事务模型，并通过回滚、重试、outbox、版本冲突和跨节点故障测试后再接受这些形状 |
 | ARCH-DB-ROLE | runtime 对其余可变业务表仍是共享角色 | 架构债务＋运维信任 | **`users`、XEP-0133 与 session authority 边界已关闭；其余子系统尚未逐服务分权** | migration 0108 已把注册、登录 verifier 升级、改密、管理员状态/提权、会话撤销、删除、roster version 与 recovery generation 迁到 typed capability。runtime 对 `users` 只有 SELECT，连列级 INSERT/UPDATE/REFERENCES 也被清除；runtime 与独立 `northstar_commands` 均无法读取/写入 command session/keyed authority 表。专用 command role 无任何 relation/sequence 权限，只能执行 canonical manifest 的 `command` 分区。所有 definer 都必须以完整规范化签名进入独立 manifest、由 migrator 持有并 pin schema；grant reconciliation 和每次 runtime/command 启动都会按 ACL catalog 验证“owner＋唯一授权 workload”、无 grant option、无 PUBLIC/backup/未知/退役 grantee、无未登记 overload。session authority 还精确核对 trigger 的表、名字、function OID/signature、tgtype、启用状态、无 WHEN 和无额外项。伪 token、跨 command/target、过期、完成后 replay、旧 generation 和并发单赢家均有 DB 门禁 | 剩余妥协是同一个 runtime role 仍对非 `users` 的多数可变业务表有广泛 DML，且 command URL 与 runtime URL 仍位于同一 OS 进程（进程完全攻陷高于“任意 runtime SQL”威胁边界）。继续按认证、消息、MUC/PubSub、上传拆分应用服务/数据库能力；完整签名 manifest 的 exact allowlist 只能收窄、不能绕过或退回名字/数量门禁 |
@@ -54,7 +57,7 @@
 | OPS-S3-BACKUP | PostgreSQL 备份只保存对象 manifest，不包含 S3 对象字节 | 外部基础设施责任 | **通过部署验收关闭** | S3 部署必须结合 provider-native versioned snapshot/replication、KMS、Object Lock 和凭据备份；不能拿本地 tar 流程替代 | 在隔离 namespace 完整恢复数据库及对象，然后逐对象验证 version/size/SHA-256；记录 RPO/RTO、KMS/凭据恢复和生命周期策略 |
 | OPS-TRUST | 数据库 superuser、KMS/HSM、WORM、legal hold、备份目标、Redis ACL/TLS 和对象存储策略属于运维信任边界 | 运维信任 | **不能由应用自证** | 应用 trigger、hash chain 和签名游标不能阻止数据库 owner 修改数据；反滥用 `key ID` authority 能检测节点漂移，但无法修复运营者丢失的 HMAC secret | 使用职责分离、非 owner runtime、独立审计日志/WORM 锚定、密钥双人控制、轮换和恢复演练。数据库与 secret 必须作为同一代恢复，epoch 不得回退或复用 |
 | OPS-BACKUP-COMPAT | 生产备份已 fail-closed，仍保留显式 development legacy、明文 rollback 与人工硬崩溃处置 | 兼容性＋运维取舍 | **生产默认已关闭；剩余项可继续收紧** | base Compose 与脚本默认强制 Ed25519、age、sequence/restore floor 和 file-backed 分权 URL；legacy 只有单一 `development-legacy` 开关并警告。backup/restore 都在 Unix-socket-only 临时 PostgreSQL 验证 dump，不再用生产角色 createdb。restore 在 rollback dump/connection fence 前事务预检当前库；incoming 始终要求 exact current ledger/schema，普通失败补偿通过同一 canonical auto resolver 恢复旧库。restore 使用四个独立注册并预先核验 PID 的 backend：维护控制连接位于 `postgres`，协调、主替换与补偿位于目标库。每个替换事务在 READY 前取得 `xid8`；父进程在发送破坏性 SQL 前把 restore/target/kind/barrier/worker/XID fsync 到 journal；协调器在同一 transaction-level barrier 后调用 `pg_xact_status()`。只有 `committed`/`aborted` 可自动推进代际，未知、`in progress`、`NULL` 或补偿不完整保持 fail-closed。restore 不 terminate peer；三个登记目标 PID 以外的连接会使 cutover 原地拒绝。rollback 目录仍可能明文；`SIGKILL`/断电后的 journal 仍需人工恢复，而且 PostgreSQL 对过旧 XID 可返回 `NULL`，不能宣称无限期自动判定；sequence/floor state 丢失仍会改变 lineage 或可信下限 | rollback 放在加密卷并完成密钥/状态离机副本与恢复演练；实现带集群身份校验的 journal resume，并对 XID 状态已回收的情况保留人工 fail-closed 流程。任何 `allow-generation-change` 都需独立审计；legacy 兼容期结束后删除显式开发入口 |
-| EXT-CLUSTER | 集群、CLU-MUC、capacity ledger 和 shared storage 的当前 checkout 尚无完整运行证据 | 仅缺运行证据 | **执行后可关闭证据项** | 两节点 fixture 已定义但本轮只做静态/纯测试；尚未证明所有非对称分区、lease loss、SM race、旧新二进制、managed Redis failover、S3/MinIO crash/restore 和 provider lifecycle | 在固定 release commit 上执行全部隔离 PostgreSQL/Redis/MinIO fixture、网络分区和 kill-point，并保存配置、日志、版本、结果和 RPO/RTO。完成前多节点仍为 `Experimental` |
+| EXT-CLUSTER | 集群、CLU-MUC、capacity ledger 和 shared storage 尚缺完整目标环境验收 | 仅缺运行证据 | **执行后可关闭证据项** | 隔离 PostgreSQL/Redis 回归已在下述源提交的常规 CI 中通过；非对称分区、lease loss、SM race、混合版本、managed Redis failover、S3/MinIO crash/restore 和 provider lifecycle 仍需完整目标环境矩阵 | 在固定 release commit 上完成隔离 PostgreSQL/Redis/MinIO、网络分区和 kill-point 矩阵，保存配置、日志、版本、结果和 RPO/RTO。完成前多节点仍为 `Experimental` |
 | EXT-CAPACITY | `1,000-session` 测试不是 1,000 名同时活跃用户的生产 SLA | 仅缺目标环境证据 | **目标硬件验收后可关闭证据项** | 现有脚本主要验证认证连接和调度，未完整模拟 initial presence、roster、MUC、OMEMO、MAM、upload、push 与 federation 混合负载 | 在目标 Linux 主机执行代表性账号/资源和业务混合、冷/热启动及 24–72 小时 soak，记录 CPU、RSS、FD、Tokio、PostgreSQL WAL/IOPS、网络和 p50/p95/p99；结论只适用于被测 commit/配置/硬件 |
 | EXT-FEDERATION | 公网 DNSSEC/SRV/TLSA、IPv4/IPv6、DANE、PKIX/本地 CRL 轮换和多个独立 peer 尚未形成当前 release 证据 | 外部环境＋仅缺运行证据 | **执行后可关闭证据项** | 本地 resolver、TLS policy 和 CRL 测试不能证明公共 DNS、CA 路径或第三方服务器行为；在线撤销能力缺口另由 `PROFILE-REVOCATION` 记录，不能用互操作测试代替实现 | 在公网 staging 对 Prosody/ejabberd/Openfire 等独立实现记录完整矩阵、DNS chain、证书指纹、版本、CRL reload/drain 和故障结果 |
 | EXT-COMPONENT | 真实第三方 external component/gateway 互操作证据不足 | 仅缺运行证据＋第三方差异 | **执行后可关闭证据项** | 2026-08-27 的 isolated strict mock peer 覆盖了本地 runtime 形状，但不能代替真实 XEP-0114 accept/connect 或 XEP-0225 component；标准缺少应用 ACK 的永久边界仍由 `STD-FINAL-ACK` 保留 | 使用固定版本的真实组件分别验证两种 XEP-0114 方向，以及 XEP-0225 STARTTLS、SASL、bind/unbind、重连、Northstar/component restart、背压、稳定 ID 重试和组件侧去重，并保存证据 |
@@ -62,17 +65,25 @@
 | EXT-SECURITY | 尚无独立 RFC/XEP 审查、安全审计和渗透测试 | 外部资格 | **第三方完成后可关闭证据项** | 内部静态检查、单元测试和自审不能构成认证，也不能证明不存在未知漏洞 | 固定 release commit、binary digest、SBOM、部署拓扑和 threat model，委托独立方审查 XML/state machine、REST/WebSocket/BOSH/S2S/component、Redis/object store、浏览器密码学和权限模型。高风险公网部署前必须完成 |
 | EXT-OPERATIONS | 真实告警接收、升级/静默/恢复、离机备份和灾难恢复尚缺目标部署演练 | 外部运维证据 | **演练后可关闭证据项** | 仓库有 metrics、Prometheus rules、Grafana 和 runbook，但阈值与通知链没有目标流量基线；代码不能证明值班人员或备份目的地有效 | 完成通知演练、恢复演练、容量阈值校准和定期 restore drill，记录负责人、时间、RTO/RPO 和失败处置 |
 
-## 当前发布候选的证据状态
+## 发布候选验证记录（2026-09-13）
 
-| 项目 | 结果 | 证据范围 |
-| --- | --- | --- |
-| `0126`–`0128`、数据库权限清单、SM、Caps 与 WebSocket 终止序列确定性回归 | 当前候选为 `1,188 total / 1,021 passed / 167 ignored / 0 failed` | 这是最终工作树的普通 Rust 测试结果；ignored 的隔离 PostgreSQL/Redis 项没有执行，不能视为通过。发布 CI 仍须把结果绑定到最终 commit |
-| Rust 最终静态质量门禁 | `fmt`、all-target/all-feature `check`、Clippy `-D warnings` 全部通过 | 结果对应 2026-09-02 的最终暂存工作树；提交后 CI 必须重跑，不能由这条记录替代 |
-| 架构静态门禁 | `AppState=9`；协议树 `0 db authority / 0 db domain-model / 0 state.pool / 0 sqlx:: / 0 PgPool` | MIX producer service gate、Caps queue/cache 非权威与 exact-owner teardown、SM event/recheck 静态不变量均通过；静态匹配仍不是权限或故障安全的运行证明 |
-| 外发 XML 与文档/迁移门禁 | 通过：raw-XML 基线为零，127 个 migration，152 个 capability，149 个 runtime relation policy，ledger/checksum 和文档一致 | 迁移当前最大值为 `0128`；权限清单、授权脚本、现有卷审计与启动 attestation 的静态边界已通过，实际应用迁移、角色授权与回滚仍由隔离 CI/目标环境证明 |
-| 运行时/外部证据 | 本轮未新增 | 没有执行 fuzz、畸形网络流量、故障注入、极限负载、公网联邦或客户端 GUI 验证；实现变化不能自动继承旧制品的运行证据 |
+`2f0a676` 的 [push Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/34756492651/job/103723213377)
+与 [PR Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/34756494803/job/103722709967)
+分别在第 2、9 轮发生 observer 查询逾时。请求已获 TCP 确认，连线没有重传，
+五秒内未收到回应；仍需区分 PostgreSQL 内部等待与 CPU 排程延迟。
+此前限制 worker CPU affinity 未改善故障，已撤回。
 
-本轮明确未执行 fuzz、WebSocket/BOSH 畸形帧、Slowloris/churn、反滥用/密码学攻击式矩阵、SIGKILL/磁盘满/断电点、PostgreSQL/Redis/对象存储故障注入、千会话极限负载或公网联邦安全探测。详细手动验证方案见 [MANUAL_SECURITY_VALIDATION.md](MANUAL_SECURITY_VALIDATION.md)。
+先前 HTTP Upload 重送检查未处理 API 已定义的暂时忙碌
+响应；现在仅对 `409 upload_in_progress` 遵守 `Retry-After`，共用十秒
+重试预算。真实 PostgreSQL 锁竞争测试已验证恢复、内容冲突及重送次数上限。
+`2f0a676` 的 push、PR 协定整合测试均已通过，Windows、Linux 与 Docker
+发布预演也通过。Observer 另加入 PostgreSQL 程序排程诊断；Federation
+间歇故障仍未关闭。
+日志和验证方法见 [CI 验证记录](handoff/2026-09-12/CI-PERFORMANCE-FOLLOWUP.md)。
+
+定时 fuzz、production/cluster load envelope 和 scheduled stress 属于定时或
+手动 CI；普通 push/PR 按策略跳过这些工作。最终发布还需要精确 `main` 提交的
+可信 CI、签名标签及制品验证，流程见 [发布职责](governance/release-roles.md)。
 
 ## 发布解释
 

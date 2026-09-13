@@ -556,6 +556,23 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // An explicit PEP subscription is a child of the metadata node.  Set
+        // up that parent through the same default configuration that the
+        // avatar conversion validates, rather than relying on the conversion
+        // below to create it after this subscription fixture is inserted.
+        let metadata_config = super::super::default_pep_node_config("urn:xmpp:avatar:metadata");
+        assert_eq!(
+            super::super::create_pep_node(
+                &pool,
+                user_id,
+                "urn:xmpp:avatar:metadata",
+                &metadata_config,
+                10,
+            )
+            .await
+            .unwrap(),
+            super::super::PepCreateOutcome::Created
+        );
         let subscriber = format!("avatar-{}@remote.test/phone", Uuid::new_v4().simple());
         let subscription = super::super::subscribe_pep_node(
             &pool,

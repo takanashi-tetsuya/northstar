@@ -25,11 +25,11 @@ cleanup() {
   trap - EXIT INT TERM
   local inner_schema
   while IFS= read -r inner_schema; do
-    [[ "$inner_schema" =~ ^s2s_(ordering|outbox)_test_[a-f0-9]{32}$ ]] || continue
+    [[ "$inner_schema" =~ ^s2s_(ordering_test|outbox_test|route_recovery_test|recovery_integration)_[a-f0-9]{32}$ ]] || continue
     PGPASSWORD=xmpp-test-password psql "${database_args[@]}" \
       --set ON_ERROR_STOP=1 \
       --command "DROP SCHEMA IF EXISTS \"$inner_schema\" CASCADE" >/dev/null || status=1
-  done < <(sed -n 's/^isolated_schema_created=\(s2s_\(ordering\|outbox\)_test_[a-f0-9]\{32\}\)$/\1/p' "$test_log" | sort -u)
+  done < <(sed -En 's/^isolated_schema_created=(s2s_(ordering_test|outbox_test|route_recovery_test|recovery_integration)_[a-f0-9]{32})$/\1/p' "$test_log" | sort -u)
   if [[ "$created" == 1 ]]; then
     PGPASSWORD=xmpp-test-password psql "${database_args[@]}" \
       --set ON_ERROR_STOP=1 \
@@ -83,3 +83,6 @@ run_exact_ignored() {
 
 run_exact_ignored db::s2s::tests::claim_preserves_mam_results_before_fin
 run_exact_ignored db::s2s::tests::scoped_claims_are_cross_worker_ordered_and_component_safe
+run_exact_ignored db::s2s::tests::route_recovery_wakes_only_the_observed_fifo_head_and_attempt
+run_exact_ignored db::s2s::tests::route_recovery_waits_for_lease_failure_commit_and_preserves_fencing
+run_exact_ignored s2s::outbound::tests::authenticated_route_recovery_integrates_with_fifo_and_leased_failure_commit

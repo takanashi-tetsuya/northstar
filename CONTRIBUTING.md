@@ -1,9 +1,9 @@
 # Contributing to Northstar
 
-Northstar is an early-stage, security-sensitive XMPP server. Contributions are
-welcome, but protocol claims, migrations and reliability guarantees must remain
-traceable to code and evidence. Read [SECURITY.md](SECURITY.md) before reporting
-a vulnerability and [docs/README.md](docs/README.md) before changing behavior.
+Northstar is developed collaboratively by humans and AI. Contributors are
+responsible for reviewing their changes and recording relevant validation.
+Read [SECURITY.md](SECURITY.md) before reporting a vulnerability and
+[docs/README.md](docs/README.md) before changing behavior.
 
 ## Development setup
 
@@ -24,9 +24,12 @@ backups.
   editing an applied migration.
 - Update `XEP_MATRIX.md` whenever advertised RFC/XEP behavior changes, and
   update `docs/openapi.yaml` with every REST wire-contract change.
-- Add unresolved compromises only to `docs/KNOWN_ISSUES.md`. Point-in-time
-  handoff or validation reports belong in `docs/archive/` with a historical
-  banner.
+- Record unresolved compromises in `docs/KNOWN_ISSUES.md`, dated validation in
+  `docs/evidence/` and handoffs in `docs/handoff/YYYY-MM-DD/`. Move retired
+  reports to `docs/archive/` with a historical banner.
+- Branch governance and release trust assumptions are documented in
+  `docs/governance/branch-rules.md` and
+  `docs/governance/release-roles.md`.
 - Preserve bounded queues, deadlines, payload limits and fail-closed secret,
   TLS and database-role checks. A compatibility exception must be explicit,
   narrowly scoped and documented.
@@ -48,9 +51,9 @@ node scripts/check-tracked-sensitive-files.mjs --include-untracked
 node scripts/verify-crypto-artifacts.mjs
 ```
 
-Run `cargo audit` and `cargo deny --all-features --locked check` for dependency
-changes. The release preflight requires both tools; install them from their
-official Rust packages using a reviewed, pinned version.
+Run `cargo audit` and `cargo deny --all-features --locked check` for
+dependency changes. The release preflight requires both tools; install them from
+their official Rust packages using a reviewed, pinned version.
 
 Fuzzing, malformed/adversarial transport traffic, abuse attack matrices,
 extreme load, process/dependency termination, resource exhaustion and public
@@ -62,6 +65,5 @@ disposable isolated environment.
 
 Describe the observable behavior, standards clauses or threat model affected,
 the tests actually run, tests intentionally not run, schema/operations impact
-and rollback or forward-fix plan. Do not call an ignored test passed, and do not
-present the existence of a harness as evidence that it ran for the submitted
-commit.
+and rollback or forward-fix plan. Associate results with the tested commit;
+list ignored and skipped tests separately.

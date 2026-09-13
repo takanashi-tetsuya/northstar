@@ -1,15 +1,14 @@
 use anyhow::{Context, Result};
 use sqlx::{PgPool, Row};
-use std::{collections::HashMap, net::IpAddr};
+use std::{
+    collections::{HashMap, HashSet},
+    net::IpAddr,
+};
 use uuid::Uuid;
 
 const U32_MODULUS: i64 = 4_294_967_296;
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
-pub struct SmMucMembership {
-    pub room_jid: String,
-    pub nick: String,
-}
+pub use northstar_session_core::SmMucMembership;
 
 #[derive(Clone, Debug)]
 pub struct SmSessionSnapshot {
@@ -119,6 +118,39 @@ pub struct ActivatedSmSession {
     pub unacked: Vec<crate::outbound::SmUnackedStanza>,
 }
 
+/// One MIX lease capability rotated while it crosses into durable XEP-0198
+/// ownership.  The input token names the worker's one-shot hand-off lease;
+/// the replacement token is private to the persisted SM queue.  Keeping both
+/// values explicit lets the live protocol FIFO replace its stale capability
+/// only after the transaction commits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SmMixLeaseRotation {
+    pub previous: crate::outbound::MixDelivery,
+    pub current: crate::outbound::MixDelivery,
+}
+
+/// Exact source rewrites committed by one SM queue replacement.
+///
+/// C2S sources are transferred by clearing their replay claim and retain the
+/// same identity.  MIX sources are deliberately rotated, so only this result
+/// may update the in-memory XEP-0198 FIFO after successful persistence.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SmQueueOwnershipResolution {
+    pub mix_rotations: Vec<SmMixLeaseRotation>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CreatedSmSession {
+    pub id: Uuid,
+    pub ownership: SmQueueOwnershipResolution,
+}
+
+#[derive(Clone, Debug)]
+pub struct SmCheckpointOutcome {
+    pub updated: bool,
+    pub ownership: SmQueueOwnershipResolution,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SmIpPolicy {
     None,
@@ -156,6 +188,9 @@ pub fn peer_ip_matches(policy: SmIpPolicy, expected: IpAddr, actual: IpAddr) -> 
     }
 }
 
+/// Result-only fixture API. Runtime callers require ownership rotations and
+/// therefore use `create_sm_session_with_ownership_resolution` directly.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub async fn create_sm_session(
     pool: &PgPool,
@@ -172,6 +207,43 @@ pub async fn create_sm_session(
     _max_per_account: usize,
     _max_global: usize,
 ) -> Result<Uuid> {
+    Ok(create_sm_session_with_ownership_resolution(
+        pool,
+        token_hash,
+        user_id,
+        auth_generation,
+        full_jid,
+        resource,
+        server_domain,
+        connection_id,
+        snapshot,
+        ttl_seconds,
+        live_lease_seconds,
+        _max_per_account,
+        _max_global,
+    )
+    .await?
+    .id)
+}
+
+/// Create a resumable SM row and report any MIX capability rotations committed
+/// while its initial queue becomes the recoverability owner.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_sm_session_with_ownership_resolution(
+    pool: &PgPool,
+    token_hash: &[u8; 32],
+    user_id: Uuid,
+    auth_generation: i64,
+    full_jid: &str,
+    resource: &str,
+    server_domain: &str,
+    connection_id: Uuid,
+    snapshot: &SmSessionSnapshot,
+    ttl_seconds: u64,
+    live_lease_seconds: u64,
+    _max_per_account: usize,
+    _max_global: usize,
+) -> Result<CreatedSmSession> {
     validate_snapshot(snapshot, usize::MAX, usize::MAX)?;
     let (joined_rooms, directed_presence) = canonical_snapshot_identities(snapshot)?;
     let full_jid = crate::jid::canonical_session_key(full_jid)?;
@@ -260,13 +332,13 @@ pub async fn create_sm_session(
     .fetch_one(&mut *transaction)
     .await?;
     anyhow::ensure!(created, "durable SM creation authority rejected");
-    replace_queue(&mut transaction, id, &snapshot.unacked, &[]).await?;
+    let ownership = replace_queue(&mut transaction, id, &snapshot.unacked, &[]).await?;
     transaction.commit().await?;
-    Ok(id)
+    Ok(CreatedSmSession { id, ownership })
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn checkpoint_sm_session(
+pub async fn checkpoint_sm_session_with_ownership_resolution(
     pool: &PgPool,
     id: Uuid,
     connection_id: Uuid,
@@ -275,8 +347,8 @@ pub async fn checkpoint_sm_session(
     live_lease_seconds: u64,
     max_stanzas: usize,
     max_bytes: usize,
-) -> Result<bool> {
-    checkpoint_sm_session_and_acknowledge(
+) -> Result<SmCheckpointOutcome> {
+    checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
         pool,
         id,
         connection_id,
@@ -327,6 +399,9 @@ pub async fn remove_live_sm_muc_memberships(
     )
 }
 
+/// Result-only fixture API. Runtime checkpointing consumes the ownership
+/// outcome from `checkpoint_sm_session_and_acknowledge_with_ownership_resolution`.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub async fn checkpoint_sm_session_and_acknowledge(
     pool: &PgPool,
@@ -339,6 +414,35 @@ pub async fn checkpoint_sm_session_and_acknowledge(
     max_stanzas: usize,
     max_bytes: usize,
 ) -> Result<bool> {
+    Ok(
+        checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
+            pool,
+            id,
+            connection_id,
+            snapshot,
+            acknowledged,
+            ttl_seconds,
+            live_lease_seconds,
+            max_stanzas,
+            max_bytes,
+        )
+        .await?
+        .updated,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
+    pool: &PgPool,
+    id: Uuid,
+    connection_id: Uuid,
+    snapshot: &SmSessionSnapshot,
+    acknowledged: &[crate::outbound::SmUnackedStanza],
+    ttl_seconds: u64,
+    live_lease_seconds: u64,
+    max_stanzas: usize,
+    max_bytes: usize,
+) -> Result<SmCheckpointOutcome> {
     validate_snapshot(snapshot, max_stanzas, max_bytes)?;
     let ttl = seconds_i64(ttl_seconds, "SM resume TTL")?;
     let live_lease = seconds_i64(live_lease_seconds, "SM live lease")?;
@@ -355,11 +459,17 @@ pub async fn checkpoint_sm_session_and_acknowledge(
     .await?;
     if !updated {
         transaction.rollback().await?;
-        return Ok(false);
+        return Ok(SmCheckpointOutcome {
+            updated: false,
+            ownership: SmQueueOwnershipResolution::default(),
+        });
     }
-    replace_queue(&mut transaction, id, &snapshot.unacked, acknowledged).await?;
+    let ownership = replace_queue(&mut transaction, id, &snapshot.unacked, acknowledged).await?;
     transaction.commit().await?;
-    Ok(true)
+    Ok(SmCheckpointOutcome {
+        updated: true,
+        ownership,
+    })
 }
 
 #[cfg(test)]
@@ -1038,16 +1148,461 @@ async fn update_snapshot(
     .await?)
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum SmDurableSourceKey {
+    // `offline_messages.id` is globally primary-keyed.  Keying the queue by
+    // that value also makes a malformed duplicate which names the same row
+    // with a different recipient fail before any acknowledgement can commit.
+    C2s(Uuid),
+    Mix(Uuid),
+}
+
+fn durable_source_key(source: crate::outbound::TransportOwnershipSource) -> SmDurableSourceKey {
+    match source {
+        crate::outbound::TransportOwnershipSource::C2s(delivery) => {
+            SmDurableSourceKey::C2s(delivery.message_id)
+        }
+        crate::outbound::TransportOwnershipSource::Mix(delivery) => {
+            SmDurableSourceKey::Mix(delivery.delivery_id)
+        }
+    }
+}
+
+fn durable_source_from_columns(
+    recipient_id: Option<Uuid>,
+    message_id: Option<Uuid>,
+    claim_id: Option<Uuid>,
+    mix_delivery_id: Option<Uuid>,
+    mix_delivery_lease_token: Option<Uuid>,
+) -> Result<Option<crate::outbound::TransportOwnershipSource>> {
+    match (
+        (recipient_id, message_id, claim_id),
+        (mix_delivery_id, mix_delivery_lease_token),
+    ) {
+        ((None, None, None), (None, None)) => Ok(None),
+        ((Some(recipient_id), Some(message_id), claim_id), (None, None)) => Ok(Some(
+            crate::outbound::TransportOwnershipSource::C2s(crate::outbound::DurableDelivery {
+                recipient_id,
+                message_id,
+                claim_id,
+            }),
+        )),
+        ((None, None, None), (Some(delivery_id), Some(lease_token))) => Ok(Some(
+            crate::outbound::TransportOwnershipSource::Mix(crate::outbound::MixDelivery {
+                delivery_id,
+                lease_token,
+            }),
+        )),
+        _ => anyhow::bail!("invalid mutually-exclusive durable source shape in SM queue"),
+    }
+}
+
+fn source_map(
+    entries: &[crate::outbound::SmUnackedStanza],
+    context: &str,
+) -> Result<HashMap<SmDurableSourceKey, crate::outbound::TransportOwnershipSource>> {
+    let mut sources = HashMap::new();
+    for entry in entries {
+        let Some(source) = entry.source else {
+            continue;
+        };
+        anyhow::ensure!(
+            sources.insert(durable_source_key(source), source).is_none(),
+            "duplicate durable source in {context}"
+        );
+    }
+    Ok(sources)
+}
+
+async fn lock_new_c2s_source_for_sm_transfer(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    delivery: crate::outbound::DurableDelivery,
+) -> Result<()> {
+    let row = sqlx::query(
+        "SELECT delivery_claim_id FROM offline_messages
+          WHERE recipient_id=$1 AND id=$2 FOR UPDATE",
+    )
+    .bind(delivery.recipient_id)
+    .bind(delivery.message_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(row) = row else {
+        anyhow::bail!("durable delivery row disappeared before SM ownership transfer");
+    };
+    let stored_claim: Option<Uuid> = row.try_get("delivery_claim_id")?;
+    anyhow::ensure!(
+        stored_claim == delivery.claim_id,
+        "durable delivery claim changed before SM ownership transfer"
+    );
+    let bosh_owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1 FROM bosh_delivery_fences WHERE message_id=$1
+         )",
+    )
+    .bind(delivery.message_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    anyhow::ensure!(
+        !bosh_owned,
+        "durable delivery is already owned by a BOSH response"
+    );
+    let sm_owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1 FROM sm_resume_stanzas WHERE delivery_message_id=$1
+         )",
+    )
+    .bind(delivery.message_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    anyhow::ensure!(
+        !sm_owned,
+        "durable delivery is already owned by another SM queue"
+    );
+    sqlx::query(
+        "UPDATE offline_messages
+            SET delivery_claim_id=NULL,delivery_claim_expires_at=NULL
+          WHERE recipient_id=$1 AND id=$2",
+    )
+    .bind(delivery.recipient_id)
+    .bind(delivery.message_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+async fn lock_mix_bosh_fence_for_sm_transfer(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    delivery_id: Uuid,
+) -> Result<()> {
+    let fence = sqlx::query(
+        "SELECT lease_token,expires_at>clock_timestamp() AS active
+           FROM mix_bosh_delivery_fences
+          WHERE delivery_id=$1 FOR UPDATE",
+    )
+    .bind(delivery_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(fence) = fence else {
+        return Ok(());
+    };
+    let active: bool = fence.try_get("active")?;
+    anyhow::ensure!(
+        !active,
+        "MIX delivery is already owned by an active BOSH response"
+    );
+    let lease_token: Uuid = fence.try_get("lease_token")?;
+    let removed = sqlx::query(
+        "DELETE FROM mix_bosh_delivery_fences
+          WHERE delivery_id=$1 AND lease_token=$2",
+    )
+    .bind(delivery_id)
+    .bind(lease_token)
+    .execute(&mut **transaction)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(
+        removed == 1,
+        "expired MIX BOSH fence changed during SM ownership transfer"
+    );
+    Ok(())
+}
+
+/// Lock one freshly claimed MIX recipient and turn the worker lease into an
+/// SM-private capability.  The fixed source -> BOSH-fence order matches the
+/// BOSH hand-off path, so neither transport can form a reverse lock cycle.
+async fn rotate_new_mix_source_for_sm_transfer(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    previous: crate::outbound::MixDelivery,
+) -> Result<crate::outbound::MixDelivery> {
+    let row = sqlx::query(
+        "SELECT lease_token,lease_until>clock_timestamp() AS active
+           FROM mix_delivery_recipients
+          WHERE delivery_id=$1 FOR UPDATE",
+    )
+    .bind(previous.delivery_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(row) = row else {
+        anyhow::bail!("MIX delivery disappeared before SM ownership transfer");
+    };
+    let lease_token: Option<Uuid> = row.try_get("lease_token")?;
+    anyhow::ensure!(
+        lease_token == Some(previous.lease_token),
+        "MIX delivery lease changed before SM ownership transfer"
+    );
+    let active: Option<bool> = row.try_get("active")?;
+    anyhow::ensure!(
+        active == Some(true),
+        "MIX delivery lease expired before SM ownership transfer"
+    );
+    lock_mix_bosh_fence_for_sm_transfer(transaction, previous.delivery_id).await?;
+    let sm_owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1 FROM sm_resume_stanzas WHERE mix_delivery_id=$1
+         )",
+    )
+    .bind(previous.delivery_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    anyhow::ensure!(
+        !sm_owned,
+        "MIX delivery is already owned by another SM queue"
+    );
+    // A remote-node hand-off carries this exact rotated token. Consume its
+    // bounded cluster fence before recording the next SM owner so a target
+    // node which later exits cannot release a source now owned by XEP-0198.
+    super::mix::consume_mix_cluster_delivery_fence_tx(transaction, previous).await?;
+    let current = crate::outbound::MixDelivery {
+        delivery_id: previous.delivery_id,
+        lease_token: Uuid::new_v4(),
+    };
+    let updated = sqlx::query(
+        "UPDATE mix_delivery_recipients
+            SET lease_token=$3
+          WHERE delivery_id=$1 AND lease_token=$2",
+    )
+    .bind(previous.delivery_id)
+    .bind(previous.lease_token)
+    .bind(current.lease_token)
+    .execute(&mut **transaction)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(
+        updated == 1,
+        "MIX delivery lease changed during SM ownership transfer"
+    );
+    Ok(current)
+}
+
+async fn delete_completed_mix_source_from_sm(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    delivery: crate::outbound::MixDelivery,
+) -> Result<()> {
+    let row = sqlx::query(
+        "SELECT lease_token FROM mix_delivery_recipients
+          WHERE delivery_id=$1 FOR UPDATE",
+    )
+    .bind(delivery.delivery_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(row) = row else {
+        anyhow::bail!("SM acknowledged MIX delivery row was not present");
+    };
+    anyhow::ensure!(
+        row.try_get::<Option<Uuid>, _>("lease_token")? == Some(delivery.lease_token),
+        "SM acknowledgement lost the exact MIX delivery lease"
+    );
+    lock_mix_bosh_fence_for_sm_transfer(transaction, delivery.delivery_id).await?;
+    let sm_owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1 FROM sm_resume_stanzas WHERE mix_delivery_id=$1
+         )",
+    )
+    .bind(delivery.delivery_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    anyhow::ensure!(
+        !sm_owned,
+        "SM acknowledgement would consume a MIX source owned by another queue"
+    );
+    let removed = sqlx::query(
+        "DELETE FROM mix_delivery_recipients
+          WHERE delivery_id=$1 AND lease_token=$2",
+    )
+    .bind(delivery.delivery_id)
+    .bind(delivery.lease_token)
+    .execute(&mut **transaction)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(
+        removed == 1,
+        "SM acknowledged MIX delivery lease changed before deletion"
+    );
+    Ok(())
+}
+
+/// Atomically acknowledge the exact source set which crossed a non-resumable
+/// transport boundary.
+///
+/// XEP-0198 persistence uses [`replace_queue`] instead: it first transfers a
+/// source into its queue and later consumes it together with the matching
+/// client acknowledgement.  This function is deliberately for the opposite
+/// boundary only, where bytes were written without an SM owner.  Validate
+/// every capability before deleting any projection, so a later stale MIX
+/// lease cannot partially consume an earlier C2S prefix.
+pub async fn acknowledge_transport_sources(
+    pool: &PgPool,
+    sources: &[crate::outbound::TransportOwnershipSource],
+) -> Result<()> {
+    if sources.is_empty() {
+        return Ok(());
+    }
+
+    let mut seen = HashSet::with_capacity(sources.len());
+    for source in sources {
+        anyhow::ensure!(
+            seen.insert(durable_source_key(*source)),
+            "duplicate durable transport source in one acknowledgement batch"
+        );
+    }
+
+    // This is the same global order used by queue replacement: C2S source
+    // rows first, then MIX source rows.  Both paths inspect their BOSH/SM
+    // owners only after holding the source row, so an ownership hand-off
+    // cannot slip between validation and deletion.
+    let mut c2s = sources
+        .iter()
+        .filter_map(|source| (*source).c2s())
+        .collect::<Vec<_>>();
+    c2s.sort_unstable_by_key(|delivery| (delivery.recipient_id, delivery.message_id));
+    let mut mix = sources
+        .iter()
+        .filter_map(|source| (*source).mix())
+        .collect::<Vec<_>>();
+    mix.sort_unstable_by_key(|delivery| delivery.delivery_id);
+
+    let mut transaction = pool.begin().await?;
+    let mut present_c2s = Vec::with_capacity(c2s.len());
+    for delivery in &c2s {
+        let row = sqlx::query(
+            "SELECT delivery_claim_id FROM offline_messages
+              WHERE recipient_id=$1 AND id=$2 FOR UPDATE",
+        )
+        .bind(delivery.recipient_id)
+        .bind(delivery.message_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        match (row, delivery.claim_id) {
+            // The legacy live C2S path treats a missing unclaimed row as an
+            // idempotent completion.  Preserve that established behaviour;
+            // a claimed row must never be silently accepted as missing.
+            (None, None) => present_c2s.push(false),
+            (None, Some(_)) => {
+                anyhow::bail!("offline delivery claim was lost before acknowledgement")
+            }
+            (Some(row), Some(expected_claim)) => {
+                anyhow::ensure!(
+                    row.try_get::<Option<Uuid>, _>("delivery_claim_id")? == Some(expected_claim),
+                    "offline delivery claim was lost before acknowledgement"
+                );
+                present_c2s.push(true);
+            }
+            (Some(row), None) => {
+                anyhow::ensure!(
+                    row.try_get::<Option<Uuid>, _>("delivery_claim_id")?
+                        .is_none(),
+                    "live transport acknowledgement does not own the offline replay claim"
+                );
+                let transport_owned: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM sm_resume_stanzas WHERE delivery_message_id=$1
+                     ) OR EXISTS(
+                         SELECT 1 FROM bosh_delivery_fences WHERE message_id=$1
+                     )",
+                )
+                .bind(delivery.message_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+                anyhow::ensure!(
+                    !transport_owned,
+                    "live transport acknowledgement does not own the durable delivery"
+                );
+                present_c2s.push(true);
+            }
+        }
+    }
+
+    for delivery in &mix {
+        let row = sqlx::query(
+            "SELECT lease_token FROM mix_delivery_recipients
+              WHERE delivery_id=$1 FOR UPDATE",
+        )
+        .bind(delivery.delivery_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(row) = row else {
+            anyhow::bail!("MIX delivery lease was lost before acknowledgement");
+        };
+        anyhow::ensure!(
+            row.try_get::<Option<Uuid>, _>("lease_token")? == Some(delivery.lease_token),
+            "MIX delivery lease was lost before acknowledgement"
+        );
+        let transport_owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                 SELECT 1 FROM sm_resume_stanzas WHERE mix_delivery_id=$1
+             ) OR EXISTS(
+                 SELECT 1 FROM mix_bosh_delivery_fences WHERE delivery_id=$1
+             )",
+        )
+        .bind(delivery.delivery_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        anyhow::ensure!(
+            !transport_owned,
+            "direct transport acknowledgement does not own the MIX delivery"
+        );
+    }
+
+    for (delivery, present) in c2s.iter().zip(present_c2s) {
+        if !present {
+            continue;
+        }
+        let removed = sqlx::query(
+            "DELETE FROM offline_messages
+              WHERE recipient_id=$1 AND id=$2
+                AND delivery_claim_id IS NOT DISTINCT FROM $3",
+        )
+        .bind(delivery.recipient_id)
+        .bind(delivery.message_id)
+        .bind(delivery.claim_id)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        anyhow::ensure!(
+            removed == 1,
+            "durable C2S delivery disappeared during acknowledgement"
+        );
+    }
+    for delivery in &mix {
+        let removed = sqlx::query(
+            "DELETE FROM mix_delivery_recipients
+              WHERE delivery_id=$1 AND lease_token=$2",
+        )
+        .bind(delivery.delivery_id)
+        .bind(delivery.lease_token)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        anyhow::ensure!(
+            removed == 1,
+            "MIX delivery lease changed during acknowledgement"
+        );
+    }
+    transaction.commit().await?;
+    tracing::debug!(
+        c2s = c2s.len(),
+        mix = mix.len(),
+        "atomically acknowledged durable transport source batch"
+    );
+    Ok(())
+}
+
 async fn replace_queue(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: Uuid,
     queue: &[crate::outbound::SmUnackedStanza],
     acknowledged: &[crate::outbound::SmUnackedStanza],
-) -> Result<()> {
+) -> Result<SmQueueOwnershipResolution> {
+    // First lock the current SM queue.  All later source locks are ordered
+    // C2S offline rows, then MIX recipient rows, then their BOSH fence rows.
+    // Every queue replacement follows this order, so a mixed snapshot cannot
+    // create a C2S/MIX inversion while preserving XEP-0198 FIFO semantics.
     let existing_rows = sqlx::query(
-        "SELECT delivery_recipient_id,delivery_message_id,delivery_claim_id
+        "SELECT delivery_recipient_id,delivery_message_id,delivery_claim_id,
+                mix_delivery_id,mix_delivery_lease_token
            FROM sm_resume_stanzas
-          WHERE session_id=$1 AND delivery_message_id IS NOT NULL
+          WHERE session_id=$1
+            AND (delivery_message_id IS NOT NULL OR mix_delivery_id IS NOT NULL)
           FOR UPDATE",
     )
     .bind(id)
@@ -1055,120 +1610,86 @@ async fn replace_queue(
     .await?;
     let mut existing = HashMap::new();
     for row in existing_rows {
-        let recipient_id: Uuid = row.try_get("delivery_recipient_id")?;
-        let message_id: Uuid = row.try_get("delivery_message_id")?;
-        let claim_id: Option<Uuid> = row.try_get("delivery_claim_id")?;
+        let source = durable_source_from_columns(
+            row.try_get("delivery_recipient_id")?,
+            row.try_get("delivery_message_id")?,
+            row.try_get("delivery_claim_id")?,
+            row.try_get("mix_delivery_id")?,
+            row.try_get("mix_delivery_lease_token")?,
+        )?
+        .context("persisted SM durable row has no source")?;
         anyhow::ensure!(
             existing
-                .insert(
-                    message_id,
-                    crate::outbound::DurableDelivery {
-                        recipient_id,
-                        message_id,
-                        claim_id,
-                    },
-                )
+                .insert(durable_source_key(source), source)
                 .is_none(),
-            "duplicate durable delivery in persisted SM queue"
+            "duplicate durable source in persisted SM queue"
         );
     }
 
-    let mut next = HashMap::new();
-    for entry in queue {
-        let Some(delivery) = entry.durable_delivery else {
-            continue;
-        };
-        anyhow::ensure!(
-            next.insert(delivery.message_id, delivery).is_none(),
-            "duplicate durable delivery in SM snapshot"
-        );
-    }
-    let mut completed = HashMap::new();
-    for entry in acknowledged {
-        let Some(delivery) = entry.durable_delivery else {
-            continue;
-        };
-        anyhow::ensure!(
-            completed.insert(delivery.message_id, delivery).is_none(),
-            "duplicate durable delivery in SM acknowledgement"
-        );
-    }
+    let mut next = source_map(queue, "SM snapshot")?;
+    let completed = source_map(acknowledged, "SM acknowledgement")?;
     anyhow::ensure!(
         completed
+            .iter()
+            .all(|(key, completed)| { existing.get(key).is_some_and(|owned| owned == completed) }),
+        "SM acknowledgement does not own the durable source fence"
+    );
+    anyhow::ensure!(
+        next.iter()
+            .all(|(key, source)| { existing.get(key).is_none_or(|owned| owned == source) }),
+        "SM snapshot changed an existing durable source fence"
+    );
+    anyhow::ensure!(
+        existing
             .keys()
-            .all(|message_id| existing.get(message_id).is_some_and(|owned| {
-                let completed = completed[message_id];
-                *owned == completed
-            })),
-        "SM acknowledgement does not own the durable delivery fence"
+            .all(|key| { next.contains_key(key) || completed.contains_key(key) }),
+        "SM snapshot attempted to drop a durable source without client acknowledgement"
     );
     anyhow::ensure!(
-        next.iter().all(|(message_id, delivery)| {
-            existing
-                .get(message_id)
-                .is_none_or(|owned| owned == delivery)
-        }),
-        "SM snapshot changed an existing durable delivery fence"
-    );
-    anyhow::ensure!(
-        existing.keys().all(|message_id| {
-            next.contains_key(message_id) || completed.contains_key(message_id)
-        }),
-        "SM snapshot attempted to drop a durable delivery without client acknowledgement"
-    );
-    anyhow::ensure!(
-        completed
-            .keys()
-            .all(|message_id| !next.contains_key(message_id)),
-        "SM acknowledgement retained the same durable delivery"
+        completed.keys().all(|key| !next.contains_key(key)),
+        "SM acknowledgement retained the same durable source"
     );
 
-    // Acquire offline rows in UUID order so concurrent resources cannot form
-    // a lock cycle while trying to bind different pages of one account.
-    let mut new_deliveries = next
+    let mut new_c2s = next
         .values()
-        .filter(|delivery| !existing.contains_key(&delivery.message_id))
-        .copied()
+        .filter_map(|source| match *source {
+            crate::outbound::TransportOwnershipSource::C2s(delivery)
+                if !existing.contains_key(&durable_source_key(*source)) =>
+            {
+                Some(delivery)
+            }
+            _ => None,
+        })
         .collect::<Vec<_>>();
-    new_deliveries.sort_unstable_by_key(|delivery| delivery.message_id);
-    for delivery in new_deliveries {
-        let row = sqlx::query(
-            "SELECT delivery_claim_id FROM offline_messages
-              WHERE recipient_id=$1 AND id=$2 FOR UPDATE",
-        )
-        .bind(delivery.recipient_id)
-        .bind(delivery.message_id)
-        .fetch_optional(&mut **transaction)
-        .await?;
-        let Some(row) = row else {
-            anyhow::bail!("durable delivery row disappeared before SM ownership transfer");
-        };
-        let stored_claim: Option<Uuid> = row.try_get("delivery_claim_id")?;
+    new_c2s.sort_unstable_by_key(|delivery| (delivery.recipient_id, delivery.message_id));
+    for delivery in new_c2s {
+        lock_new_c2s_source_for_sm_transfer(transaction, delivery).await?;
+    }
+
+    let mut new_mix = next
+        .values()
+        .filter_map(|source| match *source {
+            crate::outbound::TransportOwnershipSource::Mix(delivery)
+                if !existing.contains_key(&durable_source_key(*source)) =>
+            {
+                Some(delivery)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    new_mix.sort_unstable_by_key(|delivery| delivery.delivery_id);
+    let mut ownership = SmQueueOwnershipResolution::default();
+    for previous in new_mix {
+        let current = rotate_new_mix_source_for_sm_transfer(transaction, previous).await?;
+        let key = durable_source_key(crate::outbound::TransportOwnershipSource::Mix(previous));
+        let replaced = next.insert(key, crate::outbound::TransportOwnershipSource::Mix(current));
         anyhow::ensure!(
-            stored_claim == delivery.claim_id,
-            "durable delivery claim changed before SM ownership transfer"
+            replaced == Some(crate::outbound::TransportOwnershipSource::Mix(previous)),
+            "MIX source changed while rotating into SM ownership"
         );
-        let bosh_owned: bool = sqlx::query_scalar(
-            "SELECT EXISTS(
-                 SELECT 1 FROM bosh_delivery_fences WHERE message_id=$1
-             )",
-        )
-        .bind(delivery.message_id)
-        .fetch_one(&mut **transaction)
-        .await?;
-        anyhow::ensure!(
-            !bosh_owned,
-            "durable delivery is already owned by a BOSH response"
-        );
-        sqlx::query(
-            "UPDATE offline_messages
-                SET delivery_claim_id=NULL,delivery_claim_expires_at=NULL
-              WHERE recipient_id=$1 AND id=$2",
-        )
-        .bind(delivery.recipient_id)
-        .bind(delivery.message_id)
-        .execute(&mut **transaction)
-        .await?;
+        ownership
+            .mix_rotations
+            .push(SmMixLeaseRotation { previous, current });
     }
 
     sqlx::query("DELETE FROM sm_resume_stanzas WHERE session_id=$1")
@@ -1176,23 +1697,40 @@ async fn replace_queue(
         .execute(&mut **transaction)
         .await?;
     for (position, entry) in queue.iter().enumerate() {
-        let delivery = entry.durable_delivery;
+        let source = entry
+            .source
+            .map(|source| {
+                next.get(&durable_source_key(source))
+                    .copied()
+                    .context("SM snapshot source disappeared during replacement")
+            })
+            .transpose()?;
+        let c2s = source.and_then(crate::outbound::TransportOwnershipSource::c2s);
+        let mix = source.and_then(crate::outbound::TransportOwnershipSource::mix);
         sqlx::query(
             "INSERT INTO sm_resume_stanzas(
                 session_id,position,stanza,delivery_recipient_id,
-                delivery_message_id,delivery_claim_id
-             ) VALUES($1,$2,$3,$4,$5,$6)",
+                delivery_message_id,delivery_claim_id,
+                mix_delivery_id,mix_delivery_lease_token
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
         )
         .bind(id)
         .bind(i32::try_from(position).context("SM queue position overflow")?)
         .bind(&entry.stanza)
-        .bind(delivery.map(|delivery| delivery.recipient_id))
-        .bind(delivery.map(|delivery| delivery.message_id))
-        .bind(delivery.and_then(|delivery| delivery.claim_id))
+        .bind(c2s.map(|delivery| delivery.recipient_id))
+        .bind(c2s.map(|delivery| delivery.message_id))
+        .bind(c2s.and_then(|delivery| delivery.claim_id))
+        .bind(mix.map(|delivery| delivery.delivery_id))
+        .bind(mix.map(|delivery| delivery.lease_token))
         .execute(&mut **transaction)
         .await?;
     }
-    for delivery in completed.values() {
+    let mut completed_c2s = completed
+        .values()
+        .filter_map(|source| source.c2s())
+        .collect::<Vec<_>>();
+    completed_c2s.sort_unstable_by_key(|delivery| (delivery.recipient_id, delivery.message_id));
+    for delivery in completed_c2s {
         let deleted = sqlx::query("DELETE FROM offline_messages WHERE recipient_id=$1 AND id=$2")
             .bind(delivery.recipient_id)
             .bind(delivery.message_id)
@@ -1204,7 +1742,15 @@ async fn replace_queue(
             "SM acknowledged durable delivery row was not present"
         );
     }
-    Ok(())
+    let mut completed_mix = completed
+        .values()
+        .filter_map(|source| source.mix())
+        .collect::<Vec<_>>();
+    completed_mix.sort_unstable_by_key(|delivery| delivery.delivery_id);
+    for delivery in completed_mix {
+        delete_completed_mix_source_from_sm(transaction, delivery).await?;
+    }
+    Ok(ownership)
 }
 
 async fn fetch_queue(
@@ -1212,7 +1758,8 @@ async fn fetch_queue(
     id: Uuid,
 ) -> Result<Vec<crate::outbound::SmUnackedStanza>> {
     sqlx::query(
-        "SELECT stanza,delivery_recipient_id,delivery_message_id,delivery_claim_id
+        "SELECT stanza,delivery_recipient_id,delivery_message_id,delivery_claim_id,
+                mix_delivery_id,mix_delivery_lease_token
            FROM sm_resume_stanzas WHERE session_id=$1 ORDER BY position",
     )
     .bind(id)
@@ -1221,21 +1768,15 @@ async fn fetch_queue(
     .into_iter()
     .map(|row| {
         let stanza: String = row.try_get("stanza")?;
-        let recipient_id: Option<Uuid> = row.try_get("delivery_recipient_id")?;
-        let message_id: Option<Uuid> = row.try_get("delivery_message_id")?;
-        let claim_id: Option<Uuid> = row.try_get("delivery_claim_id")?;
-        let durable_delivery = match (recipient_id, message_id) {
-            (Some(recipient_id), Some(message_id)) => Some(crate::outbound::DurableDelivery {
-                recipient_id,
-                message_id,
-                claim_id,
-            }),
-            (None, None) if claim_id.is_none() => None,
-            _ => anyhow::bail!("invalid durable delivery shape in SM queue"),
-        };
-        Ok(crate::outbound::SmUnackedStanza::with_delivery(
-            stanza,
-            durable_delivery,
+        let source = durable_source_from_columns(
+            row.try_get("delivery_recipient_id")?,
+            row.try_get("delivery_message_id")?,
+            row.try_get("delivery_claim_id")?,
+            row.try_get("mix_delivery_id")?,
+            row.try_get("mix_delivery_lease_token")?,
+        )?;
+        Ok(crate::outbound::SmUnackedStanza::with_source(
+            stanza, source,
         ))
     })
     .collect()

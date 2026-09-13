@@ -138,6 +138,20 @@ INSERT INTO pg_temp.northstar_migration_ledger_manifest(
   (125,'registration control fail closed',pg_catalog.decode('82db5852dc2dae1a86b8a3b5e977616218f52d6fcabbc10e3276c0e33143afd031de4541b74baa82aaf3a8e88a61ac39','hex')),
   (126,'mix delivery release journal',pg_catalog.decode('2f29bc461f1f2d51f993ae86b4ac8fb8c2e5cfd30390ac14c8a1eaa6a1f6a8d3dc2db6d6f29bad9221cf4c0783352dce','hex')),
   (127,'sm resume authority notifications',pg_catalog.decode('d6b5f916ad9e100b01b206ebdf3250f648bd26ffb94179ee172c2803d9f5398b8e4177c2ca2e19cc6332de93a3b6a42c','hex')),
-  (128,'mix capacity authorities',pg_catalog.decode('ba68ea758f4a8eecca4d0776485ec52eb4cd74d5ec2a5412222a68cbe7cc39e00825abd4067fb9a544be4374134aea7e','hex'));
+  (128,'mix capacity authorities',pg_catalog.decode('ba68ea758f4a8eecca4d0776485ec52eb4cd74d5ec2a5412222a68cbe7cc39e00825abd4067fb9a544be4374134aea7e','hex')),
+  (129,'pubsub collection edge update semantics',pg_catalog.decode('144e3397db1d0fdfde52b4e169f5b8b04cce369731286577a3dc9bfff0917e06abc58a8c863d707a9eb3f8aabfb8ab65','hex')),
+  (130,'personal message admission scope lookup',pg_catalog.decode('92ea567c26fc315b52e95bc43236ba6b1338b909b39e5cf2cc690007106279428850f8026e08c39feae7edca36817201','hex')),
+  (131,'upload capacity nowait',pg_catalog.decode('b16a8d1b4cf9aefef5306c35112cfa7b957b61019ea28452c31936e04ba2ab3fccb9809c7fd7a80212e02e2ee780228e','hex')),
+  (132,'pubsub collection edge path',pg_catalog.decode('3bb9cc8cbda0798d78eb1f22b99a2076bdc6ed321aa59564e7c88faaffe8fbb4b0159ff6a6cc346a1d32769a408d535d','hex')),
+  (133,'mix delivery wake notifications',pg_catalog.decode('a773eeb37f0976361574e9e61a741037ac5b1e8d94298689ee4d8b879d290d43bac5d7cf239387ff4630ed369c6d9269','hex')),
+  (134,'mix delivery route wake generation',pg_catalog.decode('e897eff1e56dd4c298af80bd35ff23afb1e04bcfaaae8cdb0067fa68f947f6d827783e0cead9c97aa935e2a90d5ee289','hex')),
+  (135,'mix transport handoffs',pg_catalog.decode('ff5bc36909170eca8deb85aa87ca59cd66dda2517a8acedfe8c3f39c57ec89bcd839a201467964fff5a26f9c28c2dda5','hex')),
+  (136,'sm mix teardown release',pg_catalog.decode('d391639680a7b79bbc4273a4a2f39274aca3ff7c76eaaba42ac0b28aa2086a217f189aef57fcf3d5d6577438ce0b5179','hex')),
+  (137,'mix cluster transport handoffs',pg_catalog.decode('f2e40e76a71bdd3100e5abaeab3e0803ab9819cce93909cdcaae8ceec2a9537ba2f2b48089b7d4ef390936e3e1333ba1','hex')),
+  (138,'sm mix teardown catalog',pg_catalog.decode('fef9f9cf5f09968c8edb9e4b8ed205ffcf7182e515cd0383af92138d089b3acee6e6c634d68db4d73f8c8b27e591b268','hex')),
+  (139,'upload cleanup conflict target',pg_catalog.decode('83e6dccb821af18f14411ab3cfa24f24698e6c195664bf79cd4ec0b548ae0ea44455ca9bb9446679883d485e24e6a9cf','hex')),
+  (140,'upload projection release order',pg_catalog.decode('a32d1aa21e879e6934b071f422eceb6b322c405c4a8f5389c64a486dcccb64fd97e972846d695959a297a73483f38fb0','hex')),
+  (141,'upload cleanup capability rehardening',pg_catalog.decode('b74469e8b28f159aa3de2547d6691894499001d67747a43c65e16b1200d4eae309da776851dcd5fc187efd378c9f2e58','hex')),
+  (142,'upload projection capacity rehardening',pg_catalog.decode('946fc50f0415592302ae2f57746f5deb75eb7b367315e4745e7baa18b87c4496b06d91983ee89779945ceaf4896688b2','hex'));
 
 \set northstar_migration_ledger_manifest_is_loaded true

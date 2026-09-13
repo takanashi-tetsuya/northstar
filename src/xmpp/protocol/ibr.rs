@@ -70,7 +70,7 @@ impl ProtocolSession {
         };
         match self.complete_ibr_registration(submission).await {
             IbrCompletion::Created(username) => {
-                self.registration_completed = true;
+                self.negotiation.mark_registration_completed();
                 Ok(Action::Send(ibr_success(
                     &username,
                     &self.state.config.domain,
@@ -149,7 +149,7 @@ impl ProtocolSession {
         };
         match self.complete_ibr_registration(submission).await {
             IbrCompletion::Created(username) => {
-                self.registration_completed = true;
+                self.negotiation.mark_registration_completed();
                 let success_id = format!("ibr-success-{}", uuid::Uuid::new_v4());
                 let success_payload = ibr_success(&username, &self.state.config.domain);
                 let success = XmlElement::namespaced("iq", "jabber:client")
@@ -180,12 +180,12 @@ impl ProtocolSession {
     fn registration_transport_allowed(&self) -> bool {
         self.secure_transport
             && self.authenticated.is_none()
-            && !self.registration_completed
+            && !self.negotiation.registration_completed()
             && !self.state.registration_is_closed()
     }
 
     fn ibr_challenge(&self, challenge: Option<&PowChallenge>) -> String {
-        let invitation = if self.state.config.invitation_required {
+        let invitation = if self.state.registration_requires_invitation() {
             XmlElement::new("field")
                 .attr("var", "urn:northstar:invite:token")
                 .attr("type", "text-private")

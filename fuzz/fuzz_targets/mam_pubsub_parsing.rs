@@ -3,29 +3,20 @@
 use libfuzzer_sys::fuzz_target;
 use roxmltree::{Document, Node};
 
-#[path = "../../src/mam_pubsub_parsing.rs"]
-mod mam_pubsub_parsing;
-
 const MAX_INPUT: usize = 4 * 1_048_576;
 
 fn exercise_production_parsers(node: Node<'_, '_>) {
-    // The protocol layer supplies RFC 7622 and RFC 3339 conversions at these
-    // two dependency-injection points. Identity conversion here keeps this
-    // harness focused on the exact shared XML grammar rather than maintaining
-    // a second, inevitably divergent semantic parser.
-    let _ = mam_pubsub_parsing::parse_mam_query(
-        node,
-        |jid| Ok(jid.to_owned()),
-        |timestamp| Ok(timestamp.to_owned()),
-    );
+    // The production crate owns XML grammar, RFC 7622 identity conversion,
+    // and RFC 3339 timestamps. Exercise the complete parser used by MAM.
+    let _ = northstar_xep_0313::parse_mam_query(node);
 
     for kind in ["get", "set"] {
-        if let Ok(envelope) = mam_pubsub_parsing::parse_pubsub_envelope(node, kind) {
+        if let Ok(envelope) = northstar_xep_0060::parse_pubsub_envelope(node, kind) {
             for operation in envelope.operations {
                 if operation.tag_name().name() == "set"
-                    && operation.tag_name().namespace() == Some(mam_pubsub_parsing::RSM_NS)
+                    && operation.tag_name().namespace() == Some(northstar_xep_0060::NS_RSM)
                 {
-                    let _ = mam_pubsub_parsing::parse_pubsub_rsm(operation);
+                    let _ = northstar_xep_0060::parse_rsm_element(operation);
                 }
             }
         }

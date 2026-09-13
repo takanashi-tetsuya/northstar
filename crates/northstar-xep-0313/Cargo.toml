@@ -1,0 +1,35 @@
+[package]
+name = "northstar-xep-0313"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Capability-free XEP-0313 Message Archive Management (MAM) wire parsing, validation, preference evaluation, and XML builders"
+publish = false
+
+[package.metadata.northstar-xep]
+id = 313
+route-ids = [
+    "iq-set|urn:xmpp:mam:2|query",
+    "iq-get|urn:xmpp:mam:2|query",
+    "iq-get|urn:xmpp:mam:2|metadata",
+    "iq-get|urn:xmpp:mam:2|prefs",
+    "iq-set|urn:xmpp:mam:2|prefs",
+]
+worker-ids = []
+
+[dependencies]
+northstar-xep-core = { path = "../northstar-xep-core" }
+northstar-xep-0059 = { path = "../northstar-xep-0059" }
+northstar-xmpp-types = { path = "../northstar-xmpp-types" }
+roxmltree = "0.20"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+default = []
+serde = [
+    "dep:serde",
+    "northstar-xep-0059/serde",
+    "northstar-xmpp-types/serde",
+]

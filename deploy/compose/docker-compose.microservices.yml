@@ -1,0 +1,274 @@
+# Northstar Strict Microservices Docker Compose Topology
+# Defined per northstar_microservices_deep_audit_2026-09-03.md (Sections 8, 16).
+# Enforces:
+# 1. Exclusive PostgreSQL database per stateful service.
+# 2. No shared database roles, credentials, or volumes.
+# 3. Kafka broker for transactional outbox/inbox event streams.
+
+version: "3.8"
+
+networks:
+  northstar-transport:
+    driver: bridge
+  northstar-internal:
+    driver: bridge
+  northstar-data:
+    internal: true
+
+volumes:
+  identity-data:
+  session-data:
+  ingress-data:
+  delivery-data:
+  muc-data:
+  pubsub-data:
+  archive-data:
+  upload-data:
+
+services:
+  # ==========================================
+  # Message Broker (Kafka Event Log)
+  # ==========================================
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: northstar-kafka
+    networks:
+      - northstar-internal
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:29093'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LOG_DIRS: '/tmp/kraft-combined-logs'
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+
+  # ==========================================
+  # Exclusive Databases
+  # ==========================================
+  identity-db:
+    image: postgres:16-alpine
+    container_name: northstar-identity-db
+    networks:
+      - northstar-data
+    environment:
+      POSTGRES_DB: northstar_identity
+      POSTGRES_USER: identity_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/identity_db_password
+    volumes:
+      - identity-data:/var/lib/postgresql/data
+
+  session-db:
+    image: postgres:16-alpine
+    container_name: northstar-session-db
+    networks:
+      - northstar-data
+    environment:
+      POSTGRES_DB: northstar_session
+      POSTGRES_USER: session_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/session_db_password
+    volumes:
+      - session-data:/var/lib/postgresql/data
+
+  ingress-db:
+    image: postgres:16-alpine
+    container_name: northstar-ingress-db
+    networks:
+      - northstar-data
+    environment:
+      POSTGRES_DB: northstar_message_ingress
+      POSTGRES_USER: ingress_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/ingress_db_password
+    volumes:
+      - ingress-data:/var/lib/postgresql/data
+
+  delivery-db:
+    image: postgres:16-alpine
+    container_name: northstar-delivery-db
+    networks:
+      - northstar-data
+    environment:
+      POSTGRES_DB: northstar_delivery
+      POSTGRES_USER: delivery_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/delivery_db_password
+    volumes:
+      - delivery-data:/var/lib/postgresql/data
+
+  muc-db:
+    image: postgres:16-alpine
+    container_name: northstar-muc-db
+    networks:
+      - northstar-data
+    environment:
+      POSTGRES_DB: northstar_xep_0045
+      POSTGRES_USER: muc_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/muc_db_password
+    volumes:
+      - muc-data:/var/lib/postgresql/data
+
+  pubsub-db:
+    image: postgres:16-alpine
+    container_name: northstar-pubsub-db
+    networks:
+      - northstar-data
+    environment:
+      POSTGRES_DB: northstar_xep_0060
+      POSTGRES_USER: pubsub_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/pubsub_db_password
+    volumes:
+      - pubsub-data:/var/lib/postgresql/data
+
+  archive-db:
+    image: postgres:16-alpine
+    container_name: northstar-archive-db
+    networks:
+      - northstar-data
+    environment:
+      POSTGRES_DB: northstar_xep_0313
+      POSTGRES_USER: archive_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/archive_db_password
+    volumes:
+      - archive-data:/var/lib/postgresql/data
+
+  upload-db:
+    image: postgres:16-alpine
+    container_name: northstar-upload-db
+    networks:
+      - northstar-data
+    environment:
+      POSTGRES_DB: northstar_xep_0363
+      POSTGRES_USER: upload_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/upload_db_password
+    volumes:
+      - upload-data:/var/lib/postgresql/data
+
+  # ==========================================
+  # Core Platform Microservices
+  # ==========================================
+  protocol-registry:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.service
+      args:
+        SERVICE_NAME: service-protocol-registry
+    container_name: northstar-protocol-registry
+    networks:
+      - northstar-internal
+    environment:
+      RUST_LOG: info
+      PORT: 50050
+
+  identity:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.service
+      args:
+        SERVICE_NAME: service-identity
+    container_name: northstar-identity
+    networks:
+      - northstar-internal
+      - northstar-data
+    depends_on:
+      - identity-db
+      - kafka
+    environment:
+      RUST_LOG: info
+      PORT: 50051
+      DATABASE_URL: postgres://identity_owner@identity-db:5432/northstar_identity
+      KAFKA_BROKERS: kafka:9092
+
+  session-directory:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.service
+      args:
+        SERVICE_NAME: service-session-directory
+    container_name: northstar-session-directory
+    networks:
+      - northstar-internal
+      - northstar-data
+    depends_on:
+      - session-db
+      - kafka
+    environment:
+      RUST_LOG: info
+      PORT: 50052
+      DATABASE_URL: postgres://session_owner@session-db:5432/northstar_session
+      KAFKA_BROKERS: kafka:9092
+
+  message-ingress:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.service
+      args:
+        SERVICE_NAME: service-message-ingress
+    container_name: northstar-message-ingress
+    networks:
+      - northstar-internal
+      - northstar-data
+    depends_on:
+      - ingress-db
+      - kafka
+    environment:
+      RUST_LOG: info
+      PORT: 50053
+      DATABASE_URL: postgres://ingress_owner@ingress-db:5432/northstar_message_ingress
+      KAFKA_BROKERS: kafka:9092
+
+  delivery-router:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.service
+      args:
+        SERVICE_NAME: service-delivery-router
+    container_name: northstar-delivery-router
+    networks:
+      - northstar-internal
+      - northstar-data
+    depends_on:
+      - delivery-db
+      - kafka
+      - session-directory
+    environment:
+      RUST_LOG: info
+      PORT: 50054
+      DATABASE_URL: postgres://delivery_owner@delivery-db:5432/northstar_delivery
+      KAFKA_BROKERS: kafka:9092
+
+  xmpp-edge:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.service
+      args:
+        SERVICE_NAME: service-xmpp-edge
+    container_name: northstar-xmpp-edge
+    networks:
+      - northstar-transport
+      - northstar-internal
+    ports:
+      - "5222:5222" # C2S STARTTLS
+      - "5223:5223" # C2S Direct TLS
+      - "5280:5280" # WebSocket
+    depends_on:
+      - protocol-registry
+      - identity
+      - session-directory
+      - message-ingress
+      - delivery-router
+    environment:
+      RUST_LOG: info
+      C2S_PORT: 5222
+      C2S_DIRECT_TLS_PORT: 5223
+      WEBSOCKET_PORT: 5280
+      REGISTRY_URL: http://protocol-registry:50050
+      IDENTITY_URL: http://identity:50051
+      SESSION_URL: http://session-directory:50052
+      INGRESS_URL: http://message-ingress:50053
+      DELIVERY_URL: http://delivery-router:50054

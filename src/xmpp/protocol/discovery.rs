@@ -83,8 +83,6 @@ const ACCOUNT_DISCO_FEATURES: &[&str] = &[
     // the hosting domain. Advertise the exact query/RSM profile on that
     // entity so remote disco does not need to guess from server-root caps.
     "http://jabber.org/protocol/rsm",
-    "urn:xmpp:mam:2",
-    "urn:xmpp:mam:2#extended",
     "urn:xmpp:sid:0",
     "vcard-temp",
     "urn:xmpp:avatar:data",
@@ -95,7 +93,6 @@ const ACCOUNT_DISCO_FEATURES: &[&str] = &[
     "urn:xmpp:bookmarks:1",
     "urn:xmpp:bookmarks:1#compat",
     "urn:xmpp:pep-vcard-conversion:0",
-    "urn:xmpp:push:0",
 ];
 
 // Features advertised by the server entity itself. End-to-end presentation
@@ -105,38 +102,25 @@ const ACCOUNT_DISCO_FEATURES: &[&str] = &[
 const SERVER_DISCO_FEATURES: &[&str] = &[
     "http://jabber.org/protocol/disco#info",
     "http://jabber.org/protocol/disco#items",
-    "http://jabber.org/protocol/caps",
     "jabber:iq:roster",
     "jabber:iq:private",
-    "jabber:iq:version",
-    "urn:xmpp:ping",
-    "urn:xmpp:time",
     "http://jabber.org/protocol/rsm",
-    "urn:xmpp:mam:2",
-    "urn:xmpp:mam:2#extended",
-    "urn:xmpp:carbons:2",
-    "urn:xmpp:carbons:rules:0",
     "urn:xmpp:receipts",
     // XEP-0160 section 3: advertise durable offline-message storage on the
     // server entity. This is the historical disco feature name clients use.
     "msgoffline",
-    "urn:xmpp:sm:3",
-    "urn:xmpp:csi:0",
     "urn:xmpp:sid:0",
     "urn:xmpp:message-retract:1",
     "urn:xmpp:message-retract:1#tombstone",
-    "urn:xmpp:blocking",
-    "jabber:iq:privacy",
     "urn:xmpp:hints",
     "http://jabber.org/protocol/muc",
-    "urn:xmpp:http:upload:0",
+    northstar_xep_0363::NAMESPACE,
     "vcard-temp",
     "urn:xmpp:avatar:data",
     "urn:xmpp:avatar:metadata",
     "urn:ietf:params:xml:ns:vcard-4.0",
     "urn:xmpp:vcard4",
     "urn:xmpp:bookmarks:1",
-    "urn:xmpp:push:0",
     "urn:xmpp:serverinfo:0",
     "urn:xmpp:mix:pam:2",
     "urn:xmpp:mix:pam:2#archive",
@@ -160,10 +144,28 @@ impl ProtocolSession {
         let is_pubsub_service = target.localpart().is_none()
             && target.resourcepart().is_none()
             && target.domainpart() == pubsub_domain;
+        if is_pubsub_service
+            && !self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0060::XEP_ID)
+        {
+            return Ok(Action::Send(iq_error_from(id, from, "service-unavailable")));
+        }
         if !is_pubsub_service && !valid_disco_query(request) {
             return Ok(Action::Send(iq_error_from(id, from, "bad-request")));
         }
         let muc_domain = self.muc_domain();
+        if target.domainpart() == muc_domain
+            && !self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0045::XEP_ID)
+        {
+            return Ok(Action::Send(iq_error_from(id, from, "service-unavailable")));
+        }
         let upload_domain = self.upload_domain();
         let mix_domain = self.mix_domain();
         if target.localpart().is_none() && target.domainpart() == mix_domain {
@@ -233,6 +235,10 @@ impl ProtocolSession {
                 channel.allow_user_message_retraction
                     || channel.administrator_retraction_rights != "nobody",
                 channel.allow_private_messages,
+                self.state
+                    .config
+                    .xmpp_extensions
+                    .enabled(northstar_xep_0313::XEP_ID),
                 &mirror,
             )?;
             return Ok(Action::Send(iq_result_from(id, from, &query)));
@@ -283,15 +289,18 @@ impl ProtocolSession {
             let query = super::pubsub::service_disco_payload(&self.state);
             return Ok(Action::Send(iq_result_from(id, from, &query)));
         }
-        if target.localpart().is_none() && target.domainpart() == upload_domain {
+        if self.http_upload_enabled()
+            && target.localpart().is_none()
+            && target.domainpart() == upload_domain
+        {
             if request.attribute("node").is_some() {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
             let upload_name = format!("{} File Upload", self.state.config.server_name);
             let mut query = disco_info_query(None);
             query.push_child(disco_identity("store", "file", Some(&upload_name)));
-            query.push_child(disco_feature("urn:xmpp:http:upload:0"));
-            let mut form = result_form("urn:xmpp:http:upload:0");
+            query.push_child(disco_feature(northstar_xep_0363::NAMESPACE));
+            let mut form = result_form(northstar_xep_0363::NAMESPACE);
             form.push_child(data_field(
                 "max-file-size",
                 [self.state.config.upload_max_bytes],
@@ -328,10 +337,17 @@ impl ProtocolSession {
                 "urn:xmpp:message-moderate:1",
                 "urn:xmpp:message-retract:1",
                 "urn:xmpp:message-retract:1#tombstone",
-                "urn:xmpp:ping",
                 "urn:xmpp:sid:0",
             ] {
                 query.push_child(disco_feature(feature));
+            }
+            if self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0199::XEP_ID)
+            {
+                query.push_child(disco_feature(northstar_xep_0199::NAMESPACE));
             }
             query.push_validated_fragment(&mirror)?;
             return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
@@ -381,9 +397,7 @@ impl ProtocolSession {
             for feature in [
                 DISCO_INFO_NS,
                 "http://jabber.org/protocol/muc",
-                "http://jabber.org/protocol/muc#self-ping-optimization",
                 "http://jabber.org/protocol/muc#stable_id",
-                "urn:xmpp:ping",
                 "urn:xmpp:sid:0",
                 if room.public {
                     "muc_public"
@@ -418,6 +432,17 @@ impl ProtocolSession {
             ] {
                 query.push_child(disco_feature(feature));
             }
+            if self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0199::XEP_ID)
+            {
+                query.push_child(disco_feature(
+                    "http://jabber.org/protocol/muc#self-ping-optimization",
+                ));
+                query.push_child(disco_feature(northstar_xep_0199::NAMESPACE));
+            }
             if room.allow_registration {
                 query.push_child(disco_feature("jabber:iq:register"));
             }
@@ -427,10 +452,19 @@ impl ProtocolSession {
                 "urn:xmpp:message-retract:1",
                 "urn:xmpp:message-retract:1#tombstone",
                 RSM_NS,
-                "urn:xmpp:mam:2",
-                "urn:xmpp:mam:2#extended",
             ] {
                 query.push_child(disco_feature(feature));
+            }
+            if self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0313::XEP_ID)
+            {
+                query.push_child(disco_feature(northstar_xep_0313::DISCO_FEATURE_MAM));
+                query.push_child(disco_feature(
+                    northstar_xep_0313::DISCO_FEATURE_MAM_EXTENDED,
+                ));
             }
             let linked = self.state.config.mix_muc_mirror_enabled
                 && self
@@ -533,6 +567,45 @@ impl ProtocolSession {
         } else {
             SERVER_DISCO_FEATURES.to_vec()
         };
+        if is_account
+            && !self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0060::XEP_ID)
+        {
+            features.retain(|feature| !feature.starts_with("http://jabber.org/protocol/pubsub"));
+        }
+        if !self
+            .state
+            .config
+            .xmpp_extensions
+            .enabled(northstar_xep_0045::XEP_ID)
+        {
+            features.retain(|feature| *feature != northstar_xep_0045::XMLNS_MUC);
+        }
+        if !self.http_upload_enabled() {
+            features.retain(|feature| *feature != northstar_xep_0363::NAMESPACE);
+        }
+        if is_account
+            && self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0313::XEP_ID)
+        {
+            features.push(northstar_xep_0313::DISCO_FEATURE_MAM);
+            features.push(northstar_xep_0313::DISCO_FEATURE_MAM_EXTENDED);
+        }
+        if is_account
+            && self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0357::XEP_ID)
+        {
+            features.push(northstar_xep_0357::DISCO_FEATURE_PUSH);
+        }
         if is_server {
             // XEP-0077 remains available to authenticated accounts for
             // password changes and cancellation even when new registration is
@@ -545,12 +618,18 @@ impl ProtocolSession {
             if super::commands::available_to(self).await? {
                 features.push("http://jabber.org/protocol/commands");
             }
+            features.extend(self.state.config.xmpp_extensions.server_disco_features());
         }
         if is_server
+            && self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0215::XEP_ID)
             && (self.state.config.stun_service.is_some()
                 || self.state.config.turn_service.is_some())
         {
-            features.push("urn:xmpp:extdisco:2");
+            features.push(northstar_xep_0215::NAMESPACE);
         }
         let mut query = disco_info_query(None);
         for identity in disco_entity_identities(is_account, &self.state.config.server_name) {
@@ -603,6 +682,15 @@ impl ProtocolSession {
             Err(condition) => return Ok(Action::Send(iq_error_from(id, from, condition))),
         };
         let muc_domain = self.muc_domain();
+        if target.domainpart() == muc_domain
+            && !self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0045::XEP_ID)
+        {
+            return Ok(Action::Send(iq_error_from(id, from, "service-unavailable")));
+        }
         let upload_domain = self.upload_domain();
         let pubsub_domain = self.pubsub_domain();
         let mix_domain = self.mix_domain();
@@ -822,7 +910,10 @@ impl ProtocolSession {
                 first_index,
                 total,
             ));
-        } else if target.localpart().is_none() && target.domainpart() == upload_domain {
+        } else if self.http_upload_enabled()
+            && target.localpart().is_none()
+            && target.domainpart() == upload_domain
+        {
             if requested_node.is_some() {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
@@ -845,12 +936,15 @@ impl ProtocolSession {
             if requested_node.is_some() {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
-            for (jid, suffix) in [
+            let mut services = vec![
                 (muc_domain.as_str(), "Group Chat"),
-                (upload_domain.as_str(), "File Upload"),
                 (pubsub_domain.as_str(), "PubSub Service"),
                 (mix_domain.as_str(), "MIX Service"),
-            ] {
+            ];
+            if self.http_upload_enabled() {
+                services.push((upload_domain.as_str(), "File Upload"));
+            }
+            for (jid, suffix) in services {
                 query.push_child(disco_item(
                     jid,
                     None,

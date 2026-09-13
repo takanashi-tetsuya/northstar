@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package northstar.registry.v1;
+
+import "northstar/common/v1/common.proto";
+import "northstar/security/v1/assertions.proto";
+
+service ProtocolRegistryService {
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  // GetRouteSnapshot and WatchSnapshots intentionally share the stable snapshot representation.
+  rpc GetRouteSnapshot(GetRouteSnapshotRequest) returns (GetRouteSnapshotResponse);
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // The stream deliberately emits the stable snapshot representation returned by GetRouteSnapshot.
+  rpc WatchSnapshots(WatchSnapshotsRequest) returns (stream GetRouteSnapshotResponse);
+  rpc RegisterInstance(RegisterInstanceRequest) returns (RegisterInstanceResponse);
+}
+
+message GetRouteSnapshotRequest {
+  uint64 since_version = 1;
+  northstar.common.v1.TraceContext trace = 2;
+}
+
+message WatchSnapshotsRequest {
+  uint64 after_version = 1;
+  northstar.common.v1.TraceContext trace = 2;
+}
+
+message RouteEntry {
+  string namespace = 1;
+  string element = 2;
+  string stanza = 3;
+  string phase = 4;
+  string service_id = 5;
+  string endpoint = 6;
+}
+
+message DiscoFeature {
+  string var = 1;
+  string service_id = 2;
+}
+
+message GetRouteSnapshotResponse {
+  uint64 snapshot_version = 1;
+  bytes signature = 2;
+  repeated RouteEntry routes = 3;
+  repeated DiscoFeature disco_features = 4;
+  bytes digest = 5;
+  string key_id = 6;
+  string alg = 7;
+  int64 issued_at_unix_ms = 8;
+  int64 expires_at_unix_ms = 9;
+}
+
+message RegisterInstanceRequest {
+  string service_id = 1;
+  string instance_id = 2;
+  string endpoint = 3;
+  uint64 weight = 4;
+  northstar.security.v1.SessionAssertion operator_assertion = 5;
+  northstar.common.v1.IdempotencyKey idempotency_key = 6;
+  northstar.common.v1.TraceContext trace = 7;
+}
+
+message RegisterInstanceResponse {
+  bool acknowledged = 1;
+  uint64 current_registry_version = 2;
+  optional northstar.common.v1.ErrorDetail error = 3;
+}

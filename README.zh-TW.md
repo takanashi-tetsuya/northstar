@@ -2,26 +2,33 @@
 
 # Northstar XMPP 伺服器
 
+> 本專案由人類與 AI 協作開發。
+
 Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 伺服器。它提供 TCP、Direct TLS、WebSocket 與選用 BOSH 連線，以及聯邦、
 群聊、OMEMO 相容服務、網頁用戶端、REST 管理、防濫用、日誌及監控。
 
-目前的發行候選版本為 `0.2.0`，仍屬 1.0 之前的版本，尚未正式發行或接受
-獨立安全稽核。公開部署前請閱讀 [XEP 支援矩陣](XEP_MATRIX.md)、
+目前套件版本為 `0.2.0`，仍屬 1.0 之前的版本；發佈狀態與日期以
+[GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) 為準。
+專案尚未接受獨立安全稽核。公開部署前請閱讀 [XEP 支援矩陣](XEP_MATRIX.md)、
 [發行檢查表](docs/RELEASE_CHECKLIST.md)與[已知限制](docs/KNOWN_ISSUES.md)。
 
 其他資料請參閱[文件索引](docs/README.md)、[安全政策](SECURITY.md)、
 [正式維運手冊](docs/PRODUCTION_OPERATIONS.md)及
 [貢獻指南](CONTRIBUTING.md)。
 
+同一個程式可分別啟動核心與維護子伺服器，以獨立行程共用 PostgreSQL。
+核心統一管理連線、工作階段與訊息投遞；維護行程只載入資料庫與保留期限設定。
+請參閱[子伺服器權責與部署](docs/SUBSERVERS.md)，包含切換、回復與目前的權限限制。
+
 ## 如何使用
 
 ### 發行套件
 
-Northstar `0.2.0` 通過發行核准後，將透過
+Northstar `0.2.0` 套件將在維護者發佈 Release 後，透過
 [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases)
-提供下列預定檔案。在 tag workflow 建立 draft，且 checksum、provenance 與
-映像 digest 完成審核前，請勿視為已提供：
+提供下載。Tag workflow 會先建立包含下列檔案的草稿，並驗證 checksum、
+provenance 與映像 digest：
 
 | 資產 | 用途 |
 |---|---|
@@ -29,13 +36,18 @@ Northstar `0.2.0` 通過發行核准後，將透過
 | `northstar-0.2.0-linux-amd64` | 裸 Linux AMD64 ELF binary |
 | `northstar-0.2.0-windows-amd64.zip` | 完整 Windows AMD64 開發／評估套件，包含 `xmpp-server.exe` 及相同的 runtime 資產與授權聲明 |
 | `northstar-0.2.0-windows-amd64.exe` | 供開發／評估使用的裸 Windows AMD64 executable |
-| `SHA256SUMS` | 四個套件與 `IMAGE_DIGESTS` 的 SHA-256 checksum |
+| `SHA256SUMS` | 四個 binary 資產、`IMAGE_DIGESTS` 與 `RELEASE-EVIDENCE.json` 的 SHA-256 checksum |
+| `RELEASE-EVIDENCE.json` | 精確 source/run 身分及 Windows、Linux、Docker 套件驗證結果 |
 | `IMAGE_DIGESTS` | 成功 tag 執行為三個 GHCR 映像產生的精確 `name@sha256:digest` 參照 |
 
 `AMD64` 即 Rust 的 `x86_64` targets。Linux AMD64 是正式環境基線；Windows
 build 僅供開發及評估，不是支援的正式部署平台。裸 binary 不包含執行時所需的
 Web、Swagger UI、設定及授權檔案。請使用完整 archive，或把裸 binary 與同一
 tag archive 的內容放在一起，並從該目錄啟動。
+
+完整 archive 同時附上 `.env.development.example`、`docs/INSTALL.md`，以及
+記錄 source commit 和各檔案 digest 的 `PACKAGE-MANIFEST.json`。Workflow
+會在兩個原生平台及應用映像中，以私有 PostgreSQL 17 驗證實際啟動。
 
 下載所需檔案後，請在執行前核對 `SHA256SUMS` 中的對應項目，並驗證 GitHub
 build provenance。Linux 範例：
@@ -90,7 +102,9 @@ secret files 及公信憑證。
 
 OMEMO 加密由相容的用戶端完成。正確加密時，Northstar 只路由及封存密文 XMPP 封裝，並不持有用戶端的 OMEMO 私鑰。預設的 `REQUIRE_ENCRYPTED_ARCHIVE=true` 會拒絕把明文訊息本文寫入個人或群組封存，也會在保存 OMEMO stanza 前移除誤附的明文 sibling。
 
-這不等於絕對「零知識」。伺服器必然能看見路由中繼資料、帳號與房間成員關係、時間與大小、用戶端主動送出的明文，以及使用者刻意附在檢舉中的證據。擁有主機或資料庫權限的管理員可以檢視這些伺服器可見資訊。端到端隱私也取決於裝置指紋驗證、用戶端安全與正確的 TLS 部署。
+伺服器可見的資訊包括路由中繼資料、帳號與房間成員關係、訊息時間與大小、
+用戶端送出的明文，以及檢舉附帶的證據。擁有主機或資料庫權限的管理員可以
+檢視這些資訊。端到端隱私取決於用戶端安全、裝置金鑰驗證及 TLS 部署。
 
 
 ## 功能

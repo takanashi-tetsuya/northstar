@@ -700,6 +700,10 @@ async function initializePage() {
     $('#login-domain').textContent = suffix;
     $('#register-domain').textContent = suffix;
     $('#group-domain').textContent = `@conference.${state.config.domain}`;
+    const uploadAdmission = Boolean(state.config.capabilities?.upload_admission);
+    $('#attachment-button').classList.toggle('hidden', !uploadAdmission);
+    $('#attachment-button').disabled = !uploadAdmission;
+    $('#attachment-input').disabled = !uploadAdmission;
     if (!state.config.open_registration) {
       $('#register-tab').disabled = true;
       $('#register-tab').title = '服务器已关闭开放注册';
@@ -2138,6 +2142,12 @@ async function sendAttachment(event) {
   const input = event.currentTarget;
   const file = input.files?.[0];
   if (!file || !state.selected) return;
+  if (!state.config.capabilities?.upload_admission
+      || !Number.isSafeInteger(state.config.upload_max_bytes)) {
+    toast('服务器当前不接受新的文件上传。', { type: 'error' });
+    input.value = '';
+    return;
+  }
   if (state.securityModes.get(state.selected) === 'blocked-optout') {
     toast('选择会话安全模式前无法发送。', { type: 'error' });
     input.value = '';
@@ -2280,6 +2290,11 @@ async function readResponseLimited(response, maximum) {
 }
 
 async function downloadAttachment(attachment, button) {
+  const downloadLimit = state.config.upload_download_max_bytes;
+  if (!state.config.capabilities?.upload_download || !Number.isSafeInteger(downloadLimit)) {
+    toast('服务器当前不提供历史附件下载。', { type: 'error' });
+    return;
+  }
   setBusy(button, true, '解密中…');
   try {
     const response = await fetch(attachment.url, {
@@ -2293,7 +2308,7 @@ async function downloadAttachment(attachment, button) {
     // origin policy used by the encrypted metadata parser before consuming a
     // single response byte; HTTPS alone is not an authorization boundary.
     validateEncryptedAttachmentUrl(response.url);
-    const ciphertext = await readResponseLimited(response, state.config.upload_max_bytes);
+    const ciphertext = await readResponseLimited(response, downloadLimit);
     if (attachment.encryptedHash && await sha256Base64(ciphertext) !== attachment.encryptedHash) {
       throw new Error('加密文件密文完整性校验失败');
     }

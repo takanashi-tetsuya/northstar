@@ -45,6 +45,9 @@ MIGRATIONS = {
     "0126": ROOT / "migrations/0126_mix_delivery_release_journal.sql",
     "0127": ROOT / "migrations/0127_sm_resume_authority_notifications.sql",
     "0128": ROOT / "migrations/0128_mix_capacity_authorities.sql",
+    "0131": ROOT / "migrations/0131_upload_capacity_nowait.sql",
+    "0141": ROOT / "migrations/0141_upload_cleanup_capability_rehardening.sql",
+    "0142": ROOT / "migrations/0142_upload_projection_capacity_rehardening.sql",
 }
 
 # A later migration may replace an existing routine without changing its
@@ -56,11 +59,45 @@ RESECURED_BY_MIGRATION = {
         "northstar_sm_claim(bytea,uuid,inet,uuid,text,bool,uuid,int8)",
         "northstar_session_capability_catalog_healthy(text)",
     },
+    "0131": {
+        "reserve_upload_cleanup_debt()",
+        "northstar_upload_bind_capacity_policy(int8,int8,int8)",
+        "northstar_upload_capacity_lock()",
+        "northstar_upload_complete_cleanup(uuid,uuid)",
+        "northstar_upload_complete_storage_job(int8,uuid)",
+        "northstar_upload_retire_promotion_for_cleanup(uuid,uuid,int8,uuid)",
+        "northstar_upload_record_stage(uuid,uuid,text,text,text,text,bytea,int8,int8)",
+        "northstar_upload_release_claim(uuid,uuid)",
+        "northstar_upload_complete_promotion(uuid,uuid,uuid,text,text,text,bytea,int8,int8,int8)",
+        "northstar_upload_reserve_slot(uuid,uuid,text,text,int8,bytea,int8,int8,text,int8,int8,int8)",
+        "northstar_upload_claim_slot(uuid,bytea,int8,int8,int8)",
+        "northstar_upload_admit_expired_cleanup()",
+        "northstar_upload_delete_owned(uuid,int8,bytea,uuid,uuid)",
+        "northstar_upload_capability_catalog_healthy(text)",
+    },
+    "0141": {
+        "northstar_upload_admit_expired_cleanup()",
+    },
+    "0142": {
+        "account_upload_storage_job_capacity()",
+        "account_upload_cleanup_capacity()",
+    },
+}
+
+# A replacement migration may preserve a callable identity while changing its
+# body.  A separate successor can re-establish the identity's complete
+# SECURITY DEFINER contract without rewriting an already-applied migration.
+# This mapping is deliberately exact and versioned: it is not a blanket
+# future-migration exemption for incomplete routine hardening.
+REPLACEMENT_HARDENING_SUCCESSORS = {
+    ("0139", "northstar_upload_admit_expired_cleanup()"): "0141",
+    ("0140", "account_upload_storage_job_capacity()"): "0142",
+    ("0140", "account_upload_cleanup_capacity()"): "0142",
 }
 
 ROW = re.compile(
     r"^\s*\('([^']+\([^']*\))','(runtime|command|private)',"
-    r"'(baseline-0111|0112|0113|0114|0126|0127|0128)'\)[,;]\s*$",
+    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131)'\)[,;]\s*$",
     re.MULTILINE,
 )
 RELATION_ROW = re.compile(
@@ -796,7 +833,7 @@ if "ON COMMIT DROP" in generator_text:
     fail("migration ledger temp table would disappear in autocommit audit sessions")
 
 manifest_text = read(MANIFEST)
-if "'baseline-0111','0112','0113','0114','0126','0127','0128'" not in manifest_text:
+if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131'" not in manifest_text:
     fail("canonical manifest origin constraint omits a reviewed capability migration")
 rows = ROW.findall(manifest_text)
 if not rows:
@@ -810,7 +847,7 @@ by_workload = {
 }
 by_origin = {
     origin: {signature for signature, _, row_origin in rows if row_origin == origin}
-    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128")
+    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131")
 }
 manifest_origin_by_signature = {
     signature: origin for signature, _, origin in rows
@@ -825,6 +862,25 @@ migration_documents = [
     (migration, read(migration))
     for migration in sorted((ROOT / "migrations").glob("*.sql"))
 ]
+migration_versions = {migration.name.split("_", 1)[0] for migration, _ in migration_documents}
+for (replacement_version, signature), hardening_version in (
+    REPLACEMENT_HARDENING_SUCCESSORS.items()
+):
+    if signature not in manifest_signature_set:
+        fail(
+            "replacement hardening successor names an identity outside the canonical "
+            f"manifest: {signature}"
+        )
+    if replacement_version not in migration_versions or hardening_version not in migration_versions:
+        fail(
+            "replacement hardening successor names a missing migration: "
+            f"{replacement_version}->{hardening_version}"
+        )
+    if int(hardening_version) <= int(replacement_version):
+        fail(
+            "replacement hardening successor must be a strictly later migration: "
+            f"{replacement_version}->{hardening_version}"
+        )
 
 # Runtime relation privileges are a complete positive manifest, not an
 # exception list layered over a broad grant.  Reconstruct the final table set
@@ -1216,6 +1272,12 @@ for migration_index, (migration, text) in enumerate(migration_documents):
                     int(migration.name.split("_", 1)[0]) < 107
                     and proof_index > migration_index
                 )
+                or (
+                    REPLACEMENT_HARDENING_SUCCESSORS.get(
+                        (migration.name.split("_", 1)[0], signature)
+                    )
+                    == migration_documents[proof_index][0].name.split("_", 1)[0]
+                )
             )
         ):
             fail(
@@ -1244,14 +1306,27 @@ if security_definition_count == 0:
 
 for origin, migration in MIGRATIONS.items():
     text = read(migration)
-    marker_matches = list(re.finditer(r"FOREACH\s+\w+\s+IN\s+ARRAY\s+ARRAY\[", text, re.IGNORECASE))
-    if not marker_matches:
-        fail(f"{migration.name} has no migration-local capability security loop")
-    start = marker_matches[-1].end()
-    end = text.find("] LOOP", start)
-    if end < 0:
-        fail(f"{migration.name} capability security loop is unterminated")
-    migration_signatures = QUOTED_SIGNATURE.findall(text[start:end])
+    # A migration can contain several FOREACH loops (for example one for
+    # relations and another for workload roles used by ACL revocation).  The
+    # capability contract is the uniquely identifiable loop whose ARRAY
+    # contains routine signatures, not whichever loop happens to occur last.
+    # Older migrations use `signature` while newer ones use
+    # `routine_signature`, so variable spelling is deliberately not part of
+    # this structural identification.
+    candidates: list[tuple[int, list[str]]] = []
+    for marker in re.finditer(r"FOREACH\s+\w+\s+IN\s+ARRAY\s+ARRAY\[", text, re.IGNORECASE):
+        end = text.find("] LOOP", marker.end())
+        if end < 0:
+            fail(f"{migration.name} contains an unterminated FOREACH ARRAY loop")
+        signatures = QUOTED_SIGNATURE.findall(text[marker.end() : end])
+        if signatures:
+            candidates.append((marker.end(), signatures))
+    if len(candidates) != 1:
+        fail(
+            f"{migration.name} must contain exactly one migration-local "
+            "capability-signature security loop"
+        )
+    _start, migration_signatures = candidates[0]
     resecured = RESECURED_BY_MIGRATION.get(origin, set())
     if not resecured <= manifest_signature_set:
         fail(
@@ -1261,7 +1336,7 @@ for origin, migration in MIGRATIONS.items():
     require_exact(
         f"{migration.name} security loop",
         migration_signatures,
-        by_origin[origin] | resecured,
+        by_origin.get(origin, set()) | resecured,
     )
 
     created_names = set(CREATE_ROUTINE.findall(text))
@@ -1455,9 +1530,34 @@ for required in (
     if required not in database_ci_text:
         fail(f"database CI omits capability/ACL invariant: {required}")
 
-for image in (GRANT_IMAGE, BACKUP_IMAGE):
-    if "northstar-migration-ledger-manifest.sql" not in read(image):
-        fail(f"{image.relative_to(ROOT)} does not ship the migration ledger manifest")
+image_policy_dependencies = {
+    GRANT_IMAGE: (
+        "reconcile-northstar-grants.sql",
+        "verify-northstar-grant-boundary.sql",
+        "apply-northstar-grants.sql",
+        "northstar-capability-manifest.sql",
+        "northstar-migration-ledger-manifest.sql",
+    ),
+    BACKUP_IMAGE: (
+        # `validate-backup-dump-local.sh` invokes the reconciliation policy as
+        # part of its offline restore boundary check. Keep that runtime
+        # dependency explicit here so an image cannot build successfully while
+        # omitting a file that its entrypoint needs after deployment.
+        "reconcile-northstar-grants.sql",
+        "verify-northstar-grant-boundary.sql",
+        "apply-northstar-grants.sql",
+        "northstar-capability-manifest.sql",
+        "northstar-migration-ledger-manifest.sql",
+    ),
+}
+for image, dependencies in image_policy_dependencies.items():
+    image_text = read(image)
+    for dependency in dependencies:
+        if dependency not in image_text:
+            fail(
+                f"{image.relative_to(ROOT)} does not ship required database "
+                f"policy dependency: {dependency}"
+            )
 
 grant_runner_text = read(GRANT_RUNNER)
 for required in (

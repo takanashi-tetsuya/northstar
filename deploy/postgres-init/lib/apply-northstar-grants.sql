@@ -481,9 +481,12 @@ GRANT SELECT (
   ) ON TABLE public.sm_resume_sessions TO :"runtime_role";
 
 -- Fail closed for elevated routines. Reconciliation first removes all runtime
--- and backup routine execution, then restores ordinary SECURITY INVOKER
--- routines and the exact reviewed SECURITY DEFINER capability set required by
--- runtime. A newly-added definer is denied until this manifest is changed.
+-- and backup routine execution, then restores directly-callable SECURITY
+-- INVOKER routines and the exact reviewed SECURITY DEFINER capability set
+-- required by runtime. Trigger-returning invoker helpers remain owner-only
+-- for direct EXECUTE: an installed trigger still runs for permitted table DML,
+-- but no workload role receives a superfluous routine capability. A newly-added
+-- definer is denied until this manifest is changed.
 -- A future definer routine is therefore denied until explicitly reviewed.
 REVOKE EXECUTE ON ALL ROUTINES IN SCHEMA public
    FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
@@ -559,6 +562,7 @@ SELECT pg_catalog.format(
  WHERE namespace.nspname = 'public'
    AND routine.prokind='f'
    AND NOT routine.prosecdef
+   AND routine.prorettype<>'pg_catalog.trigger'::pg_catalog.regtype
    AND routine.proname NOT LIKE 'northstar_admin_command_%'
    AND routine.proname NOT IN (
          'northstar_protect_admin_session_cleanup_identity',
@@ -1385,7 +1389,9 @@ SELECT NOT EXISTS (
          SELECT 1 FROM (VALUES
            ('northstar_protect_admin_session_cleanup_identity()'),
            ('northstar_enqueue_admin_generation_cleanup(uuid,uuid,int8,text)'),
-           ('northstar_enqueue_admin_exact_session_cleanup(uuid,uuid,int8,text,uuid)')
+           ('northstar_enqueue_admin_exact_session_cleanup(uuid,uuid,int8,text,uuid)'),
+           ('northstar_upload_require_capacity_lock()'),
+           ('guard_upload_capacity_nowait()')
          ) private_helper(signature)
          CROSS JOIN LATERAL (
            SELECT pg_catalog.to_regprocedure('public.' || private_helper.signature) AS oid
@@ -2140,7 +2146,11 @@ SELECT NOT EXISTS (
               AND privilege.privilege_type='EXECUTE'
               AND (
                 (privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'runtime_role')
-                  AND (NOT routine.prosecdef OR expected.workload='runtime'))
+                  AND (
+                    (NOT routine.prosecdef
+                     AND routine.prorettype<>'pg_catalog.trigger'::pg_catalog.regtype)
+                    OR expected.workload='runtime'
+                  ))
                 OR
                 (privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'command_role')
                   AND expected.workload='command')

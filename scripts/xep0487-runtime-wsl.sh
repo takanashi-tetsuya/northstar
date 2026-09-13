@@ -17,23 +17,12 @@ run_id="$(openssl rand -hex 6)"
 schema_a="xep0487_a_${run_id}"
 schema_b="xep0487_b_${run_id}"
 [[ "$schema_a" =~ ^[a-z][a-z0-9_]{0,62}$ && "$schema_b" =~ ^[a-z][a-z0-9_]{0,62}$ ]] || exit 2
-pick_port() {
-  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
-}
 declare -a allocated_ports=(443)
-assign_port() {
-  local destination="$1" port=""
-  while :; do
-    port="$(pick_port)"
-    if [[ ! " ${allocated_ports[*]} " =~ " $port " ]]; then break; fi
-  done
-  allocated_ports+=("$port")
-  printf -v "$destination" '%s' "$port"
-}
-assign_port http_a
-assign_port http_b
-assign_port s2s_tls_a
-assign_port s2s_tls_b
+http_a=""
+http_b=""
+s2s_tls_a=""
+s2s_tls_b=""
+s2s_port_file=""
 if ss -H -ltn 'sport = :443' 2>/dev/null | grep -q .; then
   echo "XEP-0487 fixture requires an unused local TCP port 443" >&2
   exit 2
@@ -45,17 +34,69 @@ mkdir -p "$PYTHONPYCACHEPREFIX"
 pid_a=""
 pid_b=""
 https_pid=""
+residual_probe_pid=""
 port_is_listening() {
   local port="$1"
   ss -H -ltn "sport = :$port" 2>/dev/null | grep -q .
 }
+readiness_port() {
+  local record="$1" purpose="$2" address
+  address="$(awk -F= -v purpose="$purpose" '$1 == purpose { print $2; exit }' <<<"$record")"
+  [[ -n "$address" ]] || { echo "test readiness did not publish $purpose" >&2; return 1; }
+  printf '%s' "${address##*:}"
+}
+track_readiness_ports() {
+  local record="$1" purpose address port
+  while IFS='=' read -r purpose address; do
+    [[ -n "$purpose" && -n "$address" ]] || continue
+    port="${address##*:}"
+    [[ "$port" =~ ^[1-9][0-9]*$ ]] || { echo "invalid readiness address: $address" >&2; return 1; }
+    allocated_ports+=("$port")
+  done <<<"$record"
+}
+assert_no_fixture_listeners() {
+  local port listener_count=0
+  for port in "${allocated_ports[@]}"; do
+    if port_is_listening "$port"; then
+      echo "XEP-0487 listener remained on port $port" >&2
+      listener_count=$((listener_count + 1))
+    fi
+  done
+  (( listener_count == 0 ))
+}
+wait_for_readiness() {
+  local record_path="$1" nonce="$2" pid="$3"
+  readiness_output="$(python3 "$project_dir/scripts/wait-test-readiness.py" "$record_path" "$nonce" "$pid" 15)" || return 1
+  # Command substitution would run registration in a subshell and discard the
+  # parent fixture's port ledger before cleanup can inspect it.
+  track_readiness_ports "$readiness_output"
+}
+exercise_non_443_residual_detection() {
+  local probe_port_file="$runtime_dir/residual-probe.port" probe_port
+  python3 -c 'import socket,time; listener=socket.socket(); listener.bind(("127.0.0.1",0)); listener.listen(); print(listener.getsockname()[1],flush=True); time.sleep(30)' \
+    >"$probe_port_file" 2>&1 &
+  residual_probe_pid=$!
+  for _ in $(seq 1 50); do [[ -s "$probe_port_file" ]] && break; sleep .1; done
+  probe_port="$(head -n 1 "$probe_port_file")"
+  [[ "$probe_port" =~ ^[1-9][0-9]*$ && "$probe_port" != 443 ]] || {
+    echo "failed to create a non-443 residual-listener counterexample" >&2; return 1;
+  }
+  allocated_ports+=("$probe_port")
+  if assert_no_fixture_listeners >/dev/null 2>&1; then
+    echo "residual-listener detector accepted a live non-443 listener" >&2; return 1
+  fi
+  kill "$residual_probe_pid" 2>/dev/null || true
+  wait "$residual_probe_pid" 2>/dev/null || true
+  residual_probe_pid=""
+  assert_no_fixture_listeners
+}
 cleanup() {
   status=$?
   trap - EXIT INT TERM
-  for pid in "$pid_a" "$pid_b" "$https_pid"; do
+  for pid in "$pid_a" "$pid_b" "$https_pid" "$residual_probe_pid"; do
     [[ -z "$pid" ]] || kill "$pid" 2>/dev/null || true
   done
-  for pid in "$pid_a" "$pid_b" "$https_pid"; do
+  for pid in "$pid_a" "$pid_b" "$https_pid" "$residual_probe_pid"; do
     [[ -z "$pid" ]] || wait "$pid" 2>/dev/null || true
   done
   if (( status != 0 )); then
@@ -77,13 +118,7 @@ cleanup() {
     [[ "$remains" == f ]] || status=1
   done
   listener_count=0
-  for port in "${allocated_ports[@]}"; do
-    if port_is_listening "$port"; then
-      echo "XEP-0487 listener remained on port $port" >&2
-      listener_count=$((listener_count + 1))
-      status=1
-    fi
-  done
+  if ! assert_no_fixture_listeners; then listener_count=1; status=1; fi
   case "$runtime_dir" in
     /tmp/northstar-xep0487.*) rm -rf -- "$runtime_dir" ;;
     *) echo "refusing to remove unexpected XEP-0487 directory: $runtime_dir" >&2; status=1 ;;
@@ -96,6 +131,8 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+exercise_non_443_residual_detection
 
 for schema in "$schema_a" "$schema_b"; do
   PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test --dbname xmpp_test \
@@ -176,27 +213,15 @@ env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=localhost \
 env NORTHSTAR_DISABLE_DOTENV=true XMPP_DOMAIN=remote.localhost \
   MIGRATOR_DATABASE_URL="$database_url_b" "$binary" migrate
 
-XEP0487_HTTPS_PORT=443 XEP0487_S2S_PORT="$s2s_tls_b" \
-XEP0487_HTTPS_CERT="$runtime_dir/certs/https.crt" XEP0487_HTTPS_KEY="$runtime_dir/certs/https.key" \
-XEP0487_MODE_FILE="$mode_file" XEP0487_PUBLIC_KEY_PIN="$b_pin" \
-python3 scripts/xep0487-runtime-wsl.py serve >"$runtime_dir/https.log" 2>&1 &
-https_pid=$!
-for _ in $(seq 1 100); do
-  if curl --silent --fail --noproxy '*' --cacert "$runtime_dir/certs/ca.crt" \
-    --resolve remote.localhost:443:127.0.0.1 \
-    https://remote.localhost/.well-known/host-meta.json >/dev/null; then break; fi
-  kill -0 "$https_pid" 2>/dev/null || { cat "$runtime_dir/https.log" >&2; exit 1; }
-  sleep .1
-done
-curl --silent --fail --noproxy '*' --cacert "$runtime_dir/certs/ca.crt" \
-  --resolve remote.localhost:443:127.0.0.1 \
-  https://remote.localhost/.well-known/host-meta.json >/dev/null
-
 common_env=(
   NORTHSTAR_DISABLE_DOTENV=true
   XMPP_BIND=127.0.0.1:0
   XMPPS_BIND=127.0.0.1:0
+  HTTP_BIND=127.0.0.1:0
   S2S_BIND=127.0.0.1:0
+  S2S_TLS_BIND=127.0.0.1:0
+  METRICS_BIND=127.0.0.1:0
+  WEB_ADMIN_BIND=127.0.0.1:0
   OPEN_REGISTRATION=true
   REQUIRE_ENCRYPTED_ARCHIVE=false
   REGISTRATION_RATE_PER_HOUR=20
@@ -211,23 +236,29 @@ common_env=(
 )
 
 start_a() {
-  local scenario="$1" allow_private="$2"
+  local scenario="$1" allow_private="$2" readiness_file readiness_nonce readiness
   log_a="$runtime_dir/a-$scenario.log"
+  readiness_file="$runtime_dir/a-$scenario.ready.json"
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file"
   env "${common_env[@]}" XMPP_DOMAIN=localhost FEDERATION_ALLOW_PRIVATE_IPS="$allow_private" \
     FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token-a.secret" \
     DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram-a.secret" \
     DATABASE_URL="$database_url_a" \
-    HTTP_BIND="127.0.0.1:$http_a" S2S_TLS_BIND="127.0.0.1:$s2s_tls_a" \
-    PUBLIC_URL="http://127.0.0.1:$http_a" UPLOAD_DIR="$runtime_dir/uploads-a" \
+    TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL="http://127.0.0.1" UPLOAD_DIR="$runtime_dir/uploads-a" \
     TLS_CERT_PATH="$runtime_dir/certs/a.crt" TLS_KEY_PATH="$runtime_dir/certs/a.key" \
     FEDERATION_DNS_OVERRIDES= \
     "${runtime_prefix[@]}" "$binary" >"$log_a" 2>&1 &
   pid_a=$!
-  for _ in $(seq 1 150); do
-    curl --silent --fail "http://127.0.0.1:$http_a/readyz" >/dev/null && break
-    kill -0 "$pid_a" 2>/dev/null || { cat "$log_a" >&2; exit 1; }
-    sleep .1
-  done
+  wait_for_readiness "$readiness_file" "$readiness_nonce" "$pid_a" || {
+    cat "$log_a" >&2
+    return 1
+  }
+  readiness="$readiness_output"
+  printf '%s\n' "$readiness" >"$runtime_dir/a-$scenario.readiness"
+  http_a="$(readiness_port "$readiness" http)"
+  s2s_tls_a="$(readiness_port "$readiness" s2s-tls)"
   curl --silent --fail "http://127.0.0.1:$http_a/readyz" >/dev/null
   [[ "$(ps -o euid= -p "$pid_a" | tr -d '[:space:]')" == "$runtime_uid" ]] || {
     echo "Northstar A did not run as the non-root fixture uid" >&2; exit 1;
@@ -256,22 +287,37 @@ client_probe() {
 }
 
 start_b() {
+  local readiness_file readiness_nonce readiness s2s_tls_bind
+  s2s_tls_bind="${1:-127.0.0.1:0}"
+  readiness_file="$runtime_dir/b.ready.json"
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file"
   env "${common_env[@]}" XMPP_DOMAIN=remote.localhost \
     FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token-b.secret" \
     DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram-b.secret" \
     FEDERATION_ALLOW_PRIVATE_IPS=true \
     DATABASE_URL="$database_url_b" \
-    HTTP_BIND="127.0.0.1:$http_b" S2S_TLS_BIND="127.0.0.1:$s2s_tls_b" \
-    PUBLIC_URL="http://127.0.0.1:$http_b" UPLOAD_DIR="$runtime_dir/uploads-b" \
+    TEST_LISTENER_ACTIVATION=true TEST_READINESS_FILE="$readiness_file" TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL="http://127.0.0.1" UPLOAD_DIR="$runtime_dir/uploads-b" \
     TLS_CERT_PATH="$runtime_dir/certs/b.crt" TLS_KEY_PATH="$runtime_dir/certs/b.key" \
-    FEDERATION_DNS_OVERRIDES="localhost=xmpps://127.0.0.1:$s2s_tls_a" \
+    S2S_TLS_BIND="$s2s_tls_bind" \
+    FEDERATION_DNS_OVERRIDES= \
     "${runtime_prefix[@]}" "$binary" >>"$runtime_dir/b.log" 2>&1 &
   pid_b=$!
-  for _ in $(seq 1 150); do
-    curl --silent --fail "http://127.0.0.1:$http_b/readyz" >/dev/null && break
-    kill -0 "$pid_b" 2>/dev/null || { cat "$runtime_dir/b.log" >&2; exit 1; }
-    sleep .1
-  done
+  wait_for_readiness "$readiness_file" "$readiness_nonce" "$pid_b" || {
+    cat "$runtime_dir/b.log" >&2
+    return 1
+  }
+  readiness="$readiness_output"
+  printf '%s\n' "$readiness" >"$runtime_dir/b.readiness"
+  http_b="$(readiness_port "$readiness" http)"
+  s2s_tls_b="$(readiness_port "$readiness" s2s-tls)"
+  # Discovery is served by the independently restarted HTTPS fixture.  Keep
+  # the port source current for every B lifecycle, not just the one restart
+  # exercised below.
+  if [[ -n "$s2s_port_file" ]]; then
+    printf '%s\n' "$s2s_tls_b" >"$s2s_port_file"
+  fi
   curl --silent --fail "http://127.0.0.1:$http_b/readyz" >/dev/null
   [[ "$(ps -o euid= -p "$pid_b" | tr -d '[:space:]')" == "$runtime_uid" ]] || {
     echo "Northstar B did not run as the non-root fixture uid" >&2; exit 1;
@@ -291,10 +337,33 @@ stop_b() {
 
 start_b
 
+s2s_port_file="$runtime_dir/s2s-tls-b.port"
+printf '%s\n' "$s2s_tls_b" >"$s2s_port_file"
+takeover_ack="$runtime_dir/https.takeover.json"
+takeover_nonce="$(openssl rand -hex 16)"
+XEP0487_HTTPS_PORT=443 XEP0487_S2S_PORT_FILE="$s2s_port_file" \
+XEP0487_HTTPS_CERT="$runtime_dir/certs/https.crt" XEP0487_HTTPS_KEY="$runtime_dir/certs/https.key" \
+XEP0487_MODE_FILE="$mode_file" XEP0487_PUBLIC_KEY_PIN="$b_pin" \
+XEP0487_RUNTIME_UID="$runtime_uid" XEP0487_RUNTIME_GID="$runtime_gid" \
+XEP0487_TAKEOVER_ACK="$takeover_ack" XEP0487_TAKEOVER_NONCE="$takeover_nonce" \
+python3 scripts/xep0487-socket-activation.py >"$runtime_dir/https.log" 2>&1 &
+https_pid=$!
+for _ in $(seq 1 100); do
+  if curl --silent --fail --noproxy '*' --cacert "$runtime_dir/certs/ca.crt" \
+    --resolve remote.localhost:443:127.0.0.1 \
+    https://remote.localhost/.well-known/host-meta.json >/dev/null; then break; fi
+  kill -0 "$https_pid" 2>/dev/null || { cat "$runtime_dir/https.log" >&2; exit 1; }
+  sleep .1
+done
+curl --silent --fail --noproxy '*' --cacert "$runtime_dir/certs/ca.crt" \
+  --resolve remote.localhost:443:127.0.0.1 \
+  https://remote.localhost/.well-known/host-meta.json >/dev/null
+
 echo valid >"$mode_file"
 start_a valid true
 client_probe bootstrap
-grep -q 'host=remote.localhost mode=valid uid=0' "$runtime_dir/https.log"
+grep -q "takeover-ack pid=.* uid=$runtime_uid listener=127.0.0.1:443" "$runtime_dir/https.log"
+grep -q "host=remote.localhost mode=valid uid=$runtime_uid" "$runtime_dir/https.log"
 grep -q 'authenticated outbound S2S certificate identity' "$log_a"
 grep -q 'authenticated inbound S2S certificate identity' "$runtime_dir/b.log"
 stop_a
@@ -339,20 +408,38 @@ run_rejection timeout timeout true 15
 grep -q 'XEP-0487 HTTPS response read timed out' "$runtime_dir/a-timeout.log"
 
 echo stale-valid >"$mode_file"
+# Seed A's cache and then restart B on a different ephemeral port.  The old
+# cached endpoint is consequently unusable; after expiry, a valid discovery
+# response must refresh A to B's replacement port.
 start_a stale-cache true
-client_probe deliver stale-seed 30
-sleep 1.3
-# Closing B tears down A's authenticated outbound stream while preserving A's
-# in-process XEP-0487 cache.  The next delivery must therefore resolve the
-# expired entry instead of succeeding by reusing the old connection.
+client_probe deliver stale-initial 30
+old_s2s_tls_b="$s2s_tls_b"
 stop_b
 start_b
-timeout_hits_before="$(grep -c 'host=remote.localhost mode=timeout' "$runtime_dir/https.log" || true)"
+[[ "$s2s_tls_b" != "$old_s2s_tls_b" ]] || {
+  echo "XEP-0487 stale-recovery did not replace B's dynamic S2S endpoint" >&2; exit 1;
+}
+sleep 1.3
+client_probe deliver stale-refresh 30
+
+# `stale-refresh` leaves a live outbound stream.  Restart B a second time on
+# its refreshed port solely to close that stream without invalidating the
+# refreshed cache entry.  When the entry expires, the next delivery must make
+# a fresh HTTPS request, observe its timeout, and recover through that stale
+# (but still routable) endpoint.
+refreshed_s2s_tls_b="$s2s_tls_b"
+stop_b
+start_b "127.0.0.1:$refreshed_s2s_tls_b"
+[[ "$s2s_tls_b" == "$refreshed_s2s_tls_b" ]] || {
+  echo "XEP-0487 stale-recovery could not preserve B's refreshed endpoint" >&2; exit 1;
+}
+sleep 1.3
+timeout_hits_before="$(grep -c 'XEP-0487 HTTPS response read timed out' "$log_a" || true)"
 echo timeout >"$mode_file"
 client_probe deliver stale-recovery 30
-timeout_hits_after="$(grep -c 'host=remote.localhost mode=timeout' "$runtime_dir/https.log" || true)"
+timeout_hits_after="$(grep -c 'XEP-0487 HTTPS response read timed out' "$log_a" || true)"
 (( timeout_hits_after > timeout_hits_before )) || {
-  echo "stale-cache probe did not perform a fresh XEP-0487 HTTPS request" >&2; exit 1;
+  echo "stale-cache probe did not observe a fresh XEP-0487 discovery timeout" >&2; exit 1;
 }
 grep -q 'host=remote.localhost mode=stale-valid' "$runtime_dir/https.log"
 grep -q 'XEP-0487 discovery unavailable; trying cached and DNS connection methods' "$log_a"

@@ -3,14 +3,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use libfuzzer_sys::fuzz_target;
 
-#[path = "../../src/jid.rs"]
-mod jid;
-#[path = "../../src/auth.rs"]
-mod auth;
-#[path = "../../src/xmpp/sm_counter.rs"]
-mod sm_counter;
-
-use auth::{
+use northstar_auth_core::{
     ChannelBindings, ExternalMechanism, PlainMechanism, SaslMechanism, SaslStep,
     ScramSha256Mechanism,
 };
@@ -57,9 +50,8 @@ fn exercise_sasl(data: &[u8]) {
             let _ = observe(mechanism.response(&second));
         }
         2 => {
-            let mut mechanism = ScramSha256Mechanism::new_with_channel_binding_support(
-                "example.test".into(),
-            );
+            let mut mechanism =
+                ScramSha256Mechanism::new_with_channel_binding_support("example.test".into());
             let first = STANDARD.encode(first.as_bytes());
             let needs_credentials = matches!(
                 mechanism.initial_response(&first),
@@ -98,7 +90,7 @@ fn exercise_sm(data: &[u8]) {
             outstanding = outstanding.saturating_add(1).min(65_536);
         }
         if let Some(delta) =
-            sm_counter::acknowledgement_delta(acknowledged, received, outstanding)
+            northstar_xep_0198::acknowledgement_delta(acknowledged, received, outstanding)
         {
             assert!(delta <= outstanding);
             outstanding -= delta;

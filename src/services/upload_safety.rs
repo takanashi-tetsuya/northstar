@@ -15,35 +15,9 @@ use std::{
 
 use tokio::sync::watch;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct UploadAuthorityGeneration {
-    pub(crate) namespace: i64,
-    pub(crate) capacity_policy: i64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum UploadSafetyState {
-    Unproven,
-    Healthy,
-    NamespaceUnsafe,
-    CapacityAuthorityUnsafe,
-    LedgerMismatch,
-    RecoveryDraining,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum UploadIoClass {
-    /// Read an already-committed exact object/version.
-    Read,
-    /// Admit bytes which do not yet exist in the physical namespace.
-    NewWrite,
-    /// Verify/promote an already-accounted exact stage.
-    Promotion,
-    /// Delete or inspect an exact durable recovery projection.
-    Recovery,
-    /// Refresh the client used by subsequent guarded operations.
-    CredentialRefresh,
-}
+pub(crate) use northstar_upload_core::{
+    UploadAuthorityGeneration, UploadIoClass, UploadSafetyState,
+};
 
 #[derive(Clone, Debug)]
 struct UploadSafetySnapshot {
@@ -56,6 +30,7 @@ struct UploadSafetySnapshot {
 impl UploadSafetySnapshot {
     fn permits(&self, class: UploadIoClass) -> bool {
         match self.state {
+            UploadSafetyState::Disabled => false,
             UploadSafetyState::Healthy => true,
             UploadSafetyState::RecoveryDraining => !matches!(class, UploadIoClass::NewWrite),
             // A capacity proof failure does not make a committed locator
@@ -83,13 +58,24 @@ pub(crate) struct UploadSafetyGate {
 
 impl UploadSafetyGate {
     pub(crate) fn new() -> Arc<Self> {
+        Self::with_initial_state(
+            UploadSafetyState::Unproven,
+            "upload authority has not been proved",
+        )
+    }
+
+    pub(crate) fn disabled() -> Arc<Self> {
+        Self::with_initial_state(UploadSafetyState::Disabled, "upload capability is disabled")
+    }
+
+    fn with_initial_state(state: UploadSafetyState, reason: &'static str) -> Arc<Self> {
         let (changes, _) = watch::channel(0_u64);
         Arc::new(Self {
             snapshot: Arc::new(RwLock::new(UploadSafetySnapshot {
-                state: UploadSafetyState::Unproven,
+                state,
                 generation: None,
                 revision: 0,
-                reason: Arc::from("upload authority has not been proved"),
+                reason: Arc::from(reason),
             })),
             changes,
         })
@@ -104,6 +90,7 @@ impl UploadSafetyGate {
 
     pub(crate) fn metric_code(&self) -> u64 {
         match self.state() {
+            UploadSafetyState::Disabled => 6,
             UploadSafetyState::Healthy => 0,
             UploadSafetyState::RecoveryDraining => 1,
             UploadSafetyState::Unproven => 2,
@@ -166,6 +153,10 @@ impl UploadSafetyGate {
                 .snapshot
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if current.state == UploadSafetyState::Disabled && state != UploadSafetyState::Disabled
+            {
+                return;
+            }
             if current.state == UploadSafetyState::NamespaceUnsafe
                 && state != UploadSafetyState::NamespaceUnsafe
             {
@@ -317,6 +308,28 @@ mod tests {
         assert!(gate.permit(UploadIoClass::Recovery).is_ok());
         assert!(gate.permit(UploadIoClass::CredentialRefresh).is_ok());
         assert!(gate.permit(UploadIoClass::NewWrite).is_err());
+    }
+
+    #[test]
+    fn disabled_is_ready_but_permanently_denies_every_io_class() {
+        let gate = UploadSafetyGate::disabled();
+        for class in [
+            UploadIoClass::Read,
+            UploadIoClass::NewWrite,
+            UploadIoClass::Promotion,
+            UploadIoClass::Recovery,
+            UploadIoClass::CredentialRefresh,
+        ] {
+            assert!(gate.permit(class).is_err());
+        }
+        gate.establish(
+            UploadAuthorityGeneration {
+                namespace: 1,
+                capacity_policy: 1,
+            },
+            false,
+        );
+        assert_eq!(gate.state(), UploadSafetyState::Disabled);
     }
 
     #[tokio::test]

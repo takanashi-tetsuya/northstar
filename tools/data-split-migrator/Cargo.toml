@@ -1,0 +1,16 @@
+[package]
+name = "data-split-migrator"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Northstar Monolith-to-Microservices Database Migration and Data Splitting Tool"
+publish = false
+
+[dependencies]
+foundation-security = { path = "../../crates/foundation-security" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.43", features = ["sync", "macros", "rt", "rt-multi-thread"] }
+thiserror = "2.0"
+tracing = "0.1"
+uuid = { version = "1.12", features = ["v4"] }

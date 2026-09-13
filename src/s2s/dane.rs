@@ -293,11 +293,9 @@ pub(crate) async fn lookup_dane_policy(
     }
 }
 
-/// RFC 7673 requires the entire SRV-to-address delegation to be DNSSEC
-/// authenticated. Hickory's locally validating resolver assigns `Secure` to
-/// an address only after validating any CNAME/DNAME chain, so accepting the
-/// selected address additionally binds the actual socket destination. We do
-/// not trust an upstream AD bit or an address produced by the system resolver.
+/// Bind the socket destination to a DNSSEC-validated SRV delegation (RFC 7673).
+/// Hickory validates the address and any CNAME/DNAME chain locally; an upstream
+/// AD bit or a system-resolver address is insufficient.
 async fn secure_address_binding(
     resolver: &TokioResolver,
     target: &str,

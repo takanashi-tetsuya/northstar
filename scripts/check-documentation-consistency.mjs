@@ -91,8 +91,8 @@ const releaseCompose = read('deploy/docker-compose.release.yml');
 const releaseAssetMarkers = [
   `northstar-\${RELEASE_VERSION}-linux-amd64.tar.gz`,
   `northstar-\${RELEASE_VERSION}-linux-amd64`,
-  `northstar-$env:RELEASE_VERSION-windows-amd64.zip`,
-  `northstar-$env:RELEASE_VERSION-windows-amd64.exe`,
+  `northstar-\${RELEASE_VERSION}-windows-amd64.zip`,
+  `northstar-\${RELEASE_VERSION}-windows-amd64.exe`,
 ];
 for (const marker of releaseAssetMarkers) {
   if (!releaseWorkflow.includes(marker)) {

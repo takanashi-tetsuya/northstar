@@ -2,13 +2,16 @@
 
 # Northstar XMPP Server
 
+> This project is developed collaboratively by humans and AI.
+
 Northstar is a standards-oriented XMPP server written in Rust for Linux and
 PostgreSQL. It provides XMPP over TCP, Direct TLS, WebSocket and optional BOSH,
 along with federation, group chat, OMEMO-compatible services, a browser client,
 REST administration, anti-abuse controls, logging and metrics.
 
-The current release candidate is `0.2.0` and remains pre-1.0. It has not yet
-been published or received an independent security audit. Review the
+The current package version is `0.2.0` and remains pre-1.0. Publication status
+and dates are recorded in [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases).
+The project has not received an independent security audit. Review the
 [XEP support matrix](XEP_MATRIX.md), [release checklist](docs/RELEASE_CHECKLIST.md)
 and [known limitations](docs/KNOWN_ISSUES.md) before public deployment.
 
@@ -16,15 +19,21 @@ See the [documentation index](docs/README.md), [security policy](SECURITY.md),
 [production operations guide](docs/PRODUCTION_OPERATIONS.md) and
 [contribution guide](CONTRIBUTING.md).
 
+The supported architecture is the single-process modular monolith
+(`rust-xmpp-server`). The same binary can also run separate core and maintenance
+processes over shared PostgreSQL; see [process ownership and deployment](docs/SUBSERVERS.md).
+The distributed services under `services/*` remain prototypes. Their catalog is
+frozen at the [Program 5 baseline](docs/evidence/baselines/aa2b0df.yaml), with no
+integrated or production-ready service.
+
 ## How to use
 
 ### Release packages
 
-After release approval, Northstar `0.2.0` will be distributed through
-[GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) with
-the following planned files. Do not treat them as available until the tagged
-workflow has published a draft and its checksums, provenance and image digests
-have been reviewed:
+Northstar `0.2.0` packages will be available from
+[GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) after
+the maintainer publishes the Release. The tag workflow prepares a draft with
+the following files and verifies their checksums, provenance and image digests:
 
 | Asset | Intended use |
 |---|---|
@@ -32,7 +41,8 @@ have been reviewed:
 | `northstar-0.2.0-linux-amd64` | Raw Linux AMD64 ELF binary |
 | `northstar-0.2.0-windows-amd64.zip` | Complete Windows AMD64 development/evaluation distribution with `xmpp-server.exe` and the same runtime assets and notices |
 | `northstar-0.2.0-windows-amd64.exe` | Raw Windows AMD64 executable for development/evaluation |
-| `SHA256SUMS` | SHA-256 checksums for the four packages and `IMAGE_DIGESTS` |
+| `SHA256SUMS` | SHA-256 checksums for the four binary assets, `IMAGE_DIGESTS` and `RELEASE-EVIDENCE.json` |
+| `RELEASE-EVIDENCE.json` | Exact source/run identity and successful Windows, Linux and Docker package checks |
 | `IMAGE_DIGESTS` | Exact `name@sha256:digest` references produced for the three GHCR images by a successful tag run |
 
 `AMD64` means the Rust `x86_64` targets. Linux AMD64 is the production
@@ -41,6 +51,11 @@ production deployment. The raw binaries do not contain the runtime Web,
 Swagger UI, configuration, or license files. Use the complete archive, or keep
 the raw binary beside the matching-tag archive contents and run it from that
 directory.
+
+Each complete archive includes `.env.development.example`, `docs/INSTALL.md`,
+and a `PACKAGE-MANIFEST.json` with the source commit and per-file digests.
+The workflow verifies extracted startup against private PostgreSQL 17 on both
+native platforms and the application image.
 
 Download all required files, verify the matching entries in `SHA256SUMS`, and
 verify the GitHub build provenance before execution. On Linux, for example:
@@ -103,11 +118,15 @@ database roles, protected secret files and a publicly trusted certificate.
 Do not expose PostgreSQL, Redis, Prometheus or Grafana directly to the Internet.
 
 
-## What privacy means here
+## Privacy
 
 OMEMO encryption is performed by compatible clients. For a correctly encrypted message, Northstar routes and archives the encrypted XMPP envelope and does not possess the clients' OMEMO private keys. The default `REQUIRE_ENCRYPTED_ARCHIVE=true` policy rejects plaintext bodies from personal and room archives and strips accidental plaintext siblings from OMEMO stanzas before persistence.
 
-This is not an absolute “zero-knowledge” guarantee. The server necessarily sees routing metadata, account and room membership data, message timing and size, any plaintext that a client intentionally sends, and evidence a user deliberately attaches to an abuse report. Administrators with database or host access can inspect that server-visible information. End-to-end privacy therefore depends on the client, its device-key verification, endpoint security, and correct TLS deployment as well as Northstar.
+The server sees routing metadata, account and room membership, message timing
+and size, plaintext sent by clients, and evidence attached to abuse reports.
+Administrators with database or host access can inspect this information.
+End-to-end privacy depends on client security, device-key verification and TLS
+deployment.
 
 
 ## Features

@@ -530,7 +530,7 @@ pub async fn admin_invitations(
     let next_cursor = pagination::issue_pg_cursor(&state, &binding, page.next, page.database_now)?;
     Ok(Json(json!({
         "invitations":page.rows,
-        "required":state.config.invitation_required,
+        "required":state.registration_requires_invitation(),
         "limit":limit,
         "next_cursor":next_cursor
     })))
@@ -781,6 +781,11 @@ pub async fn admin_toggle_registration(
     actor: ApiAdmin,
     request: ApiJson<BooleanToggle>,
 ) -> Result<Response, AppError> {
+    if request.enabled && state.registration_opening_is_dependency_locked() {
+        return Err(AppError::Conflict(
+            "registration cannot be opened while invitation-only mode is dependency-locked by WEB_CLIENT_ENABLED=false".into(),
+        ));
+    }
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
@@ -1216,6 +1221,23 @@ mod tests {
     use axum::http::{HeaderValue, Request};
 
     use crate::api::{ApiEmpty, SessionView};
+
+    #[test]
+    fn registration_dependency_lock_is_checked_before_database_mutation() {
+        let source = include_str!("admin.rs");
+        let body = source
+            .split_once("pub async fn admin_toggle_registration")
+            .unwrap()
+            .1
+            .split_once("pub async fn admin_sessions")
+            .unwrap()
+            .0;
+        let guard = body
+            .find("registration_opening_is_dependency_locked")
+            .unwrap();
+        let transaction = body.find("state.pool.begin()").unwrap();
+        assert!(guard < transaction);
+    }
 
     fn session(connection_id: u128) -> SessionView {
         SessionView {

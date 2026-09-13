@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package northstar.security.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Signed user authorization grant issued by the Identity authority.
+// The signature covers the canonical serialization with signature omitted.
+message AuthGrant {
+  string iss = 1;
+  string aud = 2;
+  google.protobuf.Timestamp iat = 3;
+  google.protobuf.Timestamp nbf = 4;
+  google.protobuf.Timestamp exp = 5;
+  string jti = 6;
+  uint32 schema_version = 7;
+  string account_id = 8;
+  string bare_jid = 9;
+  uint64 credential_generation = 10;
+  string auth_method = 11;
+  string auth_strength = 12;
+  string channel_binding = 13;
+  string key_id = 14;
+  string alg = 15;
+  bytes signature = 16;
+  repeated string scopes = 17;
+}
+
+// Signed session/lease assertion issued by Session Authority.
+message SessionAssertion {
+  string iss = 1;
+  string aud = 2;
+  google.protobuf.Timestamp iat = 3;
+  google.protobuf.Timestamp nbf = 4;
+  google.protobuf.Timestamp exp = 5;
+  string jti = 6;
+  uint32 schema_version = 7;
+  string account_id = 8;
+  string bare_jid = 9;
+  string full_jid = 10;
+  string connection_id = 11;
+  string edge_instance_id = 12;
+  uint64 session_epoch = 13;
+  uint64 credential_generation = 14;
+  string home_region = 15;
+  uint64 region_epoch = 16;
+  string key_id = 17;
+  string alg = 18;
+  bytes signature = 19;
+  repeated string scopes = 20;
+  repeated string roles = 21;
+}

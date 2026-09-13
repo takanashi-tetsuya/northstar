@@ -1,0 +1,48 @@
+receivers:
+  otlp:
+    protocols:
+      grpc: {}
+      http: {}
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+  attributes/redact:
+    actions:
+      - key: jid
+        action: delete
+      - key: ip
+        action: delete
+      - key: message_id
+        action: delete
+      - key: room_id
+        action: delete
+      - key: stanza_body
+        action: delete
+      - key: password
+        action: delete
+      - key: scram_transcript
+        action: delete
+      - key: bearer
+        action: delete
+  batch:
+    timeout: 1s
+    send_batch_size: 512
+exporters:
+  otlphttp/backend:
+    endpoint: ${OTEL_BACKEND_ENDPOINT}
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/redact, batch]
+      exporters: [otlphttp/backend]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/redact, batch]
+      exporters: [otlphttp/backend]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/redact, batch]
+      exporters: [otlphttp/backend]

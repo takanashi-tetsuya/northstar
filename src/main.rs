@@ -15,6 +15,7 @@ mod db;
 mod error;
 mod identity_audit;
 mod jid;
+mod logging;
 mod mam_pubsub_parsing;
 mod metrics;
 mod operation_runtime;
@@ -26,6 +27,9 @@ mod s2s;
 mod services;
 mod state;
 mod storage;
+mod subscription_cleanup;
+mod subservers;
+mod test_activation;
 mod tls;
 mod transport_parsing;
 mod upload_worker;
@@ -37,7 +41,10 @@ use config::Config;
 use futures::FutureExt;
 use sqlx::postgres::PgPoolOptions;
 use state::AppState;
-use std::{any::Any, future::Future, panic::AssertUnwindSafe, path::PathBuf, sync::Arc};
+use std::{
+    any::Any, collections::BTreeMap, future::Future, net::SocketAddr, panic::AssertUnwindSafe,
+    path::PathBuf, sync::Arc,
+};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -179,8 +186,21 @@ fn install_crypto_provider() -> Result<()> {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> std::process::ExitCode {
+    logging::report_result(run().await)
+}
+
+async fn run() -> Result<()> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if matches!(arguments.first().map(String::as_str), Some("--help" | "-h")) {
+        anyhow::ensure!(arguments.len() == 1, "usage: xmpp-server --help");
+        println!("Northstar XMPP server\n\n  xmpp-server serve core         Start protocol/session/administration server\n  xmpp-server serve maintenance  Start isolated retention and subscription maintenance server\n  xmpp-server serve standalone   Start the compatible combined server (default)\n  xmpp-server --subservers       Show process responsibility inventory\n  xmpp-server migrate           Apply migrations with explicit migrator credentials\n  xmpp-server --healthcheck [IP:PORT]\n  xmpp-server --version");
+        return Ok(());
+    }
+    if arguments.first().map(String::as_str) == Some("--subservers") {
+        anyhow::ensure!(arguments.len() == 1, "usage: xmpp-server --subservers");
+        return subservers::print_inventory();
+    }
     if matches!(
         arguments.first().map(String::as_str),
         Some("--version" | "-V")
@@ -189,6 +209,16 @@ async fn main() -> Result<()> {
             anyhow::bail!("usage: xmpp-server --version");
         }
         println!("{}", version_line());
+        return Ok(());
+    }
+    if arguments.first().map(String::as_str) == Some("--runtime-connection-budget") {
+        if arguments.len() != 1 {
+            anyhow::bail!("usage: xmpp-server --runtime-connection-budget");
+        }
+        println!(
+            "{}",
+            serde_json::to_string(&config::runtime_connection_budget_manifest())?
+        );
         return Ok(());
     }
     if arguments.first().map(String::as_str) == Some("--healthcheck") {
@@ -209,7 +239,11 @@ async fn main() -> Result<()> {
     // Hermetic integration/deployment environments can explicitly prevent a
     // developer .env file in the working directory from filling unset secret
     // variables. Normal foreground startup keeps the convenient default.
-    if std::env::var("NORTHSTAR_DISABLE_DOTENV").as_deref() != Ok("true") {
+    // Maintenance has a separate configuration boundary: never populate its
+    // environment from a core .env file containing protocol/signing secrets.
+    if arguments != ["serve", "maintenance"]
+        && std::env::var("NORTHSTAR_DISABLE_DOTENV").as_deref() != Ok("true")
+    {
         dotenvy::dotenv().ok();
     }
     if let Some(outcome) = identity_audit::maybe_run(&arguments).await? {
@@ -226,11 +260,48 @@ async fn main() -> Result<()> {
         }
         return run_migrations().await;
     }
+    let process_role = if arguments.first().map(String::as_str) == Some("pie") {
+        subservers::ProcessRole::Standalone
+    } else {
+        subservers::ProcessRole::parse(&arguments)?
+    };
+    if process_role == subservers::ProcessRole::Maintenance {
+        return subservers::run_maintenance().await;
+    }
     let config = Config::from_env()?;
     let _log_guard = init_logging(&config)?;
+    if process_role == subservers::ProcessRole::Core {
+        anyhow::ensure!(config.database_max_connections <= subservers::MAX_CORE_PRIMARY_CONNECTIONS,
+            "core subserver DATABASE_MAX_CONNECTIONS must be at most {}, reserving shared-role capacity for maintenance",
+            subservers::MAX_CORE_PRIMARY_CONNECTIONS);
+        tracing::info!(
+            role = "core",
+            "core subserver selected; archive retention is owned by the maintenance process"
+        );
+    }
+    if config.invitation_policy_disabled_with_web_client {
+        tracing::warn!(
+            open_registration = config.open_registration,
+            "invitation-only registration was resolved fail-closed because WEB_CLIENT_ENABLED=false; effective registration mode is closed"
+        );
+    }
     if arguments.first().map(String::as_str) == Some("pie") {
         return pie::run(&config, &arguments[1..]).await;
     }
+    // This reservation deliberately precedes primary-pool construction and
+    // every startup database operation.  Runtime policy and service-control
+    // authority must survive a cold-start cohort that would otherwise fill
+    // the traffic pool before it can establish its own isolated connection.
+    let startup_phase = logging::StartupPhase::begin("runtime_control_reservation");
+    let mut runtime_control_connection = state::reserve_runtime_control_connection(&config).await?;
+    if process_role.embeds_retention() {
+        // Retention ownership shares this already-reserved physical session;
+        // it consumes no primary-pool slot. Its existing critical supervisor
+        // cancels this process if the exact connection stops making progress.
+        subservers::claim_maintenance_on_connection(&mut runtime_control_connection).await?;
+    }
+    startup_phase.complete();
+    let startup_phase = logging::StartupPhase::begin("primary_pool_and_role_attestation");
     let pool_options = PgPoolOptions::new()
         .max_connections(config.database_max_connections)
         .min_connections(config.database_min_connections);
@@ -251,18 +322,27 @@ async fn main() -> Result<()> {
     } else {
         db::attest_runtime_role(&pool).await?;
     }
+    startup_phase.complete();
+    let startup_phase = logging::StartupPhase::begin("schema_verification");
     db::verify_schema(&pool, &config.domain)
         .await
         .context("database schema verification failed")?;
-    tokio::time::timeout(
-        CAPACITY_AUTHORITY_QUERY_TIMEOUT,
-        db::reconcile_deployment_capacity(
-            &pool,
-            db::DeploymentCapacityConfiguration::from_config(&config)?,
-        ),
+    startup_phase.complete();
+    // Startup reconciliation owns a PostgreSQL advisory lock with its own
+    // transaction-local 30-second bound. Do not wrap that authoritative
+    // serialization in the much shorter runtime lease-I/O budget: a peer may
+    // be legitimately committing the same epoch while this process has not
+    // yet received CPU time. The database lock remains fail-closed and is
+    // released automatically if its owner dies.
+    let startup_phase = logging::StartupPhase::begin("deployment_capacity_reconciliation");
+    db::reconcile_deployment_capacity(
+        &pool,
+        db::DeploymentCapacityConfiguration::from_config(&config)?,
     )
     .await
-    .context("deployment-wide capacity authority reconciliation timed out")??;
+    .context("could not establish deployment-wide capacity authority")?;
+    startup_phase.complete();
+    let startup_phase = logging::StartupPhase::begin("credential_maintenance");
     if !config.scram_sha1_enabled {
         let removed = db::clear_scram_sha1_credentials(&pool).await?;
         if removed > 0 {
@@ -270,11 +350,22 @@ async fn main() -> Result<()> {
         }
     }
     db::ensure_bootstrap_admin(&pool, &config).await?;
+    startup_phase.complete();
     let components = components::registry();
     let (federation, federation_rx) =
         s2s::FederationRouter::channel(pool.clone(), &config, components.clone());
     let cancel = CancellationToken::new();
-    let state = AppState::new(config, pool, federation, components, cancel.clone()).await?;
+    let startup_phase = logging::StartupPhase::begin("application_state");
+    let state = AppState::new(
+        config,
+        pool,
+        federation,
+        components,
+        runtime_control_connection,
+        cancel.clone(),
+    )
+    .await?;
+    startup_phase.complete();
     state.install_service_shutdown(cancel.clone())?;
 
     let worker_registry = Arc::clone(state.worker_registry());
@@ -367,6 +458,15 @@ async fn main() -> Result<()> {
                                 .filter(|session| session.routable.load(std::sync::atomic::Ordering::Acquire))
                                 .map(|session| (session.connection_id, session.disconnect.clone()))
                                 .collect::<Vec<_>>();
+                            if local.is_empty() {
+                                // This is the local route-renewal worker. An
+                                // idle node owns no lease to renew and must
+                                // not manufacture shared database traffic;
+                                // elected maintenance below reaps expired
+                                // leases for the whole deployment.
+                                heartbeat.ok();
+                                continue;
+                            }
                             let ids = local.iter().map(|(id, _)| *id).collect::<Vec<_>>();
                             let refreshed = tokio::select! {
                                 _ = capacity_cancel.cancelled() => return Ok(()),
@@ -391,15 +491,46 @@ async fn main() -> Result<()> {
                                     disconnect.cancel();
                                 }
                             }
-                            tokio::select! {
-                                _ = capacity_cancel.cancelled() => return Ok(()),
+                            heartbeat.ok();
+                        }
+                    }
+                }
+            }
+        },
+    );
+    let capacity_reaper_state = Arc::clone(&state);
+    let capacity_reaper_cancel = cancel.clone();
+    worker_registry.supervise(
+        "deployment-capacity-lease-reaper",
+        WorkerCriticality::Restartable,
+        WorkerMode::Continuous,
+        Some(std::time::Duration::from_secs(120)),
+        cancel.clone(),
+        move |heartbeat| {
+            let capacity_reaper_state = Arc::clone(&capacity_reaper_state);
+            let capacity_reaper_cancel = capacity_reaper_cancel.clone();
+            async move {
+                let mut interval = tokio::time::interval(capacity_interval);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = capacity_reaper_cancel.cancelled() => return Ok(()),
+                        _ = interval.tick() => {
+                            let result = tokio::select! {
+                                _ = capacity_reaper_cancel.cancelled() => return Ok(()),
                                 result = tokio::time::timeout(
                                     CAPACITY_AUTHORITY_QUERY_TIMEOUT,
-                                    db::cleanup_expired_live_session_leases(&capacity_state.pool, 1024),
+                                    db::try_cleanup_expired_live_session_leases(
+                                        &capacity_reaper_state.pool,
+                                        1024,
+                                    ),
                                 ) => result
-                                    .context("deployment live-session lease cleanup timed out")?
-                                    .context("could not reap expired deployment live-session capacity leases")?,
+                                    .context("deployment live-session lease reaper timed out")?
+                                    .context("could not elect deployment live-session lease reaper")?,
                             };
+                            if let Some(removed) = result {
+                                tracing::debug!(removed, "reaped expired deployment live-session leases");
+                            }
                             heartbeat.ok();
                         }
                     }
@@ -535,75 +666,136 @@ async fn main() -> Result<()> {
         },
     );
 
-    let upload_state = Arc::clone(&state);
-    let upload_cancel = cancel.clone();
-    worker_registry.supervise(
-        "upload-storage-reconciliation",
-        // Namespace drift can make a node write or delete objects in the
-        // wrong bucket/prefix. The worker treats a proven authority mismatch
-        // as fatal; transient inability to query PostgreSQL skips object I/O
-        // and reports an unhealthy heartbeat without returning.
-        WorkerCriticality::Critical,
-        WorkerMode::Continuous,
-        // One provider operation may legitimately occupy 180 seconds. Silence
-        // detection therefore includes a margin and cannot kill a healthy
-        // critical worker mid-operation.
-        Some(std::time::Duration::from_secs(600)),
-        cancel.clone(),
-        move |heartbeat| {
-            let upload_state = Arc::clone(&upload_state);
-            let upload_cancel = upload_cancel.clone();
-            async move { upload_worker::serve(upload_state, upload_cancel, heartbeat).await }
-        },
-    );
+    if state.config.upload_mode.keeps_storage_runtime() {
+        let upload_state = Arc::clone(&state);
+        let upload_cancel = cancel.clone();
+        worker_registry.supervise(
+            "upload-storage-reconciliation",
+            // Namespace drift can make a node write or delete objects in the
+            // wrong bucket/prefix. The worker treats a proven authority mismatch
+            // as fatal; transient inability to query PostgreSQL skips object I/O
+            // and reports an unhealthy heartbeat without returning.
+            WorkerCriticality::Critical,
+            WorkerMode::Continuous,
+            // One provider operation may legitimately occupy 180 seconds. Silence
+            // detection therefore includes a margin and cannot kill a healthy
+            // critical worker mid-operation.
+            Some(std::time::Duration::from_secs(600)),
+            cancel.clone(),
+            move |heartbeat| {
+                let upload_state = Arc::clone(&upload_state);
+                let upload_cancel = upload_cancel.clone();
+                async move { upload_worker::serve(upload_state, upload_cancel, heartbeat).await }
+            },
+        );
+    }
 
-    let retention_state = Arc::clone(&state);
-    let retention_cancel = cancel.clone();
-    let retention_max_silence = std::time::Duration::from_secs(
-        state
-            .config
-            .retention_cleanup_interval_seconds
-            .saturating_mul(2)
-            .saturating_add(60),
-    );
-    worker_registry.supervise(
-        "archive-retention",
-        WorkerCriticality::Restartable,
-        WorkerMode::Continuous,
-        Some(retention_max_silence),
-        cancel.clone(),
-        move |heartbeat| {
-            let retention_state = Arc::clone(&retention_state);
-            let retention_cancel = retention_cancel.clone();
-            async move { retention::serve(retention_state, retention_cancel, heartbeat).await }
-        },
-    );
+    if process_role.embeds_retention() {
+        let retention_state = Arc::clone(&state);
+        let retention_cancel = cancel.clone();
+        let retention_max_silence = std::time::Duration::from_secs(
+            state
+                .config
+                .retention_cleanup_interval_seconds
+                .saturating_mul(2)
+                .saturating_add(60),
+        );
+        worker_registry.supervise(
+            "archive-retention",
+            WorkerCriticality::Restartable,
+            WorkerMode::Continuous,
+            Some(retention_max_silence),
+            cancel.clone(),
+            move |heartbeat| {
+                let retention_state = Arc::clone(&retention_state);
+                let retention_cancel = retention_cancel.clone();
+                async move { retention::serve(retention_state, retention_cancel, heartbeat).await }
+            },
+        );
+        let subscriptions = Arc::new(subscription_cleanup::SubscriptionCleanupContext::new(
+            state.pool.clone(),
+            Arc::clone(&state.metrics.subscription_cleanup),
+        ));
+        let subscription_cancel = cancel.clone();
+        worker_registry.supervise(
+            "pubsub-subscription-cleanup",
+            WorkerCriticality::Restartable,
+            WorkerMode::Continuous,
+            Some(subscription_cleanup::MAX_SILENCE),
+            cancel.clone(),
+            move |heartbeat| {
+                subscription_cleanup::serve_context(
+                    Arc::clone(&subscriptions),
+                    subscription_cancel.clone(),
+                    heartbeat,
+                )
+            },
+        );
+    }
+
+    // Listener ownership belongs to this process before any service task is
+    // spawned. Test fixtures can therefore use `127.0.0.1:0` and consume a
+    // nonce-bound readiness record instead of racing a port-number allocator.
+    let xmpp_listener = bind_runtime_listener("XMPP", state.config.xmpp_bind).await?;
+    let xmpps_listener = bind_runtime_listener("XMPPS", state.config.xmpps_bind).await?;
+    let http_listener = bind_runtime_listener("HTTP", state.config.http_bind).await?;
+    let metrics_listener = bind_runtime_listener("metrics", state.config.metrics_bind).await?;
+    let admin_listener = if state.config.web_admin_enabled {
+        Some(bind_runtime_listener("web administration", state.config.web_admin_bind).await?)
+    } else {
+        None
+    };
+    let s2s_listener = if state.config.federation_enabled {
+        Some(bind_runtime_listener("S2S", state.config.s2s_bind).await?)
+    } else {
+        None
+    };
+    let s2s_tls_listener = if state.config.federation_enabled {
+        Some(bind_runtime_listener("S2S Direct TLS", state.config.s2s_tls_bind).await?)
+    } else {
+        None
+    };
+    let component_listener = if state.accepts_component_connections() {
+        Some(bind_runtime_listener("external component", state.config.component_bind).await?)
+    } else {
+        None
+    };
+    let listener_addresses = runtime_listener_addresses(RuntimeListeners {
+        xmpp: &xmpp_listener,
+        xmpps: &xmpps_listener,
+        http: &http_listener,
+        metrics: &metrics_listener,
+        admin: admin_listener.as_ref(),
+        s2s: s2s_listener.as_ref(),
+        s2s_tls: s2s_tls_listener.as_ref(),
+        component: component_listener.as_ref(),
+    })?;
 
     let mut service_tasks = JoinSet::new();
     spawn_service_task(
         &mut service_tasks,
         "XMPP",
-        xmpp::serve_tcp(state.clone(), cancel.clone()),
+        xmpp::serve_tcp(state.clone(), cancel.clone(), xmpp_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "XMPPS",
-        xmpp::serve_xmpps_tcp(state.clone(), cancel.clone()),
+        xmpp::serve_xmpps_tcp(state.clone(), cancel.clone(), xmpps_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "S2S",
-        s2s::serve(state.clone(), federation_rx, cancel.clone()),
+        s2s::serve(state.clone(), federation_rx, cancel.clone(), s2s_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "S2S TLS",
-        s2s::serve_s2s_tls(state.clone(), cancel.clone()),
+        s2s::serve_s2s_tls(state.clone(), cancel.clone(), s2s_tls_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "external component",
-        components::serve(state.clone(), cancel.clone()),
+        components::serve(state.clone(), cancel.clone(), component_listener),
     );
     spawn_service_task(
         &mut service_tasks,
@@ -690,35 +882,71 @@ async fn main() -> Result<()> {
     spawn_service_task(
         &mut service_tasks,
         "metrics",
-        api::serve_metrics(state.clone(), cancel.clone()),
+        api::serve_metrics(state.clone(), cancel.clone(), metrics_listener),
     );
     spawn_service_task(
         &mut service_tasks,
         "HTTP",
-        api::serve(state, cancel.clone()),
+        api::serve(state.clone(), cancel.clone(), http_listener),
     );
+    if state.config.web_admin_enabled {
+        let Some(listener) = admin_listener else {
+            unreachable!("web admin listener should be present when web_admin_enabled is true")
+        };
+        spawn_service_task(
+            &mut service_tasks,
+            "Web administration",
+            api::serve_administration(state.clone(), cancel.clone(), listener),
+        );
+    }
+    test_activation::publish_if_enabled(&state.config, &listener_addresses, std::process::id())?;
 
     let mut shutdown_error = None;
-    tokio::select! {
+    let graceful_signal = tokio::select! {
         biased;
         _ = cancel.cancelled() => {
             shutdown_error = worker_registry
                 .critical_failure()
                 .map(anyhow::Error::msg);
+            false
         },
         _ = api::shutdown_signal() => {
             tracing::info!("shutdown signal received; stopping listeners and draining HTTP requests");
+            true
         },
         result = service_tasks.join_next() => {
             shutdown_error = Some(unexpected_service_task_exit(result));
+            false
         },
-    }
+    };
 
     // Close connection admission before signalling any child. Every accepted
     // transport is now owned by the bounded registry and must finalize before
     // the abort-and-reap deadline below.
-    shutdown_state.connection_actors().begin_shutdown();
+    shutdown_state.connection_actors().close_admission();
+    if graceful_signal {
+        match await_shutdown_notifications(
+            &cancel,
+            &mut service_tasks,
+            shutdown_state.notify_muc_system_shutdown(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(2),
+        )
+        .await
+        {
+            Ok(Some(notified_muc_occupants)) if notified_muc_occupants > 0 => {
+                tracing::info!(notified_muc_occupants, "confirmed XEP-0045 shutdown notification transport writes or BOSH response acknowledgements");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                shutdown_error.get_or_insert(error);
+            }
+        }
+        if let Some(error) = worker_registry.critical_failure() {
+            shutdown_error.get_or_insert_with(|| anyhow::Error::msg(error));
+        }
+    }
     shutdown_state.cluster.begin_shutdown();
+    shutdown_state.connection_actors().begin_shutdown();
     cancel.cancel();
     match tokio::time::timeout(
         std::time::Duration::from_secs(15),
@@ -742,14 +970,6 @@ async fn main() -> Result<()> {
             "signed cluster publications did not drain; leaving the instance fenced until its database lease expires"
         ),
     }
-    let notified_muc_occupants = shutdown_state.notify_muc_system_shutdown().await;
-    if notified_muc_occupants > 0 {
-        tracing::info!(
-            notified_muc_occupants,
-            "sent XEP-0045 system-shutdown presence"
-        );
-    }
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     let (worker_report, service_report, connection_report) = tokio::join!(
         worker_registry.shutdown_and_join(&cancel, SERVICE_TASK_DRAIN_TIMEOUT),
         drain_service_tasks(&mut service_tasks, SERVICE_TASK_DRAIN_TIMEOUT),
@@ -780,10 +1000,68 @@ async fn main() -> Result<()> {
         "shutdown complete"
     );
 
+    if let Some(error) = worker_registry.critical_failure() {
+        shutdown_error.get_or_insert_with(|| anyhow::Error::msg(error));
+    }
     match shutdown_error {
         Some(error) => Err(error),
         None => Ok(()),
     }
+}
+
+async fn bind_runtime_listener(
+    purpose: &'static str,
+    address: SocketAddr,
+) -> Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind(address)
+        .await
+        .with_context(|| format!("could not bind {purpose} listener to {address}"))
+}
+
+struct RuntimeListeners<'a> {
+    xmpp: &'a tokio::net::TcpListener,
+    xmpps: &'a tokio::net::TcpListener,
+    http: &'a tokio::net::TcpListener,
+    metrics: &'a tokio::net::TcpListener,
+    admin: Option<&'a tokio::net::TcpListener>,
+    s2s: Option<&'a tokio::net::TcpListener>,
+    s2s_tls: Option<&'a tokio::net::TcpListener>,
+    component: Option<&'a tokio::net::TcpListener>,
+}
+
+fn runtime_listener_addresses(
+    listeners: RuntimeListeners<'_>,
+) -> Result<BTreeMap<String, SocketAddr>> {
+    let mut addresses = BTreeMap::new();
+    for (purpose, listener) in [
+        ("xmpp", listeners.xmpp),
+        ("xmpps", listeners.xmpps),
+        ("http", listeners.http),
+        ("metrics", listeners.metrics),
+    ] {
+        addresses.insert(
+            purpose.to_owned(),
+            listener
+                .local_addr()
+                .with_context(|| format!("could not inspect {purpose} listener"))?,
+        );
+    }
+    for (purpose, listener) in [
+        ("web-admin", listeners.admin),
+        ("s2s", listeners.s2s),
+        ("s2s-tls", listeners.s2s_tls),
+        ("component", listeners.component),
+    ] {
+        if let Some(listener) = listener {
+            addresses.insert(
+                purpose.to_owned(),
+                listener
+                    .local_addr()
+                    .with_context(|| format!("could not inspect {purpose} listener"))?,
+            );
+        }
+    }
+    Ok(addresses)
 }
 
 fn unexpected_service_task_exit(
@@ -805,6 +1083,35 @@ fn unexpected_service_task_exit(
         None => anyhow::anyhow!("every service task exited unexpectedly"),
     }
 }
+
+async fn await_shutdown_notifications<F>(
+    cancel: &CancellationToken,
+    tasks: &mut JoinSet<ServiceTaskExit>,
+    notifications: F,
+    deadline: tokio::time::Instant,
+) -> anyhow::Result<Option<usize>>
+where
+    F: std::future::Future<Output = usize>,
+{
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Ok(None),
+        result = tasks.join_next() => Err(unexpected_service_task_exit(result)),
+        result = tokio::time::timeout_at(deadline, notifications) => {
+            match result {
+                Ok(confirmed) => Ok(Some(confirmed)),
+                Err(_) => {
+                    tracing::warn!("MUC shutdown notification window expired; unconfirmed endpoints will close without a write guarantee");
+                    Ok(None)
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "shutdown_notification_tests.rs"]
+mod shutdown_notification_tests;
 
 async fn drain_service_tasks(
     tasks: &mut JoinSet<ServiceTaskExit>,
@@ -933,7 +1240,7 @@ async fn container_healthcheck(address: &str) -> Result<()> {
     }
 }
 
-fn init_logging(config: &Config) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
+fn init_logging(config: &Config) -> Result<logging::LogGuards> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let rotation = match config.log_rotation.to_lowercase().as_str() {
@@ -950,7 +1257,9 @@ fn init_logging(config: &Config) -> Result<Option<tracing_appender::non_blocking
         .build(&config.log_dir)
         .context("failed to build rolling file appender")?;
 
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
+    let (console, console_guard) = logging::console(std::io::stderr());
+    let guards = logging::LogGuards::new(vec![file_guard, console_guard]);
 
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
@@ -962,7 +1271,7 @@ fn init_logging(config: &Config) -> Result<Option<tracing_appender::non_blocking
             .with_ansi(false);
         let console_layer = tracing_subscriber::fmt::layer()
             .json()
-            .with_writer(std::io::stderr)
+            .with_writer(console)
             .with_ansi(false);
         tracing_subscriber::registry()
             .with(filter)
@@ -973,7 +1282,7 @@ fn init_logging(config: &Config) -> Result<Option<tracing_appender::non_blocking
         let file_layer = tracing_subscriber::fmt::layer()
             .with_writer(non_blocking)
             .with_ansi(false);
-        let console_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+        let console_layer = tracing_subscriber::fmt::layer().with_writer(console);
         tracing_subscriber::registry()
             .with(filter)
             .with(file_layer)
@@ -981,7 +1290,7 @@ fn init_logging(config: &Config) -> Result<Option<tracing_appender::non_blocking
             .init();
     }
 
-    Ok(Some(guard))
+    Ok(guards)
 }
 
 #[cfg(test)]
@@ -1015,6 +1324,34 @@ mod container_healthcheck_tests {
                 .unwrap();
         });
         (address, task)
+    }
+
+    #[tokio::test]
+    async fn runtime_listener_inventory_uses_bound_ephemeral_addresses() {
+        let xmpp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let xmpps = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let http = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let metrics = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addresses = super::runtime_listener_addresses(super::RuntimeListeners {
+            xmpp: &xmpp,
+            xmpps: &xmpps,
+            http: &http,
+            metrics: &metrics,
+            admin: None,
+            s2s: None,
+            s2s_tls: None,
+            component: None,
+        })
+        .unwrap();
+        assert_eq!(addresses.len(), 4);
+        for (purpose, address) in addresses {
+            assert!(address.ip().is_loopback(), "{purpose} must remain loopback");
+            assert_ne!(
+                address.port(),
+                0,
+                "{purpose} must be resolved before readiness"
+            );
+        }
     }
 
     #[tokio::test]

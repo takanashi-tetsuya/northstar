@@ -1987,7 +1987,7 @@ mod tests {
         let (cleanup_started_tx, cleanup_started_rx) = tokio::sync::oneshot::channel();
         let cleanup_task = tokio::spawn(async move {
             let _ = cleanup_started_tx.send(());
-            db::cleanup_expired_live_session_leases(&cleanup_pool, 10).await
+            db::try_cleanup_expired_live_session_leases(&cleanup_pool, 10).await
         });
         cleanup_started_rx.await.unwrap();
         assert_eq!(
@@ -1995,7 +1995,8 @@ mod tests {
                 .await
                 .expect("expiry cleanup blocked instead of skipping a publication-locked lease")
                 .unwrap()
-                .unwrap(),
+                .unwrap()
+                .expect("an isolated fixture must acquire the reaper role"),
             0,
             "expiry cleanup reported deleting a publication-locked lease"
         );
@@ -2012,9 +2013,10 @@ mod tests {
         );
         publication.rollback().await.unwrap();
         assert!(
-            db::cleanup_expired_live_session_leases(&pool, 10)
+            db::try_cleanup_expired_live_session_leases(&pool, 10)
                 .await
                 .unwrap()
+                .expect("an isolated fixture must acquire the reaper role")
                 >= 1
         );
         assert_eq!(

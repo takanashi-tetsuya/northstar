@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://northstar.invalid/schemas/catalog-services.schema.json",
+  "title": "Northstar Service Catalog",
+  "type": "object",
+  "required": ["version", "services"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "services": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/service" }
+    }
+  },
+  "definitions": {
+    "service": {
+      "type": "object",
+      "required": [
+        "service_id", "implementation_status", "name", "execution_class",
+        "owner_team", "criticality", "data_classes", "region_mode", "home_key",
+        "runtime_binary", "image", "database", "deployment_unit", "semantic_owner", "evidence"
+      ],
+      "properties": {
+        "service_id": {
+          "type": "string",
+          "minLength": 3
+        },
+        "implementation_status": {
+          "type": "string",
+          "enum": [
+            "planned",
+            "scaffold",
+            "prototype",
+            "executable-prototype",
+            "integrated",
+            "production-candidate",
+            "production"
+          ]
+        },
+        "code_path": {
+          "type": "string"
+        },
+        "cargo_package": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "execution_class": {
+          "type": "string",
+          "enum": [
+            "remote-authority",
+            "remote-worker",
+            "transport",
+            "control-plane",
+            "bff",
+            "local-sdk",
+            "signed-policy-snapshot",
+            "pass-through-codec"
+          ]
+        },
+        "owner_team": {
+          "type": "string"
+        },
+        "criticality": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"]
+        },
+        "data_classes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "region_mode": {
+          "type": "string",
+          "enum": ["home_region", "global", "shared"]
+        },
+        "home_key": {
+          "type": "string"
+        },
+        "database": {
+          "type": "string"
+        },
+        "runtime_binary": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        },
+        "deployment_unit": {
+          "type": "string"
+        },
+        "semantic_owner": {
+          "type": "string"
+        },
+        "rpc": {
+          "type": "object",
+          "properties": {
+            "provides": { "type": "array", "items": { "type": "string" } },
+            "consumes": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "events": {
+          "type": "object",
+          "properties": {
+            "produces": { "type": "array", "items": { "type": "string" } },
+            "consumes": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "slo": {
+          "type": "object",
+          "properties": {
+            "command_p99_ms": { "type": "number", "minimum": 0 },
+            "availability": { "type": "number", "minimum": 0, "maximum": 100 }
+          },
+          "additionalProperties": false
+        },
+        "evidence": {
+          "required": ["status", "required_checks"],
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["planned", "scaffold", "prototype", "executable-prototype", "integrated", "production-candidate", "production"]
+            },
+            "last_verified_commit": { "type": "string" },
+            "required_checks": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "artifacts": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "xep_ownership": {
+          "$ref": "#/definitions/xepOwnershipRef"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "execution_class": { "enum": ["local-sdk", "pass-through-codec"] }
+            }
+          },
+          "then": {
+            "properties": { "database": { "const": "none" } }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "execution_class": { "enum": ["remote-authority", "remote-worker", "signed-policy-snapshot"] }
+            }
+          },
+          "then": {
+            "properties": { "database": { "type": "string", "pattern": "^(?!none$).+" } }
+          }
+        }
+      ]
+    },
+    "xepOwnershipRef": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["owner", "adapter"]
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

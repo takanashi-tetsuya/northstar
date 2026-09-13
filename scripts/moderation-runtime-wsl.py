@@ -47,7 +47,17 @@ def json_request(
     token: str,
     payload: dict | None,
     idempotency_key: str | None = None,
+    *,
+    administrator_listener: bool = False,
 ) -> tuple[int, dict[str, str], bytes, object]:
+    """Issue one moderation request through its owning HTTP listener.
+
+    Reporter operations belong on the public client API.  Moderation queue and
+    decision routes are intentionally served only by the loopback administrator
+    listener, so callers must opt in rather than relying on a route prefix to
+    choose a transport boundary implicitly.
+    """
+
     body = None
     headers = {"Authorization": f"Bearer {token}"}
     if payload is not None:
@@ -55,7 +65,8 @@ def json_request(
         headers["Content-Type"] = "application/json"
     if idempotency_key is not None:
         headers["Idempotency-Key"] = idempotency_key
-    status, response_headers, raw = fixture.raw_http(method, path, body, headers)
+    request = fixture.raw_admin_http if administrator_listener else fixture.raw_http
+    status, response_headers, raw = request(method, path, body, headers)
     parsed = json.loads(raw) if raw else None
     return status, response_headers, raw, parsed
 
@@ -69,8 +80,11 @@ def mutation(
     expected_status: int,
     *,
     replay: bool = True,
+    administrator_listener: bool = False,
 ) -> tuple[dict, str]:
-    status, headers, raw, parsed = json_request(method, path, token, payload, key)
+    status, headers, raw, parsed = json_request(
+        method, path, token, payload, key, administrator_listener=administrator_listener
+    )
     fixture.check(
         status == expected_status and isinstance(parsed, dict),
         f"mutation failed for {path}: {status} {parsed}",
@@ -79,7 +93,7 @@ def mutation(
     fixture.check(request_id is not None, f"mutation response omitted X-Request-Id: {path}")
     if replay:
         replay_status, replay_headers, replay_raw, _ = json_request(
-            method, path, token, payload, key
+            method, path, token, payload, key, administrator_listener=administrator_listener
         )
         fixture.check(
             replay_status == status
@@ -232,7 +246,7 @@ def workflow() -> None:
     only_visible_to_reporter(reporter_token, target_token, intruder_token, report_id)
 
     denied_status, _, _, denied = json_request(
-        "GET", "/api/v1/admin/reports", intruder_token, None
+        "GET", "/api/v1/admin/reports", intruder_token, None, administrator_listener=True
     )
     fixture.check(
         denied_status == 403 and denied.get("error", {}).get("code") == "forbidden",
@@ -243,12 +257,12 @@ def workflow() -> None:
     report_review_key = f"moderation-report-review-{time.time_ns()}"
     _, report_review_request = mutation(
         "PATCH", f"/api/v1/admin/reports/{report_id}", admin_token,
-        report_review_payload, report_review_key, 200,
+        report_review_payload, report_review_key, 200, administrator_listener=True,
     )
     conflict_status, _, _, conflict = json_request(
         "PATCH", f"/api/v1/admin/reports/{report_id}", admin_token,
         {"status": "actioned", "resolution": "different body under the same key"},
-        report_review_key,
+        report_review_key, administrator_listener=True,
     )
     fixture.check(
         conflict_status == 409
@@ -258,7 +272,7 @@ def workflow() -> None:
     _, report_final_request = mutation(
         "PATCH", f"/api/v1/admin/reports/{report_id}", admin_token,
         {"status": "actioned", "resolution": "Confirmed spam; moderation action recorded."},
-        f"moderation-report-final-{time.time_ns()}", 200,
+        f"moderation-report-final-{time.time_ns()}", 200, administrator_listener=True,
     )
 
     status, own = fixture.api("GET", "/api/v1/reports", token=reporter_token)
@@ -321,12 +335,12 @@ def workflow() -> None:
     _, appeal_review_request = mutation(
         "PATCH", f"/api/v1/admin/appeals/{appeal_id}", admin_token,
         {"status": "reviewing", "resolution": ""},
-        f"moderation-appeal-review-{time.time_ns()}", 200,
+        f"moderation-appeal-review-{time.time_ns()}", 200, administrator_listener=True,
     )
     _, appeal_final_request = mutation(
         "PATCH", f"/api/v1/admin/appeals/{appeal_id}", admin_token,
         {"status": "denied", "resolution": "Independent review confirmed the original decision."},
-        f"moderation-appeal-final-{time.time_ns()}", 200,
+        f"moderation-appeal-final-{time.time_ns()}", 200, administrator_listener=True,
     )
 
     status, own = fixture.api("GET", "/api/v1/reports", token=reporter_token)
@@ -340,7 +354,7 @@ def workflow() -> None:
         and appeal["resolution"] == "Independent review confirmed the original decision.",
         f"reporter did not receive the final appeal result: {status} {own_report}",
     )
-    status, queue = fixture.api("GET", "/api/v1/admin/reports", token=admin_token)
+    status, queue = fixture.admin_api("GET", "/api/v1/admin/reports", token=admin_token)
     queued = next((row for row in queue.get("reports", []) if row["id"] == report_id), None)
     fixture.check(
         status == 200 and queued is not None and queued.get("appeal", {}).get("id") == appeal_id,
@@ -376,7 +390,7 @@ def expired_token() -> None:
     with STATE_PATH.open("r", encoding="utf-8") as handle:
         state = json.load(handle)
     token = state["expired_token"]
-    status, result = fixture.api("GET", "/api/v1/admin/reports", token=token)
+    status, result = fixture.admin_api("GET", "/api/v1/admin/reports", token=token)
     fixture.check(
         status == 401 and result.get("error", {}).get("code") == "unauthorized",
         f"expired administrator token retained access: {status} {result}",

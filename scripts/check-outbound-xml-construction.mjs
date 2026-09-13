@@ -51,7 +51,7 @@ const BASELINE = new Map([
 const STATIC_LITERAL_ALLOWLIST = [
   {
     file: 'src/xmpp/protocol/sasl2.rs',
-    line: 605,
+    line: 625,
     literal: '</stream:stream>',
     reason: 'parser-only synthetic close used to validate a stream opening element',
   },
@@ -235,7 +235,12 @@ function rustStringLiterals(source) {
       const terminator = `"${hashes}`;
       const end = source.indexOf(terminator, contentStart);
       if (end < 0) throw new Error(`unterminated raw Rust string at line ${lineAt(source, start)}`);
-      literals.push({ value: source.slice(contentStart, end), line: lineAt(source, start) });
+      literals.push({
+        value: source.slice(contentStart, end),
+        line: lineAt(source, start),
+        start,
+        end: end + terminator.length,
+      });
       index = end + terminator.length;
       continue;
     }
@@ -264,7 +269,7 @@ function rustStringLiterals(source) {
       if (cursor >= source.length) {
         throw new Error(`unterminated Rust string at line ${lineAt(source, start)}`);
       }
-      literals.push({ value, line: lineAt(source, start) });
+      literals.push({ value, line: lineAt(source, start), start, end: cursor + 1 });
       index = cursor + 1;
       continue;
     }
@@ -273,8 +278,35 @@ function rustStringLiterals(source) {
   return literals;
 }
 
+// SQLx query literals are PostgreSQL input, not outbound XMPP construction.
+// A SQL-looking prefix is insufficient: a dynamically-built stanza can begin
+// with `SELECT` and later be sent somewhere else. Classify only a literal
+// directly passed to a reviewed query-construction call. This remains a
+// narrow lexical guard rather than an exemption for a directory, raw strings,
+// a variable name, or arbitrary SQL-looking content.
+function isSqlQueryArgument(source, literal) {
+  const prefix = source.slice(Math.max(0, literal.start - 512), literal.start);
+  // `query` is intentionally not accepted bare: an in-scope Rust function,
+  // `wire::query`, `fake_query`, and XML builders with query-like names are
+  // not reviewed SQL constructors. The boundary before `sqlx` rejects both
+  // identifier suffixes and another module path, so only the crate-root SQLx
+  // constructor token can exempt its immediate literal argument.
+  const sqlxBoundary = String.raw`(?:^|[^\p{ID_Continue}:])sqlx\s*::\s*`;
+  const queryCall =
+    new RegExp(
+      `${sqlxBoundary}(?:query|query_scalar|query_as|query_with|query_scalar_with|query_as_with)(?:\\s*::\\s*<[^(){};]{0,256}>)?\\s*\\(\\s*$`,
+      'su',
+    );
+  const builderCall = new RegExp(
+    `${sqlxBoundary}QueryBuilder(?:\\s*::\\s*<[^(){};]{0,256}>)?\\s*::\\s*new\\s*\\(\\s*$`,
+    'su',
+  );
+  return queryCall.test(prefix) || builderCall.test(prefix);
+}
+
 function findings(relativePath, source) {
   return rustStringLiterals(productionSource(source))
+    .filter((literal) => !isSqlQueryArgument(source, literal))
     .filter(({ value }) => XML_TAG.test(value))
     .filter(({ line, value }) =>
       !STATIC_LITERAL_ALLOWLIST.some(
@@ -291,6 +323,55 @@ if (findings('self-test.rs', 'fn x() { format!("<iq id={}/>", id); }').length !=
 }
 if (findings('self-test.rs', 'fn x() { format!("{form_type}<"); }').length !== 0) {
   throw new Error('outbound XML detector confused a caps hash delimiter with an XML tag');
+}
+const sqlComparisonSelfTest = String.raw`
+fn query() {
+  sqlx::query(r#"SELECT * FROM recipient WHERE earlier.sequence<recipient.sequence
+    AND earlier.sequence<=recipient.sequence-1 AND earlier.sequence<>0"#);
+}
+`;
+if (findings('self-test.rs', sqlComparisonSelfTest).length !== 0) {
+  throw new Error('outbound XML detector confused SQL comparison operators with XML tags');
+}
+const sqlPrefixedXmlSelfTest = String.raw`
+fn output(body: &str) {
+  let stanza = format!("SELECT <message>{body}</message>");
+  send(stanza.strip_prefix("SELECT ").unwrap());
+}
+`;
+if (findings('self-test.rs', sqlPrefixedXmlSelfTest).length !== 1) {
+  throw new Error('outbound XML detector accepted a SQL-prefixed non-query stanza');
+}
+const exactSqlxConstructorSelfTest = String.raw`
+fn query() { sqlx::query("SELECT '<message>'"); }
+fn builder() { sqlx::QueryBuilder::new("SELECT '<presence>'"); }
+`;
+if (findings('self-test.rs', exactSqlxConstructorSelfTest).length !== 0) {
+  throw new Error('outbound XML detector rejected a literal passed to an exact SQLx constructor');
+}
+const queryLookalikeSelfTest = String.raw`
+fn bare() { query("<message>{body}</message>"); }
+fn fake() { fake_query("<message>{body}</message>"); }
+fn wire() { wire::query("<message>{body}</message>"); }
+fn xml() { XmlQueryBuilder::new("<message>{body}</message>"); }
+`;
+if (findings('self-test.rs', queryLookalikeSelfTest).length !== 4) {
+  throw new Error('outbound XML detector exempted a bare, fake, namespaced, or XML query lookalike');
+}
+const mixedSqlAndXmlSelfTest = String.raw`
+fn query() { sqlx::query(r#"WITH chosen AS (SELECT 1) SELECT * FROM chosen"#); }
+fn output() { format!("<message>{body}</message>"); }
+`;
+if (findings('self-test.rs', mixedSqlAndXmlSelfTest).length !== 1) {
+  throw new Error('outbound XML detector exempted a raw stanza merely because the file also contains SQL');
+}
+if (
+  findings(
+    'self-test.rs',
+    'fn builder() { XmlElement::namespaced("message", "jabber:client").finish(); }',
+  ).length !== 0
+) {
+  throw new Error('outbound XML detector rejected a structured XML builder');
 }
 const splitProductionSelfTest = `
 fn before() { format!("<iq/>"); }

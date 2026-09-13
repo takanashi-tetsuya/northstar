@@ -228,7 +228,11 @@ complete file membership and SHA-256 are checked before reuse. Different pairs
 retain independent CAs, every round has fresh application secrets, and the TLS
 identity checks still run. Database
 provisioning remains serial. Round cleanup uses at most four psql clients, capped
-by the effective CPU count, after worker shutdown attempts. Each recorded name
+by the effective CPU count, after worker shutdown attempts. Round cleanup first
+uses normal DROP, which lets PostgreSQL stop its autovacuum workers without
+requiring the fixture owner to signal them. Only a database-still-in-use result
+permits the existing FORCE backstop; both attempts share one 35-second drop
+budget. Permission, lock and other errors remain failures. Each recorded name
 is checked for fixture ownership before DROP and for absence afterwards; missing
 or malformed batch results retain the original cleanup list. The failure path
 retains the scoped FORCE backstop and records remaining cleanup debt. This does

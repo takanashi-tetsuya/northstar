@@ -60,9 +60,12 @@ def names_from_input(prefix, data):
     return names
 
 
-def query(sql, port):
+def query(sql, port, *, deadline=None):
     if STOP is not None:
         raise QueryFailed('cancelled')
+    deadline = time.monotonic() + 35 if deadline is None else deadline
+    if time.monotonic() >= deadline:
+        raise QueryFailed('client_deadline')
     environment = {k: v for k, v in os.environ.items() if not k.startswith('PG')}
     environment.update(PGPASSWORD='xmpp-test-password', PGCONNECT_TIMEOUT='5',
                        PGHOSTADDR='127.0.0.1',
@@ -73,7 +76,6 @@ def query(sql, port):
          '--set', 'ON_ERROR_STOP=1', '--set', 'VERBOSITY=sqlstate', '--command', sql],
         env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
-    deadline = time.monotonic() + 35
     try:
         while STOP is None and time.monotonic() < deadline:
             try:
@@ -113,7 +115,17 @@ def cleanup_one(name, port):
         if owner != 'owned':
             return phase
         phase = 'drop_failed'
-        query(f'DROP DATABASE "{name}" WITH (FORCE)', port)
+        # Normal DROP already lets PostgreSQL stop its autovacuum workers.
+        # FORCE can reject those workers with 42501 for this non-superuser
+        # fixture owner. Use it only for connections left after normal DROP,
+        # sharing the original 35-second drop budget across both commands.
+        drop_deadline = time.monotonic() + 35
+        try:
+            query(f'DROP DATABASE "{name}"', port, deadline=drop_deadline)
+        except QueryFailed as error:
+            if error.reason != 'psql_exit' or error.sqlstate != '55006':
+                raise
+            query(f'DROP DATABASE "{name}" WITH (FORCE)', port, deadline=drop_deadline)
         phase = 'postcheck_failed'
         exists = query(f"SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_database WHERE datname='{name}')", port)
         return 'dropped' if exists == 'f' else phase

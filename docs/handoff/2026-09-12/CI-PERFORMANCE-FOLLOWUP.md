@@ -875,3 +875,57 @@ heartbeat 失效相容，但失去 worker 日誌，不能證明它就是退出�
 確認根因。XML 分幀器已保存增量 cursor，不支持每次重新掃描整個
 1 MiB stanza 的猜測。正在使用修正版執行完整 4 CPU、5×50 Federation
 本機診斷；沒有增加 heartbeat／observer／認證期限或縮減遠端矩陣。
+
+## 2026-09-13：取消修正驗證與 autovacuum 清理回歸
+
+上述取消期間診斷修正已推送為 `ff6c444`。release preview
+`34733776103` 再次完成 10 success／3 tag-only skips，Windows x64、
+Linux x64 的下載後 fresh-runner 驗證及 Docker linux/amd64 預設
+entrypoint 驗證均成功。組裝 artifact `10311005202` 的 SHA-256 為
+`1f81075bd6782e8cb69caf9b86078218991176f548dad7b444865f14011d2e27`。
+正式 tag、GHCR 發佈和實際 draft Release 尚未建立。
+
+push `34733776036` 的 Federation `103662136537` 第一輪 observer
+先失敗：最後成功取樣 02:55:08.567826 UTC、100 runtime backends，
+最大 query age 1024.052 ms；02:55:14.051870 UTC 以 client query
+deadline 結束，之後才產生 parent_cancel marker。取消前的 host
+snapshot 仍有 100 server；all-live 至取消清理 8.855 秒，CPU 累積
+35.425 秒、沒有新增 idle ticks。初始 process scan 在 250 ms 上限
+截斷，不能用分組差值推定是哪一類程序耗盡 CPU。observer 共 378
+樣本，1 error、最大 5001.346 ms。PR `34733777217` 的 Federation
+`103662591382` 通過四輪後，第五輪發生同類 observer failure；1975
+樣本、6 errors、最大 5000.573 ms，仍有 100 server，9.622 秒內 CPU
+累積 38.413 秒。兩者 cleanup 均保留 exit 143、cleanup_ok=true、
+adopted_descendants_detected=false，已保留 12 份 bounded worker tails。
+這確認頂層取消清理修正生效，沒有證明 observer 逾時已修復。
+
+失敗附件 SHA-256 均已校驗：push `10309768400`／`10310317819`，
+PR `10311225222`／`10310841401`。壓測 supervisor 在直接子程序存活
+時不掃整個 procfs；Federation client 也已在 bounded startup slot 內
+完成 Python 初始化再加入 live barrier。這些既有機制不是待實作的修正。
+03:18 UTC 查詢時，push MIX `103662136555` 和 PR MIX `103662591357`
+仍在執行，兩邊其他 25 項前置工作均成功。
+
+本機預定 5×50 的診斷在第二輪 cleanup 失敗而結束，不能記為 5×50
+通過。前兩輪完整 business 均成功，workload 分別 617183.861／
+613611.357 ms；第二輪有一個自有 database 的 DROP 回報 SQLSTATE
+42501。最終 cleanup 已完成，driver 正確保留失敗；observer 3434
+樣本、peak 100、0 errors、最大 65.634 ms，wrapper 診斷檢查均成功。
+
+隔離 PG17 重現使用非 superuser 的 xmpp_test 作為 database owner，
+觀察到 autovacuum worker 後執行 cleanup：原有 FORCE 回報 42501
+（268.526 ms）；相同條件下一般 DROP 成功（286.912 ms）。因此 round
+cleanup 現在先使用一般 DROP，僅在 SQLSTATE 55006（仍被使用）時
+使用既有 FORCE 後備，兩次共用原本 35 秒 drop deadline。42501、
+lock timeout、取消或其他錯誤不觸發 FORCE，也沒有增加角色權限。
+owner／absence 驗證、四路並行上限、未清除資源的 ledger 均保持。
+
+13 項 cleanup 單元測試通過，涵蓋共用期限、期限耗盡不啟動新 psql、
+權限／其他錯誤不轉 FORCE。新增真實 PG17 回歸在原始 `ff6c444`
+cleanup 確實因 42501 失敗，修正版則可清除 autovacuum database、
+以 FORCE 清理仍存活的自有連線，並拒絕終止高權限外來連線。原有
+PG17 integration 將 xmpp_test 直接當 bootstrap superuser，無法
+撤銷 SUPERUSER；現在另設測試 bootstrap 身分，讓這項回歸能真正
+驗證 NOSUPERUSER。完整 14 項 observer／cleanup integration 通過。
+首次完整執行漏設本機 PG17 的 LD_LIBRARY_PATH 而失敗；補上 CI
+同樣的 libpq 路徑後，全部通過（91.168 秒），未改測試期限。

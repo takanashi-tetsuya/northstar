@@ -1,7 +1,7 @@
 # CI 耗時修復實作
 
-> 更新至 2026-09-13：PR #7 的兩組 CI 結果不一致，push 的 Federation
-> 再次出現 observer 逾時。最新 CPU 分配修正與驗證見文末。
+> 更新至 2026-09-13：`9bbc4a2` 的兩組 Federation 均在第一輪失敗，
+> CPU affinity 實驗已撤回。Upload 重送修正與新增診斷見文末。
 
 本文件接續 [耗時調查](CI-TIMING-INVESTIGATION.md)，記錄使用者要求繼續後的實作。
 基線為 `0c4ca9d9c442d94589620aee51fabaf66f4bfd03`。以下是工程紀錄，不新增操作授權。
@@ -1111,7 +1111,7 @@ subserver／architecture 檢查通過。新增實際回歸確認預備查詢能
 由維護者執行最後的 Publish release。
 
 
-## 2026-09-13：落實壓測 worker 的 CPU 預留
+## 2026-09-13：壓測 worker CPU 預留實驗（已撤回）
 
 `664ff89` 的 [push CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34749896516)
 在 Federation 第 7 輪失敗。Observer 查詢未能在 5 秒內收完整個回覆，
@@ -1127,7 +1127,7 @@ heavyweight lock 等待；較早 `761c569` 的 PR Federation 第 14 輪則捕捉
 排查共用 runner 的排程與資料庫競爭，尚不足以確定所有逾時的單一根因。
 
 原 `scheduler_reserved_cpus` 只參與 Tokio 執行緒數計算，100 個 server
-及 fixture helpers 仍可用滿四顆 CPU。現在於 worker session 啟動時套用
+及 fixture helpers 仍可用滿四顆 CPU。`9bbc4a2` 於 worker session 啟動時套用
 CPU affinity：四 CPU runner 的 worker 後代共用三顆，PostgreSQL、
 observer 與 parent 保留完整四顆；單 CPU 主機共用唯一 CPU。選擇依
 實際 inherited affinity 與 effective CPU budget 計算，日誌輸出
@@ -1147,5 +1147,50 @@ CPU affinity 不預留 cgroup quota，也不能隔離其他主機負載。
 lifecycle、6 項 CI performance contract 與 9 項 release gate 測試通過。
 
 同配置的 MIX 1×50 亦完整通過；observer 262 samples、peak 100、
-0 errors，最大 20.444 ms，wrapper 檢查全過。遠端新提交的
-完整 20×50 結果仍是此次修正的最終 CI 驗證。
+0 errors，最大 20.444 ms，wrapper 檢查全過。遠端結果未通過，見下節。
+
+
+## 2026-09-13：Upload 忙碌回應與控制連線傳輸診斷
+
+`9bbc4a2` 的 [push Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/34754851173/job/103718169041)
+與 [PR Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/34754853108/job/103718745213)
+均在第一輪 transport 屏障失敗。這次 observer、failure window、case map
+及清理驗證均成功，沒有因 observer 故障取消 driver。
+
+Push 的 runtime-control snapshot-read 停滯約 5 秒，PR 為 3.674 秒，
+加上此前未更新的 heartbeat，共超過原有 5 秒上限。Push pair 12/A
+的 backend 在前窗持續為 idle/ClientRead，query age 增長至 6.672 秒；
+不能據此認定是 SQL 執行或 heavyweight lock 阻塞，也不足以區分
+用戶端排程、送收資料與核心傳輸延遲。四 CPU、另加兩個有時限 CPU
+負載程序的本地 Federation 3×50 仍全部通過：834 samples、0 errors、
+peak 100，最大 61.934 ms。CPU affinity 未改善遠端失敗，因此撤回；
+worker 恢復繼承完整 affinity，原有啟動批次與執行緒限制不變。
+
+[PR 協定整合測試](https://github.com/takanashi-tetsuya/northstar/actions/runs/34754853108/job/103717398808)
+另在第一個 Upload 重送斷言失敗，原日誌沒有保留 HTTP 狀態碼。
+檢查發現測試直接要求 201，漏掉 claim API 的 `409 upload_in_progress`。
+修正只重試此明確錯誤碼，要求有效 `Retry-After`，所有嘗試共用十秒
+重試預算；401、其他 409、429、503、傳輸錯誤仍直接交給原斷言處理。
+
+本地在既有整合測試的首次成功下載後，持有相同 schema 的
+`upload_storage_capacity_ledger` row lock 兩秒。真實 HTTP 得到兩次
+busy 回應後，以相同 token/bytes 成功重送。完整整合測試、三次重送
+上限、不同 bytes 拒絕、BOSH、WebSocket 及清理均通過，使用既有
+`runtime-test` binary 和私有 PostgreSQL 連接埠。另有七項快速回歸
+涵蓋錯誤分類、Retry-After、單一預算及逾時後不得新增請求。
+
+Observer 現在保留自身連線的 Linux TCP_INFO 數值，包括重傳次數、
+RTO、RTT、未確認封包和最近送收時間；失敗查詢也留下最後快照。
+Phase boundary 同時記錄主機 TCP timeout/retransmit/drop 累積數。
+沒有新增連線、背景採樣程序或封包內容，也不改變查詢與失敗期限。
+49 項 observer 單元測試及 16 項真實 PG17 回歸通過。
+
+| 證據 | Artifact ID | SHA-256 |
+| --- | --- | --- |
+| push 業務診斷 | 10317440977 | `442bbb119e4596126631d8805a0d689ef183879b612aec7d235347df0c84c910` |
+| push observer | 10317191400 | `2353c0775fb155064acb069cf2eaf2c289192cbb2ef47c7ab7c97e75ab069e79` |
+| PR 業務診斷 | 10317226671 | `b2cdde1a946de84efe9190e0470c89bb515e3c935e66babb964741ca2e256dc3` |
+| PR observer | 10317161845 | `2841075c4b970d3275e34f27db00d4070264be0b9ad45bf73ad8da26900fa10a` |
+
+[發佈預演](https://github.com/takanashi-tetsuya/northstar/actions/runs/34754851172)
+完成 10 success／3 tag-only skips。完整 CI 尚未全綠，不能據此建立正式標籤。

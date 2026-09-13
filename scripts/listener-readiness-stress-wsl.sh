@@ -134,12 +134,11 @@ effective_cpu_count() {
 # unchanged.  Passing the value explicitly also prevents an ambient shell
 # setting from silently changing the matrix's resource contract.
 effective_cpu_count="$(effective_cpu_count)"
-workload_cpu_set="$(python3 "$project_dir/scripts/listener-stress-phases.py" --workload-cpus "$effective_cpu_count")"
 database_cleanup_jobs=$effective_cpu_count
 ((database_cleanup_jobs >= 1)) || database_cleanup_jobs=1
 ((database_cleanup_jobs <= 4)) || database_cleanup_jobs=4
 startup_pair_limit="$(python3 "$project_dir/scripts/listener-stress-phases.py" --startup-pair-concurrency "$effective_cpu_count" "$pairs")"
-readonly scheduler_reserved_cpus=$((effective_cpu_count > 1 ? (effective_cpu_count + 3) / 4 : 0))
+readonly scheduler_reserved_cpus=$(((effective_cpu_count + 3) / 4))
 available_scheduler_cpus=$((effective_cpu_count - scheduler_reserved_cpus))
 ((available_scheduler_cpus >= 1)) || available_scheduler_cpus=1
 derived_tokio_worker_threads=$((available_scheduler_cpus / stress_child_count))
@@ -391,6 +390,22 @@ for category in ("cpu", "memory", "io"):
         result[f"{category}_pressure_errno"] = error.errno
 result["cgroup_memory_events"] = numeric_fields("/sys/fs/cgroup/memory.events", {"low", "high", "max", "oom", "oom_kill", "oom_group_kill"})
 result["cgroup_cpu_stat"] = numeric_fields("/sys/fs/cgroup/cpu.stat", {"usage_usec", "user_usec", "system_usec", "nr_periods", "nr_throttled", "throttled_usec"})
+# Compare cumulative TCP counters across the same live cohort. No endpoints
+# or packet contents are retained.
+for path, prefix, allowed in (
+    ("/proc/net/snmp", "Tcp:", {"CurrEstab", "InSegs", "OutSegs", "RetransSegs", "InErrs", "OutRsts"}),
+    ("/proc/net/netstat", "TcpExt:", {"TCPTimeouts", "TCPSpuriousRTOs", "TCPFastRetrans", "TCPSynRetrans", "TCPLossProbes", "TCPBacklogDrop", "TCPRcvQDrop", "TCPMemoryPressures", "ListenOverflows", "ListenDrops"}),
+):
+    try:
+        with Path(path).open() as stream:
+            rows = [line.split() for line in stream.read(65536).splitlines() if line.startswith(prefix)]
+        if len(rows) != 2 or len(rows[0]) != len(rows[1]):
+            result[prefix[:-1]] = {"invalid_shape": True}
+        else:
+            result[prefix[:-1]] = {key: int(value) for key, value in zip(rows[0][1:], rows[1][1:])
+                                   if key in allowed and value.isdecimal()}
+    except OSError as error:
+        result[prefix[:-1]] = {"read_errno": error.errno}
 # Attribute a CPU burst without collecting process arguments, environment,
 # database names, or command text. These cumulative totals can be compared
 # across phase boundaries while the same 100 servers remain live. Counts and
@@ -1558,10 +1573,7 @@ start_stress_worker() {
   fi
   control_file="$runtime_dir/${fixture}.round-${round}.pair-${pair}.session"
   rm -f -- "$control_file"
-  # Apply the CPU budget before any fixture helper or server starts. PostgreSQL
-  # and the observer run outside these sessions and retain the full CPU set.
-  setsid taskset --cpu-list "$workload_cpu_set" \
-    bash "$project_dir/scripts/lib/test-listener-stress-worker.sh" "$control_file" \
+  setsid bash "$project_dir/scripts/lib/test-listener-stress-worker.sh" "$control_file" \
     env \
       "$skip_variable=true" \
       "NORTHSTAR_LISTENER_STRESS_DATABASE_A=$database_a" \
@@ -1668,12 +1680,6 @@ if ! command -v setsid >/dev/null; then
   parent_failure_phase=preflight-setsid
   record_parent_diagnostic "phase=preflight-setsid status=missing_command"
   echo "listener stress requires setsid for private worker groups" >&2
-  exit 2
-fi
-if ! command -v taskset >/dev/null; then
-  parent_failure_phase=preflight-taskset
-  record_parent_diagnostic "phase=preflight-taskset status=missing_command"
-  echo "listener stress requires taskset for its worker CPU budget" >&2
   exit 2
 fi
 if ! command -v ps >/dev/null; then
@@ -1833,8 +1839,8 @@ parent_stage_end 0
 load_runtime_connection_budget
 assert_private_database_fixture
 assert_fixture_connection_capacity
-record_parent_diagnostic "phase=preflight-resource-profile status=selected profile=$resource_profile effective_cpu_count=$effective_cpu_count workload_cpu_set=$workload_cpu_set tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count fixture_max_connections=$fixture_actual_max_connections startup_pair_limit=$startup_pair_limit"
-echo "listener stress profile: resource_profile=$resource_profile worker_timeout_seconds=$worker_timeout_seconds database_max_connections=$database_max_connections database_min_connections=$database_min_connections runtime_auxiliary_connections=$runtime_auxiliary_connections runtime_connections_per_child=$runtime_connections_per_child stress_child_count=$stress_child_count fixture_control_connections_per_pair=$fixture_control_connections_per_pair fixture_control_connections=$fixture_control_connections observer_connections=$observer_connections required_fixture_connections=$required_fixture_connections fixture_max_connections=$fixture_actual_max_connections effective_cpu_count=$effective_cpu_count scheduler_reserved_cpus=$scheduler_reserved_cpus workload_cpu_set=$workload_cpu_set tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count startup_pair_limit=$startup_pair_limit"
+record_parent_diagnostic "phase=preflight-resource-profile status=selected profile=$resource_profile effective_cpu_count=$effective_cpu_count tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count fixture_max_connections=$fixture_actual_max_connections startup_pair_limit=$startup_pair_limit"
+echo "listener stress profile: resource_profile=$resource_profile worker_timeout_seconds=$worker_timeout_seconds database_max_connections=$database_max_connections database_min_connections=$database_min_connections runtime_auxiliary_connections=$runtime_auxiliary_connections runtime_connections_per_child=$runtime_connections_per_child stress_child_count=$stress_child_count fixture_control_connections_per_pair=$fixture_control_connections_per_pair fixture_control_connections=$fixture_control_connections observer_connections=$observer_connections required_fixture_connections=$required_fixture_connections fixture_max_connections=$fixture_actual_max_connections effective_cpu_count=$effective_cpu_count scheduler_reserved_cpus=$scheduler_reserved_cpus tokio_worker_threads=$tokio_worker_threads login_slot_count=$login_slot_count startup_pair_limit=$startup_pair_limit"
 if ! initialize_mix_federation_login_slots; then
   [[ -n "$parent_failure_phase" ]] || parent_failure_phase=mix-federation-login-slots
   record_parent_diagnostic "phase=mix-federation-login-slots status=failed"

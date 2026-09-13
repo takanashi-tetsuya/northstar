@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -356,6 +358,50 @@ class PublicationTests(unittest.TestCase):
 
 
 class LibpqTests(unittest.TestCase):
+    def test_tcp_info_reads_only_counters_and_preserves_the_connection(self):
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen(1)
+            with socket.create_connection(listener.getsockname()) as client:
+                server, _ = listener.accept()
+                with server:
+                    client.setblocking(False)
+                    connection = object.__new__(m.Libpq)
+                    connection.conn = 1
+                    connection.lib = mock.Mock(PQsocket=lambda _: client.fileno())
+                    info = connection.tcp_info()
+                    self.assertEqual(info['state'], 1)
+                    self.assertEqual(set(info), {'state', 'retransmits', 'backoff', 'rto_us',
+                        'unacked', 'lost', 'retrans', 'last_data_sent_ms', 'last_data_recv_ms',
+                        'last_ack_recv_ms', 'rtt_us', 'total_retrans'})
+                    self.assertTrue(all(type(value) is int and 0 <= value < 2**32 for value in info.values()))
+                    self.assertFalse(os.get_blocking(client.fileno()))
+                    client.sendall(b'connection-still-owned')
+                    self.assertEqual(server.recv(64), b'connection-still-owned')
+
+    def test_tcp_info_layout_and_unavailable_socket(self):
+        connection = object.__new__(m.Libpq)
+        connection.conn = 1
+        connection.lib = mock.Mock(PQsocket=lambda _: -1)
+        self.assertTrue(connection.tcp_info()['unavailable'])
+        with mock.patch.object(m.socket, 'fromfd') as fromfd:
+            fromfd.return_value.__enter__.return_value.getsockopt.return_value = (
+                bytes([1, 0, 2, 0, 3, 0, 0, 0]) + struct.pack('=24I', *range(24)))
+            info = connection.tcp_info()
+        self.assertEqual((info['retransmits'], info['backoff'], info['rto_us']), (2, 3, 0))
+        self.assertEqual((info['last_data_sent_ms'], info['last_data_recv_ms'], info['last_ack_recv_ms']), (9, 11, 12))
+        self.assertEqual((info['rtt_us'], info['total_retrans']), (15, 23))
+
+    def test_failed_query_retains_transport_snapshot_without_changing_error(self):
+        connection = object.__new__(m.Libpq)
+        connection.tcp_info = lambda: {'state': 1, 'total_retrans': 7}
+        failure = m.ObserverError('client_query_deadline')
+        connection._query = mock.Mock(side_effect=failure)
+        with self.assertRaises(m.ObserverError) as raised:
+            connection.query('fixed test query')
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(connection.last_tcp_info, {'state': 1, 'total_retrans': 7})
+
     def connection(self, library):
         connection = m.Libpq.__new__(m.Libpq)
         connection.conn = 7

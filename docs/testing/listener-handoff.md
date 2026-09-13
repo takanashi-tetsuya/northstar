@@ -5,16 +5,16 @@ The child Northstar process owns the socket: fixtures configure loopback `:0`
 addresses, pass a one-time nonce and an empty readiness-file destination, then
 wait for the child to atomically publish its actual addresses.
 
-For listener stress tests, the parent also assigns a CPU set to each worker
-session. All fixture helpers and server descendants inherit it. On a four-CPU
-runner, workers share three CPUs; PostgreSQL, the observer and the parent retain
-access to all four. The driver reports the assigned set as `workload_cpu_set`.
-On a single-CPU host, every process shares that CPU.
+Listener stress workers inherit the runner's CPU affinity. The CPU budget
+limits Tokio thread counts and startup concurrency; it does not reserve a
+physical CPU. All 100 servers reach the live barrier before protocol work.
+Readiness, worker and heartbeat deadlines remain enforced.
 
-This allocation applies to the full matrix: all 100 servers still reach the
-live barrier before protocol work starts. Readiness, worker and heartbeat
-deadlines remain part of the test. CPU affinity does not reserve cgroup quota
-or guarantee latency under unrelated host load.
+Observer samples include numeric Linux TCP counters for their own connection.
+The final summary retains the last counters, including after a query timeout.
+Phase diagnostics also record host TCP retransmissions, timeouts and drops.
+These counters contain no endpoints or packet contents and do not determine
+whether the workload passed.
 
 Several active fixture listeners may request `:0` on the same loopback address.
 Each request is a separate kernel allocation rather than an attempt to share a

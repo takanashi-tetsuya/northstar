@@ -16,7 +16,9 @@ import re
 import resource
 import select
 import signal
+import socket
 import stat
+import struct
 import sys
 import tempfile
 import time
@@ -296,6 +298,27 @@ class Libpq:
         return 'EXECUTE northstar_control_observer_sample'
 
     def query(self, sql, validator=None, *, command=False):
+        try:
+            return self._query(sql, validator, command=command)
+        finally:
+            self.last_tcp_info = self.tcp_info()
+
+    def tcp_info(self):
+        """Read Linux transport counters without addresses or packet contents."""
+        try:
+            fd = self.lib.PQsocket(self.conn)
+            with socket.fromfd(fd, socket.AF_INET, socket.SOCK_STREAM) as stream:
+                raw = stream.getsockopt(socket.IPPROTO_TCP, socket.TCP_INFO, 104)
+            values = struct.unpack('=24I', raw[8:104])
+            return {'state': raw[0], 'retransmits': raw[2], 'backoff': raw[4],
+                    'rto_us': values[0], 'unacked': values[4], 'lost': values[6],
+                    'retrans': values[7], 'last_data_sent_ms': values[9],
+                    'last_data_recv_ms': values[11], 'last_ack_recv_ms': values[12],
+                    'rtt_us': values[15], 'total_retrans': values[23]}
+        except (OSError, AttributeError, TypeError, ValueError, struct.error) as error:
+            return {'unavailable': True, 'errno': getattr(error, 'errno', None)}
+
+    def _query(self, sql, validator=None, *, command=False):
         if self.lib.PQsendQuery(self.conn, sql.encode('ascii')) != 1:
             raise ObserverError('query_send_failed')
         deadline = time.monotonic() + 3.0
@@ -557,14 +580,15 @@ class Evidence:
                 self.write(record)
                 self.observer_context_samples += 1
 
-    def sample(self, sample, now, duration_ms):
+    def sample(self, sample, now, duration_ms, tcp_info=None):
         validate_sample(sample)
         self.starting_observations += sum(row['state'] is None for row in sample['rows'])
         self.seq += 1
         self.sample_count += 1
         self.peak = max(self.peak, sample['total'])
         data = encoded({'type': 'sample', 'seq': self.seq, 'monotonic': round(now, 6),
-                        'sample_duration_ms': round(duration_ms, 3), **sample})
+                        'sample_duration_ms': round(duration_ms, 3), **sample,
+                        'observer_tcp': tcp_info})
         self.ring.append((now, self.seq, data))
         self.ring_bytes += len(data)
         while self.ring and (now - self.ring[0][0] > PRE_SECONDS or self.ring_bytes > self.ring_limit):
@@ -701,7 +725,7 @@ def main():
                 # Poll before appending/evicting the ring, including when a
                 # marker was published while libpq waited for a response.
                 capture_marker()
-                evidence.sample(sample, end, duration_ms)
+                evidence.sample(sample, end, duration_ms, getattr(connection, 'last_tcp_info', None))
                 recovered_errors += consecutive_errors
                 consecutive_errors = 0
                 if evidence.sample_count == 1:
@@ -731,6 +755,7 @@ def main():
     except (OSError, MemoryError, ValueError, TypeError, KeyError, AttributeError):
         final_code = 'observer_internal_or_resource_failure'
     finally:
+        last_tcp_info = getattr(connection, 'last_tcp_info', None)
         if connection:
             connection.close()
         # A signal during the last query can coincide with first failure. Only
@@ -772,6 +797,7 @@ def main():
             'ring_byte_evictions': evidence.ring_byte_evictions, 'sample_errors': errors,
             'recovered_sample_errors': recovered_errors, 'consecutive_sample_errors': consecutive_errors,
             'last_sample_error_code': last_sample_error, 'last_sample_sqlstate': last_sample_sqlstate,
+            'observer_tcp_last': last_tcp_info,
             'error_code': final_code, 'sqlstate': sqlstate,
             'truncated': bool(evidence.ring_byte_evictions or evidence.pre_window_truncated or final_code in
                 {'evidence_byte_limit', 'sample_byte_limit', 'backend_row_limit', 'blocking_pid_limit'}),

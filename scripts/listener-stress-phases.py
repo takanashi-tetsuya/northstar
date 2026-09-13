@@ -41,15 +41,6 @@ def startup_pair_concurrency(cpus: int, pairs: int) -> int:
     return min(pairs, max(1, cpus // 2), 4)
 
 
-def workload_cpus(allowed: set[int], effective_cpus: int) -> list[int]:
-    """Leave part of the runner's CPU set available to PostgreSQL and observers."""
-    if (not allowed or any(type(cpu) is not int or cpu < 0 for cpu in allowed)
-            or type(effective_cpus) is not int or not 1 <= effective_cpus <= len(allowed)):
-        raise ValueError("workload CPU budget must fit the inherited affinity")
-    count = max(1, effective_cpus - (effective_cpus + 3) // 4)
-    return sorted(allowed)[:count]
-
-
 def process_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -333,9 +324,6 @@ def wait_for_fixture_phase(phase: str, child_pids: tuple[int, ...] = ()) -> None
 
 
 def main(argv: list[str]) -> None:
-    if len(argv) == 2 and argv[0] == "--workload-cpus":
-        print(",".join(map(str, workload_cpus(os.sched_getaffinity(0), positive(argv[1])))))
-        return
     if len(argv) == 3 and argv[0] == "--startup-pair-concurrency":
         print(startup_pair_concurrency(positive(argv[1]), positive(argv[2])))
         return

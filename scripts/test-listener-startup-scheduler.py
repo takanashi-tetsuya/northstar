@@ -3,11 +3,8 @@
 
 from contextlib import ExitStack
 import importlib.util
-import json
 import os
 from pathlib import Path
-import re
-import shlex
 import subprocess
 import sys
 import tempfile
@@ -99,63 +96,6 @@ class SchedulerFixture:
 
 
 class StartupBudgetTests(unittest.TestCase):
-    def test_workload_affinity_reserves_capacity_and_handles_sparse_cpu_sets(self):
-        for allowed, effective, expected in (
-            ({7}, 1, [7]), ({2, 4}, 2, [2]),
-            ({2, 4, 6, 8}, 4, [2, 4, 6]),
-            (set(range(8)), 8, list(range(6))),
-            (set(range(16)), 4, [0, 1, 2]),
-        ):
-            with self.subTest(allowed=allowed, effective=effective):
-                self.assertEqual(phases.workload_cpus(allowed, effective), expected)
-        for allowed, effective in ((set(), 1), ({-1}, 1), ({True}, 1),
-                                   ({1}, 2), ({1}, 0), ({1}, True)):
-            with self.subTest(allowed=allowed, effective=effective):
-                with self.assertRaises(ValueError):
-                    phases.workload_cpus(allowed, effective)
-
-    def test_real_worker_and_descendants_inherit_affinity_without_pinning_parent(self):
-        allowed = os.sched_getaffinity(0)
-        cpus = phases.workload_cpus(allowed, min(4, len(allowed)))
-        source = (ROOT / "listener-readiness-stress-wsl.sh").read_text()
-        function = re.search(r"^start_stress_worker\(\) \{\n.*?^\}$", source, re.M | re.S)
-        self.assertIsNotNone(function)
-        with tempfile.TemporaryDirectory(prefix="northstar-cpu-affinity.") as raw:
-            directory = Path(raw)
-            script = directory / "fixture.sh"
-            script.write_text(
-                "#!/bin/bash\npython3 - <<'PY'\n"
-                "import json,os,subprocess,sys\n"
-                "child=subprocess.check_output([sys.executable,'-c',"
-                "'import json,os;print(json.dumps(sorted(os.sched_getaffinity(0))))'],text=True)\n"
-                f"with open({str(directory / 'result.json')!r},'w') as output:\n"
-                " json.dump([sorted(os.sched_getaffinity(0)),json.loads(child)],output)\nPY\n"
-            )
-            setup = {
-                "project_dir": str(ROOT.parent), "runtime_dir": str(directory),
-                "fixture_script": str(script), "fixture": "federation",
-                "fixture_cargo_profile": "runtime-test", "startup_phase_dir": str(directory),
-                "startup_phase_nonce": "a" * 64, "mix_login_slot_dir": str(directory),
-                "login_slot_count": "1", "skip_variable": "FEDERATION_SKIP_BUILD",
-                "database_fixture_host": "127.0.0.1", "database_fixture_port": "5432",
-                "database_prefix": "northstar_cpu_test", "database_max_connections": "2",
-                "database_min_connections": "0", "tokio_worker_threads": "1",
-                "worker_timeout_seconds": "15", "workload_cpu_set": ",".join(map(str, cpus)),
-            }
-            commands = ["set -euo pipefail", "declare -a workers=() worker_groups=()"]
-            commands.extend(f"{key}={shlex.quote(value)}" for key, value in setup.items())
-            commands += [
-                "private_database_name_is_valid() { return 0; }",
-                'wait_for_worker_group() { printf "%s\\n" "$2"; }', function.group(),
-                'start_stress_worker 1 1 "$runtime_dir/worker.log" case_a case_b',
-                'wait "${workers[0]}"',
-            ]
-            result = subprocess.run(["bash", "-c", "\n".join(commands)],
-                                    text=True, capture_output=True, timeout=20)
-            self.assertEqual(result.returncode, 0, result.stderr + (directory / "worker.log").read_text())
-            self.assertEqual(json.loads((directory / "result.json").read_text()), [cpus, cpus])
-            self.assertEqual(os.sched_getaffinity(0), allowed)
-
     def test_cpu_tiers_cap_cold_start_pairs_without_reducing_total_pairs(self):
         for cpus, pairs, expected in (
             (1, 50, 1), (2, 50, 1), (3, 50, 1), (4, 50, 2),

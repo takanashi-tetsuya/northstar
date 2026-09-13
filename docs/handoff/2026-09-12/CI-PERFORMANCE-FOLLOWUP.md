@@ -606,3 +606,406 @@ scan 前加入 1.1 秒排程延遲，舊案例第二次重現同樣失敗，stde
 `b5a3b9d` 的 [MIX 103608673765](https://github.com/takanashi-tetsuya/northstar/actions/runs/34714000982/job/103608673765)
 完整 20×50 於 UTC 21:02:48 通過，observer、diagnostic、map、cleanup
 均成功；其 Federation 已知 cleanup failure 仍使整體 CI 失敗。
+
+## 首次 main 合約基準與過期開發 CI（UTC 22:43）
+
+`f6c5f97` 的 [PR CI 34719096726](https://github.com/takanashi-tetsuya/northstar/actions/runs/34719096726)
+完整通過 28 個必要工作，4 個 scheduled-only 工作預期跳過；Federation
+及 MIX 均完成全部 20×50，observer／diagnostic／map／cleanup 成功。
+[Release preview 34719094253](https://github.com/takanashi-tetsuya/northstar/actions/runs/34719094253)
+亦通過全部 10 個適用工作，3 個 tag-only 工作預期跳過。fresh Linux、
+Windows 及預設 UID 10001:10001 的 app image 均通過 PG17.11 startup、
+migration、readiness 與 web assets 驗證。這是 preview，尚未發布 GHCR、
+產生 tag-only attestations 或建立真正的 draft Release。
+
+[PR #2](https://github.com/takanashi-tetsuya/northstar/pull/2) 已 squash 合併
+到 `dev` 的 `ee407bf5a1aad5c972344a430f9ba1074048dbea`。GitHub 回報簽章
+有效，檔案樹與 `f6c5f97` 完全相同。新的 dev push
+[34722721446](https://github.com/takanashi-tetsuya/northstar/actions/runs/34722721446)
+尚在壓測。[PR #3](https://github.com/takanashi-tetsuya/northstar/pull/3) 是
+dev → main 的草稿，尚未合併。舊 f6 push 的
+[Federation 103622681943](https://github.com/takanashi-tetsuya/northstar/actions/runs/34719094174/job/103622681943)
+也於 22:37:35 完成全部 20×50 且 wrapper 全過；同一 push 的 MIX 此時仍在執行。
+上述證據不能替代最後 main 提交自己的完整 CI。
+
+PR #3 的 [Contract compatibility 103631528906](https://github.com/takanashi-tetsuya/northstar/actions/runs/34722769749/job/103631528906)
+確定失敗於 resolver：舊 main `894f5e276d95418a722dca7c6900964453cf7165`
+沒有 `contracts/proto`，其歷史也沒有 Protobuf 合約。現在分離首次加入
+與既有比較：既有 module 繼續使用精確 event SHA 跑 Buf `FILE` breaking；
+首次加入必須證明 checkout 完整、baseline 為 HEAD 祖先，而且 baseline
+完整歷史沒有 module 或任何 `.proto`。不接受被刪除／搬移的舊合約、
+shallow history、未知 SHA、錯誤 HEAD 或不存在／非目錄的 current module。
+Buf 1.50.0 實測拒絕 empty image，因此首次加入執行真正的 `buf build`；
+另一個必要 job 繼續執行 format、lint、generated-code drift。
+
+新的 real-Buf 回歸在隔離 Git fixture 驗證：首次加入與相容欄位新增成功，
+無效首次合約、既有欄位型別變更、刪除 message 及刪除 module 必須失敗；
+resolver 另驗證歷史／SHA／路徑負例。實際 ee407bf → 舊 main 的首次加入、
+ee407bf → 合併前 dev 的既有比較均成功。Buf binary 1.50.0 來自官方 release，
+並以同一 release 的 SHA256 manifest 校驗。
+
+本次同時套用先前暫存的排程改善：同一 PR、同一 `codex/*` push 只保留
+最新 CI；`codex/release-*` 的新 push 可取消同分支舊 preview。main/dev、
+tag、scheduled、manual CI 保留各自 run ID；tag release 仍依 tag 序列化
+且不自動取消，manual preview 使用獨立 run ID。這不會追溯取消採用舊
+group 的既有 run，不改任何必要工作、20×50／100×50 或失敗判準。
+六項 CI performance 檢查含實際 workflow expression 的 event/ref 回歸，
+release gates、aggregate coverage、actionlint、文件一致性與 diff 檢查通過。
+
+### 未解決診斷與外部準備
+
+`f62e689` 的舊 [Federation 103621410483](https://github.com/takanashi-tetsuya/northstar/actions/runs/34718313625/job/103621410483)
+前 11 輪通過，第 12 輪因 observer client query 超過 5000.37 ms 而取消。
+all-live 至失敗 8.396 秒使用約 4.00 CPU cores，最後有效觀察為 100 個
+idle／ClientRead，無 SQLSTATE。all-live 分組被截斷，不能據此判定
+PostgreSQL 或 server 的 CPU 占比；根因仍未證實，同一 run 的 MIX 全過。
+
+更正之前本機「4 CPU」描述：早期 helper 在啟動 PostgreSQL 之後才限制
+Python affinity，PostgreSQL 仍可用主機的 16 CPU；這些結果不能當成整個
+fixture 共用 4 CPU 的容量證據。新的 transport-only probe 在最外層
+`taskset -c 0-3`，確認 driver 和 postmaster 都只有這四顆 CPU。全部
+50 pairs 完成四組原始 transport probes，observer 394 樣本、peak 100、
+0 errors、最大 186.06 ms；但 pair 29 cleanup 的 port-number-only
+listener 檢查失敗，因此整個 probe **未通過**。在 barrier 前後完整快照
+之間的 15.114 秒，持續存在的 server／PG／Python 分別累積
+8.71／7.72／4.84 CPU 秒；不包含快照間已退出的短命子程序。
+未重現遠端 observer deadline，沒有據此放寬 deadline 或減少 probe。
+
+main/dev 仍待啟用實際 rulesets，tag 簽署識別資訊與瀏覽器 GitHub 登入
+仍待使用者提供。三個 GHCR 名稱的 anonymous token 請求均為 DENIED，
+無法區分尚不存在或 private；正式流程仍須完成 public digest pulls。
+尚未建立 `v0.2.0` tag，也未發布 GitHub Release。
+
+## 2026-09-12 23:32 UTC：發佈預覽通過、排隊期限與啟動成本修正
+
+`f6c5f97` 的 push `34719094174` 最終也完成 28 success／4 expected skips，
+兩項 20×50 均通過；同 tree 的 dev／新提交仍須各自驗證。
+`916e863` 的 [release preview 34723553326](https://github.com/takanashi-tetsuya/northstar/actions/runs/34723553326)
+完成 10 success／3 tag-only skips。實際下載的 Windows／Linux artifact
+分別以 SHA-256 `e719ffd7ef8326e2a457f51ee832350cd77136064ed714675bf62f711a621ec0`、
+`8906f8897e8c237a0dfef04523236c17e4c9ac8b3f6a7e6b14dc006d6166bce1` 校驗，
+並核對 package manifest、commit／version identity 與 raw/archive binary。
+Linux 實際執行通過；Windows 在本機僅做 PE import／內容檢查，其實際
+執行證據來自 fresh Windows runner。Windows／Linux fresh PG17.11 startup、
+migration、readiness、web assets 均通過，分別 7922／1563.831 ms；Docker
+app 的預設 entrypoint 同樣通過，3749.994 ms。組裝 artifact `10307781399`
+成功；preview 未執行 signed-tag qualification、GHCR publication 或建立 draft。
+
+`916e863` 的 PR [Federation 103635412668](https://github.com/takanashi-tetsuya/northstar/actions/runs/34723573535/job/103635412668)
+前 5 輪通過，第 6 輪 pair 49 在 B 的共用 15 秒 HTTP readiness 期限失敗。
+A／B 都已發布 nonce record；B 從首個 startup phase 至 record 為 13.739 秒，
+接著 HTTP transport timeout。A 曾回覆 persistence authority probe timed out。
+Observer 2991 樣本、peak 100、5 次 SQLSTATE 57014 全恢復、最大 4378.41 ms，
+wrapper 的 observer／cleanup／diagnostic／marker／map／bounds 全部通過。
+附件 `10307238348`／`10307323057` 已以各自 GitHub SHA-256 驗證；不能把這次
+失敗歸為 observer client deadline，也尚未證明下述 CPU 修正能解決遠端問題。
+舊 PR #3 的 MIX `103633629199` 另在 round 3 pair 49／50 的 A 尚未發布
+nonce record 時逾時；前 2 輪成功，observer 健康。
+
+dev `ee407bf` 的 [Federation 103632600732](https://github.com/takanashi-tetsuya/northstar/actions/runs/34722721446/job/103632600732)
+則在前 14 輪通過後，第 15 輪遭 observer client_query_deadline 取消。
+6655 樣本、peak 100，11 次 sample errors 中 10 次恢復，最後查詢
+5000.264 ms。all-live 至 failure-before-cleanup 7.310 秒平均 3.985 CPU
+cores、idle ticks 沒有增加；all-live 分組仍遭截斷，不能歸因到某類程序。
+兩份附件 `10306879518`／`10307044028` 已通過 GitHub SHA-256 校驗。
+這是另一種失敗，並非上述 pair 49 HTTP readiness 問題。
+
+新的本機完整 MIX 1×50 診斷在最外層限制 PostgreSQL 與 driver 共用 CPU
+0–3。原始 `916e863` 啟動成功（最後 batch 8638.447 ms），但 12 pairs 在
+`finish()` 的第一次訊息檢查前便耗盡 150 秒。程式將等待共享認證 lane
+也計入 recovery budget，違反其他認證階段既有的 admission／I/O 分工。
+現在取得 lane 後、認證開始前才建立 recovery deadline，認證與四個
+配送事件仍共用原本 150 秒，等待 lane 仍受原本 900 秒 worker 監督。
+新增回歸模擬 200 秒排隊，確認四次認證消耗 20 秒、四個事件依序只剩
+130／120／110／100 秒；用 `916e863` 原始 finish 跑同一測試確實失敗。
+原始診斷 observer 1016 樣本、peak 100、0 errors、最大 66.878 ms；
+wrapper cleanup 與所有診斷檢查通過，整個 business fixture **未通過**。
+
+Phase helper 現在以一次即時 `/proc/<pid>/stat` 讀取同時驗證存活狀態與
+birth time，仍做 signal permission probe、zombie／PID reuse／ancestry／
+nonce 檢查，每次重新讀取，不快取 identity，也不改 25 ms 輪詢。
+100 個自有子程序、100 次 50-pair live 檢查，3 組交替微型量測的平均
+CPU 由 0.87823 降至 0.65794 秒（25.08%）；這不是整個 fixture 的改善幅度。
+新增消失的 proc record、permission denied、真實未 reap zombie 負例。
+23 startup scheduler、31 phase、37 MIX coordination 測試通過，文件一致性
+通過。修正版完整 1×50 MIX 在 23:41 UTC 通過：最後 batch 啟動
+8794.407 ms、業務 481485.209 ms、清理 6839.113 ms；observer 1303 樣本、
+peak 100、0 errors、最大 21.033 ms，wrapper 全部成功且無 adopted descendants。
+本機修正前失敗、修正後通過仍不替代新提交遠端兩項完整 20×50。
+
+本機早期 HTTP 1 秒自測曾因 loopback 建連耗時失敗；在清理壓測並允許
+自有 socket 的執行環境中，未改期限即可通過。沒有將此環境差異當成
+遠端 readiness 的已知根因。GitHub 設定頁仍停在登入畫面，main/dev
+rulesets、tag signing identifier 和正式 GHCR anonymous pull 尚待完成。
+
+## 2026-09-13：Federation 連線排隊與真實 keepalive 驗證
+
+`3b1c099` 的 [release preview 34726110875](https://github.com/takanashi-tetsuya/northstar/actions/runs/34726110875)
+完成 10 success／3 tag-only skips。Windows／Linux fresh runner 的 PG17.11
+startup、migration、readiness、web assets 均通過，分別 4719／1325.762 ms；
+Docker app 預設 entrypoint 同樣通過，4258.439 ms，linux/amd64、10001:10001。
+兩個 native build 都命中同分支共享 cache；Linux 還原 394 MiB 約 6 秒，
+其後 workspace rebuild 6m11s，伺服器本體約 6m04s。Windows build 10m37s。
+這批 compiler cache 已運作，但不能消除專案程式重新編譯；preview 沒有
+正式 tag qualification、GHCR publication 或 actual draft Release。
+
+舊 dev `ee407bf` push 的 MIX `103632600650` 最後通過完整 20×50；舊 PR #3
+的 Federation `103633629151` 也通過完整 20×50。但它們各自 workflow
+還有其他必要工作失敗，不能視為全部 CI 通過。`3b1c099` 的 push
+`34726111044` 和 PR `34726112193` 此時均為 25 success／4 skips，兩項
+20×50 在 2026-09-13 00:40 UTC 查詢時尚在執行。
+
+本機 `3b1c099` 的完整 4 CPU、1×50 Federation 診斷啟動與四组 transport
+斷言通過，observer 1100 樣本、peak 100、0 errors、最大 74.89 ms，
+但整體失敗。保留的 6 份業務失敗中，3 份在 `initial-roster-a` 收到
+policy-violation／close，另 3 份在 `fed-a-b` 遇到同樣關閉。第一種是在
+Alice 已連線後仍排隊註冊／連接 Bob；其中一對 Alice／Bob 的 authentication
+記錄相差約 409 秒。第二種是在新 Carbon client 的認證名額排隊期間，
+既有 Alice／Bob 超過 300 秒閒置限制。另 pair 16 的業務全過但 cleanup
+報告 port 41489 仍在 LISTEN；稍後唯讀 `ss` 已看不到該埠，尚不能判定
+是重用或其他原因，沒有改動 listener cleanup 判準。wrapper 的診斷與
+清理檢查本身皆成功，並不表示 fixture business／listener assertions 成功。
+
+此輪相位檔案的時間戳顯示 transport 約 13.193 秒；連續 CPU sampler
+完整落在其中的 6 個區間合計 12.252 秒，server／PG／Python 分別累積
+7.73／6.23／5.23 CPU 秒。它不包含區間間已退出的短命程序，也不能
+替代遠端遭截斷的分組資料；沒有重現遠端 observer 的 5 秒 query failure。
+
+現在先完成雙方註冊，再一次取得 admission 建立初始兩條連線；第二條
+認證失敗會關閉第一條。後續 Carbon／reconnect 等待名額時，由同一執行緒
+每 60 秒對既有 clients 發送 WebSocket Ping。callback 只在未取得名額、
+且沒有持有 slot／metadata descriptor 時執行；傳送失敗直接使 fixture
+失敗。伺服器原有 WebSocket peer-traffic idle tracker 處理 Ping，300 秒
+idle limit 不變；Pong 不進入 XMPP stanza assertions，也不重設 receive
+deadline。取得名額後才開始新 credential exchange 原有 10 秒 deadline；
+900 秒 worker 監督、runtime heartbeat、所有 transport／業務斷言均維持。
+
+新增 170 秒分段排隊回歸在舊 initial setup 確實失敗；新 setup 通過。
+另外覆蓋 360 秒排隊中的 Ping 節奏、傳送失敗阻止新認證、第二條連線
+失敗清理，以及 Pong 不重設接收期限。23 startup／36 phase／37 MIX
+coordination 測試、真實 flock admission 自測與文件一致性通過。含 keepalive 的
+完整 4 CPU 1×50 Federation 通過：workload 49930.984 ms、cleanup
+1629.761 ms，observer 189 樣本、peak 100、0 errors、最大 113.031 ms，
+wrapper 全部成功。先前及此次連 preparation／provision 也有大幅速度
+差異，因此不能把整體耗時差異全歸功於登入修正。
+
+只針對自有雙節點 fixture 的真實 flock 排隊注入也已完成：Carbon
+認證名額被佔用 320.264708 秒期間，既有 Alice／Bob 收到 5 輪共 10 個
+實際 WebSocket Ping；釋放名額後完整 Federation 業務斷言通過。
+workload 339667.509 ms、cleanup 485.267 ms 均 status 0，observer
+689 樣本、peak 2、0 errors、最大 2.826 ms。產品 300 秒閒置限制未改。
+原始 wrapper exit 2、case_map_ok=false：臨時 1-pair 診斷程式漏傳
+`expected_pairs=1`，導致按預設 50-pair 驗證。保存的原始案例表以同一
+validator 傳入實際 1 pair 驗證為 true；臨時程式已修正參數，但沒有
+重跑或將原始 wrapper 結果改成成功。這是額外的真實 queue／keepalive
+業務證據；完整 wrapper 成功證據仍以先前 1×50 run 為準。
+
+修復已提交為 `fe82a5f`。push CI `34728864767`、PR CI `34728866857`
+的 Web static checks 均在 `test-listener-stress-worker.sh` 失敗：舊靜態
+契約仍逐字要求沒有 `on_wait` 參數的 `claim_login_slot` 呼叫。更新該
+斷言以保留 `timeout_seconds=None` 並要求 forwarding callback，沒有
+移除檢查或改動 runtime。已補跑 CI「Check operational script syntax」
+全部 29 個命令（worker 群組獨立執行，其餘 28 個按原順序執行），
+全部通過；worker 群組含 8 diagnostics／20 observed-entry／41 observer
+測試及實際子程序生命週期清理。這補上先前 96 項測試未涵蓋的舊
+靜態契約。新的提交仍須取得完整遠端 CI 證據。
+
+## 2026-09-13：第 18 輪故障與取消期間的日誌保留
+
+後續查明 `3b1c099` 的 push CI `34726111044` 已完整通過：28 success、
+4 skips，Federation 與 MIX 均完成 20×50，required aggregate 成功。
+這是歷史提交的證據，不能替代最新提交的驗證。
+
+`15c7b3d` 的 release preview `34729253959` 完成 10 success、3 tag-only
+skips。Windows／Linux fresh runner 與 Docker 預設 entrypoint 的 PG17.11
+startup、migration、readiness、web assets 全部通過；組裝產物 artifact
+`10308457995` 的 SHA-256 為
+`39fa109c492bdc32b9e3098dfa08497fbdeb84f466493ce11bf42bb8e8ec5c32`。
+尚未建立正式 tag、GHCR 發佈或實際 draft Release。
+
+最新 push CI `34729253947` 的 Federation `103650472608` 完整 20×50
+通過，耗時 53m10s；PR CI `34729256042` 的 MIX `103649715440` 也完成
+20×50，耗時 55m52s。但 PR Federation `103649715403` 在第 18 輪失敗。
+push MIX `103650472637` 隨後於 02:41:29 UTC 通過完整 20×50，
+required aggregate `103661058298` 於 02:41:38 UTC 成功，push 全部
+28 success／4 skips；PR 仍因 Federation 失敗而不合格。
+
+push MIX 總耗時 91m25s。其 20 輪 phase 合計為 provision 8.36 分鐘、
+preparation 27.30、startup 4.82、workload 47.32、cleanup 2.42；
+runtime artifact 檢查僅 3.055 秒。相同提交的 PR MIX 對應合計為
+7.04／12.87／0.88／29.86／4.14 分鐘，兩者皆回報 4 個 effective CPU、
+1 login slot、2 startup pairs，全部 20 輪 phase status 0 且 wrapper
+檢查全過。慢速 run 在每一輪的 preparation／startup／workload 都較慢，
+並非單次卡住或重編譯；資料尚不足以判定底層 runner 硬體或排程根因。
+
+PR 第 18 輪 all-live 後，`federation-transport-release-r18` 在
+02:06:49.549 UTC 回報 `fixture exited before phase release`，parent
+first-failure marker 為 02:06:49.880707 UTC。observer 最後成功樣本在
+02:06:49.433512 UTC；它於 02:06:54.893915 UTC 才因 client query
+deadline 失敗。因此 observer failure 晚於已知的 fixture failure。
+02:06:55.2659 UTC wrapper 傳送 TERM 時，parent 已在 cleanup，卻已
+恢復 TERM 預設處理，結果 exit -15；只留下 parent 初始附件，沒有
+保留工作程序完成清理後的日誌，wrapper 也偵測到 adopted descendants。
+兩個失敗附件已按 GitHub SHA-256 校驗：`10310230683`
+`7da64a125912a739d8740986917fb0a7dafebb44bb5a6f1994aaa69f05e50019`；
+`10310240669`
+`330ab56ad9c4463b33ef7ff0df3639565e3801d6799639a9962ab4b5bb33a291`。
+
+現在 cleanup 保留 INT／TERM handler：不重入 cleanup，保留原始
+非零結果；成功 cleanup 期間收到訊號仍回報 130／143。外層原有
+45 秒 TERM-to-KILL budget、工作程序停止與資料庫清理限制均不變。
+phase helper 另輸出已退出 publisher 的 pair index，parent 僅用經過
+範圍檢查的 index 選取自有日誌，使仍在清理的外層 worker 不會遮蔽
+真正失敗的 pair。12 份、每份 32768 bytes、總量 524288 bytes 和
+redaction 限制不變；診斷 index 不授權 signal 或資源操作。
+
+使用實際 production cleanup 函式的控制訊號回歸，在原始 `15c7b3d`
+確實得到 `-15 != 7`，修正版保留 exit 7、晚到的首個 fixture 錯誤、
+移除自有 runtime 目錄並遮蔽秘密；成功 cleanup 收到 INT／TERM 的
+非零退出亦通過。真實 nested publisher 退出、外層 leader 仍活著的
+CLI 回歸確認 pair index 正確且不釋放 transport barrier。
+CI operational step 全部 29 個命令通過，包含 12 diagnostics、
+20 observed-wrapper、41 observer，以及 23 startup／37 phase／37 MIX
+regressions。這些修正證明取消期間的診斷保留，尚未證明首個 fixture
+退出原因已修復。
+
+最後幾筆 PG 樣本顯示 pair 15 B 的 runtime-control backend 處於
+idle／ClientRead，query age 最後到 6122.853 ms；這與 5 秒 critical
+heartbeat 失效相容，但失去 worker 日誌，不能證明它就是退出程序或
+確認根因。XML 分幀器已保存增量 cursor，不支持每次重新掃描整個
+1 MiB stanza 的猜測。正在使用修正版執行完整 4 CPU、5×50 Federation
+本機診斷；沒有增加 heartbeat／observer／認證期限或縮減遠端矩陣。
+
+## 2026-09-13：取消修正驗證與 autovacuum 清理回歸
+
+上述取消期間診斷修正已推送為 `ff6c444`。release preview
+`34733776103` 再次完成 10 success／3 tag-only skips，Windows x64、
+Linux x64 的下載後 fresh-runner 驗證及 Docker linux/amd64 預設
+entrypoint 驗證均成功。組裝 artifact `10311005202` 的 SHA-256 為
+`1f81075bd6782e8cb69caf9b86078218991176f548dad7b444865f14011d2e27`。
+正式 tag、GHCR 發佈和實際 draft Release 尚未建立。
+
+push `34733776036` 的 Federation `103662136537` 第一輪 observer
+先失敗：最後成功取樣 02:55:08.567826 UTC、100 runtime backends，
+最大 query age 1024.052 ms；02:55:14.051870 UTC 以 client query
+deadline 結束，之後才產生 parent_cancel marker。取消前的 host
+snapshot 仍有 100 server；all-live 至取消清理 8.855 秒，CPU 累積
+35.425 秒、沒有新增 idle ticks。初始 process scan 在 250 ms 上限
+截斷，不能用分組差值推定是哪一類程序耗盡 CPU。observer 共 378
+樣本，1 error、最大 5001.346 ms。PR `34733777217` 的 Federation
+`103662591382` 通過四輪後，第五輪發生同類 observer failure；1975
+樣本、6 errors、最大 5000.573 ms，仍有 100 server，9.622 秒內 CPU
+累積 38.413 秒。兩者 cleanup 均保留 exit 143、cleanup_ok=true、
+adopted_descendants_detected=false，已保留 12 份 bounded worker tails。
+這確認頂層取消清理修正生效，沒有證明 observer 逾時已修復。
+
+失敗附件 SHA-256 均已校驗：push `10309768400`／`10310317819`，
+PR `10311225222`／`10310841401`。壓測 supervisor 在直接子程序存活
+時不掃整個 procfs；Federation client 也已在 bounded startup slot 內
+完成 Python 初始化再加入 live barrier。這些既有機制不是待實作的修正。
+03:18 UTC 查詢時，push MIX `103662136555` 和 PR MIX `103662591357`
+仍在執行，兩邊其他 25 項前置工作均成功。
+
+本機預定 5×50 的診斷在第二輪 cleanup 失敗而結束，不能記為 5×50
+通過。前兩輪完整 business 均成功，workload 分別 617183.861／
+613611.357 ms；第二輪有一個自有 database 的 DROP 回報 SQLSTATE
+42501。最終 cleanup 已完成，driver 正確保留失敗；observer 3434
+樣本、peak 100、0 errors、最大 65.634 ms，wrapper 診斷檢查均成功。
+
+隔離 PG17 重現使用非 superuser 的 xmpp_test 作為 database owner，
+觀察到 autovacuum worker 後執行 cleanup：原有 FORCE 回報 42501
+（268.526 ms）；相同條件下一般 DROP 成功（286.912 ms）。因此 round
+cleanup 現在先使用一般 DROP，僅在 SQLSTATE 55006（仍被使用）時
+使用既有 FORCE 後備，兩次共用原本 35 秒 drop deadline。42501、
+lock timeout、取消或其他錯誤不觸發 FORCE，也沒有增加角色權限。
+owner／absence 驗證、四路並行上限、未清除資源的 ledger 均保持。
+
+13 項 cleanup 單元測試通過，涵蓋共用期限、期限耗盡不啟動新 psql、
+權限／其他錯誤不轉 FORCE。新增真實 PG17 回歸在原始 `ff6c444`
+cleanup 確實因 42501 失敗，修正版則可清除 autovacuum database、
+以 FORCE 清理仍存活的自有連線，並拒絕終止高權限外來連線。原有
+PG17 integration 將 xmpp_test 直接當 bootstrap superuser，無法
+撤銷 SUPERUSER；現在另設測試 bootstrap 身分，讓這項回歸能真正
+驗證 NOSUPERUSER。完整 14 項 observer／cleanup integration 通過。
+首次完整執行漏設本機 PG17 的 LD_LIBRARY_PATH 而失敗；補上 CI
+同樣的 libpq 路徑後，全部通過（91.168 秒），未改測試期限。
+
+## 2026-09-13：已到達的 observer 回覆與單次控制面查詢
+
+`e0acbea` push `34735732835` 的 Federation `103667481230` 第一輪
+通過，第二輪第 48 對 A 節點先失敗。新的診斷保留其完整錯誤：
+03:47:05.460799 UTC，critical `runtime-control-refresh` 超過原有
+5000 ms 心跳界線；當時 rules-read phase 2571 ms，距前次心跳
+5802 ms。03:47:04.412778 UTC 同一節點的非 critical
+pubsub-digest-delivery 也曾超時。父 barrier 隨後失敗，observer
+直到 03:47:17.429291 UTC 才報 client deadline，不能倒置因果。
+
+失敗附件 `10311092938`（SHA-256
+`3e7d6ce54fc6102fa642d901858b65a40688a0dac77fbf5ead8e39574eb5c312`）
+與 observer `10310823518`（SHA-256
+`7b907ad48f80294b8fea9f1775bc30df48a4523266545d15ae86fe9504c8b7c9`）
+已下載並驗證。case map 將該節點映射至 backend PID 2817、
+backend_start 03:46:46.949842 UTC；03:47:04.957350 UTC 的樣本中，
+它是 idle / ClientRead，query age 2092.925 ms、state age
+2092.852 ms、無 blocking PID。這支持檢查客戶端接收與排程延遲，
+不支持把這次失敗歸因於該查詢持續執行兩秒或 heavyweight lock。
+
+控制面刷新現在在同一保留連線上用一個 UNION ALL statement 讀取
+兩個投影，讓設定與規則共用 MVCC snapshot，並減少一次串行往返。
+缺少必要設定仍失敗；規則順序、policy apply、service-control
+polling、完整刷新後才更新健康的規則，以及 5 秒心跳界線未放寬。
+診斷 phase 對應為 snapshot-read。
+
+六項 Rust control-health 測試、45 項 subserver boundary 回歸及
+architecture 檢查通過。Rust fmt 與 all-targets Clippy（runtime-test
+profile、`-D warnings`）亦通過。實際 PG17 的三項管理命令測試通過，包含
+新增的空規則、兩個設定旗標、blacklist／whitelist 排序與必要設定
+遺失回歸。臨時測試適配器前兩次分別停在原腳本固定 5432、隔離
+叢集尚未建立 xmpp_test 的環境檢查；建立測試角色自有資料庫並
+使用本次隨機埠後，三項測試才完整執行通過，schema 已移除。
+
+隔離 pgbench 使用 4 CPUs、100 連線、4 client threads、prepared
+queries、空 federation rules，交錯執行前後版本各三次，每次
+20000 次完整刷新。平均延遲的中位數由 2.586 ms 降至 2.092 ms
+（約 19.1%）；這是 SQL 微量測，不能當成遠端整體壓測的改善比例。
+
+另外，實際 PG17 重現新 observer 連線收到 100-row 回覆時，若
+客戶端延後至 5.2 秒才執行，一次 PQconsumeInput 尚未讀完整個
+socket 中的回覆，原實作便回報 client_query_deadline；失敗時
+仍有 11671 bytes 可立即讀取。已暖機的連線則能正確排空並捨棄。
+這是 [libpq 分段讀取行為](https://raw.githubusercontent.com/postgres/postgres/REL_17_STABLE/src/interfaces/libpq/fe-misc.c)
+造成的已重現邊界問題，尚未證明它造成先前的遠端 observer failure。
+
+observer 現在於等待期限耗盡後，最多額外進行 32 次立即可讀的
+nonblocking reads，不再等待新資料；仍捨棄逾時樣本，要求同一
+連線的新樣本恢復，未完成或超過上限仍失敗。原有 3+2 秒等待
+預算、資料與結果上限、無 reconnect、三次連續錯誤規則均保持。
+44 項 observer 單元測試及完整 15 項 PG17 integration 通過
+（119.939 秒）；同一個新增實際回歸在原 `e0acbea` observer
+確實得到預期的 client_query_deadline assertion failure。
+
+`e0acbea` release preview `34735732791` 已完整通過 10 項工作，
+三項 tag-only 工作按預期跳過。Windows／Linux fresh package
+驗證為 `103668120635`／`103668120643`；Docker app
+`103668193183` 驗證 linux/amd64、UID 10001 與實際 entrypoint。
+組裝產物 `10310444714`，113427653 bytes，SHA-256
+`c41c541ed41d4ed0f16efeea1b6cf61cc769cc8902984089397be608cb55f9cf`。
+這些仍是該舊提交的 preview，不是實際 draft Release 或新修正的證據。
+
+兩項新修正的本機 4 CPU、1×50 Federation 完整回歸已通過。
+provision 55061.908 ms、preparation 168626.136 ms、startup
+12250.454 ms、workload 688775.566 ms、cleanup 14079.696 ms，
+各階段 status 0。observer 1887 樣本、peak 100、0 errors、最大
+109.852 ms；wrapper 的 observer／diagnostic／marker／cleanup／
+map／bounds 全部成功，無 adopted descendants。這輪整體耗時
+沒有顯示相對先前本機回歸的加速，不能用 SQL 微量測代替它。
+
+首次啟動這項回歸時，runtime-test binary 編譯已成功（300075.605
+ms），但本機 16 GB tmpfs 的 /tmp 用滿，provision 後第 19 個
+worker 未能建立 private session，後續診斷寫入也遭 ENOSPC。
+原失敗記錄保留；該次未通過業務階段。只移除本工作已完成 Rust
+單元測試的可重建 debug cache（5.2 GB），待原隔離 PG 清理結束
+並恢復 7.7 GB 空間後，才重新完整執行上述成功回歸。
+
+04:27 UTC 查詢時，`e0acbea` 的 push MIX 與 PR 兩組完整壓測
+仍在執行；它們不是新修正的 CI 結果。

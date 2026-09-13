@@ -2,6 +2,7 @@
 """MIX fixture coordination regressions using local sockets and private records."""
 
 from collections import Counter
+from contextlib import contextmanager, ExitStack
 import hashlib
 import hmac
 import importlib.util
@@ -25,6 +26,55 @@ SPEC.loader.exec_module(mix)
 
 
 class RestartRecoveryCase(unittest.TestCase):
+    def test_finish_excludes_admission_queue_but_counts_authentication_and_all_events(self):
+        clock = [100.0]
+        budgets = []
+        admitted = [False]
+
+        @contextmanager
+        def lane():
+            clock[0] += 200  # Another pair owns the fixture lane.
+            admitted[0] = True
+            try:
+                yield
+            finally:
+                admitted[0] = False
+
+        class Client:
+            def send_with_pow(self, *args):
+                pass
+
+        class Inbox:
+            client = Client()
+
+            def wait(self, marker, timeout):
+                budgets.append(timeout)
+                clock[0] += 10
+                if len(budgets) == 2:
+                    return "<result xmlns='urn:xmpp:mam:2'>durable MIX handoff</result>"
+                return f"<message type='groupchat'>{marker}</message>"
+
+            def close(self):
+                pass
+
+        def authenticate(*args):
+            self.assertTrue(admitted[0])
+            clock[0] += 5
+            return Inbox()
+
+        server = SimpleNamespace(wait_ready=lambda: None)
+        with ExitStack() as stack:
+            for name, value in (("A", server), ("B", server),
+                                ("time", SimpleNamespace(monotonic=lambda: clock[0])),
+                                ("fixture_phase_auth_admission", lane),
+                                ("login", authenticate), ("connect", authenticate),
+                                ("iq", lambda *args: "<iq type='result'><fin /></iq>")):
+                stack.enter_context(patch.object(mix, name, value, create=True))
+            mix.finish()
+        # Authentication consumes 20 seconds; the four delivery events share
+        # the remaining budget, without either queue time or per-event resets.
+        self.assertEqual(budgets, [130, 120, 110, 100])
+
     def test_recovery_events_share_one_deadline(self):
         clock = [100.0]
         budgets = []

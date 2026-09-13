@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Iterator, Mapping, Sequence
+from typing import Callable, Iterator, Mapping, Sequence
 
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -795,7 +795,7 @@ class LoginSlotConfiguration:
 
 @dataclass(frozen=True)
 class AuthenticationAttempt:
-    """A one-shot, monotonic deadline shared by slot acquisition and login."""
+    """One absolute I/O deadline for an admitted credential exchange."""
 
     deadline: float
 
@@ -982,6 +982,7 @@ def claim_login_slot(
     *,
     deadline: float | None = None,
     timeout_seconds: float | None = CLIENT_AUTH_IO_TIMEOUT_SECONDS,
+    on_wait: Callable[[], None] | None = None,
 ) -> Iterator[None]:
     """Claim one fixed cross-process fixture admission lane.
 
@@ -1039,6 +1040,14 @@ def claim_login_slot(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("timed out waiting for a MIX federation authentication slot")
+        if on_wait is not None:
+            # No slot or metadata descriptor is held here. Existing fixture
+            # clients can send a transport keepalive while admission queues.
+            on_wait()
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("timed out waiting for a MIX federation authentication slot")
         attempt += 1
         time.sleep(min(LOGIN_SLOT_POLL_SECONDS, remaining))
     try:
@@ -1056,13 +1065,13 @@ LOGIN_SLOT_CONFIGURATION: LoginSlotConfiguration | None = None
 
 
 @contextmanager
-def fixture_phase_auth_admission() -> Iterator[None]:
+def fixture_phase_auth_admission(*, on_wait: Callable[[], None] | None = None) -> Iterator[None]:
     """Serialize only the fixture's setup/authentication phase when requested."""
 
     if LOGIN_SLOT_CONFIGURATION is None:
         yield
         return
-    with claim_login_slot(LOGIN_SLOT_CONFIGURATION, timeout_seconds=None):
+    with claim_login_slot(LOGIN_SLOT_CONFIGURATION, timeout_seconds=None, on_wait=on_wait):
         yield
 
 
@@ -1321,12 +1330,15 @@ def wait_for_restart(inbox: Inbox, marker: str, deadline: float) -> str:
 # replacement must respect that existing 120-second lease, including a
 # queued presence event ahead of later reverse MIX deliveries. Share one
 # lease window plus the existing 30-second delivery allowance across all
-# recovery events; unrelated frames and successive waits cannot restart it.
+# recovery events, starting when authentication is admitted; unrelated frames
+# and successive waits cannot restart it. Waiting for the fixture's shared
+# authentication lane remains bounded by the worker supervisor, like setup
+# and enqueue, and must not consume recovery time before this pair can act.
 def finish() -> None:
     A.wait_ready()
     B.wait_ready()
-    recovery_deadline = time.monotonic() + 150
     with fixture_phase_auth_admission():
+        recovery_deadline = time.monotonic() + 150
         alice_token = login(A, ALICE)
         bob_token = login(B, BOB)
         bob = connect(B, BOB, "finish-b")
@@ -1563,10 +1575,20 @@ def login_slot_self_test() -> None:
         )
         try:
             check(holder.stdout is not None and holder.stdout.readline().strip() == "locked", "slot holder did not lock")
+            waiting_callbacks: list[bool] = []
             try:
-                with claim_login_slot(single, timeout_seconds=0.15):
+                with claim_login_slot(single, timeout_seconds=0.15,
+                                      on_wait=lambda: waiting_callbacks.append(True)):
                     raise AssertionError("a held slot was acquired")
             except TimeoutError:
+                pass
+            check(bool(waiting_callbacks), "a blocked admission did not service waiting clients")
+            def failed_keepalive() -> None:
+                raise BrokenPipeError("fixture keepalive failed")
+            try:
+                with claim_login_slot(single, timeout_seconds=None, on_wait=failed_keepalive):
+                    raise AssertionError("a keepalive failure admitted authentication")
+            except BrokenPipeError:
                 pass
         finally:
             if holder.stdin is not None:
@@ -1582,7 +1604,9 @@ def login_slot_self_test() -> None:
         # Runtime phase admission waits before it creates a credential I/O
         # deadline; this proves a released lane is reacquired through that
         # unbounded-but-parent-supervised path.
-        with claim_login_slot(single, timeout_seconds=None):
+        def unexpected_wait() -> None:
+            raise AssertionError("an available lane invoked its waiting callback")
+        with claim_login_slot(single, timeout_seconds=None, on_wait=unexpected_wait):
             pass
     print("MIX federation login slot gate self-test PASS")
 

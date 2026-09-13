@@ -75,7 +75,7 @@ class PostgreSQLIntegration(unittest.TestCase):
         password.chmod(0o600)
         cls.env = environment()
         subprocess.run([str(PG_BIN / 'initdb'), '-D', str(cls.root / 'data'),
-                        '--username=xmpp_test', '--auth-local=trust', '--auth-host=scram-sha-256',
+                        '--username=observer_bootstrap', '--auth-local=trust', '--auth-host=scram-sha-256',
                         '--pwfile=' + str(password), '--no-locale', '--encoding=UTF8'],
                        env=cls.env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                        check=True, timeout=30)
@@ -91,7 +91,7 @@ class PostgreSQLIntegration(unittest.TestCase):
             env=cls.env, stdout=cls.log, stderr=subprocess.STDOUT, start_new_session=True,
         )
         cls.addClassCleanup(cls.stop_server)
-        cls.env.update(PGHOST='127.0.0.1', PGPORT=str(cls.port), PGUSER='xmpp_test',
+        cls.env.update(PGHOST='127.0.0.1', PGPORT=str(cls.port), PGUSER='observer_bootstrap',
                        PGPASSWORD='xmpp-test-password', PGDATABASE='postgres', PGCONNECT_TIMEOUT='2')
         deadline = time.monotonic() + 10
         while True:
@@ -103,6 +103,13 @@ class PostgreSQLIntegration(unittest.TestCase):
             if time.monotonic() >= deadline:
                 raise RuntimeError('private PostgreSQL startup deadline')
             time.sleep(.1)
+        # The bootstrap role cannot lose SUPERUSER. Use a separate ordinary
+        # role identity so cleanup regressions can exercise NOSUPERUSER.
+        subprocess.run([str(PG_BIN / 'psql'), '-XqAtw', '-v', 'ON_ERROR_STOP=1', '-c',
+                        "CREATE ROLE xmpp_test LOGIN SUPERUSER CREATEDB PASSWORD 'xmpp-test-password'"],
+                       env=cls.env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                       check=True, timeout=5)
+        cls.env['PGUSER'] = 'xmpp_test'
         for name in ('northstar_observer_case_a', 'northstar_observer_case_b'):
             subprocess.run([str(PG_BIN / 'psql'), '-XqAt', '-v', 'ON_ERROR_STOP=1',
                             '-c', 'CREATE DATABASE ' + name], env=cls.env,
@@ -336,7 +343,7 @@ class PostgreSQLIntegration(unittest.TestCase):
         self.assertFalse(wrapper['diagnostic_ok'])
         self.assertIsNone(wrapper['driver_exit_status'])
 
-    def test_one_hundred_runtime_backends_are_sampled_without_reconnecting(self):
+    def start_one_hundred_runtime_backends(self):
         for index in range(98):
             child = subprocess.Popen([str(PG_BIN / 'psql'), '-XqAt', '-v', 'ON_ERROR_STOP=1'],
                 env={**self.env, 'PGDATABASE': self.databases[index % 2],
@@ -347,11 +354,46 @@ class PostgreSQLIntegration(unittest.TestCase):
             child.stdin.flush()
             self.assertTrue(select.select([child.stdout], [], [], 5)[0])
             self.assertGreater(int(child.stdout.readline()), 0)
+
+    def test_one_hundred_runtime_backends_are_sampled_without_reconnecting(self):
+        self.start_one_hundred_runtime_backends()
         process = self.start_wrapper('import time;time.sleep(5)')
         result, wrapper, _ = self.result(process, 0, 100)
         self.assertTrue(wrapper['diagnostic_ok'], wrapper)
         self.assertGreaterEqual(result['samples'], 8)
         self.assertEqual(result['sample_errors'], 0)
+
+    def test_large_completed_response_after_drain_deadline_is_discarded(self):
+        self.start_one_hundred_runtime_backends()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            connection = OBSERVER.Libpq(OBSERVER.Limits(20, os.getpid()))
+            self.addCleanup(connection.close)
+            connection.connect()
+            identity = connection.lib.PQbackendPID(connection.conn)
+            original_ready = connection.ready
+            delayed = False
+
+            def delayed_ready(writing, deadline):
+                nonlocal delayed
+                self.assertFalse(writing)
+                if not delayed:
+                    delayed = True
+                    # A new libpq connection has not grown its input buffer
+                    # for a 100-row response yet. PostgreSQL finishes while
+                    # the observer is descheduled past both wait deadlines.
+                    time.sleep(5.2)
+                original_ready(writing, deadline)
+
+            connection.ready = delayed_ready
+            sql = OBSERVER.activity_sql(self.salt).replace(
+                ' FROM targets\n', ' FROM targets CROSS JOIN pg_sleep(0.1)\n')
+            with self.assertRaises(OBSERVER.ObserverError) as error:
+                connection.query(sql, OBSERVER.validate_sample)
+            self.assertEqual(error.exception.code, 'client_query_deadline_drained')
+            connection.ready = original_ready
+            value = connection.query(OBSERVER.activity_sql(self.salt), OBSERVER.validate_sample)
+            self.assertEqual(value['total'], 100)
+            self.assertEqual(connection.lib.PQbackendPID(connection.conn), identity)
 
     def test_pending_server_response_is_drained_then_fresh_sample_recovers(self):
         with mock.patch.dict(os.environ, self.env, clear=True):
@@ -389,6 +431,75 @@ class PostgreSQLIntegration(unittest.TestCase):
     def fixture_sql(self, sql):
         return subprocess.run([str(PG_BIN / 'psql'), '-XqAt', '-v', 'ON_ERROR_STOP=1'],
                               env=self.env, input=sql, capture_output=True, text=True, check=True, timeout=30)
+
+    def test_non_superuser_cleanup_handles_autovacuum_and_retains_force_permissions(self):
+        prefix = 'northstar_listener_federation_' + os.urandom(8).hex()
+        names = [f'{prefix}_r1_p{i}_a' for i in range(1, 4)]
+        # Keep a separate test administrator solely to restore this private
+        # cluster; production cleanup must still authenticate as xmpp_test.
+        self.fixture_sql("CREATE ROLE cleanup_admin LOGIN SUPERUSER PASSWORD 'xmpp-test-password';\n")
+        admin = {**self.env, 'PGUSER': 'cleanup_admin'}
+
+        def execute(sql, env):
+            result = subprocess.run([str(PG_BIN / 'psql'), '-XqAtw', '-v', 'ON_ERROR_STOP=1'],
+                env=env, input=sql, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.strip()
+
+        holder = None
+        try:
+            execute('ALTER ROLE xmpp_test NOSUPERUSER CREATEDB;\n', admin)
+            self.assertEqual(execute('SELECT rolsuper FROM pg_roles WHERE rolname=current_user;\n', self.env), 'f')
+            execute("ALTER SYSTEM SET autovacuum_naptime='1s';\nSELECT pg_reload_conf();\n", admin)
+            for name in names:
+                self.fixture_sql(f'CREATE DATABASE "{name}";\n')
+            target = {**self.env, 'PGDATABASE': names[0]}
+            execute('CREATE TABLE cleanup_probe (id int, payload text) WITH ('
+                    'autovacuum_vacuum_scale_factor=0, autovacuum_vacuum_threshold=0, '
+                    'autovacuum_vacuum_insert_threshold=-1, autovacuum_analyze_threshold=0, '
+                    'autovacuum_analyze_scale_factor=0, autovacuum_vacuum_cost_delay=50, '
+                    'autovacuum_vacuum_cost_limit=1);\n'
+                    "INSERT INTO cleanup_probe SELECT i,repeat('x',200) FROM generate_series(1,20000) i;\n"
+                    'UPDATE cleanup_probe SET id=id+20000;\n', target)
+            deadline = time.monotonic() + 30
+            while execute("SELECT count(*) FROM pg_stat_activity WHERE backend_type='autovacuum worker' "
+                          f"AND datname='{names[0]}';\n", admin) == '0':
+                self.assertLess(time.monotonic(), deadline, 'autovacuum did not start')
+                time.sleep(.1)
+            result = self.cleanup_databases([names[0]], 1)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)['results'][0]['status'], 'dropped')
+
+            # A lingering owned session still needs the FORCE backstop. A
+            # superuser session must instead survive a denied FORCE attempt.
+            for name, role, expected in ((names[1], 'xmpp_test', 0), (names[2], 'cleanup_admin', 1)):
+                holder = subprocess.Popen([str(PG_BIN / 'psql'), '-XqAtw', '-v', 'ON_ERROR_STOP=1'],
+                    env={**self.env, 'PGUSER': role, 'PGDATABASE': name}, stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                holder.stdin.write("SELECT 'ready'; SELECT pg_sleep(60);\n")
+                holder.stdin.flush()
+                self.assertTrue(select.select([holder.stdout], [], [], 5)[0])
+                self.assertEqual(holder.stdout.readline().strip(), 'ready')
+                result = self.cleanup_databases([name], 1)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                if expected:
+                    self.assertIsNone(holder.poll(), 'cleanup terminated a foreign privileged session')
+                    diagnostic = json.loads(result.stderr.removeprefix('listener_database_cleanup_error='))
+                    self.assertEqual(diagnostic['sqlstate'], '42501')
+                    self.assertEqual(execute(f"SELECT count(*) FROM pg_database WHERE datname='{name}';\n", admin), '1')
+                    execute(f'DROP DATABASE "{name}" WITH (FORCE);\n', admin)
+                else:
+                    self.assertEqual(json.loads(result.stdout)['results'][0]['status'], 'dropped')
+                holder.communicate(timeout=5)
+                holder = None
+        finally:
+            for name in names:
+                execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE);\n', admin)
+            if holder is not None:
+                holder.communicate(timeout=5)
+            execute('ALTER ROLE xmpp_test SUPERUSER;\nALTER SYSTEM RESET autovacuum_naptime;\n'
+                    'SELECT pg_reload_conf();\n', admin)
+            self.fixture_sql('DROP ROLE cleanup_admin;\n')
 
     def test_parallel_cleanup_preserves_foreign_owner_and_verifies_deletion(self):
         prefix = 'northstar_listener_federation_' + os.urandom(8).hex()

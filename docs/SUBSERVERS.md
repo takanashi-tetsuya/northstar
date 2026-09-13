@@ -133,6 +133,13 @@ while serving. The windows bound those initialization phases, not all startup
 work; the listener fixture independently retains its total 15-second readiness
 deadline.
 
+The runtime-control worker reads administration flags and federation rules with
+one SQL statement on its reserved connection. Both projections share one MVCC
+snapshot, with no second query round trip during a refresh. Missing required
+settings still fail the read. Policy application, service-control polling and
+the existing five-second heartbeat health boundary remain in the same worker;
+entering a query phase does not report successful health.
+
 Core owns upload authority and capacity auditing. Startup completes both audits
 before accepting traffic. Its first upload worker may use those successful
 observations once, scheduling the next catalog audit from the original audit
@@ -228,7 +235,11 @@ complete file membership and SHA-256 are checked before reuse. Different pairs
 retain independent CAs, every round has fresh application secrets, and the TLS
 identity checks still run. Database
 provisioning remains serial. Round cleanup uses at most four psql clients, capped
-by the effective CPU count, after worker shutdown attempts. Each recorded name
+by the effective CPU count, after worker shutdown attempts. Round cleanup first
+uses normal DROP, which lets PostgreSQL stop its autovacuum workers without
+requiring the fixture owner to signal them. Only a database-still-in-use result
+permits the existing FORCE backstop; both attempts share one 35-second drop
+budget. Permission, lock and other errors remain failures. Each recorded name
 is checked for fixture ownership before DROP and for absence afterwards; missing
 or malformed batch results retain the original cleanup list. The failure path
 retains the scoped FORCE backstop and records remaining cleanup debt. This does
@@ -242,7 +253,10 @@ tracking and missing visibility still fail diagnostics. The observer keeps its
 delays leave a reply pending after the client deadline, it allows at most two
 additional seconds solely to drain that reply through ReadyForQuery. It validates
 and discards the late sample, then requires a fresh sample on the same connection.
-Replies still pending after that bound, malformed replies, three consecutive
+If libpq's input buffer holds only part of an already-arrived response, the
+observer may make at most 32 additional nonblocking reads of immediately readable
+socket data after the wait budget. It never waits for further bytes or accepts
+the late sample. Replies still incomplete after that bounded drain, malformed replies, three consecutive
 recoverable errors, or shutdown before recovery still fail. An unavailable
 observer prevents workload launch. An observer that fails during the workload
 causes prompt cancellation and cleanup of the owned driver and descendants;
@@ -251,6 +265,13 @@ window around an existing workload failure permits its original cleanup to finis
 Summary timing includes failed samples. Diagnostic-only failures upload the
 bounded observer evidence; business-failure logs remain required unless the
 wrapper explicitly reports a successful workload or that it never launched one.
+If cancellation arrives after workload failure has already started driver cleanup,
+the driver finishes that cleanup within the existing supervisor TERM-to-KILL
+budget and retains the original nonzero status. Cancellation during otherwise
+successful cleanup still fails the run. A dead nested phase publisher reports
+its pair index, so its owned worker transcript gets priority even while the outer
+worker is still alive. The existing log count, byte limits and redaction apply;
+the pair index grants no signal or resource-cleanup authority.
 
 First-failure records use Linux `renameat2(RENAME_NOREPLACE)` so concurrent
 publishers cannot replace the winner or change its inode during finalization.

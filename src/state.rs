@@ -354,8 +354,7 @@ mod runtime_control_startup_tests {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeControlPhase {
     Idle,
-    SettingsRead,
-    RulesRead,
+    SnapshotRead,
     PolicyApply,
     ServiceControlRead,
 }
@@ -364,8 +363,7 @@ impl RuntimeControlPhase {
     fn label(self) -> &'static str {
         match self {
             Self::Idle => "idle",
-            Self::SettingsRead => "settings-read",
-            Self::RulesRead => "rules-read",
+            Self::SnapshotRead => "snapshot-read",
             Self::PolicyApply => "policy-apply",
             Self::ServiceControlRead => "service-control-read",
         }
@@ -412,8 +410,7 @@ impl RuntimeControlDiagnostics {
 
     fn database_read(&mut self, phase: db::RuntimeControlReadPhase) {
         self.enter(match phase {
-            db::RuntimeControlReadPhase::Settings => RuntimeControlPhase::SettingsRead,
-            db::RuntimeControlReadPhase::Rules => RuntimeControlPhase::RulesRead,
+            db::RuntimeControlReadPhase::Snapshot => RuntimeControlPhase::SnapshotRead,
         });
     }
 
@@ -579,8 +576,7 @@ mod runtime_control_health_tests {
     async fn dropped_pending_control_turn_reports_its_actual_phase() {
         use super::RuntimeControlPhase;
         for phase in [
-            RuntimeControlPhase::SettingsRead,
-            RuntimeControlPhase::RulesRead,
+            RuntimeControlPhase::SnapshotRead,
             RuntimeControlPhase::PolicyApply,
             RuntimeControlPhase::Idle,
             RuntimeControlPhase::ServiceControlRead,
@@ -589,11 +585,8 @@ mod runtime_control_health_tests {
             let (entered, observed) = tokio::sync::oneshot::channel();
             let task = tokio::spawn(async move {
                 match phase {
-                    RuntimeControlPhase::SettingsRead => {
-                        guard.database_read(crate::db::RuntimeControlReadPhase::Settings);
-                    }
-                    RuntimeControlPhase::RulesRead => {
-                        guard.database_read(crate::db::RuntimeControlReadPhase::Rules);
+                    RuntimeControlPhase::SnapshotRead => {
+                        guard.database_read(crate::db::RuntimeControlReadPhase::Snapshot);
                     }
                     other => guard.enter(other),
                 }
@@ -620,7 +613,7 @@ mod runtime_control_health_tests {
         let (mut guard, captured) = diagnostic_guard(root_cancel.clone());
         let (entered, observed) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            guard.database_read(crate::db::RuntimeControlReadPhase::Rules);
+            guard.database_read(crate::db::RuntimeControlReadPhase::Snapshot);
             guard.phase_started -= Duration::from_secs(6);
             guard.last_reported -= Duration::from_secs(6);
             entered.send(()).unwrap();
@@ -641,11 +634,11 @@ mod runtime_control_health_tests {
         let (next_phase, continue_turn) = tokio::sync::oneshot::channel();
         let (changed, change_observed) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            guard.database_read(crate::db::RuntimeControlReadPhase::Settings);
+            guard.database_read(crate::db::RuntimeControlReadPhase::Snapshot);
             guard.last_reported -= Duration::from_secs(6);
             entered.send(()).unwrap();
             continue_turn.await.unwrap();
-            guard.database_read(crate::db::RuntimeControlReadPhase::Rules);
+            guard.enter(super::RuntimeControlPhase::PolicyApply);
             guard.phase_started -= Duration::from_secs(2);
             changed.send(()).unwrap();
             std::future::pending::<()>().await;
@@ -658,7 +651,7 @@ mod runtime_control_health_tests {
         assert!(task.await.unwrap_err().is_cancelled());
         let reports = captured.lock().unwrap();
         assert_eq!(reports.len(), 1);
-        assert_eq!(reports[0].phase, super::RuntimeControlPhase::RulesRead);
+        assert_eq!(reports[0].phase, super::RuntimeControlPhase::PolicyApply);
         assert!(reports[0].phase_elapsed >= Duration::from_secs(2));
         assert!(reports[0].heartbeat_elapsed >= Duration::from_secs(6));
         assert!(reports[0].heartbeat_elapsed > reports[0].phase_elapsed);
@@ -671,7 +664,7 @@ mod runtime_control_health_tests {
         let (report, continue_turn) = tokio::sync::oneshot::channel();
         let (reported, report_observed) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            guard.database_read(crate::db::RuntimeControlReadPhase::Settings);
+            guard.database_read(crate::db::RuntimeControlReadPhase::Snapshot);
             guard.last_reported -= Duration::from_secs(6);
             entered.send(()).unwrap();
             continue_turn.await.unwrap();

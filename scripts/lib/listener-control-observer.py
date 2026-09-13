@@ -30,6 +30,7 @@ POST_SECONDS = 15.0
 SLOW_MS = 1500
 MAX_ROWS = 128
 MAX_SAMPLE_BYTES = 256 * 1024
+MAX_BUFFERED_DRAIN_READS = 32
 RING_BYTES = 2 * 1024 * 1024
 TOTAL_BYTES = 8 * 1024 * 1024
 LOG_BYTES = TOTAL_BYTES - 64 * 1024
@@ -247,6 +248,13 @@ class Libpq:
             raise ObserverError('connection_socket_unavailable')
         select.select([] if writing else [fd], [fd] if writing else [], [], min(0.1, remaining))
 
+    def readable_now(self):
+        self.limits.check()
+        fd = self.lib.PQsocket(self.conn)
+        if fd < 0:
+            raise ObserverError('connection_socket_unavailable')
+        return bool(select.select([fd], [], [], 0)[0])
+
     def connect(self):
         # Connection endpoint/credentials use libpq PG* environment variables.
         # The diagnostic connection never inherits application query options.
@@ -299,6 +307,7 @@ class Libpq:
         failure = None
         expired = False
         results = 0
+        buffered_reads = 0
         while True:
             self.limits.check()
             expired = expired or time.monotonic() >= deadline
@@ -314,7 +323,14 @@ class Libpq:
                     if exc.code != 'client_query_deadline':
                         raise
                     if expired:
-                        raise
+                        # PQconsumeInput can fill libpq's current buffer while
+                        # more of the completed response is already queued in
+                        # the socket. Drain only immediately readable input,
+                        # with a fixed call bound; never extend the wait or
+                        # accept the late sample, even if draining succeeds.
+                        if buffered_reads >= MAX_BUFFERED_DRAIN_READS or not self.readable_now():
+                            raise
+                        buffered_reads += 1
                     expired = True
                 if self.lib.PQconsumeInput(self.conn) != 1:
                     raise ObserverError('query_receive_failed')

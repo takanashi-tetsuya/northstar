@@ -65,7 +65,36 @@ class CleanupTests(unittest.TestCase):
                                   (['owned', m.QueryFailed()], 'drop_failed')]:
             with self.subTest(expected=expected), mock.patch.object(m, 'query', side_effect=replies) as query:
                 self.assertEqual(m.cleanup_one(NAMES[0], 5432), expected)
-                self.assertEqual(query.call_args_list[1].args[0], f'DROP DATABASE "{NAMES[0]}" WITH (FORCE)')
+                self.assertEqual(query.call_args_list[1].args[0], f'DROP DATABASE "{NAMES[0]}"')
+
+    def test_busy_database_uses_force_with_the_same_drop_deadline(self):
+        with mock.patch.object(m.time, 'monotonic', return_value=100), \
+                mock.patch.object(m, 'query', side_effect=[
+                    'owned', m.QueryFailed('psql_exit', '55006'), '', 'f',
+                ]) as query:
+            self.assertEqual(m.cleanup_one(NAMES[0], 5432), 'dropped')
+        normal, force = query.call_args_list[1:3]
+        self.assertEqual(normal.args[0], f'DROP DATABASE "{NAMES[0]}"')
+        self.assertEqual(force.args[0], f'DROP DATABASE "{NAMES[0]}" WITH (FORCE)')
+        self.assertEqual(normal.kwargs, {'deadline': 135})
+        self.assertEqual(force.kwargs, normal.kwargs)
+
+    def test_permission_and_other_errors_do_not_trigger_force(self):
+        for error in (m.QueryFailed('psql_exit', '42501'), m.QueryFailed('psql_exit', '55P03'),
+                      m.QueryFailed('client_deadline'), m.QueryFailed('cancelled'),
+                      m.QueryFailed('client_error', '55006')):
+            with self.subTest(reason=error.reason, sqlstate=error.sqlstate), \
+                    mock.patch.object(m, 'query', side_effect=['owned', error]) as query:
+                self.assertEqual(m.cleanup_one(NAMES[0], 5432), 'drop_failed')
+                self.assertEqual(query.call_count, 2)
+
+    def test_expired_drop_budget_starts_no_additional_psql(self):
+        with mock.patch.object(m.time, 'monotonic', return_value=135), \
+                mock.patch.object(m.subprocess, 'Popen') as child:
+            with self.assertRaises(m.QueryFailed) as caught:
+                m.query('DROP DATABASE fixture WITH (FORCE)', 5432, deadline=135)
+        self.assertEqual(caught.exception.reason, 'client_deadline')
+        child.assert_not_called()
 
     def test_attestation_failure_prevents_all_deletion(self):
         with mock.patch.object(m, 'query', return_value='f'), mock.patch.object(m, 'cleanup_one') as one:

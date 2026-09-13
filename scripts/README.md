@@ -24,7 +24,17 @@ node scripts/check-ci-required.mjs --workflow-only
 node --test scripts/test-ci-release-gates.mjs
 node scripts/check-tracked-sensitive-files.mjs --include-untracked
 node scripts/verify-crypto-artifacts.mjs
+bash scripts/test-contract-compatibility.sh # requires the CI-pinned Buf 1.50.0
 ```
+
+`check-contract-compatibility.sh` compares existing Protobuf modules against the
+immutable event baseline with Buf's `FILE` breaking rules. A baseline without
+`contracts/proto` is accepted only for a first introduction: it must be an
+ancestor in a complete checkout, with no module or `.proto` files anywhere in
+its history. That case compiles the new module because Buf 1.50 rejects empty
+comparison images. Formatting, lint and generated-code drift remain mandatory
+in the separate contract quality job. Missing history, removed or relocated
+older contracts, and invalid or removed current modules fail the check.
 
 `check-*`, `verify-*` and `audit-*` are not automatically safe merely because
 of their names: inspect whether they invoke Docker, WSL, a database, a network
@@ -63,6 +73,17 @@ authentication admission lanes, with CPU sizing based on process affinity and
 cgroup quota. A failed or missing pair fails the round; preparation never
 extends the worker supervisor or a server's readiness deadline. Smaller local
 runs diagnose failures and do not replace evidence from the complete CI matrix.
+The MIX restart recovery window begins once the pair acquires its authentication
+lane. Authentication and all four recovery events share the same 150 seconds;
+waiting behind other pairs remains subject to the existing worker deadline.
+Federation registers both accounts before admitting its initial two client
+connections together. Later Carbon/reconnect admission sends WebSocket Ping
+to existing clients at most once per minute while waiting, so fixture queueing
+does not leave them idle past the unchanged 300-second server limit. Waiting
+callbacks hold no admission slot or metadata descriptor; send failures fail the fixture.
+Pong frames remain outside XMPP assertions and do not restart receive budgets.
+Live-child checks read the current process state and birth time together on
+every pass; they do not cache identities or relax phase ownership checks.
 
 Capacity runs explicitly build the `runtime-test` Cargo profile and use
 `$CARGO_TARGET_DIR/runtime-test/rust-xmpp-server`. This profile inherits `dev`,

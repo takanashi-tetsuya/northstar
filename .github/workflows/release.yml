@@ -13,8 +13,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-preparation-${{ github.ref }}
-  cancel-in-progress: false
+  # Superseded development previews cannot delay the latest candidate.
+  # Tag publication remains serialized; manual runs have independent groups.
+  group: release-preparation-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/codex/release-') }}
 
 jobs:
   prepare:

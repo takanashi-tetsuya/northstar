@@ -1660,28 +1660,33 @@ pub async fn admin_runtime_settings(pool: &PgPool) -> Result<(bool, bool)> {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RuntimeControlReadPhase {
-    Settings,
-    Rules,
+    Snapshot,
 }
 
 /// Read the complete runtime control-plane projection over the caller's
 /// already-reserved connection. This deliberately avoids a second pool
-/// acquisition between administration and federation observations.
+/// acquisition between administration and federation observations. One SQL
+/// statement gives both projections the same MVCC snapshot and avoids a
+/// second network/scheduler round trip on every policy refresh.
 /// The observer records only which fixed read is in flight; it performs no I/O.
 pub(crate) async fn runtime_control_snapshot(
     connection: &mut PgConnection,
     mut read_phase: impl FnMut(RuntimeControlReadPhase),
 ) -> Result<(bool, bool, Vec<String>, Vec<String>)> {
-    read_phase(RuntimeControlReadPhase::Settings);
-    let settings = sqlx::query("SELECT key,enabled FROM admin_runtime_settings ORDER BY key")
-        .fetch_all(&mut *connection)
-        .await?;
+    read_phase(RuntimeControlReadPhase::Snapshot);
+    let rows = sqlx::query(
+        "SELECT key,enabled,NULL::text AS kind,NULL::text AS domain
+           FROM admin_runtime_settings
+         UNION ALL
+         SELECT NULL::text,NULL::boolean,kind,domain FROM federation_runtime_rules
+         ORDER BY key,kind,domain",
+    )
+    .fetch_all(&mut *connection)
+    .await?;
+    let (settings, rules): (Vec<_>, Vec<_>) = rows
+        .into_iter()
+        .partition(|row| row.get::<Option<String>, _>("key").is_some());
     let (island_mode, registration_closed) = admin_runtime_settings_from_rows(settings)?;
-    read_phase(RuntimeControlReadPhase::Rules);
-    let rules =
-        sqlx::query("SELECT kind,domain FROM federation_runtime_rules ORDER BY kind,domain")
-            .fetch_all(&mut *connection)
-            .await?;
     let (blacklist, whitelist) = federation_runtime_rules_from_rows(rules);
     Ok((island_mode, registration_closed, blacklist, whitelist))
 }

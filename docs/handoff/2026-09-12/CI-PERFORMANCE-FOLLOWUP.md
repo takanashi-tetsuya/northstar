@@ -1009,3 +1009,60 @@ worker 未能建立 private session，後續診斷寫入也遭 ENOSPC。
 
 04:27 UTC 查詢時，`e0acbea` 的 push MIX 與 PR 兩組完整壓測
 仍在執行；它們不是新修正的 CI 結果。
+
+## 2026-09-13：合併後觀測器查詢中止與預備查詢量測
+
+`d107126` 的 push `34738083195`、PR `34738084926` 均完整成功：
+各有 28 個成功工作與 4 個政策預期跳過的工作，包含 CI required。
+四組 Federation／MIX 20×50 全過，80 輪、408 個階段成功；四份
+observer 附件 SHA-256 已核對。33,400 次有效取樣中共 22 次錯誤
+均成功恢復，沒有 business failure marker，不能描述為零取樣錯誤。
+release preview `34738083137` 亦通過全部 10 個適用工作。
+
+PR #4 已 squash 合併至 `dev`，產生 GitHub 驗證簽章有效的
+`d82bc56721d982d77112b6fc723fd3694205fc03`；其 tree 與 `d107126`
+相同。舊 PR #3 已被關閉而未合併，因此建立新的 draft PR #5
+（dev → main）。截至以下失敗，main 尚未合併新版本，也未建立
+正式 tag、GHCR 映像或 Release 草稿。
+
+合併後的 dev CI `34742180344`，Federation `103684385186` 前
+9 輪成功，第 10 輪的 workload 在 6090.981 ms 後被取消，回傳
+143。必要 observer 先於 06:56:57.066317 UTC 退出：
+client_query_deadline、最大取樣時間 5000.457 ms、4106 有效樣本、
+peak 100、11 次錯誤中 10 次恢復、最後連續錯誤數 1。此時尚無
+failure marker，父程序之後才發佈 parent_cancel 並取消 driver。
+wrapper 的 cleanup／marker／map／bounds 均成功，無 adopted
+descendants；不能把取消導致的 worker 錯誤列為第一原因。
+
+失敗附件 `10313573302`，SHA-256
+`f8d1e134d79936308812b45c08a664080e44bceb0ad20e0b4557c1f65b9f6daf`；
+observer 附件 `10313278971`，SHA-256
+`fa94b3bfd619a2110c7e2a4eb4b2085033799931699f773dc8ca792bce38d6ff`。
+兩份已下載校驗。最後有效取樣在 06:56:51.466080 UTC，100 個
+backend 均為 idle／ClientRead，沒有 blocking PID；此前 48 個
+上下文樣本也沒有 heavyweight lock。all-live 至清理前的約
+7.81 秒耗用約 31.14 CPU 秒，四核全滿，但起始程序分組快照
+被截斷，仍不能據此歸因某類程序，更不能宣稱已定位底層根因。
+
+新增隔離 PG17 微量測在 postmaster 與 driver 共用四顆 CPU 下，
+保留 100 個 runtime-control 與 400 個其他閒置 backend，交錯
+比較各 40 次相同查詢。閒置條件下，simple／prepared 中位數為
+3.333／2.484 ms；額外加入 100 條忙碌 pgbench 連線後，中位數
+為 6.303／4.760 ms，最大值 34.768／16.088 ms，沒有取樣錯誤。
+首次量測因測試角色無法連線至 bootstrap database 而未執行；
+另建測試角色自有資料庫後才取得上述結果，隔離叢集已清理。
+
+觀測器現在於同一條已 attested 連線上準備一次查詢，每次取樣
+執行該預備查詢。只重用計畫，每次仍是新 transaction／backend
+status snapshot；salt、完整欄位驗證、3+2 秒期限、逾時資料捨棄、
+無 reconnect、三次連續可恢復錯誤規則與完整矩陣均保留。
+準備步驟必須取得唯一完整的 command response，準備失敗、
+逾時或尚未排空時不能宣告 ready。
+
+46 項 observer 單元測試、16 項實際 PG17 回歸（66.698 秒）、
+subserver／architecture 檢查通過。新增實際回歸確認預備查詢能
+看到既有連線從 idle 變成 PgSleep，以及另一 backend 消失，
+觀測器 backend PID 維持同一個。初版回歸誤將進入 PgSleep 前的
+短暫 DataFileRead 判為失敗；改成在原三秒期限內等待目標狀態，
+完整重跑後才成功。此量測證明觀測開銷下降，尚不能代替新提交的
+完整 CI，也不證明它已解決遠端五秒中止。

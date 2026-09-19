@@ -65,21 +65,13 @@ CI 验证隔离环境中的代码与运行行为；生产环境、公网互操�
 | EXT-SECURITY | 尚无独立 RFC/XEP 审查、安全审计和渗透测试 | 外部资格 | **第三方完成后可关闭证据项** | 内部静态检查、单元测试和自审不能构成认证，也不能证明不存在未知漏洞 | 固定 release commit、binary digest、SBOM、部署拓扑和 threat model，委托独立方审查 XML/state machine、REST/WebSocket/BOSH/S2S/component、Redis/object store、浏览器密码学和权限模型。高风险公网部署前必须完成 |
 | EXT-OPERATIONS | 真实告警接收、升级/静默/恢复、离机备份和灾难恢复尚缺目标部署演练 | 外部运维证据 | **演练后可关闭证据项** | 仓库有 metrics、Prometheus rules、Grafana 和 runbook，但阈值与通知链没有目标流量基线；代码不能证明值班人员或备份目的地有效 | 完成通知演练、恢复演练、容量阈值校准和定期 restore drill，记录负责人、时间、RTO/RPO 和失败处置 |
 
-## 发布候选验证记录（2026-09-19）
+## 发布验证
 
-`52629d2` 的 [push CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34759787481)
-全部通过；[PR CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34759789421)
-的 Federation 在完成 18 轮后，第 19 轮因一台服务的控制查询触发五秒
-heartbeat 保护而失败。MIX、协定整合及其余必要检查均通过。
-本次 observer 正常结束，19 次 PostgreSQL statement timeout 均已恢复。
-新增的程序计数显示，慢查询期间的 CPU 排程等待远高于执行时间，
-容器未发生配额节流；仍需验证降低查询开销能否消除间歇故障。
-
-迁移 `0143` 让 Upload 快照重用查询计划，保留原有扫描上限与权限。
-本地 Upload 和数据库权限回归已通过，完整压力与新提交的 CI 尚待验证。
-Windows、Linux 与 Docker 的 [发布预演](https://github.com/takanashi-tetsuya/northstar/actions/runs/34759787444)
-已通过；本次快照优化仍需新的完整 CI 验证。
-日志和验证方法见 [CI 验证记录](handoff/2026-09-12/CI-PERFORMANCE-FOLLOWUP.md)。
+候选版本的状态以对应提交的 [GitHub Actions](https://github.com/takanashi-tetsuya/northstar/actions)
+结果为准。压力测试的故障分析、修复和制品校验记录见
+[CI 验证记录](handoff/2026-09-12/CI-PERFORMANCE-FOLLOWUP.md)。
+发布预演验证 Windows、Linux 与 Docker 构建；正式发布还会验证草稿中的
+下载制品、来源证明和公开镜像，完成后由维护者手动发布。
 
 定时 fuzz、production/cluster load envelope 和 scheduled stress 属于定时或
 手动 CI；普通 push/PR 按策略跳过这些工作。最终发布还需要精确 `main` 提交的

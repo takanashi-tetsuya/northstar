@@ -12,6 +12,8 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   while preserving current-data reads and the existing capability boundary.
 - Made Federation test cleanup verify socket ownership so another process
   reusing an ephemeral port is not mistaken for a leaked listener.
+- Gave the shared PostgreSQL stress fixture more CPU scheduling weight when
+  competing with the server processes, retaining all test deadlines.
 - Reduced runtime-control query work by reading settings and federation rules
   in one SQL snapshot. The pressure observer prepares its activity query once
   and reads fresh backend state on every sample, with bounded timeout recovery.

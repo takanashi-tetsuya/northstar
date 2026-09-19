@@ -787,7 +787,9 @@ jobs:
               exit 1
             fi
             release_id="$(jq -r '.id' <<<"$release_json")"
+            # GitHub clears a draft's pending tag when tag_name is omitted.
             gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              -f tag_name="$RELEASE_TAG" \
               -f name="Northstar $RELEASE_VERSION" \
               -F body=@release-notes.md \
               -F draft=true \
@@ -899,5 +901,6 @@ jobs:
             --evidence dist/RELEASE-EVIDENCE.json --output release-notes.md --verified \
             --verification-run "$GITHUB_RUN_ID"
           test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
-          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft --notes-file release-notes.md
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" --verify-tag --draft --notes-file release-notes.md
           echo "All release preparation checks passed. Draft $RELEASE_TAG is ready for the maintainer to publish." >> "$GITHUB_STEP_SUMMARY"

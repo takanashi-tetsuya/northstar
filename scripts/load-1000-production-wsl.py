@@ -272,6 +272,32 @@ def fanout(sender, sessions: list[object]) -> tuple[dict[str, float], float]:
     return summary(latencies), len(sessions) / elapsed
 
 
+def disconnect_resumable_sessions(sessions: list[object], timeout: float = 30) -> None:
+    # A transport EOF preserves SM. Wait for the peer's EOF too: local route
+    # removal precedes durable cleanup and release of the connection permit.
+    deadline = time.monotonic() + timeout
+
+    def wait_closed(session) -> None:
+        while True:
+            remaining = deadline - time.monotonic()
+            fixture.check(remaining > 0, "SM transport cleanup exceeded its deadline")
+            session.sock.settimeout(remaining)
+            try:
+                if not session.sock.recv(4096):
+                    return
+            except ConnectionResetError:
+                return
+
+    try:
+        for session in sessions:
+            session.sock.shutdown(socket.SHUT_WR)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(WORKERS, len(sessions))) as executor:
+            list(executor.map(wait_closed, sessions))
+    finally:
+        for session in sessions:
+            session.abort()
+
+
 def resume_random_sessions(sessions: list[object]) -> None:
     chosen = random.SystemRandom().sample(range(len(sessions)), RESUME_COUNT)
     resume_ids: dict[int, str] = {}
@@ -283,8 +309,8 @@ def resume_random_sessions(sessions: list[object]) -> None:
                       f"load-{index} did not enable resumable SM")
         resume_ids[index] = match.group(1)
     wait_metric("xmpp_resumable_sessions", RESUME_COUNT)
-    for index in chosen:
-        sessions[index].abort()
+    disconnect_resumable_sessions([sessions[index] for index in chosen])
+    wait_metric("xmpp_active_sessions", SESSION_COUNT + 1 - RESUME_COUNT)
 
     def resume(index: int) -> tuple[int, object]:
         replacement = fixture.XmppWebSocket(

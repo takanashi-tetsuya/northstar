@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Check scheduled fixtures against runner toolchains and device-bound login."""
 
+import concurrent.futures
 import importlib.util
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import tempfile
+import threading
+import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
@@ -17,6 +22,56 @@ spec = importlib.util.spec_from_file_location("integration", ROOT / "integration
 integration = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(integration)
 DEVICE = "b8095b5c-16fa-4fbe-915a-0f19b572c86e"
+
+
+class ResumeDrainTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("production_load", ROOT / "load-1000-production-wsl.py")
+        self.load = importlib.util.module_from_spec(spec)
+        with patch.dict(os.environ, {
+            "XMPP_LOAD_USERNAME": "load", "XMPP_LOAD_SENDER_USERNAME": "sender",
+            "XMPP_LOAD_PASSWORD": "test-password", "XMPP_LOAD_SERVER_PID": "1",
+            "XMPP_LOAD_CA_CERT": "unused",
+        }):
+            spec.loader.exec_module(self.load)
+
+    def test_transport_loss_waits_for_every_peer_to_finish_cleanup(self):
+        pairs = [socket.socketpair() for _ in range(2)]
+        clients = [SimpleNamespace(sock=client, abort=client.close) for client, _ in pairs]
+        eof_received = [threading.Event() for _ in pairs]
+        release = threading.Event()
+
+        def peer(index):
+            with pairs[index][1] as server:
+                server.settimeout(5)
+                self.assertEqual(server.recv(1), b"")
+                eof_received[index].set()
+                self.assertTrue(release.wait(5))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            peers = [executor.submit(peer, index) for index in range(len(pairs))]
+            worker = executor.submit(self.load.disconnect_resumable_sessions, clients, 5)
+            try:
+                self.assertTrue(all(event.wait(3) for event in eof_received))
+                self.assertFalse(worker.done(), "returned before the peers released their connections")
+            finally:
+                release.set()
+            worker.result(timeout=5)
+            for future in peers:
+                future.result(timeout=5)
+        self.assertTrue(all(client.sock.fileno() == -1 for client in clients))
+
+    def test_stalled_peer_hits_the_deadline_and_closes_the_client(self):
+        client, server = socket.socketpair()
+        session = SimpleNamespace(sock=client, abort=client.close)
+        started = time.monotonic()
+        try:
+            with self.assertRaises(TimeoutError):
+                self.load.disconnect_resumable_sessions([session], timeout=0.05)
+        finally:
+            server.close()
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(client.fileno(), -1)
 
 
 class DeviceLoginTests(unittest.TestCase):

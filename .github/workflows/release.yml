@@ -8,14 +8,23 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      resume_tag:
+        description: 'Existing signed tag whose verified assets need draft preparation (leave empty for a preview)'
+        type: string
+        default: ''
+      artifact_run_id:
+        description: 'Original tag run that completed package, image and provenance checks'
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 concurrency:
   # Superseded development previews cannot delay the latest candidate.
-  # Tag publication remains serialized; manual runs have independent groups.
-  group: release-preparation-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  # Recovery shares its tag's queue; manual previews have independent groups.
+  group: release-preparation-${{ inputs.resume_tag && format('refs/tags/{0}', inputs.resume_tag) || github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/codex/release-') }}
 
 jobs:
@@ -31,6 +40,7 @@ jobs:
       short_sha: ${{ steps.release.outputs.short_sha }}
       source_date_epoch: ${{ steps.release.outputs.source_date_epoch }}
       owner: ${{ steps.release.outputs.owner }}
+      reuse_run_id: ${{ steps.release.outputs.reuse_run_id }}
     steps:
       - name: Check out triggering source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,9 +51,22 @@ jobs:
       - name: Verify source and derive release metadata
         id: release
         shell: bash
+        env:
+          RESUME_TAG: ${{ inputs.resume_tag }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
         run: |
           set -euo pipefail
 
+          if [[ -n "$RESUME_TAG" || -n "$ARTIFACT_RUN_ID" ]]; then
+            if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$GITHUB_REF" != refs/heads/main \
+               || ! "$RESUME_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ \
+               || ! "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]{0,14}$ ]]; then
+              echo 'Draft recovery requires main, a version tag and its original artifact run ID' >&2
+              exit 1
+            fi
+            git fetch --depth=1 origin "refs/tags/$RESUME_TAG:refs/tags/$RESUME_TAG"
+            git checkout --detach "$RESUME_TAG"
+          fi
           commit="$(git rev-parse HEAD)"
           package_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
           if [[ ! "$package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -55,9 +78,9 @@ jobs:
           tag=""
           version="$package_version"
 
-          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_TYPE" == tag ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_TYPE" == tag || -n "$RESUME_TAG" ]]; then
             publish=true
-            tag="$GITHUB_REF_NAME"
+            tag="${RESUME_TAG:-$GITHUB_REF_NAME}"
             if [[ "$tag" != "v$package_version" ]]; then
               echo "release tag $tag must exactly match Cargo.toml version v$package_version" >&2
               exit 1
@@ -113,6 +136,7 @@ jobs:
             echo "short_sha=${commit:0:12}"
             echo "source_date_epoch=$source_date_epoch"
             echo "owner=$owner"
+            echo "reuse_run_id=$ARTIFACT_RUN_ID"
           } >>"$GITHUB_OUTPUT"
 
           if [[ "$publish" == true ]]; then
@@ -150,6 +174,7 @@ jobs:
 
   build-binaries:
     name: Build ${{ matrix.label }} package
+    if: needs.prepare.outputs.reuse_run_id == ''
     needs: [prepare, release-qualification]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -659,9 +684,14 @@ jobs:
 
   prepare-draft-release:
     name: Create or update draft GitHub Release
-    if: needs.prepare.outputs.publish == 'true'
+    if: >-
+      always() && needs.prepare.outputs.publish == 'true' &&
+      needs.release-qualification.result == 'success' &&
+      (needs.prepare.outputs.reuse_run_id != '' ||
+       (needs.assemble-release-assets.result == 'success' && needs.publish-images.result == 'success'))
     needs:
       - prepare
+      - release-qualification
       - assemble-release-assets
       - publish-images
     runs-on: ubuntu-24.04
@@ -669,11 +699,12 @@ jobs:
     permissions:
       contents: write
       actions: read
+      attestations: read
     steps:
-      - name: Re-check immutable release tag
+      - name: Check out draft preparation tools
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.prepare.outputs.tag }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -682,6 +713,9 @@ jobs:
         with:
           name: verified-release-assets-${{ needs.prepare.outputs.version }}
           path: dist
+          run-id: ${{ needs.prepare.outputs.reuse_run_id || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          digest-mismatch: error
 
       - name: Revalidate release evidence before preparing the draft
         env:
@@ -691,10 +725,28 @@ jobs:
           RELEASE_QUALIFICATION_FILE: release-qualification.json
         run: node scripts/verify-release-ci.mjs
 
+      - name: Validate original build evidence and provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          ARTIFACT_RUN_ID: ${{ needs.prepare.outputs.reuse_run_id || github.run_id }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-release-artifact-run.mjs
+          python3 scripts/release-download.py --directory dist --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT"
+          for asset in dist/*; do
+            gh attestation verify "$asset" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$RELEASE_COMMIT"
+          done
+
       - name: Render reviewable draft notes from exact release evidence
         run: >-
           python3 scripts/release-notes.py --qualification release-qualification.json
           --evidence dist/RELEASE-EVIDENCE.json --output release-notes.md
+          --verification-run '${{ github.run_id }}'
 
       - name: Create or update draft and upload assets
         shell: bash
@@ -705,9 +757,8 @@ jobs:
           RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
         run: |
           set -euo pipefail
-          if [[ "$(git rev-parse HEAD)" != "$RELEASE_COMMIT" \
-             || "$(git rev-parse "$RELEASE_TAG^{commit}")" != "$RELEASE_COMMIT" ]]; then
-            echo "$RELEASE_TAG moved after release validation" >&2
+          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo 'Draft tools differ from the workflow commit' >&2
             exit 1
           fi
           (
@@ -715,15 +766,12 @@ jobs:
             sha256sum --check SHA256SUMS
           )
 
-          release_exists=false
-          if release_json="$(gh api --method GET \
-            "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"; then
-            release_exists=true
-          elif ! jq -e '.status == "404"' <<<"$release_json" >/dev/null; then
-            echo "cannot determine whether release $RELEASE_TAG exists" >&2
-            exit 1
-          fi
-          if [[ "$release_exists" == false ]]; then
+          # The tag endpoint returns published releases only; list drafts too.
+          releases_json="$(gh api --method GET --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
+          release_json="$(jq -cs --arg tag "$RELEASE_TAG" \
+            '[.[][] | select(.tag_name == $tag)] | if length > 1 then error("duplicate release tag") else .[0] end' \
+            <<<"$releases_json")"
+          if [[ "$release_json" == null ]]; then
             create_options=(
               release create "$RELEASE_TAG"
               --repo "$GITHUB_REPOSITORY"
@@ -753,12 +801,13 @@ jobs:
 
   verify-draft-downloads:
     name: Verify fresh ${{ matrix.id }} draft download
-    if: needs.prepare.outputs.publish == 'true'
+    if: always() && needs.prepare.outputs.publish == 'true' && needs.prepare-draft-release.result == 'success'
     needs: [prepare, prepare-draft-release]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     permissions:
-      contents: read
+      # GitHub requires push access to discover unpublished releases.
+      contents: write
       attestations: read
     strategy:
       fail-fast: false
@@ -814,7 +863,7 @@ jobs:
 
   finalize-draft:
     name: Mark verified draft ready for manual publication
-    if: needs.prepare.outputs.publish == 'true'
+    if: always() && needs.prepare.outputs.publish == 'true' && needs.verify-draft-downloads.result == 'success'
     needs: [prepare, verify-draft-downloads]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -825,7 +874,7 @@ jobs:
       - name: Check out immutable release tools
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.prepare.outputs.commit }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Download this run's verified release evidence
@@ -834,6 +883,8 @@ jobs:
           name: verified-release-assets-${{ needs.prepare.outputs.version }}
           path: dist
           digest-mismatch: error
+          run-id: ${{ needs.prepare.outputs.reuse_run_id || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Revalidate CI and finalize the unpublished draft
         env:
@@ -845,7 +896,8 @@ jobs:
           set -euo pipefail
           node scripts/verify-release-ci.mjs
           python3 scripts/release-notes.py --qualification release-qualification.json \
-            --evidence dist/RELEASE-EVIDENCE.json --output release-notes.md --verified
+            --evidence dist/RELEASE-EVIDENCE.json --output release-notes.md --verified \
+            --verification-run "$GITHUB_RUN_ID"
           test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft --notes-file release-notes.md
           echo "All release preparation checks passed. Draft $RELEASE_TAG is ready for the maintainer to publish." >> "$GITHUB_STEP_SUMMARY"

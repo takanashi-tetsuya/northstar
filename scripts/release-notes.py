@@ -6,14 +6,15 @@ from pathlib import Path
 import re
 
 
-def render(qualification, evidence, output, verified):
+def render(qualification, evidence, output, verified, verification_run=None):
     q = json.loads(qualification.read_text())
     e = json.loads(evidence.read_text())
     commit, version = e['commit'], e['version']
     if (not re.fullmatch('[0-9a-f]{40}', commit) or not re.fullmatch(r'\d+\.\d+\.\d+', version)
             or q['commit'] != commit or q['tag'] != 'v' + version or e.get('published_images') is not True
             or not re.fullmatch(r'https://github.com/takanashi-tetsuya/northstar/actions/runs/[1-9][0-9]*', q['ciUrl'])
-            or type(e['workflow_run_id']) is not int or e['workflow_run_id'] <= 0):
+            or type(e['workflow_run_id']) is not int or e['workflow_run_id'] <= 0
+            or (verification_run is not None and (type(verification_run) is not int or verification_run <= 0))):
         raise ValueError('release-note evidence does not match the qualified release')
     template = Path(__file__).resolve().parents[1] / 'docs/releases' / (version + '.md')
     status = ('All automated release preparation and fresh-download checks passed. Ready for publication.'
@@ -27,6 +28,9 @@ def render(qualification, evidence, output, verified):
         + 'Verify GitHub build provenance with `gh attestation verify <file> --repo takanashi-tetsuya/northstar`. '
         + '`RELEASE-EVIDENCE.json` records native and container checks against this commit. '
         + '`IMAGE_DIGESTS` contains the three immutable image references; each image includes an SBOM and build provenance.\n')
+    if verification_run is not None and verification_run != e['workflow_run_id']:
+        content += ('\nDraft preparation and fresh-download verification: '
+                    f'[run {verification_run}](https://github.com/takanashi-tetsuya/northstar/actions/runs/{verification_run}).\n')
     output.write_text(content)
 
 
@@ -36,5 +40,6 @@ if __name__ == '__main__':
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--verified', action='store_true')
+    parser.add_argument('--verification-run', type=int)
     args = parser.parse_args()
-    render(args.qualification, args.evidence, args.output, args.verified)
+    render(args.qualification, args.evidence, args.output, args.verified, args.verification_run)

@@ -143,9 +143,16 @@ references in `IMAGE_DIGESTS`, and the successful workflow before publishing
 the draft. `SHA256SUMS` covers the four binary assets and both evidence files.
 The maintainer performs the final Publish release action.
 
-Draft preparation creates a release only when GitHub reports that the tag has
-no release (HTTP 404). Authentication, server and network errors stop the job.
+Draft preparation searches the paginated Release list, which includes drafts
+for maintainers. Authentication, server and network errors stop the job.
 Retries can update an existing draft; they cannot overwrite a published release.
+
+If a tag run passed every build, native runtime, image and attestation check but
+failed during draft preparation, run `Release preparation` from `main` with
+`resume_tag` and the original `artifact_run_id`. Recovery verifies that run's
+identity, successful build checks and artifact provenance, then resumes upload
+and fresh Windows/Linux downloads. It preserves the signed tag, packages and
+published images. Leave both inputs empty for a normal build preview.
 
 The root `build.sh`, `build_and_start.sh`, `start_server.sh`, `start.bat` and
 `Makefile` targets are compatibility wrappers for local development. They do

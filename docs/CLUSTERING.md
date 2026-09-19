@@ -1,15 +1,32 @@
 # Experimental same-domain clustering
 
-Northstar's supported baseline remains one application process plus PostgreSQL.
+Northstar's supported baseline has one core session authority plus PostgreSQL;
+[maintenance may run in its own process](SUBSERVERS.md).
 Setting `REDIS_URL`/`REDIS_URL_FILE` opts into an **Experimental** same-domain
-control plane. It is not a production scaling claim. Redis is ephemeral routing
-transport; PostgreSQL is the durable and security authority.
+control plane. Redis provides ephemeral routing; PostgreSQL owns durable state
+and authorization.
+
+The subserver topology requires one archive-retention owner per database
+schema. When upgrading an existing experimental cluster, change all but one
+combined server to `serve core`, or use core nodes and one `serve maintenance`
+process. Multiple old no-argument/`serve standalone` processes now conflict at
+startup. The cluster fixture uses one explicit standalone owner and one core
+peer, including on restart. Redis identity and aggregate connection budgets
+remain mandatory and are separate from the single-core subserver budget.
 
 No cluster signing configuration is required in single-node mode. Redis mode
 fails startup unless every node has a stable, unique `CLUSTER_NODE_ID`, a
 file-only Ed25519 signing key, and an explicit peer public-key/command ACL file.
 TLS and Redis ACLs remain required deployment controls, but they are not treated
 as application authentication.
+
+The Redis command ACL must include `SCARD` within the cluster namespace, in
+addition to the existing set and publication commands. MUC routing checks at
+most 128 peer nodes plus the local node before reading the set; missing this
+read permission fails the routing operation. Keep the key and channel scopes
+restricted to the deployment namespace. The disposable fixture in
+`scripts/cluster-wsl.sh` checks that namespaced cardinality reads succeed while
+out-of-namespace reads and administrative commands remain denied.
 
 ## Security boundary
 
@@ -292,8 +309,8 @@ contains only an operation/event locator. Every consequence is pulled back from
 PostgreSQL and digest checked.
 
 Ordinary groupchat content remains the pre-existing PostgreSQL archive plus
-best-effort Redis real-time fan-out; this CLU-MUC slice does not claim a durable
-per-recipient queue for ordinary room messages. Ordinary presence and typing
+best-effort Redis real-time fan-out, without a durable per-recipient queue.
+Ordinary presence and typing
 are explicitly bounded soft state. During either degraded failure policy, new
 MUC joins and management mutations fail closed until full reconciliation.
 Legal hold governs retained message/audit data through the data-lifecycle

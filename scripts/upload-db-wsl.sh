@@ -141,8 +141,9 @@ cargo test --locked --offline \
 cargo test --locked --offline \
   db::upload_admin::tests::postgres_retry_authorization_pagination_concurrency_and_fencing \
   -- --ignored --exact --nocapture --test-threads=1
-# The account-deletion fixture creates upload rows directly and therefore
-# deliberately reuses the core upload schema's already-bound test policy.
+# The account-deletion fixture binds its own upload-capacity policy after
+# migration, so this invocation must not depend on a preceding test command's
+# durable state in the shared isolated schema.
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$test_database?options=-csearch_path%3D$test_schema"
 cargo test --locked --offline \
   db::users::tests::account_deletion_atomically_cancels_local_reverse_rosters \

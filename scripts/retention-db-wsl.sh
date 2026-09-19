@@ -75,3 +75,7 @@ TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_t
   cargo test --locked --offline \
   db::data_lifecycle::tests::postgres_hold_cleanup_delete_release_and_audit_invariants \
   -- --ignored --exact --nocapture
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+  cargo test --locked --offline \
+  subscription_cleanup::tests::postgres_cleanup_preserves_live_subscriptions_and_event_snapshots_and_is_bounded \
+  -- --ignored --exact --nocapture

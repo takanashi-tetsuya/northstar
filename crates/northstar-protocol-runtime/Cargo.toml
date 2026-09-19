@@ -1,0 +1,15 @@
+[package]
+name = "northstar-protocol-runtime"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Transport-neutral in-memory protocol runtime indices, relay states, and capability caches for Northstar"
+publish = false
+
+[dependencies]
+dashmap = "6.1"
+northstar-session-core = { path = "../northstar-session-core" }
+northstar-xmpp-types = { path = "../northstar-xmpp-types" }
+tokio = { version = "1.43", features = ["sync", "time"] }
+uuid = { version = "1.12", features = ["v4"] }

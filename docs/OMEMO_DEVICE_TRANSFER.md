@@ -42,8 +42,8 @@ Unicode characters and is never retained in application state. JavaScript
 strings cannot be reliably erased, but the UI clears every password field
 immediately after use and overwrites its encoded and derived byte arrays where
 the platform permits. The pinned `hash-wasm` 4.12.0 Argon2id distribution,
-tarball, license, SBOM and hashes are verified by CI; its upstream toolchain is
-not claimed to be source-reproducible. See
+tarball, license, SBOM and hashes are verified by CI. Its upstream build
+environment is incomplete, preventing reproducible source builds. See
 [WEB_CRYPTO_SUPPLY_CHAIN.md](WEB_CRYPTO_SUPPLY_CHAIN.md).
 
 The plaintext contains the exact source device state needed for a move,
@@ -222,7 +222,7 @@ fixed-cardinality metrics and never contain IPs, accounts or transfer IDs.
   does not import arbitrary Gajim/Conversations/Dino/Monal databases.
 - Full browser, two-device and crash-boundary validation remains a release gate
   until a dated result is recorded for the exact release artifact and isolated
-  environment; having the harness in the repository is not execution evidence.
+  environment.
 
 Pure CI checks exercise package round-trip, wrong-passphrase authentication,
 account binding, fixed KDF parameters, size limits, server high-water wiring and

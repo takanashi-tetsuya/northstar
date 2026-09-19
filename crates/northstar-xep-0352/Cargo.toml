@@ -1,0 +1,26 @@
+﻿[package]
+name = "northstar-xep-0352"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Capability-free XEP-0352 Client State Indication wire protocol, state machine, and policy queue for Northstar"
+publish = false
+
+[package.metadata.northstar-xep]
+id = 352
+route-ids = [
+    "stream|urn:xmpp:csi:0|active",
+    "stream|urn:xmpp:csi:0|inactive",
+]
+worker-ids = []
+
+[dependencies]
+northstar-xep-core = { path = "../northstar-xep-core" }
+roxmltree = "0.20"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]

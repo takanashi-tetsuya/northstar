@@ -33,19 +33,17 @@ impl ProtocolSession {
         let stream_open = crate::xmpp::protocol::sasl2::is_tcp_stream_opening(xml)
             || (self.websocket && is_websocket_open(xml));
         if stream_open {
-            if self.stream_opened {
+            if self.negotiation.is_open() {
                 return Ok(Action::CloseWith(stream_error("unexpected-request")));
             }
             if let Err(error) = self.capture_stream_from(xml) {
                 return Ok(Action::CloseWith(stream_error(error.condition())));
             }
-            self.stream_opened = true;
             return Ok(Action::Send(self.open_stream()));
         }
         if is_stream_close(xml) {
             self.sm_resume_allowed = false;
-            self.stream_opened = false;
-            self.stream_language = None;
+            self.negotiation.close();
             return Ok(Action::Close);
         }
         let doc = match Document::parse(xml) {
@@ -65,11 +63,10 @@ impl ProtocolSession {
             && root.tag_name().namespace() == Some("urn:ietf:params:xml:ns:xmpp-framing")
         {
             self.sm_resume_allowed = false;
-            self.stream_opened = false;
-            self.stream_language = None;
+            self.negotiation.close();
             return Ok(Action::Close);
         }
-        if !self.stream_opened {
+        if !self.negotiation.is_open() {
             return Ok(Action::CloseWith(stream_error("not-well-formed")));
         }
         if root.tag_name().name() == "starttls"
@@ -88,12 +85,10 @@ impl ProtocolSession {
                 // not part of this protocol and continuing would permit
                 // negotiation state confusion.
                 self.sm_resume_allowed = false;
-                self.stream_opened = false;
+                self.negotiation.close();
                 return Ok(Action::SendManyAndClose(vec![tls_failure()]));
             }
-            self.stream_opened = false;
-            self.stream_language = None;
-            self.sasl_attempts = 0;
+            self.negotiation.restart_after_transport_upgrade();
             self.sasl_state = None;
             self.legacy_sasl_awaiting_initial_response = false;
             self.sasl2_state = None;
@@ -146,21 +141,35 @@ impl ProtocolSession {
             self.ibr_flow = None;
             return Ok(Action::CloseWith(stream_error("unexpected-request")));
         }
-        if root.tag_name().namespace() == Some("urn:xmpp:sm:3") {
+        if root.tag_name().namespace() == Some(northstar_xep_0198::NAMESPACE) {
+            if !self.state.config.xmpp_extensions.route_enabled(
+                northstar_xep_core::StanzaKind::Stream,
+                northstar_xep_0198::NAMESPACE,
+                root.tag_name().name(),
+            ) {
+                return Ok(Action::CloseWith(stream_error("unsupported-stanza-type")));
+            }
             return self.stream_management(root).await;
         }
-        if root.tag_name().namespace() == Some("urn:xmpp:csi:0") {
+        if root.tag_name().namespace() == Some(northstar_xep_0352::NAMESPACE) {
             if self.authenticated.is_none() {
                 return Ok(Action::CloseWith(stream_error("not-authorized")));
+            }
+            let indication = match northstar_xep_0352::parse_indication_node(root) {
+                Ok(indication) => indication,
+                Err(_) => return Ok(Action::CloseWith(stream_error("bad-format"))),
+            };
+            if !self.state.config.xmpp_extensions.route_enabled(
+                northstar_xep_core::StanzaKind::Stream,
+                northstar_xep_0352::NAMESPACE,
+                indication.local_name(),
+            ) {
+                return Ok(Action::CloseWith(stream_error("unsupported-stanza-type")));
             }
             if !super::csi::valid_indication(root) {
                 return Ok(Action::CloseWith(stream_error("bad-format")));
             }
-            return match root.tag_name().name() {
-                "active" => Ok(self.client_state(true)),
-                "inactive" => Ok(self.client_state(false)),
-                _ => Ok(Action::CloseWith(stream_error("unsupported-stanza-type"))),
-            };
+            return Ok(self.client_state(indication));
         }
         if matches!(root.tag_name().name(), "iq" | "message" | "presence") {
             if !valid_client_stanza_namespace(root, self.websocket, xml) {
@@ -192,7 +201,7 @@ impl ProtocolSession {
         // changes the stream default.
         let language_xml = matches!(root.tag_name().name(), "iq" | "message" | "presence")
             .then(|| {
-                self.stream_language.as_deref().and_then(|language| {
+                self.negotiation.language().and_then(|language| {
                     root.attribute(("http://www.w3.org/XML/1998/namespace", "lang"))
                         .is_none()
                         .then(|| set_root_attribute(xml, "xml:lang", language))
@@ -415,7 +424,12 @@ impl ProtocolSession {
         }
         let muc_domain = self.muc_domain();
         let upload_domain = self.upload_domain();
-        let caps_disco_get = is_caps_disco_get(root);
+        let caps_disco_get = self
+            .state
+            .config
+            .xmpp_extensions
+            .enabled(northstar_xep_0115::XEP_ID)
+            && is_caps_disco_get(root);
         if let Some(to) = root.attribute("to") {
             if let Ok(target_jid) = crate::jid::CanonicalJid::parse(to) {
                 let domain = target_jid.domainpart();
@@ -589,13 +603,30 @@ impl ProtocolSession {
                     let Some(target_nick) = to_jid.resourcepart() else {
                         return Ok(Action::Send(iq_error(id, "jid-malformed")));
                     };
-                    let is_ping = kind == "get"
-                        && root.children().filter(|node| node.is_element()).count() == 1
-                        && root.children().any(|node| {
-                            node.is_element()
-                                && node.tag_name().name() == "ping"
-                                && node.tag_name().namespace() == Some("urn:xmpp:ping")
-                        });
+                    let ping_child = root.children().find(|node| {
+                        node.is_element()
+                            && node.tag_name().name() == "ping"
+                            && node.tag_name().namespace() == Some(northstar_xep_0199::NAMESPACE)
+                    });
+                    let is_ping = if kind == "get" {
+                        if let Some(ping_child) = ping_child {
+                            if !self.state.config.xmpp_extensions.route_enabled(
+                                northstar_xep_core::StanzaKind::IqGet,
+                                northstar_xep_0199::NAMESPACE,
+                                "ping",
+                            ) {
+                                return Ok(Action::Send(iq_error(id, "service-unavailable")));
+                            }
+                            if northstar_xep_0199::parse_ping_element(ping_child).is_err() {
+                                return Ok(Action::Send(iq_error(id, "bad-request")));
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
                     if is_ping
                         && self
                             .authorized_muc_occupant(&room_jid)
@@ -704,9 +735,54 @@ impl ProtocolSession {
             return Ok(Action::Send(iq_error(id, "bad-request")));
         };
         let ns = child.tag_name().namespace().unwrap_or_default();
+        if child.tag_name().name() == "pubsub"
+            && matches!(
+                ns,
+                northstar_xep_0060::NS_PUBSUB | northstar_xep_0060::NS_PUBSUB_OWNER
+            )
+        {
+            let stanza = if kind == "get" {
+                northstar_xep_core::StanzaKind::IqGet
+            } else {
+                northstar_xep_core::StanzaKind::IqSet
+            };
+            if !self
+                .state
+                .config
+                .xmpp_extensions
+                .route_enabled(stanza, ns, "pubsub")
+            {
+                return Ok(Action::Send(iq_error(id, "feature-not-implemented")));
+            }
+        }
         let is_local_muc_room = root
             .attribute("to")
             .is_some_and(|to| super::muc::canonical_local_muc_room(to, &muc_domain).is_some());
+        let targets_local_muc = root.attribute("to").is_some_and(|to| {
+            crate::jid::CanonicalJid::parse(to).is_ok_and(|jid| jid.domainpart() == muc_domain)
+        });
+        let is_muc_operation = matches!(
+            ns,
+            "http://jabber.org/protocol/muc"
+                | "http://jabber.org/protocol/muc#unique"
+                | "http://jabber.org/protocol/muc#admin"
+                | "http://jabber.org/protocol/muc#owner"
+                | "urn:xmpp:message-moderate:1"
+        ) || (targets_local_muc && ns == "jabber:iq:register");
+        if targets_local_muc
+            && is_muc_operation
+            && !self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0045::XEP_ID)
+        {
+            return Ok(Action::Send(iq_error_from(
+                id,
+                &muc_domain,
+                "service-unavailable",
+            )));
+        }
         match (child.tag_name().name(), ns, kind) {
             ("command", "http://jabber.org/protocol/commands", "set") => {
                 super::commands::handle(self, id, root, child).await
@@ -750,8 +826,24 @@ impl ProtocolSession {
             }
             ("query", "jabber:iq:roster", "get") => self.roster_get(id, root, child).await,
             ("query", "jabber:iq:roster", "set") => self.roster_set(id, root, child).await,
-            ("query", "jabber:iq:privacy", "get") => self.privacy_get(id, root, child).await,
-            ("query", "jabber:iq:privacy", "set") => self.privacy_set(id, root, child).await,
+            ("query", northstar_xep_0016::NAMESPACE, "get")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqGet,
+                    northstar_xep_0016::NAMESPACE,
+                    "query",
+                ) =>
+            {
+                self.privacy_get(id, root, child).await
+            }
+            ("query", northstar_xep_0016::NAMESPACE, "set")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqSet,
+                    northstar_xep_0016::NAMESPACE,
+                    "query",
+                ) =>
+            {
+                self.privacy_set(id, root, child).await
+            }
             ("unique", "http://jabber.org/protocol/muc#unique", "get") => {
                 Ok(Action::Send(iq_result_from(
                     id,
@@ -783,63 +875,215 @@ impl ProtocolSession {
             ("query", "http://jabber.org/protocol/disco#items", "get") => {
                 self.disco_items(id, root.attribute("to"), child).await
             }
-            ("ping", "urn:xmpp:ping", "get") => Ok(Action::Send(iq_result(id, ""))),
-            ("time", "urn:xmpp:time", "get") => {
-                let now = chrono::Utc::now();
-                let payload = format!(
-                    "<time xmlns='urn:xmpp:time'><tzo>+00:00</tzo><utc>{}</utc></time>",
-                    now.format("%Y-%m-%dT%H:%M:%SZ")
-                );
-                Ok(Action::Send(iq_result(id, &payload)))
+            ("ping", northstar_xep_0199::NAMESPACE, "get")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqGet,
+                    northstar_xep_0199::NAMESPACE,
+                    "ping",
+                ) =>
+            {
+                if northstar_xep_0199::parse_ping_element(child).is_err() {
+                    Ok(Action::Send(iq_error(id, "bad-request")))
+                } else {
+                    Ok(Action::Send(iq_result(
+                        id,
+                        northstar_xep_0199::build_response(),
+                    )))
+                }
             }
-            ("query", "jabber:iq:version", "get") => Ok(Action::Send(iq_result(
-                id,
-                &format!(
-                    "<query xmlns='jabber:iq:version'><name>{}</name><version>{}</version><os>{}</os></query>",
-                    crate::state::xml_escape(&self.state.config.server_name),
+            ("time", northstar_xep_0202::NAMESPACE, "get")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqGet,
+                    northstar_xep_0202::NAMESPACE,
+                    "time",
+                ) =>
+            {
+                if northstar_xep_0202::parse_time_request_element(child).is_err() {
+                    return Ok(Action::Send(iq_error(id, "bad-request")));
+                }
+                let now = chrono::Utc::now();
+                match northstar_xep_0202::build_response_from_parts(
+                    northstar_xep_0202::DEFAULT_TZO,
+                    &now.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                ) {
+                    Ok(payload) => Ok(Action::Send(iq_result(id, &payload))),
+                    Err(error) => {
+                        tracing::error!(%error, "failed to build validated XEP-0202 response");
+                        Ok(Action::Send(iq_error(id, "internal-server-error")))
+                    }
+                }
+            }
+            ("query", northstar_xep_0092::NAMESPACE, "get")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqGet,
+                    northstar_xep_0092::NAMESPACE,
+                    "query",
+                ) =>
+            {
+                if northstar_xep_0092::parse_query_request_element(child).is_err() {
+                    return Ok(Action::Send(iq_error(id, "bad-request")));
+                }
+                let os = self
+                    .state
+                    .config
+                    .xep_0092_include_os
+                    .then_some(xmpp_version_os());
+                match northstar_xep_0092::build_response_from_parts(
+                    &self.state.config.server_name,
                     env!("CARGO_PKG_VERSION"),
-                    xmpp_version_os()
-                ),
-            ))),
-            ("services", "urn:xmpp:extdisco:2", "get") => self.external_services(id, root, child),
-            ("credentials", "urn:xmpp:extdisco:2", "get") => {
+                    os,
+                ) {
+                    Ok(payload) => Ok(Action::Send(iq_result(id, &payload))),
+                    Err(error) => {
+                        tracing::error!(%error, "failed to build validated XEP-0092 response");
+                        Ok(Action::Send(iq_error(id, "internal-server-error")))
+                    }
+                }
+            }
+            ("ping", northstar_xep_0199::NAMESPACE, "get")
+            | ("time", northstar_xep_0202::NAMESPACE, "get")
+            | ("query", northstar_xep_0092::NAMESPACE, "get") => {
+                Ok(Action::Send(iq_error(id, "service-unavailable")))
+            }
+            ("services", northstar_xep_0215::NAMESPACE, "get")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqGet,
+                    northstar_xep_0215::NAMESPACE,
+                    "services",
+                ) =>
+            {
+                self.external_services(id, root, child)
+            }
+            ("credentials", northstar_xep_0215::NAMESPACE, "get")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqGet,
+                    northstar_xep_0215::NAMESPACE,
+                    "credentials",
+                ) =>
+            {
                 self.external_credentials(id, root, child)
             }
             ("vCard", "vcard-temp", "get") => self.vcard_get(id, root).await,
             ("vCard", "vcard-temp", "set") => self.vcard_set(id, root, child, raw).await,
-            ("enable", "urn:xmpp:push:0", "set") => self.enable_push(id, root, child, raw).await,
-            ("disable", "urn:xmpp:push:0", "set") => self.disable_push(id, root, child).await,
-            ("request", "urn:xmpp:http:upload:0", "get") => {
+            ("enable", northstar_xep_0357::XMLNS_PUSH, "set")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqSet,
+                    northstar_xep_0357::XMLNS_PUSH,
+                    "enable",
+                ) =>
+            {
+                self.enable_push(id, root, child, raw).await
+            }
+            ("disable", northstar_xep_0357::XMLNS_PUSH, "set")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqSet,
+                    northstar_xep_0357::XMLNS_PUSH,
+                    "disable",
+                ) =>
+            {
+                self.disable_push(id, root, child).await
+            }
+            ("request", northstar_xep_0363::NAMESPACE, "get") if self.http_upload_enabled() => {
                 self.http_upload_slot(id, root.attribute("to"), child).await
             }
             // XEP-0363 defines slot allocation as an IQ-get. The upload
             // service is known and implemented, so using IQ-set is a
             // malformed request rather than an unknown feature.
-            ("request", "urn:xmpp:http:upload:0", _) => Ok(Action::Send(iq_error_from(
-                id,
-                &self.upload_domain(),
-                "bad-request",
-            ))),
-            ("query", "urn:xmpp:mam:2", "set") => self.mam(id, child, root.attribute("to")).await,
-            ("query", "urn:xmpp:mam:2", "get") => {
+            ("request", northstar_xep_0363::NAMESPACE, _) if self.http_upload_enabled() => Ok(
+                Action::Send(iq_error_from(id, &self.upload_domain(), "bad-request")),
+            ),
+            ("query", northstar_xep_0313::XMLNS_MAM, "set")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqSet,
+                    northstar_xep_0313::XMLNS_MAM,
+                    "query",
+                ) =>
+            {
+                self.mam(id, child, root.attribute("to")).await
+            }
+            ("query", northstar_xep_0313::XMLNS_MAM, "get")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqGet,
+                    northstar_xep_0313::XMLNS_MAM,
+                    "query",
+                ) =>
+            {
                 self.mam_query_form(id, root.attribute("to"), child).await
             }
-            ("metadata", "urn:xmpp:mam:2", "get") => {
+            ("metadata", northstar_xep_0313::XMLNS_MAM, "get")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqGet,
+                    northstar_xep_0313::XMLNS_MAM,
+                    "metadata",
+                ) =>
+            {
                 self.mam_metadata(id, root.attribute("to"), child).await
             }
-            ("prefs", "urn:xmpp:mam:2", "get") => {
+            ("prefs", northstar_xep_0313::XMLNS_MAM, "get")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqGet,
+                    northstar_xep_0313::XMLNS_MAM,
+                    "prefs",
+                ) =>
+            {
                 self.mam_preferences_get(id, root.attribute("to"), child)
                     .await
             }
-            ("prefs", "urn:xmpp:mam:2", "set") => {
+            ("prefs", northstar_xep_0313::XMLNS_MAM, "set")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqSet,
+                    northstar_xep_0313::XMLNS_MAM,
+                    "prefs",
+                ) =>
+            {
                 self.mam_preferences_set(id, root.attribute("to"), child)
                     .await
             }
-            ("enable", "urn:xmpp:carbons:2", "set") => self.set_carbons(id, root, child, true),
-            ("disable", "urn:xmpp:carbons:2", "set") => self.set_carbons(id, root, child, false),
-            ("blocklist", "urn:xmpp:blocking", "get") => self.blocklist(id, root, child).await,
-            ("block", "urn:xmpp:blocking", "set") => self.block(id, root, child).await,
-            ("unblock", "urn:xmpp:blocking", "set") => self.unblock(id, root, child).await,
+            ("enable", northstar_xep_0280::NAMESPACE, "set")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqSet,
+                    northstar_xep_0280::NAMESPACE,
+                    "enable",
+                ) =>
+            {
+                self.set_carbons(id, root, child, true)
+            }
+            ("disable", northstar_xep_0280::NAMESPACE, "set")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqSet,
+                    northstar_xep_0280::NAMESPACE,
+                    "disable",
+                ) =>
+            {
+                self.set_carbons(id, root, child, false)
+            }
+            ("blocklist", northstar_xep_0191::NAMESPACE, "get")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqGet,
+                    northstar_xep_0191::NAMESPACE,
+                    "blocklist",
+                ) =>
+            {
+                self.blocklist(id, root, child).await
+            }
+            ("block", northstar_xep_0191::NAMESPACE, "set")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqSet,
+                    northstar_xep_0191::NAMESPACE,
+                    "block",
+                ) =>
+            {
+                self.block(id, root, child).await
+            }
+            ("unblock", northstar_xep_0191::NAMESPACE, "set")
+                if self.state.config.xmpp_extensions.route_enabled(
+                    northstar_xep_core::StanzaKind::IqSet,
+                    northstar_xep_0191::NAMESPACE,
+                    "unblock",
+                ) =>
+            {
+                self.unblock(id, root, child).await
+            }
             ("pubsub", "http://jabber.org/protocol/pubsub", "set") => {
                 if root
                     .attribute("to")

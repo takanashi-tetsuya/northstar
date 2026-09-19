@@ -1,0 +1,19 @@
+[package]
+name = "foundation-kms"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "KMS/HSM provider traits and key lifecycle metadata for Northstar"
+publish = false
+
+[features]
+default = []
+# Development-only deterministic provider. Production builds must not enable it.
+memory = ["dep:ring", "dep:zeroize"]
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+thiserror = "2.0"
+ring = { version = "0.17.14", optional = true }
+zeroize = { version = "1.8", optional = true }
+

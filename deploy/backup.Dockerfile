@@ -21,6 +21,7 @@ RUN apk add --no-cache age bash coreutils openssl tar gzip python3 util-linux \
     && chmod 0600 /uploads/.northstar-upload-root /rollback/.northstar-rollback-root
 COPY --chown=10001:10001 --chmod=0555 scripts/backup.sh scripts/verify-backup.sh scripts/restore-backup.sh scripts/validate-backup-dump-local.sh scripts/run-postgres.py scripts/verify-upload-archive.py scripts/backup-security.py scripts/backup-security-offline.sh /opt/northstar/
 COPY --chown=10001:10001 --chmod=0444 \
+    deploy/postgres-init/lib/reconcile-northstar-grants.sql \
     deploy/postgres-init/lib/verify-northstar-grant-boundary.sql \
     deploy/postgres-init/lib/apply-northstar-grants.sql \
     deploy/postgres-init/lib/northstar-capability-manifest.sql \

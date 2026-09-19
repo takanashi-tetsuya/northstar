@@ -13,6 +13,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$project_dir/target-wsl}"
 fi
 cd "$project_dir"
+source "$project_dir/scripts/lib/test-listener-readiness.sh"
 
 test_database="${XMPP_TEST_DATABASE:-xmpp_test}"
 if [[ "$test_database" != "xmpp_test" ]]; then
@@ -25,29 +26,21 @@ if [[ ! "$schema" =~ ^northstar_moderation_rt_[0-9a-f]{32}$ ]]; then
   echo "refusing an unexpected moderation runtime schema" >&2
   exit 2
 fi
-read -r xmpp_port xmpps_port s2s_port s2s_tls_port http_port < <(
-  python3 -c "import socket; sockets=[socket.socket() for _ in range(5)]; [s.bind(('127.0.0.1',0)) for s in sockets]; print(*(s.getsockname()[1] for s in sockets)); [s.close() for s in sockets]"
-)
-ports=("$xmpp_port" "$xmpps_port" "$s2s_port" "$s2s_tls_port" "$http_port")
-if [[ "$(printf '%s\n' "${ports[@]}" | sort -u | wc -l)" -ne 5 ]]; then
-  echo "moderation runtime ports were not unique" >&2
-  exit 2
-fi
-for port in "${ports[@]}"; do
-  if [[ ! "$port" =~ ^[0-9]+$ ]] || (( port < 1024 || port > 65535 )); then
-    echo "invalid moderation runtime port: $port" >&2
-    exit 2
-  fi
-done
-
 runtime_dir="$(mktemp -d /tmp/northstar-moderation.XXXXXX)"
 chmod 0700 "$runtime_dir"
 server_pid=""
 schema_created=false
-port_is_listening() {
-  local port="$1"
-  ss -H -ltn "sport = :$port" 2>/dev/null | grep -q .
-}
+server_generation=0
+xmpp_port=""
+xmpps_port=""
+http_port=""
+http_backend_port=""
+web_admin_port=""
+http_relay_pid=""
+http_relay_port=""
+http_relay_target="$runtime_dir/moderation-http.target"
+public_url=""
+declare -a fixture_listener_ports=()
 log_contains_value() {
   local needle="$1" file
   [[ -n "$needle" ]] || return 1
@@ -89,6 +82,7 @@ cleanup() {
     wait "$server_pid" 2>/dev/null || true
     server_pid=""
   fi
+  stop_http_relay
   if [[ "$status" -ne 0 && -f "$runtime_dir/server.log" ]]; then
     if log_contains_sensitive_value; then
       echo "moderation runtime log contains sensitive test data; raw failure tail suppressed" >&2
@@ -114,12 +108,7 @@ cleanup() {
       status=1
     fi
   fi
-  for port in "${ports[@]}"; do
-    if port_is_listening "$port"; then
-      echo "moderation runtime listener remained on port $port" >&2
-      status=1
-    fi
-  done
+  fixture_assert_no_listeners || status=1
   case "$runtime_dir" in
     /tmp/northstar-moderation.*) rm -rf -- "$runtime_dir" ;;
     *) echo "refusing to remove unexpected runtime directory: $runtime_dir" >&2; status=1 ;;
@@ -129,13 +118,6 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-
-for port in "${ports[@]}"; do
-  if port_is_listening "$port"; then
-    echo "allocated moderation runtime port is already in use: $port" >&2
-    exit 1
-  fi
-done
 
 PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test \
   --dbname "$test_database" --set ON_ERROR_STOP=1 \
@@ -178,49 +160,115 @@ env \
   MIGRATOR_DATABASE_URL="$database_url" \
   "$binary" migrate
 
-env \
-  NORTHSTAR_DISABLE_DOTENV=true \
-  XMPP_DOMAIN=localhost \
-  DATABASE_URL="$database_url" \
-  XMPP_BIND="127.0.0.1:$xmpp_port" \
-  XMPPS_BIND="127.0.0.1:$xmpps_port" \
-  S2S_BIND="127.0.0.1:$s2s_port" \
-  S2S_TLS_BIND="127.0.0.1:$s2s_tls_port" \
-  HTTP_BIND="127.0.0.1:$http_port" \
-  PUBLIC_URL="http://127.0.0.1:$http_port" \
-  API_CONTROL_SECRET_FILE="$runtime_dir/api-control.secret" \
-  FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token.secret" \
-  DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram.secret" \
-  ABUSE_STATE_HMAC_KEY_FILE="$runtime_dir/abuse-state.secret" \
-  TRUSTED_PROXY_IPS=127.0.0.1,::1 \
-  WEBSOCKET_ALLOWED_ORIGINS=http://localhost \
-  UPLOAD_DIR="$runtime_dir/uploads" \
-  LOG_DIR="$runtime_dir/logs" \
-  TLS_CERT_PATH="$runtime_dir/server.crt" \
-  TLS_KEY_PATH="$runtime_dir/server.key" \
-  OPEN_REGISTRATION=true \
-  INVITATION_REQUIRED=false \
-  REQUIRE_ENCRYPTED_ARCHIVE=false \
-  FEDERATION_ENABLED=false \
-  REGISTRATION_RATE_PER_HOUR=100 \
-  MAX_CLIENT_CONNECTIONS=100 \
-  MAX_CONNECTIONS_PER_IP=100 \
-  POW_BASE_WORK_FACTOR=32 \
-  POW_MAX_WORK_FACTOR=4096 \
-  POW_MAX_DEVICE_SECONDS=8 \
-  ABUSE_MESSAGE_FREE_BURST=20 \
-  ABUSE_WINDOW_SECONDS=60 \
-  ABUSE_COOLDOWN_SECONDS=60 \
-  ABUSE_MAX_WAIT_SECONDS=120 \
-  BOOTSTRAP_ADMIN_USERNAME="$MODERATION_ADMIN_USERNAME" \
-  BOOTSTRAP_ADMIN_PASSWORD="$MODERATION_ADMIN_PASSWORD" \
-  LOG_FORMAT=json \
-  RUST_LOG=rust_xmpp_server=info \
-  "$binary" >"$runtime_dir/server.log" 2>&1 &
-server_pid=$!
+# The REST moderation client follows the server's externally advertised
+# authority.  Hold that authority at a fixture-owned relay while each server
+# generation binds HTTP :0 and only replaces the relay target after readiness.
+fixture_start_tcp_relay "$project_dir" "$runtime_dir" moderation-http moderation-http \
+  "$http_relay_target" "$runtime_dir/moderation-http-relay.log" \
+  http_relay_pid http_relay_port
+public_url="http://127.0.0.1:$http_relay_port"
+
+publish_http_target() {
+  fixture_publish_relay_target "$http_relay_target" "$http_backend_port"
+}
+
+# The public relay remains live while the fixture owns its advertised URL.
+# Reap it through one idempotent operation on both the success and EXIT paths,
+# so the listener ledger never mistakes the fixture's intentional relay for a
+# leaked server listener.
+stop_http_relay() {
+  if [[ -n "$http_relay_pid" ]]; then
+    kill "$http_relay_pid" 2>/dev/null || true
+    wait "$http_relay_pid" 2>/dev/null || true
+    http_relay_pid=""
+  fi
+}
+
+assert_advertised_public_url() {
+  curl --silent --fail "http://127.0.0.1:$http_relay_port/api/v1/config" |
+    python3 -c '
+import json
+import sys
+
+expected = sys.argv[1]
+actual = json.load(sys.stdin).get("public_url")
+if actual != expected:
+    raise SystemExit(
+        f"moderation fixture advertised {actual!r}, expected stable relay {expected!r}"
+    )
+' "$public_url"
+}
+
+start_server() {
+  server_generation=$((server_generation + 1))
+  local readiness_file="$runtime_dir/server-${server_generation}.ready.json"
+  local readiness_nonce
+  readiness_nonce="$(openssl rand -hex 16)"
+  rm -f -- "$readiness_file" "$http_relay_target"
+  env \
+    NORTHSTAR_DISABLE_DOTENV=true \
+    XMPP_DOMAIN=localhost \
+    DATABASE_URL="$database_url" \
+    XMPP_BIND=127.0.0.1:0 \
+    XMPPS_BIND=127.0.0.1:0 \
+    S2S_BIND=127.0.0.1:0 \
+    S2S_TLS_BIND=127.0.0.1:0 \
+    HTTP_BIND=127.0.0.1:0 \
+    WEB_ADMIN_BIND=127.0.0.1:0 \
+    TEST_LISTENER_ACTIVATION=true \
+    TEST_READINESS_FILE="$readiness_file" \
+    TEST_READINESS_NONCE="$readiness_nonce" \
+    PUBLIC_URL="$public_url" \
+    API_CONTROL_SECRET_FILE="$runtime_dir/api-control.secret" \
+    FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token.secret" \
+    DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram.secret" \
+    ABUSE_STATE_HMAC_KEY_FILE="$runtime_dir/abuse-state.secret" \
+    TRUSTED_PROXY_IPS=127.0.0.1,::1 \
+    WEBSOCKET_ALLOWED_ORIGINS="http://localhost,$public_url" \
+    UPLOAD_DIR="$runtime_dir/uploads" \
+    LOG_DIR="$runtime_dir/logs" \
+    TLS_CERT_PATH="$runtime_dir/server.crt" \
+    TLS_KEY_PATH="$runtime_dir/server.key" \
+    OPEN_REGISTRATION=true \
+    INVITATION_REQUIRED=false \
+    REQUIRE_ENCRYPTED_ARCHIVE=false \
+    FEDERATION_ENABLED=false \
+    REGISTRATION_RATE_PER_HOUR=100 \
+    MAX_CLIENT_CONNECTIONS=100 \
+    MAX_CONNECTIONS_PER_IP=100 \
+    POW_BASE_WORK_FACTOR=32 \
+    POW_MAX_WORK_FACTOR=4096 \
+    POW_MAX_DEVICE_SECONDS=8 \
+    ABUSE_MESSAGE_FREE_BURST=20 \
+    ABUSE_WINDOW_SECONDS=60 \
+    ABUSE_COOLDOWN_SECONDS=60 \
+    ABUSE_MAX_WAIT_SECONDS=120 \
+    BOOTSTRAP_ADMIN_USERNAME="$MODERATION_ADMIN_USERNAME" \
+    BOOTSTRAP_ADMIN_PASSWORD="$MODERATION_ADMIN_PASSWORD" \
+    LOG_FORMAT=json \
+    RUST_LOG=rust_xmpp_server=info \
+    "$binary" >"$runtime_dir/server.log" 2>&1 &
+  server_pid=$!
+  fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid" || {
+    echo "moderation runtime server failed before publishing readiness" >&2
+    return 1
+  }
+  xmpp_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
+  xmpps_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
+  http_backend_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+  web_admin_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" web-admin)"
+  publish_http_target
+  http_port="$http_relay_port"
+  curl --silent --fail "http://127.0.0.1:$http_backend_port/readyz" >/dev/null
+  curl --silent --fail "http://127.0.0.1:$http_port/readyz" >/dev/null
+  assert_advertised_public_url
+}
+
+start_server
 
 export XMPP_TEST_HOST=127.0.0.1
 export XMPP_TEST_HTTP_PORT="$http_port"
+export XMPP_TEST_WEB_ADMIN_PORT="$web_admin_port"
 export XMPP_TEST_CLIENT_PORT="$xmpp_port"
 export XMPP_TEST_XMPPS_PORT="$xmpps_port"
 export XMPP_TEST_DOMAIN=localhost
@@ -295,10 +343,6 @@ for forbidden_log_value in \
     exit 1
   fi
 done
-for port in "${ports[@]}"; do
-  if port_is_listening "$port"; then
-    echo "moderation runtime listener remained after shutdown on port $port" >&2
-    exit 1
-  fi
-done
+stop_http_relay
+fixture_assert_no_listeners || exit 1
 echo "moderation runtime: report, administration, appeal, audit, idempotency, authorization and expiry passed"

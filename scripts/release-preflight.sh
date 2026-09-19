@@ -30,6 +30,10 @@ sh scripts/test-log-security.sh \
     || fail "log permission and container rotation validation failed"
 node scripts/check-architecture-boundaries.mjs \
     || fail "application-service architecture boundary validation failed"
+node scripts/check-plugin-architecture.mjs \
+    || fail "XEP plugin dependency, capability, and ownership boundary validation failed"
+node scripts/test-plugin-architecture.mjs \
+    || fail "XEP plugin architecture gate self-test failed"
 node scripts/check-documentation-consistency.mjs \
     || fail "documentation and protocol traceability validation failed"
 node scripts/check-outbound-xml-construction.mjs \

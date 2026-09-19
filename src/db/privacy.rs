@@ -2,71 +2,15 @@ use anyhow::Result;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
-pub const MAX_PRIVACY_LISTS: usize = 64;
-pub const MAX_PRIVACY_ITEMS: usize = 256;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PrivacyAction {
-    Allow,
-    Deny,
-}
-
-impl PrivacyAction {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Allow => "allow",
-            Self::Deny => "deny",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PrivacyMatchType {
-    Jid,
-    Group,
-    Subscription,
-}
-
-impl PrivacyMatchType {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Jid => "jid",
-            Self::Group => "group",
-            Self::Subscription => "subscription",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PrivacyItem {
-    pub order: u32,
-    pub action: PrivacyAction,
-    pub match_type: Option<PrivacyMatchType>,
-    pub match_value: Option<String>,
-    pub message: bool,
-    pub iq: bool,
-    pub presence_in: bool,
-    pub presence_out: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PrivacyList {
-    pub name: String,
-    pub items: Vec<PrivacyItem>,
-}
+pub use northstar_xep_0016::{
+    PrivacyAction, PrivacyItem, PrivacyList, PrivacyMatchType, PrivacyStanzaKind,
+    MAX_PRIVACY_ITEMS, MAX_PRIVACY_LISTS,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PrivacyOverview {
     pub default: Option<String>,
     pub names: Vec<String>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PrivacyStanzaKind {
-    Message,
-    Iq,
-    PresenceIn,
-    PresenceOut,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -477,7 +421,7 @@ pub async fn privacy_denies(
         .unwrap_or_default();
     Ok(privacy_list_denies(
         &list,
-        &candidate,
+        &candidate.to_string(),
         subscription.as_deref(),
         &groups,
         kind,
@@ -612,7 +556,7 @@ pub(crate) async fn privacy_denies_in_transaction(
             name: selected,
             items,
         },
-        &candidate,
+        &candidate.to_string(),
         subscription.as_deref(),
         &groups,
         kind,
@@ -621,44 +565,12 @@ pub(crate) async fn privacy_denies_in_transaction(
 
 fn privacy_list_denies(
     list: &PrivacyList,
-    candidate: &crate::jid::CanonicalJid,
+    candidate: &str,
     subscription: Option<&str>,
     groups: &[String],
     kind: PrivacyStanzaKind,
 ) -> bool {
-    for item in &list.items {
-        let stanza_matches = if !(item.message || item.iq || item.presence_in || item.presence_out)
-        {
-            true
-        } else {
-            match kind {
-                PrivacyStanzaKind::Message => item.message,
-                PrivacyStanzaKind::Iq => item.iq,
-                PrivacyStanzaKind::PresenceIn => item.presence_in,
-                PrivacyStanzaKind::PresenceOut => item.presence_out,
-            }
-        };
-        if !stanza_matches {
-            continue;
-        }
-        let entity_matches = match (item.match_type, item.match_value.as_deref()) {
-            (None, None) => true,
-            (Some(PrivacyMatchType::Jid), Some(value)) => {
-                super::roster::blocked_jid_matches(value, &candidate.to_string())
-            }
-            (Some(PrivacyMatchType::Group), Some(value)) => {
-                groups.iter().any(|group| group == value)
-            }
-            (Some(PrivacyMatchType::Subscription), Some(value)) => {
-                subscription.unwrap_or("none") == value
-            }
-            _ => false,
-        };
-        if entity_matches {
-            return item.action == PrivacyAction::Deny;
-        }
-    }
-    false
+    northstar_xep_0016::list_denies(list, candidate, subscription, groups, kind)
 }
 
 pub async fn privacy_denies_for_sm_session(

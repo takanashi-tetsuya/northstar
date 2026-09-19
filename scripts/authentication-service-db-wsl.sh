@@ -110,5 +110,9 @@ run_exact_ignored \
   services::authentication::tests::publication_lease_lock_blocks_reserve_release_and_fences_expiry_cleanup
 run_exact_ignored \
   db::fast::tests::fast_derivation_integrity_failures_are_side_effect_free
+run_exact_ignored \
+  db::capacity::tests::postgres_capacity_audit_compares_complete_entity_and_counter_sets
+run_exact_ignored \
+  db::capacity::tests::postgres_capacity_fixture_is_atomic_leased_and_idempotent
 
 trap - EXIT

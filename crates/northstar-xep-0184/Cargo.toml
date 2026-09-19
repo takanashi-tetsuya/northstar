@@ -1,0 +1,20 @@
+[package]
+name = "northstar-xep-0184"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Capability-free XEP-0184 wire parsing, validation, building, and routing policy"
+publish = false
+
+[package.metadata.northstar-xep]
+id = 184
+route-ids = [
+    "message|urn:xmpp:receipts|request",
+    "message|urn:xmpp:receipts|received",
+]
+worker-ids = []
+
+[dependencies]
+northstar-xep-core = { path = "../northstar-xep-core" }
+roxmltree = "0.20"

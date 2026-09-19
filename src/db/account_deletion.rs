@@ -125,6 +125,39 @@ mod tests {
         )
         .await
         .unwrap();
+        // A personal-message identity is intentionally retained when its MAM
+        // projection expires, but must not outlive the account that owns its
+        // actor scope.  Exercise the audited XEP-0077 path rather than the
+        // test-only direct DELETE path in users.rs.
+        let account_jid = format!("{username}@example.test");
+        let archive_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO message_archive
+             (id,owner_id,peer_jid,peer_full_jid,stanza,encrypted)
+             VALUES($1,$2,'peer@example.test','peer@example.test',
+                    '<message xmlns=\"jabber:client\"/>',FALSE)",
+        )
+        .bind(archive_id)
+        .bind(user.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let admission_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO personal_message_admissions
+             (id,identity_kind,actor_scope_raw,actor_scope,target_scope,identity_value,
+              identity_digest,payload_key_id,payload_mac,sender_archive_id)
+             VALUES($1,'local-origin',$2,$2,'peer@example.test','delete-recovery',$3,
+                    'AAAAAAAAAAAAAAAA',$4,$5)",
+        )
+        .bind(admission_id)
+        .bind(&account_jid)
+        .bind(vec![0x61_u8; 32])
+        .bind(vec![0x62_u8; 32])
+        .bind(archive_id)
+        .execute(&pool)
+        .await
+        .unwrap();
         assert!(crate::db::begin_account_deletion_quiesce(&pool, user.id)
             .await
             .unwrap());
@@ -179,5 +212,12 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(remaining, 0);
+        let retained_admissions: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM personal_message_admissions WHERE id=$1")
+                .bind(admission_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(retained_admissions, 0);
     }
 }

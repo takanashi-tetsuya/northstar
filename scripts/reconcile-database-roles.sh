@@ -664,6 +664,7 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
            ON namespace.oid = routine.pronamespace
         WHERE namespace.nspname = 'public'
           AND ((NOT routine.prosecdef
+                AND routine.prorettype<>'pg_catalog.trigger'::pg_catalog.regtype
                 AND routine.proname NOT LIKE 'northstar_admin_command_%'
                 AND routine.proname NOT IN (
                   'northstar_protect_admin_session_cleanup_identity',
@@ -1078,7 +1079,11 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
           AND privilege.privilege_type='EXECUTE'
           AND (
             (privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'runtime_role')
-              AND (NOT routine.prosecdef OR expected.workload='runtime'))
+              AND (
+                (NOT routine.prosecdef
+                 AND routine.prorettype<>'pg_catalog.trigger'::pg_catalog.regtype)
+                OR expected.workload='runtime'
+              ))
             OR
             (privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'command_role')
               AND expected.workload='command')

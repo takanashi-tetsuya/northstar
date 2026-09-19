@@ -6,7 +6,16 @@ import vm from 'node:vm';
 const root = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
 const [abuse, config, envExample, apiRouter, authRoutes, reportRoutes, protocolSession, dispatch, messaging, miscProtocol, ibrProtocol, accountService, accountRecovery, dbUsers, apiControl, appError, xmlUtil, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, main, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
-  read('src/abuse.rs'), read('src/config.rs'), read('.env.example'),
+  Promise.all([
+    read('src/abuse.rs'),
+    read('crates/northstar-abuse-policy/src/lib.rs'),
+    read('crates/northstar-abuse-policy/src/model.rs'),
+    read('crates/northstar-abuse-policy/src/escalation.rs'),
+    read('crates/northstar-abuse-policy/src/admission.rs'),
+    read('crates/northstar-abuse-policy/src/pow.rs'),
+    read('crates/northstar-abuse-policy/src/cooldown.rs'),
+    read('crates/northstar-abuse-policy/src/config.rs'),
+  ]).then(parts => parts.join('\n')), read('src/config.rs'), read('.env.example'),
   read('src/api/mod.rs'), read('src/api/auth_routes.rs'),
   read('src/api/reports.rs'), read('src/xmpp/protocol.rs'), read('src/xmpp/protocol/dispatch.rs'),
   read('src/xmpp/protocol/messaging.rs'), read('src/xmpp/protocol/misc.rs'), read('src/xmpp/protocol/ibr.rs'), read('src/services/account.rs'), read('src/account_recovery.rs'), read('src/db/users.rs'), read('src/db/api_control.rs'), read('src/error.rs'), read('src/xmpp/xml_util.rs'),

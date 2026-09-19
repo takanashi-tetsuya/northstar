@@ -4,29 +4,28 @@ version = "0.0.0"
 publish = false
 edition = "2021"
 
+# The fuzz harness has its own lockfile and libFuzzer build configuration.
+# Production parser crates remain ordinary path dependencies of this workspace.
+[workspace]
+
 [package.metadata]
 cargo-fuzz = true
 
 [dependencies]
 anyhow = "1.0"
-argon2 = "0.5"
 axum = "0.8"
 base64 = "0.22"
 futures = "0.3"
-hmac = "0.12"
-idna = "1.1"
 libfuzzer-sys = "0.4.13"
-pbkdf2 = { version = "0.12", features = ["hmac"] }
-precis-profiles = "0.1.13"
-rand = "0.8"
+northstar-auth-core = { path = "../crates/northstar-auth-core" }
+northstar-xep-0060 = { path = "../crates/northstar-xep-0060" }
+northstar-xep-0198 = { path = "../crates/northstar-xep-0198" }
+northstar-xep-0313 = { path = "../crates/northstar-xep-0313" }
+northstar-xml-framing = { path = "../crates/northstar-xml-framing" }
+northstar-xmpp-types = { path = "../crates/northstar-xmpp-types" }
 roxmltree = "0.20"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-sha1 = "0.10"
-sha2 = "0.10"
-thiserror = "2.0"
 uuid = { version = "1.12", features = ["v4", "serde"] }
-zeroize = "1.8"
 
 [[bin]]
 name = "xml_framing"

@@ -142,6 +142,7 @@ def test_overlong_anchor_preserves_error() -> None:
 def test_cli_output() -> None:
     with tempfile.TemporaryDirectory() as temporary_directory:
         log_path = Path(temporary_directory) / "failure.log"
+        redacted_path = Path(temporary_directory) / "failure.redacted.log"
         log_path.write_bytes("ERROR: cli smoke test 🙂\n".encode("utf-8"))
         result = subprocess.run(
             [
@@ -149,6 +150,8 @@ def test_cli_output() -> None:
                 str(SCRIPT_DIRECTORY / "github_ci_summary.py"),
                 "--title",
                 "CLI smoke test",
+                "--redacted-copy",
+                str(redacted_path),
                 str(log_path),
             ],
             check=False,
@@ -156,9 +159,14 @@ def test_cli_output() -> None:
             text=True,
             encoding="utf-8",
         )
+        redacted_copy = redacted_path.read_text(encoding="utf-8")
     require(result.returncode == 0, f"CLI exited with {result.returncode}: {result.stderr}")
     require(result.stdout.startswith("::error title=CLI smoke test::"), "CLI emitted no annotation")
     require("cli smoke test" in result.stdout, "CLI omitted the root error")
+    require(
+        redacted_copy == "ERROR: cli smoke test 🙂\n",
+        "CLI redacted copy drifted",
+    )
 
 
 def main() -> int:

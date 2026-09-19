@@ -1,0 +1,27 @@
+[package]
+name = "northstar-xep-0357"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Capability-free XEP-0357 Push Notifications wire parsing, validation, disclosure policy, and XML builders"
+publish = false
+
+[package.metadata.northstar-xep]
+id = 357
+route-ids = [
+    "iq-set|urn:xmpp:push:0|enable",
+    "iq-set|urn:xmpp:push:0|disable",
+]
+worker-ids = []
+
+[dependencies]
+northstar-xep-core = { path = "../northstar-xep-core" }
+northstar-xmpp-types = { path = "../northstar-xmpp-types" }
+roxmltree = "0.20"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]

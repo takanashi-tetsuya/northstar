@@ -1,15 +1,13 @@
 # Northstar documentation index
 
-This directory separates current contracts from historical evidence. A file's
-existence does not by itself prove that its runtime test was executed for the
-current commit.
+Start with the deployment guides below. Dated validation and handoff records
+identify the commit and environment they cover.
 
 ## Authoritative current documents
 
 Read these in order before deploying or changing protocol behavior:
 
-1. [Repository README](../README.md) — supported deployment, quick start and
-   evidence vocabulary.
+1. [Repository README](../README.md) — supported deployment and quick start.
 2. [XMPP compatibility matrix](../XEP_MATRIX.md) — normative RFC/XEP scope and
    `Core`/`Partial`/`Pass-through`/`Experimental` labels.
 3. [Known issues and accepted boundaries](KNOWN_ISSUES.md) — the only current
@@ -18,11 +16,14 @@ Read these in order before deploying or changing protocol behavior:
    delivery boundaries.
 5. [Program responsibility model](PROGRAM_RESPONSIBILITIES.md) — exact process,
    task, module, database and restore-session authority boundaries.
-6. [Production operations](PRODUCTION_OPERATIONS.md) — deployment, monitoring,
+6. [Modularization progress](MODULARIZATION_PROGRESS_REPORT.md) and
+   [execution plan](MODULARIZATION_EXECUTION_PLAN.md) — current library/port
+   boundaries, remaining work packets and completion criteria.
+7. [Production operations](PRODUCTION_OPERATIONS.md) — deployment, monitoring,
    backup, recovery, TLS and database-role procedures.
-7. [Release checklist](RELEASE_CHECKLIST.md) — evidence required for one exact
+8. [Release checklist](RELEASE_CHECKLIST.md) — evidence required for one exact
    release artifact and target environment.
-8. [OpenAPI contract](openapi.yaml) — REST wire contract served by the binary.
+9. [OpenAPI contract](openapi.yaml) — REST wire contract served by the binary.
 
 Repository contributions and safe default checks are described in
 [CONTRIBUTING.md](../CONTRIBUTING.md); vulnerability reporting uses
@@ -31,6 +32,10 @@ Repository contributions and safe default checks are described in
 The shorter root [architecture and security model](../ARCHITECTURE.md) is the
 public overview; this directory's architecture document is the implementation
 map.
+
+[Independent subservers](SUBSERVERS.md) defines the core/maintenance process
+split, shared database ownership, deployment and rollback procedure.
+For release downloads, use the [installation guide](INSTALL.md).
 
 ## Repository map
 
@@ -44,7 +49,7 @@ map.
 | `monitoring/` | Prometheus/Grafana configuration, alerts and alerting runbook |
 | `scripts/` | Static gates, operations, isolated integration harnesses and release tooling; see [the script guide](../scripts/README.md) |
 | `fuzz/` | Separate pinned cargo-fuzz crate, corpora and production-parser targets |
-| `docs/` | Current technical/operations contracts; point-in-time reports live only in `docs/archive/` |
+| `docs/` | Technical and operations guides; dated validation in `docs/evidence/`, handoffs in `docs/handoff/`, retired reports in `docs/archive/` |
 | `changelog/` | Detailed release notes indexed by the root `CHANGELOG.md` |
 
 Root build/start wrappers remain only for local-development compatibility. They
@@ -69,6 +74,9 @@ not part of an unattended default command.
 
 ## Reliability and deployment design
 
+- [Library split ledger](LIBRARY_SPLIT_LEDGER.md)
+- [Modularization progress and remaining work](MODULARIZATION_PROGRESS_REPORT.md)
+- [Modularization execution plan](MODULARIZATION_EXECUTION_PLAN.md)
 - [Experimental clustering](CLUSTERING.md)
 - [Deployment capacity authority](DEPLOYMENT_CAPACITY.md)
 - [HTTP upload storage and recovery](UPLOAD_STORAGE.md)
@@ -87,15 +95,16 @@ not part of an unattended default command.
 
 - [Project changelog](../CHANGELOG.md)
 - [Northstar 0.2.0 development and release-preparation record](../changelog/v0.2.md)
+- [Northstar 0.2.0 release notes](releases/0.2.0.md)
+- [Release responsibilities and workflow](governance/release-roles.md)
+- [CI performance and validation record](handoff/2026-09-12/CI-PERFORMANCE-FOLLOWUP.md)
 - [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases)
   contains public downloads only after a maintainer reviews and publishes the
-  draft created by the tag workflow. The repository does not predeclare hashes
-  or image digests for an unbuilt release.
+  draft created by the tag workflow.
 - [Release checklist](RELEASE_CHECKLIST.md) defines tag, draft review, package,
   checksum, provenance, GHCR digest and publication gates.
-- [`archive/`](archive/) contains point-in-time handoff, validation and planning
-  reports. These files are historical evidence, not current capability or
-  release claims.
+- [`archive/`](archive/) contains retired handoff, validation and planning
+  reports.
 
 ## Evidence vocabulary
 
@@ -113,8 +122,9 @@ not part of an unattended default command.
 2. Update `openapi.yaml` in the same change as REST routing or response shape.
 3. Add unresolved compromises only to `KNOWN_ISSUES.md`; do not recreate a
    second backlog in a validation report.
-4. Put point-in-time audit/agent handoff reports in `docs/archive/` and add a
-   visible historical banner.
+4. Date validation records in `docs/evidence/` and handoffs in
+   `docs/handoff/YYYY-MM-DD/`. Move retired reports to `docs/archive/` with a
+   historical banner.
 5. Keep example commands secret-free and use placeholders for domains, tokens,
    database URLs and key paths.
 6. Run `node scripts/check-documentation-consistency.mjs` before release.

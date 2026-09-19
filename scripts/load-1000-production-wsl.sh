@@ -12,6 +12,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$project_dir/target-wsl}"
 fi
 cd "$project_dir"
+source "$project_dir/scripts/lib/test-listener-readiness.sh"
 
 test_database="${XMPP_TEST_DATABASE:-xmpp_test}"
 [[ "$test_database" == "xmpp_test" ]] \
@@ -20,26 +21,20 @@ run_id="$(openssl rand -hex 16)"
 schema="northstar_load_envelope_${run_id}"
 [[ "$schema" =~ ^northstar_load_envelope_[0-9a-f]{32}$ ]] \
   || { echo "refusing an unexpected load schema" >&2; exit 2; }
-read -r xmpp_port xmpps_port s2s_port s2s_tls_port http_port metrics_port < <(
-  python3 -c "import socket; sockets=[socket.socket() for _ in range(6)]; [s.bind(('127.0.0.1',0)) for s in sockets]; print(*(s.getsockname()[1] for s in sockets)); [s.close() for s in sockets]"
-)
-ports=("$xmpp_port" "$xmpps_port" "$s2s_port" "$s2s_tls_port" "$http_port" "$metrics_port")
-[[ "$(printf '%s\n' "${ports[@]}" | sort -u | wc -l)" -eq 6 ]] \
-  || { echo "load test ports were not unique" >&2; exit 2; }
-for port in "${ports[@]}"; do
-  [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1024 && port <= 65535 )) \
-    || { echo "invalid load test port: $port" >&2; exit 2; }
-done
 ulimit -n 8192
 
 runtime_dir="$(mktemp -d /tmp/northstar-load-envelope.XXXXXX)"
 chmod 0700 "$runtime_dir"
 server_pid=""
+http_relay_pid=""
+http_relay_port=""
+http_relay_target="$runtime_dir/http.target"
 schema_created=false
-port_is_listening() {
-  local port="$1"
-  ss -H -ltn "sport = :$port" 2>/dev/null | grep -q .
-}
+xmpp_port=""
+xmpps_port=""
+http_port=""
+metrics_port=""
+declare -a fixture_listener_ports=()
 log_contains_value() {
   local needle="$1" file
   [[ -n "$needle" ]] || return 1
@@ -76,6 +71,10 @@ cleanup() {
     wait "$cleanup_pid" 2>/dev/null || true
     server_pid=""
   fi
+  if [[ -n "$http_relay_pid" ]]; then
+    kill "$http_relay_pid" 2>/dev/null || true
+    wait "$http_relay_pid" 2>/dev/null || true
+  fi
   if [[ "$status" -ne 0 && -f "$runtime_dir/server.log" ]]; then
     if log_contains_sensitive_value; then
       echo "production-envelope log contains a password or mounted secret; raw failure tail suppressed" >&2
@@ -95,12 +94,8 @@ cleanup() {
     remains="${remains//[[:space:]]/}"
     [[ "$remains" == "f" ]] || { echo "load schema cleanup failed: $remains" >&2; status=1; }
   fi
-  for port in "${ports[@]}"; do
-    if port_is_listening "$port"; then
-      echo "load test listener remained on port $port" >&2
-      status=1
-    fi
-  done
+  listener_count=0
+  if ! fixture_assert_no_listeners; then listener_count=1; status=1; fi
   if [[ -n "$cleanup_pid" && -d "/proc/$cleanup_pid" ]]; then
     echo "load test server process remained after cleanup" >&2
     status=1
@@ -114,10 +109,6 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-
-for port in "${ports[@]}"; do
-  port_is_listening "$port" && { echo "allocated load port is already in use: $port" >&2; exit 1; }
-done
 
 PGPASSWORD=xmpp-test-password psql --host 127.0.0.1 --username xmpp_test \
   --dbname "$test_database" --set ON_ERROR_STOP=1 \
@@ -158,19 +149,32 @@ env \
   MIGRATOR_DATABASE_URL="$database_url" \
   "$binary" migrate
 
+# The advertised HTTP origin must stay owned by this fixture even though the
+# server itself binds an ephemeral child-owned listener.  A stable relay lets
+# generated upload/BOSH URLs remain routable without reintroducing a released
+# numeric port allocation.
+fixture_start_tcp_relay "$project_dir" "$runtime_dir" load-http load-http "$http_relay_target" \
+  "$runtime_dir/http-relay.log" http_relay_pid http_relay_port
+
+readiness_file="$runtime_dir/server.ready.json"
+readiness_nonce="$(openssl rand -hex 16)"
+rm -f -- "$readiness_file"
 env \
   NORTHSTAR_DISABLE_DOTENV=true \
   XMPP_DOMAIN=localhost \
   DATABASE_URL="$database_url" \
   DATABASE_MAX_CONNECTIONS=32 \
   DATABASE_MIN_CONNECTIONS=2 \
-  XMPP_BIND="127.0.0.1:$xmpp_port" \
-  XMPPS_BIND="127.0.0.1:$xmpps_port" \
-  S2S_BIND="127.0.0.1:$s2s_port" \
-  S2S_TLS_BIND="127.0.0.1:$s2s_tls_port" \
-  HTTP_BIND="127.0.0.1:$http_port" \
-  METRICS_BIND="127.0.0.1:$metrics_port" \
-  PUBLIC_URL="http://127.0.0.1:$http_port" \
+  XMPP_BIND="127.0.0.1:0" \
+  XMPPS_BIND="127.0.0.1:0" \
+  S2S_BIND="127.0.0.1:0" \
+  S2S_TLS_BIND="127.0.0.1:0" \
+  HTTP_BIND="127.0.0.1:0" \
+  METRICS_BIND="127.0.0.1:0" \
+  TEST_LISTENER_ACTIVATION=true \
+  TEST_READINESS_FILE="$readiness_file" \
+  TEST_READINESS_NONCE="$readiness_nonce" \
+  PUBLIC_URL="http://127.0.0.1:$http_relay_port" \
   API_CONTROL_SECRET_FILE="$runtime_dir/api-control.secret" \
   FAST_TOKEN_SECRET_FILE="$runtime_dir/fast-token.secret" \
   DUMMY_SCRAM_SECRET_FILE="$runtime_dir/dummy-scram.secret" \
@@ -196,8 +200,18 @@ env \
   "$binary" >"$runtime_dir/server.log" 2>&1 &
 server_pid=$!
 
+# Use only the nonce- and PID-bound record published after the child owns the
+# sockets; do not turn a free numeric port into a later bind request.
+fixture_wait_for_readiness "$project_dir" "$readiness_file" "$readiness_nonce" "$server_pid"
+xmpp_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpp)"
+xmpps_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" xmpps)"
+http_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" http)"
+metrics_port="$(fixture_readiness_port "$FIXTURE_READINESS_OUTPUT" metrics)"
+fixture_publish_relay_target "$http_relay_target" "$http_port"
+curl --silent --fail "http://127.0.0.1:$http_relay_port/readyz" >/dev/null
+
 export XMPP_TEST_HOST=127.0.0.1
-export XMPP_TEST_HTTP_PORT="$http_port"
+export XMPP_TEST_HTTP_PORT="$http_relay_port"
 export XMPP_TEST_METRICS_PORT="$metrics_port"
 export XMPP_TEST_CLIENT_PORT="$xmpp_port"
 export XMPP_TEST_XMPPS_PORT="$xmpps_port"
@@ -211,6 +225,9 @@ wait "$server_pid"
 finished_pid="$server_pid"
 server_pid=""
 [[ ! -d "/proc/$finished_pid" ]] || { echo "load server PID remained after wait" >&2; exit 1; }
+kill "$http_relay_pid"
+wait "$http_relay_pid"
+http_relay_pid=""
 grep -q 'shutdown complete' "$runtime_dir/server.log" \
   || { echo "load server did not complete graceful shutdown" >&2; exit 1; }
 for forbidden_log_value in \
@@ -224,8 +241,6 @@ for forbidden_log_value in \
     exit 1
   fi
 done
-for port in "${ports[@]}"; do
-  port_is_listening "$port" && { echo "load listener remained after shutdown: $port" >&2; exit 1; }
-done
+fixture_assert_no_listeners
 
 echo "production-envelope load validation passed (design evidence, not an SLA guarantee)"

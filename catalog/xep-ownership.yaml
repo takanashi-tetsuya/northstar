@@ -1,0 +1,143 @@
+version: "2.0.0"
+
+xep_ownership:
+  xep-0016-privacy:
+    semantic_owner: communication-policy-authority
+    deployment_unit: communication-policy-authority
+    execution_mode: remote-authority
+  xep-0045-muc:
+    semantic_owner: muc-authority
+    deployment_unit: muc-authority
+    execution_mode: remote-authority
+  xep-0049-private-storage:
+    semantic_owner: profile-authority
+    deployment_unit: profile-authority
+    execution_mode: local-sdk
+  xep-0050-ad-hoc-commands:
+    semantic_owner: admin-api
+    deployment_unit: admin-orchestrator
+    execution_mode: bff
+  xep-0054-vcard-temp:
+    semantic_owner: profile-authority
+    deployment_unit: profile-authority
+    execution_mode: remote-authority
+  xep-0060-pubsub:
+    semantic_owner: pubsub-pep-authority
+    deployment_unit: pubsub-pep-authority
+    execution_mode: remote-authority
+  xep-0084-avatar:
+    semantic_owner: profile-authority
+    deployment_unit: profile-authority
+    execution_mode: remote-authority
+  xep-0115-caps:
+    semantic_owner: protocol-registry
+    deployment_unit: protocol-registry
+    execution_mode: signed-policy-snapshot
+  xep-0160-offline-messages:
+    semantic_owner: delivery-router
+    deployment_unit: delivery-router
+    execution_mode: remote-authority
+  xep-0163-pep:
+    semantic_owner: pubsub-pep-authority
+    deployment_unit: pubsub-pep-authority
+    execution_mode: remote-authority
+  xep-0191-blocking:
+    semantic_owner: communication-policy-authority
+    deployment_unit: communication-policy-authority
+    execution_mode: remote-authority
+  xep-0198-sm:
+    semantic_owner: session-directory
+    deployment_unit: session-authority
+    execution_mode: transport
+  xep-0215-extdisco:
+    semantic_owner: protocol-registry
+    deployment_unit: protocol-registry
+    execution_mode: signed-policy-snapshot
+  xep-0280-carbons:
+    semantic_owner: delivery-router
+    deployment_unit: delivery-router
+    execution_mode: remote-authority
+  xep-0313-mam:
+    semantic_owner: mam-authority
+    deployment_unit: mam-authority
+    execution_mode: remote-authority
+  xep-0352-csi:
+    semantic_owner: xmpp-edge
+    deployment_unit: xmpp-edge
+    execution_mode: transport
+  xep-0357-push:
+    semantic_owner: push-authority
+    deployment_unit: push-authority
+    execution_mode: remote-worker
+  xep-0363-upload:
+    semantic_owner: upload-authority
+    deployment_unit: upload-authority
+    execution_mode: remote-authority
+  xep-0369-mix-core:
+    semantic_owner: mix-authority
+    deployment_unit: mix-authority
+    execution_mode: remote-authority
+  xep-0484-fast:
+    semantic_owner: identity
+    deployment_unit: identity
+    execution_mode: remote-authority
+  xep-0004-data-forms:
+    semantic_owner: xep-0004-data-forms
+    deployment_unit: xmpp-edge
+    execution_mode: pass-through-codec
+  xep-0059-rsm:
+    semantic_owner: message-ingress
+    deployment_unit: message-ingress
+    execution_mode: local-sdk
+  xep-0082-datetime:
+    semantic_owner: xmpp-edge
+    deployment_unit: protocol-registry
+    execution_mode: pass-through-codec
+  xep-0085-chat-state:
+    semantic_owner: delivery-router
+    deployment_unit: delivery-router
+    execution_mode: local-sdk
+  xep-0092-version:
+    semantic_owner: xmpp-edge
+    deployment_unit: xmpp-edge
+    execution_mode: local-sdk
+  xep-0184-receipts:
+    semantic_owner: delivery-router
+    deployment_unit: delivery-router
+    execution_mode: local-sdk
+  xep-0199-ping:
+    semantic_owner: xmpp-edge
+    deployment_unit: xmpp-edge
+    execution_mode: pass-through-codec
+  xep-0202-entity-time:
+    semantic_owner: xmpp-edge
+    deployment_unit: xmpp-edge
+    execution_mode: pass-through-codec
+  xep-0203-delayed-delivery:
+    semantic_owner: message-ingress
+    deployment_unit: message-ingress
+    execution_mode: local-sdk
+  xep-0333-chat-markers:
+    semantic_owner: delivery-router
+    deployment_unit: delivery-router
+    execution_mode: local-sdk
+  xep-0334-processing-hints:
+    semantic_owner: message-ingress
+    deployment_unit: message-ingress
+    execution_mode: local-sdk
+  xep-0359-stanza-ids:
+    semantic_owner: message-ingress
+    deployment_unit: message-ingress
+    execution_mode: pass-through-codec
+  xep-0380-eme:
+    semantic_owner: delivery-router
+    deployment_unit: delivery-router
+    execution_mode: pass-through-codec
+  xep-0444-reactions:
+    semantic_owner: message-ingress
+    deployment_unit: message-ingress
+    execution_mode: local-sdk
+  xep-0478-stream-limits:
+    semantic_owner: xmpp-edge
+    deployment_unit: xmpp-edge
+    execution_mode: pass-through-codec

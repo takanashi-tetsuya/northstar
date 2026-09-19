@@ -51,10 +51,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     let query = String::from_utf8_lossy(data);
-    let Ok(request) = Request::builder()
-        .uri(format!("/fuzz?{query}"))
-        .body(())
-    else {
+    let Ok(request) = Request::builder().uri(format!("/fuzz?{query}")).body(()) else {
         return;
     };
     let (mut parts, _) = request.into_parts();
@@ -80,7 +77,10 @@ fuzz_target!(|data: &[u8]| {
 
     // An unmatched path has no Axum router capture metadata. This still
     // exercises the production wrapper's non-diagnostic rejection contract.
-    let request = Request::builder().uri("/fuzz/not-captured").body(()).unwrap();
+    let request = Request::builder()
+        .uri("/fuzz/not-captured")
+        .body(())
+        .unwrap();
     let (mut parts, _) = request.into_parts();
     let path = block_on(extract::ApiPath::<Uuid>::from_request_parts(
         &mut parts,

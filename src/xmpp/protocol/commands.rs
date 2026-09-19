@@ -1825,6 +1825,7 @@ mod tests {
     use super::*;
     use crate::db;
     use roxmltree::Document;
+    use sqlx::Acquire;
 
     #[test]
     fn uses_the_registered_xep_0133_nodes() {
@@ -2404,13 +2405,21 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(corrected, vec![("motd".to_owned(), "Corrected".to_owned())]);
 
-        db::initialize_admin_runtime_settings(&pool, false, false)
+        db::initialize_admin_runtime_settings(&pool, false, false, false)
             .await
             .unwrap();
         assert_eq!(
             db::admin_runtime_settings(&pool).await.unwrap(),
             (false, false)
         );
+        let mut control_connection = pool.acquire().await.unwrap();
+        assert_eq!(
+            db::runtime_control_snapshot(&mut control_connection, |_| {})
+                .await
+                .unwrap(),
+            (false, false, Vec::<String>::new(), Vec::<String>::new())
+        );
+        drop(control_connection);
         assert!(
             db::set_admin_runtime_setting(&pool, admin, 0, "registration_closed", true,)
                 .await
@@ -2445,6 +2454,47 @@ mod tests {
             entities
         );
 
+        // The reserved connection reads both projections, including empty
+        // rule lists, without losing either flag or rule ordering. Corruption
+        // of a required setting must still fail instead of reopening service.
+        let mut control_connection = observer_pool.acquire().await.unwrap();
+        assert_eq!(
+            db::runtime_control_snapshot(&mut control_connection, |_| {})
+                .await
+                .unwrap(),
+            (false, true, entities.clone(), Vec::<String>::new())
+        );
+        let mut control_tx = control_connection.begin().await.unwrap();
+        sqlx::query(
+            "INSERT INTO federation_runtime_rules(kind,domain)
+             VALUES('whitelist','z.example'),('whitelist','a.example')",
+        )
+        .execute(&mut *control_tx)
+        .await
+        .unwrap();
+        assert_eq!(
+            db::runtime_control_snapshot(&mut control_tx, |_| {})
+                .await
+                .unwrap(),
+            (
+                false,
+                true,
+                entities,
+                vec!["a.example".to_owned(), "z.example".to_owned()]
+            )
+        );
+        sqlx::query("DELETE FROM admin_runtime_settings WHERE key='registration_closed'")
+            .execute(&mut *control_tx)
+            .await
+            .unwrap();
+        assert!(db::runtime_control_snapshot(&mut control_tx, |_| {})
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("registration_closed runtime setting is missing"));
+        control_tx.rollback().await.unwrap();
+        drop(control_connection);
+
         let scheduled =
             db::schedule_admin_service_control(&pool, admin, 0, "restart", 5, Some("Maintenance"))
                 .await
@@ -2473,11 +2523,13 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let fired = db::poll_admin_service_control(&pool)
+        let mut control_connection = pool.acquire().await.unwrap();
+        let mut observer_control_connection = observer_pool.acquire().await.unwrap();
+        let fired = db::poll_admin_service_control(&mut control_connection)
             .await
             .unwrap()
             .unwrap();
-        let observed = db::poll_admin_service_control(&observer_pool)
+        let observed = db::poll_admin_service_control(&mut observer_control_connection)
             .await
             .unwrap()
             .unwrap();

@@ -461,16 +461,36 @@ pub(crate) fn authentication_feature_xml(session: &ProtocolSession) -> String {
     for mechanism in mechanism_names {
         authentication.push_child(XmlElement::new("mechanism").text(mechanism));
     }
-    let mut inline = XmlElement::new("inline")
-        .child(XmlElement::namespaced("sm", "urn:xmpp:sm:3"))
-        .child(
-            XmlElement::namespaced("bind", BIND2_NS).child(
-                XmlElement::new("inline")
-                    .child(XmlElement::new("feature").attr("var", "urn:xmpp:carbons:2"))
-                    .child(XmlElement::new("feature").attr("var", "urn:xmpp:csi:0"))
-                    .child(XmlElement::new("feature").attr("var", "urn:xmpp:sm:3")),
-            ),
-        );
+    let mut bind_inline = XmlElement::new("inline")
+        .child(XmlElement::new("feature").attr("var", "urn:xmpp:carbons:2"));
+    if session
+        .state
+        .config
+        .xmpp_extensions
+        .enabled(northstar_xep_0352::XEP_ID)
+    {
+        bind_inline
+            .push_child(XmlElement::new("feature").attr("var", northstar_xep_0352::NAMESPACE));
+    }
+    if session
+        .state
+        .config
+        .xmpp_extensions
+        .enabled(northstar_xep_0198::XEP_ID)
+    {
+        bind_inline
+            .push_child(XmlElement::new("feature").attr("var", northstar_xep_0198::NAMESPACE));
+    }
+    let mut inline = XmlElement::new("inline");
+    if session
+        .state
+        .config
+        .xmpp_extensions
+        .enabled(northstar_xep_0198::XEP_ID)
+    {
+        inline.push_child(XmlElement::namespaced("sm", northstar_xep_0198::NAMESPACE));
+    }
+    inline.push_child(XmlElement::namespaced("bind", BIND2_NS).child(bind_inline));
     if session.state.config.fast_token_enabled {
         let mut fast = XmlElement::namespaced("fast", FAST_NS);
         for mechanism in fast_mechanism_names {
@@ -710,9 +730,7 @@ impl ProtocolSession {
                 return Err(StreamOpenError::InvalidFrom);
             }
         }
-        self.stream_from = parsed.from;
-        self.stream_language = parsed.language;
-        self.stream_opened = true;
+        self.negotiation.open(parsed.from, parsed.language);
         Ok(())
     }
 
@@ -738,6 +756,27 @@ impl ProtocolSession {
             Ok(request) => request,
             Err(condition) => return Ok(Action::Send(failure_xml(condition, None))),
         };
+        if (request.resume.is_some() || request.bind.as_ref().is_some_and(|bind| bind.sm.is_some()))
+            && !self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0198::XEP_ID)
+        {
+            return Ok(Action::Send(failure_xml("malformed-request", None)));
+        }
+        if request
+            .bind
+            .as_ref()
+            .is_some_and(|bind| bind.csi_active.is_some())
+            && !self
+                .state
+                .config
+                .xmpp_extensions
+                .enabled(northstar_xep_0352::XEP_ID)
+        {
+            return Ok(Action::Send(failure_xml("malformed-request", None)));
+        }
         if request.request_token.is_some() && request.user_agent_id.is_none() {
             return Ok(Action::Send(failure_xml("malformed-request", None)));
         }
@@ -843,7 +882,7 @@ impl ProtocolSession {
         let Some(user_agent_id) = request.user_agent_id else {
             return Ok(Action::Send(failure_xml("malformed-request", None)));
         };
-        let Some(stream_username) = self.stream_from.as_deref() else {
+        let Some(stream_username) = self.negotiation.stream_from() else {
             return Ok(Action::Send(failure_xml("not-authorized", None)));
         };
         let Some(initial_response) = request.initial_response.as_deref() else {
@@ -1102,9 +1141,9 @@ impl ProtocolSession {
         }
         self.user_agent_id = context.request.user_agent_id;
         if self
-            .stream_from
-            .as_ref()
-            .is_some_and(|from| from != &user.username)
+            .negotiation
+            .stream_from()
+            .is_some_and(|from| from != user.username)
         {
             self.sasl_state = None;
             self.user_agent_id = None;
@@ -1390,7 +1429,11 @@ impl ProtocolSession {
                     .store(true, std::sync::atomic::Ordering::Release);
             }
             if let Some(active) = bind.csi_active {
-                self.csi_active = active;
+                if active {
+                    self.csi_state.set_active();
+                } else {
+                    self.csi_state.set_inactive();
+                }
             }
             if let Some(sm) = bind.sm {
                 match self.enable_sm_inline(sm.resume, sm.max).await {

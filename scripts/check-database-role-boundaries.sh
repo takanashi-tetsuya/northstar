@@ -34,6 +34,7 @@ cluster_authority_migration="$project_dir/migrations/0112_cluster_runtime_capaci
 upload_authority_migration="$project_dir/migrations/0113_upload_authority_capabilities.sql"
 session_authority_migration="$project_dir/migrations/0114_session_authority_capabilities.sql"
 admin_cleanup_fixture="$project_dir/scripts/admin-session-cleanup-db-wsl.sh"
+stateful_database_manifest="$project_dir/scripts/stateful-database-ci.sh"
 restore_runner="$project_dir/scripts/restore-backup.sh"
 dump_validator="$project_dir/scripts/validate-backup-dump-local.sh"
 disaster_fixture="$project_dir/scripts/backup-restore-wsl.sh"
@@ -41,7 +42,11 @@ integration_fixture="$project_dir/scripts/integration-wsl.py"
 message_pow_fixture="$project_dir/scripts/message-pow-wire-wsl.py"
 role_runner="$project_dir/scripts/reconcile-database-roles.sh"
 database_acceptance="$project_dir/scripts/database-role-boundary-db-ci.sh"
+database_acceptance_local="$project_dir/scripts/database-role-boundary-wsl.sh"
 loopback_fixture="$project_dir/scripts/loopback-postgres-ci.sh"
+private_loopback_fixture="$project_dir/scripts/private-loopback-postgres-wsl.sh"
+n08_database_receipt="$project_dir/scripts/n08-db-receipt-wsl.sh"
+n08_loopback_receipt="$project_dir/scripts/n08-loopback-fixture-runner-wsl.sh"
 secret_generator="$project_dir/scripts/create-production-secrets.sh"
 release_preflight="$project_dir/scripts/release-preflight.sh"
 ci_workflow="$project_dir/.github/workflows/ci.yml"
@@ -87,8 +92,11 @@ for file in "$compose" "$init_script" "$grant_policy" "$grant_boundary" "$grant_
   "$cluster_authority_migration" "$upload_authority_migration" \
   "$session_authority_migration" \
   "$admin_cleanup_fixture" \
+  "$stateful_database_manifest" \
   "$restore_runner" "$dump_validator" "$role_runner" \
   "$disaster_fixture" "$message_pow_fixture" "$database_acceptance" "$loopback_fixture" \
+  "$database_acceptance_local" "$private_loopback_fixture" "$n08_database_receipt" \
+  "$n08_loopback_receipt" \
   "$secret_generator" "$release_preflight" \
   "$ci_workflow"; do
   [[ -f "$file" ]] || fail "required policy file is missing: ${file#$project_dir/}"
@@ -113,8 +121,17 @@ elif command -v python >/dev/null 2>&1; then
 else
   fail 'Python 3 is required for the database capability manifest check'
 fi
-require_literal "$ci_workflow" 'bash scripts/admin-session-cleanup-db-wsl.sh' \
-  'CI does not run the isolated administrator cleanup effect fixture'
+require_literal "$ci_workflow" 'bash scripts/stateful-database-ci.sh "${{ matrix.shard }}"' \
+  'CI does not route stateful database coverage through the checked shard entrypoint'
+require_literal "$stateful_database_manifest" \
+  'admin-session-cleanup|Admin session cleanup database|480|admin-session-cleanup-db-wsl.sh' \
+  'the stateful database suite manifest does not route the isolated administrator cleanup effect fixture through its unique suite id'
+require_literal "$admin_cleanup_fixture" \
+  'service_control_poll_isolates_traffic_exhaustion_and_fails_closed_on_lock' \
+  'the administrator cleanup database fixture does not execute the service-control pool isolation regression'
+require_literal "$stateful_database_manifest" \
+  'phase=database_suite_result' \
+  'the stateful database suite manifest does not emit a terminal result for every invoked suite'
 for boundary_probe in \
   'runtime cleanup effect direct read' \
   'runtime cleanup effect direct mutation' \
@@ -124,6 +141,26 @@ for boundary_probe in \
   require_literal "$database_acceptance" "$boundary_probe" \
     "database role acceptance omits administrator cleanup boundary: $boundary_probe"
 done
+
+# The local role-boundary test is intentionally destructive.  It must never
+# select then release a TCP port before PostgreSQL owns it: a private Unix
+# socket directory gives it a collision-free transport and keeps it unable to
+# touch the developer's shared TCP PostgreSQL service.
+require_literal "$database_acceptance_local" "listen_addresses=''" \
+  'local database role fixture does not disable TCP listeners'
+require_literal "$database_acceptance_local" 'unix_socket_permissions=0700' \
+  'local database role fixture does not restrict its private Unix socket'
+require_literal "$database_acceptance_local" 'PGHOST="$socket_dir"' \
+  'local database role fixture does not pass its private Unix socket to the acceptance runner'
+if grep -Fq 'allocate-test-ports.py' "$database_acceptance_local"; then
+  fail 'local database role fixture still uses a released TCP port allocator'
+fi
+require_literal "$database_acceptance" "database_transport='private-unix-socket'" \
+  'database role acceptance does not recognize its exact private Unix socket transport'
+require_literal "$database_acceptance" 'host=${encoded_database_host}' \
+  'database role acceptance does not encode the private Unix socket in the migrator URL'
+require_literal "$database_acceptance" '@localhost/xmpp?host=${encoded_database_host}' \
+  'database role acceptance must retain a nonempty SQLx URL authority while overriding it with the private Unix socket'
 for protected_table in admin_session_cleanup_effects admin_session_cleanup_capacity; do
   require_literal "$capability_manifest" \
     "('$protected_table',FALSE,FALSE,FALSE,FALSE,'0111')" \
@@ -352,11 +389,41 @@ for role_ci_contract in \
   'the CI PostgreSQL maintenance database is not the disposable canonical service' \
   'ALTER DATABASE postgres OWNER TO northstar_ci_control;' \
   'failed to restore the disposable CI maintenance database boundary' \
+  "COMMENT ON ROLE northstar_ci_control IS :'database_marker';" \
+  'COMMENT ON ROLE northstar_ci_control IS NULL;' \
   "COMMENT ON ROLE xmpp IS :'database_marker';" \
   'GRANT northstar_runtime TO northstar_ci_stale_grantee WITH ADMIN OPTION;' \
   'role reconciliation retained a protected role membership or delegated grant chain'; do
   require_literal "$database_acceptance" "$role_ci_contract" \
     "isolated role-CI ownership/membership lifecycle is missing: $role_ci_contract"
+done
+for cleanup_marker_contract in \
+  'read_cleanup_marker_state() {' \
+  'mapfile -t marker_lines' \
+  'cleanup_marker_authorizes() {' \
+  '[[ "$control_marked" == 1 ]]' \
+  '--self-test-cleanup-marker'; do
+  require_literal "$database_acceptance" "$cleanup_marker_contract" \
+    "isolated role-CI cleanup marker lifecycle is missing its fail-closed contract: $cleanup_marker_contract"
+done
+for private_fixture_contract in \
+  'env -i "${child_environment[@]}" "$@"' \
+  'run_child_environment_self_test() {' \
+  '--self-test-child-environment' \
+  'NORTHSTAR_PRIVATE_PG_CHILD_STATUS_FILE' \
+  'NORTHSTAR_PRIVATE_PG_CLEANUP_STATUS_FILE'; do
+  require_literal "$private_loopback_fixture" "$private_fixture_contract" \
+    "private N08 fixture lacks an explicit child-environment or lifecycle boundary: $private_fixture_contract"
+done
+for n08_receipt in "$n08_database_receipt" "$n08_loopback_receipt"; do
+  for receipt_contract in \
+    'run_receipt_state_self_test() {' \
+    '--self-test-receipt-state' \
+    'retained_redaction_failed' \
+    'removed_after_verified_redaction'; do
+    require_literal "$n08_receipt" "$receipt_contract" \
+      "N08 private fixture receipt lacks fail-closed evidence handling: ${n08_receipt#$project_dir/}: $receipt_contract"
+  done
 done
 require_literal "$role_runner" '--connection-password-file' \
   'existing-volume reconciliation does not separate connection and bootstrap passwords'
@@ -394,6 +461,12 @@ require_literal "$init_script" 'CONNECTION LIMIT 8' \
   'fresh init does not bound XEP-0133 command database connections'
 require_literal "$main_source" 'db::attest_migrator_role(&pool).await?;' \
   'migrator command does not attest its database owner identity'
+[[ "$(grep -Fc 'db::migrate_for_domain(&pool, &environment.domain).await?;' "$main_source")" == 1 ]] \
+  || fail 'database DDL must have exactly one main-process call site: the explicit migrator command'
+[[ "$(grep -Fc 'return run_migrations().await;' "$main_source")" == 1 ]] \
+  || fail 'only the explicit xmpp-server migrate subcommand may dispatch database DDL'
+require_literal "$main_source" 'db::verify_schema(&pool, &config.domain)' \
+  'normal server startup must retain read-only schema verification'
 require_literal "$db_module" "pg_advisory_lock(" \
   'migration command does not serialize against ACL reconciliation'
 require_literal "$db_module" "northstar-database-role-policy-v1" \
@@ -522,8 +595,17 @@ require_literal "$role_runner" \
   'repository migration ledger differs by version, description, success, or SHA-384 checksum' \
   'role audit does not reject missing/unknown/failed/tampered migration rows'
 require_literal "$grant_apply" \
-  'AND NOT routine.prosecdef' \
-  'runtime routine reconciliation must grant only SECURITY INVOKER routines by default'
+  "routine.prorettype<>'pg_catalog.trigger'::pg_catalog.regtype" \
+  'runtime routine reconciliation must exclude trigger-only SECURITY INVOKER helpers from direct EXECUTE'
+require_literal "$role_runner" \
+  "routine.prorettype<>'pg_catalog.trigger'::pg_catalog.regtype" \
+  'runtime role audit must classify trigger-only SECURITY INVOKER helpers as owner-only direct execution'
+require_literal "$role_attestation" \
+  "routine.prorettype='pg_catalog.trigger'::pg_catalog.regtype" \
+  'startup role attestation must reject runtime direct EXECUTE on trigger-only invoker helpers'
+require_literal "$role_attestation" \
+  'trigger-only runtime routine execution' \
+  'startup role attestation must describe trigger-only invoker execution drift'
 require_literal "$grant_apply" \
   'northstar_transfer_cluster_muc_outbox(uuid,uuid,uuid,uuid,int8,uuid,int8,text)' \
   'runtime SECURITY DEFINER allowlist is missing its exact MUC handoff signature'
@@ -1453,6 +1535,13 @@ require_literal "$database_acceptance" \
 require_literal "$database_acceptance" \
   'bash scripts/reconcile-database-grants.sh' \
   'database-backed acceptance test omits post-migration grant reconciliation'
+for trigger_only_invoker_evidence in \
+  'runtime direct EXECUTE was not denied for trigger-only invoker helpers' \
+  'runtime PubSub invoker trigger enforces the collection child limit' \
+  'runtime MIX DML did not fire both committed trigger-only wake paths'; do
+  require_literal "$database_acceptance" "$trigger_only_invoker_evidence" \
+    "database-backed acceptance omits trigger-only invoker evidence: $trigger_only_invoker_evidence"
+done
 for denied_boundary in \
   'runtime CREATE in public' \
   'runtime TEMPORARY object creation' \

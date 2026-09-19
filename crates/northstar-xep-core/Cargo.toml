@@ -1,0 +1,10 @@
+[package]
+name = "northstar-xep-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "AGPL-3.0-only"
+description = "Transport-neutral XEP extension descriptors and deterministic feature resolution for Northstar"
+publish = false
+
+[dependencies]

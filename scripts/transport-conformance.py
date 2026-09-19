@@ -98,9 +98,7 @@ class RawWebSocket:
         if subprotocol is not None:
             headers.append(f"Sec-WebSocket-Protocol: {subprotocol}")
         if self.url.scheme == "ws" and loopback_host(self.url.hostname):
-            # The local HTTP listener is the trusted-proxy side of the
-            # deployment boundary. This lets the probe exercise that boundary
-            # without pretending that public ws:// is acceptable.
+            # Simulate TLS termination at the trusted proxy on loopback only.
             headers.append("X-Forwarded-Proto: https")
         self.sock.sendall(("\r\n".join(headers) + "\r\n\r\n").encode("ascii"))
         response = read_http_head(self.sock)
@@ -206,9 +204,8 @@ def open_stream(ws: RawWebSocket, fragmented: bool = False) -> None:
 
 
 def expect_opening_error_sequence(ws: RawWebSocket, condition: str) -> None:
-    # RFC 7395 section 3.5 requires this server <open/> before an error raised
-    # while the peer's opening frame is being processed. It is part of the
-    # failure sequence, not evidence that the offending frame was accepted.
+    # RFC 7395 section 3.5 requires a server <open/> before reporting an error
+    # in the peer's opening frame.
     check(ws.receive_text().startswith("<open "), "opening error was not preceded by server open")
     check(condition in ws.receive_text(), f"missing {condition} stream error")
     check("<close " in ws.receive_text(), "XMPP close frame missing after stream error")

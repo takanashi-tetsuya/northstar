@@ -1,0 +1,39 @@
+# Multi-stage Dockerfile for Northstar Microservices
+# Defined per northstar_progress_and_next_plan_2026-09-04.md (Milestone 0).
+
+FROM rust:1.97.1-alpine AS builder
+
+RUN apk add --no-cache musl-dev protobuf-dev
+
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY services ./services
+COPY catalog ./catalog
+COPY contracts ./contracts
+COPY tools ./tools
+COPY src ./src
+
+ARG SERVICE_NAME
+ARG PACKAGE_NAME=${SERVICE_NAME}
+ARG BINARY_NAME
+
+RUN if [ -z "$BINARY_NAME" ]; then BINARY_NAME=$(echo "$PACKAGE_NAME" | sed 's/^service-//'); fi && \
+    cargo build --release -p ${PACKAGE_NAME} --bin ${BINARY_NAME} && \
+    cp /app/target/release/${BINARY_NAME} /app/service_binary
+
+FROM alpine:3.20 AS runner
+RUN apk add --no-cache ca-certificates tzdata
+
+ARG SERVICE_NAME
+ARG PACKAGE_NAME=${SERVICE_NAME}
+LABEL org.opencontainers.image.title="Northstar Microservice - ${PACKAGE_NAME}" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
+
+WORKDIR /app
+COPY --from=builder /app/service_binary /app/service
+
+RUN addgroup -S -g 10001 northstar && adduser -S -u 10001 -G northstar northstar
+USER 10001:10001
+
+ENTRYPOINT ["/app/service"]

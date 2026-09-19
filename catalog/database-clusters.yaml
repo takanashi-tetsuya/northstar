@@ -1,0 +1,34 @@
+version: "2.0.0"
+
+# Physical PostgreSQL/Redis placement is deliberately separate from the
+# logical database names in data-ownership.yaml.
+clusters:
+  - cluster_id: primary-home
+    provider: postgresql
+    region_mode: home_region
+    high_availability: true
+    logical_databases:
+      - northstar_identity
+      - northstar_session
+      - northstar_delivery
+      - northstar_message_ingress
+      - northstar_federation_outbox
+      - northstar_xep_0016
+      - northstar_xep_0045
+      - northstar_xep_0060
+      - northstar_xep_0163
+      - northstar_xep_0198
+      - northstar_xep_0313
+      - northstar_xep_0363
+      - northstar_xep_0369
+      - northstar_xep_0484
+      - northstar_moderation
+      - northstar_admin_operations
+      - northstar_retention
+
+  - cluster_id: cache-global
+    provider: redis
+    region_mode: global
+    high_availability: true
+    logical_databases:
+      - northstar_runtime_cache

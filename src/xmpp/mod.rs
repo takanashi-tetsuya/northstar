@@ -1,6 +1,6 @@
+pub(crate) mod extensions;
 pub(crate) mod framing;
 pub(crate) mod protocol;
-pub(crate) mod sm_counter;
 pub(crate) mod stanza_validation;
 pub(crate) mod xml_builder;
 pub(crate) mod xml_util;
@@ -74,11 +74,12 @@ fn c2s_idle_timeout(authenticated: bool) -> Duration {
 pub async fn serve_tcp(
     state: Arc<AppState>,
     cancel: tokio_util::sync::CancellationToken,
+    listener: TcpListener,
 ) -> Result<()> {
-    let listener = TcpListener::bind(state.config.xmpp_bind)
-        .await
-        .with_context(|| format!("could not bind XMPP listener to {}", state.config.xmpp_bind))?;
-    tracing::info!(address = %state.config.xmpp_bind, "XMPP TCP listener ready");
+    let address = listener
+        .local_addr()
+        .context("could not inspect XMPP listener")?;
+    tracing::info!(%address, "XMPP TCP listener ready");
     loop {
         let (stream, peer) = tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
@@ -127,16 +128,12 @@ pub async fn serve_tcp(
 pub async fn serve_xmpps_tcp(
     state: Arc<AppState>,
     cancel: tokio_util::sync::CancellationToken,
+    listener: TcpListener,
 ) -> Result<()> {
-    let listener = TcpListener::bind(state.config.xmpps_bind)
-        .await
-        .with_context(|| {
-            format!(
-                "could not bind XMPPS listener to {}",
-                state.config.xmpps_bind
-            )
-        })?;
-    tracing::info!(address = %state.config.xmpps_bind, "XMPPS Direct TLS listener ready");
+    let address = listener
+        .local_addr()
+        .context("could not inspect XMPPS listener")?;
+    tracing::info!(%address, "XMPPS Direct TLS listener ready");
     loop {
         let (stream, peer) = tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
@@ -420,7 +417,7 @@ where
             _ = tokio::time::sleep_until(peer_idle.deadline) => {
                 session.sm_resume_allowed = false;
                 tracing::debug!(peer_ip = %session.peer_ip, authenticated = session.authenticated.is_some(), "closed byte-idle XMPP connection at the advertised XEP-0478 limit");
-                let opening = !session.stream_opened;
+                let opening = !session.negotiation.is_open();
                 let domain = session.state.config.domain.clone();
                 let _ = tcp_fatal_error(
                     &mut io,
@@ -443,7 +440,7 @@ where
                     tcp_internal_backend_error(
                         &mut io,
                         session,
-                        !session.stream_opened,
+                        !session.negotiation.is_open(),
                         "checkpoint XEP-0198 state",
                         &error,
                     ).await;
@@ -456,7 +453,7 @@ where
                 let _ = tcp_fatal_error(
                     &mut io,
                     &domain,
-                    !session.stream_opened,
+                    !session.negotiation.is_open(),
                     &crate::xmpp::xml_util::stream_error("policy-violation"),
                 ).await;
                 return Ok(DriveOutcome::Done);
@@ -475,7 +472,7 @@ where
                 if let Err(error) = append_utf8(&mut pending_utf8, &mut buffer) {
                     tracing::debug!(?error, peer_ip = %session.peer_ip, "invalid UTF-8 in XMPP stream");
                     session.sm_resume_allowed = false;
-                    let opening = !session.stream_opened;
+                    let opening = !session.negotiation.is_open();
                     tcp_fatal_error(
                         &mut io,
                         &session.state.config.domain,
@@ -500,7 +497,7 @@ where
                             if frame.len() > MAX_XMPP_FRAME_BYTES {
                                 tracing::debug!(peer_ip = %session.peer_ip, "XMPP frame exceeded 1 MiB");
                                 session.sm_resume_allowed = false;
-                                let opening = !session.stream_opened;
+                                let opening = !session.negotiation.is_open();
                                 tcp_fatal_error(
                                     &mut io,
                                     &session.state.config.domain,
@@ -519,7 +516,7 @@ where
                             if buffer.len() + pending_utf8.len() > MAX_XMPP_FRAME_BYTES {
                                 tracing::debug!(peer_ip = %session.peer_ip, "incomplete XMPP frame exceeded 1 MiB");
                                 session.sm_resume_allowed = false;
-                                let opening = !session.stream_opened;
+                                let opening = !session.negotiation.is_open();
                                 tcp_fatal_error(
                                     &mut io,
                                     &session.state.config.domain,
@@ -535,7 +532,7 @@ where
                             tracing::debug!(?error, peer_ip = %session.peer_ip, "invalid XMPP framing");
                             session.sm_resume_allowed = false;
                             let condition = framing::stream_error_condition(&error);
-                            let opening = !session.stream_opened;
+                            let opening = !session.negotiation.is_open();
                             tcp_fatal_error(
                                 &mut io,
                                 &session.state.config.domain,
@@ -546,8 +543,8 @@ where
                             return Ok(DriveOutcome::Done);
                         }
                     };
-                    let opening = !session.stream_opened;
-                    let stream_was_open = session.stream_opened;
+                    let opening = !session.negotiation.is_open();
+                    let stream_was_open = session.negotiation.is_open();
                     let action = match tokio::time::timeout(
                         C2S_BACKEND_OPERATION_TIMEOUT,
                         session.handle(&frame),
@@ -578,7 +575,7 @@ where
                             return Ok(DriveOutcome::Done);
                         }
                     };
-                    let xml_entity_restarted = stream_was_open && !session.stream_opened;
+                    let xml_entity_restarted = stream_was_open && !session.negotiation.is_open();
                     match action {
                         Action::Send(reply) => {
                             if !tcp_record_and_send(&mut io, session, &reply, opening).await? {
@@ -691,7 +688,7 @@ where
                         &mut io,
                         session,
                         &outgoing,
-                        !session.stream_opened,
+                        !session.negotiation.is_open(),
                     ).await? {
                         return Ok(DriveOutcome::Done);
                     }
@@ -938,7 +935,7 @@ async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
             return Ok(false);
         }
     };
-    let socket_delivery = if let Some(delivery) = item.durable_delivery.filter(|_| !managed_by_sm) {
+    let socket_delivery = if let Some(delivery) = item.c2s_delivery().filter(|_| !managed_by_sm) {
         match tokio::time::timeout(
             C2S_BACKEND_OPERATION_TIMEOUT,
             session.state.replay_service().fence_socket_write(delivery),
@@ -972,8 +969,21 @@ async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
     } else {
         None
     };
+    let socket_mix_delivery = match fence_mix_socket_write(session, item, managed_by_sm).await {
+        Ok(delivery) => delivery,
+        Err(error) => {
+            tcp_internal_backend_error(io, session, opening, "fence MIX socket write", &error)
+                .await;
+            return Ok(false);
+        }
+    };
     send(io, &item.stanza).await?;
+    item.confirm_transport_write();
     if !managed_by_sm {
+        // The MIX source, if any, was already rotated to a writer-private
+        // socket fence before this write. A generic MUC receipt still waits
+        // for the actual bytes, but the former worker token is no longer
+        // eligible to retry while this transport owns the fence.
         item.confirm_transport_ownership();
     }
     if let Some(delivery) = socket_delivery {
@@ -995,7 +1005,53 @@ async fn tcp_record_and_send_item<S: AsyncWrite + Unpin>(
             }
         }
     }
+    if let Some(delivery) = socket_mix_delivery {
+        match tokio::time::timeout(
+            C2S_BACKEND_OPERATION_TIMEOUT,
+            session
+                .state
+                .mix_service()
+                .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),
+        )
+        .await
+        {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => {
+                tracing::warn!(delivery_id = %delivery.delivery_id, "MIX socket fence changed before direct-write acknowledgement")
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(?error, delivery_id = %delivery.delivery_id, "MIX socket write succeeded but durable acknowledgement failed")
+            }
+            Err(_) => {
+                tracing::warn!(delivery_id = %delivery.delivery_id, "MIX socket write succeeded but durable acknowledgement timed out")
+            }
+        }
+    }
     Ok(true)
+}
+
+/// Fence a non-SM MIX source immediately before an ordered direct write. The
+/// returned token belongs to the writer, while the original claiming worker
+/// is notified only after that durable transfer commits. A later route retry
+/// therefore cannot make an already-queued stale item authoritative again.
+async fn fence_mix_socket_write(
+    session: &ProtocolSession,
+    item: &crate::outbound::OutboundItem,
+    managed_by_sm: bool,
+) -> Result<Option<crate::outbound::MixDelivery>> {
+    let Some(source) = item.mix_delivery().filter(|_| !managed_by_sm) else {
+        return Ok(None);
+    };
+    let fenced = tokio::time::timeout(
+        C2S_BACKEND_OPERATION_TIMEOUT,
+        session.state.mix_service().fence_mix_socket_write(source),
+    )
+    .await
+    .context("MIX socket-write fence timed out")??;
+    item.complete_mix_handoff(crate::outbound::MixTransportCompletion::SocketFenced {
+        connection_id: session.connection_id,
+    });
+    Ok(Some(fenced))
 }
 
 async fn tcp_internal_backend_error<S: AsyncWrite + Unpin>(
@@ -1068,7 +1124,7 @@ pub async fn websocket_connection(
             .unwrap_or_else(|| std::time::Instant::now() + Duration::from_secs(86_400));
         tokio::select! {
             _ = actor_shutdown.cancelled() => {
-                let opened = session.stream_opened;
+                let opened = session.negotiation.is_open();
                 websocket_orderly_close(
                     &mut socket,
                     opened,
@@ -1082,14 +1138,14 @@ pub async fn websocket_connection(
             }
             _ = disconnect.cancelled() => {
                 session.sm_resume_allowed = false;
-                let opened = session.stream_opened;
+                let opened = session.negotiation.is_open();
                 websocket_orderly_close(&mut socket, opened, &mut terminal_sequence).await;
                 break;
             }
             _ = tokio::time::sleep_until(peer_idle.deadline) => {
                 session.sm_resume_allowed = false;
                 tracing::debug!(%peer_ip, authenticated = session.authenticated.is_some(), "closed byte-idle WebSocket XMPP connection at the advertised XEP-0478 limit");
-                let opening = !session.stream_opened;
+                let opening = !session.negotiation.is_open();
                 let domain = session.state.config.domain.clone();
                 websocket_fatal_error(
                     &mut socket,
@@ -1106,7 +1162,7 @@ pub async fn websocket_connection(
                 {
                     tracing::debug!(%peer_ip, "closed unauthenticated WebSocket after deadline");
                     session.sm_resume_allowed = false;
-                    let opening = !session.stream_opened;
+                    let opening = !session.negotiation.is_open();
                     let domain = session.state.config.domain.clone();
                     websocket_fatal_error(
                         &mut socket,
@@ -1121,7 +1177,7 @@ pub async fn websocket_connection(
             _ = sm_lease_watch.tick(), if session.sm_db_id.is_some() => {
                 if session.checkpoint_sm().await.is_err() {
                     session.sm_resume_allowed = false;
-                    let opening = !session.stream_opened;
+                    let opening = !session.negotiation.is_open();
                     let domain = session.state.config.domain.clone();
                     websocket_fatal_error(
                         &mut socket,
@@ -1135,7 +1191,7 @@ pub async fn websocket_connection(
             }
             _ = tokio::time::sleep_until(resource_bind_deadline.into()), if session.resource_bind_deadline().is_some() => {
                 session.sm_resume_allowed = false;
-                let opening = !session.stream_opened;
+                let opening = !session.negotiation.is_open();
                 let domain = session.state.config.domain.clone();
                 websocket_fatal_error(
                     &mut socket,
@@ -1165,7 +1221,7 @@ pub async fn websocket_connection(
                                 tracing::debug!(?error, "invalid WebSocket XMPP framing");
                                 session.sm_resume_allowed = false;
                                 let condition = framing::stream_error_condition(&error);
-                                let opening = !session.stream_opened;
+                                let opening = !session.negotiation.is_open();
                                 let domain = session.state.config.domain.clone();
                                 websocket_fatal_error(
                                     &mut socket,
@@ -1179,7 +1235,7 @@ pub async fn websocket_connection(
                         };
                         if websocket_has_invalid_stream_header_namespace(&frame) {
                             session.sm_resume_allowed = false;
-                            let opening = !session.stream_opened;
+                            let opening = !session.negotiation.is_open();
                             let domain = session.state.config.domain.clone();
                             websocket_fatal_error(
                                 &mut socket,
@@ -1192,7 +1248,7 @@ pub async fn websocket_connection(
                         }
                         if websocket_close_has_content(&frame) {
                             session.sm_resume_allowed = false;
-                            let opening = !session.stream_opened;
+                            let opening = !session.negotiation.is_open();
                             let domain = session.state.config.domain.clone();
                             websocket_fatal_error(
                                 &mut socket,
@@ -1203,15 +1259,15 @@ pub async fn websocket_connection(
                             ).await;
                             break;
                         }
-                        let opening = !session.stream_opened;
-                        let stream_was_opened = session.stream_opened;
+                        let opening = !session.negotiation.is_open();
+                        let stream_was_opened = session.negotiation.is_open();
                         let action = tokio::time::timeout(
                             C2S_BACKEND_OPERATION_TIMEOUT,
                             session.handle(&frame),
                         ).await.map_err(|_| anyhow::anyhow!("XMPP protocol/backend operation timed out"))
                             .and_then(|result| result);
                         if stream_was_opened
-                            && !session.stream_opened
+                            && !session.negotiation.is_open()
                             && session.authenticated.is_some()
                         {
                             framer.reset_entity();
@@ -1484,7 +1540,7 @@ pub async fn websocket_connection(
                             "rejected binary WebSocket XMPP message before XML processing"
                         );
                         session.sm_resume_allowed = false;
-                        let opening = !session.stream_opened;
+                        let opening = !session.negotiation.is_open();
                         let domain = session.state.config.domain.clone();
                         websocket_fatal_error(
                             &mut socket,
@@ -1502,7 +1558,7 @@ pub async fn websocket_connection(
                 let Some(outgoing) = outgoing else { break; };
                 let outgoing = session.csi_filter_outbound(outgoing);
                 if let Some(outgoing) = outgoing {
-                    let opening = !session.stream_opened;
+                    let opening = !session.negotiation.is_open();
                     if !websocket_record_and_send_item(
                         &mut socket,
                         &mut session,
@@ -1533,7 +1589,7 @@ pub async fn websocket_connection(
         disconnect.is_cancelled(),
         &terminal_sequence,
     ) {
-        let opened = session.stream_opened;
+        let opened = session.negotiation.is_open();
         websocket_orderly_close(&mut socket, opened, &mut terminal_sequence).await;
     }
     finish_protocol_session(&mut session, transport).await;
@@ -1563,7 +1619,7 @@ async fn websocket_record_and_send_item(
             return false;
         }
     };
-    let socket_delivery = if let Some(delivery) = item.durable_delivery.filter(|_| !managed_by_sm) {
+    let socket_delivery = if let Some(delivery) = item.c2s_delivery().filter(|_| !managed_by_sm) {
         match tokio::time::timeout(
             C2S_BACKEND_OPERATION_TIMEOUT,
             session.state.replay_service().fence_socket_write(delivery),
@@ -1603,6 +1659,23 @@ async fn websocket_record_and_send_item(
     } else {
         None
     };
+    let socket_mix_delivery = match fence_mix_socket_write(session, &item, managed_by_sm).await {
+        Ok(delivery) => delivery,
+        Err(error) => {
+            tracing::error!(?error, "failed to fence durable MIX WebSocket write");
+            session.sm_resume_allowed = false;
+            let domain = session.state.config.domain.clone();
+            websocket_fatal_error(
+                socket,
+                &domain,
+                opening,
+                crate::xmpp::xml_util::stream_error("internal-server-error"),
+                terminal,
+            )
+            .await;
+            return false;
+        }
+    };
     if !websocket_send_live(
         socket,
         Message::Text(item.stanza.clone().into()),
@@ -1612,7 +1685,11 @@ async fn websocket_record_and_send_item(
     {
         return false;
     }
+    item.confirm_transport_write();
     if !managed_by_sm {
+        // See the TCP writer above. A direct MIX source was fenced before
+        // this WebSocket frame write; only generic receipts remain tied to
+        // successful frame acceptance.
         item.confirm_transport_ownership();
     }
     if let Some(delivery) = socket_delivery {
@@ -1631,6 +1708,28 @@ async fn websocket_record_and_send_item(
             }
             Err(_) => {
                 tracing::warn!(message_id = %delivery.message_id, "WebSocket write succeeded but durable delivery acknowledgement timed out")
+            }
+        }
+    }
+    if let Some(delivery) = socket_mix_delivery {
+        match tokio::time::timeout(
+            C2S_BACKEND_OPERATION_TIMEOUT,
+            session
+                .state
+                .mix_service()
+                .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),
+        )
+        .await
+        {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => {
+                tracing::warn!(delivery_id = %delivery.delivery_id, "MIX WebSocket fence changed before direct-write acknowledgement")
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(?error, delivery_id = %delivery.delivery_id, "MIX WebSocket write succeeded but durable acknowledgement failed")
+            }
+            Err(_) => {
+                tracing::warn!(delivery_id = %delivery.delivery_id, "MIX WebSocket write succeeded but durable acknowledgement timed out")
             }
         }
     }

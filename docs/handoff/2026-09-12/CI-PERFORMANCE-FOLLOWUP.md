@@ -1244,3 +1244,52 @@ PID 重用或讀取失敗時標記 unavailable。
 此提交的兩條協定整合測試均通過，包含 Upload 重送檢查。
 [發佈預演](https://github.com/takanashi-tetsuya/northstar/actions/runs/34756492600)
 也完成 10 success／3 tag-only skips；完整 CI 仍因 Federation 失敗而未通過。
+
+## 2026-09-19：第 19 輪控制心跳逾時與快照計畫重用
+
+確認 `52629d2` 的最終結果：
+
+| Run | 結果 |
+| --- | --- |
+| [push CI 34759787481](https://github.com/takanashi-tetsuya/northstar/actions/runs/34759787481) | 28 success、4 預期 skips，兩條 20×50 均通過 |
+| [PR CI 34759789421](https://github.com/takanashi-tetsuya/northstar/actions/runs/34759789421) | 26 success、4 預期 skips；Federation 與彙總工作失敗，MIX 20×50 通過 |
+| [發佈預演 34759787444](https://github.com/takanashi-tetsuya/northstar/actions/runs/34759787444) | 10 success、3 tag-only skips |
+
+[PR Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/34759789421/job/103731369195)
+完成 18 輪，第 19 輪 pair 38 的 A 節點在 `snapshot-read` 停留 4,021 ms，
+控制工作 heartbeat 累計 5,240 ms 後停止服務。父程序隨後在 transport
+release 階段發現 worker 退出；失敗起點是控制工作逾時。
+
+Observer 正常結束：7,746 samples，最大 3,967.333 ms，19 次
+`57014` statement timeout 全部排空並恢復，清理與證據檢查均通過。
+14:39:59 UTC 的慢查詢耗時 672.630 ms，其中 backend CPU 6.428 ms、
+runqueue 626.727 ms；14:40:05 的查詢耗時 1,293.010 ms，其中 CPU
+8.016 ms、runqueue 1,268.655 ms。容器沒有 CPU quota 或節流。
+這證明 observer 的部分延遲來自 PostgreSQL 排程等待，不能直接把
+同一時間應用連線的全部延遲歸因於相同原因。恢復成功後的 observer
+樣本會覆寫上一筆 OS 診斷，因此沒有保留該次已恢復錯誤的完整計數。
+
+| 證據 | Artifact ID | SHA-256 |
+| --- | --- | --- |
+| PR 業務診斷 | 10319118489 | `8511e6a0289ac49e052dc1c9961faabc5f2ef9879c2c5b83c3b60dba29b94053` |
+| PR observer | 10319287787 | `dcaa18dd0f8ae8d36357f110e5a27898c37ae3d7b592bc5c13075bb494222668` |
+
+先前在相同 PostgreSQL 17.11 Alpine 映像的負載分析中，Upload snapshot
+內部 SQL 的 1,377 次規劃累計 15,217.667 ms。隔離空佇列微測試交替
+執行原版 SQL 函式與 PL/pgSQL 版本，各呼叫 1,000 次，耗時依序為
+1,019.242／212.813／985.728／210.763 ms。這是查詢成本的量測，
+不足以單独證明 CI 心跳故障已修復。
+
+9 月 19 日重建私有 PostgreSQL 17.11 工具後，再以非 superuser migrator
+執行完整遷移。每個版本先暖機十次，同一 backend 交替量測 1,000 次
+呼叫，結果為 547.712／36.762／513.693／29.899 ms，四次回傳的
+15 欄 JSON 相同。此測試使用本機 PostgreSQL，不是 Alpine 容器。
+
+新增遷移 `0143`，以 PL/pgSQL 保存查詢計畫；15 個回傳欄位、四個
+`LIMIT 1001`、時間判斷、schema path 與既有 capability 均保留。
+歷史遷移沒有改寫，也沒有調整 worker、observer 或 heartbeat 的期限。
+Rust 1.97.1 與私有 PostgreSQL 17.11 的 11 項 Upload 資料庫回歸通過，
+包括同一 backend 的資料更新可見性與暫存表遮蔽檢查；完整資料庫權限
+邊界測試亦通過。靜態 migration、capability、ledger 與文件檢查通過。
+另有十項 Upload 單元測試通過。
+四 CPU、兩個有期限 CPU 負載程序的 5×50 回歸仍在執行。

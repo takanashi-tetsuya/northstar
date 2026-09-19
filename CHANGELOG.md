@@ -6,6 +6,8 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 ## [0.2.0] - Release notes (publication date: GitHub Releases)
 
+- Reused the bounded upload queue snapshot query plan on PostgreSQL backends
+  while preserving current-data reads and the existing capability boundary.
 - Reduced runtime-control query work by reading settings and federation rules
   in one SQL snapshot. The pressure observer prepares its activity query once
   and reads fresh backend state on every sample, with bounded timeout recovery.

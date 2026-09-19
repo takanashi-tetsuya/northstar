@@ -1104,7 +1104,7 @@ pubsub_edge_path_set_call="$(awk '
 ' "$pubsub_edge_path_migration")"
 pubsub_edge_path_argument_count="$(printf '%s\n' "$pubsub_edge_path_set_call" \
   | grep -Ec '^[[:space:]]*migration_schema,?[[:space:]]*$')"
-if [[ "$pubsub_edge_path_argument_count" -ne 2 ]]; then
+if [ "$pubsub_edge_path_argument_count" -ne 2 ]; then
     echo "migration 0132 must pass both schema identifiers to its two-placeholder format call" >&2
     exit 1
 fi

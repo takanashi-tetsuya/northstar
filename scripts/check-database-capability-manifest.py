@@ -48,6 +48,7 @@ MIGRATIONS = {
     "0131": ROOT / "migrations/0131_upload_capacity_nowait.sql",
     "0141": ROOT / "migrations/0141_upload_cleanup_capability_rehardening.sql",
     "0142": ROOT / "migrations/0142_upload_projection_capacity_rehardening.sql",
+    "0143": ROOT / "migrations/0143_upload_snapshot_plan_cache.sql",
 }
 
 # A later migration may replace an existing routine without changing its
@@ -82,6 +83,7 @@ RESECURED_BY_MIGRATION = {
         "account_upload_storage_job_capacity()",
         "account_upload_cleanup_capacity()",
     },
+    "0143": {"northstar_upload_queue_snapshot()"},
 }
 
 # A replacement migration may preserve a callable identity while changing its

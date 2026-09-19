@@ -1,7 +1,7 @@
 # Northstar 当前剩余妥协、设计边界与发布门禁
 
-本文记录 Northstar 0.2.0 的已知限制与待完成验收。迁移链为 `0001`–`0142`，
-共 141 项，保留有意缺号 `0021`。已解决问题见 [changelog](../CHANGELOG.md)。
+本文记录 Northstar 0.2.0 的已知限制与待完成验收。迁移链为 `0001`–`0143`，
+共 142 项，保留有意缺号 `0021`。已解决问题见 [changelog](../CHANGELOG.md)。
 
 CI 验证隔离环境中的代码与运行行为；生产环境、公网互操作和独立安全审计
 需要各自的验收记录。手动测试方法见 [MANUAL_SECURITY_VALIDATION.md](MANUAL_SECURITY_VALIDATION.md)。
@@ -65,20 +65,20 @@ CI 验证隔离环境中的代码与运行行为；生产环境、公网互操�
 | EXT-SECURITY | 尚无独立 RFC/XEP 审查、安全审计和渗透测试 | 外部资格 | **第三方完成后可关闭证据项** | 内部静态检查、单元测试和自审不能构成认证，也不能证明不存在未知漏洞 | 固定 release commit、binary digest、SBOM、部署拓扑和 threat model，委托独立方审查 XML/state machine、REST/WebSocket/BOSH/S2S/component、Redis/object store、浏览器密码学和权限模型。高风险公网部署前必须完成 |
 | EXT-OPERATIONS | 真实告警接收、升级/静默/恢复、离机备份和灾难恢复尚缺目标部署演练 | 外部运维证据 | **演练后可关闭证据项** | 仓库有 metrics、Prometheus rules、Grafana 和 runbook，但阈值与通知链没有目标流量基线；代码不能证明值班人员或备份目的地有效 | 完成通知演练、恢复演练、容量阈值校准和定期 restore drill，记录负责人、时间、RTO/RPO 和失败处置 |
 
-## 发布候选验证记录（2026-09-13）
+## 发布候选验证记录（2026-09-19）
 
-`2f0a676` 的 [push Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/34756492651/job/103723213377)
-与 [PR Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/34756494803/job/103722709967)
-分别在第 2、9 轮发生 observer 查询逾时。请求已获 TCP 确认，连线没有重传，
-五秒内未收到回应；仍需区分 PostgreSQL 内部等待与 CPU 排程延迟。
-此前限制 worker CPU affinity 未改善故障，已撤回。
+`52629d2` 的 [push CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34759787481)
+全部通过；[PR CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/34759789421)
+的 Federation 在完成 18 轮后，第 19 轮因一台服务的控制查询触发五秒
+heartbeat 保护而失败。MIX、协定整合及其余必要检查均通过。
+本次 observer 正常结束，19 次 PostgreSQL statement timeout 均已恢复。
+新增的程序计数显示，慢查询期间的 CPU 排程等待远高于执行时间，
+容器未发生配额节流；仍需验证降低查询开销能否消除间歇故障。
 
-先前 HTTP Upload 重送检查未处理 API 已定义的暂时忙碌
-响应；现在仅对 `409 upload_in_progress` 遵守 `Retry-After`，共用十秒
-重试预算。真实 PostgreSQL 锁竞争测试已验证恢复、内容冲突及重送次数上限。
-`2f0a676` 的 push、PR 协定整合测试均已通过，Windows、Linux 与 Docker
-发布预演也通过。Observer 另加入 PostgreSQL 程序排程诊断；Federation
-间歇故障仍未关闭。
+迁移 `0143` 让 Upload 快照重用查询计划，保留原有扫描上限与权限。
+本地 Upload 和数据库权限回归已通过，完整压力与新提交的 CI 尚待验证。
+Windows、Linux 与 Docker 的 [发布预演](https://github.com/takanashi-tetsuya/northstar/actions/runs/34759787444)
+已通过；本次快照优化仍需新的完整 CI 验证。
 日志和验证方法见 [CI 验证记录](handoff/2026-09-12/CI-PERFORMANCE-FOLLOWUP.md)。
 
 定时 fuzz、production/cluster load envelope 和 scheduled stress 属于定时或

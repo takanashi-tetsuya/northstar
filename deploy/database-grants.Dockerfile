@@ -1,6 +1,6 @@
 FROM postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
 
-ARG NORTHSTAR_VERSION=0.2.0
+ARG NORTHSTAR_VERSION=0.2.1
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="Northstar Database Grant Reconciler" \
       org.opencontainers.image.description="Least-privilege PostgreSQL grant reconciler for Northstar" \

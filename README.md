@@ -9,7 +9,7 @@ PostgreSQL. It provides XMPP over TCP, Direct TLS, WebSocket and optional BOSH,
 along with federation, group chat, OMEMO-compatible services, a browser client,
 REST administration, anti-abuse controls, logging and metrics.
 
-The current package version is `0.2.0` and remains pre-1.0. Publication status
+The current package version is `0.2.1` and remains pre-1.0. Publication status
 and dates are recorded in [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases).
 The project has not received an independent security audit. Review the
 [XEP support matrix](XEP_MATRIX.md), [release checklist](docs/RELEASE_CHECKLIST.md)
@@ -30,17 +30,17 @@ integrated or production-ready service.
 
 ### Release packages
 
-Northstar `0.2.0` packages will be available from
+Northstar `0.2.1` packages will be available from
 [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) after
 the maintainer publishes the Release. The tag workflow prepares a draft with
 the following files and verifies their checksums, provenance and image digests:
 
 | Asset | Intended use |
 |---|---|
-| `northstar-0.2.0-linux-amd64.tar.gz` | Complete Linux AMD64 distribution with `xmpp-server`, the Web client, Swagger UI, `.env.example`, and license notices |
-| `northstar-0.2.0-linux-amd64` | Raw Linux AMD64 ELF binary |
-| `northstar-0.2.0-windows-amd64.zip` | Complete Windows AMD64 development/evaluation distribution with `xmpp-server.exe` and the same runtime assets and notices |
-| `northstar-0.2.0-windows-amd64.exe` | Raw Windows AMD64 executable for development/evaluation |
+| `northstar-0.2.1-linux-amd64.tar.gz` | Complete Linux AMD64 distribution with `xmpp-server`, the Web client, Swagger UI, `.env.example`, and license notices |
+| `northstar-0.2.1-linux-amd64` | Raw Linux AMD64 ELF binary |
+| `northstar-0.2.1-windows-amd64.zip` | Complete Windows AMD64 development/evaluation distribution with `xmpp-server.exe` and the same runtime assets and notices |
+| `northstar-0.2.1-windows-amd64.exe` | Raw Windows AMD64 executable for development/evaluation |
 | `SHA256SUMS` | SHA-256 checksums for the four binary assets, `IMAGE_DIGESTS` and `RELEASE-EVIDENCE.json` |
 | `RELEASE-EVIDENCE.json` | Exact source/run identity and successful Windows, Linux and Docker package checks |
 | `IMAGE_DIGESTS` | Exact `name@sha256:digest` references produced for the three GHCR images by a successful tag run |
@@ -61,10 +61,10 @@ Download all required files, verify the matching entries in `SHA256SUMS`, and
 verify the GitHub build provenance before execution. On Linux, for example:
 
 ```sh
-mkdir northstar-0.2.0
+mkdir northstar-0.2.1
 sha256sum --check SHA256SUMS
-tar -xzf northstar-0.2.0-linux-amd64.tar.gz -C northstar-0.2.0
-cd northstar-0.2.0
+tar -xzf northstar-0.2.1-linux-amd64.tar.gz -C northstar-0.2.1
+cd northstar-0.2.1
 ./xmpp-server --version
 ```
 
@@ -245,9 +245,9 @@ persistent volumes.
 
 | Dockerfile | Release image | Compose services | Purpose |
 |---|---|---|---|
-| `Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar:0.2.0` | `migrate`, `xmpp` | Database migrations and the XMPP/HTTP server |
-| `deploy/database-grants.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.0` | `database-grants` | Post-migration PostgreSQL grant reconciliation |
-| `deploy/backup.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0` | `backup`, `restore` | Signed/encrypted backup, verification and stopped restore |
+| `Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar:0.2.1` | `migrate`, `xmpp` | Database migrations and the XMPP/HTTP server |
+| `deploy/database-grants.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.1` | `database-grants` | Post-migration PostgreSQL grant reconciliation |
+| `deploy/backup.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-backup:0.2.1` | `backup`, `restore` | Signed/encrypted backup, verification and stopped restore |
 
 The complete production procedure is in
 [Production operations](docs/PRODUCTION_OPERATIONS.md). Database capabilities
@@ -284,7 +284,7 @@ For a release build, set the real domain and certificate paths, then set
 full commit. `unknown` is development-only.
 
 ```dotenv
-NORTHSTAR_VERSION=0.2.0
+NORTHSTAR_VERSION=0.2.1
 NORTHSTAR_VCS_REF=<full-release-commit>
 XMPP_DOMAIN=chat.example.org
 TLS_CERT_HOST_PATH=/etc/northstar/tls/fullchain.pem
@@ -309,7 +309,7 @@ BuildKit cache. `NORTHSTAR_VERSION` and `NORTHSTAR_VCS_REF` populate OCI labels.
 To create explicitly tagged single-platform images outside Compose:
 
 ```sh
-northstar_version=0.2.0
+northstar_version=0.2.1
 northstar_revision="$(git rev-parse HEAD)"
 
 docker build --pull \
@@ -336,7 +336,7 @@ Compose file uses `build:` and does not automatically select those tags.
 The three Linux AMD64 release images listed above have immutable references in
 the release's `IMAGE_DIGESTS` file. Copy `.env.example` to `.env`, configure the
 deployment, and set all three image variables to the matching
-`name@sha256:digest` values. The `:0.2.0` tags select the release conveniently,
+`name@sha256:digest` values. The `:0.2.1` tags select the release conveniently,
 but a digest is the production identity.
 
 ```dotenv

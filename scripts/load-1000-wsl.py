@@ -21,6 +21,8 @@ USERNAME = "load_user"
 PASSWORD = "load-test-password-123"
 SESSION_COUNT = int(os.environ.get("XMPP_LOAD_SESSIONS", "1000"))
 WORKERS = int(os.environ.get("XMPP_LOAD_WORKERS", "64"))
+# Authentication has eight active password-work slots; traffic uses WORKERS.
+LOGIN_WORKERS = min(WORKERS, 8)
 
 
 def connect(index: int):
@@ -63,7 +65,7 @@ def run() -> None:
     started = time.monotonic()
     completed = False
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=LOGIN_WORKERS) as executor:
             futures = [executor.submit(connect, index) for index in range(SESSION_COUNT)]
             for future in concurrent.futures.as_completed(futures):
                 sessions.append(future.result())

@@ -455,6 +455,7 @@ jobs:
           python3 scripts/test-redis-tls-unix-relay.py --self-test
           python3 scripts/test-cluster-tls-rejection.py --self-test
           python3 scripts/test-cluster-sm-client.py
+          python3 scripts/test-scheduled-fixtures.py
           python3 scripts/test-cluster-fault-observations.py
           python3 scripts/test-cluster-version-probes.py
           python3 scripts/test-cluster-ack-pause.py

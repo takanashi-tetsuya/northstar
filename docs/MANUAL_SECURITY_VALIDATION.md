@@ -128,7 +128,9 @@
   ```
 
 - **用途**：验证 1,000 连接下的认证、IQ ping、presence 公平性、调度、数据库池、FD/RSS/CPU 和 release 构建容量包络。
+- **负载配置**：建立会话和重新认证最多使用 8 个并行任务；1,000 个已认证会话同时保留，消息接收与 ping 使用 64 个任务。SM 恢复使用 SASL2 装置标识，保持默认的同装置检查。
 - **特有前置**：专用测试机、独立 schema、loopback 端口和 `ulimit`/系统监控；从小规模逐级增加，每级设定停止条件；与日常开发环境隔离。
+- **独立数据库**：`NORTHSTAR_LOAD_DATABASE_PORT` 指定本地测试库端口，默认 `5432`；两个负载脚本仍只接受 `xmpp_test`。验证已有二进位时可设置 `NORTHSTAR_LOAD_SKIP_BUILD=true`，并通过 `CARGO_TARGET_DIR` 指向对应的 `debug/` 或 `release/` 目录。
 - **通过标准**：认证和 ping/IQ 全部完成，不被 presence 洪泛饿死；无 OOM、panic、FD/任务泄漏或无界队列，并保存 p50/p95/p99、RSS、CPU、WAL/IOPS 和网络证据。该结果仅适用于被测 commit/配置/硬件，不自动成为生产 SLA。
 
 ### 3.9 公网联邦、DNSSEC/DANE/TLS/CRL 与第三方互操作

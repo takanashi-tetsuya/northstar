@@ -177,7 +177,7 @@ class DeviceXmppWebSocket(fixture.XmppWebSocket):
             raise RuntimeError("cluster device ID must be a canonical non-nil UUID") from None
         self.device_id = device_id
         self._protocol_frames = deque()
-        super().__init__(username, password, resource, resume=resume)
+        super().__init__(username, password, resource, resume=resume, device_id=device_id)
 
     def receive(self, timeout=10):
         if not self._protocol_frames:
@@ -858,6 +858,32 @@ def register(username: str) -> None:
     fixture.check(status == 201, f"registration failed: {status} {result}")
 
 
+def wait_for_peer_routes(alice, bob, alice_full: str, bob_full: str) -> None:
+    """Wait for both nodes to discover the new peer's signed process authority."""
+    deadline = time.monotonic() + 40
+    while time.monotonic() < deadline:
+        if not wait_for_cluster_recovery((HTTP_A, HTTP_B), deadline):
+            break
+        for sender, receiver, target in ((alice, bob, bob_full), (bob, alice, alice_full)):
+            marker = f"cluster-peer-ready-{uuid.uuid4()}"
+            sender.send(
+                f"<message xmlns='jabber:client' to='{target}' type='normal' id='{marker}'>"
+                "<body>peer discovery</body><no-store xmlns='urn:xmpp:hints'/></message>"
+            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                receiver.receive_until(marker, timeout=min(2, remaining))
+            except TimeoutError:
+                break
+        else:
+            fixture.check(time.monotonic() <= deadline, "cluster peer discovery exceeded its budget")
+            return
+        time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+    raise AssertionError("cluster peers did not establish bidirectional routes within 40 seconds")
+
+
 def run() -> None:
     endpoint(HTTP_A, XMPP_A)
     fixture.wait_ready()
@@ -876,6 +902,9 @@ def run() -> None:
     duplicate.close()
     bob_device_id = str(uuid.uuid4())
     bob_b = DeviceXmppWebSocket(BOB, PASSWORD, "bob-node-b", device_id=bob_device_id)
+    wait_for_peer_routes(
+        alice_a, bob_b, f"{ALICE}@{DOMAIN}/alice-node-a", f"{BOB}@{DOMAIN}/bob-node-b"
+    )
     alice_b = fixture.XmppWebSocket(ALICE, PASSWORD, "alice-node-b")
     alice_b.send(
         "<iq xmlns='jabber:client' type='set' id='cluster-carbons'>"
@@ -1431,6 +1460,7 @@ def run_faults() -> None:
     fixture.wait_ready()
     bob_b = fixture.XmppWebSocket(BOB, PASSWORD, "fault-bob")
     bob_full = f"{BOB}@{DOMAIN}/fault-bob"
+    wait_for_peer_routes(alice_a, bob_b, f"{ALICE}@{DOMAIN}/fault-alice", bob_full)
     bob_route = f"{prefix}:session:{bob_full}"
     bob_node = redis_cli("get", bob_route)
     fixture.check(bool(bob_node), "Bob's Redis session route is absent")
@@ -1502,6 +1532,10 @@ def run_faults() -> None:
     fixture.check(
         offline_marker_count("redis-pause-offline-fallback") == 1,
         "durable Redis-outage fallback disappeared before reconnect replay",
+    )
+    fixture.check(
+        wait_for_cluster_recovery((HTTP_A, HTTP_B), time.monotonic() + 40),
+        "cluster nodes did not recover after the Redis pause",
     )
     bob_b.close()
     time.sleep(0.5)
@@ -1733,6 +1767,10 @@ def run_faults() -> None:
 
         # A valid negative ACK is deliberately duplicated. It can end the
         # request once, but it cannot manufacture a positive delivery.
+        duplicate_degradations = {
+            port: metric_value(port, "xmpp_cluster_degraded_transitions_total")
+            for port in (METRICS_A, METRICS_B)
+        }
         with paused_node_for_ack(PID_B):
             alice_a.send(
                 f"<message xmlns='jabber:client' to='{fake_full}' type='normal' id='duplicate-ack'>"
@@ -1747,6 +1785,11 @@ def run_faults() -> None:
                 "node_id": fake_node,
                 "delivered": 0,
                 "accepted_full_jid": None,
+                # Match the real node's serialized ACK so its later reply is
+                # a replay, rather than a conflicting payload for this event.
+                "mix_supported": 0,
+                "mix_unsupported": 0,
+                "mix_unknown": 0,
                 "delivery": duplicate_request["delivery"],
             }
             duplicate_channel = f"{prefix}:node:{duplicate_envelope['source_node']}"
@@ -1779,6 +1822,11 @@ def run_faults() -> None:
         wait_for_cluster_recovery((HTTP_A, HTTP_B), deadline),
         "cluster nodes did not recover before the fresh correlated delivery probe",
     )
+    for port, before in duplicate_degradations.items():
+        fixture.check(
+            metric_value(port, "xmpp_cluster_degraded_transitions_total") == before,
+            "duplicate negative ACK caused a new control-plane failure",
+        )
     alice_a.send(
         f"<message xmlns='jabber:client' to='{bob_full}' type='chat' id='after-forged-acks'>"
         "<body>real correlated acknowledgement restored</body></message>"

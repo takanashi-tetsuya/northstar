@@ -21,6 +21,7 @@ import ssl
 import statistics
 import threading
 import time
+import uuid
 
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -36,6 +37,8 @@ SERVER_PID = int(os.environ["XMPP_LOAD_SERVER_PID"])
 CA_CERT = os.environ["XMPP_LOAD_CA_CERT"]
 SESSION_COUNT = int(os.environ.get("XMPP_LOAD_SESSIONS", "1000"))
 WORKERS = int(os.environ.get("XMPP_LOAD_WORKERS", "64"))
+# Populate the steady-state workload within the eight active password-work slots.
+LOGIN_WORKERS = min(WORKERS, 8)
 TLS_SAMPLES = int(os.environ.get("XMPP_LOAD_TLS_SAMPLES", "32"))
 RESUME_COUNT = int(os.environ.get("XMPP_LOAD_RESUME_COUNT", "100"))
 OVERLOAD_ATTEMPTS = int(os.environ.get("XMPP_LOAD_OVERLOAD_ATTEMPTS", "32"))
@@ -238,7 +241,8 @@ def timed_tls(sample: int) -> tuple[float, float]:
 def timed_websocket(index: int, resource_prefix: str = "load") -> tuple[int, object, float]:
     started = time.monotonic()
     session = fixture.XmppWebSocket(
-        USERNAME, PASSWORD, f"{resource_prefix}-{index}", initial_presence=False
+        USERNAME, PASSWORD, f"{resource_prefix}-{index}", initial_presence=False,
+        device_id=str(uuid.uuid4()),
     )
     return index, session, time.monotonic() - started
 
@@ -289,6 +293,7 @@ def resume_random_sessions(sessions: list[object]) -> None:
             f"ignored-resume-{index}",
             resume=(resume_ids[index], 0),
             initial_presence=False,
+            device_id=sessions[index].device_id,
         )
         ping_id = f"load-resume-ping-{index}"
         replacement.send(
@@ -300,7 +305,7 @@ def resume_random_sessions(sessions: list[object]) -> None:
                       f"load-{index} was not usable after SM resume")
         return index, replacement
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(WORKERS, RESUME_COUNT)) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(LOGIN_WORKERS, RESUME_COUNT)) as executor:
         for index, replacement in executor.map(resume, chosen):
             sessions[index] = replacement
 
@@ -400,7 +405,7 @@ def run() -> None:
 
         ramp_started = time.monotonic()
         websocket_latencies: list[float] = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=LOGIN_WORKERS) as executor:
             futures = [executor.submit(timed_websocket, index) for index in range(SESSION_COUNT)]
             for future in concurrent.futures.as_completed(futures):
                 index, session, elapsed = future.result()
@@ -414,6 +419,7 @@ def run() -> None:
         wait_metric("xmpp_active_sessions", SESSION_COUNT)
         results["websocket_seconds"] = websocket_summary
         results["ramp_seconds"] = ramp_elapsed
+        results["login_workers"] = LOGIN_WORKERS
 
         sender = fixture.XmppWebSocket(SENDER, PASSWORD, "load-sender", initial_presence=False)
         wait_metric("xmpp_active_sessions", SESSION_COUNT + 1)

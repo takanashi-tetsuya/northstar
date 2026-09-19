@@ -907,10 +907,10 @@ managed alert receiver before relying on them.
 ## Release artifacts and Compose image selection
 
 Linux AMD64 is the supported production baseline. The tag workflow prepares a
-complete `northstar-0.2.0-linux-amd64.tar.gz` distribution and a raw
-`northstar-0.2.0-linux-amd64` ELF binary. It also prepares a complete
-`northstar-0.2.0-windows-amd64.zip` and raw
-`northstar-0.2.0-windows-amd64.exe`, but Windows is a development/evaluation
+complete `northstar-0.2.1-linux-amd64.tar.gz` distribution and a raw
+`northstar-0.2.1-linux-amd64` ELF binary. It also prepares a complete
+`northstar-0.2.1-windows-amd64.zip` and raw
+`northstar-0.2.1-windows-amd64.exe`, but Windows is a development/evaluation
 target, not a production baseline. A raw binary lacks the matching Web client,
 Swagger UI, configuration example and license notices; operate from a complete
 archive or place those matching-tag files beside it.
@@ -922,7 +922,7 @@ publication-sensitive even though the GitHub Release remains private. Do not
 treat an unreviewed draft, a dry-run artifact, or a hash from a different run as
 release evidence. The exact values exist only after the tag workflow succeeds.
 
-For a source build, set `NORTHSTAR_VERSION=0.2.0` and set
+For a source build, set `NORTHSTAR_VERSION=0.2.1` and set
 `NORTHSTAR_VCS_REF` to the exact release commit in the ignored `.env` before
 invoking the base Compose file. The build installs OCI
 source/revision/version/license labels and copies `LICENSE` plus
@@ -935,9 +935,9 @@ with `!reset` and maps five services to three Linux AMD64 GHCR images:
 
 | Services | Version-tag reference |
 |---|---|
-| `migrate`, `xmpp` | `ghcr.io/takanashi-tetsuya/northstar:0.2.0` |
-| `database-grants` | `ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.0` |
-| `backup`, `restore` | `ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0` |
+| `migrate`, `xmpp` | `ghcr.io/takanashi-tetsuya/northstar:0.2.1` |
+| `database-grants` | `ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.1` |
+| `backup`, `restore` | `ghcr.io/takanashi-tetsuya/northstar-backup:0.2.1` |
 
 Tags select a version but are registry references, not retained deployment
 evidence. After reviewing the successful tag run, copy the three exact
@@ -1514,14 +1514,14 @@ advisories and policy. Retain the output and exact commit with the release recor
 
 ### Tag artifact verification
 
-Pushing the reviewed `v0.2.0` tag runs the release-preparation workflow. Wait
+Pushing the reviewed `v0.2.1` tag runs the release-preparation workflow. Wait
 for all binary, image, checksum and attestation jobs to pass. The workflow must
 leave a draft GitHub Release containing these seven files:
 
-- `northstar-0.2.0-linux-amd64.tar.gz` and the raw
-  `northstar-0.2.0-linux-amd64` binary;
-- `northstar-0.2.0-windows-amd64.zip` and the raw
-  `northstar-0.2.0-windows-amd64.exe` executable;
+- `northstar-0.2.1-linux-amd64.tar.gz` and the raw
+  `northstar-0.2.1-linux-amd64` binary;
+- `northstar-0.2.1-windows-amd64.zip` and the raw
+  `northstar-0.2.1-windows-amd64.exe` executable;
 - `SHA256SUMS`, `IMAGE_DIGESTS` and `RELEASE-EVIDENCE.json`.
 
 Download the complete draft asset set into an empty review directory and run:
@@ -1540,7 +1540,7 @@ commit, version and workflow run match the release candidate.
 Extract each complete archive into an empty directory. Confirm the runtime and
 license inventory, compare the extracted executable with its raw counterpart,
 and run `xmpp-server --version` or `xmpp-server.exe --version`. The result must
-be exactly the `0.2.0` build. Windows success is development/evaluation evidence
+be exactly the `0.2.1` build. Windows success is development/evaluation evidence
 only and does not change the Linux AMD64 production baseline.
 
 `IMAGE_DIGESTS` must contain exactly the `northstar`, `northstar-backup`, and
@@ -1587,7 +1587,7 @@ and a binary `/readyz` health probe that does not require adding curl or a shell
 tool. Caddy, Prometheus and Grafana have corresponding read-only/capability/PID
 bounds where their writable named volumes permit it. All Dockerfile bases and
 third-party images in the base Compose file are pinned by manifest digest. The
-release override defaults to exact `0.2.0` selection tags so it can be rendered
+release override defaults to exact `0.2.1` selection tags so it can be rendered
 before per-run digests exist; production must replace all three Northstar refs
 with the reviewed values from `IMAGE_DIGESTS`. Dependabot or a scheduled
 operator review must deliberately update both a human-readable tag and its

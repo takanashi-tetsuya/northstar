@@ -11,10 +11,11 @@ const job = (source, name) => source.split(`  ${name}:\n`)[1]?.split(/^  [a-z][a
 
 // These scheduling expressions use the shared JS/Actions boolean subset.
 // Evaluate the actual workflow fields so a changed event/ref boundary is tested.
-function scheduling(source, github) {
+function scheduling(source, github, inputs = {}) {
   const block = source.split('\nconcurrency:\n')[1].split('\njobs:')[0];
   const expression = text => vm.runInNewContext(text, {
-    github, startsWith: (value, prefix) => value.startsWith(prefix),
+    github, inputs, startsWith: (value, prefix) => value.startsWith(prefix),
+    format: (template, value) => template.replace('{0}', value),
   }, { timeout: 100 });
   const group = block.match(/^  group: (.+)$/m)[1].replace(/\$\{\{(.*?)\}\}/g, (_, text) => expression(text));
   const cancel = expression(block.match(/^  cancel-in-progress: \$\{\{(.*?)\}\}$/m)[1]);
@@ -62,6 +63,11 @@ test('release previews supersede only matching development pushes; tag runs seri
   }
   assert.notEqual(scheduling(release, event('push', 'refs/tags/v0.2.0')).group,
     scheduling(release, event('push', 'refs/tags/v0.2.1')).group);
+  const recovery = scheduling(release, event('workflow_dispatch', 'refs/heads/main'), { resume_tag: 'v0.2.0' });
+  assert.equal(recovery.group, scheduling(release, event('push', 'refs/tags/v0.2.0')).group);
+  assert.equal(recovery.cancel, false);
+  assert.notEqual(recovery.group,
+    scheduling(release, event('workflow_dispatch', 'refs/heads/main'), { resume_tag: 'v0.2.1' }).group);
 });
 
 function verifyPressureGate(source, name, rounds) {

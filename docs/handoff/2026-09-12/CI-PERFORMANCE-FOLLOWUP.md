@@ -1293,3 +1293,18 @@ Rust 1.97.1 與私有 PostgreSQL 17.11 的 11 項 Upload 資料庫回歸通過�
 邊界測試亦通過。靜態 migration、capability、ledger 與文件檢查通過。
 另有十項 Upload 單元測試通過。
 四 CPU、兩個有期限 CPU 負載程序的 5×50 回歸仍在執行。
+
+### Rustls 安全更新
+
+`411fd93` 的 [RustSec audit](https://github.com/takanashi-tetsuya/northstar/actions/runs/35437789992/job/105883305483)
+與 [dependency policy](https://github.com/takanashi-tetsuya/northstar/actions/runs/35437789992/job/105883305540)
+因 9 月 14 日公布的 [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html)
+失敗。Rustls `0.23.43` 會接受跨越加密層級的 TLS 1.3 handshake 訊息，
+上游修復版本為 `0.23.45`。鎖定檔只更新這個套件的版本與 checksum，
+保留現有 audit 規則，沒有新增例外。24 項 TLS 相關回歸通過，另有五項
+需要指定外部 fixture 的測試按原設計忽略。
+
+同一輪 Rust 單元測試另發現 migration ledger 的精確版本斷言仍為
+`0142`／141 項；補為 `0143`／142 項，保留 `0021` 缺號與 checksum
+檢查。`cargo test --workspace --all-targets --all-features --locked` 已通過，
+包含修正後的 ledger 斷言；新提交仍需完整 CI 驗證。

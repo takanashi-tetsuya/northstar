@@ -6,6 +6,8 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 ## [0.2.0] - Release notes (publication date: GitHub Releases)
 
+- Updated Rustls to 0.23.45 to fix TLS 1.3 handshake boundary validation
+  ([RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html)).
 - Reused the bounded upload queue snapshot query plan on PostgreSQL backends
   while preserving current-data reads and the existing capability boundary.
 - Reduced runtime-control query work by reading settings and federation rules

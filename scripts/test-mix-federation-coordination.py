@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import select
+import socket
 import subprocess
 import sys
 import tempfile
@@ -174,6 +175,55 @@ sys.stdin.buffer.read()
 
 @unittest.skipUnless(sys.platform == "linux", "requires Linux /proc listener ownership")
 class ListenerSnapshotTests(CoordinationCase):
+    def shell_record(self, child, port):
+        directory = self.directory / "fixture-cleanup"
+        script = '''
+set -euo pipefail
+source "$1/scripts/lib/test-listener-readiness.sh"
+declare -a fixture_listener_ports=()
+declare -A fixture_listener_owner_pids=()
+declare -A fixture_listener_purposes=()
+fixture_register_readiness_ports "http=127.0.0.1:$5" "$4"
+fixture_record_listener_ledger "$1" "$2" "$3"
+'''
+        result = subprocess.run(
+            ["bash", "-c", script, "fixture-test", str(ROOT.parent), str(directory),
+             self.nonce, str(child.pid), str(port)], capture_output=True, text=True,
+        )
+        return directory, result
+
+    def shell_verify(self, directory):
+        return subprocess.run(
+            ["bash", "-c", 'source "$1/scripts/lib/test-listener-readiness.sh"; '
+             'fixture_verify_listener_ledger "$1" "$2" "$3"', "fixture-test",
+             str(ROOT.parent), str(directory), self.nonce], capture_output=True, text=True,
+        )
+
+    def test_federation_shell_cleanup_rejects_original_socket_but_accepts_reused_port(self):
+        child, listeners = self.child()
+        port = listeners[0]["port"]
+        directory, recorded = self.shell_record(child, port)
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        self.assertNotEqual(self.shell_verify(directory).returncode, 0)
+        child.kill()
+        child.wait(timeout=5)
+        with socket.socket() as replacement:
+            replacement.bind(("127.0.0.1", port))
+            replacement.listen(1)
+            verified = self.shell_verify(directory)
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+            self.assertIn("reused_ports=1", verified.stdout)
+        self.assertEqual(self.shell_verify(directory).returncode, 0)
+
+    def test_federation_shell_cleanup_rejects_foreign_owner_and_missing_ledger(self):
+        owner, listeners = self.child()
+        stranger, _ = self.child(0)
+        directory, recorded = self.shell_record(stranger, listeners[0]["port"])
+        self.assertNotEqual(recorded.returncode, 0)
+        self.assertFalse((directory / "listeners-r001-p001.json").exists())
+        self.assertNotEqual(self.shell_verify(directory).returncode, 0)
+        self.assertIsNone(owner.poll())
+
     def test_real_listeners_match_reported_pid_port_and_kernel_inode(self):
         children = [self.child(3), self.child(2)]
         expected = {}

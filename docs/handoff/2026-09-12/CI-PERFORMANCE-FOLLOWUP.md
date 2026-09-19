@@ -1308,3 +1308,18 @@ Rust 1.97.1 與私有 PostgreSQL 17.11 的 11 項 Upload 資料庫回歸通過�
 `0142`／141 項；補為 `0143`／142 項，保留 `0021` 缺號與 checksum
 檢查。`cargo test --workspace --all-targets --all-features --locked` 已通過，
 包含修正後的 ledger 斷言；新提交仍需完整 CI 驗證。
+
+### Federation 清理的連接埠重用
+
+`411fd93` 的本地四 CPU／額外兩個 CPU 負載程序回歸完成前三輪，
+第四輪 pair 6 的協定斷言全部通過，但清理因埠 37173 仍在 LISTEN
+而失敗。當時只記錄埠號，無法判斷是否仍為原 fixture 的 socket。
+Observer 共 2,444 samples、零錯誤、最大 78.440 ms；沒有控制心跳逾時。
+此輪不能記為完整 5×50 通過，也不能把埠號判斷當成洩漏證據。
+
+Federation 現在沿用 MIX 的 socket ledger：停止子程序前核對 PID、
+出生時間和 socket inode，回收所有 server／relay 後檢查原 socket
+是否仍在監聽。不同 inode 重用同一埠不再失敗；原 socket 被後代程序
+繼承仍會失敗。清理造成的失敗也會保留原有有界、遮罩後的服務日誌。
+新增 shell helper 回歸與既有 MIX 協調測試共 39 項通過，既有 ledger
+自測另驗證繼承 socket 洩漏、簽章與埠重用。

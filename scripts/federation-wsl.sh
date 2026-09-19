@@ -94,6 +94,8 @@ s2s_b=""
 s2s_tls_a=""
 s2s_tls_b=""
 declare -a fixture_listener_ports=()
+declare -A fixture_listener_owner_pids=()
+declare -A fixture_listener_purposes=()
 fixture_print_log_excerpt() {
   # Server processes are already reaped. Redact complete bounded records before
   # truncating output; the outer CI wrapper redacts the transcript again.
@@ -173,28 +175,20 @@ PY_WARNING_EXCERPT
 cleanup() {
   exit_code=$?
   trap - EXIT INT TERM
+  listener_ledger_ready=false
+  if listener_ledger_nonce="$(openssl rand -hex 32)" \
+    && fixture_record_listener_ledger "$project_dir" "$runtime_dir/listener-cleanup" "$listener_ledger_nonce"; then
+    listener_ledger_ready=true
+  else
+    echo "federation cleanup could not capture owned listener identities" >&2
+    exit_code=1
+  fi
   for pid in "$pid_a" "$pid_b" "$relay_a_s2s_pid" "$relay_b_s2s_tls_pid" "$relay_a_http_pid" "$relay_b_http_pid"; do
     if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; fi
   done
   for pid in "$pid_a" "$pid_b" "$relay_a_s2s_pid" "$relay_b_s2s_tls_pid" "$relay_a_http_pid" "$relay_b_http_pid"; do
     if [[ -n "$pid" ]]; then wait "$pid" 2>/dev/null || true; fi
   done
-  if (( exit_code != 0 )); then
-    for log in "$log_a" "$log_b" "$runtime_dir/relay-a-s2s.log" "$runtime_dir/relay-b-s2s-tls.log" "$runtime_dir/relay-a-http.log" "$runtime_dir/relay-b-http.log"; do
-      if [[ -f "$log" ]]; then
-        # Preserve startup evidence before frequent worker debug messages can
-        # push a missing-readiness failure out of the bounded ending excerpt.
-        echo "--- $(basename "$log") (first 60 lines, at most 65536 bytes) ---" >&2
-        fixture_print_log_excerpt "$log" head >&2 || true
-        echo "--- $(basename "$log") (last 120 lines, at most 131072 bytes) ---" >&2
-        fixture_print_log_excerpt "$log" tail >&2 || true
-        if [[ "$log" == "$log_a" || "$log" == "$log_b" ]]; then
-          echo "--- $(basename "$log") (bounded WARN/ERROR excerpt) ---" >&2
-          fixture_print_log_excerpt "$log" warnings >&2 || true
-        fi
-      fi
-    done
-  fi
   schema_cleanup=""
   if [[ "$fixture_preprovisioned" == true ]]; then
     # The stress driver owns these disposable databases.  A fixture must not
@@ -219,9 +213,26 @@ cleanup() {
     done
   fi
   listener_count=0
-  if ! fixture_assert_no_listeners; then
+  if [[ "$listener_ledger_ready" != true ]] \
+    || ! fixture_verify_listener_ledger "$project_dir" "$runtime_dir/listener-cleanup" "$listener_ledger_nonce"; then
     listener_count=1
     exit_code=1
+  fi
+  if (( exit_code != 0 )); then
+    for log in "$log_a" "$log_b" "$runtime_dir/relay-a-s2s.log" "$runtime_dir/relay-b-s2s-tls.log" "$runtime_dir/relay-a-http.log" "$runtime_dir/relay-b-http.log"; do
+      if [[ -f "$log" ]]; then
+        # Preserve startup evidence before frequent worker debug messages can
+        # push a missing-readiness failure out of the bounded ending excerpt.
+        echo "--- $(basename "$log") (first 60 lines, at most 65536 bytes) ---" >&2
+        fixture_print_log_excerpt "$log" head >&2 || true
+        echo "--- $(basename "$log") (last 120 lines, at most 131072 bytes) ---" >&2
+        fixture_print_log_excerpt "$log" tail >&2 || true
+        if [[ "$log" == "$log_a" || "$log" == "$log_b" ]]; then
+          echo "--- $(basename "$log") (bounded WARN/ERROR excerpt) ---" >&2
+          fixture_print_log_excerpt "$log" warnings >&2 || true
+        fi
+      fi
+    done
   fi
   case "$runtime_dir" in
     /tmp/northstar-federation.*) rm -rf -- "$runtime_dir" ;;

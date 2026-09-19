@@ -1,19 +1,150 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { ALL_JOBS, expectedJobResults, verifyJobResults, verifyWorkflowCoverage } from './ci-required-policy.mjs';
 import { ACTIONS_APP_ID, qualifyRelease, selectCiRun, verifyBranchRules } from './verify-release-ci.mjs';
+import { BUILD_CHECKS, verifyArtifactRun } from './verify-release-artifact-run.mjs';
 
 const read = (relative) => fs.readFileSync(new URL(relative, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 const repository = 'owner/northstar';
 const commit = 'a'.repeat(40);
 const tagSha = 'b'.repeat(40);
 const tag = 'v0.2.0';
+
+for (const scenario of ['missing', 'draft', 'published', 'duplicate', 'not-found', 'forbidden', 'server-error', 'network-error', 'malformed']) {
+  test(`draft preparation handles ${scenario} without publishing`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'northstar-release-draft-'));
+    try {
+      const workflow = read('../.github/workflows/release.yml');
+      const step = workflow.split('      - name: Create or update draft and upload assets\n')[1]
+        .split(/^  verify-draft-downloads:/m)[0];
+      const script = step.split('        run: |\n')[1].replace(/^          /gm, '');
+      fs.mkdirSync(path.join(root, 'bin'));
+      fs.mkdirSync(path.join(root, 'dist'));
+      fs.writeFileSync(path.join(root, 'bin/git'), '#!/bin/sh\nprintf "%s\\n" "$RELEASE_COMMIT"\n', { mode: 0o700 });
+      fs.writeFileSync(path.join(root, 'bin/gh'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.CALLS, JSON.stringify(args) + '\\n');
+if (args[0] === 'api' && args[2] === 'GET') {
+  const scenario = process.env.SCENARIO;
+  if (['missing', 'draft', 'published', 'duplicate'].includes(scenario)) {
+    console.log(JSON.stringify([{id: 1, draft: false, tag_name: 'v0.1.0'}]));
+    const release = {id: 42, draft: scenario !== 'published', tag_name: process.env.RELEASE_TAG};
+    console.log(JSON.stringify(scenario === 'missing' ? [] : scenario === 'duplicate' ? [release, release] : [release]));
+  } else {
+    const status = {'not-found': '404', forbidden: '403', 'server-error': '500'}[scenario];
+    if (status) console.log(JSON.stringify({message: 'API error', status}));
+    if (scenario === 'malformed') console.log('upstream error');
+    process.exitCode = 1;
+  }
+}
+`, { mode: 0o700 });
+      fs.writeFileSync(path.join(root, 'dist/asset'), 'verified package');
+      const digest = createHash('sha256').update('verified package').digest('hex');
+      fs.writeFileSync(path.join(root, 'dist/SHA256SUMS'), `${digest}  asset\n`);
+      fs.writeFileSync(path.join(root, 'release-notes.md'), 'Draft verification is still running.\n');
+      const callsFile = path.join(root, 'calls.jsonl');
+      const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', script], {
+        cwd: root, encoding: 'utf8', env: {
+          PATH: `${path.join(root, 'bin')}:${process.env.PATH}`, SCENARIO: scenario, CALLS: callsFile,
+          GITHUB_REPOSITORY: repository, RELEASE_TAG: tag, RELEASE_VERSION: '0.2.0', RELEASE_COMMIT: commit, GITHUB_SHA: commit,
+          GITHUB_STEP_SUMMARY: path.join(root, 'summary'),
+        },
+      });
+      const calls = fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(JSON.parse);
+      assert.deepEqual(calls[0], ['api', '--method', 'GET', '--paginate', `repos/${repository}/releases?per_page=100`]);
+      if (!['missing', 'draft'].includes(scenario)) {
+        assert.notEqual(result.status, 0, result.stdout + result.stderr);
+        assert.equal(calls.length, 1, 'lookup failure or published release must prevent writes');
+        return;
+      }
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.equal(calls.length, 3);
+      if (scenario === 'missing') {
+        assert.deepEqual(calls[1], ['release', 'create', tag, '--repo', repository, '--verify-tag', '--draft',
+          '--title', 'Northstar 0.2.0', '--notes-file', 'release-notes.md']);
+      } else {
+        assert.deepEqual(calls[1], ['api', '--method', 'PATCH', `repos/${repository}/releases/42`,
+          '-f', 'name=Northstar 0.2.0', '-F', 'body=@release-notes.md', '-F', 'draft=true', '-F', 'prerelease=false']);
+      }
+      assert.deepEqual(calls[2], ['release', 'upload', tag, 'dist/SHA256SUMS', 'dist/asset', '--repo', repository, '--clobber']);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 const baseRun = {
   id: 30, run_attempt: 2, workflow_id: 7, path: '.github/workflows/ci.yml',
   repository: { full_name: repository }, head_repository: { full_name: repository },
   head_sha: commit, head_branch: 'main', event: 'push', status: 'completed', conclusion: 'success',
 };
+
+function artifactFixture(mutate = () => {}) {
+  const evidence = { commit, version: '0.2.0', published_images: true, workflow_run_id: 50, workflow_run_attempt: 1 };
+  const run = { ...baseRun, id: 50, workflow_id: 8, path: '.github/workflows/release.yml', head_branch: tag,
+    conclusion: 'failure' };
+  const artifacts = [{ id: 70, name: 'verified-release-assets-0.2.0', expired: false, digest: `sha256:${'c'.repeat(64)}`,
+    workflow_run: { id: 50, head_sha: commit } }];
+  return { evidence, api: async (endpoint) => {
+    let data;
+    if (endpoint.endsWith('/workflows/release.yml')) data = { id: 8, path: run.path, state: 'active' };
+    else if (endpoint.endsWith('/runs/50')) data = structuredClone(run);
+    else if (endpoint.includes('/jobs?')) {
+      const attempt = Number(endpoint.match(/attempts\/(\d+)/)[1]);
+      data = { total_count: BUILD_CHECKS.length, jobs: BUILD_CHECKS.map((name) => ({ name,
+        run_id: 50, run_attempt: attempt, head_sha: commit, status: 'completed', conclusion: 'success' })) };
+    } else if (endpoint.includes('/artifacts?')) data = { total_count: artifacts.length, artifacts: structuredClone(artifacts) };
+    else throw new Error(`unexpected endpoint: ${endpoint}`);
+    mutate(endpoint, data);
+    return data;
+  } };
+}
+
+test('draft recovery accepts verified builds even when a later draft job failed', async () => {
+  const fixture = artifactFixture();
+  const result = await verifyArtifactRun({ ...fixture, repository, tag, commit, version: '0.2.0', runId: 50 });
+  assert.equal(result.artifactId, 70);
+  assert.equal(result.buildAttempt, 1);
+});
+
+test('draft recovery rejects unrelated runs, failed build checks and ambiguous or expired assets', async () => {
+  const mutations = [
+    (url, d) => { if (url.endsWith('/runs/50')) d.event = 'pull_request'; },
+    (url, d) => { if (url.endsWith('/runs/50')) d.head_sha = 'd'.repeat(40); },
+    (url, d) => { if (url.endsWith('/runs/50')) d.head_branch = 'main'; },
+    (url, d) => { if (url.endsWith('/runs/50')) d.head_repository = { full_name: 'other/northstar' }; },
+    (url, d) => { if (url.endsWith('/runs/50')) d.workflow_id = 9; },
+    (url, d) => { if (url.endsWith('/workflows/release.yml')) d.state = 'disabled'; },
+    (url, d) => { if (url.includes('/jobs?')) d.jobs.pop(); },
+    (url, d) => { if (url.includes('/jobs?')) d.jobs.push(d.jobs[0]); },
+    (url, d) => { if (url.includes('/attempts/1/jobs?')) d.jobs[0].conclusion = 'failure'; },
+    (url, d) => { if (url.includes('/attempts/2/jobs?')) d.jobs[0].conclusion = 'failure'; },
+    (url, d) => { if (url.includes('/jobs?')) d.jobs[0].run_attempt = 99; },
+    (url, d) => { if (url.includes('/artifacts?')) d.artifacts[0].expired = true; },
+    (url, d) => { if (url.includes('/artifacts?')) d.artifacts[0].workflow_run.head_sha = 'd'.repeat(40); },
+    (url, d) => { if (url.includes('/artifacts?')) d.artifacts[0].digest = null; },
+    (url, d) => { if (url.includes('/artifacts?')) { d.artifacts.push(d.artifacts[0]); d.total_count++; } },
+  ];
+  for (const mutate of mutations) {
+    await assert.rejects(verifyArtifactRun({ ...artifactFixture(mutate), repository, tag, commit, version: '0.2.0', runId: 50 }));
+  }
+  for (const key of ['commit', 'version', 'published_images', 'workflow_run_id', 'workflow_run_attempt']) {
+    const fixture = artifactFixture();
+    fixture.evidence[key] = null;
+    await assert.rejects(verifyArtifactRun({ ...fixture, repository, tag, commit, version: '0.2.0', runId: 50 }));
+  }
+  let reads = 0;
+  const fixture = artifactFixture((url, d) => {
+    if (url.endsWith('/runs/50') && ++reads > 1) d.run_attempt++;
+  });
+  await assert.rejects(verifyArtifactRun({ ...fixture, repository, tag, commit, version: '0.2.0', runId: 50 }), /changed/);
+});
 const branchRules = [
   { type: 'pull_request' }, { type: 'deletion' }, { type: 'non_fast_forward' }, { type: 'required_signatures' },
   { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: true,
@@ -175,6 +306,12 @@ test('reviewable rulesets support one maintainer and require the stable aggregat
 
 test('publication jobs depend on qualification and binary success, with a fresh gate before GHCR login', () => {
   const workflow = read('../.github/workflows/release.yml');
+  const draft = workflow.split(/^  prepare-draft-release:\s*$/m)[1].split(/^  verify-draft-downloads:/m)[0];
+  assert.ok(draft.includes("needs.release-qualification.result == 'success'"));
+  assert.ok(draft.includes('node scripts/verify-release-artifact-run.mjs'));
+  assert.ok(draft.includes('--source-digest "$RELEASE_COMMIT"'));
+  assert.ok(draft.indexOf('node scripts/verify-release-artifact-run.mjs') < draft.indexOf('release create'));
+  assert.ok(workflow.includes('"$GITHUB_REF" != refs/heads/main'));
   const images = workflow.split(/^  publish-images:\s*$/m)[1].split(/^  assemble-release-assets:/m)[0];
   assert.ok(images.includes('needs: [prepare, release-qualification, build-binaries, verify-native-packages]'));
   assert.ok(images.indexOf('node scripts/verify-release-ci.mjs') < images.indexOf('uses: docker/login-action@'));

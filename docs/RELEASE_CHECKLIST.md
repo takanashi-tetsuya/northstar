@@ -14,6 +14,13 @@ The tag workflow prepares artifacts and a **draft** GitHub Release. It does not
 make that draft a reviewed public release. Linux AMD64 is the supported
 production baseline; Windows AMD64 artifacts are for development and evaluation.
 
+If only draft preparation failed, dispatch `Release preparation` from `main`
+with `resume_tag` and the original `artifact_run_id`. Recovery requires the
+original build and runtime checks to have passed and verifies the retained
+artifact and its provenance before uploading. It then repeats fresh Windows
+and Linux downloads. The tag and built artifacts stay unchanged; the draft
+notes link both the original build and the recovery run.
+
 ## 1. Freeze and identify the artifact
 
 - [ ] Working tree changes have been reviewed and intentionally included or

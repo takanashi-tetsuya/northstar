@@ -43,7 +43,7 @@ export function selectCiRun(runs, { repository, commit, workflowId }) {
   return run;
 }
 
-async function listPages(api, endpoint, property) {
+export async function listPages(api, endpoint, property) {
   const items = [];
   for (let page = 1; page <= 10; page++) {
     const data = await api(`${endpoint}${endpoint.includes('?') ? '&' : '?'}per_page=100&page=${page}`);
@@ -98,7 +98,7 @@ export async function qualifyRelease({ api, repository, commit, tag }) {
     ciUrl: `https://github.com/${repository}/actions/runs/${run.id}` };
 }
 
-async function githubApi(endpoint) {
+export async function githubApi(endpoint) {
   requireFact(process.env.GITHUB_API_URL === 'https://api.github.com', 'release qualification supports GitHub.com only');
   requireFact(typeof process.env.GH_TOKEN === 'string' && process.env.GH_TOKEN.length > 0, 'GH_TOKEN is required');
   const response = await fetch(`https://api.github.com${endpoint}`, {

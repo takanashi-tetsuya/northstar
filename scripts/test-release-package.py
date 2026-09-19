@@ -202,6 +202,12 @@ class PackageTests(unittest.TestCase):
         self.assertIn('Ready for publication.', output.read_text())
         self.assertIn(self.commit, output.read_text())
         self.assertIn('Windows is for development', output.read_text())
+        NOTES.render(q, e, output, True, 789)
+        self.assertIn('actions/runs/456', output.read_text())
+        self.assertIn('Draft preparation and fresh-download verification:', output.read_text())
+        self.assertIn('actions/runs/789', output.read_text())
+        with self.assertRaises(ValueError):
+            NOTES.render(q, e, output, True, -1)
         e.write_text(json.dumps(dict(evidence, commit='a' * 40)))
         with self.assertRaises(ValueError):
             NOTES.render(q, e, output, True)

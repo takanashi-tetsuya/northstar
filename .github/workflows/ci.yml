@@ -508,20 +508,22 @@ jobs:
           docker compose -f docker-compose.yml -f deploy/docker-compose.backup-security.yml config --quiet
           docker compose -f docker-compose.yml -f deploy/docker-compose.backup-security.yml -f deploy/docker-compose.backup-age.yml config --quiet
           release_config="$(mktemp)"
+          package_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
           docker compose -f docker-compose.yml -f deploy/docker-compose.release.yml \
             --profile backup --profile restore config --format json >"$release_config"
-          python3 - "$release_config" <<'PY'
+          python3 - "$release_config" "$package_version" <<'PY'
           import json
           import pathlib
           import sys
 
           services = json.loads(pathlib.Path(sys.argv[1]).read_text())["services"]
+          version = sys.argv[2]
           expected = {
-              "migrate": "ghcr.io/takanashi-tetsuya/northstar:0.2.0",
-              "xmpp": "ghcr.io/takanashi-tetsuya/northstar:0.2.0",
-              "database-grants": "ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.0",
-              "backup": "ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0",
-              "restore": "ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0",
+              "migrate": f"ghcr.io/takanashi-tetsuya/northstar:{version}",
+              "xmpp": f"ghcr.io/takanashi-tetsuya/northstar:{version}",
+              "database-grants": f"ghcr.io/takanashi-tetsuya/northstar-database-grants:{version}",
+              "backup": f"ghcr.io/takanashi-tetsuya/northstar-backup:{version}",
+              "restore": f"ghcr.io/takanashi-tetsuya/northstar-backup:{version}",
           }
           for name, image in expected.items():
               service = services[name]
@@ -537,7 +539,7 @@ jobs:
           test "$(docker image inspect --format '{{.Config.User}}' northstar-backup-ci:local)" = '10001:10001'
           test "$(docker image inspect --format '{{.Config.User}}' northstar-database-grants-ci:local)" = '10001:10001'
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.licenses"}}' northstar-ci:local)" = 'AGPL-3.0-only'
-          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' northstar-ci:local)" = '0.2.0'
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' northstar-ci:local)" = "$package_version"
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' northstar-ci:local)" = 'https://github.com/takanashi-tetsuya/northstar'
           for image in northstar-ci:local northstar-backup-ci:local northstar-database-grants-ci:local; do
             docker run --rm --entrypoint sh "$image" -c '

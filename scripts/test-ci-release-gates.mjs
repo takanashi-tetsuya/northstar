@@ -30,16 +30,28 @@ for (const scenario of ['missing', 'draft', 'published', 'duplicate', 'not-found
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.CALLS, JSON.stringify(args) + '\\n');
+const stateFile = process.env.CALLS + '.tag';
 if (args[0] === 'api' && args[2] === 'GET') {
   const scenario = process.env.SCENARIO;
   if (['missing', 'draft', 'published', 'duplicate'].includes(scenario)) {
     console.log(JSON.stringify([{id: 1, draft: false, tag_name: 'v0.1.0'}]));
     const release = {id: 42, draft: scenario !== 'published', tag_name: process.env.RELEASE_TAG};
+    if (scenario === 'draft') fs.writeFileSync(stateFile, release.tag_name);
     console.log(JSON.stringify(scenario === 'missing' ? [] : scenario === 'duplicate' ? [release, release] : [release]));
   } else {
     const status = {'not-found': '404', forbidden: '403', 'server-error': '500'}[scenario];
     if (status) console.log(JSON.stringify({message: 'API error', status}));
     if (scenario === 'malformed') console.log('upstream error');
+    process.exitCode = 1;
+  }
+} else if (args[0] === 'api' && args[2] === 'PATCH') {
+  const tag = args.find(arg => arg.startsWith('tag_name='));
+  fs.writeFileSync(stateFile, tag ? tag.slice('tag_name='.length) : 'untagged-draft');
+} else if (args[0] === 'release' && args[1] === 'create') {
+  fs.writeFileSync(stateFile, args[2]);
+} else if (args[0] === 'release' && args[1] === 'upload') {
+  if (fs.readFileSync(stateFile, 'utf8') !== args[2]) {
+    console.error('release not found');
     process.exitCode = 1;
   }
 }
@@ -70,7 +82,8 @@ if (args[0] === 'api' && args[2] === 'GET') {
           '--title', 'Northstar 0.2.0', '--notes-file', 'release-notes.md']);
       } else {
         assert.deepEqual(calls[1], ['api', '--method', 'PATCH', `repos/${repository}/releases/42`,
-          '-f', 'name=Northstar 0.2.0', '-F', 'body=@release-notes.md', '-F', 'draft=true', '-F', 'prerelease=false']);
+          '-f', `tag_name=${tag}`, '-f', 'name=Northstar 0.2.0', '-F', 'body=@release-notes.md',
+          '-F', 'draft=true', '-F', 'prerelease=false']);
       }
       assert.deepEqual(calls[2], ['release', 'upload', tag, 'dist/SHA256SUMS', 'dist/asset', '--repo', repository, '--clobber']);
     } finally {
@@ -341,5 +354,6 @@ test('publication jobs depend on qualification and binary success, with a fresh 
   assert.ok(finalize.includes('needs: [prepare, verify-draft-downloads]'));
   assert.ok(finalize.includes('node scripts/verify-release-ci.mjs'));
   assert.ok(finalize.includes('--draft --notes-file release-notes.md'));
+  assert.ok(finalize.includes('--tag "$RELEASE_TAG" --verify-tag --draft'));
   assert.ok(!workflow.includes('--draft=false'));
 });

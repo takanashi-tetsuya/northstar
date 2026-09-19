@@ -8,8 +8,11 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 - Fixed deadlocks when sessions of the same account resume concurrently, while
   preserving the lock that prevents deletion of an in-use privacy list.
+- Reduced the initial WebSocket read buffer from 128 KiB to 8 KiB per connection;
+  larger frames still use the existing size limits.
 - Updated scheduled fixtures for bounded password work, SASL2 device-bound
-  resumption, cluster peer discovery and exact duplicate ACK payloads.
+  resumption, completed transport cleanup, cluster peer discovery and exact
+  duplicate ACK payloads.
 - Enabled the pinned parser fuzz toolchain in GitHub-hosted runners.
 - Retained the signed 0.2.0 candidate; release preparation now targets 0.2.1.
 

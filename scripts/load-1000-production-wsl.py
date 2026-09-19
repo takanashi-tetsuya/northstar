@@ -22,6 +22,7 @@ import statistics
 import threading
 import time
 import uuid
+import xml.etree.ElementTree as ET
 
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -272,15 +273,34 @@ def fanout(sender, sessions: list[object]) -> tuple[dict[str, float], float]:
     return summary(latencies), len(sessions) / elapsed
 
 
-def disconnect_resumable_sessions(sessions: list[object], timeout: float = 30) -> None:
-    # A transport EOF preserves SM. Wait for the peer's EOF too: local route
-    # removal precedes durable cleanup and release of the connection permit.
+def verify_large_websocket_frame(sender, recipient) -> int:
+    marker = f"load-large-frame-{uuid.uuid4().hex}"
+    body = "x" * (32 * 1024)
+    sender.send(
+        f"<message xmlns='jabber:client' type='chat' "
+        f"to='{USERNAME}@{fixture.DOMAIN}/load-0' id='{marker}'>"
+        f"<body>{body}</body><no-store xmlns='urn:xmpp:hints'/></message>"
+    )
+    reply, _ = recipient.receive_until(marker, timeout=30)
+    message = ET.fromstring(reply)
+    received_body = message.find("{jabber:client}body")
+    fixture.check(message.get("id") == marker and message.get("type") == "chat"
+                  and received_body is not None and received_body.text == body,
+                  "WebSocket frame larger than the initial read buffer was truncated")
+    return len(body)
+
+
+def disconnect_sessions(sessions: list[object], *, resumable: bool = False, timeout: float = 30) -> None:
+    # Local route removal precedes durable cleanup and connection-permit
+    # release. Wait for peer EOF before using the released capacity.
+    if not sessions:
+        return
     deadline = time.monotonic() + timeout
 
     def wait_closed(session) -> None:
         while True:
             remaining = deadline - time.monotonic()
-            fixture.check(remaining > 0, "SM transport cleanup exceeded its deadline")
+            fixture.check(remaining > 0, "WebSocket transport cleanup exceeded its deadline")
             session.sock.settimeout(remaining)
             try:
                 if not session.sock.recv(4096):
@@ -290,6 +310,8 @@ def disconnect_resumable_sessions(sessions: list[object], timeout: float = 30) -
 
     try:
         for session in sessions:
+            if not resumable:
+                session.send("<close xmlns='urn:ietf:params:xml:ns:xmpp-framing'/>")
             session.sock.shutdown(socket.SHUT_WR)
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(WORKERS, len(sessions))) as executor:
             list(executor.map(wait_closed, sessions))
@@ -309,7 +331,7 @@ def resume_random_sessions(sessions: list[object]) -> None:
                       f"load-{index} did not enable resumable SM")
         resume_ids[index] = match.group(1)
     wait_metric("xmpp_resumable_sessions", RESUME_COUNT)
-    disconnect_resumable_sessions([sessions[index] for index in chosen])
+    disconnect_sessions([sessions[index] for index in chosen], resumable=True)
     wait_metric("xmpp_active_sessions", SESSION_COUNT + 1 - RESUME_COUNT)
 
     def resume(index: int) -> tuple[int, object]:
@@ -368,13 +390,12 @@ def overload_and_recover() -> dict[str, float]:
     peak = metrics()
     fixture.check(int(peak["xmpp_active_sessions"]) <= MAX_CONNECTIONS,
                   f"active sessions exceeded configured capacity: {peak['xmpp_active_sessions']}")
-    for session in accepted:
-        session.close()
+    disconnect_sessions(accepted)
     wait_metric("xmpp_active_sessions", SESSION_COUNT + 1)
     recovery = fixture.XmppWebSocket(USERNAME, PASSWORD, "overload-recovery", initial_presence=False)
     fixture.check(int(wait_metric("xmpp_active_sessions", SESSION_COUNT + 2)["xmpp_active_sessions"])
                   == SESSION_COUNT + 2, "server did not admit a connection after overload drained")
-    recovery.close()
+    disconnect_sessions([recovery])
     wait_metric("xmpp_active_sessions", SESSION_COUNT + 1)
     return {
         "accepted": float(len(accepted)),
@@ -457,6 +478,7 @@ def run() -> None:
                       f"message throughput {message_rate:.2f}/s was below {LIMITS['message_rate']:.2f}/s")
         results["message_seconds"] = message_summary
         results["messages_per_second"] = message_rate
+        results["large_websocket_payload_bytes"] = verify_large_websocket_frame(sender, complete_sessions[0])
 
         resume_random_sessions(complete_sessions)
         sessions = complete_sessions
@@ -483,17 +505,21 @@ def run() -> None:
         }
         completed = True
     finally:
-        if sender is not None:
-            sender.close()
-        for session in sessions:
-            if session is not None:
-                session.close()
-        if completed:
-            wait_metric("xmpp_active_sessions", 0, timeout=60)
-            wait_metric("xmpp_resumable_sessions", 0, timeout=60)
-            time.sleep(3)
-        metric_sampler.stop()
-        sampler.stop()
+        try:
+            remaining_sessions = [session for session in [sender, *sessions] if session is not None]
+            if completed:
+                disconnect_sessions(remaining_sessions, timeout=60)
+                wait_metric("xmpp_active_sessions", 0, timeout=60)
+                wait_metric("xmpp_resumable_sessions", 0, timeout=60)
+                time.sleep(3)
+            else:
+                for session in remaining_sessions:
+                    session.close()
+        finally:
+            try:
+                metric_sampler.stop()
+            finally:
+                sampler.stop()
 
     baseline_rss = baseline[1]
     peak_rss = max(sample[1] for sample in sampler.samples)
@@ -505,19 +531,7 @@ def run() -> None:
     baseline_pool_connections = int(baseline_metrics["xmpp_database_pool_connections"])
     final_pool_connections = int(final_metrics["xmpp_database_pool_connections"])
     retained_pool_fds = max(0, final_pool_connections - baseline_pool_connections)
-    fixture.check(peak_rss / 1024 <= LIMITS["rss_mib"],
-                  f"peak RSS {peak_rss / 1024:.1f} MiB exceeded {LIMITS['rss_mib']:.1f} MiB")
-    fixture.check(peak_fds <= LIMITS["fds"],
-                  f"peak FD count {peak_fds} exceeded {LIMITS['fds']:.0f}")
-    fixture.check(
-        final_fds <= baseline[2] + 16 + retained_pool_fds,
-        "FDs did not return near baseline after accounting for healthy retained "
-        f"database-pool sockets: baseline={baseline[2]} final={final_fds} "
-        f"pool_growth={retained_pool_fds}",
-    )
     retained_mib = max(0, final_rss - baseline_rss) / 1024
-    fixture.check(retained_mib <= LIMITS["retained_rss_mib"],
-                  f"post-close retained RSS {retained_mib:.1f} MiB exceeded the leak guard")
     pool_connections = [sample["xmpp_database_pool_connections"]
                         for sample in metric_sampler.samples]
     pool_idle = [sample["xmpp_database_pool_idle_connections"]
@@ -526,13 +540,6 @@ def run() -> None:
     collector_up = [sample.get("xmpp_database_collector_up", 0)
                     for sample in metric_sampler.samples]
     active_sessions = [sample["xmpp_active_sessions"] for sample in metric_sampler.samples]
-    fixture.check(min(database_up) == 1, "database health dropped during sampled load")
-    fixture.check(min(collector_up) == 1, "database metrics collector dropped during sampled load")
-    fixture.check(max(pool_connections) <= 32, "database pool exceeded the 32-connection envelope")
-    fixture.check(max(active_sessions) <= MAX_CONNECTIONS,
-                  "sampled active sessions exceeded the connection envelope")
-    fixture.check(max(active_sessions) >= SESSION_COUNT + 1,
-                  "metrics sampler never observed the full load population")
     results["sampled_database_pool"] = {
         "samples": len(metric_sampler.samples),
         "peak_connections": max(pool_connections),
@@ -544,6 +551,7 @@ def run() -> None:
         "baseline_rss_mib": baseline_rss / 1024,
         "peak_rss_mib": peak_rss / 1024,
         "final_rss_mib": final_rss / 1024,
+        "retained_rss_mib": retained_mib,
         "peak_fds": peak_fds,
         "final_fds": final_fds,
         "retained_database_pool_fds_allowed": retained_pool_fds,
@@ -563,7 +571,26 @@ def run() -> None:
     results["scope"] = (
         "single-node design validation only; results are not a production capacity or SLA guarantee"
     )
-    print(json.dumps(results, indent=2, sort_keys=True))
+    print(json.dumps(results, indent=2, sort_keys=True), flush=True)
+    fixture.check(peak_rss / 1024 <= LIMITS["rss_mib"],
+                  f"peak RSS {peak_rss / 1024:.1f} MiB exceeded {LIMITS['rss_mib']:.1f} MiB")
+    fixture.check(peak_fds <= LIMITS["fds"],
+                  f"peak FD count {peak_fds} exceeded {LIMITS['fds']:.0f}")
+    fixture.check(
+        final_fds <= baseline[2] + 16 + retained_pool_fds,
+        "FDs did not return near baseline after accounting for healthy retained "
+        f"database-pool sockets: baseline={baseline[2]} final={final_fds} "
+        f"pool_growth={retained_pool_fds}",
+    )
+    fixture.check(retained_mib <= LIMITS["retained_rss_mib"],
+                  f"post-close retained RSS {retained_mib:.1f} MiB exceeded the leak guard")
+    fixture.check(min(database_up) == 1, "database health dropped during sampled load")
+    fixture.check(min(collector_up) == 1, "database metrics collector dropped during sampled load")
+    fixture.check(max(pool_connections) <= 32, "database pool exceeded the 32-connection envelope")
+    fixture.check(max(active_sessions) <= MAX_CONNECTIONS,
+                  "sampled active sessions exceeded the connection envelope")
+    fixture.check(max(active_sessions) >= SESSION_COUNT + 1,
+                  "metrics sampler never observed the full load population")
     print("load production envelope: TLS/WS, 1000 sessions, fanout, SM resume, overload recovery, resources and cleanup passed")
 
 

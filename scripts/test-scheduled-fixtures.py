@@ -24,7 +24,7 @@ spec.loader.exec_module(integration)
 DEVICE = "b8095b5c-16fa-4fbe-915a-0f19b572c86e"
 
 
-class ResumeDrainTests(unittest.TestCase):
+class SessionDrainTests(unittest.TestCase):
     def setUp(self):
         spec = importlib.util.spec_from_file_location("production_load", ROOT / "load-1000-production-wsl.py")
         self.load = importlib.util.module_from_spec(spec)
@@ -35,22 +35,29 @@ class ResumeDrainTests(unittest.TestCase):
         }):
             spec.loader.exec_module(self.load)
 
-    def test_transport_loss_waits_for_every_peer_to_finish_cleanup(self):
+    def check_peer_cleanup(self, resumable):
         pairs = [socket.socketpair() for _ in range(2)]
-        clients = [SimpleNamespace(sock=client, abort=client.close) for client, _ in pairs]
+        clients = [SimpleNamespace(sock=client, abort=client.close,
+                                   send=lambda text, sock=client: sock.sendall(text.encode()))
+                   for client, _ in pairs]
         eof_received = [threading.Event() for _ in pairs]
         release = threading.Event()
 
         def peer(index):
             with pairs[index][1] as server:
                 server.settimeout(5)
-                self.assertEqual(server.recv(1), b"")
+                received = b""
+                while chunk := server.recv(4096):
+                    received += chunk
+                self.assertEqual(received, b"" if resumable else
+                                 b"<close xmlns='urn:ietf:params:xml:ns:xmpp-framing'/>")
                 eof_received[index].set()
                 self.assertTrue(release.wait(5))
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             peers = [executor.submit(peer, index) for index in range(len(pairs))]
-            worker = executor.submit(self.load.disconnect_resumable_sessions, clients, 5)
+            worker = executor.submit(self.load.disconnect_sessions, clients,
+                                     resumable=resumable, timeout=5)
             try:
                 self.assertTrue(all(event.wait(3) for event in eof_received))
                 self.assertFalse(worker.done(), "returned before the peers released their connections")
@@ -61,13 +68,19 @@ class ResumeDrainTests(unittest.TestCase):
                 future.result(timeout=5)
         self.assertTrue(all(client.sock.fileno() == -1 for client in clients))
 
+    def test_transport_loss_waits_for_every_peer_to_finish_cleanup(self):
+        self.check_peer_cleanup(resumable=True)
+
+    def test_orderly_close_waits_for_every_peer_to_finish_cleanup(self):
+        self.check_peer_cleanup(resumable=False)
+
     def test_stalled_peer_hits_the_deadline_and_closes_the_client(self):
         client, server = socket.socketpair()
         session = SimpleNamespace(sock=client, abort=client.close)
         started = time.monotonic()
         try:
             with self.assertRaises(TimeoutError):
-                self.load.disconnect_resumable_sessions([session], timeout=0.05)
+                self.load.disconnect_sessions([session], resumable=True, timeout=0.05)
         finally:
             server.close()
         self.assertLess(time.monotonic() - started, 2)

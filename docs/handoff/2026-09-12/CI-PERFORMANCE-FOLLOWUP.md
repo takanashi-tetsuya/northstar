@@ -1323,3 +1323,38 @@ Federation 現在沿用 MIX 的 socket ledger：停止子程序前核對 PID、
 繼承仍會失敗。清理造成的失敗也會保留原有有界、遮罩後的服務日誌。
 新增 shell helper 回歸與既有 MIX 協調測試共 39 項通過，既有 ledger
 自測另驗證繼承 socket 洩漏、簽章與埠重用。
+
+## 2026-09-19：合併後的 PostgreSQL 排程等待
+
+`01cdf92` 的 [push CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/35438766952)
+與 [PR CI](https://github.com/takanashi-tetsuya/northstar/actions/runs/35438769174)
+均為 28 success、4 預期 skips；四條 20×50 矩陣全部通過。
+[發佈預演](https://github.com/takanashi-tetsuya/northstar/actions/runs/35438766971)
+完成 10 success、3 tag-only skips。本地四 CPU、兩個 CPU 負載程序的
+5×50 也通過：2,783 samples、零 observer 錯誤、最大 81.123 ms，
+worker 回收與資料庫清理均成功。
+
+PR #7 合併為 `66151e9`，檔案樹與上述提交相同。
+[main Federation](https://github.com/takanashi-tetsuya/northstar/actions/runs/35443343810/job/105899201421)
+完成兩輪，第三輪 startup 後 observer 觸發 `client_query_deadline`。
+共 1,161 samples，兩次錯誤中一次恢復；最後一筆在 5,001.51 ms
+仍未收到完整 PostgreSQL 回應，因此 wrapper 取消 driver。
+原有的清理、case map、證據界限與 failure marker 檢查均通過。
+
+該筆 observer backend 使用 CPU 5.925 ms，排程佇列等待 4,133.357 ms；
+四次採樣均為 runnable。容器沒有 CPU quota 或節流，TCP 沒有重傳。
+這筆失敗的主要證據指向 CPU 排程等待，而非 socket 清理或查詢執行成本。
+[main 發佈預演](https://github.com/takanashi-tetsuya/northstar/actions/runs/35443343833)
+已完成全部十項預演工作，正式標籤仍須等待 main CI 通過。
+
+| 證據 | Artifact ID | SHA-256 |
+| --- | --- | --- |
+| main Federation 診斷 | 10585081467 | `ac26d7fc8fe823a50160395621c42c726f17865ae29b70dfa61ef46e4064f316` |
+| main Federation observer | 10585031662 | `2a70b3a2255c3c6b945a8d56d53585809f30676720dd1e0d26a853d5e4cbaafc` |
+
+修正候選只讓 listener smoke、regular、scheduled 的 PostgreSQL 容器
+使用 `--cpu-shares 8192`，其他整合測試保留 Docker 預設值。
+啟動 helper 驗證輸入與 Docker 實際設定，不一致時停止 fixture。
+CPU shares 是競爭時的相對排程權重，不保證 CPU 容量；所有 CPU
+仍可使用，沒有新增 affinity 或 quota。observer、heartbeat、worker
+期限與完整矩陣均保留。此候選仍需本地和遠端 CI 驗證。

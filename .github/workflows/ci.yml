@@ -951,6 +951,7 @@ jobs:
 
       - name: Check diagnostic and cleanup regressions
         run: |
+          python3 scripts/test-loopback-postgres-ci.py
           python3 scripts/test-github-ci-failure-marker.py
           python3 scripts/test-listener-control-observer.py
           python3 scripts/test-listener-readiness-observed.py
@@ -1005,6 +1006,8 @@ jobs:
       # This remains an isolated loopback fixture.  It is intentionally sized
       # only for the 1x1 and 1x2 proofs below, not the pressure matrix.
       NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "32"
+      # Exercise the same database scheduling weight as the pressure jobs.
+      NORTHSTAR_LOOPBACK_POSTGRES_CPU_SHARES: "8192"
       NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS: "0"
@@ -1107,6 +1110,9 @@ jobs:
       # therefore checked against a 650-connection 50-pair requirement plus
       # one dedicated observer connection, without generic headroom.
       NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "672"
+      # Give the shared database more CPU weight alongside 100 servers.
+      # Shares affect contention; they do not reserve CPU capacity.
+      NORTHSTAR_LOOPBACK_POSTGRES_CPU_SHARES: "8192"
       NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS: "0"
@@ -1204,6 +1210,8 @@ jobs:
       # Match the regular 50-pair runtime-pool plus fixture-control budget;
       # this is host capacity, not a relaxation of the 100x50 matrix.
       NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "672"
+      # Keep database scheduling consistent with the regular matrix.
+      NORTHSTAR_LOOPBACK_POSTGRES_CPU_SHARES: "8192"
       NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS: "0"

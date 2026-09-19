@@ -143,6 +143,10 @@ references in `IMAGE_DIGESTS`, and the successful workflow before publishing
 the draft. `SHA256SUMS` covers the four binary assets and both evidence files.
 The maintainer performs the final Publish release action.
 
+Draft preparation creates a release only when GitHub reports that the tag has
+no release (HTTP 404). Authentication, server and network errors stop the job.
+Retries can update an existing draft; they cannot overwrite a published release.
+
 The root `build.sh`, `build_and_start.sh`, `start_server.sh`, `start.bat` and
 `Makefile` targets are compatibility wrappers for local development. They do
 not provision PostgreSQL, apply migrations, install a supervisor or qualify a

@@ -715,9 +715,15 @@ jobs:
             sha256sum --check SHA256SUMS
           )
 
-          release_json="$(gh api --method GET \
-            "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" 2>/dev/null || true)"
-          if [[ -z "$release_json" ]]; then
+          release_exists=false
+          if release_json="$(gh api --method GET \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"; then
+            release_exists=true
+          elif ! jq -e '.status == "404"' <<<"$release_json" >/dev/null; then
+            echo "cannot determine whether release $RELEASE_TAG exists" >&2
+            exit 1
+          fi
+          if [[ "$release_exists" == false ]]; then
             create_options=(
               release create "$RELEASE_TAG"
               --repo "$GITHUB_REPOSITORY"

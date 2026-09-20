@@ -135,11 +135,11 @@ operations](../docs/PRODUCTION_OPERATIONS.md) and [backup security
 policy](../docs/BACKUP_SECURITY.md). Never place real credentials in a command
 line, log or committed file.
 
-The `0.2.1` workflow names its complete packages
-`northstar-0.2.1-linux-amd64.tar.gz` and
-`northstar-0.2.1-windows-amd64.zip`; it also emits raw
-`northstar-0.2.1-linux-amd64` and
-`northstar-0.2.1-windows-amd64.exe` binaries. A successful tag run creates or
+The `0.2.0` workflow names its complete packages
+`northstar-0.2.0-linux-amd64.tar.gz` and
+`northstar-0.2.0-windows-amd64.zip`; it also emits raw
+`northstar-0.2.0-linux-amd64` and
+`northstar-0.2.0-windows-amd64.exe` binaries. A successful tag run creates or
 updates a draft Release and publishes the three GHCR images. Fresh Windows and
 Linux jobs download all seven draft assets and verify checksums, attestations
 and native executables. Review `RELEASE-EVIDENCE.json`, the three exact image

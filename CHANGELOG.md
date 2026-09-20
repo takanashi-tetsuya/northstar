@@ -4,7 +4,7 @@ All notable Northstar changes are documented here. Protocol support claims are
 normative only in [XEP_MATRIX.md](XEP_MATRIX.md), and unresolved release
 boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
-## [0.2.1] - Release notes (publication date: GitHub Releases)
+## [0.2.0] - Release notes (publication date: GitHub Releases)
 
 - Fixed deadlocks when sessions of the same account resume concurrently, while
   preserving the lock that prevents deletion of an in-use privacy list.
@@ -20,9 +20,6 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   manual selection. Load, cluster fault and parser fuzz tests are mandatory
   in every source CI run; development branch and tag pushes no longer duplicate
   PR/main CI.
-- Retained the signed 0.2.0 candidate; release preparation now targets 0.2.1.
-
-## [0.2.0] - Release notes (publication date: GitHub Releases)
 
 - Updated Rustls to 0.23.45 to fix TLS 1.3 handshake boundary validation
   ([RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html)).
@@ -427,5 +424,3 @@ feature or security declarations.
 
 [0.2.0]: https://github.com/takanashi-tetsuya/northstar/releases/tag/v0.2.0
 [0.1.0]: https://github.com/takanashi-tetsuya/northstar/commit/998396915ab38a9deadf47ae871be561e11f7ef2
-
-[0.2.1]: https://github.com/takanashi-tetsuya/northstar/releases/tag/v0.2.1

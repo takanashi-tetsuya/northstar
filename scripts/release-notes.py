@@ -17,20 +17,21 @@ def render(qualification, evidence, output, verified, verification_run=None):
             or (verification_run is not None and (type(verification_run) is not int or verification_run <= 0))):
         raise ValueError('release-note evidence does not match the qualified release')
     template = Path(__file__).resolve().parents[1] / 'docs/releases' / (version + '.md')
-    status = ('All automated release preparation and fresh-download checks passed. Ready for publication.'
-              if verified else 'Draft verification is still running. Wait for the complete Release preparation workflow before publication.')
-    content = (status + '\n\n' + template.read_text().strip() + '\n\n'
-        + f'Source commit: [{commit}](https://github.com/takanashi-tetsuya/northstar/commit/{commit}).\n\n'
-        + f'Full CI: [{q["ciRunId"]}]({q["ciUrl"]}), attempt {q["ciAttempt"]}. '
-        + f'Build and package verification: [run {e["workflow_run_id"]}]'
-        + f'(https://github.com/takanashi-tetsuya/northstar/actions/runs/{e["workflow_run_id"]}).\n\n'
-        + 'Download `SHA256SUMS` and verify the matching asset checksums before execution. '
-        + 'Verify GitHub build provenance with `gh attestation verify <file> --repo takanashi-tetsuya/northstar`. '
-        + '`RELEASE-EVIDENCE.json` records native and container checks against this commit. '
-        + '`IMAGE_DIGESTS` contains the three immutable image references; each image includes an SBOM and build provenance.\n')
+    status = '' if verified else 'Draft verification is still running. Wait for it to finish before publication.\n\n'
+    content = status + template.read_text().strip() + '\n\n<details>\n<summary>Build verification</summary>\n\n'
+    if verified:
+        content += 'Package and fresh-download checks passed.\n\n'
+    content += (f'[Source commit](https://github.com/takanashi-tetsuya/northstar/commit/{commit}) · '
+        + f'[CI]({q["ciUrl"]}), attempt {q["ciAttempt"]} · '
+        + f'[Build](https://github.com/takanashi-tetsuya/northstar/actions/runs/{e["workflow_run_id"]}).\n\n'
+        + '`SHA256SUMS` lists the asset checksums. `RELEASE-EVIDENCE.json` records the '
+        + 'source commit and platform checks; `IMAGE_DIGESTS` lists the container digests. '
+        + 'To verify build provenance, run '
+        + '`gh attestation verify <file> --repo takanashi-tetsuya/northstar`.\n')
     if verification_run is not None and verification_run != e['workflow_run_id']:
         content += ('\nDraft preparation and fresh-download verification: '
                     f'[run {verification_run}](https://github.com/takanashi-tetsuya/northstar/actions/runs/{verification_run}).\n')
+    content += '\n</details>\n'
     output.write_text(content)
 
 

@@ -15,7 +15,7 @@ COPY deploy/postgres-init/lib/northstar-capability-manifest.sql \
 RUN cargo build -p rust-xmpp-server --release --locked
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
-ARG NORTHSTAR_VERSION=0.2.1
+ARG NORTHSTAR_VERSION=0.2.0
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="Northstar XMPP Server" \
       org.opencontainers.image.description="Standards-oriented XMPP server written in Rust" \

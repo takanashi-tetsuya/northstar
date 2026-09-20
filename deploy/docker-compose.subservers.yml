@@ -12,7 +12,7 @@ services:
     build:
       context: .
       args:
-        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-0.2.1}
+        NORTHSTAR_VERSION: ${NORTHSTAR_VERSION:-0.2.0}
         VCS_REF: ${NORTHSTAR_VCS_REF:-unknown}
     depends_on:
       database-grants:

@@ -94,8 +94,8 @@ not part of an unattended default command.
 ## Release history
 
 - [Project changelog](../CHANGELOG.md)
-- [Northstar 0.2.1 development and release-preparation record](../changelog/v0.2.md)
-- [Northstar 0.2.1 release notes](releases/0.2.1.md)
+- [Northstar 0.2.0 development and release-preparation record](../changelog/v0.2.md)
+- [Northstar 0.2.0 release notes](releases/0.2.0.md)
 - [Release responsibilities and workflow](governance/release-roles.md)
 - [CI performance and validation record](handoff/2026-09-12/CI-PERFORMANCE-FOLLOWUP.md)
 - [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases)

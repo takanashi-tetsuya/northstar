@@ -1449,15 +1449,19 @@ def run_faults() -> None:
         and REDIS_KEY,
         "Redis TLS fault-injection environment is incomplete",
     )
+    # A was restarted after the shutdown test. B may still be reconciling
+    # its subscription and routes on the 30-second maintenance cycle.
+    fixture.check(
+        wait_for_cluster_recovery((HTTP_A, HTTP_B), time.monotonic() + 40),
+        "cluster nodes did not recover after the shutdown/restart scenario",
+    )
     prefix = f"northstar:{DOMAIN}"
     endpoint(HTTP_A, XMPP_A)
-    fixture.wait_ready()
     alice_a = fixture.XmppWebSocket(ALICE, PASSWORD, "fault-alice")
     alice_a.send("<enable xmlns='urn:xmpp:sm:3' resume='false'/>")
     sm_enabled, _ = alice_a.receive_until("<enabled ")
     fixture.check("urn:xmpp:sm:3" in sm_enabled, "fault sender could not enable SM")
     endpoint(HTTP_B, XMPP_B)
-    fixture.wait_ready()
     bob_b = fixture.XmppWebSocket(BOB, PASSWORD, "fault-bob")
     bob_full = f"{BOB}@{DOMAIN}/fault-bob"
     wait_for_peer_routes(alice_a, bob_b, f"{ALICE}@{DOMAIN}/fault-alice", bob_full)

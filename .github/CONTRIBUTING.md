@@ -3,14 +3,14 @@
 Northstar is developed collaboratively by humans and AI. Contributors are
 responsible for reviewing their changes and recording relevant validation.
 Read [SECURITY.md](SECURITY.md) before reporting a vulnerability and
-[docs/README.md](docs/README.md) before changing behavior.
+[docs/README.md](../docs/README.md) before changing behavior.
 
 ## Development setup
 
 The release toolchain is pinned by `rust-toolchain.toml`. For a localhost-only
 source build, copy `.env.development.example` to `.env`, replace its two local
 PostgreSQL URL placeholders, generate a development certificate and run the
-explicit migration command described in [README.md](README.md). Never commit
+explicit migration command described in [README.md](../README.md). Never commit
 `.env`, credentials, certificates, keys, logs, database files, uploads or
 backups.
 
@@ -22,7 +22,7 @@ backups.
 - Published files in `migrations/` are immutable. Add a new monotonically
   numbered migration and update the migration/capability manifests instead of
   editing an applied migration.
-- Update `XEP_MATRIX.md` whenever advertised RFC/XEP behavior changes, and
+- Update `docs/XEP_MATRIX.md` whenever advertised RFC/XEP behavior changes, and
   update `docs/openapi.yaml` with every REST wire-contract change.
 - Record unresolved compromises in `docs/KNOWN_ISSUES.md`, dated validation in
   `docs/evidence/` and handoffs in `docs/handoff/YYYY-MM-DD/`. Move retired

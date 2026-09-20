@@ -76,7 +76,7 @@ states `1`, `3`, `4` and `5` all make `/readyz` fail. State `4` is the bounded
 key/instance-authority failure makes both cluster policies fail fast. Investigate
 authentication/replay counter increases as security events and follow the
 key/instance/listener/session/MUC recovery order in
-[`docs/CLUSTERING.md`](../docs/CLUSTERING.md); never silence the readiness gate
+[`docs/CLUSTERING.md`](../../docs/CLUSTERING.md); never silence the readiness gate
 to return a degraded node to service.
 
 Use the [alert receiver qualification runbook](ALERTING_RUNBOOK.md) to record

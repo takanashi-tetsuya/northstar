@@ -85,7 +85,7 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   distributed image contains `LICENSE` and `THIRD_PARTY_NOTICES.md` under
   `/usr/share/licenses/northstar/`.
 - [ ] `LICENSE`, `THIRD_PARTY_NOTICES.md` and dependency policy agree.
-- [ ] `docs/KNOWN_ISSUES.md` and `XEP_MATRIX.md` have been reviewed for this
+- [ ] `docs/KNOWN_ISSUES.md` and `docs/XEP_MATRIX.md` have been reviewed for this
   exact artifact.
 
 ## 2. Protect secrets and database authority
@@ -278,7 +278,7 @@ node scripts/verify-crypto-artifacts.mjs
   pushes the three GHCR images before it prepares the draft GitHub Release. Do
   not push the tag merely to discover whether the release is ready.
 - [ ] Finalize version-specific release notes in `CHANGELOG.md` and
-  `changelog/v0.2.md`, remove `Unreleased` markers, and identify `0.2.0` as the
+  `docs/changelog/v0.2.md`, remove `Unreleased` markers, and identify `0.2.0` as the
   current package version in `README.md`. Publication status/date belong to the
   GitHub Release, so preparing an immutable tag/draft never requires claiming
   that an unpublished release is already public.

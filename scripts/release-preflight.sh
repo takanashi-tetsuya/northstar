@@ -414,7 +414,7 @@ PY
     if command -v docker >/dev/null 2>&1; then
         docker compose config --quiet
         docker run --rm --entrypoint /bin/promtool \
-            -v "$project_dir/monitoring:/etc/northstar-monitoring:ro" \
+            -v "$project_dir/deploy/monitoring:/etc/northstar-monitoring:ro" \
             prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac \
             check rules /etc/northstar-monitoring/alerts.yml \
             || fail "Prometheus alert-rule syntax validation failed"

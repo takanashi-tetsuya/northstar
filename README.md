@@ -1,4 +1,4 @@
-**English** | [繁體中文](README.zh-TW.md)
+**English** | [繁體中文](docs/README.zh-TW.md)
 
 # Northstar XMPP Server
 
@@ -12,12 +12,12 @@ REST administration, anti-abuse controls, logging and metrics.
 The current package version is `0.2.0` and remains pre-1.0. Publication status
 and dates are recorded in [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases).
 The project has not received an independent security audit. Review the
-[XEP support matrix](XEP_MATRIX.md), [release checklist](docs/RELEASE_CHECKLIST.md)
+[XEP support matrix](docs/XEP_MATRIX.md), [release checklist](docs/RELEASE_CHECKLIST.md)
 and [known limitations](docs/KNOWN_ISSUES.md) before public deployment.
 
-See the [documentation index](docs/README.md), [security policy](SECURITY.md),
+See the [documentation index](docs/README.md), [security policy](.github/SECURITY.md),
 [production operations guide](docs/PRODUCTION_OPERATIONS.md) and
-[contribution guide](CONTRIBUTING.md).
+[contribution guide](.github/CONTRIBUTING.md).
 
 The supported architecture is the single-process modular monolith
 (`rust-xmpp-server`). The same binary can also run separate core and maintenance
@@ -149,7 +149,7 @@ deployment.
   deployment remains experimental; a single Northstar process is the supported
   production baseline.
 
-See [XEP_MATRIX.md](XEP_MATRIX.md) for the exact protocol support boundary.
+See [XEP_MATRIX.md](docs/XEP_MATRIX.md) for the exact protocol support boundary.
 
 
 

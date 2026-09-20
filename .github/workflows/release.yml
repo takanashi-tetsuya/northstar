@@ -94,7 +94,7 @@ jobs:
               exit 1
             fi
             release_series="${package_version%.*}"
-            release_series_changelog="changelog/v${release_series}.md"
+            release_series_changelog="docs/changelog/v${release_series}.md"
             for release_doc in CHANGELOG.md "$release_series_changelog" README.md; do
               test -f "$release_doc" || {
                 echo "required release document is missing: $release_doc" >&2

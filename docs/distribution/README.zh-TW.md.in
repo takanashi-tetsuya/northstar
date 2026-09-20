@@ -19,8 +19,8 @@ Windows x64 供開發與評估使用。
 - [正式環境維運](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/PRODUCTION_OPERATIONS.md)
 - [資料庫角色與權限](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/DATABASE_ROLES.md)
 - [已知限制](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/KNOWN_ISSUES.md)
-- [協定支援](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/XEP_MATRIX.md)
-- [安全政策](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/SECURITY.md)
+- [協定支援](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/XEP_MATRIX.md)
+- [安全政策](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/.github/SECURITY.md)
 - [HTTP API 規格](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/openapi.yaml)
 
 Docker 部署及從原始碼編譯需使用

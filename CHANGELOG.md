@@ -15,7 +15,11 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   duplicate ACK payloads.
 - Enabled the pinned parser fuzz toolchain in GitHub-hosted runners.
 - Increased MIX fixture credential admission to half the available CPUs, up to
-  four operations, retaining the complete stress matrices and deadlines.
+  four operations, preserving protocol assertions and worker deadlines.
+- CI runs 5×50 for PRs and main, 20×50 periodically, and 100×50 on explicit
+  manual selection. Load, cluster fault and parser fuzz tests are mandatory
+  in every source CI run; development branch and tag pushes no longer duplicate
+  PR/main CI.
 - Retained the signed 0.2.0 candidate; release preparation now targets 0.2.1.
 
 ## [0.2.0] - Release notes (publication date: GitHub Releases)

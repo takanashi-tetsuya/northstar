@@ -21,6 +21,21 @@ artifact and its provenance before uploading. It then repeats fresh Windows
 and Linux downloads. The tag and built artifacts stay unchanged; the draft
 notes link both the original build and the recovery run.
 
+## CI coverage
+
+PRs and pushes to `main` run the complete source checks, including database
+and security invariants, parser fuzzing, the 1,000-session production envelope,
+cluster faults and raw 1,000-session load. Both listener fixtures run five
+rounds with 50 pairs and retain their observer and cleanup checks.
+
+Weekly and ordinary manual runs use 20 rounds. The manual `extended_stress`
+option selects 100 rounds for endurance investigations. These profiles use
+the same protocol cases, pair concurrency and worker/recovery deadlines.
+
+Development branch pushes use PR validation. Release tags qualify the exact
+commit against successful `main` CI, then rebuild and verify Windows, Linux
+and Docker artifacts and their provenance. They do not repeat source CI.
+
 ## 1. Freeze and identify the artifact
 
 - [ ] Working tree changes have been reviewed and intentionally included or

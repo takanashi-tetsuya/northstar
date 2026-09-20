@@ -55,8 +55,12 @@ the full isolated `backup-restore-wsl.sh` drill also runs its generated SQL
 against PostgreSQL. `test-listener-stress-phases.py` exercises the small
 fixture synchronization and identity checks without starting Northstar.
 
-`listener-readiness-stress-wsl.sh` keeps the regular 20 × 50 and scheduled
-100 × 50 matrices. Each pair owns two migrated database copies, certificates,
+`listener-readiness-stress-wsl.sh` runs 5 × 50 for PRs and `main`, and 20 × 50
+for weekly or manual CI. Select `extended_stress` when dispatching CI to run
+100 × 50. Every round exercises the complete fixture at 50-pair concurrency;
+round counts control repetition rather than protocol coverage. The regular
+matrix retains its PostgreSQL observer and verifies the diagnostic artifacts.
+Each pair owns two migrated database copies, certificates,
 listeners and separate log directories. All pairs finish certificate, secret,
 binary/database preparation and all four relay readiness checks before any
 server starts. Relay readiness does not depend on a server target, avoiding a

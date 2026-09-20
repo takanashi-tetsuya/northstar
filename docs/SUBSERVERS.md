@@ -186,9 +186,10 @@ recorded process identities and liveness, including earlier batches, before
 advancing and before releasing all pairs into the concurrent business tests.
 A dead server fails the round; neither startup nor a failed round is retried.
 
-Regular CI still runs 20 rounds of 50 pairs, with all 100 servers live before
-concurrent protocol work begins. The scheduled matrix runs 100 rounds of the
-same 50-pair workload. Smoke tests retain the one-pair and two-pair cases.
+PR and main CI run five rounds of 50 pairs, with all 100 servers live before
+concurrent protocol work begins. Weekly and ordinary manual runs repeat the
+same workload for 20 rounds; the manual `extended_stress` option selects 100.
+Smoke tests retain the one-pair and two-pair cases.
 This validates concurrent operation after batched startup on the available runner.
 MIX records each pair's listener ownership while that pair still holds its
 startup slot, using one TCP-table snapshot and one file-descriptor snapshot
@@ -291,7 +292,7 @@ The small observer integration fixture can be run independently with
 It starts its own temporary, fsync-enabled PG17 cluster as an ordinary user and
 tests 100 runtime-control connections, delayed replies, actual waits, case mapping,
 failure windows and cancellation. It does not
-run application servers or replace the regular 20-by-50 acceptance matrix.
+run application servers or replace the regular 5-by-50 acceptance matrix.
 The startup scheduler's failure paths are also checked independently of a
 database using controlled child processes.
 

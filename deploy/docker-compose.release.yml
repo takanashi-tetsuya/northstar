@@ -10,26 +10,26 @@
 
 services:
   migrate:
-    image: "${NORTHSTAR_SERVER_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar:0.2.1}"
+    image: "${NORTHSTAR_SERVER_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar:0.2.0}"
     build: !reset null
     pull_policy: always
 
   database-grants:
-    image: "${NORTHSTAR_DATABASE_GRANTS_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.1}"
+    image: "${NORTHSTAR_DATABASE_GRANTS_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.0}"
     build: !reset null
     pull_policy: always
 
   xmpp:
-    image: "${NORTHSTAR_SERVER_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar:0.2.1}"
+    image: "${NORTHSTAR_SERVER_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar:0.2.0}"
     build: !reset null
     pull_policy: always
 
   backup:
-    image: "${NORTHSTAR_BACKUP_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar-backup:0.2.1}"
+    image: "${NORTHSTAR_BACKUP_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0}"
     build: !reset null
     pull_policy: always
 
   restore:
-    image: "${NORTHSTAR_BACKUP_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar-backup:0.2.1}"
+    image: "${NORTHSTAR_BACKUP_IMAGE_REF:-ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0}"
     build: !reset null
     pull_policy: always

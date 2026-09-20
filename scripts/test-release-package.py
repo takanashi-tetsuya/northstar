@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -35,6 +36,10 @@ class PackageTests(unittest.TestCase):
             path = self.project / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('fixture content: ' + name)
+        for template in PACKAGE.DISTRIBUTION_READMES.values():
+            path = self.project / template
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((PACKAGE.ROOT / template).read_bytes())
         (self.project / 'Cargo.toml').write_text('[package]\nversion="0.2.0"\n')
         env = dict(os.environ, GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1')
         def git(*args):
@@ -62,6 +67,31 @@ class PackageTests(unittest.TestCase):
                 self.assertFalse((destination / 'web/private.secret').exists())
                 self.assertTrue((destination / '.env.development.example').is_file())
                 self.assertTrue((destination / 'docs/INSTALL.md').is_file())
+
+    def test_packaged_readmes_link_to_included_files_or_the_matching_release(self):
+        for target in PACKAGE.TARGETS:
+            archive, raw = self.pack(target, target)
+            destination = self.root / ('readmes-' + target)
+            PACKAGE.unpack(archive, raw, destination, '0.2.0', self.commit, target)
+            for name in ('README.md', 'README.zh-TW.md'):
+                text = (destination / name).read_text()
+                self.assertIn('# Northstar 0.2.0', text)
+                self.assertNotIn('@VERSION@', text)
+                self.assertNotIn('fixture content:', text)
+                self.assertNotIn('cargo ', text)
+                self.assertIn('](docs/INSTALL.md)', text)
+                links = re.findall(r'\[[^\]]+\]\(([^)]+)\)', text)
+                self.assertTrue(links)
+                for link in links:
+                    with self.subTest(target=target, readme=name, link=link):
+                        if link.startswith('https://'):
+                            match = re.fullmatch(
+                                r'https://github.com/takanashi-tetsuya/northstar/(blob|tree)/v0\.2\.0(?:/(.+))?', link)
+                            self.assertIsNotNone(match)
+                            if match.group(2):
+                                self.assertTrue((PACKAGE.ROOT / match.group(2)).exists())
+                        else:
+                            self.assertTrue((destination / link).is_file())
 
     def test_archives_are_reproducible_for_the_same_source_and_epoch(self):
         for target in PACKAGE.TARGETS:
@@ -193,7 +223,8 @@ class PackageTests(unittest.TestCase):
         q, e, output = (self.root / name for name in ('qualification.json', 'evidence.json', 'notes.md'))
         q.write_text(json.dumps(dict(commit=self.commit, tag='v0.2.0', ciRunId=123, ciAttempt=1,
             ciUrl='https://github.com/takanashi-tetsuya/northstar/actions/runs/123')))
-        evidence = dict(commit=self.commit, version='0.2.0', published_images=True, workflow_run_id=456)
+        evidence = dict(commit=self.commit, version='0.2.0', published_images=True,
+                        workflow_run_id=456, workflow_run_attempt=2)
         e.write_text(json.dumps(evidence))
         NOTES.render(q, e, output, False)
         self.assertIn('Draft verification is still running', output.read_text())
@@ -205,12 +236,22 @@ class PackageTests(unittest.TestCase):
         self.assertLess(output.read_text().index('## Downloads'), output.read_text().index('<summary>Build verification</summary>'))
         self.assertIn(self.commit, output.read_text())
         self.assertIn('Windows is for development', output.read_text())
+        self.assertIn('[CI (attempt 1)](https://github.com/takanashi-tetsuya/northstar/actions/runs/123/attempts/1)', output.read_text())
+        self.assertIn('[Release preparation (attempt 2)](https://github.com/takanashi-tetsuya/northstar/actions/runs/456/attempts/2)', output.read_text())
         NOTES.render(q, e, output, True, 789)
         self.assertIn('actions/runs/456', output.read_text())
         self.assertIn('Draft preparation and fresh-download verification:', output.read_text())
         self.assertIn('actions/runs/789', output.read_text())
         with self.assertRaises(ValueError):
             NOTES.render(q, e, output, True, -1)
+        qualification = json.loads(q.read_text())
+        for field, data, path in (('ciAttempt', qualification, q), ('workflow_run_attempt', evidence, e)):
+            for invalid in (None, 0, -1, '2', True):
+                with self.subTest(field=field, invalid=invalid):
+                    path.write_text(json.dumps(dict(data, **{field: invalid})))
+                    with self.assertRaises(ValueError):
+                        NOTES.render(q, e, output, True)
+            path.write_text(json.dumps(data))
         e.write_text(json.dumps(dict(evidence, commit='a' * 40)))
         with self.assertRaises(ValueError):
             NOTES.render(q, e, output, True)

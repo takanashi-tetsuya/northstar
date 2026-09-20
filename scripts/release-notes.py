@@ -14,6 +14,8 @@ def render(qualification, evidence, output, verified, verification_run=None):
             or q['commit'] != commit or q['tag'] != 'v' + version or e.get('published_images') is not True
             or not re.fullmatch(r'https://github.com/takanashi-tetsuya/northstar/actions/runs/[1-9][0-9]*', q['ciUrl'])
             or type(e['workflow_run_id']) is not int or e['workflow_run_id'] <= 0
+            or any(type(attempt) is not int or attempt <= 0
+                   for attempt in (q.get('ciAttempt'), e.get('workflow_run_attempt')))
             or (verification_run is not None and (type(verification_run) is not int or verification_run <= 0))):
         raise ValueError('release-note evidence does not match the qualified release')
     template = Path(__file__).resolve().parents[1] / 'docs/releases' / (version + '.md')
@@ -22,8 +24,9 @@ def render(qualification, evidence, output, verified, verification_run=None):
     if verified:
         content += 'Package and fresh-download checks passed.\n\n'
     content += (f'[Source commit](https://github.com/takanashi-tetsuya/northstar/commit/{commit}) · '
-        + f'[CI]({q["ciUrl"]}), attempt {q["ciAttempt"]} · '
-        + f'[Build](https://github.com/takanashi-tetsuya/northstar/actions/runs/{e["workflow_run_id"]}).\n\n'
+        + f'[CI (attempt {q["ciAttempt"]})]({q["ciUrl"]}/attempts/{q["ciAttempt"]}) · '
+        + f'[Release preparation (attempt {e["workflow_run_attempt"]})]'
+        + f'(https://github.com/takanashi-tetsuya/northstar/actions/runs/{e["workflow_run_id"]}/attempts/{e["workflow_run_attempt"]}).\n\n'
         + '`SHA256SUMS` lists the asset checksums. `RELEASE-EVIDENCE.json` records the '
         + 'source commit and platform checks; `IMAGE_DIGESTS` lists the container digests. '
         + 'To verify build provenance, run '

@@ -39,9 +39,24 @@ of the [production operations guide](https://github.com/takanashi-tetsuya/norths
 Migration is an explicit stopped-writer operation where required by that guide;
 starting the application never silently upgrades the database.
 
+## Docker
+
+First obtain the matching repository checkout. The Compose files and deployment
+scripts are in the repository, not in the native archives:
+
+```sh
+git clone --branch v0.2.0 --depth 1 \
+  https://github.com/takanashi-tetsuya/northstar.git
+cd northstar
+```
+
+Configure the deployment using `.env.example` and the production operations
+guide above. Run Docker Compose from this checkout, with both `docker-compose.yml`
+and `deploy/docker-compose.release.yml`.
+
 Docker deployments use the three immutable image references in `IMAGE_DIGESTS`
 with [the release Compose override](https://github.com/takanashi-tetsuya/northstar/blob/v0.2.0/deploy/docker-compose.release.yml)
-and the matching repository deployment configuration. Verify image provenance
+and this checkout's deployment configuration. Verify image provenance
 and replace the convenient version tags with those exact digest references.
 Application, backup and database-grants images have separate responsibilities;
 the application container does not receive migration or bootstrap credentials.

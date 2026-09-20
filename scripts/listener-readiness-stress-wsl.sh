@@ -151,13 +151,11 @@ tokio_worker_threads="${NORTHSTAR_LISTENER_STRESS_TOKIO_WORKER_THREADS:-$derived
   exit 2
 }
 tokio_worker_threads=$((10#$tokio_worker_threads))
-# Legacy SASL PLAIN and the REST session endpoint deliberately spend Argon2
-# work.  A single-node server's password gate is process-local by design, so
-# hundreds of isolated test processes would otherwise launch hundreds of
-# independent password-derived setup operations against one host. The slot
-# directory below does not serialize server startup, MIX/S2S work, or
-# application requests after construction.
-derived_login_slots=$((effective_cpu_count / 4))
+# Limit CPU-heavy registration and login across independent test servers.
+# Half the CPUs, capped at four operations, leaves capacity for PostgreSQL
+# and live nodes without serializing all 50 pairs on four-CPU runners.
+# Startup and subsequent MIX/S2S operations do not hold these slots.
+derived_login_slots=$((effective_cpu_count / 2))
 ((derived_login_slots >= 1)) || derived_login_slots=1
 ((derived_login_slots <= 4)) || derived_login_slots=4
 login_slot_count="${NORTHSTAR_LISTENER_STRESS_LOGIN_CONCURRENCY:-$derived_login_slots}"

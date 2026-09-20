@@ -14,6 +14,8 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   resumption, completed transport cleanup, cluster peer discovery and exact
   duplicate ACK payloads.
 - Enabled the pinned parser fuzz toolchain in GitHub-hosted runners.
+- Increased MIX fixture credential admission to half the available CPUs, up to
+  four operations, retaining the complete stress matrices and deadlines.
 - Retained the signed 0.2.0 candidate; release preparation now targets 0.2.1.
 
 ## [0.2.0] - Release notes (publication date: GitHub Releases)

@@ -5,7 +5,7 @@ It does not turn repository-local test coverage into a public production
 guarantee. Record every result against the commit, binary/image digest,
 configuration generation and environment.
 
-The current development line is `0.2.0`. Do not assign `1.0.0` until one exact
+The current development line is `0.2.1`. Do not assign `1.0.0` until one exact
 artifact and target environment have completed every applicable checkbox in
 this document, all release-blocking known issues are closed, and the retained
 evidence has been reviewed.
@@ -30,17 +30,17 @@ notes link both the original build and the recovery run.
   passes the same gates. Do not create a release from only the repository's
   previously tracked subset.
 - [ ] `Cargo.toml`, `Cargo.lock`, OpenAPI, Docker/Compose defaults, README files,
-  security policy and both changelogs consistently use `0.2.0`; the stable tag
-  is exactly `v0.2.0`, while file and OCI versions omit the leading `v`.
+  security policy and both changelogs consistently use `0.2.1`; the stable tag
+  is exactly `v0.2.1`, while file and OCI versions omit the leading `v`.
 - [ ] `Cargo.lock` is committed and the release build uses `--locked`.
 - [ ] Record the exact tag commit, Rust `1.97.1`, the package target triples
   `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc`, and the workflow run
   URL. Do not place a guessed hash or a different run's hash in release notes.
-- [ ] The workflow produced exactly these four `0.2.0` binary assets:
-  `northstar-0.2.0-linux-amd64.tar.gz`,
-  `northstar-0.2.0-linux-amd64`,
-  `northstar-0.2.0-windows-amd64.zip`, and
-  `northstar-0.2.0-windows-amd64.exe`.
+- [ ] The workflow produced exactly these four `0.2.1` binary assets:
+  `northstar-0.2.1-linux-amd64.tar.gz`,
+  `northstar-0.2.1-linux-amd64`,
+  `northstar-0.2.1-windows-amd64.zip`, and
+  `northstar-0.2.1-windows-amd64.exe`.
 - [ ] The complete Linux tarball and Windows ZIP contain the matching
   `xmpp-server`/`xmpp-server.exe`, `web/`, `third_party/swagger-ui/dist/`,
   `.env.example`, `README.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, and the
@@ -257,17 +257,17 @@ node scripts/verify-crypto-artifacts.mjs
 
 ## 9. Tag, draft and publication
 
-- [ ] Treat pushing `v0.2.0` as an external publication action: the tag workflow
+- [ ] Treat pushing `v0.2.1` as an external publication action: the tag workflow
   pushes the three GHCR images before it prepares the draft GitHub Release. Do
   not push the tag merely to discover whether the release is ready.
 - [ ] Finalize version-specific release notes in `CHANGELOG.md` and
-  `changelog/v0.2.md`, remove `Unreleased` markers, and identify `0.2.0` as the
+  `changelog/v0.2.md`, remove `Unreleased` markers, and identify `0.2.1` as the
   current package version in `README.md`. Publication status/date belong to the
   GitHub Release, so preparing an immutable tag/draft never requires claiming
   that an unpublished release is already public.
 - [ ] Confirm the reviewed release commit is the intended protected-branch
-  commit, create the immutable `v0.2.0` tag at that commit, verify
-  `v0.2.0^{commit}`, and push only that tag. Never move or reuse a published tag.
+  commit, create the immutable `v0.2.1` tag at that commit, verify
+  `v0.2.1^{commit}`, and push only that tag. Never move or reuse a published tag.
 - [ ] Wait for the complete tag-triggered `Release preparation` workflow. It
   must finish successfully and create or update a **draft**, not an already
   public GitHub Release.
@@ -285,7 +285,7 @@ node scripts/verify-crypto-artifacts.mjs
 - [ ] Extract both complete archives into empty directories, confirm their
   required runtime/license contents, confirm the extracted executable matches
   the corresponding raw asset, and run `xmpp-server --version` or
-  `xmpp-server.exe --version`; each must report `0.2.0`.
+  `xmpp-server.exe --version`; each must report `0.2.1`.
 - [ ] Pull all three `IMAGE_DIGESTS` references by digest. Verify architecture,
   image digest, SBOM/provenance, source/revision/version/license labels,
   non-root user, health check/entrypoint where applicable, and anonymous pull

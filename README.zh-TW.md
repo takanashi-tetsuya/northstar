@@ -8,7 +8,7 @@ Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 伺服器。它提供 TCP、Direct TLS、WebSocket 與選用 BOSH 連線，以及聯邦、
 群聊、OMEMO 相容服務、網頁用戶端、REST 管理、防濫用、日誌及監控。
 
-目前套件版本為 `0.2.0`，仍屬 1.0 之前的版本；發佈狀態與日期以
+目前套件版本為 `0.2.1`，仍屬 1.0 之前的版本；發佈狀態與日期以
 [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) 為準。
 專案尚未接受獨立安全稽核。公開部署前請閱讀 [XEP 支援矩陣](XEP_MATRIX.md)、
 [發行檢查表](docs/RELEASE_CHECKLIST.md)與[已知限制](docs/KNOWN_ISSUES.md)。
@@ -25,17 +25,17 @@ Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 
 ### 發行套件
 
-Northstar `0.2.0` 套件將在維護者發佈 Release 後，透過
+Northstar `0.2.1` 套件將在維護者發佈 Release 後，透過
 [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases)
 提供下載。Tag workflow 會先建立包含下列檔案的草稿，並驗證 checksum、
 provenance 與映像 digest：
 
 | 資產 | 用途 |
 |---|---|
-| `northstar-0.2.0-linux-amd64.tar.gz` | 完整 Linux AMD64 發行套件，包含 `xmpp-server`、Web 用戶端、Swagger UI、`.env.example` 及授權聲明 |
-| `northstar-0.2.0-linux-amd64` | 裸 Linux AMD64 ELF binary |
-| `northstar-0.2.0-windows-amd64.zip` | 完整 Windows AMD64 開發／評估套件，包含 `xmpp-server.exe` 及相同的 runtime 資產與授權聲明 |
-| `northstar-0.2.0-windows-amd64.exe` | 供開發／評估使用的裸 Windows AMD64 executable |
+| `northstar-0.2.1-linux-amd64.tar.gz` | 完整 Linux AMD64 發行套件，包含 `xmpp-server`、Web 用戶端、Swagger UI、`.env.example` 及授權聲明 |
+| `northstar-0.2.1-linux-amd64` | 裸 Linux AMD64 ELF binary |
+| `northstar-0.2.1-windows-amd64.zip` | 完整 Windows AMD64 開發／評估套件，包含 `xmpp-server.exe` 及相同的 runtime 資產與授權聲明 |
+| `northstar-0.2.1-windows-amd64.exe` | 供開發／評估使用的裸 Windows AMD64 executable |
 | `SHA256SUMS` | 四個 binary 資產、`IMAGE_DIGESTS` 與 `RELEASE-EVIDENCE.json` 的 SHA-256 checksum |
 | `RELEASE-EVIDENCE.json` | 精確 source/run 身分及 Windows、Linux、Docker 套件驗證結果 |
 | `IMAGE_DIGESTS` | 成功 tag 執行為三個 GHCR 映像產生的精確 `name@sha256:digest` 參照 |
@@ -53,10 +53,10 @@ tag archive 的內容放在一起，並從該目錄啟動。
 build provenance。Linux 範例：
 
 ```sh
-mkdir northstar-0.2.0
+mkdir northstar-0.2.1
 sha256sum --check SHA256SUMS
-tar -xzf northstar-0.2.0-linux-amd64.tar.gz -C northstar-0.2.0
-cd northstar-0.2.0
+tar -xzf northstar-0.2.1-linux-amd64.tar.gz -C northstar-0.2.1
+cd northstar-0.2.1
 ./xmpp-server --version
 ```
 
@@ -207,9 +207,9 @@ Northstar 會建置三個非 root 映像。建議使用 Docker Compose 部署，
 
 | Dockerfile | 發行映像 | Compose 服務 | 用途 |
 |---|---|---|---|
-| `Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar:0.2.0` | `migrate`、`xmpp` | 執行資料庫遷移及 XMPP/HTTP 服務 |
-| `deploy/database-grants.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.0` | `database-grants` | 遷移後重新核對 PostgreSQL 權限 |
-| `deploy/backup.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0` | `backup`、`restore` | 已簽章／加密的備份、驗證及停機還原 |
+| `Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar:0.2.1` | `migrate`、`xmpp` | 執行資料庫遷移及 XMPP/HTTP 服務 |
+| `deploy/database-grants.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.1` | `database-grants` | 遷移後重新核對 PostgreSQL 權限 |
+| `deploy/backup.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-backup:0.2.1` | `backup`、`restore` | 已簽章／加密的備份、驗證及停機還原 |
 
 完整正式環境流程請參閱[正式環境維運](docs/PRODUCTION_OPERATIONS.md)；
 資料庫能力邊界請參閱[資料庫角色](docs/DATABASE_ROLES.md)；
@@ -245,7 +245,7 @@ cp .env.example .env
 `unknown` 僅供開發使用。
 
 ```dotenv
-NORTHSTAR_VERSION=0.2.0
+NORTHSTAR_VERSION=0.2.1
 NORTHSTAR_VCS_REF=<full-release-commit>
 XMPP_DOMAIN=chat.example.org
 TLS_CERT_HOST_PATH=/etc/northstar/tls/fullchain.pem
@@ -270,7 +270,7 @@ docker compose --profile backup --profile restore build --pull backup restore
 如需在 Compose 以外建立可推送 registry 或離線傳輸的明確標籤單平台映像：
 
 ```sh
-northstar_version=0.2.0
+northstar_version=0.2.1
 northstar_revision="$(git rev-parse HEAD)"
 
 docker build --pull \
@@ -295,7 +295,7 @@ docker build --pull --file deploy/backup.Dockerfile \
 
 上表三個 Linux AMD64 發行映像的 immutable references 記錄於 Release 的
 `IMAGE_DIGESTS`。請先把 `.env.example` 複製為 `.env` 並完成部署設定，再將
-三個映像變數設為其中相符的 `name@sha256:digest`。`:0.2.0` tag 方便選取版本，
+三個映像變數設為其中相符的 `name@sha256:digest`。`:0.2.1` tag 方便選取版本，
 但正式環境身分應以 digest 為準。
 
 ```dotenv

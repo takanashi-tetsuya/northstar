@@ -17,6 +17,12 @@ source "$project_dir/scripts/lib/test-listener-readiness.sh"
 test_database="${XMPP_TEST_DATABASE:-xmpp_test}"
 [[ "$test_database" == "xmpp_test" ]] \
   || { echo "production-envelope load tests are restricted to xmpp_test" >&2; exit 2; }
+database_port="${NORTHSTAR_LOAD_DATABASE_PORT:-5432}"
+if ! [[ "$database_port" =~ ^[1-9][0-9]{0,4}$ ]] || ((10#$database_port > 65535)); then
+  echo "NORTHSTAR_LOAD_DATABASE_PORT must be an integer from 1 through 65535" >&2
+  exit 2
+fi
+export PGPORT="$database_port"
 run_id="$(openssl rand -hex 16)"
 schema="northstar_load_envelope_${run_id}"
 [[ "$schema" =~ ^northstar_load_envelope_[0-9a-f]{32}$ ]] \
@@ -140,9 +146,11 @@ export XMPP_LOAD_MAX_CONNECTIONS=1005
 
 cargo_args=(--locked)
 if [[ "${XMPP_TEST_OFFLINE:-true}" != "false" ]]; then cargo_args+=(--offline); fi
-cargo build --release "${cargo_args[@]}"
+if [[ "${NORTHSTAR_LOAD_SKIP_BUILD:-false}" != "true" ]]; then
+  cargo build --release "${cargo_args[@]}"
+fi
 binary="${CARGO_TARGET_DIR:-$project_dir/target}/release/rust-xmpp-server"
-database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$test_database?options=-csearch_path%3D$schema"
+database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:$database_port/$test_database?options=-csearch_path%3D$schema"
 env \
   NORTHSTAR_DISABLE_DOTENV=true \
   XMPP_DOMAIN=localhost \

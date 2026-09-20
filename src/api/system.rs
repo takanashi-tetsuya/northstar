@@ -899,6 +899,8 @@ pub async fn websocket(
         return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     ws.protocols(["xmpp"])
+        // Grow for large stanzas instead of reserving 128 KiB per idle client.
+        .read_buffer_size(8 * 1024)
         .max_message_size(1024 * 1024)
         .max_frame_size(1024 * 1024)
         .on_upgrade(move |socket| async move {

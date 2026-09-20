@@ -2147,6 +2147,7 @@ class XmppWebSocket:
         initial_presence: bool = True,
         timeout: float = 10,
         deadline: float | None = None,
+        device_id: str | None = None,
     ):
         check(0 < timeout <= 10, "WebSocket construction timeout must be greater than zero and no more than ten seconds")
         self._construction_deadline: float | None = (
@@ -2179,6 +2180,7 @@ class XmppWebSocket:
         self.username = username
         self.password = password
         self.resource = resource
+        self.device_id = device_id
         self.sasl2_resume_id = None
         if sasl2:
             check(resume is None and not expect_bind_conflict, "SASL2 test client has no legacy bind mode")
@@ -2314,15 +2316,28 @@ class XmppWebSocket:
     ) -> None:
         self.send(f"<open xmlns='urn:ietf:params:xml:ns:xmpp-framing' to='{DOMAIN}' version='1.0'/>")
         self.receive_until("<open ")
-        self.receive_until("<mechanisms")
-        encoded = base64.b64encode(f"\0{self.username}\0{self.password}".encode()).decode()
-        self.send(
-            f"<auth xmlns='urn:ietf:params:xml:ns:xmpp-sasl' mechanism='PLAIN'>{encoded}</auth>"
-        )
-        self.receive_until("<success")
-        self.send(f"<open xmlns='urn:ietf:params:xml:ns:xmpp-framing' to='{DOMAIN}' version='1.0'/>")
-        self.receive_until("<open ")
         features, _ = self.receive_until("</stream:features>")
+        encoded = base64.b64encode(f"\0{self.username}\0{self.password}".encode()).decode()
+        if self.device_id is not None:
+            check(re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", self.device_id) is not None,
+                  "device identity must be a UUID")
+            check("urn:xmpp:sasl:2" in features, "WebSocket did not advertise SASL2")
+            self.send(
+                "<authenticate xmlns='urn:xmpp:sasl:2' mechanism='PLAIN'>"
+                f"<initial-response>{encoded}</initial-response>"
+                f"<user-agent id='{self.device_id}'/></authenticate>"
+            )
+            features, frames = self.receive_until("</stream:features>")
+            check(any("<success xmlns='urn:xmpp:sasl:2'" in frame for frame in frames),
+                  "device authentication failed")
+        else:
+            self.send(
+                f"<auth xmlns='urn:ietf:params:xml:ns:xmpp-sasl' mechanism='PLAIN'>{encoded}</auth>"
+            )
+            self.receive_until("<success")
+            self.send(f"<open xmlns='urn:ietf:params:xml:ns:xmpp-framing' to='{DOMAIN}' version='1.0'/>")
+            self.receive_until("<open ")
+            features, _ = self.receive_until("</stream:features>")
         check("urn:xmpp:sm:3" in features, "stream management was not advertised after SASL")
         check("urn:xmpp:csi:0" in features, "client state indication was not advertised after SASL")
         if resume:

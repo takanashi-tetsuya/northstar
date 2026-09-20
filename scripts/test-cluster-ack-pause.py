@@ -122,6 +122,40 @@ class AckPauseTests(unittest.TestCase):
 
 
 class ClusterRecoveryTests(unittest.TestCase):
+    def test_restart_recovery_can_complete_after_the_startup_window(self):
+        now = [0.0]
+
+        @contextmanager
+        def response(url, timeout):
+            status = 503 if url.endswith(':1002/readyz') and now[0] < 31 else 200
+            yield SimpleNamespace(status=status)
+
+        with patch.object(cluster.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(cluster.time, "sleep", side_effect=lambda delay: now.__setitem__(0, now[0] + delay)), \
+                patch.object(cluster.urllib.request, "urlopen", side_effect=response):
+            self.assertTrue(cluster.wait_for_cluster_recovery((1001, 1002), 40))
+        self.assertEqual(now[0], 31)
+
+    def test_faults_require_joint_restart_recovery_before_opening_sessions(self):
+        for recovered in (False, True):
+            with self.subTest(recovered=recovered), \
+                    patch.multiple(cluster, REDIS_PORT=1, REDIS_PID=1, REDIS_PASSWORD="fixture",
+                                   REDIS_CA="fixture", REDIS_CERT="fixture", REDIS_KEY="fixture"), \
+                    patch.object(cluster.time, "monotonic", return_value=100), \
+                    patch.object(cluster, "wait_for_cluster_recovery", return_value=recovered) as recover, \
+                    patch.object(cluster, "endpoint"), \
+                    patch.object(cluster.fixture, "wait_ready", side_effect=AssertionError("startup wait used")), \
+                    patch.object(cluster.fixture, "XmppWebSocket", side_effect=RuntimeError("authentication reached")) as connect:
+                if recovered:
+                    with self.assertRaisesRegex(RuntimeError, "authentication reached"):
+                        cluster.run_faults()
+                    connect.assert_called_once()
+                else:
+                    with self.assertRaisesRegex(AssertionError, "shutdown/restart scenario"):
+                        cluster.run_faults()
+                    connect.assert_not_called()
+                recover.assert_called_once_with((cluster.HTTP_A, cluster.HTTP_B), 140)
+
     def test_every_round_requires_both_nodes_ready_before_fresh_delivery(self):
         now = [0.0]
         calls = []

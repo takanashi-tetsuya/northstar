@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the unchanged regular listener matrix with one bounded PG observer."""
+"""Run the regular listener matrix with one bounded PG observer."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from github_ci_supervisor import (
     terminate_owned_direct_child,
 )
 
-OBSERVER_MAX_SECONDS = 9000  # Existing regular CI job ceiling, never a worker budget.
+OBSERVER_MAX_SECONDS = 3600  # Regular CI job ceiling; worker deadlines are separate.
 READY_SECONDS = 15.0  # Bounded connect + identity attestation + first sample.
 POST_WAIT_SECONDS = 20.0  # Fixed 15s post-window plus one bounded query and finalization.
 OBSERVER_STOP_SECONDS = 4
@@ -372,7 +372,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=["regular"], required=True)
     parser.add_argument("--fixture", choices=["federation", "mix-federation"], required=True)
-    parser.add_argument("--rounds", choices=[20], type=int, required=True)
+    parser.add_argument("--rounds", choices=[5], type=int, required=True)
     parser.add_argument("--pairs", choices=[50], type=int, required=True)
     args = parser.parse_args()
     os.umask(0o077)

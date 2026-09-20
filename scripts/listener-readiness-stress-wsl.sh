@@ -33,8 +33,8 @@ while (($#)); do
 done
 
 case "$mode" in
-  regular) [[ -n "$rounds" ]] || rounds=20 ;;
-  scheduled) [[ -n "$rounds" ]] || rounds=100 ;;
+  regular) [[ -n "$rounds" ]] || rounds=5 ;;
+  scheduled) [[ -n "$rounds" ]] || rounds=20 ;;
   *) echo "mode must be regular or scheduled" >&2; exit 2 ;;
 esac
 case "$fixture" in

@@ -65,6 +65,8 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   `README.zh-TW.md` and `PACKAGE-MANIFEST.json`; the manifest identifies the
   exact source/target and hashes every distributed file. Windows packages link
   the Visual C++ runtime statically.
+- [ ] Both README files describe the native distribution. Local links resolve
+  inside the archive; online documentation links use the matching release tag.
 - [ ] Independent native runners download and extract the packages, migrate
   a private PostgreSQL 17 cluster, reach readiness within 15 seconds, and serve
   the matching client, administration and Swagger assets. The application image

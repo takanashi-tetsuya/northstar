@@ -1,129 +1,81 @@
-# Northstar documentation index
+# Northstar documentation
 
-This directory separates current contracts from historical evidence. A file's
-existence does not by itself prove that its runtime test was executed for the
-current commit.
+Start with the [installation guide](INSTALL.md) for release packages or the
+[project README](../README.md) for a source checkout.
 
-## Authoritative current documents
+## Deployment
 
-Read these in order before deploying or changing protocol behavior:
+- [Production operations](PRODUCTION_OPERATIONS.md): configuration, TLS, migrations and recovery.
+- [Database roles](DATABASE_ROLES.md): migrator, runtime, command and backup permissions.
+- [Known limitations](KNOWN_ISSUES.md): current issues and deployment constraints.
+- [Core and maintenance processes](SUBSERVERS.md): separate processes over shared PostgreSQL.
+- [Monitoring](../deploy/monitoring/README.md) and [alert delivery](../deploy/monitoring/ALERTING_RUNBOOK.md).
+- [Experimental clustering](CLUSTERING.md), [capacity limits](DEPLOYMENT_CAPACITY.md) and [upload storage](UPLOAD_STORAGE.md).
 
-1. [Repository README](../README.md) — supported deployment, quick start and
-   evidence vocabulary.
-2. [XMPP compatibility matrix](../XEP_MATRIX.md) — normative RFC/XEP scope and
-   `Core`/`Partial`/`Pass-through`/`Experimental` labels.
-3. [Known issues and accepted boundaries](KNOWN_ISSUES.md) — the only current
-   backlog and compromise register.
-4. [Internal architecture](ARCHITECTURE.md) — ownership, persistence and
-   delivery boundaries.
-5. [Program responsibility model](PROGRAM_RESPONSIBILITIES.md) — exact process,
-   task, module, database and restore-session authority boundaries.
-6. [Modularization progress](MODULARIZATION_PROGRESS_REPORT.md) and
-   [execution plan](MODULARIZATION_EXECUTION_PLAN.md) — current library/port
-   boundaries, remaining work packets and completion criteria.
-7. [Production operations](PRODUCTION_OPERATIONS.md) — deployment, monitoring,
-   backup, recovery, TLS and database-role procedures.
-8. [Release checklist](RELEASE_CHECKLIST.md) — evidence required for one exact
-   release artifact and target environment.
-9. [OpenAPI contract](openapi.yaml) — REST wire contract served by the binary.
+## Architecture and protocols
 
-Repository contributions and safe default checks are described in
-[CONTRIBUTING.md](../CONTRIBUTING.md); vulnerability reporting uses
-[SECURITY.md](../SECURITY.md).
+- [Architecture overview](architecture/overview.md): deployment, authentication and message delivery.
+- [Implementation architecture](ARCHITECTURE.md): module ownership and persistence boundaries.
+- [Process responsibilities](PROGRAM_RESPONSIBILITIES.md): runtime, worker and database ownership.
+- [XMPP compatibility matrix](XEP_MATRIX.md): supported RFC and XEP profiles.
+- [OpenAPI specification](openapi.yaml): the HTTP API served by the binary.
+- [PubSub event delivery](PUBSUB_EVENT_OUTBOX.md), [SASL2/FAST/Bind2](SASL2_FAST_BIND2_EVIDENCE.md) and [external components](COMPONENT_PROTOCOL_EVIDENCE.md).
 
-The shorter root [architecture and security model](../ARCHITECTURE.md) is the
-public overview; this directory's architecture document is the implementation
-map.
+## Repository layout
 
-[Independent subservers](SUBSERVERS.md) defines the core/maintenance process
-split, shared database ownership, deployment and rollback procedure.
-
-## Repository map
-
-| Path | Ownership |
+| Directory | Contents |
 | --- | --- |
-| `src/` | Rust runtime; protocol adapters, application services, repositories, workers and transports |
-| `migrations/` | Immutable, monotonically numbered PostgreSQL schema and capability history |
-| `web/` | Self-hosted browser client and generated static locale packs |
-| `third_party/` | Vendored browser artifacts, source/provenance records, notices and SBOMs |
-| `deploy/` | Compose overlays, proxy policy, container helpers and PostgreSQL role/grant bootstrap |
-| `monitoring/` | Prometheus/Grafana configuration, alerts and alerting runbook |
-| `scripts/` | Static gates, operations, isolated integration harnesses and release tooling; see [the script guide](../scripts/README.md) |
-| `fuzz/` | Separate pinned cargo-fuzz crate, corpora and production-parser targets |
-| `docs/` | Current technical/operations contracts; point-in-time reports live only in `docs/archive/` |
-| `changelog/` | Detailed release notes indexed by the root `CHANGELOG.md` |
+| `src/` | Main Rust server |
+| `crates/` | Shared workspace libraries and protocol modules |
+| `services/` | Experimental service processes |
+| `web/` | Browser client, administration UI and translations |
+| `migrations/` | Versioned PostgreSQL migrations |
+| `contracts/`, `catalog/` | Protocol contracts, service definitions and data policies |
+| `deploy/` | Containers, Compose overlays, proxy and monitoring configuration |
+| `scripts/` | Development, operations and validation scripts; see [the script guide](../scripts/README.md) |
+| `tools/` | Rust validation and administration tools |
+| `tests/`, `fuzz/` | Test fixtures and parser fuzzing |
+| `third_party/` | Vendored dependencies, licenses and provenance |
+| `docs/` | Guides, release notes and historical records |
 
-Root build/start wrappers remain only for local-development compatibility. They
-do not run migrations or replace the production supervisor and operations
-procedure.
+Local startup helpers live in `scripts/dev/`. Run them from any directory; they
+use the checkout's `.env` and run in the foreground. Database setup and migrations
+remain explicit steps in the project README.
 
-## Security, identity and data governance
+Build output belongs in `target/`; local maintenance records belong in the
+ignored `.local/` directory. Keep private configuration and runtime data out of Git.
 
-- [Database roles](DATABASE_ROLES.md)
-- [Data lifecycle, legal hold and audit evidence](DATA_LIFECYCLE.md)
-- [Identity audit](IDENTITY_AUDIT.md)
-- [Anti-abuse and moderation audit](ABUSE_AND_MODERATION_PRODUCTION_AUDIT.md)
-- [PoW action intent v2](POW_INTENT_V2.md)
-- [Backup security](BACKUP_SECURITY.md)
-- [Manual security and extreme validation](MANUAL_SECURITY_VALIDATION.md)
-- [Browser cryptography supply chain](WEB_CRYPTO_SUPPLY_CHAIN.md)
-- [OMEMO one-time device transfer](OMEMO_DEVICE_TRANSFER.md)
+## Security and data
 
-Security-sensitive validation in `MANUAL_SECURITY_VALIDATION.md` must run only
-against an explicitly authorized disposable environment. It is intentionally
-not part of an unattended default command.
+- [Security policy](../.github/SECURITY.md) and vulnerability reporting.
+- [Identity](IDENTITY_AUDIT.md), [anti-abuse and moderation](ABUSE_AND_MODERATION_PRODUCTION_AUDIT.md), and [PoW action intent](POW_INTENT_V2.md).
+- [Data lifecycle and legal hold](DATA_LIFECYCLE.md).
+- [Backup and restore security](BACKUP_SECURITY.md).
+- [Manual security validation](MANUAL_SECURITY_VALIDATION.md): tests requiring an authorized disposable environment.
 
-## Reliability and deployment design
+## Browser client
 
-- [Library split ledger](LIBRARY_SPLIT_LEDGER.md)
-- [Modularization progress and remaining work](MODULARIZATION_PROGRESS_REPORT.md)
-- [Modularization execution plan](MODULARIZATION_EXECUTION_PLAN.md)
-- [Experimental clustering](CLUSTERING.md)
-- [Deployment capacity authority](DEPLOYMENT_CAPACITY.md)
-- [HTTP upload storage and recovery](UPLOAD_STORAGE.md)
-- [Durable PubSub/PEP event outbox](PUBSUB_EVENT_OUTBOX.md)
-- [SASL2, FAST and Bind2 evidence](SASL2_FAST_BIND2_EVIDENCE.md)
-- [External component evidence](COMPONENT_PROTOCOL_EVIDENCE.md)
-- [Implementation/evidence traceability](TRACEABILITY.md)
+- [Localization](LOCALIZATION.md).
+- [Browser cryptography dependencies](WEB_CRYPTO_SUPPLY_CHAIN.md).
+- [OMEMO device transfer](OMEMO_DEVICE_TRANSFER.md).
 
-## Web client
+## Development and releases
 
-- [Localization policy](LOCALIZATION.md)
-- [Browser cryptography supply chain](WEB_CRYPTO_SUPPLY_CHAIN.md)
-- [OMEMO one-time device transfer](OMEMO_DEVICE_TRANSFER.md)
+- [Contributing](../.github/CONTRIBUTING.md): setup, checks and pull requests.
+- [Library split](LIBRARY_SPLIT_LEDGER.md), [modularization progress](MODULARIZATION_PROGRESS_REPORT.md) and [remaining work](MODULARIZATION_EXECUTION_PLAN.md).
+- [Implementation and test coverage](TRACEABILITY.md).
+- [Release checklist](RELEASE_CHECKLIST.md) and [release responsibilities](governance/release-roles.md).
+- [Changelog](../CHANGELOG.md), [detailed 0.2 history](changelog/v0.2.md) and [0.2.0 release notes](releases/0.2.0.md).
+- [Published releases](https://github.com/takanashi-tetsuya/northstar/releases).
 
-## Release history
+Update the compatibility matrix when protocol behavior changes and the OpenAPI
+specification when the HTTP API changes. Record current issues in
+`KNOWN_ISSUES.md` and run `node scripts/check-documentation-consistency.mjs`
+after editing documentation.
 
-- [Project changelog](../CHANGELOG.md)
-- [Northstar 0.2.0 development and release-preparation record](../changelog/v0.2.md)
-- [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases)
-  contains public downloads only after a maintainer reviews and publishes the
-  draft created by the tag workflow. The repository does not predeclare hashes
-  or image digests for an unbuilt release.
-- [Release checklist](RELEASE_CHECKLIST.md) defines tag, draft review, package,
-  checksum, provenance, GHCR digest and publication gates.
-- [`archive/`](archive/) contains point-in-time handoff, validation and planning
-  reports. These files are historical evidence, not current capability or
-  release claims.
+## Historical records
 
-## Evidence vocabulary
-
-- **Implemented**: code/schema exists in this checkout.
-- **Verified locally**: a named deterministic/static or isolated harness was
-  actually run for the recorded commit.
-- **External/operator validation required**: public DNS/PKI, target hardware,
-  third-party interoperability, alert delivery and off-host recovery evidence.
-- **Accepted boundary**: a deliberate standards, privacy, platform or upstream
-  constraint documented in `KNOWN_ISSUES.md`.
-
-## Maintenance rules
-
-1. Update `XEP_MATRIX.md` whenever an advertised protocol profile changes.
-2. Update `openapi.yaml` in the same change as REST routing or response shape.
-3. Add unresolved compromises only to `KNOWN_ISSUES.md`; do not recreate a
-   second backlog in a validation report.
-4. Put point-in-time audit/agent handoff reports in `docs/archive/` and add a
-   visible historical banner.
-5. Keep example commands secret-free and use placeholders for domains, tokens,
-   database URLs and key paths.
-6. Run `node scripts/check-documentation-consistency.mjs` before release.
+Validation records in [`evidence/`](evidence/) identify the commit and environment
+tested. Dated handoffs live in [`handoff/`](handoff/); retired reports and plans
+live in [`archive/`](archive/). They describe the state at the time they were
+written. Use the current guides above for deployment decisions.

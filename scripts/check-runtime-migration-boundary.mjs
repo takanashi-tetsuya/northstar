@@ -17,11 +17,8 @@ function lineStarts(source) {
   return starts;
 }
 
-// Shell functions configure their local runtime at definition time, but do not
-// start it until a top-level call occurs. The fixtures use conventional
-// unindented `name() {` / `}` delimiters; retaining offsets lets the policy
-// compare actual invocations with migrations without pretending to be a full
-// shell parser.
+// Match the fixtures' unindented `name() {` / `}` function boundaries so
+// migration ordering is checked at call sites, not function definitions.
 function shellFunctionRanges(source) {
   const ranges = [];
   const starts = lineStarts(source);

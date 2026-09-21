@@ -5,13 +5,13 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const currentDocuments = [
   'README.md',
-  'README.zh-TW.md',
-  'CONTRIBUTING.md',
+  'docs/README.zh-TW.md',
+  '.github/CONTRIBUTING.md',
   'CHANGELOG.md',
-  'SECURITY.md',
-  'ARCHITECTURE.md',
-  'XEP_MATRIX.md',
-  'changelog/v0.2.md',
+  '.github/SECURITY.md',
+  'docs/architecture/overview.md',
+  'docs/XEP_MATRIX.md',
+  'docs/changelog/v0.2.md',
   'docs/README.md',
   'docs/ARCHITECTURE.md',
   'docs/PROGRAM_RESPONSIBILITIES.md',
@@ -31,8 +31,8 @@ const currentDocuments = [
   'docs/LOCALIZATION.md',
   'docs/TRACEABILITY.md',
   'docs/archive/README.md',
-  'monitoring/README.md',
-  'monitoring/ALERTING_RUNBOOK.md',
+  'deploy/monitoring/README.md',
+  'deploy/monitoring/ALERTING_RUNBOOK.md',
 ];
 const historicalDocuments = [
   'docs/archive/CHANGELOG.md',
@@ -79,7 +79,7 @@ for (const relativePath of [
 for (const [relativePath, marker] of [
   ['.env.example', `NORTHSTAR_VERSION=${packageVersion}`],
   ['docker-compose.yml', `NORTHSTAR_VERSION:-${packageVersion}`],
-  ['changelog/v0.2.md', `**Package version:** \`${packageVersion}\``],
+  ['docs/changelog/v0.2.md', `**Package version:** \`${packageVersion}\``],
 ]) {
   if (!read(relativePath).includes(marker)) {
     throw new Error(`${relativePath} does not carry release version ${packageVersion}`);
@@ -128,7 +128,7 @@ for (const image of [
 if (!releaseCompose.includes('build: !reset null')) {
   throw new Error('release Compose override must remove checkout-local image builds');
 }
-if (!read('SECURITY.md').includes(`\`${packageVersion.split('.').slice(0, 2).join('.')}.x\``)) {
+if (!read('.github/SECURITY.md').includes(`\`${packageVersion.split('.').slice(0, 2).join('.')}.x\``)) {
   throw new Error('SECURITY.md does not identify the supported release line');
 }
 if (read('src/s2s/dns.rs').includes('User-Agent: Northstar-XMPP/1.1')) {
@@ -376,7 +376,7 @@ for (const marker of [
   }
 }
 
-const matrix = read('XEP_MATRIX.md');
+const matrix = read('docs/XEP_MATRIX.md');
 const allowedStatuses = new Set(['Core', 'Partial', 'Pass-through', 'Experimental']);
 const seenStandards = new Set();
 let matrixRows = 0;
@@ -470,16 +470,12 @@ function markdownFilesUnder(relativeDirectory) {
 
 const markdownDocuments = [
   'README.md',
-  'README.zh-TW.md',
-  'CONTRIBUTING.md',
-  'ARCHITECTURE.md',
+  '.github/CONTRIBUTING.md',
   'CHANGELOG.md',
-  'SECURITY.md',
-  'XEP_MATRIX.md',
-  ...markdownFilesUnder('changelog'),
+  '.github/SECURITY.md',
   ...markdownFilesUnder('docs'),
-  'monitoring/README.md',
-  'monitoring/ALERTING_RUNBOOK.md',
+  'deploy/monitoring/README.md',
+  'deploy/monitoring/ALERTING_RUNBOOK.md',
 ];
 for (const relativePath of markdownDocuments) {
   const source = read(relativePath);

@@ -1,0 +1,33 @@
+Northstar 由維護者與 AI 協作開發。
+
+# Northstar @VERSION@
+
+此套件包含 XMPP 伺服器、瀏覽器客戶端、管理介面、Swagger UI 和設定範例。
+
+請先閱讀隨附的[安裝指南](docs/INSTALL.md)，完成雜湊驗證、PostgreSQL 設定、
+應用程式設定及資料庫遷移。以解壓後的目錄作為工作目錄啟動伺服器，
+讓程式能讀取網頁資源與設定。在 Linux 執行 `./xmpp-server --version`，
+或在 Windows PowerShell 執行 `.\xmpp-server.exe --version`，確認版本。
+
+需要 PostgreSQL 15 或更新版本。Linux x64 支援正式部署；
+Windows x64 供開發與評估使用。
+
+## 文件
+
+以下連結均對應此版本：
+
+- [正式環境維運](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/PRODUCTION_OPERATIONS.md)
+- [資料庫角色與權限](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/DATABASE_ROLES.md)
+- [已知限制](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/KNOWN_ISSUES.md)
+- [協定支援](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/XEP_MATRIX.md)
+- [安全政策](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/.github/SECURITY.md)
+- [HTTP API 規格](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/openapi.yaml)
+
+Docker 部署及從原始碼編譯需使用
+[v@VERSION@ 版本的儲存庫](https://github.com/takanashi-tetsuya/northstar/tree/v@VERSION@)。
+安裝指南提供 Docker 所需的 checkout 指令。
+
+授權為 [AGPL-3.0-only](LICENSE)。內附相依套件請參閱
+[第三方授權聲明](THIRD_PARTY_NOTICES.md)。
+
+[English](README.md)

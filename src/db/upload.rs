@@ -1718,8 +1718,8 @@ mod tests {
         create_upload_slot, defer_queued_upload_cleanup, is_retryable_upload_capacity_lock,
         queue_user_upload_delete, queue_user_upload_delete_authorized, queued_upload_cleanup,
         reconcile_upload_capacity_ledger, record_upload_replay, release_upload_claim,
-        renew_upload_claim, upload_cleanup_generation_is_quiescent, uploaded_file,
-        validate_upload_capacity_policy, UploadCapacityAuthorityAudit,
+        renew_upload_claim, upload_cleanup_generation_is_quiescent, upload_queue_metrics,
+        uploaded_file, validate_upload_capacity_policy, UploadCapacityAuthorityAudit,
         UploadCapacityReconciliation, UploadClaimOutcome, UploadRenewOutcome, UploadReservation,
         UserUploadDeleteOutcome, MAX_UPLOAD_ATTEMPTS, MAX_UPLOAD_REPLAYS,
         TEST_UPLOAD_PENDING_LIMIT, TEST_UPLOAD_RETAINED_BYTES_LIMIT,
@@ -3065,6 +3065,81 @@ mod tests {
         .await
         .unwrap();
         id
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+    async fn upload_queue_snapshot_reads_committed_changes_on_the_same_backend() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("set TEST_DATABASE_URL");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        db::migrate(&pool).await.unwrap();
+        validate_upload_capacity_policy(
+            &pool,
+            TEST_UPLOAD_PENDING_LIMIT,
+            TEST_UPLOAD_RETAINED_FILES_LIMIT,
+            TEST_UPLOAD_RETAINED_BYTES_LIMIT,
+        )
+        .await
+        .unwrap();
+        sqlx::query("CREATE TEMP TABLE upload_storage_capacity_ledger(singleton bool)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let before = upload_queue_metrics(&pool).await.unwrap();
+        let user_id = insert_user(&pool).await;
+        let token = b"snapshot-current-data";
+        let slot_id = create_upload_slot(
+            &pool,
+            UploadReservation {
+                user_id,
+                filename: "snapshot.bin",
+                content_type: "application/octet-stream",
+                size: 4,
+                token_hash: token,
+                max_files_per_user: 100,
+                max_bytes_per_user: 1_000,
+                storage_backend: "local",
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let lease = match claim_upload_slot(&pool, slot_id, token, 90).await.unwrap() {
+            UploadClaimOutcome::Acquired(lease) => lease,
+            other => panic!("unexpected upload claim outcome: {other:?}"),
+        };
+        let claimed = upload_queue_metrics(&pool).await.unwrap();
+        assert_eq!(
+            claimed.cleanup_obligation_debt,
+            before.cleanup_obligation_debt + 1
+        );
+        assert!(release_upload_claim(&pool, slot_id, lease.claim_token)
+            .await
+            .unwrap());
+        let released = upload_queue_metrics(&pool).await.unwrap();
+        assert_eq!(
+            released.cleanup_obligation_debt,
+            before.cleanup_obligation_debt
+        );
+        assert_eq!(
+            released.storage_jobs_pending,
+            before.storage_jobs_pending + 1
+        );
+        sqlx::query("DELETE FROM upload_storage_jobs WHERE object_id=$1")
+            .bind(slot_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
     }
 
     #[tokio::test]

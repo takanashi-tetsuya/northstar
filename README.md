@@ -1,6 +1,8 @@
-**English** | [繁體中文](README.zh-TW.md)
+**English** | [繁體中文](docs/README.zh-TW.md)
 
 # Northstar XMPP Server
+
+> This project is developed collaboratively by humans and AI.
 
 Northstar is a standards-oriented XMPP server written in Rust for Linux and
 PostgreSQL. It provides XMPP over TCP, Direct TLS, WebSocket and optional BOSH,
@@ -10,28 +12,28 @@ REST administration, anti-abuse controls, logging and metrics.
 The current package version is `0.2.0` and remains pre-1.0. Publication status
 and dates are recorded in [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases).
 The project has not received an independent security audit. Review the
-[XEP support matrix](XEP_MATRIX.md), [release checklist](docs/RELEASE_CHECKLIST.md)
+[XEP support matrix](docs/XEP_MATRIX.md), [release checklist](docs/RELEASE_CHECKLIST.md)
 and [known limitations](docs/KNOWN_ISSUES.md) before public deployment.
 
-See the [documentation index](docs/README.md), [security policy](SECURITY.md),
+See the [documentation index](docs/README.md), [security policy](.github/SECURITY.md),
 [production operations guide](docs/PRODUCTION_OPERATIONS.md) and
-[contribution guide](CONTRIBUTING.md).
+[contribution guide](.github/CONTRIBUTING.md).
 
-> [!NOTE]
-> **Architecture Evolution Status**:
-> - **Production Baseline**: The single-process modular monolith (`rust-xmpp-server`) remains the authoritative, supported production baseline for Northstar 0.2.0.
-> - **Independent subservers**: The same binary can now run a core process and a maintenance process with shared PostgreSQL. See [process ownership and deployment](docs/SUBSERVERS.md) for configuration, migration and current isolation limits.
-> - **Microservices v2 Target**: The distributed architecture (`services/*`) is a prototype program. Its catalog status is frozen at the Program 5 baseline: no service is integrated or production-ready. The baseline record is [aa2b0df](docs/evidence/baselines/aa2b0df.yaml); it records the associated CI failures and is not a release approval.
+The supported architecture is the single-process modular monolith
+(`rust-xmpp-server`). The same binary can also run separate core and maintenance
+processes over shared PostgreSQL; see [process ownership and deployment](docs/SUBSERVERS.md).
+The distributed services under `services/*` remain prototypes. Their catalog is
+frozen at the [Program 5 baseline](docs/evidence/baselines/aa2b0df.yaml), with no
+integrated or production-ready service.
 
 ## How to use
 
 ### Release packages
 
-After release approval, Northstar `0.2.0` will be distributed through
-[GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) with
-the following planned files. Do not treat them as available until the tagged
-workflow has published a draft and its checksums, provenance and image digests
-have been reviewed:
+Northstar `0.2.0` packages will be available from
+[GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) after
+the maintainer publishes the Release. The tag workflow prepares a draft with
+the following files and verifies their checksums, provenance and image digests:
 
 | Asset | Intended use |
 |---|---|
@@ -116,11 +118,15 @@ database roles, protected secret files and a publicly trusted certificate.
 Do not expose PostgreSQL, Redis, Prometheus or Grafana directly to the Internet.
 
 
-## What privacy means here
+## Privacy
 
 OMEMO encryption is performed by compatible clients. For a correctly encrypted message, Northstar routes and archives the encrypted XMPP envelope and does not possess the clients' OMEMO private keys. The default `REQUIRE_ENCRYPTED_ARCHIVE=true` policy rejects plaintext bodies from personal and room archives and strips accidental plaintext siblings from OMEMO stanzas before persistence.
 
-This is not an absolute “zero-knowledge” guarantee. The server necessarily sees routing metadata, account and room membership data, message timing and size, any plaintext that a client intentionally sends, and evidence a user deliberately attaches to an abuse report. Administrators with database or host access can inspect that server-visible information. End-to-end privacy therefore depends on the client, its device-key verification, endpoint security, and correct TLS deployment as well as Northstar.
+The server sees routing metadata, account and room membership, message timing
+and size, plaintext sent by clients, and evidence attached to abuse reports.
+Administrators with database or host access can inspect this information.
+End-to-end privacy depends on client security, device-key verification and TLS
+deployment.
 
 
 ## Features
@@ -143,7 +149,7 @@ This is not an absolute “zero-knowledge” guarantee. The server necessarily s
   deployment remains experimental; a single Northstar process is the supported
   production baseline.
 
-See [XEP_MATRIX.md](XEP_MATRIX.md) for the exact protocol support boundary.
+See [XEP_MATRIX.md](docs/XEP_MATRIX.md) for the exact protocol support boundary.
 
 
 

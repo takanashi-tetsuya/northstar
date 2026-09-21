@@ -98,8 +98,7 @@ so these final counts are not a guaranteed last scrape. A stalled OS write
 cannot safely be cancelled: an overdue helper is released by process exit and
 remaining console/file events may be lost. Logging teardown never waits indefinitely
 for a stopped stdout/stderr consumer, including the logger library's own
-shutdown diagnostic. This isolates a known blocking-I/O path; it is not evidence
-that console logging caused any particular federation readiness failure.
+shutdown diagnostic.
 
 An entrypoint error keeps its nonzero exit status and original Debug diagnostic
 through a separate final bounded stderr report, avoiding Rust Result termination
@@ -241,7 +240,7 @@ then choose `POW_BASE_WORK_FACTOR`/`POW_MAX_WORK_FACTOR` without raising the
 advertised target. Thermal throttling, browser engines and hardware vary. The
 fixed maximum work factor is the actual enforced ceiling. Standards-only XMPP
 clients use the 60-message burst and receive retryable `wait/resource-constraint`
-after it; Northstar does not claim its PoW extension is an XMPP standard.
+after it. The PoW challenge is a Northstar-specific extension.
 
 PoW intent v2 is the production default. It commits every capable challenge to
 the method/XMPP action, canonical path and SHA-256 of the pow-less mutation
@@ -977,11 +976,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 140 files from `0001` through
-`0142`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 142 files from `0001` through
+`0143`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0142`, with the exact SQLx description and SHA-384 checksum, before it
+through `0143`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url` and `command_database_url` secrets; neither identity may
 attempt DDL. Pending, failed, unknown, duplicated, missing or checksum-drifted
@@ -1149,7 +1148,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0142` manifest
+5. run the one-shot migration job through the complete `0001`-`0143` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;
@@ -1477,15 +1476,13 @@ prekeys are replenished with new monotonically rotating IDs rather than reused
 IDs. Monitor PEP publication/retraction/retrieval rates when diagnosing device
 initialization.
 
-The recorded manual Gajim observation is deliberately narrow. On August 25,
-2026, against localhost with the development certificate, `test1`, `test2` and
+On August 25, 2026, against localhost with the development certificate, `test1`, `test2` and
 `test3` authenticated and joined an existing members-only, non-anonymous room;
 `test2` sent one message that Gajim displayed as end-to-end encrypted, and the
 archive probe contained encrypted content without a plaintext sibling. The
-Gajim version was not recorded. This is point-in-time troubleshooting evidence,
-not validation of the final release binary, public TLS, every Gajim release or
-all OMEMO trust/multi-device transitions. Repeat the client matrix with recorded
-versions and retained evidence on the release candidate.
+Gajim version was not recorded. Repeat the client matrix on the release candidate
+with recorded client versions and deployment TLS, including trust and multi-device
+transitions.
 
 ### Browser device-transfer drill
 
@@ -1513,21 +1510,19 @@ bash scripts/release-preflight.sh
 
 Static preflight checks formatting, all targets, unit tests, Clippy with warnings
 denied, migration-version immutability, Compose/config mapping, dependency
-advisories and policy. Its existence is not a statement that it passed for the
-current checkout; retain the output and exact commit when cutting a release.
+advisories and policy. Retain the output and exact commit with the release record.
 
 ### Tag artifact verification
 
 Pushing the reviewed `v0.2.0` tag runs the release-preparation workflow. Wait
 for all binary, image, checksum and attestation jobs to pass. The workflow must
-leave a draft GitHub Release containing these files—this list describes the
-expected output and is not a claim that it has already been published:
+leave a draft GitHub Release containing these seven files:
 
 - `northstar-0.2.0-linux-amd64.tar.gz` and the raw
   `northstar-0.2.0-linux-amd64` binary;
 - `northstar-0.2.0-windows-amd64.zip` and the raw
   `northstar-0.2.0-windows-amd64.exe` executable;
-- `SHA256SUMS` and `IMAGE_DIGESTS`.
+- `SHA256SUMS`, `IMAGE_DIGESTS` and `RELEASE-EVIDENCE.json`.
 
 Download the complete draft asset set into an empty review directory and run:
 
@@ -1537,9 +1532,10 @@ sha256sum --check SHA256SUMS
 
 For Windows review, independently compare
 `(Get-FileHash -Algorithm SHA256 <file>).Hash` with the applicable entry. Then
-verify the GitHub build provenance for every package, `IMAGE_DIGESTS`, and
-`SHA256SUMS`; a checksum downloaded beside an asset proves integrity relative
-to that file, not build identity by itself.
+verify the GitHub build provenance for every package, `IMAGE_DIGESTS`,
+`RELEASE-EVIDENCE.json` and `SHA256SUMS`. Checksums detect corruption;
+provenance identifies the source and build. Confirm that the evidence file's
+commit, version and workflow run match the release candidate.
 
 Extract each complete archive into an empty directory. Confirm the runtime and
 license inventory, compare the extracted executable with its raw counterpart,
@@ -1564,7 +1560,7 @@ federation, component, browser, backup/restore, cluster, 1,000-resource,
 fault-injection and adversarial checks must not share an operator database or be
 silently chained by `scripts/release-runtime-validation.sh`. Record the exact
 commit/artifact, configuration, environment and result for every selected
-harness; the existence of a runner is not execution evidence.
+harness.
 
 The 1,000-resource harness uses authenticated sessions without initial
 presence. When separately authorized, it covers connection/authentication,

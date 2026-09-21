@@ -1,8 +1,7 @@
 # Browser cryptography supply-chain policy
 
-Northstar treats browser OMEMO code as a security-critical third-party binary
-boundary. Provenance, reproducibility and distribution trust are three
-different properties; passing one is never reported as passing the others.
+This policy records the origin of bundled browser cryptography, requirements
+for reproducible builds, and controls on artifact distribution.
 
 ## Current 2.0.2 decision
 
@@ -12,21 +11,19 @@ CycloneDX SBOM are pinned and checked offline. The lockfile supplies integrity
 for all 344 registry packages. These controls detect repository drift and make
 the asserted release origin reviewable.
 
-The release is nevertheless classified
-`provenance-traced-not-reproducible`. Neither the source archive nor its
+Version 2.0.2 is classified `provenance-traced-not-reproducible`.
+Neither the source archive nor its
 workflows record npm, Emscripten, LLVM or Binaryen versions. The WASM has no
 custom or `producers` section. The official npm tarball, signed tag object and
-registry/signature attestations are absent; only the registry SHA-1 is recorded,
-and no unverifiable SHA-256 is asserted. The prebuilt WASM inside the source
-archive is an artifact, not proof that the archived C source generated it.
+registry/signature attestations are absent; registry metadata supplies only the
+npm tarball's SHA-1. These gaps prevent verification of the source-to-WASM build.
 
 The device-transfer KDF additionally vendors the exact official npm tarball and
 deployed UMD artifact for `hash-wasm` 4.12.0, its MIT license, registry
 integrity/SHA-1 metadata, SHA-256 allowlist and CycloneDX 1.6 SBOM under
-`third_party/hash-wasm`. CI verifies those bytes without fetching a CDN. This
-establishes reviewable package provenance and drift detection, not a
-source-to-byte reproducibility claim: the upstream compiler/bundler environment
-is not preserved, and no signature attestation is asserted.
+`third_party/hash-wasm`. CI verifies those bytes offline. Reproducible source
+builds remain unavailable because the upstream compiler/bundler environment is
+not preserved. No signature attestation is retained.
 
 ## CI states
 

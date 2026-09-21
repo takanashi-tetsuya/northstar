@@ -9,12 +9,10 @@ export const ALWAYS_REQUIRED = [
   'mix-integration', 'federation-integration', 'listener-readiness-stress-smoke',
   'listener-diagnostics',
   'xep0487-integration', 'disaster-recovery',
+  'protocol-fuzz', 'production-envelope', 'heavy-runtime-envelope',
 ];
 export const REGULAR_REQUIRED = ['listener-readiness-stress-regular'];
-export const SCHEDULED_REQUIRED = [
-  'protocol-fuzz', 'production-envelope', 'heavy-runtime-envelope',
-  'listener-readiness-stress-scheduled',
-];
+export const SCHEDULED_REQUIRED = ['listener-readiness-stress-scheduled'];
 export const ALL_JOBS = [...ALWAYS_REQUIRED, ...REGULAR_REQUIRED, ...SCHEDULED_REQUIRED];
 
 export function expectedJobResults(event) {

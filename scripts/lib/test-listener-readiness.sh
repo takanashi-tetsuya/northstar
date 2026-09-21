@@ -27,10 +27,8 @@ fixture_readiness_port() {
 }
 
 fixture_register_readiness_ports() {
-  # ``owner_pid`` is optional so existing standalone fixtures retain their
-  # lightweight port-only cleanup.  The MIX matrix declares the two
-  # associative ledgers below and upgrades each port to its exact owner
-  # identity before the parent later verifies socket inodes after quiescence.
+  # Federation fixtures declare the associative maps below so cleanup can
+  # distinguish their original sockets from reused ephemeral ports.
   local record="$1" owner_pid="${2:-}" purpose address port
   declare -p fixture_listener_ports >/dev/null 2>&1 || {
     echo "fixture_listener_ports must be declared by the parent fixture" >&2
@@ -119,6 +117,38 @@ fixture_assert_no_listeners() {
     fi
   done
   ((leaked == 0))
+}
+
+fixture_record_listener_ledger() {
+  # Capture live owner identities before stopping children. The existing MIX
+  # verifier signs the socket-inode records and rejects stale or foreign PIDs.
+  local project_dir="$1" directory="$2" nonce="$3" port owner purpose
+  local -a entries=()
+  [[ "$nonce" =~ ^[0-9a-f]{64}$ ]] || return 1
+  declare -p fixture_listener_owner_pids fixture_listener_purposes >/dev/null 2>&1 || return 1
+  for port in "${!fixture_listener_owner_pids[@]}"; do
+    owner="${fixture_listener_owner_pids[$port]}"
+    purpose="${fixture_listener_purposes[$port]:-}"
+    [[ "$owner" =~ ^[1-9][0-9]*$ && "$port" =~ ^[1-9][0-9]*$ \
+       && "$purpose" =~ ^[a-z0-9-]{1,48}$ ]] || return 1
+    entries+=("${purpose}-p${owner}=${owner}:${port}")
+  done
+  ((${#entries[@]} > 0)) || return 1
+  mkdir --mode=0700 -- "$directory" || return 1
+  (umask 077; openssl rand -hex 32 >"$directory/pair-001.key") || return 1
+  NORTHSTAR_MIX_FEDERATION_PHASE_CONTROL_DIR="$directory" \
+  NORTHSTAR_MIX_FEDERATION_PHASE_RUN_NONCE="$nonce" \
+  NORTHSTAR_MIX_FEDERATION_PHASE_ROUND=1 \
+  NORTHSTAR_MIX_FEDERATION_PHASE_PAIR=1 \
+    python3 "$project_dir/scripts/mix-federation-runtime-wsl.py" \
+      --listener-ledger-record "${entries[@]}"
+}
+
+fixture_verify_listener_ledger() {
+  # Call only after reaping every owned server and relay. A foreign socket on
+  # the same port is harmless; an inherited original socket still fails.
+  python3 "$1/scripts/mix-federation-runtime-wsl.py" \
+    --listener-ledger-verify "$2" "$3" 1 1
 }
 
 # A dynamic backend port is not a substitute for a correct public endpoint.

@@ -352,7 +352,7 @@ restore. Treat it together with the retained pre-restore dump as recovery
 evidence; do not merely remove it or run `ALTER DATABASE ... ALLOW_CONNECTIONS
 true`. This release does not provide a fully automatic hard-crash journal
 replay command, so hard-crash recovery requires an operator-reviewed restore
-drill. That is a documented residual boundary, not an automatic-recovery claim.
+drill.
 
 The retained pre-restore database dump and old upload copies are plaintext by
 default. Put the rollback root on encrypted, access-controlled storage (or move

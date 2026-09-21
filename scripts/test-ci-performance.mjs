@@ -11,24 +11,25 @@ const job = (source, name) => source.split(`  ${name}:\n`)[1]?.split(/^  [a-z][a
 
 // These scheduling expressions use the shared JS/Actions boolean subset.
 // Evaluate the actual workflow fields so a changed event/ref boundary is tested.
-function scheduling(source, github) {
+function scheduling(source, github, inputs = {}) {
   const block = source.split('\nconcurrency:\n')[1].split('\njobs:')[0];
   const expression = text => vm.runInNewContext(text, {
-    github, startsWith: (value, prefix) => value.startsWith(prefix),
+    github, inputs, startsWith: (value, prefix) => value.startsWith(prefix),
+    format: (template, value) => template.replace('{0}', value),
   }, { timeout: 100 });
   const group = block.match(/^  group: (.+)$/m)[1].replace(/\$\{\{(.*?)\}\}/g, (_, text) => expression(text));
   const cancel = expression(block.match(/^  cancel-in-progress: \$\{\{(.*?)\}\}$/m)[1]);
   return { group, cancel };
 }
 
-test('only superseded PRs and codex pushes share cancellable CI groups', () => {
+test('only superseded PR revisions share cancellable CI groups', () => {
   const event = (event_name, ref, run_id = 101, number = 3) => ({
     workflow: 'CI', event_name, ref, run_id, event: { pull_request: { number } },
   });
   for (const [name, ref, cancel] of [
     ['pull_request', 'refs/pull/3/merge', true],
-    ['push', 'refs/heads/codex/release-contract-baseline', true],
-    ['push', 'refs/heads/codex/fix', true],
+    ['push', 'refs/heads/codex/release-contract-baseline', false],
+    ['push', 'refs/heads/codex/fix', false],
     ['push', 'refs/heads/main', false], ['push', 'refs/heads/dev', false],
     ['push', 'refs/heads/feature', false], ['push', 'refs/tags/codex/fix', false],
     ['push', 'refs/tags/v0.2.0', false],
@@ -42,8 +43,31 @@ test('only superseded PRs and codex pushes share cancellable CI groups', () => {
   }
   assert.notEqual(scheduling(workflow, event('pull_request', '', 101, 3)).group,
     scheduling(workflow, event('pull_request', '', 102, 4)).group);
-  assert.notEqual(scheduling(workflow, event('push', 'refs/heads/codex/a')).group,
-    scheduling(workflow, event('push', 'refs/heads/codex/b')).group);
+});
+
+test('main and PRs own source CI; tags retain exact-source release qualification', () => {
+  const triggers = workflow.split('\non:\n')[1].split('\npermissions:')[0];
+  const push = triggers.split('  push:\n')[1].split(/^  [a-z_]+:/m)[0];
+  assert.match(push, /^    branches: \[main\]$/m);
+  assert.doesNotMatch(push, /tags:|branches-ignore:/);
+  assert.match(triggers, /^  pull_request:$/m);
+  assert.match(release, /tags:\n\s+- "v\*"/);
+  assert.ok(job(release, 'release-qualification').includes('node scripts/verify-release-ci.mjs'));
+});
+
+test('load, cluster faults and parser fuzzing are mandatory on every source CI event', () => {
+  for (const [name, command] of [
+    ['protocol-fuzz', 'bash scripts/parser-robustness-wsl.sh'],
+    ['production-envelope', 'bash scripts/load-1000-production-wsl.sh'],
+    ['heavy-runtime-envelope', 'bash scripts/cluster-wsl.sh'],
+  ]) {
+    assert.ok(ALWAYS_REQUIRED.includes(name));
+    const block = job(workflow, name);
+    assert.doesNotMatch(block.split('    steps:')[0], /^    if:/m);
+    assert.ok(block.includes(command));
+    assert.doesNotMatch(block, /continue-on-error/);
+  }
+  assert.ok(job(workflow, 'heavy-runtime-envelope').includes('bash scripts/load-1000-wsl.sh'));
 });
 
 test('release previews supersede only matching development pushes; tag runs serialize', () => {
@@ -62,6 +86,11 @@ test('release previews supersede only matching development pushes; tag runs seri
   }
   assert.notEqual(scheduling(release, event('push', 'refs/tags/v0.2.0')).group,
     scheduling(release, event('push', 'refs/tags/v0.2.1')).group);
+  const recovery = scheduling(release, event('workflow_dispatch', 'refs/heads/main'), { resume_tag: 'v0.2.0' });
+  assert.equal(recovery.group, scheduling(release, event('push', 'refs/tags/v0.2.0')).group);
+  assert.equal(recovery.cancel, false);
+  assert.notEqual(recovery.group,
+    scheduling(release, event('workflow_dispatch', 'refs/heads/main'), { resume_tag: 'v0.2.1' }).group);
 });
 
 function verifyPressureGate(source, name, rounds) {
@@ -78,7 +107,7 @@ function verifyPressureGate(source, name, rounds) {
 test('diagnostic preflight is required for every event and both pressure matrices', () => {
   verifyWorkflowCoverage(workflow);
   assert.ok(ALWAYS_REQUIRED.includes('listener-diagnostics'));
-  for (const [name, rounds] of [['listener-readiness-stress-regular', 20], ['listener-readiness-stress-scheduled', 100]]) {
+  for (const [name, rounds] of [['listener-readiness-stress-regular', 5], ['listener-readiness-stress-scheduled', '"$LISTENER_STRESS_ROUNDS"']]) {
     verifyPressureGate(workflow, name, rounds);
     for (const old of ['needs: [listener-readiness-stress-smoke, listener-diagnostics]',
                        "needs.listener-diagnostics.result == 'success'", `--rounds ${rounds} --pairs 50`]) {
@@ -95,6 +124,35 @@ test('diagnostic preflight is required for every event and both pressure matrice
   }
   // The independent diagnostic job overlaps smoke; no new serial compile gate.
   assert.doesNotMatch(job(workflow, 'listener-readiness-stress-smoke'), /^    needs:/m);
+});
+
+test('scheduled repetition is bounded and 100 rounds requires explicit manual selection', () => {
+  const triggers = workflow.split('\non:\n')[1].split('\npermissions:')[0];
+  assert.match(triggers, /extended_stress:\n\s+description: [^\n]+\n\s+type: boolean\n\s+default: false/);
+  const regular = job(workflow, 'listener-readiness-stress-regular');
+  const scheduled = job(workflow, 'listener-readiness-stress-scheduled');
+  // Actions permits hyphens in dotted property names; JS needs bracket access.
+  const expression = (value, event, extended, ready = true) => vm.runInNewContext(
+    value.replace(/needs\.([a-z-]+)\.result/g, 'needs["$1"].result'), {
+    github: { event_name: event }, inputs: { extended_stress: extended },
+    needs: Object.fromEntries(['listener-readiness-stress-smoke', 'listener-diagnostics']
+      .map(name => [name, { result: ready ? 'success' : 'failure' }])),
+  }, { timeout: 100 });
+  const condition = block => block.match(/    if: >-\n\s*\$\{\{([\s\S]*?)\}\}/)[1];
+  const rounds = scheduled.match(/LISTENER_STRESS_ROUNDS: \$\{\{(.*?)\}\}/)[1];
+  const deadline = scheduled.match(/timeout-minutes: \$\{\{(.*?)\}\}/)[1];
+  for (const event of ['push', 'pull_request', 'schedule', 'workflow_dispatch']) {
+    const isScheduled = ['schedule', 'workflow_dispatch'].includes(event);
+    assert.equal(expression(condition(regular), event, false), !isScheduled);
+    assert.equal(expression(condition(scheduled), event, false), isScheduled);
+    assert.equal(expression(condition(regular), event, false, false), false);
+    assert.equal(expression(condition(scheduled), event, false, false), false);
+    assert.equal(expression(rounds, event, false), 20);
+    assert.equal(expression(deadline, event, false), 120);
+    assert.equal(expression(rounds, event, true), event === 'workflow_dispatch' ? 100 : 20);
+  }
+  assert.equal(expression(rounds, 'workflow_dispatch', true), 100);
+  assert.equal(expression(deadline, 'workflow_dispatch', true), 360);
 });
 
 test('cache restores retain mandatory Cargo commands and checked runtime builds', () => {

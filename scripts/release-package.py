@@ -22,6 +22,7 @@ TARGETS = {'linux-amd64': 'xmpp-server', 'windows-amd64': 'xmpp-server.exe'}
 SINGLE_FILES = {'.env.example', '.env.development.example', 'README.md', 'README.zh-TW.md',
                 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/INSTALL.md',
                 'third_party/swagger-ui/LICENSE', 'third_party/swagger-ui/NOTICE'}
+DISTRIBUTION_READMES = {name: 'docs/distribution/' + name + '.in' for name in ('README.md', 'README.zh-TW.md')}
 PREFIXES = ('web/', 'third_party/swagger-ui/dist/')
 MANIFEST = 'PACKAGE-MANIFEST.json'
 MAX_TOTAL = 2 * 1024 * 1024 * 1024
@@ -63,10 +64,13 @@ def pack(project, binary, output, version, commit, target, epoch):
     for flags in ([], ['--cached']):
         subprocess.run(['git', 'diff', '--quiet', *flags, '--'], cwd=project, check=True)
     tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=project).decode().split('\0')
-    selected = {name for name in tracked if name in SINGLE_FILES or name.startswith(PREFIXES)}
-    if not SINGLE_FILES <= selected:
+    source_files = SINGLE_FILES - DISTRIBUTION_READMES.keys()
+    selected = {name for name in tracked if name in source_files or name.startswith(PREFIXES)}
+    if not source_files <= selected or not set(DISTRIBUTION_READMES.values()) <= set(tracked):
         raise ValueError('required distribution source is not tracked')
     files = {name: regular(project / name) for name in sorted(selected)}
+    for name, template in DISTRIBUTION_READMES.items():
+        files[name] = regular(project / template).decode('utf-8').replace('@VERSION@', version).encode('utf-8')
     files[TARGETS[target]] = regular(binary)
     magic = b'MZ' if target == 'windows-amd64' else b'\x7fELF'
     if not files[TARGETS[target]].startswith(magic):

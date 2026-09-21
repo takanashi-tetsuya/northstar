@@ -16,7 +16,9 @@ import re
 import resource
 import select
 import signal
+import socket
 import stat
+import struct
 import sys
 import tempfile
 import time
@@ -203,6 +205,164 @@ class Limits:
             time.sleep(min(0.1, max(0, end - time.monotonic())))
 
 
+class BackendProcess:
+    """Match a container backend to its host process and measure query waits."""
+
+    def __init__(self, backend_pid):
+        self.pid = None
+        self.error = 'not_configured'
+        try:
+            parent = os.environ.get('NORTHSTAR_CI_POSTGRES_HOST_PID', '')
+            started = os.environ.get('NORTHSTAR_CI_POSTGRES_START_TICKS', '')
+            if not parent and not started:
+                return
+            if not parent.isdecimal() or not started.isdecimal() or int(parent) <= 1 or int(started) < 1:
+                raise ValueError('invalid_parent_identity')
+            self.parent, self.parent_start = int(parent), int(started)
+            if self.process_fields(self.parent)[19] != started:
+                raise ValueError('parent_identity_changed')
+            children = self.read(f'{self.parent}/task/{self.parent}/children', 16384).split()
+            if len(children) > 768:
+                raise ValueError('child_limit')
+            for child in children:
+                if not child.isdecimal():
+                    raise ValueError('invalid_child_identity')
+                try:
+                    status = self.read(f'{child}/status', 8192)
+                    namespace = next(line.split()[1:] for line in status.splitlines()
+                                     if line.startswith('NSpid:'))
+                    if not namespace or int(namespace[-1]) != backend_pid:
+                        continue
+                    fields = self.process_fields(int(child))
+                    if int(fields[1]) != self.parent or fields[0] in {'Z', 'X'}:
+                        continue
+                    self.pid, self.started = int(child), int(fields[19])
+                    self.cgroup = None
+                    try:
+                        group = next(line[3:] for line in self.read(f'{child}/cgroup', 8192).splitlines()
+                                     if line.startswith('0::'))
+                        if group.startswith('/') and '..' not in Path(group).parts:
+                            self.cgroup = Path('/sys/fs/cgroup') / group.lstrip('/')
+                    except (OSError, ValueError, StopIteration):
+                        pass
+                    self.snapshot()
+                    self.error = None
+                    return
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+            raise ValueError('backend_not_found')
+        except (OSError, ValueError, StopIteration, IndexError):
+            self.pid = None
+            self.error = 'backend_process_unavailable'
+
+    @staticmethod
+    def read(relative, limit):
+        with (Path('/proc') / relative).open() as stream:
+            value = stream.read(limit + 1)
+        if len(value) > limit:
+            raise ValueError('process_field_limit')
+        return value
+
+    @classmethod
+    def process_fields(cls, pid):
+        fields = cls.read(f'{pid}/stat', 4096).rsplit(')', 1)[1].split()
+        if len(fields) < 20:
+            raise ValueError('invalid_process_stat')
+        return fields
+
+    def snapshot(self):
+        if int(self.process_fields(self.parent)[19]) != self.parent_start:
+            raise ValueError('parent_identity_changed')
+        before = self.process_fields(self.pid)
+        counters = [int(value) for value in self.read(f'{self.pid}/schedstat', 256).split()]
+        after = self.process_fields(self.pid)
+        if (int(before[19]) != self.started or int(after[19]) != self.started
+                or int(after[1]) != self.parent or len(counters) != 3
+                or any(not 0 <= value < 2**64 for value in counters)):
+            raise ValueError('backend_identity_changed')
+        if not any(counters):
+            raise ValueError('scheduler_accounting_unavailable')
+        return {'state': after[0], 'run_ns': counters[0], 'wait_ns': counters[1],
+                'group': self.group_snapshot()}
+
+    def group_snapshot(self):
+        """Keep container CPU limits and throttling separate from host totals."""
+        if self.cgroup is None:
+            return None
+        try:
+            def read(name):
+                with (self.cgroup / name).open() as stream:
+                    value = stream.read(4097)
+                if len(value) > 4096:
+                    raise ValueError('cgroup_field_limit')
+                return value
+            stats = dict(line.split() for line in read('cpu.stat').splitlines())
+            quota, period = read('cpu.max').split()
+            result = {key: int(stats[key]) for key in ['usage_usec', 'throttled_usec', 'nr_throttled']}
+            result.update(quota_us=None if quota == 'max' else int(quota),
+                          period_us=int(period), weight=int(read('cpu.weight')))
+            if any(value is not None and not 0 <= value < 2**64 for value in result.values()):
+                raise ValueError('invalid_cgroup_counter')
+            return result
+        except (OSError, ValueError, KeyError):
+            return None
+
+    def begin(self):
+        self.initial = None
+        self.samples = self.runnable = 0
+        self.next_sample = time.monotonic() + 1
+        if self.pid is not None:
+            try:
+                self.initial = self.snapshot()
+                self.error = None
+            except (OSError, ValueError, IndexError):
+                self.error = 'backend_process_unavailable'
+
+    def sample_if_due(self):
+        if self.initial is None or time.monotonic() < self.next_sample or self.samples >= 5:
+            return
+        self.next_sample = time.monotonic() + 1
+        try:
+            self.samples += 1
+            self.runnable += self.snapshot()['state'] == 'R'
+        except (OSError, ValueError, IndexError):
+            self.error = 'backend_process_unavailable'
+
+    def finish(self):
+        if self.initial is None or self.error:
+            return {'unavailable': self.error or 'backend_process_unavailable'}
+        try:
+            final = self.snapshot()
+            cpu = final['run_ns'] - self.initial['run_ns']
+            wait = final['wait_ns'] - self.initial['wait_ns']
+            if min(cpu, wait) < 0:
+                raise ValueError('scheduler_counters_regressed')
+            wait_channel = None
+            try:
+                value = self.read(f'{self.pid}/wchan', 128).strip()
+                if re.fullmatch(r'[A-Za-z0-9_.]{1,64}', value):
+                    wait_channel = value
+            except (OSError, ValueError):
+                pass
+            result = {'cpu_ms': round(cpu / 1e6, 3),
+                    'runqueue_ms': round(wait / 1e6, 3),
+                    'end_state': final['state'], 'pending_samples': self.samples,
+                    'runnable_samples': self.runnable, 'wait_channel': wait_channel}
+            before_group, after_group = self.initial['group'], final['group']
+            if before_group is not None and after_group is not None:
+                deltas = {key: after_group[key] - before_group[key]
+                          for key in ['usage_usec', 'throttled_usec', 'nr_throttled']}
+                if all(value >= 0 for value in deltas.values()) and all(
+                        before_group[key] == after_group[key] for key in ['quota_us', 'period_us', 'weight']):
+                    result['container_cpu'] = {'cpu_ms': round(deltas['usage_usec'] / 1000, 3),
+                        'throttled_ms': round(deltas['throttled_usec'] / 1000, 3),
+                        'throttled_periods': deltas['nr_throttled'],
+                        **{key: after_group[key] for key in ['quota_us', 'period_us', 'weight']}}
+            return result
+        except (OSError, ValueError, IndexError):
+            return {'unavailable': 'backend_process_unavailable'}
+
+
 class Libpq:
     """Nonblocking libpq; exactly one connection, with no reconnect fallback."""
     def __init__(self, limits):
@@ -247,6 +407,8 @@ class Libpq:
         if fd < 0:
             raise ObserverError('connection_socket_unavailable')
         select.select([] if writing else [fd], [fd] if writing else [], [], min(0.1, remaining))
+        if getattr(self, 'backend_process', None) is not None:
+            self.backend_process.sample_if_due()
 
     def readable_now(self):
         self.limits.check()
@@ -287,17 +449,41 @@ class Libpq:
             self.ready(status == 2, deadline)
         if self.lib.PQsetnonblocking(self.conn, 1) != 0:
             raise ObserverError('nonblocking_setup_failed')
+        self.backend_process = BackendProcess(self.lib.PQbackendPID(self.conn))
 
     def prepare_activity(self, salt):
-        # Parsing/planning pg_stat_activity for every 500 ms sample adds
-        # avoidable catalog work under the same load we are observing. Only
-        # the plan is reused: EXECUTE still runs in a fresh transaction and
-        # obtains a fresh backend-status snapshot on this one connection.
+        # Reuse the plan to reduce overhead at the 500 ms sampling interval.
+        # Each EXECUTE reads a fresh backend snapshot in a new transaction.
         self.query('PREPARE northstar_control_observer_sample AS ' + activity_sql(salt),
                    command=True)
         return 'EXECUTE northstar_control_observer_sample'
 
     def query(self, sql, validator=None, *, command=False):
+        process = getattr(self, 'backend_process', None)
+        if process is not None:
+            process.begin()
+        try:
+            return self._query(sql, validator, command=command)
+        finally:
+            self.last_tcp_info = self.tcp_info()
+            self.last_backend_process = process.finish() if process is not None else None
+
+    def tcp_info(self):
+        """Read Linux transport counters without addresses or packet contents."""
+        try:
+            fd = self.lib.PQsocket(self.conn)
+            with socket.fromfd(fd, socket.AF_INET, socket.SOCK_STREAM) as stream:
+                raw = stream.getsockopt(socket.IPPROTO_TCP, socket.TCP_INFO, 104)
+            values = struct.unpack('=24I', raw[8:104])
+            return {'state': raw[0], 'retransmits': raw[2], 'backoff': raw[4],
+                    'rto_us': values[0], 'unacked': values[4], 'lost': values[6],
+                    'retrans': values[7], 'last_data_sent_ms': values[9],
+                    'last_data_recv_ms': values[11], 'last_ack_recv_ms': values[12],
+                    'rtt_us': values[15], 'total_retrans': values[23]}
+        except (OSError, AttributeError, TypeError, ValueError, struct.error) as error:
+            return {'unavailable': True, 'errno': getattr(error, 'errno', None)}
+
+    def _query(self, sql, validator=None, *, command=False):
         if self.lib.PQsendQuery(self.conn, sql.encode('ascii')) != 1:
             raise ObserverError('query_send_failed')
         deadline = time.monotonic() + 3.0
@@ -401,12 +587,10 @@ SELECT pg_catalog.json_build_object('authorized',
 def activity_sql(salt):
     if not re.fullmatch(r'[0-9a-f]{32}', salt):
         raise ObserverError('invalid_hash_salt')
-    # Bound the JSON and restrict lock-manager inspection to heavyweight-lock
-    # waiters. pg_blocking_pids cannot explain LWLock, CPU or I/O waits and
-    # takes every lock hash partition itself; calling it for merely slow
-    # active queries can amplify the very LockManager pressure being sampled.
-    # Database identity is salted in the server; raw datname never leaves it. The shared run salt maps this pseudonym to
-    # the driver-owned case map; only (pid, backend_start) identifies a backend.
+    # Query blockers only for heavyweight-lock waits: pg_blocking_pids takes
+    # every lock hash partition and would add contention for other wait types.
+    # Hash database names inside PostgreSQL; the shared salt links them to the
+    # driver's case map. Identify backends by (pid, backend_start).
     return f"""
 WITH targets AS MATERIALIZED (
   SELECT pid,backend_start,datname,state,wait_event_type,wait_event,
@@ -561,14 +745,15 @@ class Evidence:
                 self.write(record)
                 self.observer_context_samples += 1
 
-    def sample(self, sample, now, duration_ms):
+    def sample(self, sample, now, duration_ms, tcp_info=None, backend_process=None):
         validate_sample(sample)
         self.starting_observations += sum(row['state'] is None for row in sample['rows'])
         self.seq += 1
         self.sample_count += 1
         self.peak = max(self.peak, sample['total'])
         data = encoded({'type': 'sample', 'seq': self.seq, 'monotonic': round(now, 6),
-                        'sample_duration_ms': round(duration_ms, 3), **sample})
+                        'sample_duration_ms': round(duration_ms, 3), **sample,
+                        'observer_tcp': tcp_info, 'observer_backend_process': backend_process})
         self.ring.append((now, self.seq, data))
         self.ring_bytes += len(data)
         while self.ring and (now - self.ring[0][0] > PRE_SECONDS or self.ring_bytes > self.ring_limit):
@@ -581,8 +766,8 @@ class Evidence:
         current = {(row['pid'], row['backend_start']) for row in sample['rows']}
         slow = {(row['pid'], row['backend_start']) for row in sample['rows']
                 if row['state'] == 'active' and row['query_age_ms'] >= SLOW_MS}
-        # These events are not evidence of a fixture failure. In particular,
-        # round teardown legitimately removes every backend in a cohort.
+        # Count these events without triggering failure capture; normal round
+        # teardown removes all backends in a cohort.
         self.slow_events += len(slow - self.previous_slow)
         self.disappearances += len(self.previous - current)
         self.flush_captured_ring()
@@ -705,7 +890,8 @@ def main():
                 # Poll before appending/evicting the ring, including when a
                 # marker was published while libpq waited for a response.
                 capture_marker()
-                evidence.sample(sample, end, duration_ms)
+                evidence.sample(sample, end, duration_ms, getattr(connection, 'last_tcp_info', None),
+                                getattr(connection, 'last_backend_process', None))
                 recovered_errors += consecutive_errors
                 consecutive_errors = 0
                 if evidence.sample_count == 1:
@@ -735,6 +921,8 @@ def main():
     except (OSError, MemoryError, ValueError, TypeError, KeyError, AttributeError):
         final_code = 'observer_internal_or_resource_failure'
     finally:
+        last_tcp_info = getattr(connection, 'last_tcp_info', None)
+        last_backend_process = getattr(connection, 'last_backend_process', None)
         if connection:
             connection.close()
         # A signal during the last query can coincide with first failure. Only
@@ -776,6 +964,8 @@ def main():
             'ring_byte_evictions': evidence.ring_byte_evictions, 'sample_errors': errors,
             'recovered_sample_errors': recovered_errors, 'consecutive_sample_errors': consecutive_errors,
             'last_sample_error_code': last_sample_error, 'last_sample_sqlstate': last_sample_sqlstate,
+            'observer_tcp_last': last_tcp_info,
+            'observer_backend_process_last': last_backend_process,
             'error_code': final_code, 'sqlstate': sqlstate,
             'truncated': bool(evidence.ring_byte_evictions or evidence.pre_window_truncated or final_code in
                 {'evidence_byte_limit', 'sample_byte_limit', 'backend_row_limit', 'blocking_pid_limit'}),

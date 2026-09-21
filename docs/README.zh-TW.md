@@ -1,6 +1,8 @@
-[English](README.md) | **繁體中文**
+[English](../README.md) | **繁體中文**
 
 # Northstar XMPP 伺服器
+
+> 本專案由人類與 AI 協作開發。
 
 Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 伺服器。它提供 TCP、Direct TLS、WebSocket 與選用 BOSH 連線，以及聯邦、
@@ -9,24 +11,24 @@ Northstar 是以 Rust 編寫、面向 Linux 與 PostgreSQL 的標準相容 XMPP
 目前套件版本為 `0.2.0`，仍屬 1.0 之前的版本；發佈狀態與日期以
 [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases) 為準。
 專案尚未接受獨立安全稽核。公開部署前請閱讀 [XEP 支援矩陣](XEP_MATRIX.md)、
-[發行檢查表](docs/RELEASE_CHECKLIST.md)與[已知限制](docs/KNOWN_ISSUES.md)。
+[發行檢查表](RELEASE_CHECKLIST.md)與[已知限制](KNOWN_ISSUES.md)。
 
-其他資料請參閱[文件索引](docs/README.md)、[安全政策](SECURITY.md)、
-[正式維運手冊](docs/PRODUCTION_OPERATIONS.md)及
-[貢獻指南](CONTRIBUTING.md)。
+其他資料請參閱[文件索引](README.md)、[安全政策](../.github/SECURITY.md)、
+[正式維運手冊](PRODUCTION_OPERATIONS.md)及
+[貢獻指南](../.github/CONTRIBUTING.md)。
 
 同一個程式可分別啟動核心與維護子伺服器，以獨立行程共用 PostgreSQL。
 核心統一管理連線、工作階段與訊息投遞；維護行程只載入資料庫與保留期限設定。
-請參閱[子伺服器權責與部署](docs/SUBSERVERS.md)，包含切換、回復與目前的權限限制。
+請參閱[子伺服器權責與部署](SUBSERVERS.md)，包含切換、回復與目前的權限限制。
 
 ## 如何使用
 
 ### 發行套件
 
-Northstar `0.2.0` 通過發行核准後，將透過
+Northstar `0.2.0` 套件將在維護者發佈 Release 後，透過
 [GitHub Releases](https://github.com/takanashi-tetsuya/northstar/releases)
-提供下列預定檔案。在 tag workflow 建立 draft，且 checksum、provenance 與
-映像 digest 完成審核前，請勿視為已提供：
+提供下載。Tag workflow 會先建立包含下列檔案的草稿，並驗證 checksum、
+provenance 與映像 digest：
 
 | 資產 | 用途 |
 |---|---|
@@ -79,8 +81,8 @@ cargo run --release --locked
 ```
 
 開發設定使用臨時本機密鑰及 self-signed 憑證，不得公開或用於正式環境。
-正式部署請從 [.env.example](.env.example) 開始，並依照
-[正式維運手冊](docs/PRODUCTION_OPERATIONS.md)設定分離的資料庫角色、受保護
+正式部署請從 [.env.example](../.env.example) 開始，並依照
+[正式維運手冊](PRODUCTION_OPERATIONS.md)設定分離的資料庫角色、受保護
 secret files 及公信憑證。
 
 | 預設埠 | 功能 | 預設暴露方式 |
@@ -100,7 +102,9 @@ secret files 及公信憑證。
 
 OMEMO 加密由相容的用戶端完成。正確加密時，Northstar 只路由及封存密文 XMPP 封裝，並不持有用戶端的 OMEMO 私鑰。預設的 `REQUIRE_ENCRYPTED_ARCHIVE=true` 會拒絕把明文訊息本文寫入個人或群組封存，也會在保存 OMEMO stanza 前移除誤附的明文 sibling。
 
-這不等於絕對「零知識」。伺服器必然能看見路由中繼資料、帳號與房間成員關係、時間與大小、用戶端主動送出的明文，以及使用者刻意附在檢舉中的證據。擁有主機或資料庫權限的管理員可以檢視這些伺服器可見資訊。端到端隱私也取決於裝置指紋驗證、用戶端安全與正確的 TLS 部署。
+伺服器可見的資訊包括路由中繼資料、帳號與房間成員關係、訊息時間與大小、
+用戶端送出的明文，以及檢舉附帶的證據。擁有主機或資料庫權限的管理員可以
+檢視這些資訊。端到端隱私取決於用戶端安全、裝置金鑰驗證及 TLS 部署。
 
 
 ## 功能
@@ -125,13 +129,13 @@ OMEMO 加密由相容的用戶端完成。正確加密時，Northstar 只路由�
 ## 設定
 
 設定由環境變數或 `.env` 提供；完整且附註解的權威清單位於
-[.env.example](.env.example)。
+[.env.example](../.env.example)。
 
 - **身分及 listeners：** `XMPP_DOMAIN`、`PUBLIC_URL`，以及 client、
   federation、HTTP、component、metrics bind addresses。
 - **TLS：** 憑證與私鑰路徑，以及選用的聯邦／用戶端 trust roots 或 CRLs。
 - **資料庫：** 正式環境應使用分離的 migrator、runtime 及 admin-command
-  PostgreSQL 身分；請參閱[資料庫角色](docs/DATABASE_ROLES.md)。
+  PostgreSQL 身分；請參閱[資料庫角色](DATABASE_ROLES.md)。
 - **註冊：** `OPEN_REGISTRATION` 控制公開註冊；
   `INVITATION_REQUIRED` 控制是否每次註冊都必須提供邀請碼。
 - **認證：** 設定 SCRAM 成本及受保護的 FAST／dummy-SCRAM secret files；
@@ -165,7 +169,7 @@ bundle 並重新整理 discovery，再考慮清除用戶端 cache。
 網頁端將 OMEMO 私鑰保存在瀏覽器 profile。刪除 profile 可能永久失去金鑰及
 舊密文的解密能力；伺服器不保存復原金鑰。裝置轉移 package 只在本機產生、
 一次性使用、由獨立密碼保護且不會上傳；匯入後會重設聯絡人信任。詳見
-[裝置轉移說明](docs/OMEMO_DEVICE_TRANSFER.md)。
+[裝置轉移說明](OMEMO_DEVICE_TRANSFER.md)。
 
 ## 註冊、防濫用與檢舉
 
@@ -184,7 +188,7 @@ moderator。使用者提供的 OMEMO 解密文字無法由伺服器獨立驗證�
 
 HTTP 服務提供帳號管理、歷史、檢舉與申訴、uploads、XMPP WebSocket/BOSH、
 健康檢查及管理功能。機器可讀契約位於
-[docs/openapi.yaml](docs/openapi.yaml)，也由 `/api/openapi.yaml` 提供；
+[docs/openapi.yaml](openapi.yaml)，也由 `/api/openapi.yaml` 提供；
 `/api/docs` 提供唯讀 Swagger UI。
 
 長時間管理操作支援 `Idempotency-Key`，並回傳可查詢進度的 operation URL。
@@ -193,8 +197,8 @@ HTTP 服務提供帳號管理、歷史、檢舉與申訴、uploads、XMPP WebSoc
 - `/readyz` 檢查資料庫及關鍵背景工作，應只供部署平台內部使用。
 - `/metrics` 只由獨立的私有 metrics listener 提供。
 
-監控、升級及復原請參閱[正式維運手冊](docs/PRODUCTION_OPERATIONS.md)；
-建立或還原正式備份前請先閱讀[備份安全](docs/BACKUP_SECURITY.md)。
+監控、升級及復原請參閱[正式維運手冊](PRODUCTION_OPERATIONS.md)；
+建立或還原正式備份前請先閱讀[備份安全](BACKUP_SECURITY.md)。
 
 ## Docker 映像與 Compose 部署
 
@@ -207,9 +211,9 @@ Northstar 會建置三個非 root 映像。建議使用 Docker Compose 部署，
 | `deploy/database-grants.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.0` | `database-grants` | 遷移後重新核對 PostgreSQL 權限 |
 | `deploy/backup.Dockerfile` | `ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0` | `backup`、`restore` | 已簽章／加密的備份、驗證及停機還原 |
 
-完整正式環境流程請參閱[正式環境維運](docs/PRODUCTION_OPERATIONS.md)；
-資料庫能力邊界請參閱[資料庫角色](docs/DATABASE_ROLES.md)；
-備份與還原的信任邊界請參閱[備份安全](docs/BACKUP_SECURITY.md)。
+完整正式環境流程請參閱[正式環境維運](PRODUCTION_OPERATIONS.md)；
+資料庫能力邊界請參閱[資料庫角色](DATABASE_ROLES.md)；
+備份與還原的信任邊界請參閱[備份安全](BACKUP_SECURITY.md)。
 
 ### 前置條件
 
@@ -349,7 +353,7 @@ sudo docker compose up -d --force-recreate xmpp caddy
 ```
 
 較舊的 PostgreSQL 超級使用者部署不能只替換 Compose 檔；
-請依照[正式環境維運](docs/PRODUCTION_OPERATIONS.md)執行停機角色遷移。
+請依照[正式環境維運](PRODUCTION_OPERATIONS.md)執行停機角色遷移。
 
 ### 使用映像
 
@@ -366,7 +370,7 @@ sudo docker compose --profile monitoring up -d
 `docker compose up -d --force-recreate xmpp`。
 
 升級時不要自行猜測 migration 與 database-grant 的執行順序；請依照
-[正式環境維運](docs/PRODUCTION_OPERATIONS.md)中的版本化流程操作。
+[正式環境維運](PRODUCTION_OPERATIONS.md)中的版本化流程操作。
 
 使用已設定的 backup 映像建立正式備份：
 
@@ -375,12 +379,12 @@ sudo install -d -m 0700 -o 10001 -g 10001 ./backups
 sudo docker compose --profile backup run --rm backup
 ```
 
-備份驗證與還原必須依照[備份安全](docs/BACKUP_SECURITY.md)的受控流程。
+備份驗證與還原必須依照[備份安全](BACKUP_SECURITY.md)的受控流程。
 還原具有破壞性；不要自行拼湊 `docker run` 還原命令。
 
 ### 重要參數
 
-完整且附註解的權威參數清單位於 [.env.example](.env.example)。
+完整且附註解的權威參數清單位於 [.env.example](../.env.example)。
 最常調整的 Compose 輸入如下：
 
 | 範圍 | 參數 |
@@ -409,7 +413,7 @@ Compose 只傳入明確映射的變數；自訂 override 後應以
 
 Northstar 仍屬 1.0 之前的版本。Redis 多程序路由仍為實驗性，部分選用
 XMPP profile 尚未實作，且尚未建立廣泛的公網 federation 相容性。部署前請
-閱讀 [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md)。
+閱讀 [docs/KNOWN_ISSUES.md](KNOWN_ISSUES.md)。
 
-Northstar 原始程式碼採 [AGPL-3.0-only](LICENSE)；第三方授權見
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+Northstar 原始程式碼採 [AGPL-3.0-only](../LICENSE)；第三方授權見
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。

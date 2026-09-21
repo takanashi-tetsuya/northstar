@@ -1,11 +1,43 @@
 # Changelog
 
 All notable Northstar changes are documented here. Protocol support claims are
-normative only in [XEP_MATRIX.md](XEP_MATRIX.md), and unresolved release
+normative only in [XEP_MATRIX.md](docs/XEP_MATRIX.md), and unresolved release
 boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 ## [0.2.0] - Release notes (publication date: GitHub Releases)
 
+- Fixed deadlocks when sessions of the same account resume concurrently, while
+  preserving the lock that prevents deletion of an in-use privacy list.
+- Reduced the initial WebSocket read buffer from 128 KiB to 8 KiB per connection;
+  larger frames still use the existing size limits.
+- Updated scheduled fixtures for bounded password work, SASL2 device-bound
+  resumption, completed transport cleanup, cluster peer discovery and exact
+  duplicate ACK payloads.
+- Enabled the pinned parser fuzz toolchain in GitHub-hosted runners.
+- Increased MIX fixture credential admission to half the available CPUs, up to
+  four operations, preserving protocol assertions and worker deadlines.
+- CI runs 5×50 for PRs and main, 20×50 periodically, and 100×50 on explicit
+  manual selection. Load, cluster fault and parser fuzz tests are mandatory
+  in every source CI run; development branch and tag pushes no longer duplicate
+  PR/main CI.
+
+- Updated Rustls to 0.23.45 to fix TLS 1.3 handshake boundary validation
+  ([RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html)).
+- Reused the bounded upload queue snapshot query plan on PostgreSQL backends
+  while preserving current-data reads and the existing capability boundary.
+- Made Federation test cleanup verify socket ownership so another process
+  reusing an ephemeral port is not mistaken for a leaked listener.
+- Gave the shared PostgreSQL stress fixture more CPU scheduling weight when
+  competing with the server processes, retaining all test deadlines.
+- Reduced runtime-control query work by reading settings and federation rules
+  in one SQL snapshot. The pressure observer prepares its activity query once
+  and reads fresh backend state on every sample, with bounded timeout recovery.
+- Reused verified runtime binaries within each CI run and private fixture
+  certificates across stress rounds. Added phase timings, coordinated client
+  admission and bounded cleanup while retaining the full stress matrices.
+- Updated installation, release, governance and validation documents; added
+  the human/AI collaboration notice and streamlined third-party attribution
+  and source comments.
 - Added complete Windows x64 and Linux x64 package manifests and installation
   instructions, native PostgreSQL startup/resource verification, default-user
   Docker startup checks, and fresh draft-download checksum/provenance checks.
@@ -30,7 +62,7 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   backup image ship every SQL policy file used by its offline dump validator;
   the static capability gate now guards that image/runtime dependency contract.
 - The complete change set from the previous committed `0.1.0` baseline is
-  recorded in the [0.2 development changelog](changelog/v0.2.md).
+  recorded in the [0.2 development changelog](docs/changelog/v0.2.md).
 - Cargo, Compose, OCI, backup and OpenAPI metadata now identify the current
   pre-1.0 development line as `0.2.0`. Version `1.0.0` is reserved until one
   exact artifact and target environment satisfy every applicable production
@@ -382,7 +414,7 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - Initial pre-1.0 Northstar baseline at Git commit
   `998396915ab38a9deadf47ae871be561e11f7ef2`, with migrations `0001`–`0013`.
 - The complete delta from this baseline to `0.2.0` is maintained in
-  [the 0.2 development changelog](changelog/v0.2.md).
+  [the 0.2 development changelog](docs/changelog/v0.2.md).
 
 ## Historical development snapshots
 

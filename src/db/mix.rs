@@ -1912,12 +1912,9 @@ pub async fn defer_mix_delivery(
 
 /// Make the current ordered delivery head for one recipient eligible now.
 ///
-/// A verified local MIX-capable resource is a routing fact, not an authority
-/// to manufacture a delivery. This helper only advances an already-persisted
-/// head row. It also advances a durable epoch while the head is leased, so
-/// its lease owner cannot overwrite this routing fact with a recovery delay.
-/// Normal fenced claiming still decides whether it can be delivered. Later
-/// rows deliberately remain untouched so per-recipient ordering is preserved.
+/// Advance only the persisted head row, preserving per-recipient order.
+/// Increment its wake epoch even while leased so the current owner cannot
+/// overwrite the wake with a recovery delay. Delivery still requires a fenced claim.
 pub async fn wake_mix_delivery_recipient(pool: &PgPool, recipient_jid: &str) -> Result<u64> {
     let updated = sqlx::query(
         "UPDATE mix_delivery_recipients AS recipient
@@ -1932,10 +1929,6 @@ pub async fn wake_mix_delivery_recipient(pool: &PgPool, recipient_jid: &str) -> 
                 SELECT 1
                  FROM mix_delivery_recipients AS earlier
                  WHERE earlier.recipient_jid=recipient.recipient_jid
-                   -- Keep the native strict comparison. The XML gate
-                   -- classifies SQL literals by content, so comparison
-                   -- syntax is never rewritten merely to satisfy a source
-                   -- checker (and cannot acquire arithmetic edge cases).
                    AND earlier.delivery_sequence < recipient.delivery_sequence
             )",
     )

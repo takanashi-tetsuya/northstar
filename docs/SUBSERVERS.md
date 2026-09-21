@@ -186,11 +186,11 @@ recorded process identities and liveness, including earlier batches, before
 advancing and before releasing all pairs into the concurrent business tests.
 A dead server fails the round; neither startup nor a failed round is retried.
 
-Regular CI still runs 20 rounds of 50 pairs, with all 100 servers live before
-concurrent protocol work begins. The scheduled matrix runs 100 rounds of the
-same 50-pair workload. Smoke tests retain the one-pair and two-pair cases.
-This validates concurrent operation and bounded startup on the available
-runner; it does not claim that all 50 pairs can cold-start simultaneously.
+PR and main CI run five rounds of 50 pairs, with all 100 servers live before
+concurrent protocol work begins. Weekly and ordinary manual runs repeat the
+same workload for 20 rounds; the manual `extended_stress` option selects 100.
+Smoke tests retain the one-pair and two-pair cases.
+This validates concurrent operation after batched startup on the available runner.
 MIX records each pair's listener ownership while that pair still holds its
 startup slot, using one TCP-table snapshot and one file-descriptor snapshot
 per owner. A single coordinator checks the signed setup records and original
@@ -203,8 +203,12 @@ Fixed host pressure counters are sampled at the live barrier and before failed
 cleanup. Regular CI additionally uses one dedicated PostgreSQL observer
 connection, sampling at 500 ms intervals. Including that connection, Federation
 requires 601 connections and MIX requires 651, within the fixture's 672 limit.
-The observer attests the fixed loopback test identity before sampling. It keeps
-a 30-second, 2 MiB memory ring and exports rows only around the first failure
+The observer attests the fixed loopback test identity, then prepares its activity
+query once on that connection. Each execution reads a fresh transaction and
+backend-status snapshot. Preparation must return one complete command response
+within the deadline before the observer reports ready. The private PostgreSQL
+regression checks state changes and backend disappearance on the same connection.
+The observer keeps a 30-second, 2 MiB memory ring and exports rows only around the first failure
 observed by a supervisor, with a fixed 15-second post-window. Normal backend
 disappearance and successful completion produce summaries only. Retained
 evidence is capped at 8 MiB and 128 backends; incomplete required diagnostics
@@ -288,7 +292,7 @@ The small observer integration fixture can be run independently with
 It starts its own temporary, fsync-enabled PG17 cluster as an ordinary user and
 tests 100 runtime-control connections, delayed replies, actual waits, case mapping,
 failure windows and cancellation. It does not
-run application servers or replace the regular 20-by-50 acceptance matrix.
+run application servers or replace the regular 5-by-50 acceptance matrix.
 The startup scheduler's failure paths are also checked independently of a
 database using controlled child processes.
 
@@ -346,9 +350,8 @@ connection limits remain unchanged.
 Separate processes now provide separate lifecycle, configuration and secret
 inputs. They still share a database role with the existing runtime table
 privileges. A compromised maintenance process therefore has broader database
-access than its normal cleanup operations require. This stage does not claim
-database privilege isolation or distributed transaction independence. A later
-dedicated maintenance role needs its own attestation, immutable grants
+access than its normal cleanup operations require. A dedicated maintenance role
+needs its own attestation, immutable grants
 migration, restore fencing and negative authorization tests.
 
 Keep the shared database and the two process roles until an explicit service

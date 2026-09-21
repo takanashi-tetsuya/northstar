@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Execute one N08 database card in a private loopback PostgreSQL fixture and
-# publish only a verified redacted control receipt. Raw output is retained
-# locally when evidence generation fails; it is never replaced with a fake log.
+# Run one N08 database card in a private loopback PostgreSQL fixture and publish
+# a verified, redacted receipt. Keep raw output locally if verification fails.
 
 set -Eeuo pipefail
 set +x

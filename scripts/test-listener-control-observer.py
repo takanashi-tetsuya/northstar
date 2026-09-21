@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -355,7 +357,145 @@ class PublicationTests(unittest.TestCase):
             self.assertEqual(list(Path(root).iterdir()), [])
 
 
+class BackendProcessTests(unittest.TestCase):
+    @staticmethod
+    def stat(pid, parent, started, state='S'):
+        fields = [state, str(parent)] + ['0'] * 18
+        fields[19] = str(started)
+        return f'{pid} (postgres) ' + ' '.join(fields)
+
+    def setUp(self):
+        self.files = {'100/stat': self.stat(100, 1, 10),
+                      '100/task/100/children': '200 201',
+                      '200/status': 'NSpid:\t200\t88\n',
+                      '200/cgroup': '1:cpu:/legacy-cgroup',
+                      '200/stat': self.stat(200, 100, 20),
+                      '200/schedstat': '1000000 2000000 5', '200/wchan': 'ep_poll'}
+        self.environment = mock.patch.dict(os.environ,
+            NORTHSTAR_CI_POSTGRES_HOST_PID='100', NORTHSTAR_CI_POSTGRES_START_TICKS='10')
+        self.read = mock.patch.object(m.BackendProcess, 'read', side_effect=lambda name, limit: self.files[name])
+        self.environment.start()
+        self.read.start()
+        self.addCleanup(self.environment.stop)
+        self.addCleanup(self.read.stop)
+
+    def test_container_mapping_and_query_scheduler_deltas(self):
+        process = m.BackendProcess(88)
+        self.assertEqual(process.pid, 200)
+        with mock.patch.object(m.time, 'monotonic', return_value=0):
+            process.begin()
+        self.files['200/stat'] = self.stat(200, 100, 20, state='R')
+        for second in range(1, 9):
+            with mock.patch.object(m.time, 'monotonic', return_value=second):
+                process.sample_if_due()
+        self.files['200/schedstat'] = '6000000 5002000000 10'
+        self.files['200/wchan'] = '0'
+        self.assertEqual(process.finish(), {'cpu_ms': 5.0, 'runqueue_ms': 5000.0,
+            'end_state': 'R', 'pending_samples': 5, 'runnable_samples': 5, 'wait_channel': '0'})
+
+    def test_recycled_parent_or_backend_never_supplies_counters(self):
+        for key in ['100/stat', '200/stat']:
+            with self.subTest(key=key):
+                original = self.files[key]
+                process = m.BackendProcess(88)
+                process.begin()
+                self.files[key] = original.rsplit(' ', 1)[0] + ' 999'
+                self.assertEqual(process.finish(), {'unavailable': 'backend_process_unavailable'})
+                self.files[key] = original
+
+    def test_missing_access_and_reparenting_do_not_mask_query_failure(self):
+        process = m.BackendProcess(88)
+        process.begin()
+        self.files['200/stat'] = self.stat(200, 101, 20)
+        self.assertEqual(process.finish(), {'unavailable': 'backend_process_unavailable'})
+        with mock.patch.object(m.BackendProcess, 'read', side_effect=PermissionError):
+            unavailable = m.BackendProcess(88)
+            unavailable.begin()
+            self.assertEqual(unavailable.finish(), {'unavailable': 'backend_process_unavailable'})
+
+    def test_scheduler_counter_regression_is_reported(self):
+        process = m.BackendProcess(88)
+        process.begin()
+        self.files['200/schedstat'] = '500000 1000000 6'
+        self.assertEqual(process.finish(), {'unavailable': 'backend_process_unavailable'})
+
+    def test_zeroed_scheduler_accounting_is_unavailable_not_zero_wait(self):
+        process = m.BackendProcess(88)
+        self.files['200/schedstat'] = '0 0 0'
+        process.begin()
+        self.assertEqual(process.finish(), {'unavailable': 'backend_process_unavailable'})
+
+    def test_container_throttling_deltas_and_changed_limits(self):
+        process = m.BackendProcess(88)
+        group = {'usage_usec':1000,'throttled_usec':2000,'nr_throttled':1,
+                 'quota_us':100000,'period_us':100000,'weight':100}
+        with mock.patch.object(process, 'group_snapshot', side_effect=lambda: dict(group)):
+            process.begin()
+            group.update(usage_usec=11000,throttled_usec=22000,nr_throttled=3)
+            self.assertEqual(process.finish()['container_cpu'],
+                {'cpu_ms':10.0,'throttled_ms':20.0,'throttled_periods':2,
+                 'quota_us':100000,'period_us':100000,'weight':100})
+            group['quota_us']=200000
+            self.assertNotIn('container_cpu', process.finish())
+
+    def test_unconfigured_native_fixture_uses_no_process_scan(self):
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(m.BackendProcess, 'read') as read:
+            process = m.BackendProcess(88)
+            process.begin()
+            process.sample_if_due()
+            self.assertEqual(process.finish(), {'unavailable': 'not_configured'})
+            read.assert_not_called()
+
+
 class LibpqTests(unittest.TestCase):
+    def test_tcp_info_reads_only_counters_and_preserves_the_connection(self):
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen(1)
+            with socket.create_connection(listener.getsockname()) as client:
+                server, _ = listener.accept()
+                with server:
+                    client.setblocking(False)
+                    connection = object.__new__(m.Libpq)
+                    connection.conn = 1
+                    connection.lib = mock.Mock(PQsocket=lambda _: client.fileno())
+                    info = connection.tcp_info()
+                    self.assertEqual(info['state'], 1)
+                    self.assertEqual(set(info), {'state', 'retransmits', 'backoff', 'rto_us',
+                        'unacked', 'lost', 'retrans', 'last_data_sent_ms', 'last_data_recv_ms',
+                        'last_ack_recv_ms', 'rtt_us', 'total_retrans'})
+                    self.assertTrue(all(type(value) is int and 0 <= value < 2**32 for value in info.values()))
+                    self.assertFalse(os.get_blocking(client.fileno()))
+                    client.sendall(b'connection-still-owned')
+                    self.assertEqual(server.recv(64), b'connection-still-owned')
+
+    def test_tcp_info_layout_and_unavailable_socket(self):
+        connection = object.__new__(m.Libpq)
+        connection.conn = 1
+        connection.lib = mock.Mock(PQsocket=lambda _: -1)
+        self.assertTrue(connection.tcp_info()['unavailable'])
+        with mock.patch.object(m.socket, 'fromfd') as fromfd:
+            fromfd.return_value.__enter__.return_value.getsockopt.return_value = (
+                bytes([1, 0, 2, 0, 3, 0, 0, 0]) + struct.pack('=24I', *range(24)))
+            info = connection.tcp_info()
+        self.assertEqual((info['retransmits'], info['backoff'], info['rto_us']), (2, 3, 0))
+        self.assertEqual((info['last_data_sent_ms'], info['last_data_recv_ms'], info['last_ack_recv_ms']), (9, 11, 12))
+        self.assertEqual((info['rtt_us'], info['total_retrans']), (15, 23))
+
+    def test_failed_query_retains_transport_snapshot_without_changing_error(self):
+        connection = object.__new__(m.Libpq)
+        connection.tcp_info = lambda: {'state': 1, 'total_retrans': 7}
+        connection.backend_process = mock.Mock()
+        connection.backend_process.finish.return_value = {'cpu_ms': 1, 'runqueue_ms': 4999}
+        failure = m.ObserverError('client_query_deadline')
+        connection._query = mock.Mock(side_effect=failure)
+        with self.assertRaises(m.ObserverError) as raised:
+            connection.query('fixed test query')
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(connection.last_tcp_info, {'state': 1, 'total_retrans': 7})
+        self.assertEqual(connection.last_backend_process, {'cpu_ms': 1, 'runqueue_ms': 4999})
+        connection.backend_process.begin.assert_called_once_with()
+
     def connection(self, library):
         connection = m.Libpq.__new__(m.Libpq)
         connection.conn = 7

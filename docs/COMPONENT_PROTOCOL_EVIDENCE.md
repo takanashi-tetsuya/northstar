@@ -52,8 +52,8 @@ schema on exit.
 
 Neither XEP defines an application-stanza acknowledgement. A successful socket
 write followed by a process or network failure can therefore be observed as an
-ambiguous duplicate. Components must implement idempotent application handlers;
-Northstar does not claim end-to-end exactly-once delivery.
+ambiguous duplicate. Delivery is at-least-once; components must implement
+idempotent application handlers.
 
 ## Configuration boundary
 

@@ -1887,9 +1887,8 @@ export class OmemoManager {
     let stableReads = 0;
     let lastConfirmed = Array.isArray(knownIds) ? knownIds : [];
     for (let attempt = 0; attempt < DEVICE_ANNOUNCEMENT_ATTEMPTS; attempt += 1) {
-      // This read must bypass the PEP cache on every attempt. Two resources can
-      // both have fetched the old list before either publishes its bundle; a
-      // cached read here would make their last-writer-wins loop permanent.
+      // Read fresh PEP state so concurrent publishers can merge each other's
+      // device IDs instead of repeatedly overwriting a stale list.
       const latest = await this.fetchDeviceIds(this.account, false);
       const merged = [...new Set([...latest, ownId])].sort((left, right) => left - right);
       await this.publishDeviceList(merged);
@@ -1913,10 +1912,8 @@ export class OmemoManager {
   async ensureOwnDeviceForSend(knownIds) {
     const ownId = Number(this.state?.deviceId);
     if (knownIds.includes(ownId)) return knownIds;
-    // Removing another endpoint is a two-step PEP operation: first publish a
-    // list without the device, then retract its bundle. A send that observes
-    // the intermediate state must not resurrect an intentionally retired
-    // endpoint merely because its bundle is still visible for a moment.
+    // Retirement removes the device from the list before retracting its bundle.
+    // Wait for that retraction before deciding whether to reannounce this device.
     await this.deviceRetirementGrace();
     const latest = await this.fetchDeviceIds(this.account, false);
     if (latest.includes(ownId)) return latest;
@@ -2220,10 +2217,7 @@ export class OmemoManager {
     if (!owners.length || owners.length > MAX_TRUST_OWNERS || entryCount > MAX_TRUST_ENTRIES) {
       throw new Error('Trust message exceeds the safety limit');
     }
-    // Enforce resource bounds before the replay fast-path. The XML parser
-    // already performs the same checks, but callers of this internal entry
-    // point must not be able to bypass validation merely by reusing an old
-    // timestamp.
+    // Validate bounds before replay detection, including calls that skip XML parsing.
     const last = Number(this.state.lastTrustTimestamps[senderAddress] || 0);
     if (stamp <= last) return { applied: false, replay: true };
     const pending = [];

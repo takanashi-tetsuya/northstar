@@ -127,10 +127,9 @@ impl ManagedProcess {
         self.diagnostics_retained
     }
 
-    /// Terminate process gracefully, first via SIGTERM/terminate, then SIGKILL.
-    ///
-    /// On Unix the process receives SIGTERM and we wait up to `timeout`.
-    /// On timeout (or on unsupported platforms), we fall back to SIGKILL.
+    /// Request shutdown, then force termination after `timeout`.
+    /// Unix signals the process group with SIGTERM, then SIGKILL;
+    /// Windows uses `taskkill /T`, adding `/F` on timeout.
     pub fn stop(&mut self, timeout: Duration) -> Result<()> {
         if let Some(mut child) = self.child.take() {
             let pid = child.id();

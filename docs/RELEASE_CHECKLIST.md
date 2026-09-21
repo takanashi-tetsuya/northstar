@@ -14,6 +14,28 @@ The tag workflow prepares artifacts and a **draft** GitHub Release. It does not
 make that draft a reviewed public release. Linux AMD64 is the supported
 production baseline; Windows AMD64 artifacts are for development and evaluation.
 
+If only draft preparation failed, dispatch `Release preparation` from `main`
+with `resume_tag` and the original `artifact_run_id`. Recovery requires the
+original build and runtime checks to have passed and verifies the retained
+artifact and its provenance before uploading. It then repeats fresh Windows
+and Linux downloads. The tag and built artifacts stay unchanged; the draft
+notes link both the original build and the recovery run.
+
+## CI coverage
+
+PRs and pushes to `main` run the complete source checks, including database
+and security invariants, parser fuzzing, the 1,000-session production envelope,
+cluster faults and raw 1,000-session load. Both listener fixtures run five
+rounds with 50 pairs and retain their observer and cleanup checks.
+
+Weekly and ordinary manual runs use 20 rounds. The manual `extended_stress`
+option selects 100 rounds for endurance investigations. These profiles use
+the same protocol cases, pair concurrency and worker/recovery deadlines.
+
+Development branch pushes use PR validation. Release tags qualify the exact
+commit against successful `main` CI, then rebuild and verify Windows, Linux
+and Docker artifacts and their provenance. They do not repeat source CI.
+
 ## 1. Freeze and identify the artifact
 
 - [ ] Working tree changes have been reviewed and intentionally included or
@@ -43,6 +65,8 @@ production baseline; Windows AMD64 artifacts are for development and evaluation.
   `README.zh-TW.md` and `PACKAGE-MANIFEST.json`; the manifest identifies the
   exact source/target and hashes every distributed file. Windows packages link
   the Visual C++ runtime statically.
+- [ ] Both README files describe the native distribution. Local links resolve
+  inside the archive; online documentation links use the matching release tag.
 - [ ] Independent native runners download and extract the packages, migrate
   a private PostgreSQL 17 cluster, reach readiness within 15 seconds, and serve
   the matching client, administration and Swagger assets. The application image
@@ -61,7 +85,7 @@ production baseline; Windows AMD64 artifacts are for development and evaluation.
   distributed image contains `LICENSE` and `THIRD_PARTY_NOTICES.md` under
   `/usr/share/licenses/northstar/`.
 - [ ] `LICENSE`, `THIRD_PARTY_NOTICES.md` and dependency policy agree.
-- [ ] `docs/KNOWN_ISSUES.md` and `XEP_MATRIX.md` have been reviewed for this
+- [ ] `docs/KNOWN_ISSUES.md` and `docs/XEP_MATRIX.md` have been reviewed for this
   exact artifact.
 
 ## 2. Protect secrets and database authority
@@ -134,9 +158,11 @@ production baseline; Windows AMD64 artifacts are for development and evaluation.
 - [ ] Apply forward hardening migration `0142`; verify both upload-projection
   capacity trigger functions have the exact installation-schema
   `SECURITY DEFINER` path and no `PUBLIC` execute privilege.
+- [ ] Apply migration `0143`; verify the upload queue snapshot reads current
+  data through its pinned schema and retains the existing bounded counters.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 141 migrations from `0001` through the current
-  repository maximum `0142`, with `0021` as the sole intentional gap.
+  identity and verify all 142 migrations from `0001` through the current
+  repository maximum `0143`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the
@@ -252,7 +278,7 @@ node scripts/verify-crypto-artifacts.mjs
   pushes the three GHCR images before it prepares the draft GitHub Release. Do
   not push the tag merely to discover whether the release is ready.
 - [ ] Finalize version-specific release notes in `CHANGELOG.md` and
-  `changelog/v0.2.md`, remove `Unreleased` markers, and identify `0.2.0` as the
+  `docs/changelog/v0.2.md`, remove `Unreleased` markers, and identify `0.2.0` as the
   current package version in `README.md`. Publication status/date belong to the
   GitHub Release, so preparing an immutable tag/draft never requires claiming
   that an unpublished release is already public.

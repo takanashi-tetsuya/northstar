@@ -5,6 +5,28 @@ The child Northstar process owns the socket: fixtures configure loopback `:0`
 addresses, pass a one-time nonce and an empty readiness-file destination, then
 wait for the child to atomically publish its actual addresses.
 
+Listener stress workers inherit the runner's CPU affinity. The CPU budget
+limits Tokio thread counts and startup concurrency; it does not reserve a
+physical CPU. All 100 servers reach the live barrier before protocol work.
+Readiness, worker and heartbeat deadlines remain enforced.
+
+Observer samples include numeric Linux TCP counters for their own connection.
+The final summary retains the last counters, including after a query timeout.
+Phase diagnostics also record host TCP retransmissions, timeouts and drops.
+These counters contain no endpoints or packet contents and do not determine
+whether the workload passed.
+
+In CI, the fixture records its postmaster's host PID and kernel start tick.
+The observer uses that identity and the backend's namespace PID to find the
+corresponding host process. Query diagnostics include CPU time, runnable-state
+samples and scheduler wait counters, with at most five pending samples per
+query. Missing or zeroed scheduler counters are reported as unavailable.
+The counters are cumulative deltas and may include waiting charged after the
+query began. Missing process access is also reported as unavailable. These reads
+use procfs and preserve the existing connection and query deadlines.
+When cgroup v2 counters are readable, `container_cpu` records the PostgreSQL
+container's CPU use, throttling, quota and weight for that query interval.
+
 Several active fixture listeners may request `:0` on the same loopback address.
 Each request is a separate kernel allocation rather than an attempt to share a
 fixed listener. Fixed bind addresses still fail configuration validation when
@@ -37,8 +59,8 @@ child with `pass_fds`, and keeps its own descriptor open until the child has:
 The supervisor verifies every acknowledgement field and its filesystem
 ownership before it releases the root-owned descriptor. It also terminates the
 child process group on signal, startup failure, or acknowledgement timeout.
-The server product does not implement descriptor activation, and Windows does
-not claim equivalent inherited-handle support.
+Descriptor activation is limited to this Unix fixture. The server product and
+Windows fixture do not support it.
 
 The shared verifier is:
 

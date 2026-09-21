@@ -602,9 +602,10 @@ def raw_http(
     headers=None,
     *,
     port: int | None = None,
+    timeout: float = 10,
 ):
     port = resolve_http_port(port)
-    connection = http.client.HTTPConnection(HTTP_HOST, port, timeout=10)
+    connection = http.client.HTTPConnection(HTTP_HOST, port, timeout=timeout)
     connection.request(method, path, body=body, headers=headers or {})
     response = connection.getresponse()
     result = response.read()
@@ -612,6 +613,32 @@ def raw_http(
     response_headers = {name.lower(): value for name, value in response.getheaders()}
     connection.close()
     return status, response_headers, result
+
+
+def put_upload_when_ready(path: str, body: bytes, headers):
+    """Retry only the upload API's typed busy response within ten seconds."""
+    deadline = time.monotonic() + 10
+    while True:
+        remaining = deadline - time.monotonic()
+        check(remaining > 0, "HTTP Upload remained busy for ten seconds")
+        response = raw_http("PUT", path, body, headers, timeout=remaining)
+        status, response_headers, raw = response
+        if status != 409:
+            return response
+        try:
+            error = json.loads(raw)
+        except (ValueError, UnicodeError):
+            return response
+        if (not isinstance(error, dict) or not isinstance(error.get("error"), dict)
+                or error["error"].get("code") != "upload_in_progress"):
+            return response
+        retry_after = response_headers.get("retry-after", "")
+        check(re.fullmatch(r"[1-9][0-9]{0,5}", retry_after) is not None,
+              "busy HTTP Upload response omitted a valid Retry-After")
+        delay = int(retry_after)
+        check(delay < deadline - time.monotonic(),
+              "HTTP Upload retry would exceed its ten-second deadline")
+        time.sleep(delay)
 
 
 def raw_admin_http(method: str, path: str, body: bytes | None = None, headers=None):
@@ -2120,6 +2147,7 @@ class XmppWebSocket:
         initial_presence: bool = True,
         timeout: float = 10,
         deadline: float | None = None,
+        device_id: str | None = None,
     ):
         check(0 < timeout <= 10, "WebSocket construction timeout must be greater than zero and no more than ten seconds")
         self._construction_deadline: float | None = (
@@ -2152,6 +2180,7 @@ class XmppWebSocket:
         self.username = username
         self.password = password
         self.resource = resource
+        self.device_id = device_id
         self.sasl2_resume_id = None
         if sasl2:
             check(resume is None and not expect_bind_conflict, "SASL2 test client has no legacy bind mode")
@@ -2287,15 +2316,28 @@ class XmppWebSocket:
     ) -> None:
         self.send(f"<open xmlns='urn:ietf:params:xml:ns:xmpp-framing' to='{DOMAIN}' version='1.0'/>")
         self.receive_until("<open ")
-        self.receive_until("<mechanisms")
-        encoded = base64.b64encode(f"\0{self.username}\0{self.password}".encode()).decode()
-        self.send(
-            f"<auth xmlns='urn:ietf:params:xml:ns:xmpp-sasl' mechanism='PLAIN'>{encoded}</auth>"
-        )
-        self.receive_until("<success")
-        self.send(f"<open xmlns='urn:ietf:params:xml:ns:xmpp-framing' to='{DOMAIN}' version='1.0'/>")
-        self.receive_until("<open ")
         features, _ = self.receive_until("</stream:features>")
+        encoded = base64.b64encode(f"\0{self.username}\0{self.password}".encode()).decode()
+        if self.device_id is not None:
+            check(re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", self.device_id) is not None,
+                  "device identity must be a UUID")
+            check("urn:xmpp:sasl:2" in features, "WebSocket did not advertise SASL2")
+            self.send(
+                "<authenticate xmlns='urn:xmpp:sasl:2' mechanism='PLAIN'>"
+                f"<initial-response>{encoded}</initial-response>"
+                f"<user-agent id='{self.device_id}'/></authenticate>"
+            )
+            features, frames = self.receive_until("</stream:features>")
+            check(any("<success xmlns='urn:xmpp:sasl:2'" in frame for frame in frames),
+                  "device authentication failed")
+        else:
+            self.send(
+                f"<auth xmlns='urn:ietf:params:xml:ns:xmpp-sasl' mechanism='PLAIN'>{encoded}</auth>"
+            )
+            self.receive_until("<success")
+            self.send(f"<open xmlns='urn:ietf:params:xml:ns:xmpp-framing' to='{DOMAIN}' version='1.0'/>")
+            self.receive_until("<open ")
+            features, _ = self.receive_until("</stream:features>")
         check("urn:xmpp:sm:3" in features, "stream management was not advertised after SASL")
         check("urn:xmpp:csi:0" in features, "client state indication was not advertised after SASL")
         if resume:
@@ -3016,8 +3058,7 @@ def run() -> None:
     assert_public_url(get_match.group(1), "/uploads/", "HTTP Upload GET slot")
     put_path = re.sub(r"^https?://[^/]+", "", put_match.group(1))
     get_path = re.sub(r"^https?://[^/]+", "", get_match.group(1))
-    status, _, _ = raw_http(
-        "PUT",
+    status, _, _ = put_upload_when_ready(
         put_path,
         upload_body,
         {"Authorization": f"Bearer {put_match.group(2)}", "Content-Type": "application/octet-stream"},
@@ -3034,19 +3075,18 @@ def run() -> None:
         == "default-src 'none'; sandbox",
         "HTTP Upload download did not return the reserved ciphertext",
     )
-    status, replay_headers, _ = raw_http(
-        "PUT",
+    status, replay_headers, _ = put_upload_when_ready(
         put_path,
         upload_body,
         {"Authorization": f"Bearer {put_match.group(2)}", "Content-Type": "application/octet-stream"},
     )
     check(
         status == 201 and replay_headers.get("idempotency-replayed") == "true",
-        "byte-identical HTTP Upload retry did not use the bounded replay contract",
+        f"byte-identical HTTP Upload retry violated replay contract: status={status}, "
+        f"replayed={replay_headers.get('idempotency-replayed')!r}",
     )
     changed_upload_body = bytes([upload_body[0] ^ 1]) + upload_body[1:]
-    status, _, _ = raw_http(
-        "PUT",
+    status, _, _ = put_upload_when_ready(
         put_path,
         changed_upload_body,
         {"Authorization": f"Bearer {put_match.group(2)}", "Content-Type": "application/octet-stream"},
@@ -3056,8 +3096,7 @@ def run() -> None:
     # client can recover from lost HTTP responses. The capability is still
     # bounded: a fourth replay must be rejected even when its bytes match.
     for replay_number in (2, 3):
-        status, replay_headers, _ = raw_http(
-            "PUT",
+        status, replay_headers, _ = put_upload_when_ready(
             put_path,
             upload_body,
             {
@@ -3069,8 +3108,7 @@ def run() -> None:
             status == 201 and replay_headers.get("idempotency-replayed") == "true",
             f"HTTP Upload identical replay {replay_number} was not accepted safely",
         )
-    status, _, _ = raw_http(
-        "PUT",
+    status, _, _ = put_upload_when_ready(
         put_path,
         upload_body,
         {"Authorization": f"Bearer {put_match.group(2)}", "Content-Type": "application/octet-stream"},
@@ -3096,8 +3134,7 @@ def run() -> None:
     )
     route_limit_put_path = re.sub(r"^https?://[^/]+", "", route_limit_put.group(1))
     route_limit_get_path = re.sub(r"^https?://[^/]+", "", route_limit_get.group(1))
-    status, _, _ = raw_http(
-        "PUT",
+    status, _, _ = put_upload_when_ready(
         route_limit_put_path,
         route_limit_body,
         {
@@ -3127,9 +3164,9 @@ def run() -> None:
         "Authorization": f"Bearer {retry_put.group(2)}",
         "Content-Type": "application/octet-stream",
     }
-    status, _, _ = raw_http("PUT", retry_put_path, b"short", retry_headers)
+    status, _, _ = put_upload_when_ready(retry_put_path, b"short", retry_headers)
     check(status == 400, "HTTP Upload accepted a body shorter than the reserved slot")
-    status, _, _ = raw_http("PUT", retry_put_path, retry_body, retry_headers)
+    status, _, _ = put_upload_when_ready(retry_put_path, retry_body, retry_headers)
     check(status == 201, "HTTP Upload did not release a rejected claim for safe retry")
     status, _, retried_download = raw_http("GET", retry_get_path)
     check(

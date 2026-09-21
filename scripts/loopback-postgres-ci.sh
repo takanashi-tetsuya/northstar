@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runtime fixtures deliberately use the single-owner development database
-# escape hatch.  A normal GitHub Actions service container is reached through
-# Docker's bridge, so PostgreSQL correctly reports a non-loopback server
-# address even when the runner connects to a published 127.0.0.1 port.  Start
-# the pinned fixture in the runner's network namespace instead, and constrain
-# PostgreSQL itself to 127.0.0.1.  This preserves the production fail-closed
-# attestation instead of teaching it to trust CI or Docker bridge addresses.
+# The single-owner development profile requires a loopback database endpoint.
+# Host networking lets PostgreSQL bind to 127.0.0.1 directly; a bridge would
+# report the container address even when the published port is on loopback.
 
 readonly container_name='northstar-ci-loopback-postgres'
 readonly postgres_image='postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73'
 readonly max_connections="${NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS:-100}"
+readonly cpu_shares="${NORTHSTAR_LOOPBACK_POSTGRES_CPU_SHARES-0}"
 
 stop_fixture() {
   docker rm --force "$container_name" >/dev/null 2>&1 || true
@@ -33,6 +30,11 @@ if ! [[ "$max_connections" =~ ^[1-9][0-9]*$ ]] || ((max_connections < 16 || max_
   echo 'NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS must be an integer from 16 through 768' >&2
   exit 2
 fi
+# Bound the length before arithmetic so large inputs cannot wrap around.
+if ! [[ "$cpu_shares" =~ ^(0|[1-9][0-9]{0,5})$ ]] || ((cpu_shares != 0 && (cpu_shares < 2 || cpu_shares > 262144))); then
+  echo 'NORTHSTAR_LOOPBACK_POSTGRES_CPU_SHARES must be 0 (Docker default) or an integer from 2 through 262144' >&2
+  exit 2
+fi
 if docker container inspect "$container_name" >/dev/null 2>&1; then
   echo "refusing to replace an existing container: $container_name" >&2
   exit 2
@@ -50,6 +52,7 @@ trap cleanup_failed_start EXIT
 docker run --detach \
   --name "$container_name" \
   --network host \
+  --cpu-shares "$cpu_shares" \
   --env POSTGRES_DB=xmpp_test \
   --env POSTGRES_USER=xmpp_test \
   --env POSTGRES_PASSWORD=xmpp-test-password \
@@ -57,6 +60,12 @@ docker run --detach \
   -c listen_addresses=127.0.0.1 \
   -c "max_connections=$max_connections" \
   -c password_encryption=scram-sha-256 >/dev/null
+
+applied_cpu_shares="$(docker inspect --format '{{.HostConfig.CpuShares}}' "$container_name")"
+if [[ "$applied_cpu_shares" != "$cpu_shares" ]]; then
+  echo "PostgreSQL CPU shares mismatch: requested=$cpu_shares applied=$applied_cpu_shares" >&2
+  exit 1
+fi
 
 for _ in $(seq 1 60); do
   if docker exec "$container_name" \
@@ -84,5 +93,28 @@ if [[ "$fixture_ready" != true ]]; then
   exit 1
 fi
 
+# Retain the owning postmaster identity so the observer can map container
+# backend IDs to host processes.
+fixture_ready=false
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  postgres_host_pid="$(docker inspect --format '{{.State.Pid}}' "$container_name")"
+  python3 - "$postgres_host_pid" "$GITHUB_ENV" <<'PY'
+from pathlib import Path
+import sys
+
+pid = int(sys.argv[1])
+if pid <= 1:
+    raise SystemExit('invalid PostgreSQL fixture process')
+raw = Path(f'/proc/{pid}/stat').read_text()
+fields = raw.rsplit(')', 1)[1].split()
+if raw.split('(', 1)[1].rsplit(')', 1)[0] != 'postgres' or fields[0] in {'Z', 'X'}:
+    raise SystemExit('PostgreSQL fixture process is not live')
+started = int(fields[19])
+with Path(sys.argv[2]).open('a') as stream:
+    stream.write(f'NORTHSTAR_CI_POSTGRES_HOST_PID={pid}\n')
+    stream.write(f'NORTHSTAR_CI_POSTGRES_START_TICKS={started}\n')
+PY
+fi
+fixture_ready=true
 trap - EXIT
-echo "loopback PostgreSQL fixture ready on 127.0.0.1:5432 max_connections=$max_connections"
+echo "loopback PostgreSQL fixture ready on 127.0.0.1:5432 max_connections=$max_connections cpu_shares=$applied_cpu_shares"

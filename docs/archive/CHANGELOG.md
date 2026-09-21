@@ -2,7 +2,7 @@
 
 > **Historical snapshot / 历史快照 — not current release notes and 不得作为当前能力或发布说明。**
 > Use [the root changelog](../../CHANGELOG.md), [current known issues](../KNOWN_ISSUES.md),
-> [the XEP matrix](../../XEP_MATRIX.md) and [the release checklist](../RELEASE_CHECKLIST.md)
+> [the XEP matrix](../XEP_MATRIX.md) and [the release checklist](../RELEASE_CHECKLIST.md)
 > for the current artifact.
 
 All notable changes to Northstar XMPP Server during the recent development engagement.

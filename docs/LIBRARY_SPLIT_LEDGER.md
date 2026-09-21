@@ -190,9 +190,10 @@ moves (for example, credential zeroization now lives in
   enter one injected PostgreSQL repository operation. Ordered MUC post-commit
   plans are owned by the application library rather than the XML handler.
 
-## 6. Verification state
+## 6. Historical integration checkpoint
 
-The current local static/unit gate after integration is:
+The [2026-09-03 repository record](https://github.com/takanashi-tetsuya/northstar/blob/94b7d9d5ea100a176d010f0bd42a7ad8f5b1080f/docs/LIBRARY_SPLIT_LEDGER.md)
+contains these local results from the library integration:
 
 - root unit tests: 959 passed, 167 environment-dependent tests ignored;
 - root `cargo check --all-features`: passed;
@@ -201,8 +202,9 @@ The current local static/unit gate after integration is:
 - program architecture-boundary check: passed after moving ownership checks to
   their new crate locations.
 
-Environment-dependent PostgreSQL, Redis, transport, browser, federation,
-load, fuzzing and deployment gates are not evidence from this pass.
+This checkpoint covers static and unit checks. Subsequent CI results are
+recorded in the [CI validation log](handoff/2026-09-12/CI-PERFORMANCE-FOLLOWUP.md);
+release validation follows the [release checklist](RELEASE_CHECKLIST.md).
 
 ## 7. Remaining split debt
 

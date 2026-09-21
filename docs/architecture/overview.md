@@ -23,7 +23,7 @@ Northstar processes. It is an experimental, non-durable transport, not a second
 system of record or an application-authentication boundary. Remote Redis
 requires `rediss://` hostname verification and may use a private CA and mTLS.
 Every command/ACK additionally uses an exact Ed25519 signed-envelope format v8
-inside the independently versioned node/delivery contract v11, plus a
+inside the independently versioned node/delivery contract v13, plus a
 PostgreSQL-authorized key-bound process-instance lease. Explicit fail-closed or
 PostgreSQL-spool-only degradation keeps bind/resume/MUC/admin/transient work out
 of an unreconciled cluster. Redis does not replicate upload objects; public
@@ -147,8 +147,8 @@ stamped once from its UUID so all retries preserve an idempotency key.
 
 PubSub/PEP mutations atomically commit their immutable audience, stable event
 ID and exact bytes/digest to PostgreSQL. A leased worker retries local, cluster,
-digest and S2S projections. The final transport boundary remains at-least-once
-and no distributed exactly-once transaction is claimed.
+digest and S2S projections. The final transport boundary is at-least-once;
+recipients must handle possible duplicates.
 
 ## End-to-end confidentiality
 
@@ -160,10 +160,9 @@ and encrypted envelopes. Encrypted upload bytes are AES-GCM ciphertext and the
 key/IV/name/type metadata travels inside OMEMO/SCE.
 
 `REQUIRE_ENCRYPTED_ARCHIVE=true` prevents plaintext message bodies from being
-persisted in personal/MUC archives and offline storage. It is a storage policy,
-not a promise that the server cannot see plaintext voluntarily sent on a live
-connection. Routing metadata, membership, timing, approximate sizes and
-user-submitted decrypted report evidence remain server-visible. The server
+persisted in personal/MUC archives and offline storage. The server can still see
+plaintext sent on a live connection, routing metadata, membership, timing,
+approximate sizes and user-submitted decrypted report evidence. The server
 cannot recover lost browser OMEMO private keys.
 
 ## Recovery and capacity evidence
@@ -177,9 +176,8 @@ The simple load fixture authenticates 1,000 WebSocket resources and pings them.
 The production-envelope fixture additionally uses a release build, samples
 Direct TLS/WebSocket authentication latency, sends fan-out traffic, resumes 100
 SM sessions, tests overload rejection/recovery and records RSS, file descriptor
-and database-pool bounds. This is automated local design evidence, not an SLA or
-a production-capacity guarantee. Repeat it with target-host limits, PostgreSQL
-I/O, proxy and monitoring enabled.
+and database-pool bounds. Measure production capacity separately with target-host
+limits, PostgreSQL I/O, proxy and monitoring enabled.
 
 Database dumps and uploaded bytes form one recovery set. Local backup/restore tooling
 uses staged publication, manifests/checksums, database-to-file size/SHA-256
@@ -191,8 +189,8 @@ contains S3 bytes. Operators must
 store encrypted/authenticated copies off-host. Browser private keys are outside
 server backups.
 
-See [XEP_MATRIX.md](XEP_MATRIX.md),
-[docs/PRODUCTION_OPERATIONS.md](docs/PRODUCTION_OPERATIONS.md),
-[docs/UPLOAD_STORAGE.md](docs/UPLOAD_STORAGE.md) and
-[docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) for the precise support and
+See [XEP_MATRIX.md](../XEP_MATRIX.md),
+[docs/PRODUCTION_OPERATIONS.md](../PRODUCTION_OPERATIONS.md),
+[docs/UPLOAD_STORAGE.md](../UPLOAD_STORAGE.md) and
+[docs/KNOWN_ISSUES.md](../KNOWN_ISSUES.md) for the precise support and
 deployment boundaries.

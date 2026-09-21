@@ -2,8 +2,8 @@
 
 `catalog/topics.yaml` is the source of truth for event topics, producer and
 consumer ACLs, retention, replication, and ordering keys. Run
-`kafka-policy-generator` to render broker configuration; hand-edited ACLs are
-not release evidence.
+`kafka-policy-generator` to render broker configuration and validate the output
+against the catalog before deployment.
 
 Ordering keys follow the aggregate that owns the semantic order: direct
 messages use a recipient/conversation key, rooms use `room_id`, PubSub uses

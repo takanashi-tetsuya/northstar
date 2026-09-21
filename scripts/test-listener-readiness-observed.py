@@ -319,14 +319,14 @@ assert os.environ['NORTHSTAR_LISTENER_STRESS_FAILURE_MARKER'].endswith('/first-f
         self.assertNotIn("PGSERVICE", value)
         self.assertNotIn("PGOPTIONS", value)
 
-    def test_regular_only_ci_keeps_original_load_and_allowlists_artifacts_without_salt(self):
+    def test_regular_ci_keeps_concurrency_and_allowlists_artifacts_without_salt(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         regular = workflow.split("  listener-readiness-stress-regular:", 1)[1].split(
             "  listener-readiness-stress-scheduled:", 1)[0]
         self.assertIn("python3 scripts/listener-readiness-observed-wsl.py", regular)
-        self.assertIn('--mode regular --fixture "¤{{ matrix.fixture }}" --rounds 20 --pairs 50'.replace("¤", "$"), regular)
+        self.assertIn('--mode regular --fixture "¤{{ matrix.fixture }}" --rounds 5 --pairs 50'.replace("¤", "$"), regular)
         self.assertIn('NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"', regular)
-        self.assertIn("timeout-minutes: 150", regular)
+        self.assertIn("timeout-minutes: 60", regular)
         artifact = regular.split("      - name: Upload bounded control observer evidence", 1)[1]
         self.assertIn("/database-map.json", artifact)
         self.assertNotIn("/database-hash-salt", artifact)

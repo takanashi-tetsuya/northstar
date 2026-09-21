@@ -158,7 +158,7 @@ fn test_registration_authority_and_runtime_transition_lock() {
     assert_eq!(res.registration_mode(), RegistrationMode::Closed);
     assert!(res.is_registration_locked());
 
-    // Proof: Admin/runtime cannot bypass fail-closed lock by transitioning to Open
+    // The dependency lock rejects Open.
     let err_open = res
         .validate_registration_transition(RegistrationMode::Open)
         .unwrap_err();
@@ -172,7 +172,7 @@ fn test_registration_authority_and_runtime_transition_lock() {
         }
     ));
 
-    // Proof: Admin/runtime cannot transition to InvitationOnly either
+    // InvitationOnly is blocked by the same dependency lock.
     let err_inv = res
         .validate_registration_transition(RegistrationMode::InvitationOnly)
         .unwrap_err();

@@ -188,12 +188,8 @@ pub async fn remove_privacy_list(
     name: &str,
 ) -> Result<RemovePrivacyListOutcome> {
     let mut tx = pool.begin().await?;
-    // A shared user-row lock is sufficient to keep the FK parent alive while
-    // the selection changes. Callers such as SM finalization already hold the
-    // same authorization lock; avoiding a SHARE -> UPDATE upgrade prevents
-    // concurrent resumes for different resources of one account from
-    // deadlocking while preserving deletion/change-password serialization.
-    let owner = sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE id=$1 FOR SHARE")
+    // Exclude new selections until the in-use check and deletion commit.
+    let owner = sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE id=$1 FOR UPDATE")
         .bind(owner_id)
         .fetch_optional(&mut *tx)
         .await?;
@@ -303,7 +299,10 @@ pub async fn set_active_privacy_list_in_transaction(
     connection_id: Uuid,
     name: Option<&str>,
 ) -> Result<bool> {
-    let owner = sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+    // SM finalization already holds this shared authorization lock. Upgrading
+    // it would deadlock concurrent resumes for different account resources.
+    // List deletion takes the exclusive lock before checking active selections.
+    let owner = sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE id=$1 FOR SHARE")
         .bind(owner_id)
         .fetch_optional(&mut **tx)
         .await?;
@@ -729,6 +728,79 @@ mod tests {
             }],
         };
         replace_privacy_list(&pool, owner_id, &allow).await.unwrap();
+        let generation: i64 = sqlx::query_scalar("SELECT auth_generation FROM users WHERE id=$1")
+            .bind(owner_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let first_connection = Uuid::new_v4();
+        let second_connection = Uuid::new_v4();
+        let mut first = crate::db::lock_auth_generation(&pool, owner_id, generation)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut second = crate::db::lock_auth_generation(&pool, owner_id, generation)
+            .await
+            .unwrap()
+            .unwrap();
+        // Both resume transactions hold the account lock before either writes
+        // its selection. A lock upgrade would block the first operation here.
+        for (transaction, connection) in [
+            (&mut first, first_connection),
+            (&mut second, second_connection),
+        ] {
+            sqlx::query("SET LOCAL lock_timeout='1s'")
+                .execute(&mut **transaction)
+                .await
+                .unwrap();
+            assert!(set_active_privacy_list_in_transaction(
+                transaction,
+                owner_id,
+                connection,
+                Some("allow"),
+            )
+            .await
+            .unwrap());
+        }
+        second.commit().await.unwrap();
+        clear_active_privacy_session(&pool, owner_id, second_connection)
+            .await
+            .unwrap();
+
+        let removal_pool = pool.clone();
+        let removal =
+            tokio::spawn(
+                async move { remove_privacy_list(&removal_pool, owner_id, "allow").await },
+            );
+        let waiting = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let blocked: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+                     WHERE datname=current_database() AND wait_event_type='Lock'
+                       AND query='SELECT id FROM users WHERE id=$1 FOR UPDATE')",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                if blocked {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        first.commit().await.unwrap();
+        assert!(
+            waiting.is_ok(),
+            "list deletion did not wait for the selection transaction"
+        );
+        assert_eq!(
+            removal.await.unwrap().unwrap(),
+            RemovePrivacyListOutcome::Conflict
+        );
+        clear_active_privacy_session(&pool, owner_id, first_connection)
+            .await
+            .unwrap();
         let active_connection = Uuid::new_v4();
         assert!(
             set_active_privacy_list(&pool, owner_id, active_connection, Some("allow"),)

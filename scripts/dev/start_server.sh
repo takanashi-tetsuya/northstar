@@ -2,7 +2,7 @@
 set -eu
 umask 077
 
-project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$project_dir"
 
 # Development convenience wrapper only. Run the explicit migration command

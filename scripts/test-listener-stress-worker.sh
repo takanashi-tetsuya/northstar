@@ -25,7 +25,7 @@ grep -Fq 'worker_group="$(wait_for_worker_group "$control_file" "$worker_pid")"'
 grep -Fq 'kill "-$signal" -- "-$group"' "$driver" \
   || { echo "listener stress driver no longer uses scoped worker-group signalling" >&2; exit 1; }
 # Keep the parent-side safety gates coupled to the process-session regression.
-# The full 20x50/100x50 workload owns behavioral verification; these checks
+# The full listener matrices own behavioral verification; these checks
 # prevent a future edit from reintroducing the already-observed entry failures
 # before the worker topology can even start.
 grep -Fq 'pg_catalog.host(pg_catalog.inet_server_addr())' "$driver" \

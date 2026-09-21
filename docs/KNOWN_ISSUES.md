@@ -1,8 +1,10 @@
 # Northstar 当前剩余妥协、设计边界与发布门禁
 
-> 基线：当前 `dev` 工作区；迁移 `0126`–`0138`、XEP-0198 事件通知、MIX durable route-wake、跨节点 typed transport hand-off 与 XEP-0115 observation 重构已经进入代码，但发布前仍须对最终提交重新保存完整门禁证据。`0130` 的持久个人消息 admission 索引/账号删除候选查找，以及 `0131`–`0138` 的数据库安全与有序投递修复都仍处于 M00 验证中，不能据此声称 production accepted。
-> 定位：这是当前唯一的剩余问题与妥协清单。已经解决的历史问题属于 changelog 或历史验收报告，不应继续出现在这里。
-> 证据边界：仓库测试和静态检查不等于生产环境、公网互操作或独立安全认证。按用户要求，本轮没有执行可能触发 cybersecurity 拦截的 fuzz、畸形/对抗网络流量、故障注入、攻击式反滥用验证或极限负载；这些项目已移至 [MANUAL_SECURITY_VALIDATION.md](MANUAL_SECURITY_VALIDATION.md) 供授权操作者在隔离环境中手动执行。
+本文记录 Northstar 0.2.0 的已知限制与待完成验收。迁移链为 `0001`–`0143`，
+共 142 项，保留有意缺号 `0021`。已解决问题见 [changelog](../CHANGELOG.md)。
+
+CI 验证隔离环境中的代码与运行行为；生产环境、公网互操作和独立安全审计
+需要各自的验收记录。手动测试方法见 [MANUAL_SECURITY_VALIDATION.md](MANUAL_SECURITY_VALIDATION.md)。
 
 ## 如何理解下表
 
@@ -46,7 +48,7 @@
 | DESIGN-OMEMO | OMEMO 私钥、信任决定和 fingerprint 验证属于端点；举报解密明文无法由服务器证明 | 标准/密码学边界 | **永久边界** | 服务端保存 PEP 公共材料和 archive ciphertext/digest，不托管私钥。举报中的解密文本必须标注为 `user-supplied/unverified`，所以 moderation 不是 zero knowledge | 保留人工指纹/QR 验证、设备撤销和密文证据链；服务器不得自动信任设备、伪造验证或宣称能证明用户解密结果 |
 | DESIGN-TLS-RELOAD | TLS reload 不能原地替换现有连接已经协商的会话 | TLS 架构属性 | **只能缓解** | 新连接立即使用新证书、trust/CRL generation；旧连接继续使用原握手，只有明确证书撤销会触发精确 drain，普通续期不会无差别踢线 | 高风险轮换执行受控 connection drain；永久声明“reload 影响新握手，现有 TLS 会话需要重连或显式 drain” |
 | PROFILE-REVOCATION | 证书撤销只支持本地、签名与 freshness 校验后的 PEM CRL，没有 OCSP 或在线 CRL/AIA 获取 | 产品范围＋网络安全取舍 | **可实现，不能靠运行测试关闭** | 当前 profile 避免盲目访问证书给出的 URL 和由此产生的 SSRF/可用性问题；CRL 的可靠获取与及时 reload 是运营者责任。DANE-EE 按其信任模型不使用 CA revocation | 若产品需要在线撤销，必须实现有界来源、重定向/地址策略、缓存、stapling/freshness、SSRF 防护和明确 fail policy；否则永久声明“仅本地 CRL，不支持 OCSP/在线 AIA” |
-| PROFILE-XEP | `Partial`、`Pass-through`、`Experimental` 只表示明确实现的 profile，不是完整实现整个 XEP | 刻意产品范围＋规范成熟度 | **逐项可扩展** | XEP-0225、XEP-0357、XEP-0408、XEP-0487 等包含 Deferred/Experimental 边界；vCard4、现代媒体/信任扩展和 MIX/MUC coexistence 只实现矩阵声明的语义 | 以 [XEP_MATRIX.md](../XEP_MATRIX.md) 为唯一逐协议范围。只有实现、自动化证据、第三方互操作和规范状态均允许时才能升级标签；端点职责不得伪装成服务器状态机 |
+| PROFILE-XEP | `Partial`、`Pass-through`、`Experimental` 只表示明确实现的 profile，不是完整实现整个 XEP | 刻意产品范围＋规范成熟度 | **逐项可扩展** | XEP-0225、XEP-0357、XEP-0408、XEP-0487 等包含 Deferred/Experimental 边界；vCard4、现代媒体/信任扩展和 MIX/MUC coexistence 只实现矩阵声明的语义 | 以 [XEP_MATRIX.md](XEP_MATRIX.md) 为唯一逐协议范围。只有实现、自动化证据、第三方互操作和规范状态均允许时才能升级标签；端点职责不得伪装成服务器状态机 |
 | WEB-ORIGIN | 网页服务器和静态资源发布链始终位于浏览器 OMEMO 的 E2EE 信任根 | Web 平台架构＋运维信任 | **网页形态下永久存在** | 控制服务器、TLS/CDN 或发布凭据的一方可以在用户下次加载时替换验证代码；同源 CSP、SRI、hash 和签名 manifest 能提高可见性，但验证器也由同源下发时不能消除该风险 | 高风险部署提供独立签名的桌面/移动/浏览器扩展客户端和可验证更新/透明日志。网页客户端必须永久声明其代码分发方属于信任根 |
 | WEB-PLATFORM | 浏览器没有 TLS exporter 或可靠 secure-memory/erase 能力 | 浏览器平台限制 | **当前 Web API 下不可根治** | 网页端不能实现真实 SCRAM-SHA-256-PLUS，只能使用 SASL2 SCRAM-SHA-256、FAST 和 SM；JavaScript 字符串无法保证清零，ArrayBuffer 擦除也只是 best-effort | 缩短密码/密钥生命周期、Worker 隔离、立即清表单并优先 FAST。要获得 channel binding 和可证明安全内存，需浏览器标准新增能力或使用原生客户端 |
 | WEB-TRANSFER | OMEMO 恢复包是一次性设备 **move**，不是 escrow 或通用备份 | 刻意密码学设计＋平台限制 | **可改善 UX，不应改名为 backup** | 同一 Double Ratchet 状态不能在源/目标并行使用；弱包口令可被离线猜测，服务器限流无效；已因前向保密删除的旧密钥不能恢复，服务器也不能证明离线副本已物理擦除 | 使用高熵口令/安全设备通道、冻结 source、永久 generation fence 和重新验证联系人。若需要可恢复备份，必须另行设计并审计多设备/备份协议 |
@@ -55,7 +57,7 @@
 | OPS-S3-BACKUP | PostgreSQL 备份只保存对象 manifest，不包含 S3 对象字节 | 外部基础设施责任 | **通过部署验收关闭** | S3 部署必须结合 provider-native versioned snapshot/replication、KMS、Object Lock 和凭据备份；不能拿本地 tar 流程替代 | 在隔离 namespace 完整恢复数据库及对象，然后逐对象验证 version/size/SHA-256；记录 RPO/RTO、KMS/凭据恢复和生命周期策略 |
 | OPS-TRUST | 数据库 superuser、KMS/HSM、WORM、legal hold、备份目标、Redis ACL/TLS 和对象存储策略属于运维信任边界 | 运维信任 | **不能由应用自证** | 应用 trigger、hash chain 和签名游标不能阻止数据库 owner 修改数据；反滥用 `key ID` authority 能检测节点漂移，但无法修复运营者丢失的 HMAC secret | 使用职责分离、非 owner runtime、独立审计日志/WORM 锚定、密钥双人控制、轮换和恢复演练。数据库与 secret 必须作为同一代恢复，epoch 不得回退或复用 |
 | OPS-BACKUP-COMPAT | 生产备份已 fail-closed，仍保留显式 development legacy、明文 rollback 与人工硬崩溃处置 | 兼容性＋运维取舍 | **生产默认已关闭；剩余项可继续收紧** | base Compose 与脚本默认强制 Ed25519、age、sequence/restore floor 和 file-backed 分权 URL；legacy 只有单一 `development-legacy` 开关并警告。backup/restore 都在 Unix-socket-only 临时 PostgreSQL 验证 dump，不再用生产角色 createdb。restore 在 rollback dump/connection fence 前事务预检当前库；incoming 始终要求 exact current ledger/schema，普通失败补偿通过同一 canonical auto resolver 恢复旧库。restore 使用四个独立注册并预先核验 PID 的 backend：维护控制连接位于 `postgres`，协调、主替换与补偿位于目标库。每个替换事务在 READY 前取得 `xid8`；父进程在发送破坏性 SQL 前把 restore/target/kind/barrier/worker/XID fsync 到 journal；协调器在同一 transaction-level barrier 后调用 `pg_xact_status()`。只有 `committed`/`aborted` 可自动推进代际，未知、`in progress`、`NULL` 或补偿不完整保持 fail-closed。restore 不 terminate peer；三个登记目标 PID 以外的连接会使 cutover 原地拒绝。rollback 目录仍可能明文；`SIGKILL`/断电后的 journal 仍需人工恢复，而且 PostgreSQL 对过旧 XID 可返回 `NULL`，不能宣称无限期自动判定；sequence/floor state 丢失仍会改变 lineage 或可信下限 | rollback 放在加密卷并完成密钥/状态离机副本与恢复演练；实现带集群身份校验的 journal resume，并对 XID 状态已回收的情况保留人工 fail-closed 流程。任何 `allow-generation-change` 都需独立审计；legacy 兼容期结束后删除显式开发入口 |
-| EXT-CLUSTER | 集群、CLU-MUC、capacity ledger 和 shared storage 的当前 checkout 尚无完整运行证据 | 仅缺运行证据 | **执行后可关闭证据项** | 两节点 fixture 已定义但本轮只做静态/纯测试；尚未证明所有非对称分区、lease loss、SM race、旧新二进制、managed Redis failover、S3/MinIO crash/restore 和 provider lifecycle | 在固定 release commit 上执行全部隔离 PostgreSQL/Redis/MinIO fixture、网络分区和 kill-point，并保存配置、日志、版本、结果和 RPO/RTO。完成前多节点仍为 `Experimental` |
+| EXT-CLUSTER | 集群、CLU-MUC、capacity ledger 和 shared storage 尚缺完整目标环境验收 | 仅缺运行证据 | **执行后可关闭证据项** | 隔离 PostgreSQL/Redis 回归已在下述源提交的常规 CI 中通过；非对称分区、lease loss、SM race、混合版本、managed Redis failover、S3/MinIO crash/restore 和 provider lifecycle 仍需完整目标环境矩阵 | 在固定 release commit 上完成隔离 PostgreSQL/Redis/MinIO、网络分区和 kill-point 矩阵，保存配置、日志、版本、结果和 RPO/RTO。完成前多节点仍为 `Experimental` |
 | EXT-CAPACITY | `1,000-session` 测试不是 1,000 名同时活跃用户的生产 SLA | 仅缺目标环境证据 | **目标硬件验收后可关闭证据项** | 现有脚本主要验证认证连接和调度，未完整模拟 initial presence、roster、MUC、OMEMO、MAM、upload、push 与 federation 混合负载 | 在目标 Linux 主机执行代表性账号/资源和业务混合、冷/热启动及 24–72 小时 soak，记录 CPU、RSS、FD、Tokio、PostgreSQL WAL/IOPS、网络和 p50/p95/p99；结论只适用于被测 commit/配置/硬件 |
 | EXT-FEDERATION | 公网 DNSSEC/SRV/TLSA、IPv4/IPv6、DANE、PKIX/本地 CRL 轮换和多个独立 peer 尚未形成当前 release 证据 | 外部环境＋仅缺运行证据 | **执行后可关闭证据项** | 本地 resolver、TLS policy 和 CRL 测试不能证明公共 DNS、CA 路径或第三方服务器行为；在线撤销能力缺口另由 `PROFILE-REVOCATION` 记录，不能用互操作测试代替实现 | 在公网 staging 对 Prosody/ejabberd/Openfire 等独立实现记录完整矩阵、DNS chain、证书指纹、版本、CRL reload/drain 和故障结果 |
 | EXT-COMPONENT | 真实第三方 external component/gateway 互操作证据不足 | 仅缺运行证据＋第三方差异 | **执行后可关闭证据项** | 2026-08-27 的 isolated strict mock peer 覆盖了本地 runtime 形状，但不能代替真实 XEP-0114 accept/connect 或 XEP-0225 component；标准缺少应用 ACK 的永久边界仍由 `STD-FINAL-ACK` 保留 | 使用固定版本的真实组件分别验证两种 XEP-0114 方向，以及 XEP-0225 STARTTLS、SASL、bind/unbind、重连、Northstar/component restart、背压、稳定 ID 重试和组件侧去重，并保存证据 |
@@ -63,17 +65,17 @@
 | EXT-SECURITY | 尚无独立 RFC/XEP 审查、安全审计和渗透测试 | 外部资格 | **第三方完成后可关闭证据项** | 内部静态检查、单元测试和自审不能构成认证，也不能证明不存在未知漏洞 | 固定 release commit、binary digest、SBOM、部署拓扑和 threat model，委托独立方审查 XML/state machine、REST/WebSocket/BOSH/S2S/component、Redis/object store、浏览器密码学和权限模型。高风险公网部署前必须完成 |
 | EXT-OPERATIONS | 真实告警接收、升级/静默/恢复、离机备份和灾难恢复尚缺目标部署演练 | 外部运维证据 | **演练后可关闭证据项** | 仓库有 metrics、Prometheus rules、Grafana 和 runbook，但阈值与通知链没有目标流量基线；代码不能证明值班人员或备份目的地有效 | 完成通知演练、恢复演练、容量阈值校准和定期 restore drill，记录负责人、时间、RTO/RPO 和失败处置 |
 
-## 当前发布候选的证据状态
+## 发布验证
 
-| 项目 | 结果 | 证据范围 |
-| --- | --- | --- |
-| `0126`–`0138`、数据库权限清单、SM、Caps 与 WebSocket 终止序列确定性回归 | `0130`–`0138` 后的最终结果尚未记录；M00 仍为进行中，不能视为 production accepted | 先前记录的 `1,188 total / 1,021 passed / 167 ignored / 0 failed` 早于当前 `0130`–`0138` 变更，只能作为历史对照。必须在同一最终 tree 上重新执行普通 Rust、隔离 PostgreSQL/Redis 与发布 CI 门禁；ignored 不得视为通过 |
-| Rust 最终静态质量门禁 | `fmt`、all-target/all-feature `check`、Clippy `-D warnings` 全部通过 | 结果对应 2026-09-02 的最终暂存工作树；提交后 CI 必须重跑，不能由这条记录替代 |
-| 架构静态门禁 | `AppState=9`；协议树 `0 db authority / 0 db domain-model / 0 state.pool / 0 sqlx:: / 0 PgPool` | MIX producer service gate、Caps queue/cache 非权威与 exact-owner teardown、SM event/recheck 静态不变量均通过；静态匹配仍不是权限或故障安全的运行证明 |
-| 外发 XML 与文档/迁移门禁 | `0138` 的 checked-in ledger 已按迁移字节的 SHA-384 更新，Rust ledger 单元测试、文档和静态迁移契约已通过；最终提交仍须由 CI 的 generator/checker 重算 | 迁移当前最大值为 `0138`、总数为 137；每行由 SQLx description 与 SHA-384 绑定。当前 Windows 主机没有可用的 Python 解释器，因此未在本机运行 ledger generator；实际应用迁移、角色授权与回滚仍由隔离 CI/目标环境证明 |
-| 运行时/外部证据 | 本轮未新增 | 没有执行 fuzz、畸形网络流量、故障注入、极限负载、公网联邦或客户端 GUI 验证；实现变化不能自动继承旧制品的运行证据 |
+候选版本的状态以对应提交的 [GitHub Actions](https://github.com/takanashi-tetsuya/northstar/actions)
+结果为准。压力测试的故障分析、修复和制品校验记录见
+[CI 验证记录](handoff/2026-09-12/CI-PERFORMANCE-FOLLOWUP.md)。
+发布预演验证 Windows、Linux 与 Docker 构建；正式发布还会验证草稿中的
+下载制品、来源证明和公开镜像，完成后由维护者手动发布。
 
-本轮明确未执行 fuzz、WebSocket/BOSH 畸形帧、Slowloris/churn、反滥用/密码学攻击式矩阵、SIGKILL/磁盘满/断电点、PostgreSQL/Redis/对象存储故障注入、千会话极限负载或公网联邦安全探测。详细手动验证方案见 [MANUAL_SECURITY_VALIDATION.md](MANUAL_SECURITY_VALIDATION.md)。
+定时 fuzz、production/cluster load envelope 和 scheduled stress 属于定时或
+手动 CI；普通 push/PR 按策略跳过这些工作。最终发布还需要精确 `main` 提交的
+可信 CI、签名标签及制品验证，流程见 [发布职责](governance/release-roles.md)。
 
 ## 发布解释
 
@@ -81,7 +83,7 @@
 - 单节点模式不受 Redis 集群架构债务直接阻断，但仍必须完成目标硬件、备份恢复、证书、公网互操作、客户端和安全审计门禁后，才能作高风险公网生产声明。
 - 多节点模式只有在 `EXT-CLUSTER` 关闭后才可考虑从 `Experimental` 晋升；通过基本两节点用例不足以证明共识或任意分区安全。
 - “标准限制”“刻意设计”和“平台限制”行不能因测试通过而删除，只能在产品不再支持对应协议/客户端形态，或底层标准和平台发生实质变化时重审。
-- `Partial`、`Pass-through` 和 `Experimental` 的逐协议范围以 [XEP_MATRIX.md](../XEP_MATRIX.md) 为准；本表不重复宣称完整支持所有可选 XEP 行为。
+- `Partial`、`Pass-through` 和 `Experimental` 的逐协议范围以 [XEP_MATRIX.md](XEP_MATRIX.md) 为准；本表不重复宣称完整支持所有可选 XEP 行为。
 
 ## 维护规则
 

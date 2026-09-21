@@ -10,9 +10,8 @@ use northstar_xep_core::{
 
 pub(crate) const XEP_0030: XepId = XepId::new(30);
 
-/// XEP-0030 is a built-in protocol foundation rather than an optional crate.
-/// Its descriptor is backed by `protocol::discovery` and makes dependencies
-/// explicit without pretending they are enabled outside the resolver.
+/// Register built-in XEP-0030 discovery with the dependency resolver.
+/// The implementation lives in `protocol::discovery`.
 static SERVICE_DISCOVERY: ExtensionDescriptor = ExtensionDescriptor {
     id: XEP_0030,
     name: "Service Discovery",

@@ -3,8 +3,8 @@
 Northstar's supported baseline has one core session authority plus PostgreSQL;
 [maintenance may run in its own process](SUBSERVERS.md).
 Setting `REDIS_URL`/`REDIS_URL_FILE` opts into an **Experimental** same-domain
-control plane. It is not a production scaling claim. Redis is ephemeral routing
-transport; PostgreSQL is the durable and security authority.
+control plane. Redis provides ephemeral routing; PostgreSQL owns durable state
+and authorization.
 
 The subserver topology requires one archive-retention owner per database
 schema. When upgrading an existing experimental cluster, change all but one
@@ -309,8 +309,8 @@ contains only an operation/event locator. Every consequence is pulled back from
 PostgreSQL and digest checked.
 
 Ordinary groupchat content remains the pre-existing PostgreSQL archive plus
-best-effort Redis real-time fan-out; this CLU-MUC slice does not claim a durable
-per-recipient queue for ordinary room messages. Ordinary presence and typing
+best-effort Redis real-time fan-out, without a durable per-recipient queue.
+Ordinary presence and typing
 are explicitly bounded soft state. During either degraded failure policy, new
 MUC joins and management mutations fail closed until full reconciliation.
 Legal hold governs retained message/audit data through the data-lifecycle

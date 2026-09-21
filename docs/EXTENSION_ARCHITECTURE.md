@@ -10,7 +10,7 @@ recovery authority ambiguous.
 This document is a design and enforcement contract. It defines what a library
 may own, what it must not own, how configuration is resolved, and how support
 is removed from discovery when a component is unavailable. Protocol support
-claims remain in [../XEP_MATRIX.md](../XEP_MATRIX.md).
+claims remain in [../XEP_MATRIX.md](XEP_MATRIX.md).
 
 ## 1. Dependency direction
 

@@ -171,8 +171,7 @@ impl CapacityLedgerAuditProgress {
                     self.next_audit = now() + CAPACITY_LEDGER_AUDIT_DEGRADED_INTERVAL;
                     self.proof = CapacityAuditProof::ViolationObserved;
                 }
-                // Only the caller's complete authority/probe boundary may
-                // reopen the gate; a successful read does not prove all work.
+                // The caller reopens the gate after all authority and probe checks.
             }
             Err(_) => {
                 gate.mark_ledger_mismatch("upload capacity ledger consistency could not be proved");

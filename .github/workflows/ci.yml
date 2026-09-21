@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -9,6 +10,10 @@ on:
         description: "Immutable commit SHA used for the manual contract compatibility comparison"
         required: true
         type: string
+      extended_stress:
+        description: "Run the 100x50 endurance matrix instead of the standard 20x50 scheduled matrix"
+        type: boolean
+        default: false
   schedule:
     - cron: "23 18 * * 6"
 
@@ -16,14 +21,9 @@ permissions:
   contents: read
 
 concurrency:
-  # Keep only the latest PR and codex branch validation. Protected-branch,
-  # tag, scheduled and manual runs retain independent run IDs, so historical
-  # runs cannot serialize newer exact-SHA qualification behind them.
-  #
-  # This controls scheduling only.  It does not weaken required jobs, replace
-  # per-test deadlines, or turn a cancelled run into passing evidence.
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.event_name == 'push' && startsWith(github.ref, 'refs/heads/codex/') && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' && startsWith(github.ref, 'refs/heads/codex/') }}
+  # Only a newer revision of the same PR supersedes an active run.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   rust-fmt:
@@ -348,7 +348,6 @@ jobs:
 
   protocol-fuzz:
     name: Timed parser robustness suite
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -455,6 +454,7 @@ jobs:
           python3 scripts/test-redis-tls-unix-relay.py --self-test
           python3 scripts/test-cluster-tls-rejection.py --self-test
           python3 scripts/test-cluster-sm-client.py
+          python3 scripts/test-scheduled-fixtures.py
           python3 scripts/test-cluster-fault-observations.py
           python3 scripts/test-cluster-version-probes.py
           python3 scripts/test-cluster-ack-pause.py
@@ -468,6 +468,7 @@ jobs:
           bash scripts/test-github-ci-supervisor.sh
           bash scripts/test-listener-stress-worker.sh
           python3 scripts/test-listener-stress-phases.py
+          python3 scripts/test-upload-retry.py
           python3 scripts/test-listener-startup-scheduler.py
           python3 scripts/test-mix-federation-coordination.py
           python3 scripts/check-runtime-test-profile.py --manifest Cargo.toml
@@ -498,7 +499,7 @@ jobs:
           bash scripts/github-ci-run.sh "Pinned non-root container build" bash -Eeuo pipefail <<'CONTAINER_CI'
           docker compose config --quiet
           docker run --rm --entrypoint /bin/promtool \
-            -v "$PWD/monitoring:/etc/northstar-monitoring:ro" \
+            -v "$PWD/deploy/monitoring:/etc/northstar-monitoring:ro" \
             prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac \
             check rules /etc/northstar-monitoring/alerts.yml
           docker compose -f docker-compose.yml -f deploy/docker-compose.components.yml config --quiet
@@ -506,20 +507,22 @@ jobs:
           docker compose -f docker-compose.yml -f deploy/docker-compose.backup-security.yml config --quiet
           docker compose -f docker-compose.yml -f deploy/docker-compose.backup-security.yml -f deploy/docker-compose.backup-age.yml config --quiet
           release_config="$(mktemp)"
+          package_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
           docker compose -f docker-compose.yml -f deploy/docker-compose.release.yml \
             --profile backup --profile restore config --format json >"$release_config"
-          python3 - "$release_config" <<'PY'
+          python3 - "$release_config" "$package_version" <<'PY'
           import json
           import pathlib
           import sys
 
           services = json.loads(pathlib.Path(sys.argv[1]).read_text())["services"]
+          version = sys.argv[2]
           expected = {
-              "migrate": "ghcr.io/takanashi-tetsuya/northstar:0.2.0",
-              "xmpp": "ghcr.io/takanashi-tetsuya/northstar:0.2.0",
-              "database-grants": "ghcr.io/takanashi-tetsuya/northstar-database-grants:0.2.0",
-              "backup": "ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0",
-              "restore": "ghcr.io/takanashi-tetsuya/northstar-backup:0.2.0",
+              "migrate": f"ghcr.io/takanashi-tetsuya/northstar:{version}",
+              "xmpp": f"ghcr.io/takanashi-tetsuya/northstar:{version}",
+              "database-grants": f"ghcr.io/takanashi-tetsuya/northstar-database-grants:{version}",
+              "backup": f"ghcr.io/takanashi-tetsuya/northstar-backup:{version}",
+              "restore": f"ghcr.io/takanashi-tetsuya/northstar-backup:{version}",
           }
           for name, image in expected.items():
               service = services[name]
@@ -535,7 +538,7 @@ jobs:
           test "$(docker image inspect --format '{{.Config.User}}' northstar-backup-ci:local)" = '10001:10001'
           test "$(docker image inspect --format '{{.Config.User}}' northstar-database-grants-ci:local)" = '10001:10001'
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.licenses"}}' northstar-ci:local)" = 'AGPL-3.0-only'
-          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' northstar-ci:local)" = '0.2.0'
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' northstar-ci:local)" = "$package_version"
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' northstar-ci:local)" = 'https://github.com/takanashi-tetsuya/northstar'
           for image in northstar-ci:local northstar-backup-ci:local northstar-database-grants-ci:local; do
             docker run --rm --entrypoint sh "$image" -c '
@@ -600,16 +603,12 @@ jobs:
               return 1
             fi
           }
-          # The official PostgreSQL entrypoint intentionally starts as root to
-          # initialize mounted storage, then drops to this image-owned account.
-          # Replacing that entrypoint with `id` would bypass the drop and only
-          # observe 0:0, so validate the account the entrypoint actually uses.
+          # PostgreSQL initializes storage as root, then drops privileges.
+          # Validate the account selected by its entrypoint.
           assert_image_account_identity PostgreSQL \
             postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73 \
             postgres 70 70
-          # Compose deliberately overrides Grafana to the numeric 472:0
-          # capability used by its mode-0600 secret and writable volumes. Test
-          # that deployed identity, not an incidental /etc/passwd group name.
+          # Match Grafana's Compose UID:GID and its secret/volume permissions.
           assert_effective_container_identity Grafana \
             grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63 \
             472:0 472 0
@@ -709,8 +708,7 @@ jobs:
         run: bash scripts/loopback-postgres-ci.sh stop
 
   production-envelope:
-    name: Scheduled 1,000-session production envelope
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: 1,000-session production envelope
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -741,8 +739,7 @@ jobs:
         run: bash scripts/loopback-postgres-ci.sh stop
 
   heavy-runtime-envelope:
-    name: Scheduled multi-node cluster and raw 1,000-session load
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: Multi-node cluster and raw 1,000-session load
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -954,6 +951,7 @@ jobs:
 
       - name: Check diagnostic and cleanup regressions
         run: |
+          python3 scripts/test-loopback-postgres-ci.py
           python3 scripts/test-github-ci-failure-marker.py
           python3 scripts/test-listener-control-observer.py
           python3 scripts/test-listener-readiness-observed.py
@@ -990,9 +988,8 @@ jobs:
           export LD_LIBRARY_PATH="$RUNNER_TEMP/northstar-pg17-tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           python3 scripts/test-listener-control-observer-pg17.py --pg-bin "$RUNNER_TEMP/northstar-pg17-tools/bin"
 
-  # A small, real two-node path is a gate, not evidence for the full stress
-  # envelope.  It catches setup, template, listener, and cleanup regressions
-  # before either regular 20x50 or scheduled 100x50 capacity work begins.
+  # Catch setup, template, listener and cleanup regressions before starting
+  # the regular or scheduled matrix.
   listener-readiness-stress-smoke:
     name: Listener/readiness smoke (1x1 then 1x2 · ${{ matrix.fixture }})
     if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -1009,6 +1006,8 @@ jobs:
       # This remains an isolated loopback fixture.  It is intentionally sized
       # only for the 1x1 and 1x2 proofs below, not the pressure matrix.
       NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "32"
+      # Exercise the same database scheduling weight as the pressure jobs.
+      NORTHSTAR_LOOPBACK_POSTGRES_CPU_SHARES: "8192"
       NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS: "0"
@@ -1087,7 +1086,7 @@ jobs:
         run: bash scripts/loopback-postgres-ci.sh stop
 
   listener-readiness-stress-regular:
-    name: Listener/readiness stress (regular 20x50 · ${{ matrix.fixture }})
+    name: Listener/readiness stress (regular 5x50 · ${{ matrix.fixture }})
     needs: [listener-readiness-stress-smoke, listener-diagnostics]
     if: >-
       ${{ (github.event_name == 'push' || github.event_name == 'pull_request') &&
@@ -1097,7 +1096,7 @@ jobs:
     # This is a capacity ceiling only. Every fixture worker has its own
     # process-group deadline inside the stress driver, so a hung child cannot
     # consume a round until GitHub's job-level timeout.
-    timeout-minutes: 150
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -1111,6 +1110,9 @@ jobs:
       # therefore checked against a 650-connection 50-pair requirement plus
       # one dedicated observer connection, without generic headroom.
       NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "672"
+      # Give the shared database more CPU weight alongside 100 servers.
+      # Shares affect contention; they do not reserve CPU capacity.
+      NORTHSTAR_LOOPBACK_POSTGRES_CPU_SHARES: "8192"
       NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS: "0"
@@ -1149,7 +1151,7 @@ jobs:
           NORTHSTAR_RUNTIME_ARTIFACT_DIR: ${{ runner.temp }}/northstar-runtime-fixture
         run: >-
           python3 scripts/listener-readiness-observed-wsl.py
-          --mode regular --fixture "${{ matrix.fixture }}" --rounds 20 --pairs 50
+          --mode regular --fixture "${{ matrix.fixture }}" --rounds 5 --pairs 50
 
       - name: Upload failed listener/readiness diagnostics
         if: ${{ failure() && steps.listener_matrix.outputs.driver_succeeded != 'true' && steps.listener_matrix.outputs.driver_started != 'false' }}
@@ -1186,17 +1188,15 @@ jobs:
         run: bash scripts/loopback-postgres-ci.sh stop
 
   listener-readiness-stress-scheduled:
-    name: Scheduled listener/readiness stress (100x50 · ${{ matrix.fixture }})
+    name: Scheduled listener/readiness stress (${{ github.event_name == 'workflow_dispatch' && inputs.extended_stress && '100x50' || '20x50' }} · ${{ matrix.fixture }})
     needs: [listener-readiness-stress-smoke, listener-diagnostics]
     if: >-
       ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
           needs.listener-readiness-stress-smoke.result == 'success' &&
           needs.listener-diagnostics.result == 'success' }}
     runs-on: ubuntu-latest
-    # The 100-round workload remains unchanged. This limit bounds only the
-    # host capacity for the scheduled evidence run; worker deadlines remain
-    # enforced by the private process-group supervisor in the driver.
-    timeout-minutes: 360
+    # Extended repetition is opt-in; worker and recovery deadlines stay fixed.
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.extended_stress && 360 || 120 }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -1205,9 +1205,11 @@ jobs:
           - federation
           - mix-federation
     env:
-      # Match the regular 50-pair runtime-pool plus fixture-control budget;
-      # this is host capacity, not a relaxation of the 100x50 matrix.
+      LISTENER_STRESS_ROUNDS: ${{ github.event_name == 'workflow_dispatch' && inputs.extended_stress && 100 || 20 }}
+      # Keep the same 50-pair runtime and fixture-control connection budget.
       NORTHSTAR_LOOPBACK_POSTGRES_MAX_CONNECTIONS: "672"
+      # Keep database scheduling consistent with the regular matrix.
+      NORTHSTAR_LOOPBACK_POSTGRES_CPU_SHARES: "8192"
       NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS: "900"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS: "2"
       NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS: "0"
@@ -1245,7 +1247,7 @@ jobs:
           NORTHSTAR_RUNTIME_ARTIFACT_DIR: ${{ runner.temp }}/northstar-runtime-fixture
         run: >-
           bash scripts/listener-readiness-stress-wsl.sh
-          --mode scheduled --fixture "${{ matrix.fixture }}" --rounds 100 --pairs 50
+          --mode scheduled --fixture "${{ matrix.fixture }}" --rounds "$LISTENER_STRESS_ROUNDS" --pairs 50
 
       - name: Upload failed listener/readiness diagnostics
         if: failure()

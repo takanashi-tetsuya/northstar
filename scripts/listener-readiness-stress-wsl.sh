@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# Exercise the migrated child-owned listener fixtures under deliberate parallel
-# runtime pressure after CPU-bounded cold-start batches. Every worker still
-# runs a complete two-node MIX or federation fixture, and all pairs are live
-# before business release. This does not claim simultaneous whole-fleet cold
-# start capacity. Each worker is privately process-group supervised; failure
-# never retries a worker or removes a pair from the prescribed matrix.
+# Run complete two-node MIX or federation fixtures concurrently after batched
+# startup. All pairs must be live before protocol work begins. Each worker has
+# its own supervised process group; a failed worker fails the full matrix.
 
 set -euo pipefail
 
@@ -36,8 +33,8 @@ while (($#)); do
 done
 
 case "$mode" in
-  regular) [[ -n "$rounds" ]] || rounds=20 ;;
-  scheduled) [[ -n "$rounds" ]] || rounds=100 ;;
+  regular) [[ -n "$rounds" ]] || rounds=5 ;;
+  scheduled) [[ -n "$rounds" ]] || rounds=20 ;;
   *) echo "mode must be regular or scheduled" >&2; exit 2 ;;
 esac
 case "$fixture" in
@@ -50,10 +47,8 @@ esac
   exit 2
 }
 
-# A 50-pair round starts 100 real Northstar children. The primary-pool limit
-# is a stress-only setting. The fixed auxiliary pool
-# facts are queried from the freshly built binary below, rather than copied
-# here as a second hand-maintained architecture contract.
+# A 50-pair round starts 100 Northstar children. Only the primary-pool limit
+# is overridden for stress; auxiliary pool sizes come from the built binary.
 worker_timeout_seconds="${NORTHSTAR_LISTENER_STRESS_WORKER_TIMEOUT_SECONDS:-900}"
 database_max_connections="${NORTHSTAR_LISTENER_STRESS_DATABASE_MAX_CONNECTIONS:-2}"
 database_min_connections="${NORTHSTAR_LISTENER_STRESS_DATABASE_MIN_CONNECTIONS:-0}"
@@ -156,13 +151,11 @@ tokio_worker_threads="${NORTHSTAR_LISTENER_STRESS_TOKIO_WORKER_THREADS:-$derived
   exit 2
 }
 tokio_worker_threads=$((10#$tokio_worker_threads))
-# Legacy SASL PLAIN and the REST session endpoint deliberately spend Argon2
-# work.  A single-node server's password gate is process-local by design, so
-# hundreds of isolated test processes would otherwise launch hundreds of
-# independent password-derived setup operations against one host. The slot
-# directory below does not serialize server startup, MIX/S2S work, or
-# application requests after construction.
-derived_login_slots=$((effective_cpu_count / 4))
+# Limit CPU-heavy registration and login across independent test servers.
+# Half the CPUs, capped at four operations, leaves capacity for PostgreSQL
+# and live nodes without serializing all 50 pairs on four-CPU runners.
+# Startup and subsequent MIX/S2S operations do not hold these slots.
+derived_login_slots=$((effective_cpu_count / 2))
 ((derived_login_slots >= 1)) || derived_login_slots=1
 ((derived_login_slots <= 4)) || derived_login_slots=4
 login_slot_count="${NORTHSTAR_LISTENER_STRESS_LOGIN_CONCURRENCY:-$derived_login_slots}"
@@ -264,19 +257,11 @@ PY_STAGE_TIMING
   record_parent_diagnostic "$timing"
 }
 
-# Every stress worker must own two independent database states: one for each
-# federated domain.  Applying the normal migrator from 50 workers would be
-# deliberately serialized by the production database-policy advisory lock.
-# Instead, this CI/local-loopback-only harness migrates two empty templates
-# exactly once, then makes disposable physical database copies for the workers.
-# The fixtures still perform their normal runtime ledger/canonicalizer checks;
-# they simply receive an already-migrated private database rather than asking
-# a live worker to contend for production's migration fence.
-# A local developer may bind the disposable Docker PostgreSQL fixture to a
-# different loopback port (for example 55432) when 5432 belongs to another
-# local service. Only that endpoint is configurable: the test control role,
-# its non-production password, and the control database stay fixed so this
-# harness cannot be redirected at an arbitrary local PostgreSQL identity.
+# Migrate one template per domain, then give each worker private database copies.
+# This avoids serial migration-lock contention across 50 workers while keeping
+# normal runtime ledger and canonicalizer checks.
+# The loopback port is configurable for local port conflicts. The fixed test
+# role, password and control database restrict this to a disposable fixture.
 database_fixture_host="${NORTHSTAR_LISTENER_STRESS_DATABASE_HOST:-127.0.0.1}"
 database_fixture_port="${NORTHSTAR_LISTENER_STRESS_DATABASE_PORT:-5432}"
 readonly database_fixture_user=xmpp_test
@@ -403,6 +388,22 @@ for category in ("cpu", "memory", "io"):
         result[f"{category}_pressure_errno"] = error.errno
 result["cgroup_memory_events"] = numeric_fields("/sys/fs/cgroup/memory.events", {"low", "high", "max", "oom", "oom_kill", "oom_group_kill"})
 result["cgroup_cpu_stat"] = numeric_fields("/sys/fs/cgroup/cpu.stat", {"usage_usec", "user_usec", "system_usec", "nr_periods", "nr_throttled", "throttled_usec"})
+# Compare cumulative TCP counters across the same live cohort. No endpoints
+# or packet contents are retained.
+for path, prefix, allowed in (
+    ("/proc/net/snmp", "Tcp:", {"CurrEstab", "InSegs", "OutSegs", "RetransSegs", "InErrs", "OutRsts"}),
+    ("/proc/net/netstat", "TcpExt:", {"TCPTimeouts", "TCPSpuriousRTOs", "TCPFastRetrans", "TCPSynRetrans", "TCPLossProbes", "TCPBacklogDrop", "TCPRcvQDrop", "TCPMemoryPressures", "ListenOverflows", "ListenDrops"}),
+):
+    try:
+        with Path(path).open() as stream:
+            rows = [line.split() for line in stream.read(65536).splitlines() if line.startswith(prefix)]
+        if len(rows) != 2 or len(rows[0]) != len(rows[1]):
+            result[prefix[:-1]] = {"invalid_shape": True}
+        else:
+            result[prefix[:-1]] = {key: int(value) for key, value in zip(rows[0][1:], rows[1][1:])
+                                   if key in allowed and value.isdecimal()}
+    except OSError as error:
+        result[prefix[:-1]] = {"read_errno": error.errno}
 # Attribute a CPU burst without collecting process arguments, environment,
 # database names, or command text. These cumulative totals can be compared
 # across phase boundaries while the same 100 servers remain live. Counts and

@@ -19,6 +19,12 @@ run_id="$(openssl rand -hex 8)"
 schema="northstar_load_1000_${run_id}"
 [[ "$test_database" == "xmpp_test" ]] \
   || { echo "load tests are restricted to the dedicated xmpp_test database" >&2; exit 2; }
+database_port="${NORTHSTAR_LOAD_DATABASE_PORT:-5432}"
+if ! [[ "$database_port" =~ ^[1-9][0-9]{0,4}$ ]] || ((10#$database_port > 65535)); then
+  echo "NORTHSTAR_LOAD_DATABASE_PORT must be an integer from 1 through 65535" >&2
+  exit 2
+fi
+export PGPORT="$database_port"
 [[ "$schema" =~ ^northstar_load_1000_[0-9a-f]{16}$ ]] \
   || { echo "refusing an unexpected load-test schema name" >&2; exit 2; }
 ulimit -n 8192
@@ -85,9 +91,11 @@ schema_created=true
 
 cargo_args=(--locked)
 if [[ "${XMPP_TEST_OFFLINE:-true}" == "true" ]]; then cargo_args+=(--offline); fi
-cargo build "${cargo_args[@]}"
+if [[ "${NORTHSTAR_LOAD_SKIP_BUILD:-false}" != "true" ]]; then
+  cargo build "${cargo_args[@]}"
+fi
 
-database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$test_database?options=-csearch_path%3D$schema"
+database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:$database_port/$test_database?options=-csearch_path%3D$schema"
 readiness_file="$runtime_dir/server.ready.json"
 readiness_nonce="$(openssl rand -hex 16)"
 rm -f -- "$readiness_file"

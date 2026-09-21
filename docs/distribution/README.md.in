@@ -1,0 +1,35 @@
+Northstar is developed collaboratively by humans and AI.
+
+# Northstar @VERSION@
+
+This package contains the XMPP server, browser client, administration interface,
+Swagger UI and configuration examples.
+
+Start with the included [installation guide](docs/INSTALL.md) for checksum
+verification, PostgreSQL setup, configuration and migrations. Run the server
+from the extracted directory so it can find its Web assets and configuration.
+Check the version with `./xmpp-server --version` on Linux or
+`.\xmpp-server.exe --version` in Windows PowerShell.
+
+PostgreSQL 15 or newer is required. Linux x64 is the supported production target;
+Windows x64 is for development and evaluation.
+
+## Documentation
+
+The following guides match this release:
+
+- [Production operations](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/PRODUCTION_OPERATIONS.md)
+- [Database roles and grants](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/DATABASE_ROLES.md)
+- [Known limitations](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/KNOWN_ISSUES.md)
+- [Protocol support](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/XEP_MATRIX.md)
+- [Security policy](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/.github/SECURITY.md)
+- [HTTP API specification](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/openapi.yaml)
+
+Docker deployments and source builds use the
+[v@VERSION@ repository checkout](https://github.com/takanashi-tetsuya/northstar/tree/v@VERSION@).
+See the installation guide for the Docker checkout command.
+
+License: [AGPL-3.0-only](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md)
+for bundled dependencies.
+
+[繁體中文](README.zh-TW.md)

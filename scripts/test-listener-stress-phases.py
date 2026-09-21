@@ -191,6 +191,7 @@ if sys.argv[5] == "prepared":
         probe_names = [
             "verify_starttls_failure_boundary", "verify_c2s_transport_boundaries",
             "verify_s2s_transport_boundaries", "verify_s2s_authentication_boundaries",
+            "verify_s2s_stream_management",
         ]
         program = r'''
 import importlib.util, os, pathlib, subprocess, sys, time
@@ -204,14 +205,14 @@ def trace(message):
 def probe(name):
     def run_probe():
         trace(name)
-        if name == "verify_s2s_authentication_boundaries" and os.environ["NORTHSTAR_LISTENER_STRESS_PHASE_PAIR"] == "2":
+        if name == "verify_s2s_stream_management" and os.environ["NORTHSTAR_LISTENER_STRESS_PHASE_PAIR"] == "2":
             deadline = time.monotonic() + 5
             while not slow_release.exists():
                 if time.monotonic() >= deadline:
                     raise AssertionError("slow probe was never released")
                 time.sleep(0.01)
     return run_probe
-for name in ("verify_starttls_failure_boundary", "verify_c2s_transport_boundaries", "verify_s2s_transport_boundaries", "verify_s2s_authentication_boundaries"):
+for name in ("verify_starttls_failure_boundary", "verify_c2s_transport_boundaries", "verify_s2s_transport_boundaries", "verify_s2s_authentication_boundaries", "verify_s2s_stream_management"):
     setattr(federation, name, probe(name))
 def premature_authentication():
     raise AssertionError("authentication started before transport release")
@@ -263,7 +264,9 @@ finally:
             phases.release(self.directory, self.nonce, 1, "live", 5, leaders)
             deadline = time.monotonic() + 5
             while not (self.directory / "transport-1.json").exists():
-                self.assertIsNone(workers[0].poll())
+                if workers[0].poll() is not None:
+                    _, error = workers[0].communicate(timeout=5)
+                    self.fail(f"faster fixture exited before transport barrier: {error}")
                 if time.monotonic() >= deadline:
                     self.fail("faster fixture did not reach transport barrier")
                 time.sleep(0.01)

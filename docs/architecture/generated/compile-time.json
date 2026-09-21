@@ -25,6 +25,7 @@
     "axum-core",
     "base64",
     "base64ct",
+    "base64urlsafedata",
     "bb8",
     "bitflags",
     "blake2",
@@ -52,6 +53,7 @@
     "crossbeam-epoch",
     "crossbeam-queue",
     "crossbeam-utils",
+    "crunchy",
     "crypto-common",
     "dashmap",
     "data-encoding",
@@ -76,6 +78,8 @@
     "flume",
     "fnv",
     "foldhash",
+    "foreign-types",
+    "foreign-types-shared",
     "form_urlencoded",
     "foundation-contracts",
     "foundation-db-test",
@@ -100,6 +104,7 @@
     "generic-array",
     "getrandom",
     "h2",
+    "half",
     "hashbrown",
     "hashlink",
     "heck",
@@ -229,11 +234,16 @@
     "object_store",
     "oid-registry",
     "once_cell",
+    "openssl",
+    "openssl-macros",
     "openssl-probe",
+    "openssl-src",
+    "openssl-sys",
     "parking",
     "parking_lot",
     "parking_lot_core",
     "password-hash",
+    "pastey",
     "pbkdf2",
     "pem-rfc7468",
     "percent-encoding",
@@ -297,6 +307,7 @@
     "security-framework-sys",
     "semver",
     "serde",
+    "serde_cbor_2",
     "serde_core",
     "serde_derive",
     "serde_json",
@@ -406,6 +417,10 @@
     "wasm-streams",
     "web-sys",
     "web-time",
+    "webauthn-attestation-ca",
+    "webauthn-rs",
+    "webauthn-rs-core",
+    "webauthn-rs-proto",
     "webpki-root-certs",
     "webpki-roots",
     "whoami",
@@ -814,6 +829,18 @@
       "tracing"
     ],
     [
+      "base64urlsafedata",
+      "base64"
+    ],
+    [
+      "base64urlsafedata",
+      "pastey"
+    ],
+    [
+      "base64urlsafedata",
+      "serde"
+    ],
+    [
       "bb8",
       "futures-util"
     ],
@@ -1172,6 +1199,10 @@
     [
       "flume",
       "spin"
+    ],
+    [
+      "foreign-types",
+      "foreign-types-shared"
     ],
     [
       "form_urlencoded",
@@ -1544,6 +1575,18 @@
     [
       "h2",
       "tracing"
+    ],
+    [
+      "half",
+      "cfg-if"
+    ],
+    [
+      "half",
+      "crunchy"
+    ],
+    [
+      "half",
+      "zerocopy"
     ],
     [
       "hashbrown",
@@ -3390,6 +3433,66 @@
       "portable-atomic"
     ],
     [
+      "openssl",
+      "bitflags"
+    ],
+    [
+      "openssl",
+      "cfg-if"
+    ],
+    [
+      "openssl",
+      "foreign-types"
+    ],
+    [
+      "openssl",
+      "libc"
+    ],
+    [
+      "openssl",
+      "openssl-macros"
+    ],
+    [
+      "openssl",
+      "openssl-sys"
+    ],
+    [
+      "openssl-macros",
+      "proc-macro2"
+    ],
+    [
+      "openssl-macros",
+      "quote"
+    ],
+    [
+      "openssl-macros",
+      "syn"
+    ],
+    [
+      "openssl-src",
+      "cc"
+    ],
+    [
+      "openssl-sys",
+      "cc"
+    ],
+    [
+      "openssl-sys",
+      "libc"
+    ],
+    [
+      "openssl-sys",
+      "openssl-src"
+    ],
+    [
+      "openssl-sys",
+      "pkg-config"
+    ],
+    [
+      "openssl-sys",
+      "vcpkg"
+    ],
+    [
       "parking_lot",
       "lock_api"
     ],
@@ -4343,6 +4446,10 @@
     ],
     [
       "rust-xmpp-server",
+      "openssl"
+    ],
+    [
+      "rust-xmpp-server",
       "pbkdf2"
     ],
     [
@@ -4428,6 +4535,10 @@
     [
       "rust-xmpp-server",
       "uuid"
+    ],
+    [
+      "rust-xmpp-server",
+      "webauthn-rs"
     ],
     [
       "rust-xmpp-server",
@@ -4616,6 +4727,14 @@
     [
       "serde",
       "serde_derive"
+    ],
+    [
+      "serde_cbor_2",
+      "half"
+    ],
+    [
+      "serde_cbor_2",
+      "serde"
     ],
     [
       "serde_core",
@@ -6730,6 +6849,10 @@
       "serde"
     ],
     [
+      "url",
+      "serde_derive"
+    ],
+    [
       "uuid",
       "getrandom"
     ],
@@ -6856,6 +6979,150 @@
     [
       "web-time",
       "wasm-bindgen"
+    ],
+    [
+      "webauthn-attestation-ca",
+      "base64urlsafedata"
+    ],
+    [
+      "webauthn-attestation-ca",
+      "openssl"
+    ],
+    [
+      "webauthn-attestation-ca",
+      "openssl-sys"
+    ],
+    [
+      "webauthn-attestation-ca",
+      "serde"
+    ],
+    [
+      "webauthn-attestation-ca",
+      "tracing"
+    ],
+    [
+      "webauthn-attestation-ca",
+      "uuid"
+    ],
+    [
+      "webauthn-rs",
+      "base64urlsafedata"
+    ],
+    [
+      "webauthn-rs",
+      "serde"
+    ],
+    [
+      "webauthn-rs",
+      "tracing"
+    ],
+    [
+      "webauthn-rs",
+      "url"
+    ],
+    [
+      "webauthn-rs",
+      "uuid"
+    ],
+    [
+      "webauthn-rs",
+      "webauthn-rs-core"
+    ],
+    [
+      "webauthn-rs-core",
+      "base64"
+    ],
+    [
+      "webauthn-rs-core",
+      "base64urlsafedata"
+    ],
+    [
+      "webauthn-rs-core",
+      "der-parser"
+    ],
+    [
+      "webauthn-rs-core",
+      "hex"
+    ],
+    [
+      "webauthn-rs-core",
+      "nom"
+    ],
+    [
+      "webauthn-rs-core",
+      "openssl"
+    ],
+    [
+      "webauthn-rs-core",
+      "openssl-sys"
+    ],
+    [
+      "webauthn-rs-core",
+      "rand"
+    ],
+    [
+      "webauthn-rs-core",
+      "rand_chacha"
+    ],
+    [
+      "webauthn-rs-core",
+      "serde"
+    ],
+    [
+      "webauthn-rs-core",
+      "serde_cbor_2"
+    ],
+    [
+      "webauthn-rs-core",
+      "serde_json"
+    ],
+    [
+      "webauthn-rs-core",
+      "thiserror"
+    ],
+    [
+      "webauthn-rs-core",
+      "tracing"
+    ],
+    [
+      "webauthn-rs-core",
+      "url"
+    ],
+    [
+      "webauthn-rs-core",
+      "uuid"
+    ],
+    [
+      "webauthn-rs-core",
+      "webauthn-attestation-ca"
+    ],
+    [
+      "webauthn-rs-core",
+      "webauthn-rs-proto"
+    ],
+    [
+      "webauthn-rs-core",
+      "x509-parser"
+    ],
+    [
+      "webauthn-rs-proto",
+      "base64"
+    ],
+    [
+      "webauthn-rs-proto",
+      "base64urlsafedata"
+    ],
+    [
+      "webauthn-rs-proto",
+      "serde"
+    ],
+    [
+      "webauthn-rs-proto",
+      "serde_json"
+    ],
+    [
+      "webauthn-rs-proto",
+      "url"
     ],
     [
       "webpki-root-certs",

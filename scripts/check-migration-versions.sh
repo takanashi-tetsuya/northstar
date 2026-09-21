@@ -187,13 +187,9 @@ if [ -n "$hardcoded_public_migration_refs" ]; then
     printf '%s\n' "$hardcoded_public_migration_refs" >&2
     exit 1
 fi
-canonical_security_definer_count=$(grep -Eic \
-    'LANGUAGE[[:space:]]+plpgsql[[:space:]]+SECURITY[[:space:]]+DEFINER' \
-    migrations/*.sql | awk -F: '{ total += $NF } END { print total + 0 }')
-if [ "$canonical_security_definer_count" -ne 50 ]; then
-    echo "migration sources must contain exactly 50 canonical single-line PL/pgSQL SECURITY DEFINER declarations (0111 adds eight PL/pgSQL XEP-0133 cleanup issuers/claimants; 0124 adds the fenced authentication credential upgrade; 0125 replaces registration with a fail-closed control lookup; 0107's multiline declaration and 0111's read-only SQL snapshot are checked separately)" >&2
-    exit 1
-fi
+# Check complete routine identities, grants and hardening against the reviewed
+# manifest. Counting single-line declarations misses multiline and SQL routines.
+python3 scripts/check-database-capability-manifest.py
 echo "database migrations contain no hard-coded public schema references; SECURITY DEFINER set is exact"
 
 database_capability_migration="migrations/0107_database_capability_hardening.sql"

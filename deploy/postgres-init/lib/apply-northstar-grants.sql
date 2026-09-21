@@ -1513,6 +1513,14 @@ SELECT NOT EXISTS (
                   SELECT 1
                     FROM (VALUES
                       ('northstar_transfer_cluster_muc_outbox(uuid,uuid,uuid,uuid,int8,uuid,int8,text)'),
+                      ('northstar_passkey_challenge(uuid,int8,text,bytea,jsonb)'),
+                      ('northstar_passkey_consume(uuid,text,bytea)'),
+                      ('northstar_passkey_register(uuid,int8,bytea,bytea,jsonb,text)'),
+                      ('northstar_passkey_accept(uuid,int8,uuid,uuid,jsonb,int8)'),
+                      ('northstar_passkey_remove(uuid,int8,bytea,uuid)'),
+                      ('northstar_pending_account_revocations(text,text,uuid,int8,int4)'),
+                      ('northstar_ack_account_revocations(text,text,uuid,int8,uuid[])'),
+                      ('northstar_cleanup_account_revocations(int4)'),
                       ('northstar_purge_released_hold_offline_snapshots(int4,int4)'),
                       ('northstar_purge_audit_log(int4,int4)'),
                       ('northstar_purge_governance_export_leases(int4,int4)'),
@@ -1646,6 +1654,14 @@ SELECT NOT EXISTS (
          OR NOT EXISTS (
          SELECT 1 FROM (VALUES
            ('northstar_transfer_cluster_muc_outbox(uuid,uuid,uuid,uuid,int8,uuid,int8,text)'),
+           ('northstar_passkey_challenge(uuid,int8,text,bytea,jsonb)'),
+           ('northstar_passkey_consume(uuid,text,bytea)'),
+           ('northstar_passkey_register(uuid,int8,bytea,bytea,jsonb,text)'),
+           ('northstar_passkey_accept(uuid,int8,uuid,uuid,jsonb,int8)'),
+           ('northstar_passkey_remove(uuid,int8,bytea,uuid)'),
+           ('northstar_pending_account_revocations(text,text,uuid,int8,int4)'),
+           ('northstar_ack_account_revocations(text,text,uuid,int8,uuid[])'),
+           ('northstar_cleanup_account_revocations(int4)'),
            ('northstar_purge_released_hold_offline_snapshots(int4,int4)'),
            ('northstar_purge_audit_log(int4,int4)'),
            ('northstar_purge_governance_export_leases(int4,int4)'),

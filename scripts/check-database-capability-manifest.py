@@ -1370,6 +1370,20 @@ runtime_grant = signatures_between(
 )
 require_exact("runtime grant allowlist", runtime_grant, by_workload["runtime"])
 
+for label, start, end in (
+    (
+        "runtime unexpected-grant postcondition",
+        "FROM (VALUES\n                      ('northstar_transfer_cluster_muc_outbox",
+        ") AS allowed(signature)",
+    ),
+    (
+        "runtime missing-grant postcondition",
+        "SELECT 1 FROM (VALUES\n           ('northstar_transfer_cluster_muc_outbox",
+        ") AS allowed(signature)",
+    ),
+):
+    require_exact(label, signatures_between(grants_text, start, end), by_workload["runtime"])
+
 command_grant_start = grants_text.find(
     "JOIN (VALUES\n       ('northstar_admin_command_create_session",
     grants_text.find(") AS allowed(signature)\n   ON routine.oid") + 1,

@@ -119,7 +119,7 @@ assert.match(abuse, /pub fn xmpp_registration\([\s\S]+northstar\/xmpp-registrati
   'both XMPP registration transports need one semantic body commitment');
 assert.match(miscProtocol, /PowIntent::xmpp_registration[\s\S]+issue_v2\(AbuseAction::Registration/,
   'XEP-0077 metered retries must issue body-bound v2 challenges only after submission');
-assert.match(ibrProtocol, /ibr_challenge\(None\)[\s\S]+PowIntent::xmpp_registration[\s\S]+issue_v2\(AbuseAction::Registration/,
+assert.match(ibrProtocol, /ibr_challenge\(None, None\)[\s\S]+PowIntent::xmpp_registration[\s\S]+issue_v2\(AbuseAction::Registration/,
   'XEP-0389 must start without an unbound challenge and use an iterative v2 retry');
 assert.doesNotMatch(`${miscProtocol}\n${ibrProtocol}`, /\.issue\(\s*AbuseAction::Registration/,
   'XMPP registration must not issue legacy v1 challenges');

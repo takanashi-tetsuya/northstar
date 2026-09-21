@@ -196,6 +196,119 @@ paths:
               schema: { $ref: "#/components/schemas/Session" }
         "401": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/passkeys/login/start:
+    post:
+      summary: Start a Passkey login
+      description: Requires the exact PUBLIC_URL Origin header. Login abuse limits apply. The returned challenge expires after five minutes. Password login remains available.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, device_id]
+              properties:
+                username: { type: string, maxLength: 1024 }
+                device_id: { type: string, format: uuid, description: UUIDv4 for the browser XMPP user-agent }
+                pow: { $ref: "#/components/schemas/PowProof" }
+      responses:
+        "200": { description: challenge_id and WebAuthn options for navigator.credentials.get }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/passkeys/login/finish:
+    post:
+      summary: Verify a Passkey and create API and XMPP sessions
+      description: Requires the exact PUBLIC_URL Origin header. Consumes the challenge once, including failed verification. It does not replay a response for Idempotency-Key; start a new ceremony after an interrupted request. The device-bound FAST credential is for XMPP SASL2 and must remain in memory.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [challenge_id, credential]
+              properties:
+                challenge_id: { type: string, format: uuid }
+                credential: { type: object, description: Serialized WebAuthn PublicKeyCredential assertion }
+      responses:
+        "200": { description: token, jid, is_admin, device_id and fast (mechanism, token, expiry in Unix milliseconds) }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/me/passkeys:
+    get:
+      summary: List the current account's Passkeys
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Passkey IDs, labels, creation and last-use timestamps; excludes public-key verification state }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/me/passkeys/register/start:
+    post:
+      summary: Start adding a Passkey
+      security: [{ bearerAuth: [] }]
+      description: Requires the exact PUBLIC_URL Origin header and the current password. Each account may store ten keys. The challenge is bound to this bearer session and expires after five minutes. Login abuse limits apply.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password, label]
+              properties:
+                password: { type: string, maxLength: 1024, writeOnly: true }
+                label: { type: string, minLength: 1, maxLength: 64 }
+                pow: { $ref: "#/components/schemas/PowProof" }
+      responses:
+        "200": { description: challenge_id and WebAuthn options for navigator.credentials.create }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/me/passkeys/register/finish:
+    post:
+      summary: Verify and save a Passkey
+      security: [{ bearerAuth: [] }]
+      description: Requires the same bearer session and exact PUBLIC_URL Origin. The challenge is consumed once. Restart the ceremony after an interrupted request; Idempotency-Key does not replay this response. Credential IDs are unique across accounts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [challenge_id, credential]
+              properties:
+                challenge_id: { type: string, format: uuid }
+                credential: { type: object, description: Serialized WebAuthn registration response }
+      responses:
+        "200": { description: New Passkey ID }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/me/passkeys/remove:
+    post:
+      summary: Remove a Passkey and revoke all account sessions
+      security: [{ bearerAuth: [] }]
+      description: Requires the exact PUBLIC_URL Origin and current password. Revokes API, FAST, live XMPP and resumable sessions. Password login and other registered Passkeys remain available. Login abuse limits apply.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [id, password]
+              properties:
+                id: { type: string, format: uuid }
+                password: { type: string, maxLength: 1024, writeOnly: true }
+                pow: { $ref: "#/components/schemas/PowProof" }
+      responses:
+        "200": { description: removed and signed_out are true }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /api/v1/session:
     delete:
       summary: Revoke the current API bearer session

@@ -8,6 +8,7 @@ pub(crate) mod mam;
 pub(crate) mod messaging;
 pub(crate) mod mix;
 pub(crate) mod muc;
+pub(crate) mod passkeys;
 pub(crate) mod presence;
 pub(crate) mod privacy;
 pub(crate) mod private_storage;

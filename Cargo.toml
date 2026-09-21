@@ -191,6 +191,10 @@ northstar-session-application = { path = "crates/northstar-session-application" 
 northstar-federation-core = { path = "crates/northstar-federation-core" }
 northstar-federation-application = { path = "crates/northstar-federation-application" }
 northstar-protocol-runtime = { path = "crates/northstar-protocol-runtime" }
+# Ceremony state is serialized only into the server-side PostgreSQL challenge table.
+webauthn-rs = { version = "0.5.5", default-features = false, features = ["danger-allow-state-serialisation"] }
+# Keep native distributions independent of a system OpenSSL installation.
+openssl = { version = "0.10.81", features = ["vendored"] }
 
 [profile.release]
 lto = "thin"

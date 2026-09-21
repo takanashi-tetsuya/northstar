@@ -436,27 +436,29 @@ then commits mutation, revocation projections, audit and terminal result in one
 transaction. Runtime SQL alone cannot mint or inspect this authority.
 
 Credential rotation, disablement and deletion cancel local routes and durable
-SM state after the commit. Redis normally carries the generation fence to other
-nodes immediately. Because multi-node mode remains Experimental rather than a
-consensus system, failed Redis delivery falls back to the 30-second PostgreSQL
-authorization-maintenance sweep; with PostgreSQL healthy this is a bounded
-one-sweep stale-socket window, not a synchronous cross-node acknowledgement.
+SM state after the commit. The same database transaction records a revocation
+for each registered node process. PostgreSQL notifications and signed Redis
+events wake the consumers; a one-second poll recovers missed notifications.
+Each process acknowledges the exact revision only after fencing its local
+routes. Database failures close local sessions, while the existing 30-second
+authorization sweep remains a backstop. Multi-node mode is Experimental;
+revocation is asynchronous and does not promise a zero-length partition window.
 
 ### Federation and components
 
 Outboxes are bounded, ordered, expiring and restart-safe. A durable message is
 stamped once with a server-authoritative XEP-0359 `stanza-id` derived from the
 outbox UUID, and every retry reuses those exact stored bytes. A failed write
-keeps the row. A successful socket write followed by a process failure before
-row completion is ambiguous and can duplicate delivery; both paths are still
-at-least-once because RFC 6120/XEP-0114/XEP-0225 provide no application-stanza
-acknowledgement. Consumers must deduplicate the stable ID.
+keeps the row. S2S peers that negotiate XEP-0198 must acknowledge the stanza
+before its fenced outbox claim is completed. The acknowledgement window is
+bounded to 256 stanzas and 15 seconds; timeout or disconnection returns pending
+durable rows to the normal retry policy. Volatile stanzas count toward the
+stream sequence without retaining their payloads. S2S resumption is not enabled.
 
-The ownership transition is `pending PostgreSQL row -> fenced worker claim ->
-socket write -> database completion`. Socket and worker ownership are local to
-one process, but the pending row and claim lease are not: after lease expiry a
-different worker can continue. Failure before the write retries; failure after
-the write but before completion is the at-least-once duplicate window.
+Peers without SM and XEP-0114/XEP-0225 components complete at socket write.
+An acknowledgement or database completion can still be lost, so delivery
+remains at-least-once. Stable XEP-0359 IDs and durable inbound admission suppress
+exact message retries; this does not guarantee arbitrary peers will deduplicate.
 
 ### PubSub and PEP
 

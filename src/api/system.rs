@@ -1032,6 +1032,8 @@ pub async fn public_config(State(state): State<Arc<AppState>>) -> Json<Value> {
             "websocket":state.config.websocket_enabled,
             "bosh":state.config.bosh_enabled,
             "web_client":state.config.web_client_enabled,
+            "passkeys":state.config.web_client_enabled && state.config.fast_token_enabled
+                && crate::services::passkeys::relying_party(&state.config.public_url).is_ok(),
             "web_administration":state.config.web_admin_enabled,
             "invitation_registration":state.config.web_client_enabled,
             "upload_admission":state.config.upload_mode.admits_new_uploads(),

@@ -119,28 +119,15 @@ impl ProtocolSession {
                     .child(XmlElement::new("required")),
             )
             .child(invitation);
-        // Registration is free at the ordinary allowance. If a metered step
-        // is reached, the error response contains a v2 challenge committed to
-        // the submitted values; the client retries those exact values here.
-        // Issuing an unbound challenge in this initial form was the last v1
-        // compatibility dependency and made v2-only deployments unusable.
-        form.push_child(
-            XmlElement::new("field")
-                .attr("var", "urn:northstar:pow:challenge-id")
-                .attr("type", "text-single")
-                .attr(
-                    "label",
-                    "Proof-of-work challenge (only after a retry request)",
-                ),
-        );
-        form.push_child(
-            XmlElement::new("field")
-                .attr("var", "urn:northstar:pow:nonce")
-                .attr("type", "text-single")
-                .attr("label", "Proof-of-work nonce"),
-        );
+        // Ordinary form clients echo 0. A capable client must explicitly
+        // select version 2 before the server issues a computational challenge.
+        form.push_child(xdata_value_field(
+            "urn:northstar:pow:version",
+            "hidden",
+            "0",
+        ));
         let mut query = XmlElement::namespaced("query", "jabber:iq:register").child(
-            XmlElement::new("instructions").text("Choose a username and a password of at least 10 UTF-8 octets. A normal registration needs no proof of work. If the server returns a body-bound challenge, retry the same values with its challenge ID and the solved nonce."),
+            XmlElement::new("instructions").text("Choose a username and a password of at least 10 UTF-8 octets. If registration is rate limited, wait before trying again."),
         );
         if !self.state.registration_requires_invitation() {
             query.push_child(XmlElement::new("username"));
@@ -180,7 +167,7 @@ impl ProtocolSession {
             return Ok(Action::Send(iq_registration_error(id, "bad-request")));
         }
 
-        let (username, password, invitation_token, pow_challenge_id, pow_nonce) =
+        let (username, password, invitation_token, pow_challenge_id, pow_nonce, pow_enabled) =
             if let Some(x_form) = form {
                 if query.children().filter(|node| node.is_element()).count() != 1 {
                     return Ok(Action::Send(iq_registration_error(id, "bad-request")));
@@ -192,6 +179,7 @@ impl ProtocolSession {
                         "username",
                         "password",
                         "urn:northstar:invite:token",
+                        "urn:northstar:pow:version",
                         "urn:northstar:pow:challenge-id",
                         "urn:northstar:pow:nonce",
                     ],
@@ -200,6 +188,18 @@ impl ProtocolSession {
                     Err(_) => return Ok(Action::Send(iq_registration_error(id, "bad-request"))),
                 };
 
+                let pow_enabled = match fields.get("urn:northstar:pow:version").map(String::as_str)
+                {
+                    None | Some("0") => false,
+                    Some("2") => true,
+                    _ => return Ok(Action::Send(iq_registration_error(id, "bad-request"))),
+                };
+                if !pow_enabled
+                    && (fields.contains_key("urn:northstar:pow:challenge-id")
+                        || fields.contains_key("urn:northstar:pow:nonce"))
+                {
+                    return Ok(Action::Send(iq_registration_error(id, "bad-request")));
+                }
                 (
                     fields.get("username").cloned().unwrap_or_default(),
                     fields.get("password").cloned().unwrap_or_default(),
@@ -208,10 +208,11 @@ impl ProtocolSession {
                         .get("urn:northstar:pow:challenge-id")
                         .and_then(|value| value.parse().ok()),
                     fields.get("urn:northstar:pow:nonce").cloned(),
+                    pow_enabled,
                 )
             } else {
                 match parse_legacy_register(query) {
-                    Ok((username, password)) => (username, password, None, None, None),
+                    Ok((username, password)) => (username, password, None, None, None, false),
                     Err(_) => return Ok(Action::Send(iq_registration_error(id, "bad-request"))),
                 }
             };
@@ -286,6 +287,13 @@ impl ProtocolSession {
                     .metrics
                     .rate_limited_total
                     .fetch_add(1, Ordering::Relaxed);
+                if !pow_enabled {
+                    return Ok(Action::Send(iq_registration_abuse_error(
+                        id,
+                        &requirement,
+                        None,
+                    )));
+                }
                 let challenge = match self
                     .state
                     .abuse
@@ -1333,6 +1341,14 @@ fn iq_registration_error(id: &str, condition: &str) -> String {
         .finish()
 }
 
+pub(crate) fn registration_retry_seconds(requirement: &WorkRequirement) -> u64 {
+    requirement
+        .cooldown_seconds
+        .max(requirement.hard_wait_seconds)
+        .max(requirement.retry_after_seconds)
+        .max(1)
+}
+
 fn iq_registration_abuse_error(
     id: &str,
     requirement: &WorkRequirement,
@@ -1370,19 +1386,28 @@ fn iq_registration_abuse_error(
                 .attr("intent-body-sha256", intent.body_sha256.clone());
         }
     }
+    let mut error = XmlElement::new("error")
+        .attr("code", "500")
+        .attr("type", "wait")
+        .child(XmlElement::namespaced(
+            "resource-constraint",
+            "urn:ietf:params:xml:ns:xmpp-stanzas",
+        ))
+        .child(
+            XmlElement::namespaced("text", "urn:ietf:params:xml:ns:xmpp-stanzas")
+                .attr("xml:lang", "en")
+                .text(format!(
+                    "Too many requests. Wait at least {} seconds before trying again.",
+                    registration_retry_seconds(requirement)
+                )),
+        );
+    if challenge.is_some() {
+        error.push_child(pow);
+    }
     XmlElement::namespaced("iq", "jabber:client")
         .attr("type", "error")
         .attr("id", id)
-        .child(
-            XmlElement::new("error")
-                .attr("code", "500")
-                .attr("type", "wait")
-                .child(XmlElement::namespaced(
-                    "resource-constraint",
-                    "urn:ietf:params:xml:ns:xmpp-stanzas",
-                ))
-                .child(pow),
-        )
+        .child(error)
         .finish()
 }
 
@@ -1716,5 +1741,23 @@ mod legacy_tests {
         assert!(pow
             .attribute("intent-body-sha256")
             .is_some_and(|digest| !digest.is_empty()));
+        let ordinary = iq_registration_abuse_error("standard-client", &challenge.requirement, None);
+        let document = Document::parse(&ordinary).unwrap();
+        let error = document.root_element().first_element_child().unwrap();
+        assert_eq!(error.attribute("type"), Some("wait"));
+        let children = error
+            .children()
+            .filter(Node::is_element)
+            .collect::<Vec<_>>();
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0].tag_name().name(), "resource-constraint");
+        assert_eq!(children[1].tag_name().name(), "text");
+        assert!(
+            children
+                .iter()
+                .all(|node| node.tag_name().namespace()
+                    == Some("urn:ietf:params:xml:ns:xmpp-stanzas"))
+        );
+        assert!(children[1].text().unwrap().contains("300 seconds"));
     }
 }

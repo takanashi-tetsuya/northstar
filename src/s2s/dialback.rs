@@ -58,6 +58,8 @@ pub(crate) fn features(state: &AppState, external_available: bool) -> String {
         );
     }
     features
+        .validated_fragment(&super::sm::feature())
+        .expect("static stream management feature is valid XML")
         .validated_fragment(&negotiation_stream_limits_feature())
         .expect("server-generated stream limits must be valid XML")
         .finish()

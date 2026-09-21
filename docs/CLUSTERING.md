@@ -361,3 +361,19 @@ upload state machine and its unexecuted two-node/provider release gates are
 documented in [UPLOAD_STORAGE.md](UPLOAD_STORAGE.md). The bounded authority cache intentionally leaves at
 most a short revocation delay; immediate revocation requires stopping consumers
 or an authenticated invalidation mechanism outside this implementation.
+
+## Account revocation
+
+Credential changes and deletions append an account fence for every known node
+process in the same PostgreSQL transaction. Each node consumes its own queue,
+closes older local routes, and acknowledges the revision it read. A concurrent
+change gets a new revision, so a delayed acknowledgement cannot erase it.
+
+The shared PostgreSQL listener wakes the worker after commit. A one-second poll
+recovers missed notifications; Redis is still a fast control path but is not
+required to retain the event. The 30-second generation sweep remains a separate
+reconciliation check. Read or acknowledgement failures fence local connections;
+repeated failures or the ten-second watchdog stop the node. A replaced process's
+queue is removed, while lease expiry alone does not discard its pending events.
+This bounds normal recovery work, not network-partition duration or end-to-end
+revocation latency. Multi-node operation remains experimental.

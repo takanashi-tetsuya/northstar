@@ -49,6 +49,8 @@ MIGRATIONS = {
     "0141": ROOT / "migrations/0141_upload_cleanup_capability_rehardening.sql",
     "0142": ROOT / "migrations/0142_upload_projection_capacity_rehardening.sql",
     "0143": ROOT / "migrations/0143_upload_snapshot_plan_cache.sql",
+    "0145": ROOT / "migrations/0145_webauthn_passkeys.sql",
+    "0144": ROOT / "migrations/0144_account_revocation_outbox.sql",
 }
 
 # A later migration may replace an existing routine without changing its
@@ -99,7 +101,7 @@ REPLACEMENT_HARDENING_SUCCESSORS = {
 
 ROW = re.compile(
     r"^\s*\('([^']+\([^']*\))','(runtime|command|private)',"
-    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131)'\)[,;]\s*$",
+    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131|0144|0145)'\)[,;]\s*$",
     re.MULTILINE,
 )
 RELATION_ROW = re.compile(
@@ -835,7 +837,7 @@ if "ON COMMIT DROP" in generator_text:
     fail("migration ledger temp table would disappear in autocommit audit sessions")
 
 manifest_text = read(MANIFEST)
-if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131'" not in manifest_text:
+if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145'" not in manifest_text:
     fail("canonical manifest origin constraint omits a reviewed capability migration")
 rows = ROW.findall(manifest_text)
 if not rows:
@@ -849,7 +851,7 @@ by_workload = {
 }
 by_origin = {
     origin: {signature for signature, _, row_origin in rows if row_origin == origin}
-    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131")
+    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131", "0144", "0145")
 }
 manifest_origin_by_signature = {
     signature: origin for signature, _, origin in rows

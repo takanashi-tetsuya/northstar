@@ -6,6 +6,15 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 ## Unreleased
 
+- Complete S2S outbox deliveries on peer ACK when XEP-0198 is negotiated,
+  with bounded acknowledgement waits and retries after disconnection.
+- Add optional Web Passkeys with one-use challenges and device-bound XMPP login.
+- Persist cross-node account revocations with account changes, retaining events
+  across lost Redis notifications and acknowledging each node separately.
+- Let standard registration clients wait for rate limits to clear; send private
+  PoW challenges only after explicit opt-in.
+- Require Extended Master Secret for TLS 1.2 and reject invalid XML characters
+  before the browser sends a stanza.
 - Validate account push sources, IQ response senders and MAM archive identities
   in the browser client before updating local state or completing requests.
 - Reply to browser-resource pings and return errors for unsupported IQ requests.

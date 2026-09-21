@@ -207,10 +207,17 @@ fn derive_turn_credentials(
 mod tests {
     use super::*;
 
+    fn test_secret() -> String {
+        use ring::rand::SecureRandom;
+        let mut bytes = [0_u8; 32];
+        ring::rand::SystemRandom::new().fill(&mut bytes).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
     #[test]
     fn credentials_are_opaque_short_lived_and_verifiable() {
-        let secret = "0123456789abcdef0123456789abcdef";
-        let service = ExtDiscoService::new(Some(secret.to_owned()), 3_600, 4);
+        let secret = test_secret();
+        let service = ExtDiscoService::new(Some(secret.clone()), 3_600, 4);
         let credentials = service
             .issue_turn_credentials(
                 "alice@example.test",
@@ -245,8 +252,12 @@ mod tests {
             Err(CredentialIssueError::NotConfigured)
         );
         assert_eq!(
-            ExtDiscoService::new(Some("a sufficiently long secret".to_owned()), 1, 4)
-                .issue_turn_credentials("alice@example.test", ip, now, u64::MAX),
+            ExtDiscoService::new(Some(test_secret()), 1, 4).issue_turn_credentials(
+                "alice@example.test",
+                ip,
+                now,
+                u64::MAX
+            ),
             Err(CredentialIssueError::TimestampOverflow)
         );
     }

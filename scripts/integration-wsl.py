@@ -872,11 +872,40 @@ def atomic_registration_wire_conformance() -> None:
     )
     check(status == 200 and login.get("token"), f"XEP-0077 account did not commit: {login}")
 
+    # A client without the private capability receives a standard wait error.
+    secure, _ = starttls_registration_socket()
+    secure.sendall(
+        ("<iq xmlns='jabber:client' type='set' id='standard-throttled'>"
+         "<query xmlns='jabber:iq:register'><username>standard_throttled</username>"
+         f"<password>{PASSWORD}</password></query></iq>").encode()
+    )
+    limited = read_until(secure, b"</iq>").decode()
+    check("resource-constraint" in limited and "type='wait'" in limited,
+          f"standard registration did not receive a wait error: {limited}")
+    check("Wait at least" in limited and "urn:northstar:pow:" not in limited,
+          f"standard registration requires a private extension: {limited}")
+    secure.close()
+
+    secure, _ = starttls_registration_socket()
+    secure.sendall(b"<register xmlns='urn:xmpp:register:0'><flow id='northstar'/></register>")
+    read_until(secure, b"</challenge>")
+    secure.sendall(
+        ("<response xmlns='urn:xmpp:register:0'><x xmlns='jabber:x:data' type='submit'>"
+         "<field var='FORM_TYPE' type='hidden'><value>urn:xmpp:register:0</value></field>"
+         "<field var='username'><value>standard_throttled</value></field>"
+         f"<field var='password'><value>{PASSWORD}</value></field>"
+         "</x></response>").encode()
+    )
+    limited = read_until(secure, b"</challenge>").decode()
+    check("Wait at least" in limited and "urn:northstar:pow:" not in limited,
+          f"default IBR flow requires a private extension: {limited}")
+    secure.close()
+
     xep0389_username = "xep0389_atomic"
     secure, features = starttls_registration_socket()
     check("urn:xmpp:register:0" in features, "XEP-0389 was not advertised after STARTTLS")
     secure.sendall(
-        b"<register xmlns='urn:xmpp:register:0'><flow id='northstar'/></register>"
+        b"<register xmlns='urn:xmpp:register:0'><flow id='northstar-pow-v2'/></register>"
     )
     initial_form = read_until(secure, b"</challenge>").decode()
     check(
@@ -908,9 +937,15 @@ def atomic_registration_wire_conformance() -> None:
         == xmpp_registration_body_digest(xep0389_username, PASSWORD),
         f"XEP-0389 challenge was not bound to the submitted registration body: {challenge}",
     )
+    # Cooling can exceed the unauthenticated stream lifetime. The proof is
+    # bound to the registration body and source, so retry on a fresh stream.
+    secure.close()
     if hard_wait:
         time.sleep(hard_wait + 0.05)
     nonce = solve_pow_prefix(prefix, work_factor)
+    secure, _ = starttls_registration_socket()
+    secure.sendall(b"<register xmlns='urn:xmpp:register:0'><flow id='northstar-pow-v2'/></register>")
+    read_until(secure, b"</challenge>")
     secure.sendall(
         (
             "<response xmlns='urn:xmpp:register:0'><x xmlns='jabber:x:data' type='submit'>"
@@ -2604,6 +2639,10 @@ def modern_message_profiles_conformance(
 
 def run() -> None:
     wait_ready()
+    if os.environ.get("XMPP_TEST_ONLY_PASSKEYS") == "true":
+        import passkeys_wire
+        passkeys_wire.run(sys.modules[__name__])
+        return
     if os.environ.get("XMPP_TEST_ONLY_CHALLENGE_CAPACITY") == "true":
         challenge_capacity_conformance()
         print("PoW challenge hard capacity and account-enumeration resistance passed")
@@ -6189,6 +6228,8 @@ def run() -> None:
     bob.close()
     alice_carbon.close()
     alice.close()
+    import passkeys_wire
+    passkeys_wire.run(sys.modules[__name__])
     print("integration: REST/no-store, admin, STARTTLS, WebSocket, roster, atomic/access-controlled PEP with owner quotas and OMEMO bundle retraction, vCard avatars, routing, SM resume, Carbons, blocking, MUC, HTTP Upload, XEP-0352 CSI, XEP-0357 push, paged MAM, credential/session revocation and metrics passed")
 
 

@@ -2,7 +2,7 @@ use super::{Action, ProtocolSession};
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use crate::{
-    abuse::{AbuseAction, PowChallenge, PowIntent, PowProof},
+    abuse::{AbuseAction, PowChallenge, PowIntent, PowProof, WorkRequirement},
     services::account::{RegistrationOutcome, RegistrationRequest},
 };
 use anyhow::Result;
@@ -12,6 +12,8 @@ use zeroize::Zeroize;
 
 pub(crate) const IBR2_NS: &str = "urn:xmpp:register:0";
 const FLOW_ID: &str = "northstar";
+const POW_FLOW_ID: &str = "northstar-pow-v2";
+const POW_NS: &str = "urn:northstar:pow:2";
 const INVITATION_TOKEN_MAX_BYTES: usize = 512;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,7 +56,8 @@ impl ProtocolSession {
             return Ok(Action::CloseWith(stream_error("unexpected-request")));
         }
         self.ibr_flow = Some(IbrFlowTransport::Stream);
-        Ok(Action::Send(self.ibr_challenge(None)))
+        self.ibr_pow_enabled = pow_flow_selected(node);
+        Ok(Action::Send(self.ibr_challenge(None, None)))
     }
 
     pub(crate) async fn handle_ibr_response(&mut self, node: Node<'_, '_>) -> Result<Action> {
@@ -130,7 +133,8 @@ impl ProtocolSession {
             return Ok(Action::Send(iq_error(id, "unexpected-request")));
         }
         self.ibr_flow = Some(IbrFlowTransport::Iq);
-        Ok(Action::Send(iq_result(id, &self.ibr_challenge(None))))
+        self.ibr_pow_enabled = pow_flow_selected(node);
+        Ok(Action::Send(iq_result(id, &self.ibr_challenge(None, None))))
     }
 
     pub(crate) async fn handle_ibr_response_iq(
@@ -184,7 +188,11 @@ impl ProtocolSession {
             && !self.state.registration_is_closed()
     }
 
-    fn ibr_challenge(&self, challenge: Option<&PowChallenge>) -> String {
+    fn ibr_challenge(
+        &self,
+        challenge: Option<&PowChallenge>,
+        wait: Option<&WorkRequirement>,
+    ) -> String {
         let invitation = if self.state.registration_requires_invitation() {
             XmlElement::new("field")
                 .attr("var", "urn:northstar:invite:token")
@@ -198,9 +206,14 @@ impl ProtocolSession {
                 .attr("label", "Invitation token (optional)")
         };
         let instructions = if challenge.is_some() {
-            "The previous attempt reached a metered step. Retry the exact same username, password and invitation, then solve the body-bound proof-of-work challenge."
+            "The previous attempt reached a metered step. Retry the exact same username, password and invitation, then solve the body-bound proof-of-work challenge.".to_owned()
+        } else if let Some(requirement) = wait {
+            format!(
+                "Too many registration attempts. Wait at least {} seconds before trying again.",
+                super::misc::registration_retry_seconds(requirement)
+            )
         } else {
-            "Choose a username and a password of at least 10 UTF-8 octets. A normal registration needs no proof of work; a metered retry returns a body-bound challenge."
+            "Choose a username and a password of at least 10 UTF-8 octets.".to_owned()
         };
         let mut form = XmlElement::namespaced("x", "jabber:x:data")
             .attr("type", "form")
@@ -281,12 +294,22 @@ impl ProtocolSession {
             );
         }
         XmlElement::namespaced("challenge", IBR2_NS)
-            .attr("type", "jabber:x:data")
+            .attr(
+                "type",
+                if challenge.is_some() {
+                    POW_NS
+                } else {
+                    "jabber:x:data"
+                },
+            )
             .child(form)
             .finish()
     }
 
     async fn complete_ibr_registration(&self, submission: RegistrationSubmission) -> IbrCompletion {
+        if !self.ibr_pow_enabled && submission.proof.is_some() {
+            return IbrCompletion::Failed("bad-request");
+        }
         if crate::auth::normalize_username(&submission.username).is_err()
             || crate::auth::validate_password(&submission.password).is_err()
         {
@@ -334,18 +357,23 @@ impl ProtocolSession {
                     .fetch_add(1, Ordering::Relaxed);
                 IbrCompletion::Created(user.username)
             }
-            RegistrationOutcome::AbuseDenied(_) => {
+            RegistrationOutcome::AbuseDenied(requirement) => {
                 self.state
                     .metrics
                     .rate_limited_total
                     .fetch_add(1, Ordering::Relaxed);
+                if !self.ibr_pow_enabled {
+                    return IbrCompletion::Retry(self.ibr_challenge(None, Some(&requirement)));
+                }
                 match self
                     .state
                     .abuse
                     .issue_v2(AbuseAction::Registration, &subject, &actors, &intent)
                     .await
                 {
-                    Ok(challenge) => IbrCompletion::Retry(self.ibr_challenge(Some(&challenge))),
+                    Ok(challenge) => {
+                        IbrCompletion::Retry(self.ibr_challenge(Some(&challenge), None))
+                    }
                     Err(error) => {
                         tracing::warn!(?error, "XEP-0389 v2 challenge issuance failed");
                         self.state
@@ -387,6 +415,17 @@ pub(crate) fn ibr_stream_feature() -> String {
                         .text("Account registration"),
                 )
                 .child(XmlElement::new("challenge").attr("type", "jabber:x:data")),
+        )
+        .child(
+            XmlElement::new("flow")
+                .attr("id", POW_FLOW_ID)
+                .child(
+                    XmlElement::new("name")
+                        .attr("xml:lang", "en")
+                        .text("Registration with proof of work"),
+                )
+                .child(XmlElement::new("challenge").attr("type", "jabber:x:data"))
+                .child(XmlElement::new("challenge").attr("type", POW_NS)),
         )
         .finish()
 }
@@ -491,10 +530,16 @@ fn valid_flow_selection(node: Node<'_, '_>) -> bool {
     };
     flow.tag_name().name() == "flow"
         && flow.tag_name().namespace() == Some(IBR2_NS)
-        && flow.attribute("id") == Some(FLOW_ID)
+        && matches!(flow.attribute("id"), Some(FLOW_ID | POW_FLOW_ID))
         && flow.attributes().all(|attribute| attribute.name() == "id")
         && !flow.children().any(|child| child.is_element())
         && flow.text().is_none_or(|text| text.trim().is_empty())
+}
+
+fn pow_flow_selected(node: Node<'_, '_>) -> bool {
+    node.children()
+        .find(|child| child.is_element())
+        .is_some_and(|flow| flow.attribute("id") == Some(POW_FLOW_ID))
 }
 
 fn valid_empty_element(node: Node<'_, '_>, name: &str, namespace: &str) -> bool {
@@ -539,11 +584,18 @@ mod tests {
 
     #[test]
     fn flow_selection_is_exact() {
+        let pow = Document::parse(
+            "<register xmlns='urn:xmpp:register:0'><flow id='northstar-pow-v2'/></register>",
+        )
+        .unwrap();
+        assert!(valid_flow_selection(pow.root_element()));
+        assert!(pow_flow_selected(pow.root_element()));
         let valid = Document::parse(
             "<register xmlns='urn:xmpp:register:0'><flow id='northstar'/></register>",
         )
         .unwrap();
         assert!(valid_flow_selection(valid.root_element()));
+        assert!(!pow_flow_selected(valid.root_element()));
         for xml in [
             "<register xmlns='urn:xmpp:register:0'/>",
             "<register xmlns='urn:xmpp:register:0'><flow id='other'/></register>",

@@ -401,7 +401,7 @@ def assert_initial_s2s_error(
         stream.close()
 
 
-def authenticate_external(stream: ssl.SSLSocket, asserted_domain: str) -> None:
+def authenticate_external(stream: ssl.SSLSocket, asserted_domain: str, bidi: bool = False) -> None:
     features = begin_s2s(stream, asserted_domain)
     fixture.check("<mechanism>EXTERNAL</mechanism>" in features, "EXTERNAL was not advertised")
     fixture.check(
@@ -410,6 +410,8 @@ def authenticate_external(stream: ssl.SSLSocket, asserted_domain: str) -> None:
         f"pre-authentication S2S features omitted the enforced XEP-0478 limits: {features}",
     )
     authorization = base64.b64encode(asserted_domain.encode()).decode()
+    if bidi:
+        stream.sendall(b"<bidi xmlns='urn:xmpp:bidi'/>")
     stream.sendall(
         f"<auth xmlns='urn:ietf:params:xml:ns:xmpp-sasl' mechanism='EXTERNAL'>{authorization}</auth>".encode()
     )
@@ -577,6 +579,73 @@ def verify_s2s_transport_boundaries() -> None:
         )
     finally:
         stream.close()
+
+
+def verify_s2s_outbox_acknowledgement(alice, bob) -> None:
+    if os.environ.get("FEDERATION_TEST_EXTERNAL", "true").lower() != "true":
+        return
+    cert_dir = pathlib.Path(os.environ["FEDERATION_TEST_CERT_DIR"])
+    stream = open_direct_s2s(str(cert_dir / "federation-b.crt"), str(cert_dir / "federation-b.key"))
+    schema = os.environ["FEDERATION_TEST_SCHEMA_A"]
+    database = required_test_database("FEDERATION_TEST_DATABASE_A")
+
+    def pending(marker):
+        return int(psql_schema(schema, database, f"SELECT count(*) FROM s2s_outbox WHERE stanza LIKE '%{marker}%'"))
+
+    try:
+        authenticate_external(stream, "remote.localhost", bidi=True)
+        stream.sendall(b"<enable xmlns='urn:xmpp:sm:3'/>")
+        receive_tls_until(stream, "/>")
+        for marker in ("SM-ACK-WIRE", "SM-RETRY-WIRE"):
+            alice.send(f"<message xmlns='jabber:client' to='bob_fed@remote.localhost' type='chat' id='{marker}'><body>{marker}</body></message>")
+            response = receive_tls_until(stream, "<r xmlns='urn:xmpp:sm:3'/>")
+            fixture.check(marker in response, "managed BIDI route did not receive its stanza")
+            fixture.check(pending(marker) == 1, "S2S outbox completed before peer ACK")
+            if marker == "SM-ACK-WIRE":
+                stream.sendall(b"<a xmlns='urn:xmpp:sm:3' h='1'/><r xmlns='urn:xmpp:sm:3'/>")
+                receive_tls_until(stream, "h='0'")
+                fixture.check(pending(marker) == 0, "peer ACK did not complete its fenced outbox row")
+            else:
+                original = response
+    finally:
+        stream.close()
+    replay, _ = bob.receive_until("SM-RETRY-WIRE", timeout=30)
+    def stanza_id(raw):
+        for match in re.finditer(r"<stanza-id\b[^>]*>", raw):
+            if "by='alice_fed@localhost'" in match.group():
+                return re.search(r"\bid='([^']+)'", match.group()).group(1)
+        return None
+    fixture.check(stanza_id(original) is not None and stanza_id(original) == stanza_id(replay),
+                  "S2S retry changed its stable stanza ID")
+    print("S2S outbox waits for ACK and retries disconnected deliveries with the same stanza ID")
+
+
+def verify_s2s_stream_management() -> None:
+    if os.environ.get("FEDERATION_TEST_EXTERNAL", "true").lower() != "true":
+        return
+    cert_dir = pathlib.Path(os.environ["FEDERATION_TEST_CERT_DIR"])
+    stream = open_direct_s2s(str(cert_dir / "federation-b.crt"), str(cert_dir / "federation-b.key"))
+    try:
+        authenticate_external(stream, "remote.localhost")
+        stream.sendall(b"<resume xmlns='urn:xmpp:sm:3' previd='missing' h='0'/>")
+        response = receive_tls_until(stream, "</failed>")
+        fixture.check("feature-not-implemented" in response, "S2S advertised unsupported resumption")
+        stream.sendall(b"<enable xmlns='urn:xmpp:sm:3' resume='true'/>")
+        response = receive_tls_until(stream, "/>")
+        fixture.check("<enabled xmlns='urn:xmpp:sm:3'/>" in response, "S2S did not negotiate acknowledgement-only SM")
+        stream.sendall(b"<r xmlns='urn:xmpp:sm:3'/>")
+        fixture.check("h='0'" in receive_tls_until(stream, "/>"), "SM counter did not start at zero")
+        stream.sendall(b"<iq xmlns='jabber:server' from='remote.localhost' to='localhost' type='get' id='sm-wire'><ping xmlns='urn:xmpp:ping'/></iq><r xmlns='urn:xmpp:sm:3'/>")
+        response = receive_tls_until(stream, "h='1'")
+        fixture.check("sm-wire" in response and "<r xmlns='urn:xmpp:sm:3'/>" in response, "S2S response was not counted/requested")
+        stream.sendall(b"<a xmlns='urn:xmpp:sm:3' h='1'/><r xmlns='urn:xmpp:sm:3'/>")
+        fixture.check("h='1'" in receive_tls_until(stream, "h='1'"), "SM controls advanced the stanza counter")
+        stream.sendall(b"<a xmlns='urn:xmpp:sm:3' h='2'/>")
+        response = receive_tls_until(stream, "</stream:stream>")
+        fixture.check("handled-count-too-high" in response, "S2S accepted an acknowledgement for unsent stanzas")
+    finally:
+        stream.close()
+    print("S2S SM negotiation, stanza counters, acknowledgement and over-ack rejection passed")
 
 
 def verify_s2s_authentication_boundaries() -> None:
@@ -787,11 +856,13 @@ def run(server_pids: tuple[int, ...] = ()) -> None:
     verify_c2s_transport_boundaries()
     verify_s2s_transport_boundaries()
     verify_s2s_authentication_boundaries()
+    verify_s2s_stream_management()
     # Every pair completes the original concurrent transport probes before a
     # faster pair begins password work. This process publishes its own PID
     # and stays alive at the barrier, before taking any authentication slot.
     stress_phases.wait_for_fixture_phase("transport")
     alice, bob = initialize_clients()
+    verify_s2s_outbox_acknowledgement(alice, bob)
 
     # RFC 6121 distinguishes connected, available, and interested resources.
     # Subscription approvals and roster pushes are delivered to interested

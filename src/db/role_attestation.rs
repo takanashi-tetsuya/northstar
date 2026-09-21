@@ -1183,6 +1183,14 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
                ('northstar_upload_claim_slot(uuid,bytea,int8,int8,int8)'),
                ('northstar_upload_capacity_reconciliation()'),
                ('northstar_upload_queue_snapshot()'),
+       ('northstar_passkey_challenge(uuid,int8,text,bytea,jsonb)'),
+       ('northstar_passkey_consume(uuid,text,bytea)'),
+       ('northstar_passkey_register(uuid,int8,bytea,bytea,jsonb,text)'),
+       ('northstar_passkey_accept(uuid,int8,uuid,uuid,jsonb,int8)'),
+       ('northstar_passkey_remove(uuid,int8,bytea,uuid)'),
+               ('northstar_pending_account_revocations(text,text,uuid,int8,int4)'),
+               ('northstar_ack_account_revocations(text,text,uuid,int8,uuid[])'),
+               ('northstar_cleanup_account_revocations(int4)'),
                ('northstar_upload_policy_binding_matches(int8,int8,int8)'),
                ('northstar_upload_admit_expired_cleanup()'),
                ('northstar_upload_delete_owned(uuid,int8,bytea,uuid,uuid)'),
@@ -1585,8 +1593,8 @@ mod tests {
         // The ledger has one intentional historical gap (0021).  Keep this
         // assertion exact so adding a migration requires reviewing both the
         // embedded capability manifest and its attestation expectation.
-        assert_eq!(manifest.versions.last(), Some(&143));
-        assert_eq!(manifest.versions.len(), 142);
+        assert_eq!(manifest.versions.last(), Some(&145));
+        assert_eq!(manifest.versions.len(), 144);
         assert!(!manifest.versions.contains(&21));
         assert!(manifest
             .checksum_hex

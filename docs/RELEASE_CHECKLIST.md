@@ -158,11 +158,11 @@ and Docker artifacts and their provenance. They do not repeat source CI.
 - [ ] Apply forward hardening migration `0142`; verify both upload-projection
   capacity trigger functions have the exact installation-schema
   `SECURITY DEFINER` path and no `PUBLIC` execute privilege.
-- [ ] Apply migration `0143`; verify the upload queue snapshot reads current
+- [ ] Apply migration `0145`; verify the upload queue snapshot reads current
   data through its pinned schema and retains the existing bounded counters.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 142 migrations from `0001` through the current
-  repository maximum `0143`, with `0021` as the sole intentional gap.
+  identity and verify all 144 migrations from `0001` through the current
+  repository maximum `0145`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

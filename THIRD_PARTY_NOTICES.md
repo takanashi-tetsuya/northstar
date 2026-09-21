@@ -35,3 +35,16 @@ license, notice, npm tarball, package metadata and deployed-file hashes.
 Northstar disables authorization and request submission in this UI.
 
 All bundled browser resources are served locally.
+
+## WebAuthn libraries 0.5.5 — MPL-2.0
+
+Passkeys use `webauthn-rs`, its core and protocol crates, and the attestation
+certificate types. Their [source](https://github.com/kanidm/webauthn-rs/tree/d2c10d53ca5ef033d37ee6462e936e9eb72ad98c)
+is available under the included [Mozilla Public License 2.0](third_party/webauthn-rs/LICENSE).
+
+## OpenSSL 3.6.3 — Apache-2.0
+
+The WebAuthn verifier uses OpenSSL, statically linked through `openssl` 0.10.81
+and `openssl-src` 300.6.1. The [OpenSSL source](https://github.com/openssl/openssl/tree/openssl-3.6.3)
+and included [license](third_party/openssl/LICENSE) cover that library.
+XMPP TLS connections continue to use rustls.

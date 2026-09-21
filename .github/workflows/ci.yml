@@ -401,6 +401,7 @@ jobs:
           node --check web/pow.js
           node --check web/pow-worker.js
           node --check web/storage.js
+          node --check web/passkeys.js
           node --check third_party/swagger-ui/dist/northstar-swagger-initializer.js
           node --check scripts/web-e2e.cjs
           node --check scripts/audit-libomemo-source.mjs

@@ -14,11 +14,20 @@ CREATE TEMPORARY TABLE northstar_capability_manifest (
   workload pg_catalog.text NOT NULL
     CHECK (workload IN ('runtime','command','private')),
   origin pg_catalog.text NOT NULL
-    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131'))
+    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145'))
 );
 
 INSERT INTO pg_temp.northstar_capability_manifest(signature,workload,origin)
 VALUES
+  ('northstar_passkey_challenge(uuid,int8,text,bytea,jsonb)','runtime','0145'),
+  ('northstar_passkey_consume(uuid,text,bytea)','runtime','0145'),
+  ('northstar_passkey_register(uuid,int8,bytea,bytea,jsonb,text)','runtime','0145'),
+  ('northstar_passkey_accept(uuid,int8,uuid,uuid,jsonb,int8)','runtime','0145'),
+  ('northstar_passkey_remove(uuid,int8,bytea,uuid)','runtime','0145'),
+  ('northstar_record_account_revocation()','private','0144'),
+  ('northstar_pending_account_revocations(text,text,uuid,int8,int4)','runtime','0144'),
+  ('northstar_ack_account_revocations(text,text,uuid,int8,uuid[])','runtime','0144'),
+  ('northstar_cleanup_account_revocations(int4)','runtime','0144'),
   ('offline_upgrade_upload_storage_authority_v1_to_v2(text,bytea,bytea,text)','private','baseline-0111'),
   ('account_upload_storage_job_capacity()','private','baseline-0111'),
   ('account_upload_cleanup_capacity()','private','baseline-0111'),
@@ -198,6 +207,9 @@ INSERT INTO pg_temp.northstar_runtime_relation_manifest(
 )
 VALUES
   ('_sqlx_migrations',TRUE,FALSE,FALSE,FALSE,'sqlx'),
+  ('webauthn_credentials',TRUE,FALSE,FALSE,FALSE,'0145'),
+  ('webauthn_challenges',FALSE,FALSE,FALSE,FALSE,'0145'),
+  ('account_revocation_outbox',FALSE,FALSE,FALSE,FALSE,'0144'),
   ('users',TRUE,FALSE,FALSE,FALSE,'0001'),
   ('api_sessions',TRUE,TRUE,TRUE,TRUE,'0001'),
   ('roster_items',TRUE,TRUE,TRUE,TRUE,'0001'),

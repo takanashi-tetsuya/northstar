@@ -498,6 +498,7 @@ pub struct ProtocolSession {
     /// Active XEP-0389 challenge transport. A response is accepted only after
     /// this connection selected an advertised flow and received a challenge.
     pub(crate) ibr_flow: Option<ibr::IbrFlowTransport>,
+    pub(crate) ibr_pow_enabled: bool,
     /// One unauthenticated transport may bootstrap at most one account. After
     /// a successful XEP-0077/XEP-0389 registration only SASL is expected.
     pub(crate) user_agent_id: Option<uuid::Uuid>,
@@ -604,6 +605,7 @@ impl ProtocolSession {
             legacy_sasl_awaiting_initial_response: false,
             sasl2_state: None,
             ibr_flow: None,
+            ibr_pow_enabled: false,
             user_agent_id: None,
             user_agent_epoch: None,
             pending_credential_commit: None,

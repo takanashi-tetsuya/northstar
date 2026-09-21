@@ -185,7 +185,7 @@ cargo build "${cargo_args[@]}"
 # applied by the explicit migrator command before the runtime process starts.
 # This hermetic suite owns its random schema, so the dedicated xmpp_test role
 # safely serves as both migrator and runtime identity inside that schema.
-integration_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$test_database?options=-csearch_path%3D$test_schema"
+integration_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$test_schema"
 env \
   NORTHSTAR_DISABLE_DOTENV=true \
   XMPP_DOMAIN=localhost \
@@ -199,7 +199,7 @@ env \
 fixture_start_tcp_relay "$project_dir" "$runtime_dir" integration-http integration-http \
   "$integration_http_relay_target" "$runtime_dir/integration-http-relay.log" \
   integration_http_relay_pid integration_http_relay_port
-integration_public_url="https://127.0.0.1:$integration_http_relay_port"
+integration_public_url="https://localhost:$integration_http_relay_port"
 
 publish_integration_http_target() {
   fixture_publish_relay_target "$integration_http_relay_target" "$test_http_backend_port"
@@ -285,7 +285,7 @@ if [[ "${XMPP_TEST_ONLY_JINGLE_GATE:-false}" == "true" ]]; then
   exit 0
 fi
 
-if [[ "${XMPP_TEST_ONLY_SASL:-false}" != "true" && "${XMPP_TEST_ONLY_ATOMIC_REGISTRATION:-false}" != "true" && "${XMPP_TEST_ONLY_MODERN_MESSAGES:-false}" != "true" && "${XMPP_TEST_ONLY_LOGIN_IDEMPOTENCY:-false}" != "true" && "${XMPP_TEST_ONLY_CHALLENGE_CAPACITY:-false}" != "true" ]]; then
+if [[ "${XMPP_TEST_ONLY_SASL:-false}" != "true" && "${XMPP_TEST_ONLY_ATOMIC_REGISTRATION:-false}" != "true" && "${XMPP_TEST_ONLY_MODERN_MESSAGES:-false}" != "true" && "${XMPP_TEST_ONLY_LOGIN_IDEMPOTENCY:-false}" != "true" && "${XMPP_TEST_ONLY_CHALLENGE_CAPACITY:-false}" != "true" && "${XMPP_TEST_ONLY_PASSKEYS:-false}" != "true" ]]; then
   XMPP_TEST_HOST=127.0.0.1 \
   XMPP_TEST_HTTP_PORT="$test_http_port" \
   XMPP_TEST_CLIENT_PORT="$test_client_port" \
@@ -332,7 +332,7 @@ XMPP_TEST_C2S_UNTRUSTED_CERT="$runtime_dir/client-untrusted.crt" \
 XMPP_TEST_C2S_UNTRUSTED_KEY="$runtime_dir/client-untrusted.key" \
 python3 scripts/integration-wsl.py
 
-if [[ "${XMPP_TEST_ONLY_SASL:-false}" != "true" && "${XMPP_TEST_ONLY_ATOMIC_REGISTRATION:-false}" != "true" && "${XMPP_TEST_ONLY_MODERN_MESSAGES:-false}" != "true" && "${XMPP_TEST_ONLY_LOGIN_IDEMPOTENCY:-false}" != "true" && "${XMPP_TEST_ONLY_CHALLENGE_CAPACITY:-false}" != "true" ]]; then
+if [[ "${XMPP_TEST_ONLY_SASL:-false}" != "true" && "${XMPP_TEST_ONLY_ATOMIC_REGISTRATION:-false}" != "true" && "${XMPP_TEST_ONLY_MODERN_MESSAGES:-false}" != "true" && "${XMPP_TEST_ONLY_LOGIN_IDEMPOTENCY:-false}" != "true" && "${XMPP_TEST_ONLY_CHALLENGE_CAPACITY:-false}" != "true" && "${XMPP_TEST_ONLY_PASSKEYS:-false}" != "true" ]]; then
   XMPP_TEST_HOST=127.0.0.1 \
   XMPP_TEST_HTTP_PORT="$test_http_port" \
   XMPP_TEST_WEB_ADMIN_PORT="$test_web_admin_port" \
@@ -384,7 +384,7 @@ if [[ "${XMPP_TEST_ONLY_SASL:-false}" == "true" ]]; then
   python3 scripts/integration-wsl.py
 fi
 
-if [[ "${XMPP_TEST_ONLY_SASL:-false}" != "true" && "${XMPP_TEST_ONLY_ATOMIC_REGISTRATION:-false}" != "true" && "${XMPP_TEST_ONLY_MODERN_MESSAGES:-false}" != "true" && "${XMPP_TEST_ONLY_LOGIN_IDEMPOTENCY:-false}" != "true" && "${XMPP_TEST_ONLY_CHALLENGE_CAPACITY:-false}" != "true" ]]; then
+if [[ "${XMPP_TEST_ONLY_SASL:-false}" != "true" && "${XMPP_TEST_ONLY_ATOMIC_REGISTRATION:-false}" != "true" && "${XMPP_TEST_ONLY_MODERN_MESSAGES:-false}" != "true" && "${XMPP_TEST_ONLY_LOGIN_IDEMPOTENCY:-false}" != "true" && "${XMPP_TEST_ONLY_CHALLENGE_CAPACITY:-false}" != "true" && "${XMPP_TEST_ONLY_PASSKEYS:-false}" != "true" ]]; then
   python3 scripts/transport-conformance.py \
     --bosh "http://127.0.0.1:$test_http_port/http-bind" \
     --websocket "ws://127.0.0.1:$test_http_port/xmpp-websocket" \

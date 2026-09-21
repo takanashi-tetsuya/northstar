@@ -1,3 +1,4 @@
+import { passkeysAvailable, createPasskey, authenticatePasskey } from './passkeys.js';
 import { XmppClient, NS, bareJid, child, contactJid, localpart, randomId, xmlEscape } from './xmpp.js';
 import {
   deleteValue, getValue, loadCachedMessages, saveCachedMessage, setValue,
@@ -523,7 +524,7 @@ function waitForApiRetry(milliseconds, signal) {
 }
 
 async function request(path, options = {}) {
-  const { idempotencyKey, omitAuthorization = false, ...requestOptions } = options;
+  const { idempotencyKey, omitAuthorization = false, retry = true, ...requestOptions } = options;
   const headers = new Headers(requestOptions.headers || {});
   if (requestOptions.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   if (state.apiToken && !omitAuthorization) headers.set('Authorization', `Bearer ${state.apiToken}`);
@@ -539,7 +540,7 @@ async function request(path, options = {}) {
     try {
       response = await fetch(path, { ...requestOptions, headers, cache: 'no-store' });
     } catch (error) {
-      const delay = API_RETRY_DELAYS_MS[attempt];
+      const delay = retry ? API_RETRY_DELAYS_MS[attempt] : undefined;
       if (delay === undefined || requestOptions.signal?.aborted) throw error;
       await waitForApiRetry(delay, requestOptions.signal);
       continue;
@@ -552,7 +553,7 @@ async function request(path, options = {}) {
     const errorCode = data?.error?.code;
     const retryable = API_RETRYABLE_STATUS.has(response.status)
       || (response.status === 409 && errorCode === 'idempotency_in_progress');
-    const delay = retryable ? apiRetryDelay(response, attempt) : null;
+    const delay = retry && retryable ? apiRetryDelay(response, attempt) : null;
     if (delay !== null && attempt < API_RETRY_DELAYS_MS.length && !requestOptions.signal?.aborted) {
       await waitForApiRetry(delay, requestOptions.signal);
       continue;
@@ -695,6 +696,9 @@ async function initializePage() {
   bindInterface();
   try {
     state.config = await request('/api/v1/config');
+    const passkeysEnabled = !!state.config.capabilities?.passkeys && passkeysAvailable();
+    $('#passkey-login').classList.toggle('hidden', !passkeysEnabled);
+    $('#passkey-settings').classList.toggle('hidden', !passkeysEnabled);
     const suffix = `@${state.config.domain}`;
     $('#server-label').textContent = `连接到 ${state.config.domain}`;
     $('#login-domain').textContent = suffix;
@@ -729,6 +733,8 @@ function bindInterface() {
   $('#login-tab').addEventListener('click', () => switchAuth('login'));
   $('#register-tab').addEventListener('click', () => switchAuth('register'));
   $('#login-form').addEventListener('submit', login);
+  $('#passkey-login').addEventListener('click', (event) => login(event, true));
+  $('#add-passkey').addEventListener('click', () => managePasskey());
   $('#register-form').addEventListener('submit', register);
   document.querySelectorAll('[data-reveal]').forEach((button) => button.addEventListener('click', () => {
     const input = document.getElementById(button.dataset.reveal);
@@ -761,7 +767,12 @@ function bindInterface() {
   $('#dismiss-security').addEventListener('click', () => $('#security-banner').classList.add('hidden'));
   $('#verify-button').addEventListener('click', handleSecurityButton);
   $('#refresh-devices').addEventListener('click', (event) => { event.preventDefault(); openVerification(true); });
-  $('#settings-button').addEventListener('click', () => $('#settings-dialog').showModal());
+  $('#settings-button').addEventListener('click', () => {
+    $('#settings-dialog').showModal();
+    if (state.config.capabilities?.passkeys && passkeysAvailable()) {
+      loadPasskeys().catch((error) => showMessage($('#passkey-status'), humanError(error)));
+    }
+  });
   $('#avatar-button').addEventListener('click', () => $('#avatar-input').click());
   $('#avatar-input').addEventListener('change', prepareAvatar);
   $('#logout-button').addEventListener('click', (event) => { event.preventDefault(); logout(); });
@@ -862,11 +873,17 @@ async function register(event) {
   }
 }
 
-async function login(event) {
+async function login(event, usePasskey = false) {
   event.preventDefault();
-  const button = event.currentTarget.querySelector('button[type="submit"]');
+  if (state.authenticating) return;
+  state.authenticating = true;
+  const authController = new AbortController();
+  state.authAbortController = authController;
+  $('#passkey-login').disabled = true;
+  $('#login-form button[type="submit"]').disabled = true;
+  const button = usePasskey ? event.currentTarget : event.currentTarget.querySelector('button[type="submit"]');
   const username = $('#login-username').value.trim().toLowerCase();
-  let password = $('#login-password').value;
+  let password = usePasskey ? '' : $('#login-password').value;
   $('#login-password').value = '';
   setBusy(button, true, '正在建立安全会话…');
   showMessage($('#auth-error'), '');
@@ -874,38 +891,58 @@ async function login(event) {
   state.pageLifecycleLocked = false;
   let requestBody = null;
   let scramKey = null;
+  let fastBootstrap = null;
   try {
     await state.lifecycleCleanup.catch(() => {});
     state.lifecycleCleanup = Promise.resolve();
-    requestBody = { username, password };
-    const pow = await queuedHttpProof(
-      'login', '#auth-pow-status', '/api/v1/login', requestBody, { username },
-    );
-    const session = await request('/api/v1/login', { method: 'POST', body: JSON.stringify({ ...requestBody, pow }) });
-    requestBody.password = '';
-    requestBody = null;
-
-    let passwordBytes = new TextEncoder().encode(password);
-    password = '';
-    try {
-      scramKey = await crypto.subtle.importKey(
-        'raw',
-        passwordBytes,
-        'PBKDF2',
-        false,
-        ['deriveBits'],
+    let session;
+    if (usePasskey) {
+      if (!username) throw new Error('请输入用户名');
+      const body = { username, device_id: crypto.randomUUID() };
+      const path = '/api/v1/passkeys/login/start';
+      const pow = await queuedHttpProof('login', '#auth-pow-status', path, body, { username });
+      const ceremony = await request(path, { method: 'POST', retry: false, signal: authController.signal, body: JSON.stringify({ ...body, pow }) });
+      const credential = await authenticatePasskey(ceremony.options, authController.signal);
+      session = await request('/api/v1/passkeys/login/finish', { method: 'POST', retry: false, signal: authController.signal,
+        body: JSON.stringify({ challenge_id: ceremony.challenge_id, credential }) });
+      fastBootstrap = { deviceId: session.device_id, credential: session.fast };
+    } else {
+      requestBody = { username, password };
+      const pow = await queuedHttpProof(
+        'login', '#auth-pow-status', '/api/v1/login', requestBody, { username },
       );
-    } finally {
-      passwordBytes.fill(0);
-      passwordBytes = null;
+      session = await request('/api/v1/login', { method: 'POST', body: JSON.stringify({ ...requestBody, pow }) });
+      requestBody.password = '';
+      requestBody = null;
+
+      let passwordBytes = new TextEncoder().encode(password);
+      password = '';
+      try {
+        scramKey = await crypto.subtle.importKey(
+          'raw',
+          passwordBytes,
+          'PBKDF2',
+          false,
+          ['deriveBits'],
+        );
+      } finally {
+        passwordBytes.fill(0);
+        passwordBytes = null;
+      }
+
     }
 
+    if (authController.signal.aborted) {
+      revokeApiSessionKeepalive(session.token);
+      throw new Error('登录已取消');
+    }
     state.apiToken = session.token;
     state.account = contactJid(session.jid);
     await drainEncryptedOutboxWrites();
     state.outboxErasing = false;
     $('#login-password').value = '';
-    await connectXmpp(scramKey);
+    await connectXmpp(scramKey, fastBootstrap);
+    fastBootstrap = null;
     scramKey = null;
     await enterChat();
   } catch (error) {
@@ -939,21 +976,79 @@ async function login(event) {
       requestBody = null;
     }
     password = '';
+    if (fastBootstrap?.credential) fastBootstrap.credential.token = '';
+    fastBootstrap = null;
     scramKey = null;
     $('#login-password').value = '';
     $('#register-password').value = '';
     $('#register-confirm').value = '';
     setBusy(button, false);
+    state.authenticating = false;
+    if (state.authAbortController === authController) state.authAbortController = null;
+    $('#passkey-login').disabled = false;
+    $('#login-form button[type="submit"]').disabled = false;
   }
 }
 
-async function connectXmpp(secret = null) {
+async function loadPasskeys() {
+  const { passkeys } = await request('/api/v1/me/passkeys');
+  const list = $('#passkey-list');
+  list.replaceChildren();
+  for (const key of passkeys) {
+    const row = document.createElement('div');
+    const name = document.createElement('span');
+    name.textContent = key.label;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'danger-button';
+    remove.textContent = '移除并退出所有会话';
+    remove.addEventListener('click', () => managePasskey(key.id));
+    row.append(name, remove);
+    list.append(row);
+  }
+}
+
+async function managePasskey(id = null) {
+  if (state.passkeyAbortController) return;
+  const controller = new AbortController();
+  state.passkeyAbortController = controller;
+  const status = $('#passkey-status');
+  const body = { password: $('#passkey-password').value };
+  $('#passkey-password').value = '';
+  try {
+    if (!body.password) throw new Error('请输入当前密码以管理通行密钥');
+    const path = id ? '/api/v1/me/passkeys/remove' : '/api/v1/me/passkeys/register/start';
+    if (id) body.id = id;
+    else body.label = $('#passkey-name').value.trim();
+    const pow = await queuedHttpProof('login', '#passkey-status', path, body, { username: localpart(state.account) });
+    const result = await request(path, { method: 'POST', retry: false, signal: controller.signal, body: JSON.stringify({ ...body, pow }) });
+    body.password = '';
+    if (id) {
+      await logout();
+      showMessage($('#auth-success'), '通行密钥已移除，请重新登录。');
+      return;
+    }
+    const credential = await createPasskey(result.options, controller.signal);
+    await request('/api/v1/me/passkeys/register/finish', { method: 'POST', retry: false, signal: controller.signal,
+      body: JSON.stringify({ challenge_id: result.challenge_id, credential }) });
+    await loadPasskeys();
+    showMessage(status, '通行密钥已添加，下次可直接用它登录。');
+  } catch (error) {
+    showMessage(status, error.name === 'NotAllowedError' ? '验证已取消或超时，可以重试。' : humanError(error));
+  } finally {
+    body.password = '';
+    if (state.passkeyAbortController === controller) state.passkeyAbortController = null;
+    $('#passkey-password').value = '';
+  }
+}
+
+async function connectXmpp(secret = null, fastBootstrap = null) {
   // REST authentication returns the server's PRECIS-prepared identity.
   const account = contactJid(state.account);
   if (account.split('@')[1] !== state.config.domain) throw new Error('服务器返回了不匹配的认证身份');
   const username = localpart(account);
   const requestedUrl = websocketUrl(state.config.websocket_path || '/xmpp-websocket');
-  const reusable = state.xmpp?.domain === state.config.domain
+  const reusable = !fastBootstrap && state.xmpp?.domain === state.config.domain
     && state.xmpp.websocketUrl === requestedUrl
     && state.xmpp.username === username
     && state.xmpp.canReconnect();
@@ -961,6 +1056,10 @@ async function connectXmpp(secret = null) {
     domain: state.config.domain,
     websocketUrl: requestedUrl,
   });
+  if (fastBootstrap) {
+    xmpp.installFastCredential(fastBootstrap.deviceId, fastBootstrap.credential);
+    fastBootstrap.credential.token = '';
+  }
   state.xmpp = xmpp;
   if (state.omemo) state.omemo.xmpp = xmpp;
   if (!reusable) bindXmppEvents(xmpp);
@@ -3000,6 +3099,8 @@ async function cancelPendingOmemoTransfer(event) {
   const transferId = state.omemoTransferId;
   if (!transferId || !state.omemo) return;
   if (!confirm('永久取消此一次性迁移文件并重新启用源设备？')) return;
+  state.authAbortController?.abort();
+  state.passkeyAbortController?.abort();
   state.omemoTransferAbortController?.abort();
   setBusy(button, true, '正在取消…');
   try {
@@ -3150,7 +3251,7 @@ function clearPasswordAndTransferInputs() {
 function clearSensitiveSessionUi() {
   clearPasswordAndTransferInputs();
   for (const selector of [
-    '#login-username', '#register-username', '#register-invitation', '#contact-search',
+    '#passkey-password', '#passkey-name', '#login-username', '#register-username', '#register-invitation', '#contact-search',
     '#contact-jid', '#contact-name', '#group-room', '#group-name', '#group-nick',
     '#report-description', '#message-input', '#attachment-input', '#avatar-input',
   ]) {
@@ -3159,7 +3260,7 @@ function clearSensitiveSessionUi() {
   }
   for (const selector of [
     '#message-list', '#fingerprint-list', '#conversation-list', '#room-member-list',
-    '#report-message-list', '#report-history-list',
+    '#passkey-list', '#report-message-list', '#report-history-list',
   ]) {
     $(selector)?.replaceChildren();
   }
@@ -3216,6 +3317,8 @@ function endBrowserSession({
   state.outboxErasing = true;
   state.outboxGeneration += 1;
   clearTimeout(state.reconnectTimer);
+  state.authAbortController?.abort();
+  state.passkeyAbortController?.abort();
   state.omemoTransferAbortController?.abort();
   state.omemoTransferAbortController = null;
   state.xmpp?.disconnect();

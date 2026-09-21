@@ -2902,6 +2902,7 @@ impl AppState {
         crate::services::sm::start_database_authority_listener(
             state.sm_service().clone(),
             state.mix_service().delivery_wake_broker(),
+            state.cluster.account_revocation_notify(),
             sm_authority_connect_options,
             Arc::clone(state.worker_registry()),
             worker_cancel.clone(),

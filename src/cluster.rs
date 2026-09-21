@@ -1040,6 +1040,7 @@ pub struct ClusterManager {
     health: Arc<ClusterHealth>,
     publication_gate: Arc<tokio::sync::RwLock<()>>,
     muc_outbox_notify: Arc<tokio::sync::Notify>,
+    account_revocation_notify: Arc<tokio::sync::Notify>,
     listener_rotation: Arc<tokio::sync::Notify>,
     pending_ack_slots: Arc<tokio::sync::Semaphore>,
     pending_acks: Arc<dashmap::DashMap<String, PendingClusterAck>>,
@@ -1300,6 +1301,7 @@ impl ClusterManager {
                 health: Arc::new(ClusterHealth::disabled()),
                 publication_gate: Arc::new(tokio::sync::RwLock::new(())),
                 muc_outbox_notify: Arc::new(tokio::sync::Notify::new()),
+                account_revocation_notify: Arc::new(tokio::sync::Notify::new()),
                 listener_rotation: Arc::new(tokio::sync::Notify::new()),
                 pending_ack_slots: Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_CLUSTER_ACKS)),
                 pending_acks: Arc::new(dashmap::DashMap::new()),
@@ -1369,12 +1371,17 @@ impl ClusterManager {
             health: Arc::new(ClusterHealth::enabled()),
             publication_gate: Arc::new(tokio::sync::RwLock::new(())),
             muc_outbox_notify: Arc::new(tokio::sync::Notify::new()),
+            account_revocation_notify: Arc::new(tokio::sync::Notify::new()),
             listener_rotation: Arc::new(tokio::sync::Notify::new()),
             pending_ack_slots: Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_CLUSTER_ACKS)),
             pending_acks: Arc::new(dashmap::DashMap::new()),
         };
         tracing::warn!(node_id = %cluster.node_id, "experimental Redis multi-node routing is enabled");
         Ok(cluster)
+    }
+
+    pub(crate) fn account_revocation_notify(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.account_revocation_notify)
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -5315,6 +5322,97 @@ impl ClusterManager {
     }
 }
 
+/// Read committed account fences independently of Redis and cluster maintenance.
+/// Notifications reduce latency; polling recovers missed notifications.
+pub(crate) async fn run_account_revocations(
+    state: Arc<AppState>,
+    cancel: CancellationToken,
+    heartbeat: crate::workers::WorkerHeartbeat,
+) -> Result<()> {
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut cleanup_interval = tokio::time::interval(Duration::from_secs(30));
+    let notify = state.cluster.account_revocation_notify();
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(()),
+            _ = notify.notified() => {},
+            _ = interval.tick() => {},
+            _ = cleanup_interval.tick() => {
+                // A replaced process cannot host live sessions. Its queue can
+                // be removed, but an expired lease alone is not replacement.
+                match tokio::time::timeout(Duration::from_secs(2),
+                    crate::db::account_revocations::cleanup(&state.pool)).await {
+                    Ok(Ok(())) => {},
+                    error => tracing::warn!(?error, "account revocation queue cleanup deferred"),
+                }
+                continue;
+            }
+        }
+        let consume = async {
+            let cluster = &state.cluster;
+            let epoch = cluster.instance_epoch.load(Ordering::Acquire);
+            let events = crate::db::account_revocations::pending(
+                &state.pool,
+                &state.config.domain,
+                &cluster.node_id,
+                cluster.connection_uuid,
+                epoch,
+            )
+            .await?;
+            let mut revisions = Vec::with_capacity(events.len());
+            for event in events {
+                state.revoke_local_account_routes(
+                    event.user_id,
+                    &format!("{}@{}", event.username, state.config.domain),
+                    (!event.account_deleted).then_some(event.before_generation),
+                );
+                revisions.push(event.revision);
+            }
+            if !revisions.is_empty() {
+                crate::db::account_revocations::acknowledge(
+                    &state.pool,
+                    &state.config.domain,
+                    &cluster.node_id,
+                    cluster.connection_uuid,
+                    epoch,
+                    &revisions,
+                )
+                .await?;
+            }
+            if revisions.len() == 256 {
+                notify.notify_one();
+            }
+            Ok::<(), anyhow::Error>(())
+        };
+        let result = tokio::select! {
+            _ = cancel.cancelled() => return Ok(()),
+            result = tokio::time::timeout(Duration::from_secs(2), consume) =>
+                result.context("account revocation read exceeded its time budget")
+                    .and_then(std::convert::identity),
+        };
+        match result {
+            Ok(()) => heartbeat.ok(),
+            Err(error) => {
+                state.cluster.record_authority_failure(&error);
+                heartbeat.error(&error);
+                // An unreachable authority cannot confirm that existing
+                // credentials are still valid. Fence routes before retrying.
+                for session in state.sessions.iter_mut() {
+                    session.routable.store(false, Ordering::Release);
+                    session.disconnect.cancel();
+                }
+                tracing::warn!(
+                    ?error,
+                    "account revocation authority unavailable; local routes fenced"
+                );
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
 pub async fn run_maintenance(
     state: Arc<AppState>,
     cancel: CancellationToken,
@@ -8116,6 +8214,7 @@ mod tests {
             health: Arc::new(ClusterHealth::disabled()),
             publication_gate: Arc::new(tokio::sync::RwLock::new(())),
             muc_outbox_notify: Arc::new(tokio::sync::Notify::new()),
+            account_revocation_notify: Arc::new(tokio::sync::Notify::new()),
             listener_rotation: Arc::new(tokio::sync::Notify::new()),
             pending_ack_slots: Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_CLUSTER_ACKS)),
             pending_acks: Arc::new(dashmap::DashMap::new()),

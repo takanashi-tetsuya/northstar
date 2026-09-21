@@ -843,6 +843,23 @@ async fn run() -> Result<()> {
             },
         );
 
+        let revocation_state = state.clone();
+        let revocation_cancel = cancel.clone();
+        worker_registry.supervise(
+            "account-revocations",
+            WorkerCriticality::Critical,
+            WorkerMode::Continuous,
+            Some(std::time::Duration::from_secs(10)),
+            cancel.clone(),
+            move |heartbeat| {
+                cluster::run_account_revocations(
+                    Arc::clone(&revocation_state),
+                    revocation_cancel.clone(),
+                    heartbeat,
+                )
+            },
+        );
+
         let state_maintenance = state.clone();
         let maintenance_cancel = cancel.clone();
         worker_registry.supervise(

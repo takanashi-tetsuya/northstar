@@ -56,11 +56,15 @@ else
   database_name_b=xmpp_test
 fi
 database_host=127.0.0.1
-database_port=5432
+database_port="${PGPORT:-5432}"
 if [[ "$fixture_preprovisioned" == true ]]; then
   database_host="$stress_database_host"
   database_port="$stress_database_port"
 fi
+[[ "$database_port" =~ ^[1-9][0-9]{0,4}$ ]] && ((10#$database_port <= 65535)) || {
+  echo "federation database port must be from 1 through 65535" >&2
+  exit 2
+}
 runtime_dir="$(mktemp -d /tmp/northstar-federation.XXXXXX)"
 cert_dir="$runtime_dir/certs"
 upload_a="$runtime_dir/uploads-a"
@@ -427,6 +431,7 @@ start_b
 # slots, so releasing 100 live servers does not also start 100 interpreters.
 
 FEDERATION_TEST_CERT_DIR="$cert_dir" \
+NORTHSTAR_LISTENER_STRESS_DATABASE_PORT="$database_port" \
 FEDERATION_TEST_EXTERNAL="${S2S_SASL_EXTERNAL_ENABLED:-true}" \
 FEDERATION_TEST_HTTP_PORT_A="$http_a" \
 FEDERATION_TEST_HTTP_PORT_B="$http_b" \

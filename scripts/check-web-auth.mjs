@@ -268,6 +268,12 @@ globalThis.WebSocket = MockWebSocket;
 
 const { XmppClient, NS, bareJid, contactJid, localpart, xmlEscape } = await import('../web/xmpp.js');
 
+for (const value of ['\u0000', '\u0008', '\u000b', '\u000c', '\u001f', '\ud800', '\udfff', '\ufffe', '\uffff']) {
+  assert.throws(() => xmlEscape(`before${value}after`), /XML/, 'invalid XML characters must not be silently removed');
+}
+assert.equal(xmlEscape('中文 😀\t\n\r'), '中文 😀\t\n\r');
+assert.equal(xmlEscape('&<>"\''), '&amp;&lt;&gt;&quot;&apos;');
+
 // Crypto helper for SCRAM test verification
 async function hmac(keyBytes, dataBytes) {
   const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
@@ -1483,7 +1489,7 @@ function toBase64(bytes) {
     const identities = [];
     const errors = [];
     const context = {
-      state, $, crypto, TextEncoder, Promise, bareJid, contactJid, localpart,
+      state, $, crypto, TextEncoder, Promise, AbortController, bareJid, contactJid, localpart,
       XmppClient: class {
         constructor({ domain, websocketUrl }) { this.domain = domain; this.websocketUrl = websocketUrl; }
         async connect(username) { identities.push(username); this.username = username; }
@@ -1522,6 +1528,62 @@ function toBase64(bytes) {
       assert.equal(calls.length, 0, `invalid contact reached the network: ${input}`);
       assert.equal(errors.length, 1);
     }
+  }
+}
+
+// Check the browser WebAuthn boundary with binary challenges and cancellable
+// authenticator calls. Cryptographic verification is covered by the server.
+{
+  const signal = new AbortController().signal;
+  const seen = [];
+  const bytes = new Uint8Array([0, 255, 254, 1]);
+  const credential = {
+    id: 'AP_-AQ', rawId: bytes.buffer, type: 'public-key',
+    response: { attestationObject: bytes.buffer, clientDataJSON: bytes.buffer,
+      authenticatorData: bytes.buffer, signature: bytes.buffer, userHandle: null,
+      getTransports: () => ['internal'] },
+    getClientExtensionResults: () => ({ credProps: { rk: true } }),
+  };
+  const credentials = {
+    async create(options) { seen.push(options); return credential; },
+    async get(options) { seen.push(options); return credential; },
+  };
+  const source = fs.readFileSync(new URL('../web/passkeys.js', import.meta.url), 'utf8');
+  const context = { isSecureContext: true, PublicKeyCredential: class {}, navigator: { credentials },
+    Uint8Array, atob, btoa };
+  const helpers = vm.runInNewContext(`${source.replaceAll('export ', '')}\n({ createPasskey, authenticatePasskey, passkeysAvailable });`, context);
+  assert.equal(helpers.passkeysAvailable(), true);
+  const options = { publicKey: { challenge: 'AP_-AQ', user: { id: 'AP_-AQ' },
+    excludeCredentials: [{ id: 'AP_-AQ', type: 'public-key' }],
+    allowCredentials: [{ id: 'AP_-AQ', type: 'public-key' }], userVerification: 'required' } };
+  const registered = await helpers.createPasskey(options, signal);
+  const authenticated = await helpers.authenticatePasskey(options, signal);
+  for (const call of seen) {
+    assert.equal(call.signal, signal);
+    assert.deepEqual(call.publicKey.challenge, bytes);
+    assert.equal(call.publicKey.userVerification, 'required');
+  }
+  assert.deepEqual(seen[0].publicKey.user.id, bytes);
+  assert.deepEqual(seen[1].publicKey.allowCredentials[0].id, bytes);
+  assert.equal(options.publicKey.challenge, 'AP_-AQ', 'conversion must not mutate reusable API options');
+  assert.equal(registered.response.attestationObject, 'AP_-AQ');
+  assert.equal(authenticated.response.signature, 'AP_-AQ');
+  assert.equal(authenticated.response.userHandle, null);
+  credentials.get = async () => { throw new DOMException('Cancelled', 'NotAllowedError'); };
+  await assert.rejects(helpers.authenticatePasskey(options, signal), { name: 'NotAllowedError' });
+  context.isSecureContext = false;
+  assert.equal(helpers.passkeysAvailable(), false);
+
+  const client = new XmppClient({ domain: 'example.com', websocketUrl: 'wss://example.com/xmpp-websocket' });
+  const device = crypto.randomUUID();
+  const fast = { mechanism: 'HT-SHA-256-NONE', token: 'a'.repeat(43), expiry: Date.now() + 60000 };
+  client.installFastCredential(device, fast);
+  fast.token = '';
+  assert.equal(client.userAgentId, device);
+  assert.equal(client.fastCredential.token.length, 43, 'bootstrap must copy the credential before response cleanup');
+  for (const [id, value] of [[device, { ...fast, expiry: 0 }], ['invalid', client.fastCredential],
+    [device, { ...client.fastCredential, mechanism: 'PLAIN' }]]) {
+    assert.throws(() => client.installFastCredential(id, value));
   }
 }
 

@@ -776,6 +776,7 @@ async fn authenticate_secure_inbound(
         )
         .await?;
         let features = crate::xmpp::xml_builder::XmlElement::new("stream:features")
+            .validated_fragment(&super::sm::feature())?
             .validated_fragment(&stream_limits_feature())?
             .finish();
         write_xml(secure, &features).await?;
@@ -1147,8 +1148,13 @@ async fn drive_authenticated_inbound_inner(
     peer_keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let disconnect_signal = disconnect.cancelled_owned();
     tokio::pin!(disconnect_signal);
+    let mut sm = super::sm::StreamManagement::default();
+    let result = async {
     loop {
         tokio::select! {
+            _ = tokio::time::sleep_until(sm.deadline()), if sm.is_enabled() => {
+                anyhow::bail!("S2S acknowledgement timed out");
+            }
             _ = &mut disconnect_signal => {
                 let _ = send_stream_error(&mut secure, "not-authorized").await;
                 anyhow::bail!("inbound S2S certificate was explicitly revoked");
@@ -1177,6 +1183,9 @@ async fn drive_authenticated_inbound_inner(
                     write_xml(&mut secure, &XmlElement::new("stream:stream").close()).await?;
                     return Ok(());
                 }
+                if sm.control(&state, &mut secure, &frame, true).await? {
+                    continue;
+                }
                 match route_inbound_for_connection_owned(
                     Arc::clone(&state),
                     authenticated_domain.clone(),
@@ -1192,7 +1201,9 @@ async fn drive_authenticated_inbound_inner(
                             &frame,
                             peer_limits.max_bytes,
                         )? {
+                            sm.track(None)?;
                             write_xml(&mut secure, &reply).await?;
+                            sm.request(&mut secure).await?;
                             if peer_limits.idle_seconds.is_some() {
                                 peer_keepalive.reset_after(peer_keepalive_period);
                             }
@@ -1204,10 +1215,11 @@ async fn drive_authenticated_inbound_inner(
                         anyhow::bail!("remote S2S stanza violated stream addressing: {condition}");
                     }
                 }
+                sm.handled(&frame);
             }
             envelope = outgoing.recv(), if bidi_enabled => {
                 let Some(mut envelope) = envelope else { return Ok(()) };
-                if let Err(error) = deliver_envelope(&state, &mut secure, &mut envelope, peer_limits.max_bytes).await {
+                if let Err(error) = deliver_managed_envelope(&state, &mut secure, &mut envelope, peer_limits.max_bytes, &mut sm).await {
                     let permanent = is_peer_stanza_limit_error(&error);
                     fail_envelope(&state, &envelope, &error, permanent).await;
                     if permanent {
@@ -1224,6 +1236,9 @@ async fn drive_authenticated_inbound_inner(
             }
         }
     }
+    }.await;
+    sm.retry_unacknowledged(&state).await;
+    result
 }
 
 /// Serialize a response under the peer-advertised XEP-0478 byte limit. When

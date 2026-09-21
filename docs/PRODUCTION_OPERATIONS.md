@@ -537,6 +537,32 @@ owner. These defaults protect service availability; tune them only with
 PostgreSQL and disk alerts in place. A retention change applies to existing data
 on the next pass, so take and verify a backup before reducing retention days.
 
+## Passkeys
+
+The development branch adds optional Passkeys to the Web client. After applying
+migration `0145` and reconciling grants, users can add a key in **Settings →
+Passkeys** and use it on the login page. Password login remains available for
+account recovery and other XMPP clients. Adding or removing a key requires the
+current password. Removing one signs out all sessions; changing a password does
+not remove registered Passkeys.
+
+Set `PUBLIC_URL` to the exact HTTPS origin users visit and keep the hostname
+stable: it is the WebAuthn RP ID. HTTP is supported only for localhost development.
+Aliases and subdomains are not accepted as alternate origins. WebAuthn requires
+user verification, such as a device PIN or biometric unlock. Credentials contain
+public keys; authenticator private keys never reach Northstar.
+
+Challenges expire after five minutes and can be submitted once. A cancelled or
+interrupted ceremony must be started again. An account may have ten Passkeys and
+four active challenges; a deployment may have 4,096 active challenges. Login and
+key-management starts share the existing login abuse limits. Successful login
+issues an API session and a device-bound FAST credential for XMPP. The browser
+keeps both in memory and discards them at logout.
+
+Passkeys protect against phishing through RP ID and Origin verification. They
+do not expose a TLS exporter to JavaScript, replace HTTPS or prevent same-origin
+script compromise. OMEMO device keys remain independent of login credentials.
+
 ## Authentication key separation
 
 Normal and clustered deployments require two distinct owner-only authentication
@@ -780,8 +806,10 @@ non-self-signed certificate for the real XMPP domain. On WSL paths under
 that is not acceptable evidence for a Linux production host. The production
 preflight requires a native Linux key file with mode `0400` or `0600`.
 
-Northstar explicitly enables only TLS 1.2 and TLS 1.3 using rustls' modern
-AEAD/forward-secret suites. At startup and reload it bounds and strictly parses
+Northstar enables TLS 1.2 and TLS 1.3 using rustls' AEAD/forward-secret suites.
+TLS 1.2 requires Extended Master Secret on both client and server connections;
+legacy peers without EMS cannot connect. rustls does not support TLS
+renegotiation. At startup and reload Northstar bounds and strictly parses
 the PEM files, rejects symlinks, multiple/private PEM objects in the wrong file,
 duplicate or oversized chains, expired/not-yet-valid certificates, CA leaves,
 wrong key usage or EKU, missing/wrong SANs, weak RSA/EC keys, weak signatures,
@@ -977,10 +1005,10 @@ the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
 For this release the exact manifest contains 142 files from `0001` through
-`0143`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+`0145`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0143`, with the exact SQLx description and SHA-384 checksum, before it
+through `0145`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url` and `command_database_url` secrets; neither identity may
 attempt DDL. Pending, failed, unknown, duplicated, missing or checksum-drifted
@@ -1148,7 +1176,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0143` manifest
+5. run the one-shot migration job through the complete `0001`-`0145` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

@@ -873,6 +873,7 @@ fn server_config(
     }
     .with_single_cert(chain.to_vec(), key.clone_key())
     .context("TLS certificate and private key do not match")?;
+    config.require_ems = true;
     if let Some(alpn) = alpn {
         config.alpn_protocols = vec![alpn.to_vec()];
     }
@@ -891,6 +892,7 @@ fn client_config(
         .with_root_certificates(roots)
         .with_client_auth_cert(chain.to_vec(), key.clone_key())
         .context("invalid S2S client certificate or private key")?;
+    config.require_ems = true;
     if let Some(alpn) = alpn {
         config.alpn_protocols = vec![alpn.to_vec()];
     }
@@ -1619,6 +1621,16 @@ mod tests {
             ReloadableTlsConfig::new(&certificate, &key, "localhost", None, None, None, None)
                 .unwrap();
         let initial = reloadable.current();
+        for config in [
+            &initial.c2s_starttls,
+            &initial.c2s_direct,
+            &initial.s2s_starttls,
+            &initial.s2s_direct,
+        ] {
+            assert!(config.require_ems);
+        }
+        assert!(initial.s2s_client_starttls.require_ems);
+        assert!(initial.s2s_client_direct.require_ems);
         assert!(initial
             .tls_server_end_point
             .as_ref()
@@ -1661,6 +1673,65 @@ mod tests {
         assert!(!Arc::ptr_eq(&initial, &reloadable.current()));
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires generated TLS fixture and loopback sockets"]
+    async fn generated_tls12_requires_ems_and_tls13_still_connects() {
+        use openssl::ssl::{SslConnector, SslMethod, SslOptions, SslVerifyMode, SslVersion};
+        install_crypto_provider();
+        let reloadable = ReloadableTlsConfig::new(
+            &PathBuf::from(std::env::var("TEST_TLS_CERT_PATH").unwrap()),
+            &PathBuf::from(std::env::var("TEST_TLS_KEY_PATH").unwrap()),
+            "localhost",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        for (version, without_ems, accepted) in [
+            (SslVersion::TLS1_2, false, true),
+            (SslVersion::TLS1_2, true, false),
+            (SslVersion::TLS1_3, false, true),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = listener.local_addr().unwrap();
+            let acceptor =
+                tokio_rustls::TlsAcceptor::from(Arc::clone(&reloadable.current().c2s_starttls));
+            let client = tokio::task::spawn_blocking(move || {
+                let mut connector = SslConnector::builder(SslMethod::tls()).unwrap();
+                connector.set_min_proto_version(Some(version)).unwrap();
+                connector.set_max_proto_version(Some(version)).unwrap();
+                connector.set_verify(SslVerifyMode::NONE);
+                if without_ems {
+                    // OpenSSL's SSL_OP_NO_EXTENDED_MASTER_SECRET is bit 0.
+                    // The Rust bindings omit its name; use the pinned vendored
+                    // library so this does not depend on the host CLI version.
+                    connector.set_options(SslOptions::from_bits_retain(1));
+                }
+                let budget = std::time::Duration::from_secs(5);
+                let socket = std::net::TcpStream::connect_timeout(&endpoint, budget).unwrap();
+                socket.set_read_timeout(Some(budget)).unwrap();
+                socket.set_write_timeout(Some(budget)).unwrap();
+                connector.build().connect("localhost", socket).is_ok()
+            });
+            let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                tokio::join!(client, async {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    acceptor.accept(socket).await
+                })
+            })
+            .await
+            .expect("TLS handshake timed out");
+            assert_eq!(
+                result.1.is_ok(),
+                accepted,
+                "{version:?}, no EMS={without_ems}: {:?}",
+                result.1.err()
+            );
+            assert_eq!(result.0.unwrap(), accepted);
+        }
     }
 
     #[test]

@@ -42,6 +42,7 @@ const BASELINE = new Map([
   ['src/cluster.rs', 0],
   ['src/s2s/inbound.rs', 0],
   ['src/s2s/outbound.rs', 0],
+  ['src/s2s/sm.rs', 0],
   ['src/xmpp/protocol/ibr.rs', 0],
 ]);
 

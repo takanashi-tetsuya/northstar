@@ -1157,7 +1157,7 @@ impl SmService {
 }
 
 /// Run the one reserved PostgreSQL notification connection shared by the
-/// XEP-0198 authority broker and the typed MIX delivery wake broker.
+/// XEP-0198, MIX delivery and account revocation workers.
 ///
 /// AppState composes these independent services here; neither protocol layer
 /// reaches into the other's broker.  This deliberately reuses the existing
@@ -1167,6 +1167,7 @@ async fn run_database_authority_listener(
     connect_options: PgConnectOptions,
     authority: Arc<SmAuthorityBroker>,
     mix_delivery_wake: Arc<MixDeliveryWakeBroker>,
+    account_revocations: Arc<tokio::sync::Notify>,
     cancel: tokio_util::sync::CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
@@ -1197,91 +1198,102 @@ async fn run_database_authority_listener(
         .listen_all([
             SM_AUTHORITY_NOTIFICATION_CHANNEL,
             MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL,
+            "northstar_account_revocations",
         ])
         .await
         .context("could not subscribe to PostgreSQL authority notifications")?;
-    // Publish only after both channels are installed. A reconnect or startup
+    // Publish only after all channels are installed. A reconnect or startup
     // can have a gap before LISTEN becomes active; each broker's retained
     // generation makes its workers run an authoritative database probe.
     authority.publish_listener_transition();
     mix_delivery_wake.publish_listener_transition();
+    account_revocations.notify_one();
     heartbeat.ok();
     let mut liveness = tokio::time::interval(Duration::from_secs(5));
     liveness.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
-            biased;
-            _ = cancel.cancelled() => {
-                authority.publish_listener_transition();
-                mix_delivery_wake.publish_listener_transition();
-                return Ok(());
-            }
-            _ = liveness.tick() => {
-                // LISTEN is legitimately quiet when no SM authority changes
-                // occur. A periodic supervisor heartbeat proves that this
-                // task is still schedulable without turning notification
-                // silence into a false failure.
-                heartbeat.ok();
-            }
-            notification = listener.try_recv() => {
-                match notification {
-                    Ok(Some(notification)) => {
-                        match notification.channel() {
-                            SM_AUTHORITY_NOTIFICATION_CHANNEL => {
-                                if notification.payload().len() > 256 {
-                                    continue;
+                biased;
+                _ = cancel.cancelled() => {
+                    authority.publish_listener_transition();
+                    mix_delivery_wake.publish_listener_transition();
+        account_revocations.notify_one();
+                    return Ok(());
+                }
+                _ = liveness.tick() => {
+                    // LISTEN is legitimately quiet when no SM authority changes
+                    // occur. A periodic supervisor heartbeat proves that this
+                    // task is still schedulable without turning notification
+                    // silence into a false failure.
+                    heartbeat.ok();
+                }
+                notification = listener.try_recv() => {
+                    match notification {
+                        Ok(Some(notification)) => {
+                            match notification.channel() {
+                                SM_AUTHORITY_NOTIFICATION_CHANNEL => {
+                                    if notification.payload().len() > 256 {
+                                        continue;
+                                    }
+                                    let Ok(event) = serde_json::from_str::<SmAuthorityNotification>(
+                                        notification.payload(),
+                                    ) else {
+                                        tracing::warn!(
+                                            channel = notification.channel(),
+                                            "discarded malformed SM authority notification"
+                                        );
+                                        continue;
+                                    };
+                                    if event.schema == authority.schema && event.state_version > 0 {
+                                        authority.publish_state(event.session_id, event.state_version);
+                                    }
                                 }
-                                let Ok(event) = serde_json::from_str::<SmAuthorityNotification>(
-                                    notification.payload(),
-                                ) else {
-                                    tracing::warn!(
-                                        channel = notification.channel(),
-                                        "discarded malformed SM authority notification"
-                                    );
-                                    continue;
-                                };
-                                if event.schema == authority.schema && event.state_version > 0 {
-                                    authority.publish_state(event.session_id, event.state_version);
+                                MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL => {
+                                    // Migration 0133 emits only TG_TABLE_SCHEMA
+                                    // (max 63 bytes). The payload is a wake hint,
+                                    // never a delivery capability: MIX workers
+                                    // still claim the exact fenced recipient row.
+                                    if notification.payload().len() > 63
+                                        || !mix_delivery_wake
+                                            .accept_committed_notification(notification.payload())
+                                    {
+                                        tracing::warn!(
+                                            channel = notification.channel(),
+                                            "discarded mismatched MIX delivery wake notification"
+                                        );
+                                        continue;
+                                    }
                                 }
+                                "northstar_account_revocations" => {
+                                    if notification.payload() != authority.schema {
+                                        continue;
+                                    }
+                                    account_revocations.notify_one();
+                                }
+                                _ => continue,
                             }
-                            MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL => {
-                                // Migration 0133 emits only TG_TABLE_SCHEMA
-                                // (max 63 bytes). The payload is a wake hint,
-                                // never a delivery capability: MIX workers
-                                // still claim the exact fenced recipient row.
-                                if notification.payload().len() > 63
-                                    || !mix_delivery_wake
-                                        .accept_committed_notification(notification.payload())
-                                {
-                                    tracing::warn!(
-                                        channel = notification.channel(),
-                                        "discarded mismatched MIX delivery wake notification"
-                                    );
-                                    continue;
-                                }
-                            }
-                            _ => continue,
+                            heartbeat.ok();
                         }
-                        heartbeat.ok();
-                    }
-                    Ok(None) => {
-                        // PgListener has already re-established LISTEN before
-                        // returning None. Notifications in the disconnect gap
-                        // are unknowable, so generation is the loss marker and
-                        // every current waiter performs a fresh authority read.
-                        authority.publish_listener_transition();
-                        mix_delivery_wake.publish_listener_transition();
-                        heartbeat.ok();
-                    }
-                    Err(error) => {
-                        authority.publish_listener_transition();
-                        mix_delivery_wake.publish_listener_transition();
-                        return Err(error).context("SM authority notification listener failed");
+                        Ok(None) => {
+                            // PgListener has already re-established LISTEN before
+                            // returning None. Notifications in the disconnect gap
+                            // are unknowable, so generation is the loss marker and
+                            // every current waiter performs a fresh authority read.
+                            authority.publish_listener_transition();
+                            mix_delivery_wake.publish_listener_transition();
+        account_revocations.notify_one();
+                            heartbeat.ok();
+                        }
+                        Err(error) => {
+                            authority.publish_listener_transition();
+                            mix_delivery_wake.publish_listener_transition();
+        account_revocations.notify_one();
+                            return Err(error).context("SM authority notification listener failed");
+                        }
                     }
                 }
             }
-        }
     }
 }
 
@@ -1292,6 +1304,7 @@ async fn run_database_authority_listener(
 pub(crate) fn start_database_authority_listener(
     service: SmService,
     mix_delivery_wake: Arc<MixDeliveryWakeBroker>,
+    account_revocations: Arc<tokio::sync::Notify>,
     connect_options: PgConnectOptions,
     registry: Arc<crate::workers::WorkerRegistry>,
     cancel: tokio_util::sync::CancellationToken,
@@ -1306,6 +1319,7 @@ pub(crate) fn start_database_authority_listener(
         move |heartbeat| {
             let authority = Arc::clone(&authority);
             let mix_delivery_wake = Arc::clone(&mix_delivery_wake);
+            let account_revocations = Arc::clone(&account_revocations);
             let connect_options = connect_options.clone();
             let cancel = cancel.clone();
             async move {
@@ -1313,6 +1327,7 @@ pub(crate) fn start_database_authority_listener(
                     connect_options,
                     authority,
                     mix_delivery_wake,
+                    account_revocations,
                     cancel,
                     heartbeat,
                 )

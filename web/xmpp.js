@@ -44,7 +44,15 @@ const MAX_SCRAM_SERVER_FIRST_ATTRIBUTES = 32;
 const MAX_SCRAM_ATTRIBUTE_VALUE_CHARACTERS = 4096;
 
 export function xmlEscape(value) {
-  return String(value ?? '')
+  const text = String(value ?? '');
+  for (const character of text) {
+    const code = character.codePointAt(0);
+    if ((code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d)
+      || (code >= 0xd800 && code <= 0xdfff) || code === 0xfffe || code === 0xffff) {
+      throw new Error('内容包含 XML 不允许的字符');
+    }
+  }
+  return text
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
@@ -304,6 +312,17 @@ export class XmppClient extends EventTarget {
 
   emit(type, detail = {}) {
     this.dispatchEvent(new CustomEvent(type, { detail }));
+  }
+
+  installFastCredential(deviceId, credential) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(deviceId)
+      || credential?.mechanism !== 'HT-SHA-256-NONE'
+      || !/^[A-Za-z0-9_-]{32,4096}$/.test(credential.token)
+      || !Number.isFinite(credential.expiry) || credential.expiry <= Date.now()) {
+      throw new Error('服务器返回了无效的登录凭据');
+    }
+    this.userAgentId = deviceId;
+    this.fastCredential = { ...credential };
   }
 
   async connect(username, scramKey = null) {

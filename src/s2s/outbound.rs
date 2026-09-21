@@ -597,6 +597,61 @@ async fn connect_and_multiplex_inner(
         return Err(outbound_cancellation_error(state, " before delivery"));
     }
 
+    let mut sm = super::sm::StreamManagement::default();
+    if super::sm::advertised(&features) {
+        sm = super::sm::StreamManagement::enabled();
+        write_xml(
+            &mut secure,
+            &XmlElement::new("enable")
+                .attr("xmlns", super::sm::NS)
+                .finish(),
+        )
+        .await?;
+        tokio::time::timeout(IO_TIMEOUT, async {
+            loop {
+                let response = timed_read_frame(&mut secure, &mut input).await?;
+                if super::sm::accepted(&response) {
+                    return Ok::<_, anyhow::Error>(());
+                }
+                // A BIDI route can emit stanzas before it reads our enable.
+                // Incoming counting starts at enabled; our outgoing count
+                // has already started at enable, including any reply here.
+                anyhow::ensure!(
+                    bidi_enabled && super::sm::is_stanza(&response),
+                    "remote rejected S2S stream management"
+                );
+                match route_inbound_for_connection(
+                    state,
+                    target_domain,
+                    source_domain,
+                    connection_id,
+                    &response,
+                )
+                .await?
+                {
+                    InboundFederationRoute::Reply(Some(reply)) => {
+                        if let Some(reply) = super::inbound::reply_within_peer_limit(
+                            &reply,
+                            &response,
+                            peer_limits.max_bytes,
+                        )? {
+                            sm.track(None)?;
+                            write_xml(&mut secure, &reply).await?;
+                            sm.request(&mut secure).await?;
+                        }
+                    }
+                    InboundFederationRoute::Reply(None) => {}
+                    InboundFederationRoute::StreamError(condition) => {
+                        send_stream_error(&mut secure, condition).await?;
+                        anyhow::bail!("invalid S2S stanza during SM negotiation");
+                    }
+                }
+            }
+        })
+        .await
+        .context("S2S stream management negotiation timed out")??;
+    }
+
     // Only this post-authentication state may accept an ephemeral stanza.
     // The worker clears the flag before removing its route entry.
     authenticated.store(true, Ordering::Release);
@@ -609,6 +664,7 @@ async fn connect_and_multiplex_inner(
     keepalive_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut incoming_idle_deadline = tokio::time::Instant::now() + S2S_AUTHENTICATED_IDLE_TIMEOUT;
 
+    let result = async {
     if !initial.lease_valid.load(Ordering::Acquire) {
         anyhow::bail!("federation outbox lease was lost before first delivery");
     }
@@ -617,7 +673,7 @@ async fn connect_and_multiplex_inner(
         _ = disconnect.cancelled() => {
             return Err(outbound_cancellation_error(state, " before first delivery"));
         }
-        result = deliver_envelope(state, &mut secure, initial.envelope, peer_limits.max_bytes) => {
+        result = deliver_managed_envelope(state, &mut secure, initial.envelope, peer_limits.max_bytes, &mut sm) => {
             result?;
         }
     }
@@ -627,6 +683,9 @@ async fn connect_and_multiplex_inner(
 
     loop {
         tokio::select! {
+            _ = tokio::time::sleep_until(sm.deadline()), if sm.is_enabled() => {
+                anyhow::bail!("S2S acknowledgement timed out");
+            }
             _ = disconnect.cancelled() => {
                 let _ = send_stream_error(&mut secure, "not-authorized").await;
                 return Err(outbound_cancellation_error(state, ""));
@@ -638,7 +697,7 @@ async fn connect_and_multiplex_inner(
             }
             envelope = rx.recv() => {
                 let Some(mut envelope) = envelope else { break };
-                if let Err(error) = deliver_envelope(state, &mut secure, &mut envelope, peer_limits.max_bytes).await {
+                if let Err(error) = deliver_managed_envelope(state, &mut secure, &mut envelope, peer_limits.max_bytes, &mut sm).await {
                     let permanent = is_peer_stanza_limit_error(&error);
                     fail_envelope(state, &envelope, &error, permanent).await;
                     if permanent {
@@ -673,6 +732,9 @@ async fn connect_and_multiplex_inner(
                 if let Some(condition) = peer_stream_error_condition(&frame) {
                     anyhow::bail!("remote S2S stream error: {condition}");
                 }
+                if sm.control(state, &mut secure, &frame, false).await? {
+                    continue;
+                }
                 if !bidi_enabled {
                     send_stream_error(&mut secure, "unexpected-request").await?;
                     anyhow::bail!("remote sent a stanza on a unidirectional S2S connection");
@@ -692,7 +754,9 @@ async fn connect_and_multiplex_inner(
                             &frame,
                             peer_limits.max_bytes,
                         )? {
+                            sm.track(None)?;
                             write_xml(&mut secure, &reply).await?;
+                            sm.request(&mut secure).await?;
                             keepalive_interval.reset_after(keepalive_period);
                         }
                     }
@@ -702,6 +766,7 @@ async fn connect_and_multiplex_inner(
                         anyhow::bail!("remote S2S stanza violated stream addressing: {condition}");
                     }
                 }
+                sm.handled(&frame);
             }
         }
     }
@@ -709,18 +774,53 @@ async fn connect_and_multiplex_inner(
     write_xml(&mut secure, &XmlElement::new("stream:stream").close()).await?;
     secure.shutdown().await?;
     Ok(())
+    }.await;
+    sm.retry_unacknowledged(state).await;
+    result
 }
 
-pub(crate) async fn deliver_envelope<S: AsyncWrite + Unpin>(
+pub(crate) async fn deliver_managed_envelope<S: AsyncWrite + Unpin>(
     state: &AppState,
     secure: &mut S,
     envelope: &mut FederationEnvelope,
     peer_max_bytes: Option<usize>,
+    sm: &mut super::sm::StreamManagement,
+) -> Result<()> {
+    deliver_envelope_inner(state, secure, envelope, peer_max_bytes, Some(sm)).await
+}
+
+async fn deliver_envelope_inner<S: AsyncWrite + Unpin>(
+    state: &AppState,
+    secure: &mut S,
+    envelope: &mut FederationEnvelope,
+    peer_max_bytes: Option<usize>,
+    mut sm: Option<&mut super::sm::StreamManagement>,
 ) -> Result<()> {
     let _delivery_timer = envelope
         .is_durable()
         .then(|| state.metrics.outbox_delivery_duration_seconds.start_timer());
     let serialized = serialize_for_peer(&envelope.stanza, peer_max_bytes)?;
+    let managed = sm.as_ref().is_some_and(|sm| sm.is_enabled());
+    if envelope
+        .volatile_write_budget()
+        .is_some_and(|budget| budget.is_zero())
+    {
+        return Ok(());
+    }
+    if managed && envelope.is_durable() {
+        let renewed = tokio::time::timeout(
+            Duration::from_secs(5),
+            db::renew_s2s_outbox_lease(
+                &state.pool,
+                envelope.outbox_id,
+                envelope.lock_token,
+                state.config.s2s_outbox_lease_seconds,
+            ),
+        )
+        .await
+        .context("S2S outbox lease renewal timed out")??;
+        anyhow::ensure!(renewed, "S2S outbox lease was lost before managed delivery");
+    }
     // Route admission can race an administrator enabling island mode. Hold
     // the shared side of the policy gate only for the socket-write boundary;
     // the exclusive transition waits for an in-flight write and prevents any
@@ -736,16 +836,25 @@ pub(crate) async fn deliver_envelope<S: AsyncWrite + Unpin>(
             // avoids a late write after the sender was told delivery failed.
             return Ok(());
         }
+        if let Some(sm) = sm.as_mut() {
+            sm.track(Some(envelope))?;
+        }
         tokio::time::timeout(write_budget, write_xml(secure, &serialized))
             .await
             .context("volatile federation delivery deadline elapsed")??;
     } else {
+        if let Some(sm) = sm.as_mut() {
+            sm.track(Some(envelope))?;
+        }
         write_xml(secure, &serialized)
             .await
             .context("failed to write federation envelope")?;
     }
     drop(delivery_permit);
-    if envelope.is_durable() {
+    if let Some(sm) = sm {
+        sm.request(secure).await?;
+    }
+    if envelope.is_durable() && !managed {
         if !db::complete_s2s_outbox(&state.pool, envelope.outbox_id, envelope.lock_token).await? {
             state
                 .metrics
@@ -757,7 +866,7 @@ pub(crate) async fn deliver_envelope<S: AsyncWrite + Unpin>(
                 "federation stanza was written after its outbox lease was lost; delivery may be duplicated"
             );
         }
-    } else {
+    } else if !envelope.is_durable() {
         envelope.complete_volatile_delivery();
     }
     state

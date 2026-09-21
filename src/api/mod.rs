@@ -47,6 +47,7 @@ const WEB_CLIENT_STATIC_FILES: &[(&str, &str)] = &[
     ("/i18n.js", "web/i18n.js"),
     ("/locales.generated.js", "web/locales.generated.js"),
     ("/xmpp.js", "web/xmpp.js"),
+    ("/passkeys.js", "web/passkeys.js"),
     ("/storage.js", "web/storage.js"),
     ("/pow.js", "web/pow.js"),
     ("/pow-worker.js", "web/pow-worker.js"),
@@ -280,6 +281,7 @@ pub mod cursor;
 pub mod data_lifecycle;
 pub(crate) mod idempotency;
 pub mod pagination;
+mod passkeys;
 pub use auth_routes::*;
 pub use data_lifecycle::*;
 pub mod admin;
@@ -316,6 +318,21 @@ fn public_rest_routes() -> Router<Arc<AppState>> {
         .route("/api/v1/register", post(register))
         .route("/api/v1/anti-abuse/challenge", post(anti_abuse_challenge))
         .route("/api/v1/login", post(login))
+        .route("/api/v1/me/passkeys", get(passkeys::list))
+        .route(
+            "/api/v1/me/passkeys/register/start",
+            post(passkeys::register_start),
+        )
+        .route(
+            "/api/v1/me/passkeys/register/finish",
+            post(passkeys::register_finish),
+        )
+        .route("/api/v1/me/passkeys/remove", post(passkeys::remove))
+        .route("/api/v1/passkeys/login/start", post(passkeys::login_start))
+        .route(
+            "/api/v1/passkeys/login/finish",
+            post(passkeys::login_finish),
+        )
         .route("/api/v1/session", delete(logout))
         .route("/api/v1/me", get(me))
         .route(

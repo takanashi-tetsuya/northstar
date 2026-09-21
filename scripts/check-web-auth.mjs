@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
 import { createRequire } from 'node:module';
 
 const clientSource = fs.readFileSync(new URL('../web/client.js', import.meta.url), 'utf8');
@@ -265,7 +266,7 @@ class MockWebSocket extends EventTarget {
 
 globalThis.WebSocket = MockWebSocket;
 
-const { XmppClient, NS } = await import('../web/xmpp.js');
+const { XmppClient, NS, bareJid, contactJid, localpart, xmlEscape } = await import('../web/xmpp.js');
 
 // Crypto helper for SCRAM test verification
 async function hmac(keyBytes, dataBytes) {
@@ -1305,6 +1306,223 @@ function toBase64(bytes) {
     /SCRAM CryptoKey 必须为 non-extractable PBKDF2 密钥/,
     'Client must reject raw password strings',
   );
+}
+
+// Exercise the real receive handlers with both hostile and authorized peers.
+{
+  const el = (name, namespace, attributes = {}, children = [], text = '') => (
+    new MockXmlElement(name, namespace, attributes, text, children)
+  );
+  globalThis.XMLSerializer = class {
+    serializeToString(node) {
+      const attrs = node.attributes.map(({ name, value }) => ` ${name}='${xmlEscape(value)}'`).join('');
+      return `<${node.localName} xmlns='${node.namespaceURI}'${attrs}>${xmlEscape(node.textContent)}${node.children.map((child) => this.serializeToString(child)).join('')}</${node.localName}>`;
+    }
+  };
+  const client = new XmppClient({ domain: 'example.com', websocketUrl: 'wss://example.com/xmpp-websocket' });
+  client.jid = 'alice@example.com/Web';
+  const events = [];
+  const sent = [];
+  client.emit = (type, detail) => events.push({ type, detail });
+  client.sendRaw = (xml) => sent.push(xml);
+  const iq = (type, from, payload = [], id = 'test', namespace = NS.CLIENT) => (
+    el('iq', namespace, { id, type, ...(from === null ? {} : { from }) }, payload)
+  );
+  const item = (attributes = {}, namespace = NS.ROSTER) => el('item', namespace, { jid: 'bob@example.com', subscription: 'both', ...attributes });
+  const roster = (items = [item()]) => el('query', NS.ROSTER, {}, items);
+  for (const from of ['mallory@example.com/device', 'alice@example.com/Other', 'example.com', '']) {
+    events.length = 0;
+    sent.length = 0;
+    client.handleIq(iq('set', from, [roster()]));
+    client.handleIq(iq('set', from, [el('unblock', NS.BLOCKING)]));
+    assert.equal(events.length, 0, `untrusted account push from ${from}`);
+    assert.equal(sent.length, 0, 'untrusted account pushes must not disclose presence');
+  }
+  for (const from of [null, 'alice@example.com']) {
+    events.length = 0;
+    client.handleIq(iq('set', from, [roster()]));
+    client.handleIq(iq('set', from, [el('unblock', NS.BLOCKING)]));
+    assert.deepEqual(events.map(({ type }) => type), ['roster-push', 'blocking-change']);
+    assert.deepEqual(events[1].detail.jids, []);
+  }
+  for (const items of [[], [item(), item()], [item({}, 'urn:wrong')], [item({ subscription: 'admin' })], [item({ jid: '' })], [item({ jid: 'bob@example.com/device' })]]) {
+    events.length = 0;
+    client.handleIq(iq('set', 'alice@example.com', [roster(items)]));
+    assert.equal(events.length, 0, 'malformed roster must not change contacts');
+    assert.match(sent.at(-1), /bad-request/);
+  }
+  for (const payload of [el('block', NS.BLOCKING), el('unblock', NS.BLOCKING, {}, [item({}, 'urn:wrong')])]) {
+    events.length = 0;
+    client.handleIq(iq('set', null, [payload]));
+    assert.equal(events.length, 0);
+    assert.match(sent.at(-1), /bad-request/);
+  }
+
+  const query = el('query', NS.DISCO_INFO);
+  const pending = client.sendIq(`<query xmlns='${NS.DISCO_INFO}'/>`, { to: 'bob@example.com', id: 'known-id' });
+  for (const response of [
+    iq('result', 'mallory@example.com/device', [query], 'known-id'),
+    iq('result', null, [query], 'known-id'),
+    iq('set', 'bob@example.com', [el('ping', NS.PING)], 'known-id'),
+    iq('get', 'bob@example.com', [el('ping', NS.PING)], 'known-id'),
+    iq('result', 'bob@example.com', [query], 'known-id', 'urn:wrong'),
+    iq('result', 'bob@example.com', [el('query', 'urn:wrong')], 'known-id'),
+    iq('result', 'bob@example.com', [], 'known-id'),
+    iq('result', 'bob@example.com', [query], 'unrelated-id'),
+  ]) {
+    client.handleIq(response);
+    assert(client.pending.has('known-id'), 'invalid response consumed the pending request');
+  }
+  client.handleIq(iq('result', 'bob@example.com/Phone', [query], 'known-id'));
+  await pending;
+  assert(!client.pending.has('known-id'));
+  for (const from of [null, 'alice@example.com', 'example.com']) {
+    const request = client.sendIq(`<query xmlns='${NS.ROSTER}'/>`, { id: 'local-iq' });
+    client.handleIq(iq('result', 'alice@example.com/Other', [roster()], 'local-iq'));
+    assert(client.pending.has('local-iq'));
+    client.handleIq(iq('result', from, [roster()], 'local-iq'));
+    await request;
+  }
+  const full = client.sendIq(`<ping xmlns='${NS.PING}'/>`, { to: 'bob@example.com/Phone', id: 'full-iq' });
+  for (const from of ['bob@example.com', 'bob@example.com/phone', 'bob@example.com/Other']) {
+    client.handleIq(iq('result', from, [], 'full-iq'));
+    assert(client.pending.has('full-iq'));
+  }
+  client.handleIq(iq('result', 'bob@example.com/Phone', [], 'full-iq'));
+  await full;
+  for (const from of [null, 'example.com', 'remote.test']) {
+    const request = client.sendIq(`<ping xmlns='${NS.PING}'/>`, { to: 'bob@remote.test/Phone', id: 'route-error' });
+    const rejected = assert.rejects(request);
+    client.handleIq(iq('error', from, [el('error', NS.CLIENT, { type: 'cancel' }, [el('remote-server-not-found', NS.STANZAS)])], 'route-error'));
+    await rejected;
+  }
+
+  sent.length = 0;
+  client.handleIq(iq('get', 'bob@example.com/Phone', [el('ping', NS.PING)], 'peer-ping'));
+  assert.match(sent[0], /type='result'.*id='peer-ping'.*to='bob@example.com\/Phone'/);
+  client.handleIq(iq('get', 'bob@example.com/Phone', [el('query', 'urn:unknown')], 'peer-unknown'));
+  assert.match(sent[1], /type='error'.*id='peer-unknown'.*to='bob@example.com\/Phone'/);
+  assert.match(sent[1], /urn:unknown.*service-unavailable/);
+  client.handleIq(iq('result', 'bob@example.com/Phone', [], 'peer-ping'));
+  client.handleIq(iq('error', 'bob@example.com/Phone', [], 'peer-unknown'));
+  assert.equal(sent.length, 2, 'responses must not create response loops');
+
+  const archiveRequest = client.queryMam('bob@example.com');
+  const queryId = [...client.mamQueries.keys()][0];
+  const archived = (from, id = queryId) => el('message', NS.CLIENT, from === null ? {} : { from }, [
+    el('result', NS.MAM, { queryid: id, id: 'archive-id' }, [
+      el('forwarded', NS.FORWARD, {}, [el('message', NS.CLIENT, { from: 'bob@example.com/Phone', to: client.jid })]),
+    ]),
+  ]);
+  for (const from of ['mallory@example.com/Phone', 'alice@example.com/Other', 'example.com']) {
+    events.length = 0;
+    client.handleMessage(archived(from), '');
+    assert.equal(events[0]?.type, 'protocol-error');
+    assert(!events.some(({ type }) => type === 'message'));
+  }
+  for (const from of [null, 'alice@example.com']) {
+    events.length = 0;
+    client.handleMessage(archived(from), '');
+    assert.equal(events[0]?.detail.archived, true);
+  }
+  events.length = 0;
+  client.handleMessage(archived('alice@example.com', 'unknown-query'), '');
+  assert.equal(events[0]?.type, 'protocol-error');
+  client.handleIq(iq('result', 'alice@example.com', [el('fin', NS.MAM)], queryId));
+  await archiveRequest;
+  assert.equal(client.mamQueries.size, 0);
+
+  for (const from of [null, '', 'mallory@example.com/Phone', 'alice@example.com/Other', 'example.com', 'alice@example.com']) {
+    events.length = 0;
+    client.handleMessage(el('message', NS.CLIENT, from === null ? {} : { from }, [
+      el('received', NS.CARBONS, {}, [
+        el('forwarded', NS.FORWARD, {}, [el('message', NS.CLIENT, { from: 'bob@example.com/Phone', to: client.jid })]),
+      ]),
+    ]), '');
+    if (from === 'alice@example.com') assert.equal(events[0]?.detail.carbon, 'received');
+    else {
+      assert.equal(events[0]?.type, 'protocol-error');
+      assert(!events.some(({ type }) => type === 'message'));
+    }
+  }
+
+  for (const [username, authorization, accepted] of [
+    ['josé', 'josé@example.com/Web', true],
+    ['alice', 'alice@example.com/Web', true],
+    ['alice', 'mallory@example.com/Web', false],
+  ]) {
+    const authClient = new XmppClient({ domain: 'example.com', websocketUrl: 'wss://example.com/xmpp-websocket' });
+    authClient.username = username;
+    authClient.phase = 'authenticating-sasl2';
+    authClient.sasl2Context = { kind: 'fast', expectedServerSignature: new Uint8Array([1, 2, 3]) };
+    authClient.fastCredential = { token: 'a'.repeat(32), expiry: Date.now() + 60000 };
+    let failure = null;
+    authClient.failConnect = (error) => { failure = error; };
+    authClient.handleSasl2Success(el('success', NS.SASL2, {}, [
+      el('additional-data', NS.SASL2, {}, [], 'AQID'),
+      el('authorization-identifier', NS.SASL2, {}, [], authorization),
+      el('bound', NS.BIND2, {}, [el('enabled', NS.SM, { resume: 'true', id: 's'.repeat(43) })]),
+    ]));
+    assert.equal(failure === null, accepted, 'canonical login must retain the authorization identity check');
+    if (accepted) assert.equal(authClient.phase, 'sasl2-complete');
+  }
+}
+
+// Run the current UI functions, not copied audit excerpts.
+{
+  const loginSource = clientSource.slice(clientSource.indexOf('async function login('), clientSource.indexOf('function bindXmppEvents('));
+  for (const [input, canonical] of [['Jose\u0301', 'josé'], ['Ａlice', 'alice'], ['ALICE', 'alice']]) {
+    const state = { config: { domain: 'example.com' }, lifecycleCleanup: Promise.resolve() };
+    const elements = new Map();
+    const $ = (selector) => {
+      if (!elements.has(selector)) elements.set(selector, { value: '', classList: { add() {}, remove() {} } });
+      return elements.get(selector);
+    };
+    $('#login-username').value = input;
+    $('#login-password').value = 'fixture-password';
+    const identities = [];
+    const errors = [];
+    const context = {
+      state, $, crypto, TextEncoder, Promise, bareJid, contactJid, localpart,
+      XmppClient: class {
+        constructor({ domain, websocketUrl }) { this.domain = domain; this.websocketUrl = websocketUrl; }
+        async connect(username) { identities.push(username); this.username = username; }
+      },
+      setBusy() {}, showMessage: (_, message) => { if (message) errors.push(message); },
+      queuedHttpProof: async () => ({}), request: async () => ({ token: 'fixture', jid: `${canonical}@example.com` }),
+      drainEncryptedOutboxWrites: async () => {}, enterChat: async () => {},
+      websocketUrl: () => 'wss://example.com/xmpp-websocket', bindXmppEvents() {}, setConnection() {},
+      humanError: (error) => String(error),
+    };
+    const login = vm.runInNewContext(`${loginSource}\nlogin;`, context);
+    await login({ preventDefault() {}, currentTarget: { querySelector() { return {}; } } });
+    assert.deepEqual(errors, []);
+    assert.deepEqual(identities, [canonical]);
+    assert.equal(state.account, `${canonical}@example.com`);
+  }
+  const saveSource = clientSource.slice(clientSource.indexOf('async function saveContact('), clientSource.indexOf('function openContactDialog('));
+  for (const input of ['bob@remote.test', 'bob@example.com', 'bob@例子.test', 'bad@@remote.test', 'bob@remote.test/resource', 'bob@remote.test?ignored', 'bob@remote.test:443', 'bob@-bad.test', 'bob@remote..test']) {
+    const state = { config: { domain: 'example.com' }, account: 'alice@example.com', contacts: new Map() };
+    const calls = [];
+    const errors = [];
+    state.xmpp = { async setRosterItem(jid) { calls.push(['roster', jid]); }, subscribe(jid) { calls.push(['subscribe', jid]); } };
+    const context = {
+      state, contactJid, bareJid,
+      $: (selector) => ({ value: selector === '#contact-jid' ? input : 'Bob', close() {} }),
+      setBusy() {}, showMessage: (_, message) => errors.push(message), humanError: (error) => String(error),
+      ensureContact: (jid, name) => state.contacts.set(jid, { jid, name }), renderConversations() {},
+      selectConversation: async () => {}, toast() {},
+    };
+    const save = vm.runInNewContext(`${saveSource}\nsaveContact;`, context);
+    await save({ preventDefault() {} });
+    if (['bob@remote.test', 'bob@example.com', 'bob@例子.test'].includes(input)) {
+      assert.deepEqual(errors, []);
+      assert.deepEqual(calls, [['roster', contactJid(input)], ['subscribe', contactJid(input)]]);
+    } else {
+      assert.equal(calls.length, 0, `invalid contact reached the network: ${input}`);
+      assert.equal(errors.length, 1);
+    }
+  }
 }
 
 console.log('Web authentication security and unit tests passed successfully');

@@ -13,7 +13,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::auth;
@@ -26,6 +25,17 @@ const UPLOAD_LEASE_SECONDS: i64 = 90;
 const UPLOAD_RENEW_SECONDS: u64 = 30;
 const UPLOAD_ATTEMPT_MAX_SECONDS: u64 = 15 * 60;
 const UPLOAD_PROMOTION_MAX_SECONDS: u64 = 180;
+
+async fn write_with_lease<T>(
+    write: impl std::future::Future<Output = T>,
+    renew: impl std::future::Future<Output = ()>,
+) -> Option<T> {
+    // Both futures belong to the request; cancelling it also stops renewal.
+    tokio::select! {
+        () = renew => None,
+        result = write => Some(result),
+    }
+}
 
 pub async fn upload_put(
     State(state): State<Arc<AppState>>,
@@ -107,19 +117,12 @@ pub async fn upload_put(
     let async_read = tokio_util::io::StreamReader::new(stream);
     let object_key = slot.id.to_string();
     let attempt_key = lease.claim_token.to_string();
-    let stop_renewal = CancellationToken::new();
-    let lease_lost = CancellationToken::new();
-    let renewer = tokio::spawn({
+    let renewer = {
         let pool = state.pool.clone();
-        let stop_renewal = stop_renewal.clone();
-        let lease_lost = lease_lost.clone();
         async move {
             let jitter_millis = (lease.claim_token.as_u128() % 41) as u64;
             loop {
-                tokio::select! {
-                    () = stop_renewal.cancelled() => break,
-                    () = tokio::time::sleep(Duration::from_secs(UPLOAD_RENEW_SECONDS)) => {}
-                }
+                tokio::time::sleep(Duration::from_secs(UPLOAD_RENEW_SECONDS)).await;
                 let mut busy_attempt = 0_u32;
                 loop {
                     match db::renew_upload_claim(&pool, id, lease.claim_token, UPLOAD_LEASE_SECONDS)
@@ -132,25 +135,20 @@ pub async fn upload_put(
                                 .min(800)
                                 .saturating_add(jitter_millis);
                             busy_attempt = busy_attempt.saturating_add(1);
-                            tokio::select! {
-                                () = stop_renewal.cancelled() => return,
-                                () = tokio::time::sleep(Duration::from_millis(delay)) => {}
-                            }
+                            tokio::time::sleep(Duration::from_millis(delay)).await;
                         }
                         Ok(db::UploadRenewOutcome::Busy | db::UploadRenewOutcome::Lost) => {
-                            lease_lost.cancel();
                             return;
                         }
                         Err(error) => {
                             tracing::error!(upload_id=%id, ?error, "failed to renew upload lease");
-                            lease_lost.cancel();
                             return;
                         }
                     }
                 }
             }
         }
-    });
+    };
     let attempt_deadline =
         Duration::from_secs(lease.remaining_seconds.clamp(1, UPLOAD_ATTEMPT_MAX_SECONDS));
     let put = state.upload_store().put(
@@ -159,14 +157,7 @@ pub async fn upload_put(
         Box::new(async_read),
         slot.size as u64,
     );
-    let write_result = tokio::select! {
-        () = lease_lost.cancelled() => None,
-        result = tokio::time::timeout(attempt_deadline, put) => Some(result),
-    };
-    stop_renewal.cancel();
-    if let Err(error) = renewer.await {
-        tracing::warn!(upload_id=%id, ?error, "upload lease renewer did not stop cleanly");
-    }
+    let write_result = write_with_lease(tokio::time::timeout(attempt_deadline, put), renewer).await;
     let mut staged = match write_result {
         Some(Ok(Ok(staged))) => staged,
         Some(Ok(Err(error))) => {
@@ -741,8 +732,60 @@ async fn abort_stage_best_effort(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_upload_framing_headers;
+    use super::{validate_upload_framing_headers, write_with_lease};
     use axum::http::{header, HeaderMap, HeaderValue};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use std::task::{Context, Poll};
+
+    struct PendingOperation(Arc<AtomicBool>);
+
+    impl Future for PendingOperation {
+        type Output = ();
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+            Poll::Pending
+        }
+    }
+
+    impl Drop for PendingOperation {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn upload_cancellation_drops_write_and_lease_renewal() {
+        let write_dropped = Arc::new(AtomicBool::new(false));
+        let renewal_dropped = Arc::new(AtomicBool::new(false));
+        let mut request = Box::pin(write_with_lease(
+            PendingOperation(write_dropped.clone()),
+            PendingOperation(renewal_dropped.clone()),
+        ));
+        assert!(futures::poll!(&mut request).is_pending());
+        drop(request);
+        assert!(write_dropped.load(Ordering::SeqCst));
+        assert!(renewal_dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn upload_completion_stops_renewal_and_lease_loss_stops_writing() {
+        let renewal_dropped = Arc::new(AtomicBool::new(false));
+        assert_eq!(
+            write_with_lease(async { 42 }, PendingOperation(renewal_dropped.clone())).await,
+            Some(42)
+        );
+        assert!(renewal_dropped.load(Ordering::SeqCst));
+        let write_dropped = Arc::new(AtomicBool::new(false));
+        assert_eq!(
+            write_with_lease(PendingOperation(write_dropped.clone()), async {}).await,
+            None
+        );
+        assert!(write_dropped.load(Ordering::SeqCst));
+    }
 
     #[test]
     fn upload_framing_rejects_ambiguous_encodings_and_ranges() {

@@ -1,5 +1,7 @@
 export const NS = Object.freeze({
   CLIENT: 'jabber:client',
+  STANZAS: 'urn:ietf:params:xml:ns:xmpp-stanzas',
+  PING: 'urn:xmpp:ping',
   FRAMING: 'urn:ietf:params:xml:ns:xmpp-framing',
   SASL2: 'urn:xmpp:sasl:2',
   BIND2: 'urn:xmpp:bind:0',
@@ -57,7 +59,31 @@ export function parseXml(text) {
 }
 
 export function bareJid(jid = '') {
-  return String(jid).split('/')[0].toLowerCase();
+  return String(jid).split('/')[0].toLowerCase().normalize('NFC');
+}
+
+// This checks address syntax; the server remains responsible for PRECIS preparation.
+export function contactJid(value) {
+  const jid = String(value ?? '').trim();
+  const parts = jid.split('@');
+  if (parts.length !== 2 || !parts[0] || !parts[1]
+    || /[\s\p{C}"&'/:<>]/u.test(jid)
+    || /[\\?#%\[\]]/.test(parts[1])
+    || parts.some((part) => new TextEncoder().encode(part).length > 1023)) {
+    throw new Error('请输入有效的 XMPP 地址，例如 name@example.org');
+  }
+  const domain = new URL(`https://${parts[1]}`).hostname;
+  if (!domain || domain.length > 253 || domain.split('.').some((label) => (
+    !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label)
+  ))) throw new Error('XMPP 地址的域名无效');
+  return `${parts[0].toLowerCase().normalize('NFC')}@${domain}`;
+}
+
+function sameFullJid(left, right) {
+  const resource = (jid) => String(jid).slice(String(jid).indexOf('/') + 1);
+  return bareJid(left) === bareJid(right)
+    && String(left).includes('/') === String(right).includes('/')
+    && (!String(left).includes('/') || resource(left) === resource(right));
 }
 
 export function localpart(jid = '') {
@@ -282,7 +308,7 @@ export class XmppClient extends EventTarget {
 
   async connect(username, scramKey = null) {
     if (this.connectPromise) return this.connectPromise;
-    this.username = username.toLowerCase();
+    this.username = username.toLowerCase().normalize('NFC');
     this.scramKey = null;
 
     if (scramKey !== null) {
@@ -356,6 +382,8 @@ export class XmppClient extends EventTarget {
   }
 
   async sendIq(payload, { type = 'get', to = null, timeout = 12000, id = randomId('iq') } = {}) {
+    if (!['get', 'set'].includes(type) || this.pending.has(id)) throw new Error('无效或重复的 IQ 请求');
+    const request = parseXml(payload);
     const toAttribute = to ? ` to='${xmlEscape(to)}'` : '';
     const xml = `<iq xmlns='${NS.CLIENT}' type='${type}' id='${xmlEscape(id)}'${toAttribute}>${payload}</iq>`;
     const promise = new Promise((resolve, reject) => {
@@ -363,7 +391,10 @@ export class XmppClient extends EventTarget {
         this.pending.delete(id);
         reject(new Error('XMPP 请求超时'));
       }, timeout);
-      this.pending.set(id, { resolve, reject, timer });
+      const responseName = request.namespaceURI === NS.HTTP_UPLOAD ? 'slot'
+        : (request.namespaceURI === NS.MAM ? 'fin' : request.localName);
+      const requiresPayload = (type === 'get' && request.namespaceURI !== NS.PING) || request.namespaceURI === NS.MAM;
+      this.pending.set(id, { resolve, reject, timer, to, namespace: request.namespaceURI, responseName, requiresPayload });
     });
     try {
       this.sendRaw(xml);
@@ -743,33 +774,92 @@ export class XmppClient extends EventTarget {
   }
 
   handleIq(iq) {
+    if (iq.namespaceURI !== NS.CLIENT) return;
     const id = iq.getAttribute('id');
+    const type = iq.getAttribute('type');
+    const from = iq.getAttribute('from');
+    const elements = [...iq.children];
     const pending = id && this.pending.get(id);
-    if (pending) {
+    if (type === 'result' || type === 'error') {
+      if (!pending || !this.isIqResponseSource(from, pending.to, type)) return;
+      const errors = elements.filter((node) => node.localName === 'error' && node.namespaceURI === NS.CLIENT);
+      const payloads = elements.filter((node) => !errors.includes(node));
+      if (payloads.length > 1 || payloads.some((node) => node.namespaceURI !== pending.namespace)
+        || (type === 'result' && (errors.length || (pending.requiresPayload && payloads.length !== 1)
+          || payloads.some((node) => node.localName !== pending.responseName)))
+        || (type === 'error' && (errors.length !== 1 || [...errors[0].children].filter((node) => (
+          node.namespaceURI === NS.STANZAS && node.localName !== 'text'
+        )).length !== 1))) return;
       clearTimeout(pending.timer);
       this.pending.delete(id);
-      if (iq.getAttribute('type') === 'error') pending.reject(xmppError(iq));
+      if (type === 'error') pending.reject(xmppError(iq));
       else pending.resolve(iq);
       return;
     }
+    if (type !== 'get' && type !== 'set') return;
     const roster = child(iq, 'query', NS.ROSTER);
-    if (iq.getAttribute('type') === 'set' && roster) {
-      this.sendRaw(`<iq xmlns='${NS.CLIENT}' type='result' id='${xmlEscape(id || '')}'/>`);
-      this.emit('roster-push', { items: parseRoster(roster) });
-      return;
-    }
     const blocked = child(iq, 'block', NS.BLOCKING);
     const unblocked = child(iq, 'unblock', NS.BLOCKING);
-    if (iq.getAttribute('type') === 'set' && (blocked || unblocked)) {
-      this.sendRaw(`<iq xmlns='${NS.CLIENT}' type='result' id='${xmlEscape(id || '')}'/>`);
+    if (roster || blocked || unblocked) {
+      // Ignore unauthorized account pushes without revealing presence.
+      if (!this.isAccountSource(from)) return;
+      if (type !== 'set' || elements.length !== 1) return this.replyIq(iq, 'bad-request');
+    }
+    if (roster) {
+      let items;
+      try {
+        items = parseRoster(roster);
+        if (items.length !== 1) throw new Error('roster push must contain one item');
+      } catch {
+        return this.replyIq(iq, 'bad-request');
+      }
+      this.replyIq(iq);
+      this.emit('roster-push', { items });
+      return;
+    }
+    if (blocked || unblocked) {
+      const items = [...(blocked || unblocked).children];
+      if ((blocked && !items.length) || items.some((node) => node.localName !== 'item'
+        || node.namespaceURI !== NS.BLOCKING || !node.getAttribute('jid')
+        || /[\s\p{C}]/u.test(node.getAttribute('jid')) || node.children.length)) {
+        return this.replyIq(iq, 'bad-request');
+      }
+      this.replyIq(iq);
       this.emit('blocking-change', {
         action: blocked ? 'block' : 'unblock',
-        jids: [...(blocked || unblocked).children].filter((node) => node.localName === 'item').map((node) => bareJid(node.getAttribute('jid'))),
+        jids: items.map((node) => bareJid(node.getAttribute('jid'))),
       });
+      return;
     }
+    if (elements.length !== 1) return this.replyIq(iq, 'bad-request');
+    if (type === 'get' && child(iq, 'ping', NS.PING) && !elements[0].children.length) return this.replyIq(iq);
+    this.replyIq(iq, 'service-unavailable');
+  }
+
+  isAccountSource(from, account = bareJid(this.jid || '')) {
+    return Boolean(account) && (from === null || (from && !from.includes('/') && bareJid(from) === account));
+  }
+
+  isIqResponseSource(from, to, type) {
+    const account = bareJid(this.jid || `${this.username}@${this.domain}`);
+    if (!to) return this.isAccountSource(from, account) || from === this.domain;
+    if (from === null) return to === account || to === this.domain || type === 'error';
+    if (to.includes('/') ? sameFullJid(from, to)
+      : (to.includes('@') ? bareJid(from) === bareJid(to) : from === to)) return true;
+    // Routing failures may be generated by our server or the destination server.
+    return type === 'error' && (from === this.domain || from === bareJid(to).split('@').at(-1));
+  }
+
+  replyIq(iq, condition = null) {
+    const from = iq.getAttribute('from');
+    const address = from ? ` to='${xmlEscape(from)}'` : '';
+    const payload = condition ? [...iq.children].map((node) => new XMLSerializer().serializeToString(node)).join('') : '';
+    const error = condition ? `<error type='${condition === 'bad-request' ? 'modify' : 'cancel'}'><${condition} xmlns='${NS.STANZAS}'/></error>` : '';
+    this.sendRaw(`<iq xmlns='${NS.CLIENT}' type='${condition ? 'error' : 'result'}' id='${xmlEscape(iq.getAttribute('id') || '')}'${address}>${payload}${error}</iq>`);
   }
 
   handleMessage(message, raw) {
+    if (message.namespaceURI !== NS.CLIENT) return;
     if (message.getAttribute('type') === 'error') {
       const id = message.getAttribute('id') || '';
       const errors = [...message.children]
@@ -803,7 +893,9 @@ export class XmppClient extends EventTarget {
     if (mamResult) {
       const queryId = mamResult.getAttribute('queryid') || '';
       const archiveId = mamResult.getAttribute('id') || '';
-      if (!this.mamQueries.has(queryId) || !archiveId || archiveId.length > 256) {
+      const query = this.mamQueries.get(queryId);
+      if (!query || !this.isAccountSource(message.getAttribute('from'), query.archive)
+        || !archiveId || archiveId.length > 256) {
         this.emit('protocol-error', { error: new Error('拒绝了未经请求或缺少稳定 ID 的 MAM 结果'), raw });
         return;
       }
@@ -821,7 +913,8 @@ export class XmppClient extends EventTarget {
     }
     const carbon = child(message, 'sent', NS.CARBONS) || child(message, 'received', NS.CARBONS);
     if (carbon) {
-      if (bareJid(message.getAttribute('from')) !== bareJid(this.jid)) {
+      const from = message.getAttribute('from');
+      if (!from || !this.isAccountSource(from)) {
         this.emit('protocol-error', { error: new Error('拒绝了来源不匹配的 Message Carbon'), raw });
         return;
       }
@@ -1112,7 +1205,7 @@ export class XmppClient extends EventTarget {
   async queryMam(withJid, max = 100) {
     const queryId = randomId('mam-query');
     const payload = `<query xmlns='${NS.MAM}' queryid='${queryId}'><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE' type='hidden'><value>${NS.MAM}</value></field><field var='with'><value>${xmlEscape(bareJid(withJid))}</value></field></x><set xmlns='${NS.RSM}'><max>${Math.min(100, Math.max(1, max))}</max></set></query>`;
-    this.mamQueries.set(queryId, { withJid: bareJid(withJid) });
+    this.mamQueries.set(queryId, { withJid: bareJid(withJid), archive: bareJid(this.jid) });
     try {
       return await this.sendIq(payload, { type: 'set', id: queryId, timeout: 20000 });
     } finally {
@@ -1149,12 +1242,17 @@ export class XmppClient extends EventTarget {
 }
 
 function parseRoster(query) {
-  return [...(query?.children || [])]
-    .filter((item) => item.localName === 'item')
-    .map((item) => ({
+  return [...(query?.children || [])].map((item) => {
+    const jid = item.getAttribute('jid');
+    if (item.localName !== 'item' || item.namespaceURI !== NS.ROSTER
+      || !jid || /[\s\p{C}/]/u.test(jid)
+      || !['none', 'to', 'from', 'both', 'remove'].includes(item.getAttribute('subscription') || 'none')
+      || ![null, 'subscribe'].includes(item.getAttribute('ask'))) throw new Error('无效的联系人列表');
+    return {
       jid: bareJid(item.getAttribute('jid')),
       name: item.getAttribute('name') || '',
       subscription: item.getAttribute('subscription') || 'none',
       ask: item.getAttribute('ask') || null,
-    }));
+    };
+  });
 }

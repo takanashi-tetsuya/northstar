@@ -181,7 +181,7 @@ requirePattern(client, /room\.affiliates\.keys\(\)/, 'offline MUC owners, admins
 requirePattern(client, /Promise\.all\(\[[\s\S]+getDiscoFeatures[\s\S]+getMucAffiliations/, 'MUC encryption does not require a complete room discovery and affiliation snapshot');
 requirePattern(client, /features\.has\('muc_nonanonymous'\)/, 'MUC encryption does not reject anonymous rooms');
 requirePattern(client, /!room\.omemoRoomVerified \|\| !room\.affiliatesReady/, 'MUC encryption can proceed with an incomplete recipient list');
-requirePattern(xmpp, /mamQueries\.has\(queryId\)/, 'unsolicited MAM results are not rejected');
+requirePattern(xmpp, /mamQueries\.get\(queryId\)[\s\S]+!query \|\| !this\.isAccountSource/, 'MAM results are not bound to an active query and its archive');
 requirePattern(xmpp, /来源不匹配的 Message Carbon/, 'Message Carbon outer senders are not authenticated');
 requirePattern(xmpp, /origin-id xmlns=/, 'outgoing messages do not carry XEP-0359 origin ids');
 requirePattern(client, /sid:\$\{stanzaIds\[0\]\.by\}/, 'message deduplication is not scoped by XEP-0359 assigning entity');

@@ -1,4 +1,4 @@
-import { XmppClient, NS, bareJid, child, localpart, randomId, xmlEscape } from './xmpp.js';
+import { XmppClient, NS, bareJid, child, contactJid, localpart, randomId, xmlEscape } from './xmpp.js';
 import {
   deleteValue, getValue, loadCachedMessages, saveCachedMessage, setValue,
 } from './storage.js';
@@ -901,11 +901,11 @@ async function login(event) {
     }
 
     state.apiToken = session.token;
-    state.account = bareJid(session.jid);
+    state.account = contactJid(session.jid);
     await drainEncryptedOutboxWrites();
     state.outboxErasing = false;
     $('#login-password').value = '';
-    await connectXmpp(username, scramKey);
+    await connectXmpp(scramKey);
     scramKey = null;
     await enterChat();
   } catch (error) {
@@ -947,11 +947,15 @@ async function login(event) {
   }
 }
 
-async function connectXmpp(username, secret = null) {
+async function connectXmpp(secret = null) {
+  // REST authentication returns the server's PRECIS-prepared identity.
+  const account = contactJid(state.account);
+  if (account.split('@')[1] !== state.config.domain) throw new Error('服务器返回了不匹配的认证身份');
+  const username = localpart(account);
   const requestedUrl = websocketUrl(state.config.websocket_path || '/xmpp-websocket');
   const reusable = state.xmpp?.domain === state.config.domain
     && state.xmpp.websocketUrl === requestedUrl
-    && state.xmpp.username === username.toLowerCase()
+    && state.xmpp.username === username
     && state.xmpp.canReconnect();
   const xmpp = reusable ? state.xmpp : new XmppClient({
     domain: state.config.domain,
@@ -1157,12 +1161,14 @@ function ensureContact(jid, name = '') {
 
 async function saveContact(event) {
   event.preventDefault();
-  const jid = bareJid($('#contact-jid').value.trim());
-  const name = $('#contact-name').value.trim();
-  if (!jid.includes('@') || jid.split('@')[1] !== state.config.domain) {
-    showMessage($('#contact-error'), `请输入 ${state.config.domain} 上的完整 XMPP 地址`);
+  let jid;
+  try {
+    jid = contactJid($('#contact-jid').value);
+  } catch (error) {
+    showMessage($('#contact-error'), humanError(error));
     return;
   }
+  const name = $('#contact-name').value.trim();
   if (jid === state.account) {
     showMessage($('#contact-error'), '不能把自己添加为联系人');
     return;
@@ -2713,7 +2719,7 @@ async function maybeReconnect() {
   if (state.intentionalLogout || !navigator.onLine || !state.account || !state.xmpp?.canReconnect() || state.xmpp?.phase === 'online') return;
   try {
     setConnection('away', '正在重新连接');
-    await connectXmpp(localpart(state.account));
+    await connectXmpp();
     state.omemo.xmpp = state.xmpp;
     await state.omemo.validateRecoveryAuthority();
     if (!state.xmpp.lastConnectResumed) {

@@ -4,6 +4,16 @@ All notable Northstar changes are documented here. Protocol support claims are
 normative only in [XEP_MATRIX.md](docs/XEP_MATRIX.md), and unresolved release
 boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
+## Unreleased
+
+- Validate account push sources, IQ response senders and MAM archive identities
+  in the browser client before updating local state or completing requests.
+- Reply to browser-resource pings and return errors for unsupported IQ requests.
+- Use the canonical account returned by login for XMPP authentication, and allow
+  contacts on other XMPP domains subject to server federation policy.
+- Stop upload lease renewal when the request is cancelled.
+- Set certificate fixture key identifiers explicitly for OpenSSL 4 compatibility.
+
 ## [0.2.0] - Release notes (publication date: GitHub Releases)
 
 - Fixed deadlocks when sessions of the same account resume concurrently, while

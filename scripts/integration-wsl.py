@@ -2738,7 +2738,11 @@ def run() -> None:
         config.get("public_url") == PUBLIC_URL,
         f"public config advertised {config.get('public_url')!r}, expected stable relay origin {PUBLIC_URL!r}",
     )
-    status, _, host_meta = raw_http("GET", "/.well-known/host-meta")
+    # Connect to the fixture's loopback relay using its advertised authority,
+    # as a browser would. Trusted proxy discovery uses the HTTP Host header.
+    check(PUBLIC_URL is not None, "integration fixture is missing its public URL")
+    status, _, host_meta = raw_http("GET", "/.well-known/host-meta",
+                                  headers={"Host": urllib.parse.urlsplit(PUBLIC_URL).netloc})
     host_meta_text = host_meta.decode("utf-8")
     check(
         status == 200

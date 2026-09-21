@@ -16,6 +16,7 @@ openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 397 \
   -subj '/CN=Northstar regression root' \
   -addext 'basicConstraints=critical,CA:TRUE,pathlen:1' \
   -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -addext 'subjectKeyIdentifier=hash' \
   -keyout "$work_dir/root.key" -out "$work_dir/root.crt" >/dev/null 2>&1
 
 make_leaf() {
@@ -30,6 +31,9 @@ make_leaf() {
   {
     echo "basicConstraints=critical,$constraints"
     echo "keyUsage=critical,$usage"
+    # OpenSSL 4 no longer adds key identifiers automatically.
+    echo 'authorityKeyIdentifier=keyid,issuer'
+    echo 'subjectKeyIdentifier=hash'
     echo 'extendedKeyUsage=serverAuth'
     echo "subjectAltName=DNS:$domain"
   } > "$work_dir/$name.ext"
@@ -52,6 +56,8 @@ openssl req -new -newkey rsa:3072 -nodes -sha256 \
 cat > "$work_dir/cn_only.ext" <<'EOF'
 basicConstraints=critical,CA:FALSE
 keyUsage=critical,digitalSignature
+authorityKeyIdentifier=keyid,issuer
+subjectKeyIdentifier=hash
 extendedKeyUsage=serverAuth
 EOF
 openssl x509 -req -in "$work_dir/cn_only.csr" \

@@ -8,7 +8,7 @@ release readiness or remaining work.
 Current authority order:
 
 1. source code and migrations;
-2. [`XEP_MATRIX.md`](../../XEP_MATRIX.md);
+2. [`XEP_MATRIX.md`](../XEP_MATRIX.md);
 3. [`docs/KNOWN_ISSUES.md`](../KNOWN_ISSUES.md);
 4. [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) and
    [`docs/PRODUCTION_OPERATIONS.md`](../PRODUCTION_OPERATIONS.md);

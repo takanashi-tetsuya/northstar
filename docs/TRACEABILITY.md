@@ -24,7 +24,7 @@ checked only for an explicit archive banner.
 | --- | --- | --- | --- | --- |
 | DOC-001 | Implemented | [messaging.rs](../src/xmpp/protocol/messaging.rs) | [documentation gate](../scripts/check-documentation-consistency.mjs) | [known issues](KNOWN_ISSUES.md) |
 | DOC-002 | Implemented | [cluster.rs](../src/cluster.rs), [PubSub outbox](../src/db/pubsub_outbox.rs) | [documentation gate](../scripts/check-documentation-consistency.mjs) | [clustering](CLUSTERING.md) |
-| DOC-003 | Implemented | [pubsub.rs](../src/xmpp/protocol/pubsub.rs) | [PubSub wire harness](../scripts/pubsub-wire-wsl.sh) | [XEP matrix](../XEP_MATRIX.md) |
+| DOC-003 | Implemented | [pubsub.rs](../src/xmpp/protocol/pubsub.rs) | [PubSub wire harness](../scripts/pubsub-wire-wsl.sh) | [XEP matrix](XEP_MATRIX.md) |
 | DOC-004 | Implemented | [S2S outbox](../src/db/s2s.rs) | [S2S database harness](../scripts/s2s-db-wsl.sh) | [production operations](PRODUCTION_OPERATIONS.md) |
 | DOC-005 | Implemented | [cluster runtime](../src/cluster.rs) | [cluster harness](../scripts/cluster-wsl.sh) | [clustering](CLUSTERING.md) |
 | DOC-006 | Implemented | [load harness](../scripts/load-1000-production-wsl.py) | [production-envelope runner](../scripts/load-1000-production-wsl.sh) | [README](../README.md) |
@@ -50,7 +50,7 @@ checked only for an explicit archive banner.
 | CLU-TEST | Implemented | [cluster harness](../scripts/cluster-wsl.py), [MUC fixture](../scripts/muc-cluster-wsl.sh) | Experimental source-defined Redis/PG direction, signature tamper/replay/version, instance/key lease and CLU-MUC recovery cases; execution remains a separately authorized isolated release gate | [clustering](CLUSTERING.md), [known issues](KNOWN_ISSUES.md) |
 | FED-REVOCATION | Implemented | [CRL classification and certificate-session registry](../src/crl.rs), [atomic generation/reload](../src/tls.rs), [C2S lifecycle](../src/xmpp/protocol.rs), [S2S lifecycle](../src/s2s) | pure exact-cancellation/classification/pin-policy tests plus [generated CRL fixture](../scripts/generate-crl-fixture-wsl.sh); external CA rotation remains a release gate | [production operations](PRODUCTION_OPERATIONS.md) |
 | FED-CERT | Implemented | [TLS policy](../src/tls.rs), [per-connection binding selection](../src/xmpp/mod.rs) | [TLS unit tests](../src/tls.rs), [TLS security harness](../scripts/test-certificate-security.sh) | [production operations](PRODUCTION_OPERATIONS.md); external RSA/ECDSA/Ed25519 TLS matrix remains a release gate |
-| FED-S2S | Accepted-boundary | [S2S implementation](../src/s2s) | [federation harness](../scripts/federation-wsl.sh) | [XEP matrix](../XEP_MATRIX.md) |
+| FED-S2S | Accepted-boundary | [S2S implementation](../src/s2s) | [federation harness](../scripts/federation-wsl.sh) | [XEP matrix](XEP_MATRIX.md) |
 | FED-COMPONENT | Accepted-boundary | [component implementation](../src/components.rs) | [component harness](../scripts/component-runtime-wsl.sh) | [component evidence](COMPONENT_PROTOCOL_EVIDENCE.md) |
 | FED-BOSH | Accepted-boundary | [BOSH implementation](../src/bosh.rs), [bounded ACK ownership migration](../migrations/0096_bosh_ack_ownership_bounds.sql) | [transport conformance](../scripts/transport-conformance.py) plus pure count/byte/age models | [production operations](PRODUCTION_OPERATIONS.md) |
 | DATA-RETENTION | Implemented | [policy and hold-aware retention worker](../src/retention.rs), [data lifecycle storage](../src/db/data_lifecycle.rs) | [retention database harness](../scripts/retention-db-wsl.sh) | [data lifecycle contract](DATA_LIFECYCLE.md); ignored PostgreSQL fixture remains an explicit release gate |
@@ -59,7 +59,7 @@ checked only for an explicit archive banner.
 | API-MAM | Implemented | [history API](../src/api/users.rs) | [MAM database harness](../scripts/mam-db-wsl.sh) | [OpenAPI](openapi.yaml) |
 | API-DOCS | Implemented | [HTTP router](../src/api/mod.rs), [pinned Swagger UI](../third_party/swagger-ui/README.md) | [Swagger artifact gate](../scripts/verify-swagger-ui-artifacts.mjs) | [OpenAPI](openapi.yaml) |
 | OPS-METRICS | Implemented | [metrics registry](../src/metrics.rs) | [metrics unit tests](../src/metrics.rs) | [production operations](PRODUCTION_OPERATIONS.md) |
-| OPS-ALERT | Planned | [Prometheus rules](../monitoring/alerts.yml) | [release preflight](../scripts/release-preflight.sh) | [receiver qualification runbook](../monitoring/ALERTING_RUNBOOK.md) |
+| OPS-ALERT | Planned | [Prometheus rules](../deploy/monitoring/alerts.yml) | [release preflight](../scripts/release-preflight.sh) | [receiver qualification runbook](../deploy/monitoring/ALERTING_RUNBOOK.md) |
 | UPLOAD-DELETE | Implemented | [upload API](../src/api/upload.rs), [upload storage](../src/db/upload.rs) | [upload database harness](../scripts/upload-db-wsl.sh) | [OpenAPI](openapi.yaml) |
 | UPLOAD-SCAN | Accepted-boundary | [upload API](../src/api/upload.rs) | [upload archive verifier](../scripts/verify-upload-archive.py) | [current DESIGN-UPLOAD-SCAN boundary](KNOWN_ISSUES.md), [upload storage contract](UPLOAD_STORAGE.md) |
 | ADMIN-AMBIGUITY | Implemented | [operation runtime](../src/operation_runtime.rs), [operations API](../src/api/operations.rs) | [operation database harness](../scripts/api-operations-db-wsl.sh) | [OpenAPI](openapi.yaml) |

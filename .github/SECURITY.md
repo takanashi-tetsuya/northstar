@@ -6,9 +6,9 @@ Northstar is a pre-1.0 XMPP server and has not completed an independent security
 audit. The supported deployment baseline is one Linux host and one Northstar
 process with PostgreSQL; multi-node Redis mode remains experimental.
 
-See [the known-issues register](docs/KNOWN_ISSUES.md), [security and architecture
-model](ARCHITECTURE.md), [production operations](docs/PRODUCTION_OPERATIONS.md)
-and [release checklist](docs/RELEASE_CHECKLIST.md).
+See [the known-issues register](../docs/KNOWN_ISSUES.md), [security and architecture
+model](../docs/architecture/overview.md), [production operations](../docs/PRODUCTION_OPERATIONS.md)
+and [release checklist](../docs/RELEASE_CHECKLIST.md).
 
 ## Supported versions
 

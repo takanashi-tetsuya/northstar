@@ -14,8 +14,8 @@ grep -F "northstar-upload-root-v1' > /uploads/.northstar-upload-root" deploy/bac
 grep -F "northstar-restore-rollback-v1' > /rollback/.northstar-rollback-root" deploy/backup.Dockerfile >/dev/null
 grep -F -- '- restore-rollback:/rollback' docker-compose.yml >/dev/null
 grep -Fx '  restore-rollback:' docker-compose.yml >/dev/null
-grep -Fx 'umask 077' start_server.sh >/dev/null
-grep -Fx 'umask 077' build_and_start.sh >/dev/null
+grep -Fx 'umask 077' scripts/dev/start_server.sh >/dev/null
+grep -Fx 'umask 077' scripts/dev/build_and_start.sh >/dev/null
 grep -F 'driver: local' docker-compose.yml >/dev/null
 grep -F 'max-size: "${DOCKER_LOG_MAX_SIZE:-10m}"' docker-compose.yml >/dev/null
 grep -F 'max-file: "${DOCKER_LOG_MAX_FILES:-5}"' docker-compose.yml >/dev/null
@@ -47,13 +47,13 @@ chmod 0755 "$test_root/bin/cargo"
 # Keep the production guard intact and satisfy it only inside this disposable
 # project; the fake cargo command below observes the wrappers' umask.
 wrapper_project="$test_root/wrapper-project"
-mkdir "$wrapper_project"
-cp start_server.sh build_and_start.sh "$wrapper_project/"
+mkdir -p "$wrapper_project/scripts/dev"
+cp scripts/dev/start_server.sh scripts/dev/build_and_start.sh "$wrapper_project/scripts/dev/"
 : >"$wrapper_project/.env"
 NORTHSTAR_UMASK_PROBE="$test_root/start-server-created.log" \
-    PATH="$test_root/bin:$PATH" sh "$wrapper_project/start_server.sh" >/dev/null
+    PATH="$test_root/bin:$PATH" sh "$wrapper_project/scripts/dev/start_server.sh" >/dev/null
 NORTHSTAR_UMASK_PROBE="$test_root/build-and-start-created.log" \
-    PATH="$test_root/bin:$PATH" sh "$wrapper_project/build_and_start.sh" >/dev/null
+    PATH="$test_root/bin:$PATH" sh "$wrapper_project/scripts/dev/build_and_start.sh" >/dev/null
 [ "$(stat -c '%a' "$test_root/start-server-created.log")" = 600 ]
 [ "$(stat -c '%a' "$test_root/build-and-start-created.log")" = 600 ]
 chmod 0755 "$test_root/uploads" "$test_root/logs"

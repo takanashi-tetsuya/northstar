@@ -189,8 +189,8 @@ contains S3 bytes. Operators must
 store encrypted/authenticated copies off-host. Browser private keys are outside
 server backups.
 
-See [XEP_MATRIX.md](XEP_MATRIX.md),
-[docs/PRODUCTION_OPERATIONS.md](docs/PRODUCTION_OPERATIONS.md),
-[docs/UPLOAD_STORAGE.md](docs/UPLOAD_STORAGE.md) and
-[docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) for the precise support and
+See [XEP_MATRIX.md](../XEP_MATRIX.md),
+[docs/PRODUCTION_OPERATIONS.md](../PRODUCTION_OPERATIONS.md),
+[docs/UPLOAD_STORAGE.md](../UPLOAD_STORAGE.md) and
+[docs/KNOWN_ISSUES.md](../KNOWN_ISSUES.md) for the precise support and
 deployment boundaries.

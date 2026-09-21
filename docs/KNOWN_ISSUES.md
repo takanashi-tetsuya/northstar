@@ -48,7 +48,7 @@ CI 验证隔离环境中的代码与运行行为；生产环境、公网互操�
 | DESIGN-OMEMO | OMEMO 私钥、信任决定和 fingerprint 验证属于端点；举报解密明文无法由服务器证明 | 标准/密码学边界 | **永久边界** | 服务端保存 PEP 公共材料和 archive ciphertext/digest，不托管私钥。举报中的解密文本必须标注为 `user-supplied/unverified`，所以 moderation 不是 zero knowledge | 保留人工指纹/QR 验证、设备撤销和密文证据链；服务器不得自动信任设备、伪造验证或宣称能证明用户解密结果 |
 | DESIGN-TLS-RELOAD | TLS reload 不能原地替换现有连接已经协商的会话 | TLS 架构属性 | **只能缓解** | 新连接立即使用新证书、trust/CRL generation；旧连接继续使用原握手，只有明确证书撤销会触发精确 drain，普通续期不会无差别踢线 | 高风险轮换执行受控 connection drain；永久声明“reload 影响新握手，现有 TLS 会话需要重连或显式 drain” |
 | PROFILE-REVOCATION | 证书撤销只支持本地、签名与 freshness 校验后的 PEM CRL，没有 OCSP 或在线 CRL/AIA 获取 | 产品范围＋网络安全取舍 | **可实现，不能靠运行测试关闭** | 当前 profile 避免盲目访问证书给出的 URL 和由此产生的 SSRF/可用性问题；CRL 的可靠获取与及时 reload 是运营者责任。DANE-EE 按其信任模型不使用 CA revocation | 若产品需要在线撤销，必须实现有界来源、重定向/地址策略、缓存、stapling/freshness、SSRF 防护和明确 fail policy；否则永久声明“仅本地 CRL，不支持 OCSP/在线 AIA” |
-| PROFILE-XEP | `Partial`、`Pass-through`、`Experimental` 只表示明确实现的 profile，不是完整实现整个 XEP | 刻意产品范围＋规范成熟度 | **逐项可扩展** | XEP-0225、XEP-0357、XEP-0408、XEP-0487 等包含 Deferred/Experimental 边界；vCard4、现代媒体/信任扩展和 MIX/MUC coexistence 只实现矩阵声明的语义 | 以 [XEP_MATRIX.md](../XEP_MATRIX.md) 为唯一逐协议范围。只有实现、自动化证据、第三方互操作和规范状态均允许时才能升级标签；端点职责不得伪装成服务器状态机 |
+| PROFILE-XEP | `Partial`、`Pass-through`、`Experimental` 只表示明确实现的 profile，不是完整实现整个 XEP | 刻意产品范围＋规范成熟度 | **逐项可扩展** | XEP-0225、XEP-0357、XEP-0408、XEP-0487 等包含 Deferred/Experimental 边界；vCard4、现代媒体/信任扩展和 MIX/MUC coexistence 只实现矩阵声明的语义 | 以 [XEP_MATRIX.md](XEP_MATRIX.md) 为唯一逐协议范围。只有实现、自动化证据、第三方互操作和规范状态均允许时才能升级标签；端点职责不得伪装成服务器状态机 |
 | WEB-ORIGIN | 网页服务器和静态资源发布链始终位于浏览器 OMEMO 的 E2EE 信任根 | Web 平台架构＋运维信任 | **网页形态下永久存在** | 控制服务器、TLS/CDN 或发布凭据的一方可以在用户下次加载时替换验证代码；同源 CSP、SRI、hash 和签名 manifest 能提高可见性，但验证器也由同源下发时不能消除该风险 | 高风险部署提供独立签名的桌面/移动/浏览器扩展客户端和可验证更新/透明日志。网页客户端必须永久声明其代码分发方属于信任根 |
 | WEB-PLATFORM | 浏览器没有 TLS exporter 或可靠 secure-memory/erase 能力 | 浏览器平台限制 | **当前 Web API 下不可根治** | 网页端不能实现真实 SCRAM-SHA-256-PLUS，只能使用 SASL2 SCRAM-SHA-256、FAST 和 SM；JavaScript 字符串无法保证清零，ArrayBuffer 擦除也只是 best-effort | 缩短密码/密钥生命周期、Worker 隔离、立即清表单并优先 FAST。要获得 channel binding 和可证明安全内存，需浏览器标准新增能力或使用原生客户端 |
 | WEB-TRANSFER | OMEMO 恢复包是一次性设备 **move**，不是 escrow 或通用备份 | 刻意密码学设计＋平台限制 | **可改善 UX，不应改名为 backup** | 同一 Double Ratchet 状态不能在源/目标并行使用；弱包口令可被离线猜测，服务器限流无效；已因前向保密删除的旧密钥不能恢复，服务器也不能证明离线副本已物理擦除 | 使用高熵口令/安全设备通道、冻结 source、永久 generation fence 和重新验证联系人。若需要可恢复备份，必须另行设计并审计多设备/备份协议 |
@@ -83,7 +83,7 @@ CI 验证隔离环境中的代码与运行行为；生产环境、公网互操�
 - 单节点模式不受 Redis 集群架构债务直接阻断，但仍必须完成目标硬件、备份恢复、证书、公网互操作、客户端和安全审计门禁后，才能作高风险公网生产声明。
 - 多节点模式只有在 `EXT-CLUSTER` 关闭后才可考虑从 `Experimental` 晋升；通过基本两节点用例不足以证明共识或任意分区安全。
 - “标准限制”“刻意设计”和“平台限制”行不能因测试通过而删除，只能在产品不再支持对应协议/客户端形态，或底层标准和平台发生实质变化时重审。
-- `Partial`、`Pass-through` 和 `Experimental` 的逐协议范围以 [XEP_MATRIX.md](../XEP_MATRIX.md) 为准；本表不重复宣称完整支持所有可选 XEP 行为。
+- `Partial`、`Pass-through` 和 `Experimental` 的逐协议范围以 [XEP_MATRIX.md](XEP_MATRIX.md) 为准；本表不重复宣称完整支持所有可选 XEP 行为。
 
 ## 维护规则
 

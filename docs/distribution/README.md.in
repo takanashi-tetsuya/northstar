@@ -21,8 +21,8 @@ The following guides match this release:
 - [Production operations](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/PRODUCTION_OPERATIONS.md)
 - [Database roles and grants](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/DATABASE_ROLES.md)
 - [Known limitations](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/KNOWN_ISSUES.md)
-- [Protocol support](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/XEP_MATRIX.md)
-- [Security policy](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/SECURITY.md)
+- [Protocol support](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/XEP_MATRIX.md)
+- [Security policy](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/.github/SECURITY.md)
 - [HTTP API specification](https://github.com/takanashi-tetsuya/northstar/blob/v@VERSION@/docs/openapi.yaml)
 
 Docker deployments and source builds use the

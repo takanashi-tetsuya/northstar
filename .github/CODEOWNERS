@@ -36,6 +36,6 @@
 
 # Documentation boundaries
 /README.md                            @takanashi-tetsuya
-/SECURITY.md                          @takanashi-tetsuya
-/CONTRIBUTING.md                      @takanashi-tetsuya
+/.github/SECURITY.md                   @takanashi-tetsuya
+/.github/CONTRIBUTING.md               @takanashi-tetsuya
 /docs/**                              @takanashi-tetsuya

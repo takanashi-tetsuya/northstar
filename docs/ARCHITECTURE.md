@@ -1,7 +1,7 @@
 # Northstar internal architecture
 
 This document maps the current implementation to its security and persistence
-boundaries. Protocol support claims belong in [../XEP_MATRIX.md](../XEP_MATRIX.md);
+boundaries. Protocol support claims belong in [../XEP_MATRIX.md](XEP_MATRIX.md);
 operational procedures belong in [PRODUCTION_OPERATIONS.md](PRODUCTION_OPERATIONS.md).
 
 The binary supports combined operation or independent core and maintenance

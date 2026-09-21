@@ -158,11 +158,12 @@ identity, successful build checks and artifact provenance, then resumes upload
 and fresh Windows/Linux downloads. It preserves the signed tag, packages and
 published images. Leave both inputs empty for a normal build preview.
 
-The root `build.sh`, `build_and_start.sh`, `start_server.sh`, `start.bat` and
-`Makefile` targets are compatibility wrappers for local development. They do
-not provision PostgreSQL, apply migrations, install a supervisor or qualify a
-production deployment. Follow the explicit migration and foreground-start
-steps in the repository README instead.
+The helpers in [`dev/`](dev/) build or start a local development instance.
+For example, run `bash scripts/dev/start_server.sh` or `scripts\dev\start.bat`
+from the checkout root. They locate the checkout themselves and read its `.env`.
+The root `Makefile` also provides `check`, `test`, `format` and `run` targets.
+Set up PostgreSQL and apply migrations using the steps in the project README
+before starting the server.
 
 ## Isolated database/runtime families
 

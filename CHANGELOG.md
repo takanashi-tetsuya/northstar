@@ -1,7 +1,7 @@
 # Changelog
 
 All notable Northstar changes are documented here. Protocol support claims are
-normative only in [XEP_MATRIX.md](XEP_MATRIX.md), and unresolved release
+normative only in [XEP_MATRIX.md](docs/XEP_MATRIX.md), and unresolved release
 boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 ## [0.2.0] - Release notes (publication date: GitHub Releases)
@@ -62,7 +62,7 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   backup image ship every SQL policy file used by its offline dump validator;
   the static capability gate now guards that image/runtime dependency contract.
 - The complete change set from the previous committed `0.1.0` baseline is
-  recorded in the [0.2 development changelog](changelog/v0.2.md).
+  recorded in the [0.2 development changelog](docs/changelog/v0.2.md).
 - Cargo, Compose, OCI, backup and OpenAPI metadata now identify the current
   pre-1.0 development line as `0.2.0`. Version `1.0.0` is reserved until one
   exact artifact and target environment satisfy every applicable production
@@ -414,7 +414,7 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - Initial pre-1.0 Northstar baseline at Git commit
   `998396915ab38a9deadf47ae871be561e11f7ef2`, with migrations `0001`–`0013`.
 - The complete delta from this baseline to `0.2.0` is maintained in
-  [the 0.2 development changelog](changelog/v0.2.md).
+  [the 0.2 development changelog](docs/changelog/v0.2.md).
 
 ## Historical development snapshots
 

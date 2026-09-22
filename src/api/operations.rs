@@ -6,7 +6,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::{db, error::AppError, state::AppState};
+use crate::{
+    db,
+    error::AppError,
+    services::{
+        api_queries::{ApiReadDenial, AuthorizedRead, PageBoundary},
+        operations::{OperationPageBoundary, OperationRecord, OperationTargetRecord},
+    },
+    state::AppState,
+};
 
 use super::{
     admin::{acquire_admin_mutation_in_tx, complete_admin_response, AdminMutationAcquire},
@@ -98,8 +106,8 @@ pub struct OperationSummary {
     completed_at: Option<DateTime<Utc>>,
 }
 
-impl From<db::OperationRecord> for OperationSummary {
-    fn from(value: db::OperationRecord) -> Self {
+impl From<OperationRecord> for OperationSummary {
+    fn from(value: OperationRecord) -> Self {
         Self {
             id: value.id,
             request_id: value.request_id,
@@ -122,8 +130,8 @@ impl From<db::OperationRecord> for OperationSummary {
     }
 }
 
-impl From<db::OperationRecord> for OperationView {
-    fn from(value: db::OperationRecord) -> Self {
+impl From<OperationRecord> for OperationView {
+    fn from(value: OperationRecord) -> Self {
         Self {
             id: value.id,
             request_id: value.request_id,
@@ -168,8 +176,8 @@ pub struct TargetView {
     completed_at: Option<DateTime<Utc>>,
 }
 
-impl From<db::OperationTargetRecord> for TargetView {
-    fn from(value: db::OperationTargetRecord) -> Self {
+impl From<OperationTargetRecord> for TargetView {
+    fn from(value: OperationTargetRecord) -> Self {
         Self {
             id: value.id,
             operation_id: value.operation_id,
@@ -209,8 +217,8 @@ pub struct TargetSummary {
     completed_at: Option<DateTime<Utc>>,
 }
 
-impl From<db::OperationTargetRecord> for TargetSummary {
-    fn from(value: db::OperationTargetRecord) -> Self {
+impl From<OperationTargetRecord> for TargetSummary {
+    fn from(value: OperationTargetRecord) -> Self {
         Self {
             id: value.id,
             operation_id: value.operation_id,
@@ -236,20 +244,11 @@ pub struct Page<T> {
     next_cursor: Option<String>,
 }
 
-async fn reauthorize(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    actor: &ApiAdmin,
-) -> Result<(), AppError> {
-    if !db::authorize_user_in_tx(tx, actor.id, actor.auth_generation, actor.session_token()).await?
-    {
-        return Err(AppError::Unauthorized);
-    }
-    if !db::authorize_admin_in_tx(tx, actor.id, actor.auth_generation, actor.session_token())
-        .await?
-    {
-        return Err(AppError::Forbidden);
-    }
-    Ok(())
+fn authorized_read<T>(result: AuthorizedRead<T>) -> Result<T, AppError> {
+    result.map_err(|denial| match denial {
+        ApiReadDenial::Unauthorized => AppError::Unauthorized,
+        ApiReadDenial::Forbidden => AppError::Forbidden,
+    })
 }
 
 fn validate_filter<'a>(
@@ -283,9 +282,9 @@ mod read_tests {
     use super::*;
     use serde_json::json;
 
-    fn operation_record() -> db::OperationRecord {
+    fn operation_record() -> OperationRecord {
         let now = Utc::now();
-        db::OperationRecord {
+        OperationRecord {
             id: Uuid::new_v4(),
             request_id: Uuid::new_v4(),
             idempotency_id: Some(Uuid::new_v4()),
@@ -311,9 +310,9 @@ mod read_tests {
         }
     }
 
-    fn target_record() -> db::OperationTargetRecord {
+    fn target_record() -> OperationTargetRecord {
         let now = Utc::now();
-        db::OperationTargetRecord {
+        OperationTargetRecord {
             id: Uuid::new_v4(),
             operation_id: Uuid::new_v4(),
             target_key: "x".repeat(4096),
@@ -408,7 +407,7 @@ mod read_tests {
 }
 
 pub async fn list_operations(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<OperationListQuery>,
 ) -> Result<Json<Page<OperationSummary>>, AppError> {
@@ -421,30 +420,23 @@ pub async fn list_operations(
         operation_filter_scope(status, kind).map_err(|error| AppError::Internal(error.into()))?;
     let principal = actor.id.as_bytes();
     let binding = pagination::pg_binding(OPERATIONS_ENDPOINT, principal, &filter);
-    let boundary = pagination::pg_boundary(
-        &state.api_query_context(),
-        query.cursor.as_deref(),
-        &binding,
-    )
-    .await?
-    .map(|b| db::OperationPageBoundary {
-        created_at: b.created_at,
-        id: b.id,
-    });
-    let mut tx = state.pool.begin().await?;
-    reauthorize(&mut tx, &actor).await?;
-    let page = db::list_operations(&mut tx, status, kind, boundary, limit).await?;
-    tx.commit().await?;
-    let next = page.next.map(|b| db::PageBoundary {
-        created_at: b.created_at,
-        id: b.id,
-    });
-    let next_cursor = pagination::issue_pg_cursor(
-        &state.api_query_context(),
-        &binding,
-        next,
-        page.database_now,
+    let boundary = pagination::pg_boundary(&state, query.cursor.as_deref(), &binding)
+        .await?
+        .map(|b| OperationPageBoundary {
+            created_at: b.created_at,
+            id: b.id,
+        });
+    let page = authorized_read(
+        state
+            .api_query_service()
+            .operations(actor.read_authority(), status, kind, boundary, limit)
+            .await?,
     )?;
+    let next = page.next.map(|b| PageBoundary {
+        created_at: b.created_at,
+        id: b.id,
+    });
+    let next_cursor = pagination::issue_pg_cursor(&state, &binding, next, page.database_now)?;
     Ok(Json(Page {
         items: page.items.into_iter().map(Into::into).collect(),
         next_cursor,
@@ -452,24 +444,25 @@ pub async fn list_operations(
 }
 
 pub async fn get_operation(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
 ) -> Result<Json<OperationView>, AppError> {
     if id.is_nil() {
         return Err(AppError::BadRequest("operation id must not be nil".into()));
     }
-    let mut tx = state.pool.begin().await?;
-    reauthorize(&mut tx, &actor).await?;
-    let item = db::operation_by_id(&mut tx, id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("operation does not exist".into()))?;
-    tx.commit().await?;
+    let item = authorized_read(
+        state
+            .api_query_service()
+            .operation(actor.read_authority(), id)
+            .await?,
+    )?
+    .ok_or_else(|| AppError::NotFound("operation does not exist".into()))?;
     Ok(Json(item.into()))
 }
 
 pub async fn list_targets(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<TargetListQuery>,
@@ -484,33 +477,24 @@ pub async fn list_targets(
         .and_then(|scope| scope.field("status", status.map(str::as_bytes)))
         .map_err(|e| AppError::Internal(e.into()))?;
     let binding = pagination::pg_binding(TARGETS_ENDPOINT, actor.id.as_bytes(), &filter);
-    let boundary = pagination::pg_boundary(
-        &state.api_query_context(),
-        query.cursor.as_deref(),
-        &binding,
-    )
-    .await?
-    .map(|b| db::OperationPageBoundary {
+    let boundary = pagination::pg_boundary(&state, query.cursor.as_deref(), &binding)
+        .await?
+        .map(|b| OperationPageBoundary {
+            created_at: b.created_at,
+            id: b.id,
+        });
+    let page = authorized_read(
+        state
+            .api_query_service()
+            .operation_targets(actor.read_authority(), id, status, boundary, limit)
+            .await?,
+    )?
+    .ok_or_else(|| AppError::NotFound("operation does not exist".into()))?;
+    let next = page.next.map(|b| PageBoundary {
         created_at: b.created_at,
         id: b.id,
     });
-    let mut tx = state.pool.begin().await?;
-    reauthorize(&mut tx, &actor).await?;
-    if db::operation_by_id(&mut tx, id).await?.is_none() {
-        return Err(AppError::NotFound("operation does not exist".into()));
-    }
-    let page = db::list_operation_targets(&mut tx, id, status, boundary, limit).await?;
-    tx.commit().await?;
-    let next = page.next.map(|b| db::PageBoundary {
-        created_at: b.created_at,
-        id: b.id,
-    });
-    let next_cursor = pagination::issue_pg_cursor(
-        &state.api_query_context(),
-        &binding,
-        next,
-        page.database_now,
-    )?;
+    let next_cursor = pagination::issue_pg_cursor(&state, &binding, next, page.database_now)?;
     Ok(Json(Page {
         items: page.items.into_iter().map(Into::into).collect(),
         next_cursor,
@@ -518,7 +502,7 @@ pub async fn list_targets(
 }
 
 pub async fn get_target(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     actor: ApiAdmin,
     ApiPath((operation_id, target_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<TargetView>, AppError> {
@@ -527,13 +511,13 @@ pub async fn get_target(
             "operation target id must not be nil".into(),
         ));
     }
-    let mut tx = state.pool.begin().await?;
-    reauthorize(&mut tx, &actor).await?;
-    let item = db::operation_target_by_id(&mut tx, target_id)
-        .await?
-        .filter(|target| target.operation_id == operation_id)
-        .ok_or_else(|| AppError::NotFound("operation target does not exist".into()))?;
-    tx.commit().await?;
+    let item = authorized_read(
+        state
+            .api_query_service()
+            .operation_target(actor.read_authority(), operation_id, target_id)
+            .await?,
+    )?
+    .ok_or_else(|| AppError::NotFound("operation target does not exist".into()))?;
     Ok(Json(item.into()))
 }
 

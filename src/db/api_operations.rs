@@ -1,3 +1,7 @@
+pub use crate::services::operations::{
+    AuthorizationPolicy, OperationPage, OperationPageBoundary, OperationRecord, OperationStatus,
+    OperationTargetPage, OperationTargetRecord,
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
@@ -11,43 +15,6 @@ const MAX_TARGET_PAYLOAD_BYTES: usize = 64 * 1024;
 const MAX_RESULT_BYTES: usize = 1024 * 1024;
 const MAX_ERROR_CODE_BYTES: usize = 128;
 const MAX_TARGET_BYTES: usize = 4096;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AuthorizationPolicy {
-    ReauthorizeUntilEffect,
-    CommittedConsequence,
-}
-
-impl AuthorizationPolicy {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::ReauthorizeUntilEffect => "reauthorize_until_effect",
-            Self::CommittedConsequence => "committed_consequence",
-        }
-    }
-
-    fn parse(value: &str) -> Result<Self> {
-        match value {
-            "reauthorize_until_effect" => Ok(Self::ReauthorizeUntilEffect),
-            "committed_consequence" => Ok(Self::CommittedConsequence),
-            _ => anyhow::bail!("stored operation authorization policy is invalid"),
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        self.as_str()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OperationStatus {
-    Pending,
-    Running,
-    Succeeded,
-    Failed,
-    Canceled,
-    Indeterminate,
-}
 
 /// Bounded operational view used by the Prometheus collector.  Keep this a
 /// single aggregate query so scraping cannot enumerate operator payloads or
@@ -84,85 +51,6 @@ pub async fn api_operation_snapshot(pool: &PgPool) -> Result<ApiOperationSnapsho
     })
 }
 
-impl OperationStatus {
-    fn parse(value: &str) -> Result<Self> {
-        match value {
-            "pending" => Ok(Self::Pending),
-            "running" => Ok(Self::Running),
-            "succeeded" => Ok(Self::Succeeded),
-            "failed" => Ok(Self::Failed),
-            "canceled" => Ok(Self::Canceled),
-            "indeterminate" => Ok(Self::Indeterminate),
-            _ => anyhow::bail!("stored operation status is invalid"),
-        }
-    }
-
-    pub fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Succeeded | Self::Failed | Self::Canceled | Self::Indeterminate
-        )
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Running => "running",
-            Self::Succeeded => "succeeded",
-            Self::Failed => "failed",
-            Self::Canceled => "canceled",
-            Self::Indeterminate => "indeterminate",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct OperationPageBoundary {
-    pub created_at: DateTime<Utc>,
-    pub id: Uuid,
-}
-
-#[derive(Clone, Debug)]
-pub struct OperationPage {
-    pub items: Vec<OperationRecord>,
-    pub next: Option<OperationPageBoundary>,
-    pub database_now: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct OperationTargetPage {
-    pub items: Vec<OperationTargetRecord>,
-    pub next: Option<OperationPageBoundary>,
-    pub database_now: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct OperationRecord {
-    pub id: Uuid,
-    pub request_id: Uuid,
-    #[cfg(test)]
-    pub idempotency_id: Option<Uuid>,
-    pub actor_id: Option<Uuid>,
-    pub actor_subject_id: Uuid,
-    pub actor_auth_generation: i64,
-    pub authorization_policy: AuthorizationPolicy,
-    pub kind: String,
-    pub target: Option<String>,
-    pub status: OperationStatus,
-    pub payload_version: i16,
-    pub payload: Value,
-    pub result: Option<Value>,
-    pub error_code: Option<String>,
-    pub attempts: i32,
-    pub max_attempts: i32,
-    pub next_attempt_at: DateTime<Utc>,
-    pub deadline_at: DateTime<Utc>,
-    pub cancel_requested_at: Option<DateTime<Utc>>,
-    pub point_of_no_return_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
-}
-
 #[derive(Clone, Debug)]
 pub struct OperationLease {
     pub operation: OperationRecord,
@@ -183,26 +71,6 @@ pub struct EnqueueOperation<'a> {
     pub payload: &'a Value,
     pub max_attempts: i32,
     pub deadline_seconds: i64,
-}
-
-#[derive(Clone, Debug)]
-pub struct OperationTargetRecord {
-    pub id: Uuid,
-    pub operation_id: Uuid,
-    pub target_key: String,
-    pub ordinal: i64,
-    pub status: OperationStatus,
-    pub payload: Value,
-    pub result: Option<Value>,
-    pub error_code: Option<String>,
-    pub attempts: i32,
-    pub max_attempts: i32,
-    pub next_attempt_at: DateTime<Utc>,
-    pub deadline_at: DateTime<Utc>,
-    pub cancel_requested_at: Option<DateTime<Utc>>,
-    pub point_of_no_return_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug)]
@@ -2606,6 +2474,143 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
         operation
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a random isolated TEST_DATABASE_URL PostgreSQL schema"]
+    async fn query_ports_preserve_target_scope_and_authorization_denials() {
+        use crate::services::api_queries::{ApiQueryService, ApiReadAuthority, ApiReadDenial};
+
+        let pool = test_pool().await;
+        let operation = enqueue_broadcast(&pool, 4).await;
+        let token = crate::db::create_api_session(&pool, operation.actor_subject_id, 1)
+            .await
+            .unwrap();
+        let principal = crate::db::user_for_token(&pool, &token)
+            .await
+            .unwrap()
+            .unwrap();
+        let actor = || ApiReadAuthority {
+            user_id: principal.id,
+            auth_generation: principal.auth_generation,
+            session_token: &token,
+        };
+        let mut setup = pool.begin().await.unwrap();
+        let parent = claim_operation_in_tx(&mut setup, Uuid::new_v4(), 120)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(parent.operation.id, operation.id);
+        let target = enqueue_operation_target_in_tx(
+            &mut setup,
+            &EnqueueOperationTarget {
+                operation_id: operation.id,
+                target_key: "test-target",
+                ordinal: 0,
+                payload: &json!({}),
+                max_attempts: 3,
+                deadline_seconds: 3600,
+            },
+        )
+        .await
+        .unwrap();
+        setup.commit().await.unwrap();
+
+        let service = ApiQueryService::new(
+            crate::db::api_queries::PostgresApiQueryRepository::new(pool.clone()),
+        );
+        let page = service
+            .operations(actor(), Some("running"), Some("admin.broadcast"), None, 25)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, operation.id);
+        assert_eq!(
+            service
+                .operation(actor(), operation.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .id,
+            operation.id
+        );
+        let targets = service
+            .operation_targets(actor(), operation.id, None, None, 25)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(targets.items.len(), 1);
+        assert_eq!(targets.items[0].id, target.id);
+        assert_eq!(
+            service
+                .operation_target(actor(), operation.id, target.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .id,
+            target.id
+        );
+        let absent = Uuid::new_v4();
+        assert!(service
+            .operation_target(actor(), absent, target.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_none());
+        assert!(service
+            .operation_targets(actor(), absent, None, None, 25)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_none());
+
+        sqlx::query("UPDATE users SET is_admin=FALSE WHERE id=$1")
+            .bind(principal.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .operations(actor(), None, None, None, 25)
+                .await
+                .unwrap()
+                .unwrap_err(),
+            ApiReadDenial::Forbidden
+        );
+        assert_eq!(
+            service
+                .operation_target(actor(), operation.id, target.id)
+                .await
+                .unwrap()
+                .unwrap_err(),
+            ApiReadDenial::Forbidden
+        );
+        sqlx::query("DELETE FROM api_sessions WHERE user_id=$1")
+            .bind(principal.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .operation(actor(), operation.id)
+                .await
+                .unwrap()
+                .unwrap_err(),
+            ApiReadDenial::Unauthorized
+        );
+        assert_eq!(
+            service
+                .operation_targets(actor(), operation.id, None, None, 25)
+                .await
+                .unwrap()
+                .unwrap_err(),
+            ApiReadDenial::Unauthorized
+        );
+        pool.close().await;
     }
 
     #[tokio::test]

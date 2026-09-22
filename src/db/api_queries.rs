@@ -14,6 +14,36 @@ impl PostgresApiQueryRepository {
         Self { pool }
     }
 
+    async fn begin_operation_read(
+        &self,
+        actor: ApiReadAuthority<'_>,
+    ) -> Result<AuthorizedRead<Transaction<'_, Postgres>>> {
+        let mut tx = self.pool.begin().await?;
+        if !db::authorize_user_in_tx(
+            &mut tx,
+            actor.user_id,
+            actor.auth_generation,
+            actor.session_token,
+        )
+        .await?
+        {
+            tx.rollback().await?;
+            return Ok(Err(ApiReadDenial::Unauthorized));
+        }
+        if !db::authorize_admin_in_tx(
+            &mut tx,
+            actor.user_id,
+            actor.auth_generation,
+            actor.session_token,
+        )
+        .await?
+        {
+            tx.rollback().await?;
+            return Ok(Err(ApiReadDenial::Forbidden));
+        }
+        Ok(Ok(tx))
+    }
+
     async fn begin_authorized_read(
         &self,
         actor: &ApiReadAuthority<'_>,
@@ -48,6 +78,72 @@ impl PostgresApiQueryRepository {
     }
 }
 impl ApiQueryRepository for PostgresApiQueryRepository {
+    async fn operations(
+        &self,
+        actor: ApiReadAuthority<'_>,
+        status: Option<&str>,
+        kind: Option<&str>,
+        after: Option<OperationPageBoundary>,
+        limit: i64,
+    ) -> Result<AuthorizedRead<OperationPage>> {
+        let mut tx = match self.begin_operation_read(actor).await? {
+            Ok(tx) => tx,
+            Err(denial) => return Ok(Err(denial)),
+        };
+        let value = db::list_operations(&mut tx, status, kind, after, limit).await?;
+        tx.commit().await?;
+        Ok(Ok(value))
+    }
+    async fn operation(
+        &self,
+        actor: ApiReadAuthority<'_>,
+        id: Uuid,
+    ) -> Result<AuthorizedRead<Option<OperationRecord>>> {
+        let mut tx = match self.begin_operation_read(actor).await? {
+            Ok(tx) => tx,
+            Err(denial) => return Ok(Err(denial)),
+        };
+        let value = db::operation_by_id(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(Ok(value))
+    }
+    async fn operation_targets(
+        &self,
+        actor: ApiReadAuthority<'_>,
+        id: Uuid,
+        status: Option<&str>,
+        after: Option<OperationPageBoundary>,
+        limit: i64,
+    ) -> Result<AuthorizedRead<Option<OperationTargetPage>>> {
+        let mut tx = match self.begin_operation_read(actor).await? {
+            Ok(tx) => tx,
+            Err(denial) => return Ok(Err(denial)),
+        };
+        let value = if db::operation_by_id(&mut tx, id).await?.is_some() {
+            Some(db::list_operation_targets(&mut tx, id, status, after, limit).await?)
+        } else {
+            None
+        };
+        tx.commit().await?;
+        Ok(Ok(value))
+    }
+    async fn operation_target(
+        &self,
+        actor: ApiReadAuthority<'_>,
+        operation_id: Uuid,
+        target_id: Uuid,
+    ) -> Result<AuthorizedRead<Option<OperationTargetRecord>>> {
+        let mut tx = match self.begin_operation_read(actor).await? {
+            Ok(tx) => tx,
+            Err(denial) => return Ok(Err(denial)),
+        };
+        let value = db::operation_target_by_id(&mut tx, target_id)
+            .await?
+            .filter(|target| target.operation_id == operation_id);
+        tx.commit().await?;
+        Ok(Ok(value))
+    }
+
     async fn principal(&self, token: &str) -> Result<Option<ApiPrincipal>> {
         db::user_for_token(&self.pool, token).await
     }

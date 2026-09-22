@@ -155,8 +155,9 @@ Key ownership:
   the PostgreSQL clock and existing cursor scope. These handlers extract a
   query context containing the service, cursor signer and read-only runtime
   projections. It shares live policy flags and session maps without retaining
-  global application state. Operation-journal and data-lifecycle endpoints
-  still need their own persistence boundaries.
+  global application state. Operation-journal reads use the same context and
+  preserve separate bearer/role errors and parent-scoped targets. Their writes
+  and data-lifecycle endpoints still need persistence boundaries.
 - OMEMO recovery uses lifecycle repository operations. Transfer and authority
   reads hold the exact bearer and account-generation locks through the snapshot.
   Public completion polling has its own context, bounded IP/concurrency

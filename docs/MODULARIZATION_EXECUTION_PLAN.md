@@ -376,7 +376,7 @@ Existing cross-table transactions, admission permits, account
 fences and post-commit recovery behavior remain intact.
 
 REST identity, history, user/report/invitation/dead-letter collections and
-server statistics use complete query transactions. Those handlers receive
+server statistics and operation-journal reads use complete query transactions. Those handlers receive
 shared projections and a query context with live policy flags, without an
 open transaction or AppState.
 OMEMO transfer lifecycle operations and authorized recovery reads also use

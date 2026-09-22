@@ -79,7 +79,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_HOME="$project_dir/.cargo-local"
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$test_database?options=-csearch_path%3D$test_schema"
+export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$test_schema"
 export TEST_DATABASE_SCHEMA="$test_schema"
 
 test_output="$(cargo test --locked --offline 'db::api_operations::tests::' \
@@ -88,8 +88,8 @@ test_output="$(cargo test --locked --offline 'db::api_operations::tests::' \
   exit 1
 }
 printf '%s\n' "$test_output"
-if ! grep -Eq 'test result: ok\. 10 passed; 0 failed' <<<"$test_output"; then
-  echo "expected exactly ten ignored API operation tests to execute" >&2
+if ! grep -Eq 'test result: ok\. 11 passed; 0 failed' <<<"$test_output"; then
+  echo "expected exactly eleven ignored API operation tests to execute" >&2
   exit 1
 fi
 

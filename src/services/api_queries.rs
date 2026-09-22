@@ -1,4 +1,9 @@
-//! Authorized REST projections and complete repeatable-read queries.
+//! Authorized REST projections and complete read transactions.
+pub(crate) use crate::services::operations::{
+    OperationPage, OperationPageBoundary, OperationRecord, OperationTargetPage,
+    OperationTargetRecord,
+};
+
 pub(crate) use crate::services::mam::{ArchivePage, MamArchiveQuery};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -243,11 +248,46 @@ pub(crate) struct AdminStatistics {
     pub(crate) live: LiveAdminStats,
 }
 
-/// An absent authorized result means that the bearer or its generation/role
-/// was rejected. Empty collections and missing archive cursors are separate
-/// values. Runtime projections are synchronous and execute under the same
-/// authorization locks; SQL transactions never cross this port.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum ApiReadDenial {
+    Unauthorized,
+    Forbidden,
+}
+pub(crate) type AuthorizedRead<T> = std::result::Result<T, ApiReadDenial>;
+
+/// Authorization denial is separate from an empty collection or missing item.
+/// Operation queries retain distinct bearer and administrator-role errors.
+/// Runtime projections are synchronous and execute under the authorization
+/// locks; database transactions never cross this port.
 pub(crate) trait ApiQueryRepository: Send + Sync {
+    fn operations(
+        &self,
+        actor: ApiReadAuthority<'_>,
+        status: Option<&str>,
+        kind: Option<&str>,
+        after: Option<OperationPageBoundary>,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<AuthorizedRead<OperationPage>>> + Send;
+    fn operation(
+        &self,
+        actor: ApiReadAuthority<'_>,
+        id: Uuid,
+    ) -> impl std::future::Future<Output = Result<AuthorizedRead<Option<OperationRecord>>>> + Send;
+    fn operation_targets(
+        &self,
+        actor: ApiReadAuthority<'_>,
+        id: Uuid,
+        status: Option<&str>,
+        after: Option<OperationPageBoundary>,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<AuthorizedRead<Option<OperationTargetPage>>>> + Send;
+    fn operation_target(
+        &self,
+        actor: ApiReadAuthority<'_>,
+        operation_id: Uuid,
+        target_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<AuthorizedRead<Option<OperationTargetRecord>>>> + Send;
+
     fn principal(
         &self,
         token: &str,
@@ -325,6 +365,48 @@ pub(crate) struct ApiQueryService<R> {
     repository: R,
 }
 impl<R: ApiQueryRepository> ApiQueryService<R> {
+    pub(crate) async fn operations(
+        &self,
+        actor: ApiReadAuthority<'_>,
+        status: Option<&str>,
+        kind: Option<&str>,
+        after: Option<OperationPageBoundary>,
+        limit: i64,
+    ) -> Result<AuthorizedRead<OperationPage>> {
+        self.repository
+            .operations(actor, status, kind, after, limit)
+            .await
+    }
+    pub(crate) async fn operation(
+        &self,
+        actor: ApiReadAuthority<'_>,
+        id: Uuid,
+    ) -> Result<AuthorizedRead<Option<OperationRecord>>> {
+        self.repository.operation(actor, id).await
+    }
+    pub(crate) async fn operation_targets(
+        &self,
+        actor: ApiReadAuthority<'_>,
+        id: Uuid,
+        status: Option<&str>,
+        after: Option<OperationPageBoundary>,
+        limit: i64,
+    ) -> Result<AuthorizedRead<Option<OperationTargetPage>>> {
+        self.repository
+            .operation_targets(actor, id, status, after, limit)
+            .await
+    }
+    pub(crate) async fn operation_target(
+        &self,
+        actor: ApiReadAuthority<'_>,
+        operation_id: Uuid,
+        target_id: Uuid,
+    ) -> Result<AuthorizedRead<Option<OperationTargetRecord>>> {
+        self.repository
+            .operation_target(actor, operation_id, target_id)
+            .await
+    }
+
     pub(crate) fn new(repository: R) -> Self {
         Self { repository }
     }

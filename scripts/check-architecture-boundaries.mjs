@@ -2066,6 +2066,7 @@ for (const [name, source] of [
   ['SmSuspensionRepository', read('src/services/sm_suspension.rs')],
   ['ApiQueryService', read('src/services/api_queries.rs')],
   ['ApiQueryContext', read('src/state/api_queries.rs')],
+  ['Operation projections', read('src/services/operations.rs')],
   ['OmemoRecoveryService', read('src/services/omemo_recovery.rs')],
   ['OmemoRecoveryPollContext', read('src/state/omemo_poll.rs')],
 ]) {
@@ -2080,6 +2081,8 @@ for (const [name, source] of [
   }
 }
 for (const [path, name] of [
+  ['src/api/operations.rs', 'list_operations'], ['src/api/operations.rs', 'get_operation'],
+  ['src/api/operations.rs', 'list_targets'], ['src/api/operations.rs', 'get_target'],
   ['src/api/admin.rs', 'admin_stats'], ['src/api/admin.rs', 'admin_users'],
   ['src/api/admin.rs', 'admin_reports'], ['src/api/admin.rs', 'admin_invitations'],
   ['src/api/admin.rs', 'admin_sessions'], ['src/api/admin.rs', 'admin_offline_messages_stats'],

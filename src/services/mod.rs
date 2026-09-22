@@ -31,3 +31,5 @@ pub(crate) mod sm_suspension;
 pub(crate) mod api_queries;
 
 pub(crate) mod omemo_recovery;
+
+pub(crate) mod operations;

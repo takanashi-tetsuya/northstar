@@ -35,6 +35,7 @@ OUTPUT_STOP_SECONDS = 1.0
 KILL_REAP_SECONDS = 2.0
 CONSOLE_FORWARD_SECONDS = 1.0
 CONSOLE_START_SECONDS = 5.0
+CONSOLE_DRAIN_SECONDS = 5.0
 CONSOLE_STOP_SECONDS = 1.0
 DEFAULT_MAX_LOG_BYTES = 16 * 1024 * 1024
 MIN_MAX_LOG_BYTES = 1024
@@ -406,16 +407,22 @@ def close_console_forwarder_input(forwarder: ConsoleForwarder) -> None:
         pass
 
 
-def finalize_console_forwarder(forwarder: ConsoleForwarder) -> bool:
+def finalize_console_forwarder(
+    forwarder: ConsoleForwarder, *, output_completed: bool = True,
+) -> bool:
     """Close, reap, and if necessary terminate the known helper process."""
 
     close_console_forwarder_input(forwarder)
+    # All frames are acknowledged before healthy output completes. Allow the
+    # idle interpreter time to exit under load; failed delivery still takes
+    # the short termination path and cannot be turned into a successful run.
+    drain_seconds = CONSOLE_DRAIN_SECONDS if output_completed else CONSOLE_STOP_SECONDS
     try:
-        status = forwarder.process.wait(timeout=CONSOLE_STOP_SECONDS)
+        status = forwarder.process.wait(timeout=drain_seconds)
     except subprocess.TimeoutExpired:
         print(
             "phase=command_console_forwarder_drain_elapsed "
-            f"pid={forwarder.process.pid} drain_seconds={CONSOLE_STOP_SECONDS:g} "
+            f"pid={forwarder.process.pid} drain_seconds={drain_seconds:g} "
             "action=terminate_popen_helper",
             file=sys.stderr,
             flush=True,
@@ -1640,7 +1647,9 @@ def main() -> int:
                 if console_forwarder is not None:
                     try:
                         output_completed = (
-                            finalize_console_forwarder(console_forwarder)
+                            finalize_console_forwarder(
+                                console_forwarder, output_completed=output_completed,
+                            )
                             and output_completed
                         )
                     except Exception:

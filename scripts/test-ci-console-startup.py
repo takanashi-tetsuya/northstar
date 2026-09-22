@@ -19,6 +19,45 @@ POPEN = subprocess.Popen
 
 
 class ConsoleStartupTests(unittest.TestCase):
+    def test_acknowledged_output_allows_slow_shutdown_but_requires_zero_exit(self):
+        for exit_status in (0, 1):
+            with self.subTest(exit_status=exit_status), tempfile.TemporaryFile() as output:
+                children = []
+                forwarder = None
+
+                def delayed_exit(arguments, **kwargs):
+                    child = POPEN([sys.executable, '-c',
+                        'import runpy,sys,time; '
+                        'path=sys.argv.pop(1); status=int(sys.argv.pop(1)); '
+                        'module=runpy.run_path(path); '
+                        'result=module["console_forwarder_main"](sys.argv[1:]); '
+                        'time.sleep(1.5); raise SystemExit(result or status)',
+                        arguments[1], str(exit_status), *arguments[2:]],
+                        **(kwargs | {'stdout': output}))
+                    children.append(child)
+                    return child
+
+                try:
+                    with patch.object(SUPERVISOR.subprocess, 'Popen', delayed_exit):
+                        forwarder = SUPERVISOR.spawn_console_forwarder()
+                    state = SUPERVISOR.OutputCopyState(1024)
+                    self.assertTrue(SUPERVISOR.forward_console_frame(
+                        forwarder, b'final-frame\n', threading.Event(), state))
+                    self.assertIsNone(state.failure())
+                    self.assertEqual(
+                        SUPERVISOR.finalize_console_forwarder(forwarder), exit_status == 0)
+                    forwarder = None
+                    self.assertEqual(children[0].returncode, exit_status)
+                    output.seek(0)
+                    self.assertEqual(output.read(), b'final-frame\n')
+                finally:
+                    if forwarder is not None:
+                        SUPERVISOR.finalize_console_forwarder(forwarder)
+                    for child in children:
+                        if child.poll() is None:
+                            child.kill()
+                            child.wait(timeout=2)
+
     def test_slow_start_does_not_spend_first_delivery_deadline(self):
         children = []
         with tempfile.TemporaryFile() as output:

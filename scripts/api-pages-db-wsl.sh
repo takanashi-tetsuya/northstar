@@ -7,7 +7,7 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PGPASSWORD="xmpp-test-password"
 database_args=(--host 127.0.0.1 --username xmpp_test --dbname xmpp_test)
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test"
+export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test"
 schema="api_pages_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 [[ "$schema" =~ ^api_pages_[0-9a-f]{32}$ ]] || {
     echo "failed to create a safe schema name" >&2
@@ -47,16 +47,19 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
     export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
 
-test_name='db::api_pages::tests::postgres_keyset_pages_are_stable_isolated_and_indexed'
-if ! test_output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture 2>&1)"; then
+for test_name in \
+    db::api_pages::tests::postgres_keyset_pages_are_stable_isolated_and_indexed \
+    db::api_queries::tests::authorized_projection_holds_account_and_bearer_until_snapshot_finishes; do
+    if ! test_output="$(cargo test --locked --offline "$test_name" -- --ignored --exact --nocapture 2>&1)"; then
+        printf '%s\n' "$test_output"
+        exit 1
+    fi
     printf '%s\n' "$test_output"
-    exit 1
-fi
-printf '%s\n' "$test_output"
-grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$test_output" || {
-    echo "expected exactly one isolated api_pages PostgreSQL test to execute" >&2
-    exit 1
-}
+    grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$test_output" || {
+        echo "expected exactly one isolated api_pages PostgreSQL test to execute" >&2
+        exit 1
+    }
+done
 
 cleanup
 created=0

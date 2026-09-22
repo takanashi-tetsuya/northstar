@@ -421,12 +421,16 @@ pub async fn list_operations(
         operation_filter_scope(status, kind).map_err(|error| AppError::Internal(error.into()))?;
     let principal = actor.id.as_bytes();
     let binding = pagination::pg_binding(OPERATIONS_ENDPOINT, principal, &filter);
-    let boundary = pagination::pg_boundary(&state, query.cursor.as_deref(), &binding)
-        .await?
-        .map(|b| db::OperationPageBoundary {
-            created_at: b.created_at,
-            id: b.id,
-        });
+    let boundary = pagination::pg_boundary(
+        &state.api_query_context(),
+        query.cursor.as_deref(),
+        &binding,
+    )
+    .await?
+    .map(|b| db::OperationPageBoundary {
+        created_at: b.created_at,
+        id: b.id,
+    });
     let mut tx = state.pool.begin().await?;
     reauthorize(&mut tx, &actor).await?;
     let page = db::list_operations(&mut tx, status, kind, boundary, limit).await?;
@@ -435,7 +439,12 @@ pub async fn list_operations(
         created_at: b.created_at,
         id: b.id,
     });
-    let next_cursor = pagination::issue_pg_cursor(&state, &binding, next, page.database_now)?;
+    let next_cursor = pagination::issue_pg_cursor(
+        &state.api_query_context(),
+        &binding,
+        next,
+        page.database_now,
+    )?;
     Ok(Json(Page {
         items: page.items.into_iter().map(Into::into).collect(),
         next_cursor,
@@ -475,12 +484,16 @@ pub async fn list_targets(
         .and_then(|scope| scope.field("status", status.map(str::as_bytes)))
         .map_err(|e| AppError::Internal(e.into()))?;
     let binding = pagination::pg_binding(TARGETS_ENDPOINT, actor.id.as_bytes(), &filter);
-    let boundary = pagination::pg_boundary(&state, query.cursor.as_deref(), &binding)
-        .await?
-        .map(|b| db::OperationPageBoundary {
-            created_at: b.created_at,
-            id: b.id,
-        });
+    let boundary = pagination::pg_boundary(
+        &state.api_query_context(),
+        query.cursor.as_deref(),
+        &binding,
+    )
+    .await?
+    .map(|b| db::OperationPageBoundary {
+        created_at: b.created_at,
+        id: b.id,
+    });
     let mut tx = state.pool.begin().await?;
     reauthorize(&mut tx, &actor).await?;
     if db::operation_by_id(&mut tx, id).await?.is_none() {
@@ -492,7 +505,12 @@ pub async fn list_targets(
         created_at: b.created_at,
         id: b.id,
     });
-    let next_cursor = pagination::issue_pg_cursor(&state, &binding, next, page.database_now)?;
+    let next_cursor = pagination::issue_pg_cursor(
+        &state.api_query_context(),
+        &binding,
+        next,
+        page.database_now,
+    )?;
     Ok(Json(Page {
         items: page.items.into_iter().map(Into::into).collect(),
         next_cursor,

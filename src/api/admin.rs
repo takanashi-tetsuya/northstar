@@ -171,43 +171,56 @@ fn valid_admin_text(value: &str, max_chars: usize, max_bytes: usize, multiline: 
 }
 
 pub async fn admin_stats(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     actor: ApiAdmin,
 ) -> Result<Json<Value>, AppError> {
-    let mut read_tx = actor.begin_authorized_read(&state).await?;
-    let island_mode = state.island_mode_enabled();
-    let registration_open = !state.registration_is_closed();
-    let (users, archived, offline) = db::counts_in_tx(&mut read_tx).await?;
-    let (rooms, uploads, push_subscriptions) = db::operational_counts_in_tx(&mut read_tx).await?;
-    let (pending_reports, pending_appeals, active_invitations) =
-        db::moderation_counts_in_tx(&mut read_tx).await?;
-    let online_sessions = state.sessions.len();
-    let room_occupants = state.muc_occupants.len();
-    read_tx.commit().await?;
+    let crate::services::api_queries::AdminStatistics {
+        users,
+        archived,
+        offline,
+        rooms,
+        uploads,
+        push_subscriptions,
+        pending_reports,
+        pending_appeals,
+        active_invitations,
+        live,
+    } = state
+        .api_query_service()
+        .statistics(actor.read_authority(), || state.live_statistics())
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    let crate::services::api_queries::LiveAdminStats {
+        island_mode,
+        registration_open,
+        online_sessions,
+        room_occupants,
+    } = live;
+    let counters = state.counters();
     Ok(Json(json!({
         "users":users, "online_sessions":online_sessions, "archived_stanzas":archived,
         "offline_stanzas":offline, "uptime_seconds":state.uptime().as_secs(),
-        "archive_policy":if state.config.require_encrypted_archive {"encrypted_only"} else {"all"},
+        "archive_policy":state.archive_policy(),
         "rooms":rooms, "room_occupants":room_occupants, "uploaded_files":uploads,
         "push_subscriptions":push_subscriptions,
         "island_mode":island_mode,
         "registration_open":registration_open,
-        "federation_configured":state.config.federation_enabled,
-        "federation_enabled":state.config.federation_enabled && !island_mode,
-        "federation_inbound_connections":state.metrics.federation_inbound_connections_total.load(std::sync::atomic::Ordering::Relaxed),
-        "federation_outbound_deliveries":state.metrics.federation_outbound_deliveries_total.load(std::sync::atomic::Ordering::Relaxed),
-        "federation_failures":state.metrics.federation_failures_total.load(std::sync::atomic::Ordering::Relaxed),
+        "federation_configured":state.federation_configured(),
+        "federation_enabled":state.federation_configured() && !island_mode,
+        "federation_inbound_connections":counters.federation_inbound_connections,
+        "federation_outbound_deliveries":counters.federation_outbound_deliveries,
+        "federation_failures":counters.federation_failures,
         "pending_reports":pending_reports, "pending_appeals":pending_appeals,
         "active_invitations":active_invitations,
-        "anti_abuse_challenges":state.metrics.anti_abuse_challenges_total.load(std::sync::atomic::Ordering::Relaxed),
-        "rate_limited_operations":state.metrics.rate_limited_total.load(std::sync::atomic::Ordering::Relaxed),
-        "reports_created":state.metrics.reports_total.load(std::sync::atomic::Ordering::Relaxed),
-        "appeals_created":state.metrics.appeals_total.load(std::sync::atomic::Ordering::Relaxed)
+        "anti_abuse_challenges":counters.anti_abuse_challenges,
+        "rate_limited_operations":counters.rate_limited_operations,
+        "reports_created":counters.reports_created,
+        "appeals_created":counters.appeals_created
     })))
 }
 
 pub async fn admin_users(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<CursorPage>,
 ) -> Result<Json<Value>, AppError> {
@@ -215,9 +228,11 @@ pub async fn admin_users(
     let filter = pagination::no_filter_scope();
     let binding = pagination::pg_binding("admin/users", actor.id.as_bytes(), &filter);
     let after = pagination::pg_boundary(&state, query.cursor.as_deref(), &binding).await?;
-    let mut read_tx = actor.begin_authorized_read(&state).await?;
-    let page = db::users_page_in_tx(&mut read_tx, after, limit).await?;
-    read_tx.commit().await?;
+    let page = state
+        .api_query_service()
+        .users(actor.read_authority(), after, limit)
+        .await?
+        .ok_or(AppError::Forbidden)?;
     let next_cursor = pagination::issue_pg_cursor(&state, &binding, page.next, page.database_now)?;
     Ok(Json(json!({"users":page.rows,"next_cursor":next_cursor})))
 }
@@ -305,7 +320,7 @@ pub async fn admin_update_user(
 }
 
 pub async fn admin_reports(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<ReportPageQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -314,9 +329,11 @@ pub async fn admin_reports(
     let filter = pagination::one_filter_scope("status", status)?;
     let binding = pagination::pg_binding("admin/reports", actor.id.as_bytes(), &filter);
     let after = pagination::pg_boundary(&state, query.cursor.as_deref(), &binding).await?;
-    let mut read_tx = actor.begin_authorized_read(&state).await?;
-    let page = db::admin_reports_page_in_tx(&mut read_tx, status, after, limit).await?;
-    read_tx.commit().await?;
+    let page = state
+        .api_query_service()
+        .admin_reports(actor.read_authority(), status, after, limit)
+        .await?
+        .ok_or(AppError::Forbidden)?;
     let next_cursor = pagination::issue_pg_cursor(&state, &binding, page.next, page.database_now)?;
     Ok(Json(json!({
         "reports":page.rows,
@@ -516,7 +533,7 @@ pub async fn admin_tls_reload(
 }
 
 pub async fn admin_invitations(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<CursorPage>,
 ) -> Result<Json<Value>, AppError> {
@@ -524,9 +541,11 @@ pub async fn admin_invitations(
     let filter = pagination::no_filter_scope();
     let binding = pagination::pg_binding("admin/invitations", actor.id.as_bytes(), &filter);
     let after = pagination::pg_boundary(&state, query.cursor.as_deref(), &binding).await?;
-    let mut read_tx = actor.begin_authorized_read(&state).await?;
-    let page = db::invitations_page_in_tx(&mut read_tx, after, limit).await?;
-    read_tx.commit().await?;
+    let page = state
+        .api_query_service()
+        .invitations(actor.read_authority(), after, limit)
+        .await?
+        .ok_or(AppError::Forbidden)?;
     let next_cursor = pagination::issue_pg_cursor(&state, &binding, page.next, page.database_now)?;
     Ok(Json(json!({
         "invitations":page.rows,
@@ -838,13 +857,13 @@ pub async fn admin_toggle_registration(
 }
 
 pub async fn admin_sessions(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<CursorPage>,
 ) -> Result<Json<Value>, AppError> {
     let limit = pagination::checked_limit(query.limit, 100, 100)?;
-    let node_incarnation = Uuid::parse_str(&state.cluster.node_id)
-        .map_err(|error| AppError::Internal(error.into()))?;
+    let node_incarnation =
+        Uuid::parse_str(state.node_id()).map_err(|error| AppError::Internal(error.into()))?;
     let filter = pagination::no_filter_scope();
     let binding = pagination::session_binding(
         "admin/sessions",
@@ -853,30 +872,16 @@ pub async fn admin_sessions(
         node_incarnation,
     );
     let after = pagination::session_after(&state, query.cursor.as_deref(), &binding).await?;
-    let mut read_tx = actor.begin_authorized_read(&state).await?;
-    let mut views = Vec::new();
-    let now = std::time::Instant::now();
-    for entry in state.sessions.iter() {
-        let jid = entry.key().clone();
-        let session = entry.value();
-        if !session.routable.load(std::sync::atomic::Ordering::Acquire) {
-            continue;
-        }
-        views.push(SessionView {
-            connection_id: session.connection_id,
-            node: state.cluster.node_id.clone(),
-            jid,
-            ip: session.ip.map(|ip| ip.to_string()),
-            resource: session.resource.clone(),
-            carbons_enabled: session.carbons.load(std::sync::atomic::Ordering::Acquire),
-            connected_duration_seconds: now
-                .saturating_duration_since(session.connected_at)
-                .as_secs(),
-        });
-    }
-    let (views, next) = finish_session_page(views, after, limit);
-    let database_now = db::database_cursor_clock_in_tx(&mut read_tx).await?;
-    read_tx.commit().await?;
+    let read = state
+        .api_query_service()
+        .sessions(actor.read_authority(), || {
+            let views = state.local_sessions();
+            finish_session_page(views, after, limit)
+        })
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    let (views, next) = (read.rows, read.next);
+    let database_now = read.database_now;
     let next_cursor = pagination::issue_session_cursor(&state, &binding, next, database_now)?;
     Ok(Json(json!({"sessions":views,"next_cursor":next_cursor})))
 }
@@ -973,20 +978,15 @@ pub async fn admin_kick_session(
 }
 
 pub async fn admin_offline_messages_stats(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     actor: ApiAdmin,
 ) -> Result<Json<OfflineMessagesStats>, AppError> {
-    let mut read_tx = actor.begin_authorized_read(&state).await?;
-    let row: (i64, i64) =
-        sqlx::query_as("SELECT COUNT(*), COALESCE(SUM(LENGTH(stanza)), 0) FROM offline_messages")
-            .fetch_one(&mut *read_tx)
-            .await?;
-    read_tx.commit().await?;
-
-    Ok(Json(OfflineMessagesStats {
-        total_messages: row.0,
-        estimated_bytes: row.1,
-    }))
+    let statistics = state
+        .api_query_service()
+        .offline_statistics(actor.read_authority())
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    Ok(Json(statistics))
 }
 
 pub async fn admin_clear_offline_messages(
@@ -1044,7 +1044,7 @@ pub async fn admin_clear_offline_messages(
 }
 
 pub async fn admin_muc_rooms(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<CursorPage>,
 ) -> Result<Json<Value>, AppError> {
@@ -1052,33 +1052,32 @@ pub async fn admin_muc_rooms(
     let filter = pagination::no_filter_scope();
     let binding = pagination::pg_binding("admin/muc-rooms", actor.id.as_bytes(), &filter);
     let after = pagination::pg_boundary(&state, query.cursor.as_deref(), &binding).await?;
-    let mut read_tx = actor.begin_authorized_read(&state).await?;
-    let page = db::admin_muc_rooms_page_in_tx(&mut read_tx, after, limit).await?;
-    let mut views = Vec::with_capacity(page.rows.len());
-    for row in page.rows {
-        let localpart = row.localpart;
-        let occupants = state
-            .muc_occupants
-            .iter()
-            .filter(|occ| {
-                occ.room_jid == format!("{}@conference.{}", localpart, state.config.domain)
-            })
-            .count();
+    let page = state
+        .api_query_service()
+        .muc_rooms(actor.read_authority(), after, limit, |rows| {
+            let mut views = Vec::with_capacity(rows.len());
+            for row in rows {
+                let localpart = row.localpart;
+                let occupants = state.room_occupant_count(&localpart);
 
-        views.push(MucRoomView {
-            id: row.id,
-            localpart,
-            title: row.title,
-            created_at: row.created_at,
-            public: row.public,
-            persistent: row.persistent,
-            members_only: row.members_only,
-            moderated: row.moderated,
-            non_anonymous: row.non_anonymous,
-            current_occupants: occupants,
-        });
-    }
-    read_tx.commit().await?;
+                views.push(MucRoomView {
+                    id: row.id,
+                    localpart,
+                    title: row.title,
+                    created_at: row.created_at,
+                    public: row.public,
+                    persistent: row.persistent,
+                    members_only: row.members_only,
+                    moderated: row.moderated,
+                    non_anonymous: row.non_anonymous,
+                    current_occupants: occupants,
+                });
+            }
+            views
+        })
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    let views = page.rows;
     let next_cursor = pagination::issue_pg_cursor(&state, &binding, page.next, page.database_now)?;
     Ok(Json(json!({"rooms":views,"next_cursor":next_cursor})))
 }

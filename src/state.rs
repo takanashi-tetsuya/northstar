@@ -1,4 +1,13 @@
+pub(crate) mod api_queries;
 pub(crate) mod suspension;
+pub(crate) type ApiQueryContext =
+    api_queries::ApiQueryContext<db::api_queries::PostgresApiQueryRepository>;
+
+impl axum::extract::FromRef<Arc<AppState>> for ApiQueryContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        state.api_query_context()
+    }
+}
 
 use crate::{
     abuse::{AbuseConfig, AbuseGuard},
@@ -1580,14 +1589,14 @@ impl From<&MucOccupant> for SerializableMucOccupant {
 
 struct FederationWritePolicy {
     gate: RwLock<()>,
-    island_mode: AtomicBool,
+    island_mode: Arc<AtomicBool>,
 }
 
 impl FederationWritePolicy {
     fn new(island_mode: bool) -> Self {
         Self {
             gate: RwLock::new(()),
-            island_mode: AtomicBool::new(island_mode),
+            island_mode: Arc::new(AtomicBool::new(island_mode)),
         }
     }
 
@@ -1681,6 +1690,7 @@ type UploadService = crate::services::upload::UploadService<db::upload::Postgres
 pub struct AppState {
     pub config: Config,
     pub pool: PgPool,
+    api_query_context: ApiQueryContext,
     passkey_service: PasskeyService,
     /// Narrow persistence/orchestration capability for XEP-0060 and PEP.
     /// Protocol handlers receive this service rather than database authority.
@@ -1738,7 +1748,7 @@ pub struct AppState {
     push_service: crate::services::push::PushService<db::push::PostgresPushRepository>,
     pub cluster: crate::cluster::ClusterManager,
     bosh: Option<crate::bosh::BoshManager>,
-    pub sessions: DashMap<String, OnlineSession>,
+    pub sessions: Arc<DashMap<String, OnlineSession>>,
     pub muc_occupants: Arc<DashMap<String, MucOccupant>>,
     /// Exactly one process-local suspension/resume FIFO per durable SM
     /// session.  Every room occupancy for the same client points at this Arc,
@@ -1771,7 +1781,7 @@ pub struct AppState {
     /// Keeping both keyrings on the state makes rotation atomic at startup:
     /// cursors issued with the previous secret remain valid only for the
     /// configured overlap window enforced by the cursor token lifetime.
-    api_cursor: crate::api::cursor::CursorKeyring,
+    api_cursor: Arc<crate::api::cursor::CursorKeyring>,
     /// XEP-0363 bearer-token and capacity admission authority. Protocol code
     /// receives typed slot outcomes, never the PostgreSQL pool.
     upload_service: Option<UploadService>,
@@ -1838,7 +1848,7 @@ pub struct AppState {
     /// stanza writes hold a read guard only across the socket write; island
     /// mode transitions take the exclusive guard.
     federation_write_policy: FederationWritePolicy,
-    registration_closed: AtomicBool,
+    registration_closed: Arc<AtomicBool>,
     /// Durable XEP-0133 federation policy overlay. Static environment policy
     /// remains the outer ceiling; runtime rules may only restrict it further.
     federation_runtime_policy: arc_swap::ArcSwap<RuntimeFederationPolicy>,
@@ -2861,8 +2871,36 @@ impl AppState {
             db::room::PostgresMucRepository::new(pool.clone()),
             config.domain.clone(),
         );
+        let sessions = Arc::new(DashMap::new());
+        let metrics = Arc::new(Metrics::default());
+        let muc_occupants = Arc::new(DashMap::new());
+        let started_at = Instant::now();
+        let api_cursor = Arc::new(api_cursor);
+        let federation_write_policy = FederationWritePolicy::new(island_mode);
+        let registration_closed = Arc::new(AtomicBool::new(registration_closed));
+        let api_query_context = api_queries::ApiQueryContext::new(
+            crate::services::api_queries::ApiQueryService::new(
+                db::api_queries::PostgresApiQueryRepository::new(pool.clone()),
+            ),
+            Arc::clone(&api_cursor),
+            api_queries::ApiQueryRuntime {
+                domain: config.domain.clone(),
+                node_id: cluster.node_id.clone(),
+                require_encrypted_archive: config.require_encrypted_archive,
+                federation_configured: config.federation_enabled,
+                configured_registration_mode: config.configured_registration_mode(),
+                registration_dependency_locked: config.registration_dependency_locked(),
+                registration_closed: Arc::clone(&registration_closed),
+                island_mode: Arc::clone(&federation_write_policy.island_mode),
+                sessions: Arc::clone(&sessions),
+                occupants: Arc::clone(&muc_occupants),
+                metrics: Arc::clone(&metrics),
+                started_at,
+            },
+        );
         let state = Arc::new(Self {
             config,
+            api_query_context,
             pubsub_service,
             profile_service,
             extdisco_service,
@@ -2897,8 +2935,8 @@ impl AppState {
             pool,
             cluster,
             bosh,
-            sessions: DashMap::new(),
-            muc_occupants: Arc::new(DashMap::new()),
+            sessions,
+            muc_occupants,
             suspended_muc_sessions: Arc::new(DashMap::new()),
             sm_suspension_recovery:
                 crate::services::session_cleanup::SmSuspensionRecoveryQueue::new(
@@ -2908,7 +2946,7 @@ impl AppState {
                     Arc::clone(&sm_memory_governor),
                 ),
             sm_memory_governor,
-            metrics: Arc::new(Metrics::default()),
+            metrics,
             metrics_bearer_token,
             web_admin_gateway_token,
             omemo_recovery_poll_pool,
@@ -2948,11 +2986,11 @@ impl AppState {
             connection_actors,
             abuse,
             abuse_key_deployment,
-            started_at: Instant::now(),
+            started_at,
             process_started_at,
             tls,
-            federation_write_policy: FederationWritePolicy::new(island_mode),
-            registration_closed: AtomicBool::new(registration_closed),
+            federation_write_policy,
+            registration_closed,
             federation_runtime_policy: arc_swap::ArcSwap::from_pointee(RuntimeFederationPolicy {
                 blacklist: runtime_blacklist.into_iter().collect(),
                 whitelist: runtime_whitelist.into_iter().collect(),
@@ -3219,6 +3257,17 @@ impl AppState {
         self.upload_service
             .as_ref()
             .expect("upload slot admission requires UploadMode::Enabled")
+    }
+
+    pub(crate) fn api_query_service(
+        &self,
+    ) -> &crate::services::api_queries::ApiQueryService<db::api_queries::PostgresApiQueryRepository>
+    {
+        self.api_query_context.api_query_service()
+    }
+
+    pub(crate) fn api_query_context(&self) -> ApiQueryContext {
+        self.api_query_context.clone()
     }
 
     pub(crate) fn pubsub_service(

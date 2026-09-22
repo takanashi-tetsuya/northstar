@@ -177,3 +177,5 @@ pub async fn migrate_for_domain(pool: &PgPool, domain: &str) -> Result<()> {
 pub(crate) mod upload_maintenance;
 
 pub(crate) mod sm_suspension;
+
+pub(crate) mod api_queries;

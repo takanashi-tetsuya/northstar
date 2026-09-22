@@ -72,12 +72,12 @@ async fn complete_password_response(
 }
 
 pub async fn me(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
-    let user = current_user(&state, &headers).await?;
+    let user = current_user_with_queries(&state, &headers).await?;
     Ok(Json(
-        json!({"id":user.id,"jid":format!("{}@{}",user.username,state.config.domain),"display_name":user.display_name,"is_admin":user.is_admin}),
+        json!({"id":user.id,"jid":format!("{}@{}",user.username,state.domain()),"display_name":user.display_name,"is_admin":user.is_admin}),
     ))
 }
 
@@ -403,7 +403,7 @@ enum HistoryQueryMode {
 
 #[derive(Debug)]
 struct PreparedHistoryQuery {
-    mam: db::MamArchiveQuery,
+    mam: crate::services::mam::MamArchiveQuery,
     mode: HistoryQueryMode,
     flip: bool,
 }
@@ -421,10 +421,10 @@ struct HistoryMessageView {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl TryFrom<db::ArchiveRow> for HistoryMessageView {
+impl TryFrom<crate::services::mam::ArchiveRow> for HistoryMessageView {
     type Error = anyhow::Error;
 
-    fn try_from(value: db::ArchiveRow) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: crate::services::mam::ArchiveRow) -> std::result::Result<Self, Self::Error> {
         let peer_jid = crate::jid::canonical_bare_key(&value.peer_jid)?;
         Ok(Self {
             id: value.id,
@@ -517,27 +517,27 @@ fn prepare_history_query(query: &HistoryQuery) -> Result<PreparedHistoryQuery, A
     }
     let page = if let Some(page) = query.page.as_deref() {
         match page {
-            "first" => db::MamRsmPage::First,
-            "last" => db::MamRsmPage::Last,
+            "first" => crate::services::mam::MamRsmPage::First,
+            "last" => crate::services::mam::MamRsmPage::Last,
             _ => {
                 return Err(AppError::BadRequest("page must be first or last".into()));
             }
         }
     } else if let Some(id) = query.before {
-        db::MamRsmPage::Before(id)
+        crate::services::mam::MamRsmPage::Before(id)
     } else if let Some(id) = query.after {
-        db::MamRsmPage::After(id)
+        crate::services::mam::MamRsmPage::After(id)
     } else if let Some(index) = query.index {
         if !(0..=MAX_HISTORY_INDEX).contains(&index) {
             return Err(AppError::BadRequest(format!(
                 "index must be between 0 and {MAX_HISTORY_INDEX}"
             )));
         }
-        db::MamRsmPage::Index(index)
+        crate::services::mam::MamRsmPage::Index(index)
     } else if mode == HistoryQueryMode::Legacy {
-        db::MamRsmPage::Last
+        crate::services::mam::MamRsmPage::Last
     } else {
-        db::MamRsmPage::First
+        crate::services::mam::MamRsmPage::First
     };
 
     let max = if let Some(max) = query.max {
@@ -552,7 +552,7 @@ fn prepare_history_query(query: &HistoryQuery) -> Result<PreparedHistoryQuery, A
     };
 
     Ok(PreparedHistoryQuery {
-        mam: db::MamArchiveQuery {
+        mam: crate::services::mam::MamArchiveQuery {
             with_jid,
             start: query.start,
             end: query.end,
@@ -570,11 +570,11 @@ fn prepare_history_query(query: &HistoryQuery) -> Result<PreparedHistoryQuery, A
 }
 
 pub async fn history(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     headers: HeaderMap,
     ApiQuery(query): ApiQuery<HistoryQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let user = current_user(&state, &headers).await?;
+    let user = current_user_with_queries(&state, &headers).await?;
     let mut prepared = prepare_history_query(&query)?;
 
     // Preserve the old opaque, principal/filter-bound cursor without keeping
@@ -587,21 +587,23 @@ pub async fn history(
         if let Some(boundary) =
             pagination::pg_boundary(&state, query.cursor.as_deref(), &binding).await?
         {
-            prepared.mam.page = db::MamRsmPage::Before(boundary.id);
+            prepared.mam.page = crate::services::mam::MamRsmPage::Before(boundary.id);
         }
     }
 
-    let mut read_tx = user.begin_authorized_read(&state).await?;
-    let page = db::mam_user_archive_page_in_transaction(&mut read_tx, user.id, &prepared.mam)
+    let read = state
+        .api_query_service()
+        .history(user.read_authority(), &prepared.mam)
         .await?
-        .ok_or_else(|| {
-            if prepared.mode == HistoryQueryMode::Legacy {
-                AppError::InvalidCursor
-            } else {
-                AppError::NotFound("archive UID is not visible in this query scope".into())
-            }
-        })?;
-    let database_now = db::database_cursor_clock_in_tx(&mut read_tx).await?;
+        .ok_or(AppError::Unauthorized)?;
+    let database_now = read.database_now;
+    let page = read.value.ok_or_else(|| {
+        if prepared.mode == HistoryQueryMode::Legacy {
+            AppError::InvalidCursor
+        } else {
+            AppError::NotFound("archive UID is not visible in this query scope".into())
+        }
+    })?;
     let chronological_first = page.rows.first().map(|row| (row.id, row.created_at));
     let chronological_last = page.rows.last().map(|row| row.id);
     let next_cursor = if prepared.mode == HistoryQueryMode::Legacy && !page.complete {
@@ -610,7 +612,9 @@ pub async fn history(
         pagination::issue_pg_cursor(
             &state,
             &binding,
-            chronological_first.map(|(id, created_at)| db::PageBoundary { created_at, id }),
+            chronological_first.map(|(id, created_at)| {
+                crate::services::api_queries::PageBoundary { created_at, id }
+            }),
             database_now,
         )?
     } else {
@@ -629,12 +633,11 @@ pub async fn history(
         .map(HistoryMessageView::try_from)
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(AppError::Internal)?;
-    read_tx.commit().await?;
     Ok(Json(json!({
         "messages":messages,
         "next_cursor":next_cursor,
         "all_end_to_end_encrypted":all_end_to_end_encrypted,
-        "archive_policy":if state.config.require_encrypted_archive {"encrypted_only"} else {"all"},
+        "archive_policy":state.archive_policy(),
         "complete":complete,
         "count":count,
         "first_index":first_index,
@@ -682,7 +685,7 @@ mod history_tests {
             prepared.mam.with_jid.as_deref(),
             Some("bob@example.test/Phone")
         );
-        assert_eq!(prepared.mam.page, db::MamRsmPage::Last);
+        assert_eq!(prepared.mam.page, crate::services::mam::MamRsmPage::Last);
         assert_eq!(prepared.mam.max, 25);
         assert!(prepared.flip);
     }
@@ -711,7 +714,10 @@ mod history_tests {
         assert_eq!(prepared.mam.after_id, Some(first));
         assert_eq!(prepared.mam.before_id, Some(second));
         assert_eq!(prepared.mam.ids, vec![first, second]);
-        assert_eq!(prepared.mam.page, db::MamRsmPage::Before(before));
+        assert_eq!(
+            prepared.mam.page,
+            crate::services::mam::MamRsmPage::Before(before)
+        );
         assert_eq!(prepared.mam.max, 0);
         assert!(prepared.flip);
     }

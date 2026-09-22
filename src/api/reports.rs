@@ -347,19 +347,21 @@ pub async fn create_report(
 }
 
 pub async fn my_reports(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     headers: HeaderMap,
     ApiQuery(query): ApiQuery<ReportPageQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let user = current_user(&state, &headers).await?;
+    let user = current_user_with_queries(&state, &headers).await?;
     let limit = pagination::checked_limit(query.limit, 25, 25)?;
     let status = pagination::checked_report_status(query.status.as_deref())?;
     let filter = pagination::one_filter_scope("status", status)?;
     let binding = pagination::pg_binding("reports/own", user.id.as_bytes(), &filter);
     let after = pagination::pg_boundary(&state, query.cursor.as_deref(), &binding).await?;
-    let mut read_tx = user.begin_authorized_read(&state).await?;
-    let page = db::own_reports_page_in_tx(&mut read_tx, user.id, status, after, limit).await?;
-    read_tx.commit().await?;
+    let page = state
+        .api_query_service()
+        .own_reports(user.read_authority(), status, after, limit)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
     let next_cursor = pagination::issue_pg_cursor(&state, &binding, page.next, page.database_now)?;
     Ok(Json(json!({
         "reports":page.rows,

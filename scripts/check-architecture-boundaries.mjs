@@ -2064,6 +2064,8 @@ for (const [name, source] of [
   ['UploadMaintenanceRepository', read('src/services/upload_maintenance.rs')],
   ['SmSuspensionContext', read('src/state/suspension.rs')],
   ['SmSuspensionRepository', read('src/services/sm_suspension.rs')],
+  ['ApiQueryService', read('src/services/api_queries.rs')],
+  ['ApiQueryContext', read('src/state/api_queries.rs')],
 ]) {
   const production = productionWithoutCfgTestModules(source, name);
   for (const [label, pattern] of [
@@ -2074,6 +2076,26 @@ for (const [name, source] of [
   ]) {
     if (pattern.test(production)) throw new Error(`${name} regained ${label} authority`);
   }
+}
+for (const [path, name] of [
+  ['src/api/admin.rs', 'admin_stats'], ['src/api/admin.rs', 'admin_users'],
+  ['src/api/admin.rs', 'admin_reports'], ['src/api/admin.rs', 'admin_invitations'],
+  ['src/api/admin.rs', 'admin_sessions'], ['src/api/admin.rs', 'admin_offline_messages_stats'],
+  ['src/api/admin.rs', 'admin_muc_rooms'], ['src/api/users.rs', 'history'],
+  ['src/api/reports.rs', 'my_reports'], ['src/api/upload_admin.rs', 'admin_upload_dead_letters'],
+]) {
+  const body = structBody(read(path), `pub async fn ${name}(`);
+  const signature = read(path).slice(read(path).indexOf(`pub async fn ${name}(`)).split(') ->')[0];
+  if (!signature.includes('State<crate::state::ApiQueryContext>')) {
+    throw new Error(`${name} must receive the narrow REST query context`);
+  }
+
+  if (/\b(?:sqlx|db)\s*::|\.pool\b|begin_authorized_read/.test(body) || !body.includes('.api_query_service()')) {
+    throw new Error(`${name} must use a complete authorized query port`);
+  }
+}
+if (/begin_authorized_read/.test(read('src/api/mod.rs'))) {
+  throw new Error('HTTP principals must not expose database read transactions');
 }
 const cleanupServiceSource = productionWithoutCfgTestModules(read('src/services/session_cleanup.rs'), 'Session cleanup');
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\bstate\s*\.\s*pool\b/]) {
@@ -3046,6 +3068,7 @@ for (const task of serviceTaskNames) {
   }
 }
 const stateServiceAccessors = [
+  'api_query_service',
   'authentication_service',
   'passkey_service',
   'account_service',

@@ -6,24 +6,14 @@
 
 use anyhow::{ensure, Result};
 use chrono::{DateTime, Utc};
+#[cfg(test)]
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PageBoundary {
-    pub created_at: DateTime<Utc>,
-    pub id: Uuid,
-}
-
-#[derive(Debug)]
-pub struct KeysetPage<T> {
-    pub rows: Vec<T>,
-    pub next: Option<PageBoundary>,
-    /// PostgreSQL time captured for this page. Routes must use this value when
-    /// issuing the continuation cursor, never a web node's wall clock.
-    pub database_now: DateTime<Utc>,
-}
+pub use crate::services::api_queries::{
+    InvitationPageRow, KeysetPage, MucRoomPageRow, PageBoundary, ReportPageRow, UserPageRow,
+};
 
 #[cfg(test)]
 #[derive(Debug, Serialize)]
@@ -33,60 +23,6 @@ pub struct HistoryPageRow {
     pub stanza: String,
     pub encrypted: bool,
     pub stanza_id: Option<String>,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ReportPageRow {
-    pub id: Uuid,
-    pub reporter_id: Uuid,
-    pub reporter_username: String,
-    pub reported_jid: String,
-    pub category: String,
-    pub description: String,
-    pub status: String,
-    pub resolution: Option<String>,
-    pub assigned_admin: Option<String>,
-    pub resolved_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub evidence: serde_json::Value,
-    pub appeal: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct UserPageRow {
-    pub id: Uuid,
-    pub username: String,
-    pub display_name: Option<String>,
-    pub is_admin: bool,
-    pub is_disabled: bool,
-    pub created_at: DateTime<Utc>,
-    pub last_login_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct InvitationPageRow {
-    pub id: Uuid,
-    pub label: String,
-    pub created_by: Option<String>,
-    pub max_uses: i32,
-    pub use_count: i32,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub revoked_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MucRoomPageRow {
-    pub id: Uuid,
-    pub localpart: String,
-    pub title: Option<String>,
-    pub public: bool,
-    pub persistent: bool,
-    pub members_only: bool,
-    pub moderated: bool,
-    pub non_anonymous: bool,
     pub created_at: DateTime<Utc>,
 }
 

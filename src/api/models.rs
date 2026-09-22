@@ -357,39 +357,7 @@ pub struct LegalHoldPageQuery {
     pub limit: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct SessionView {
-    pub connection_id: uuid::Uuid,
-    pub node: String,
-    pub jid: String,
-    pub ip: Option<String>,
-    pub resource: String,
-    /// XEP-0280 is negotiated per resource. Exposing this non-secret runtime
-    /// flag makes a successful control IQ distinguishable from a fanout or
-    /// transport problem during production diagnosis.
-    pub carbons_enabled: bool,
-    pub connected_duration_seconds: u64,
-}
-
-#[derive(Serialize)]
-pub struct OfflineMessagesStats {
-    pub total_messages: i64,
-    pub estimated_bytes: i64,
-}
-
-#[derive(Serialize)]
-pub struct MucRoomView {
-    pub id: uuid::Uuid,
-    pub localpart: String,
-    pub title: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub public: bool,
-    pub persistent: bool,
-    pub members_only: bool,
-    pub moderated: bool,
-    pub non_anonymous: bool,
-    pub current_occupants: usize,
-}
+pub use crate::services::api_queries::{MucRoomView, OfflineMessagesStats, SessionView};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

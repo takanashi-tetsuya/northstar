@@ -428,6 +428,7 @@ copy that coupling.
 
 | Capability/accessor | Decision responsibility | Persistence/side-effect responsibility today | Explicitly outside the capability |
 | --- | --- | --- | --- |
+| `api_query_service()` | bearer identity and authorized REST collection reads | complete repeatable-read transactions, PostgreSQL cursor time and synchronous live projections | exposing a pool or an open transaction to HTTP handlers |
 | `authentication_service()` | SCRAM/SASL2/FAST credential-family selection, account status and authentication-generation checks | authentication repository calls and token lifecycle | stream framing, TLS establishment and resource binding |
 | `passkey_service()` | WebAuthn ceremonies, credential generations and session-bound registration/removal | injected repository; credential revision acceptance, FAST issuance and API-session creation share one commit | HTTP headers, raw pools, SQLx transactions and global application state |
 | `account_service()` | registration mode, invitation/account lifecycle and password-change authorization | user/credential mutations and account-operation transitions | session socket closure, which is requested only after commit |

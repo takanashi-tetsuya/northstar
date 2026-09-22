@@ -108,7 +108,7 @@ fn boundary_from_position(
 }
 
 async fn dead_letter_boundary(
-    state: &AppState,
+    state: &crate::state::ApiQueryContext,
     token: Option<&str>,
     binding: &CursorBinding<'_>,
     kind: db::UploadDeadLetterKind,
@@ -116,7 +116,7 @@ async fn dead_letter_boundary(
     let Some(token) = token else {
         return Ok(None);
     };
-    let database_now = db::database_cursor_clock(&state.pool).await?;
+    let database_now = state.api_query_service().cursor_clock().await?;
     let position = state
         .api_cursor()
         .verify(token, binding, database_now.timestamp())
@@ -125,7 +125,7 @@ async fn dead_letter_boundary(
 }
 
 fn issue_dead_letter_cursor(
-    state: &AppState,
+    state: &crate::state::ApiQueryContext,
     binding: &CursorBinding<'_>,
     next: Option<db::UploadDeadLetterBoundary>,
     database_now: DateTime<Utc>,
@@ -307,7 +307,7 @@ fn view(kind: db::UploadDeadLetterKind, row: db::UploadDeadLetterRecord) -> Uplo
 }
 
 pub async fn admin_upload_dead_letters(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ApiQueryContext>,
     actor: ApiAdmin,
     ApiQuery(query): ApiQuery<UploadDeadLetterPageQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -316,9 +316,11 @@ pub async fn admin_upload_dead_letters(
     let filter = dead_letter_filter(kind)?;
     let binding = dead_letter_binding(&actor.id, &filter);
     let after = dead_letter_boundary(&state, query.cursor.as_deref(), &binding, kind).await?;
-    let mut tx = actor.begin_authorized_read(&state).await?;
-    let page = db::upload_dead_letters_page_in_tx(&mut tx, kind, after, limit).await?;
-    tx.commit().await?;
+    let page = state
+        .api_query_service()
+        .upload_dead_letters(actor.read_authority(), kind, after, limit)
+        .await?
+        .ok_or(AppError::Forbidden)?;
     let next_cursor = issue_dead_letter_cursor(&state, &binding, page.next, page.database_now)?;
     let items = page
         .rows

@@ -910,7 +910,7 @@ fn forwarded_client_ip(peer_ip: IpAddr, forwarded: &str, trusted: &[IpAddr]) -> 
 pub fn abuse_identity(
     action: AbuseAction,
     ip: IpAddr,
-    user: Option<&db::ApiPrincipal>,
+    user: Option<&crate::services::api_queries::ApiPrincipal>,
 ) -> (String, Vec<String>) {
     if action == AbuseAction::Registration {
         return (format!("registration:{ip}"), vec![ip_actor(ip)]);
@@ -964,7 +964,7 @@ pub fn rate_limited(error: GuardError) -> AppError {
 }
 
 pub struct ApiUser {
-    user: db::ApiPrincipal,
+    user: crate::services::api_queries::ApiPrincipal,
     session_token: zeroize::Zeroizing<String>,
 }
 
@@ -972,32 +972,17 @@ impl ApiUser {
     pub fn session_token(&self) -> &str {
         self.session_token.as_str()
     }
-
-    /// Start a repeatable authorization snapshot for a sensitive read.
-    ///
-    /// The shared locks taken by `authorize_user_in_tx` keep password
-    /// rotation, account disablement and explicit bearer revocation from
-    /// committing between this check and the caller's final database read.
-    pub(crate) async fn begin_authorized_read<'a>(
-        &self,
-        state: &'a AppState,
-    ) -> Result<sqlx::Transaction<'a, sqlx::Postgres>, AppError> {
-        let mut tx = state.pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-            .execute(&mut *tx)
-            .await?;
-        if !db::authorize_user_in_tx(&mut tx, self.id, self.auth_generation, self.session_token())
-            .await?
-        {
-            tx.rollback().await?;
-            return Err(AppError::Unauthorized);
+    pub(crate) fn read_authority(&self) -> crate::services::api_queries::ApiReadAuthority<'_> {
+        crate::services::api_queries::ApiReadAuthority {
+            user_id: self.id,
+            auth_generation: self.auth_generation,
+            session_token: self.session_token(),
         }
-        Ok(tx)
     }
 }
 
 impl Deref for ApiUser {
-    type Target = db::ApiPrincipal;
+    type Target = crate::services::api_queries::ApiPrincipal;
 
     fn deref(&self) -> &Self::Target {
         &self.user
@@ -1005,13 +990,19 @@ impl Deref for ApiUser {
 }
 
 pub async fn current_user(state: &AppState, headers: &HeaderMap) -> Result<ApiUser, AppError> {
-    let _authentication_timer = state.metrics.authentication_duration_seconds.start_timer();
+    current_user_with_queries(&state.api_query_context(), headers).await
+}
+
+pub(crate) async fn current_user_with_queries(
+    state: &crate::state::ApiQueryContext,
+    headers: &HeaderMap,
+) -> Result<ApiUser, AppError> {
+    let _authentication_timer = state.authentication_timer();
     let token = bearer_token(headers)?;
-    let database_timer = state
-        .metrics
-        .database_operation_duration_seconds
-        .start_timer();
-    let user = db::user_for_token(&state.pool, token)
+    let database_timer = state.database_timer();
+    let user = state
+        .api_query_service()
+        .principal(token)
         .await?
         .ok_or(AppError::Unauthorized)?;
     drop(database_timer);
@@ -1029,44 +1020,32 @@ impl ApiAdmin {
     pub fn session_token(&self) -> &str {
         self.user.session_token()
     }
-
-    /// Hold the exact administrator bearer, credential generation and role
-    /// stable until a sensitive read has produced its complete projection.
-    pub(crate) async fn begin_authorized_read<'a>(
-        &self,
-        state: &'a AppState,
-    ) -> Result<sqlx::Transaction<'a, sqlx::Postgres>, AppError> {
-        let mut tx = state.pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-            .execute(&mut *tx)
-            .await?;
-        if !db::authorize_admin_in_tx(&mut tx, self.id, self.auth_generation, self.session_token())
-            .await?
-        {
-            tx.rollback().await?;
-            return Err(AppError::Forbidden);
-        }
-        Ok(tx)
+    pub(crate) fn read_authority(&self) -> crate::services::api_queries::ApiReadAuthority<'_> {
+        self.user.read_authority()
     }
 }
 
 impl Deref for ApiAdmin {
-    type Target = db::ApiPrincipal;
+    type Target = crate::services::api_queries::ApiPrincipal;
 
     fn deref(&self) -> &Self::Target {
         &self.user.user
     }
 }
 
-impl FromRequestParts<Arc<AppState>> for ApiAdmin {
+impl<S> FromRequestParts<S> for ApiAdmin
+where
+    S: Send + Sync,
+    crate::state::ApiQueryContext: axum::extract::FromRef<S>,
+{
     type Rejection = AppError;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &Arc<AppState>,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let state = <crate::state::ApiQueryContext as axum::extract::FromRef<S>>::from_ref(state);
         let token = bearer_token(&parts.headers)?;
-        let user = db::user_for_token(&state.pool, token)
+        let user = state
+            .api_query_service()
+            .principal(token)
             .await?
             .ok_or(AppError::Unauthorized)?;
         if !user.is_admin {
@@ -1083,7 +1062,9 @@ impl FromRequestParts<Arc<AppState>> for ApiAdmin {
 
 pub async fn admin(state: &AppState, headers: &HeaderMap) -> Result<ApiAdmin, AppError> {
     let token = bearer_token(headers)?;
-    let user = db::user_for_token(&state.pool, token)
+    let user = state
+        .api_query_service()
+        .principal(token)
         .await?
         .ok_or(AppError::Unauthorized)?;
     if !user.is_admin {

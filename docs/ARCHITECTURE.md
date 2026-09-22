@@ -148,6 +148,15 @@ Key ownership:
   maps, cluster projection capability and queue limits. Recreated contexts share
   the same endpoint identities and capacity leases. Session cleanup accesses
   SM revocation, privacy cleanup, temporary rooms and presence through services.
+- REST history, users, reports, invitations, upload dead letters and server
+  statistics use a query repository that revalidates the bearer, credential
+  generation and administrator role in the same transaction as the projection.
+  Local session and room snapshots execute under those locks; pagination keeps
+  the PostgreSQL clock and existing cursor scope. These handlers extract a
+  query context containing the service, cursor signer and read-only runtime
+  projections. It shares live policy flags and session maps without retaining
+  global application state. Operation-journal and data-lifecycle endpoints
+  still need their own persistence boundaries.
 - Administrator commands validate claim identity and page bounds before the
   repository. Sensitive reads retain their generation lock and snapshot;
   command mutations retain their dedicated database authority.

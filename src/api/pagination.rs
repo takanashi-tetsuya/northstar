@@ -1,6 +1,6 @@
 //! Shared REST keyset-pagination policy.
 
-use crate::{db, error::AppError, state::AppState};
+use crate::{error::AppError, services::api_queries::PageBoundary, state::ApiQueryContext};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
@@ -75,14 +75,14 @@ pub fn session_binding<'a>(
 }
 
 pub async fn pg_boundary(
-    state: &AppState,
+    state: &ApiQueryContext,
     token: Option<&str>,
     binding: &CursorBinding<'_>,
-) -> Result<Option<db::PageBoundary>, AppError> {
+) -> Result<Option<PageBoundary>, AppError> {
     let Some(token) = token else {
         return Ok(None);
     };
-    let database_now = db::database_cursor_clock(&state.pool).await?;
+    let database_now = state.api_query_service().cursor_clock().await?;
     let position = state
         .api_cursor()
         .verify(token, binding, database_now.timestamp())
@@ -92,13 +92,13 @@ pub async fn pg_boundary(
         .map_err(|_| AppError::InvalidCursor)?;
     let created_at =
         DateTime::<Utc>::from_timestamp_micros(micros).ok_or(AppError::InvalidCursor)?;
-    Ok(Some(db::PageBoundary { created_at, id }))
+    Ok(Some(PageBoundary { created_at, id }))
 }
 
 pub fn issue_pg_cursor(
-    state: &AppState,
+    state: &ApiQueryContext,
     binding: &CursorBinding<'_>,
-    next: Option<db::PageBoundary>,
+    next: Option<PageBoundary>,
     database_now: DateTime<Utc>,
 ) -> Result<Option<String>, AppError> {
     next.map(|boundary| {
@@ -121,14 +121,14 @@ pub fn issue_pg_cursor(
 }
 
 pub async fn session_after(
-    state: &AppState,
+    state: &ApiQueryContext,
     token: Option<&str>,
     binding: &CursorBinding<'_>,
 ) -> Result<Option<Uuid>, AppError> {
     let Some(token) = token else {
         return Ok(None);
     };
-    let database_now = db::database_cursor_clock(&state.pool).await?;
+    let database_now = state.api_query_service().cursor_clock().await?;
     let position = state
         .api_cursor()
         .verify(token, binding, database_now.timestamp())
@@ -140,7 +140,7 @@ pub async fn session_after(
 }
 
 pub fn issue_session_cursor(
-    state: &AppState,
+    state: &ApiQueryContext,
     binding: &CursorBinding<'_>,
     next: Option<Uuid>,
     database_now: DateTime<Utc>,

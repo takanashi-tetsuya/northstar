@@ -375,7 +375,12 @@ directly, but still needs a narrower runtime context for delivery and teardown.
 Existing cross-table transactions, admission permits, account
 fences and post-commit recovery behavior remain intact.
 
-Remaining work covers REST handlers and live-session/account-recovery workers.
+REST identity, history, user/report/invitation/dead-letter collections and
+server statistics use complete query transactions. Those handlers receive
+shared projections and a query context with live policy flags, without an
+open transaction or AppState.
+Remaining work covers the other REST reads and mutations, their HTTP contexts,
+and live-session/account-recovery workers.
 AppState still has nine public fields, so stage 1 remains open. Changing field
 visibility alone does not demonstrate reduced authority.
 

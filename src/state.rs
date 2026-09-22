@@ -1777,7 +1777,7 @@ pub struct AppState {
     upload_storage_namespace_sha256: [u8; 32],
     upload_authority_generation: UploadAuthorityGeneration,
     upload_safety_gate: Arc<UploadSafetyGate>,
-    upload_startup_audits: crate::upload_worker::StartupAuditHandoff,
+    upload_startup_audits: Arc<crate::upload_worker::StartupAuditHandoff>,
     pub federation: FederationRouter,
     /// Full XEP-0114/XEP-0225 authentication records. `config.components`
     /// retains only redacted routing/discovery metadata after construction.
@@ -2918,7 +2918,7 @@ impl AppState {
             upload_storage_namespace_sha256: upload_namespace,
             upload_authority_generation,
             upload_safety_gate,
-            upload_startup_audits,
+            upload_startup_audits: Arc::new(upload_startup_audits),
             federation,
             component_credentials,
             components,
@@ -3169,22 +3169,32 @@ impl AppState {
             .cloned()
     }
 
-    pub(crate) fn upload_storage_namespace_sha256(&self) -> &[u8; 32] {
-        &self.upload_storage_namespace_sha256
-    }
-
-    pub(crate) fn upload_authority_generation(&self) -> UploadAuthorityGeneration {
-        self.upload_authority_generation
-    }
-
     pub(crate) fn upload_safety_gate(&self) -> &Arc<UploadSafetyGate> {
         &self.upload_safety_gate
     }
 
-    pub(crate) fn take_upload_startup_audits(
+    pub(crate) fn upload_maintenance_context(
         &self,
-    ) -> Option<crate::upload_worker::SuccessfulStartupAudits> {
-        self.upload_startup_audits.take()
+    ) -> Option<
+        crate::upload_worker::UploadMaintenanceContext<
+            db::upload_maintenance::PostgresUploadMaintenanceRepository,
+        >,
+    > {
+        Some(crate::upload_worker::UploadMaintenanceContext::new(
+            db::upload_maintenance::PostgresUploadMaintenanceRepository::new(self.pool.clone()),
+            Arc::clone(self.upload_store.as_ref()?),
+            crate::upload_worker::UploadMaintenancePolicy {
+                max_pending_jobs: self.config.upload_storage_max_pending_jobs,
+                max_retained_files: self.config.upload_storage_max_retained_files,
+                max_retained_bytes: self.config.upload_storage_max_retained_bytes,
+                retention_seconds: self.config.upload_retention_seconds,
+                namespace_sha256: self.upload_storage_namespace_sha256,
+                generation: self.upload_authority_generation,
+            },
+            Arc::clone(&self.upload_safety_gate),
+            Arc::clone(&self.upload_startup_audits),
+            Arc::clone(&self.metrics),
+        ))
     }
 
     pub(crate) fn upload_service(&self) -> &UploadService {

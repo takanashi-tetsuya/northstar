@@ -1,5 +1,5 @@
 use crate::services::upload_safety::{UploadAuthorityGeneration, UploadIoClass, UploadSafetyGate};
-use crate::{db, state::AppState, workers::WorkerHeartbeat};
+use crate::{services::upload_maintenance::*, workers::WorkerHeartbeat};
 use anyhow::{Context, Result};
 use futures::{stream, StreamExt};
 use std::{
@@ -7,6 +7,45 @@ use std::{
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;
+
+#[derive(Clone, Copy)]
+pub(crate) struct UploadMaintenancePolicy {
+    pub(crate) max_pending_jobs: i64,
+    pub(crate) max_retained_files: i64,
+    pub(crate) max_retained_bytes: i64,
+    pub(crate) retention_seconds: u64,
+    pub(crate) namespace_sha256: [u8; 32],
+    pub(crate) generation: UploadAuthorityGeneration,
+}
+
+pub(crate) struct UploadMaintenanceContext<R> {
+    repository: R,
+    store: Arc<dyn crate::storage::UploadStore>,
+    policy: UploadMaintenancePolicy,
+    safety_gate: Arc<UploadSafetyGate>,
+    startup_audits: Arc<StartupAuditHandoff>,
+    metrics: Arc<crate::metrics::Metrics>,
+}
+
+impl<R: UploadMaintenanceRepository> UploadMaintenanceContext<R> {
+    pub(crate) fn new(
+        repository: R,
+        store: Arc<dyn crate::storage::UploadStore>,
+        policy: UploadMaintenancePolicy,
+        safety_gate: Arc<UploadSafetyGate>,
+        startup_audits: Arc<StartupAuditHandoff>,
+        metrics: Arc<crate::metrics::Metrics>,
+    ) -> Self {
+        Self {
+            repository,
+            store,
+            policy,
+            safety_gate,
+            startup_audits,
+            metrics,
+        }
+    }
+}
 
 const STORAGE_OPERATION_TIMEOUT: Duration = Duration::from_secs(180);
 const CAPACITY_AUTHORITY_AUDIT_INTERVAL: Duration = Duration::from_secs(60);
@@ -52,7 +91,7 @@ impl CapacityAuditProof {
 }
 
 /// Keep failed observations distinct from ticks waiting for their retry.
-/// The process-wide gate, not this scheduling state, authorizes object I/O.
+/// The process-wide gate, not this scheduling context, authorizes object I/O.
 struct CapacityAuthorityAuditProgress {
     next_audit: tokio::time::Instant,
     violations: u64,
@@ -73,10 +112,10 @@ impl CapacityAuthorityAuditProgress {
         gate: &UploadSafetyGate,
         mut now: impl FnMut() -> tokio::time::Instant,
         audit: A,
-    ) -> Option<Result<db::UploadCapacityAuthorityAudit>>
+    ) -> Option<Result<UploadCapacityAuthorityAudit>>
     where
         A: FnOnce() -> F,
-        F: std::future::Future<Output = Result<db::UploadCapacityAuthorityAudit>>,
+        F: std::future::Future<Output = Result<UploadCapacityAuthorityAudit>>,
     {
         if now() < self.next_audit {
             return None;
@@ -151,10 +190,10 @@ impl CapacityLedgerAuditProgress {
         gate: &UploadSafetyGate,
         mut now: impl FnMut() -> tokio::time::Instant,
         audit: A,
-    ) -> Option<Result<db::UploadCapacityReconciliation>>
+    ) -> Option<Result<UploadCapacityReconciliation>>
     where
         A: FnOnce() -> F,
-        F: std::future::Future<Output = Result<db::UploadCapacityReconciliation>>,
+        F: std::future::Future<Output = Result<UploadCapacityReconciliation>>,
     {
         if now() < self.next_audit {
             return None;
@@ -199,7 +238,7 @@ pub(crate) struct SuccessfulStartupAudits {
     ledger_started_at: tokio::time::Instant,
 }
 
-/// One AppState may hand its successful startup observations to one worker
+/// Startup may hand its successful observations to one worker
 /// attempt. This stores no reusable health verdict: subsequent attempts and
 /// invalidated gates must perform the ordinary database audits immediately.
 #[derive(Default)]
@@ -254,7 +293,7 @@ impl SuccessfulStartupAudits {
             return (now, now);
         }
         // Anchor to each database observation's START, including pool wait and
-        // query/commit time. Later AppState initialization or worker scheduling
+        // query/commit time. Later application initialization or worker scheduling
         // must never grant the old observation a fresh 60-second/hour lifetime.
         (
             self.authority_started_at + CAPACITY_AUTHORITY_AUDIT_INTERVAL,
@@ -263,15 +302,15 @@ impl SuccessfulStartupAudits {
     }
 }
 
-pub async fn serve(
-    state: Arc<AppState>,
+pub(crate) async fn serve<R: UploadMaintenanceRepository>(
+    context: Arc<UploadMaintenanceContext<R>>,
     cancel: CancellationToken,
     heartbeat: WorkerHeartbeat,
 ) -> Result<()> {
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut credential_ticks = 0_u8;
-    let mut startup_audits = state.take_upload_startup_audits();
+    let mut startup_audits = context.startup_audits.take();
     let mut capacity_authority_audit =
         CapacityAuthorityAuditProgress::new(tokio::time::Instant::now());
     let mut capacity_ledger_audit =
@@ -285,37 +324,38 @@ pub async fn serve(
             _ = interval.tick() => {}
         }
         let mut failures = 0_u64;
-        state
+        context
             .metrics
             .upload_storage_safety_gate_state
-            .store(state.upload_safety_gate().metric_code(), Ordering::Relaxed);
-        let authority_generation = state.upload_authority_generation();
-        let recovery_draining = match db::upload_storage_authority_matches(
-            &state.pool,
-            state.upload_store().backend(),
-            state.upload_storage_namespace_sha256(),
-            authority_generation.namespace,
-            authority_generation.capacity_policy,
-            state.config.upload_storage_max_pending_jobs,
-            state.config.upload_storage_max_retained_files,
-            state.config.upload_storage_max_retained_bytes,
-        )
-        .await
+            .store(context.safety_gate.metric_code(), Ordering::Relaxed);
+        let authority_generation = context.policy.generation;
+        let recovery_draining = match context
+            .repository
+            .upload_storage_authority_matches(
+                context.store.backend(),
+                &context.policy.namespace_sha256,
+                authority_generation.namespace,
+                authority_generation.capacity_policy,
+                context.policy.max_pending_jobs,
+                context.policy.max_retained_files,
+                context.policy.max_retained_bytes,
+            )
+            .await
         {
             Ok(probe) if !probe.namespace_matches => {
-                state.upload_safety_gate().mark_namespace_unsafe(
+                context.safety_gate.mark_namespace_unsafe(
                     "upload namespace authority changed while this process was running",
                 );
-                state
+                context
                     .metrics
                     .upload_storage_safety_gate_state
-                    .store(state.upload_safety_gate().metric_code(), Ordering::Relaxed);
+                    .store(context.safety_gate.metric_code(), Ordering::Relaxed);
                 anyhow::bail!(
                     "upload storage authority disappeared or changed while this process was running"
                 );
             }
             Ok(probe) if !probe.capacity_matches => {
-                state.upload_safety_gate().mark_capacity_authority_unsafe(
+                context.safety_gate.mark_capacity_authority_unsafe(
                     "upload capacity policy generation changed while this process was running",
                 );
                 heartbeat.error("upload capacity authority changed");
@@ -323,10 +363,10 @@ pub async fn serve(
             }
             Ok(probe) => probe.recovery_draining,
             Err(error) => {
-                state.upload_safety_gate().mark_capacity_authority_unsafe(
+                context.safety_gate.mark_capacity_authority_unsafe(
                     "upload authority could not be proved from PostgreSQL",
                 );
-                note_reconciliation_failure(&state);
+                note_reconciliation_failure(&context);
                 tracing::error!(
                     ?error,
                     "could not verify upload-storage authority; skipping object I/O"
@@ -342,39 +382,34 @@ pub async fn serve(
             ) = audits.deadlines(
                 authority_generation,
                 [
-                    state.config.upload_storage_max_pending_jobs,
-                    state.config.upload_storage_max_retained_files,
-                    state.config.upload_storage_max_retained_bytes,
+                    context.policy.max_pending_jobs,
+                    context.policy.max_retained_files,
+                    context.policy.max_retained_bytes,
                 ],
-                state.upload_safety_gate(),
+                &context.safety_gate,
                 tokio::time::Instant::now(),
             );
         }
         let authority_observation = capacity_authority_audit
-            .audit_if_due(
-                state.upload_safety_gate(),
-                tokio::time::Instant::now,
-                || {
-                    db::audit_upload_capacity_authority(
-                        &state.pool,
-                        state.config.upload_storage_max_pending_jobs,
-                        state.config.upload_storage_max_retained_files,
-                        state.config.upload_storage_max_retained_bytes,
-                    )
-                },
-            )
+            .audit_if_due(&context.safety_gate, tokio::time::Instant::now, || {
+                context.repository.audit_upload_capacity_authority(
+                    context.policy.max_pending_jobs,
+                    context.policy.max_retained_files,
+                    context.policy.max_retained_bytes,
+                )
+            })
             .await;
         let authority_audited = authority_observation.is_some();
         if let Some(observation) = authority_observation {
             let capacity_authority_violations = capacity_authority_audit.violations;
-            state
+            context
                 .metrics
                 .upload_storage_capacity_authority_violations
                 .store(capacity_authority_violations, Ordering::Relaxed);
             match observation {
                 Ok(audit) => {
                     if capacity_authority_violations > 0 {
-                        note_reconciliation_failure(&state);
+                        note_reconciliation_failure(&context);
                         tracing::error!(
                             capacity_authority_violations,
                             relation_owner_violations = audit.relation_owner_violations,
@@ -387,7 +422,7 @@ pub async fn serve(
                     }
                 }
                 Err(error) => {
-                    note_reconciliation_failure(&state);
+                    note_reconciliation_failure(&context);
                     tracing::error!(
                         ?error,
                         "could not verify upload capacity enforcement authority; retrying without object I/O"
@@ -403,23 +438,21 @@ pub async fn serve(
             continue;
         }
         let ledger_observation = capacity_ledger_audit
-            .audit_if_due(
-                state.upload_safety_gate(),
-                tokio::time::Instant::now,
-                || db::reconcile_upload_capacity_ledger(&state.pool),
-            )
+            .audit_if_due(&context.safety_gate, tokio::time::Instant::now, || {
+                context.repository.reconcile_upload_capacity_ledger()
+            })
             .await;
         let ledger_audited = ledger_observation.is_some();
         if let Some(observation) = ledger_observation {
             let capacity_ledger_mismatches = capacity_ledger_audit.mismatches;
-            state
+            context
                 .metrics
                 .upload_storage_capacity_ledger_mismatches
                 .store(capacity_ledger_mismatches, Ordering::Relaxed);
             match observation {
                 Ok(audit) => {
                     if capacity_ledger_mismatches > 0 {
-                        note_reconciliation_failure(&state);
+                        note_reconciliation_failure(&context);
                         tracing::error!(
                             capacity_ledger_mismatches,
                             ledger_retained_files = audit.ledger_retained_files,
@@ -451,7 +484,7 @@ pub async fn serve(
                     }
                 }
                 Err(error) => {
-                    note_reconciliation_failure(&state);
+                    note_reconciliation_failure(&context);
                     tracing::error!(?error, "could not prove upload capacity ledger consistency");
                 }
             }
@@ -459,25 +492,25 @@ pub async fn serve(
         if capacity_ledger_audit.report_blocked(&heartbeat, ledger_audited) {
             continue;
         }
-        state
-            .upload_safety_gate()
+        context
+            .safety_gate
             .establish(authority_generation, recovery_draining);
-        state
+        context
             .metrics
             .upload_storage_safety_gate_state
-            .store(state.upload_safety_gate().metric_code(), Ordering::Relaxed);
-        if let Err(error) = db::cleanup_expired_upload_slots(&state.pool).await {
+            .store(context.safety_gate.metric_code(), Ordering::Relaxed);
+        if let Err(error) = context.repository.cleanup_expired_upload_slots().await {
             tracing::error!(?error, "failed to queue expired upload storage cleanup");
             failures += 1;
-            note_reconciliation_failure(&state);
+            note_reconciliation_failure(&context);
         }
 
-        match db::claim_upload_storage_jobs(&state.pool).await {
+        match context.repository.claim_upload_storage_jobs().await {
             Ok(jobs) => {
                 let outcomes = stream::iter(jobs).map(|job| {
-                    let state = Arc::clone(&state);
+                    let context = Arc::clone(&context);
                     async move {
-                        let result = process_storage_job(&state, &job).await;
+                        let result = process_storage_job(&context, &job).await;
                         (job, result)
                     }
                 });
@@ -485,20 +518,18 @@ pub async fn serve(
                 while let Some((job, result)) = outcomes.next().await {
                     match result {
                         Ok(StorageOutcome::Completed) => {
-                            note_storage_job_success(&state, &job.action)
+                            note_storage_job_success(&context, &job.action)
                         }
                         Ok(StorageOutcome::Deferred) => {}
                         Err(error) => {
                             if crate::storage::is_upload_safety_error(&error) {
-                                if let Err(db_error) = db::defer_upload_storage_job(
-                                    &state.pool,
-                                    job.id,
-                                    job.claim_token,
-                                )
-                                .await
+                                if let Err(db_error) = context
+                                    .repository
+                                    .defer_upload_storage_job(job.id, job.claim_token)
+                                    .await
                                 {
                                     failures += 1;
-                                    note_reconciliation_failure(&state);
+                                    note_reconciliation_failure(&context);
                                     tracing::error!(
                                         job_id = job.id,
                                         ?db_error,
@@ -508,18 +539,19 @@ pub async fn serve(
                                 continue;
                             }
                             failures += 1;
-                            note_storage_job_failure(&state, &job.action, &error);
+                            note_storage_job_failure(&context, &job.action, &error);
                             tracing::error!(job_id=job.id, upload_id=%job.object_id, action=%job.action, ?error, "upload storage reconciliation failed");
-                            if let Err(db_error) = db::fail_upload_storage_job(
-                                &state.pool,
-                                job.id,
-                                job.claim_token,
-                                &error.to_string(),
-                            )
-                            .await
+                            if let Err(db_error) = context
+                                .repository
+                                .fail_upload_storage_job(
+                                    job.id,
+                                    job.claim_token,
+                                    &error.to_string(),
+                                )
+                                .await
                             {
                                 failures += 1;
-                                note_reconciliation_failure(&state);
+                                note_reconciliation_failure(&context);
                                 tracing::error!(
                                     job_id = job.id,
                                     ?db_error,
@@ -532,18 +564,18 @@ pub async fn serve(
             }
             Err(error) => {
                 failures += 1;
-                note_reconciliation_failure(&state);
+                note_reconciliation_failure(&context);
                 tracing::error!(?error, "failed to claim upload storage jobs");
             }
         }
         heartbeat.pulse();
 
-        match db::queued_upload_cleanup(&state.pool).await {
+        match context.repository.queued_upload_cleanup().await {
             Ok(jobs) => {
                 let outcomes = stream::iter(jobs).map(|job| {
-                    let state = Arc::clone(&state);
+                    let context = Arc::clone(&context);
                     async move {
-                        let result = process_cleanup_job(&state, &job).await;
+                        let result = process_cleanup_job(&context, &job).await;
                         (job, result)
                     }
                 });
@@ -551,7 +583,7 @@ pub async fn serve(
                 while let Some((job, result)) = outcomes.next().await {
                     match result {
                         Ok(CleanupOutcome::Completed) => {
-                            state
+                            context
                                 .metrics
                                 .upload_storage_cleanup_success_total
                                 .fetch_add(1, Ordering::Relaxed);
@@ -559,42 +591,41 @@ pub async fn serve(
                         Ok(CleanupOutcome::Deferred) => {}
                         Err(error) => {
                             if crate::storage::is_upload_safety_error(&error) {
-                                if let Err(db_error) = db::defer_queued_upload_cleanup(
-                                    &state.pool,
-                                    job.object_id,
-                                    job.claim_token,
-                                )
-                                .await
+                                if let Err(db_error) = context
+                                    .repository
+                                    .defer_queued_upload_cleanup(job.object_id, job.claim_token)
+                                    .await
                                 {
                                     failures += 1;
-                                    note_reconciliation_failure(&state);
+                                    note_reconciliation_failure(&context);
                                     tracing::error!(upload_id=%job.object_id, ?db_error, "failed to defer upload cleanup after authority invalidation");
                                 }
                                 continue;
                             }
                             failures += 1;
-                            note_reconciliation_failure(&state);
-                            state
+                            note_reconciliation_failure(&context);
+                            context
                                 .metrics
                                 .upload_storage_cleanup_failures_total
                                 .fetch_add(1, Ordering::Relaxed);
                             if crate::storage::is_upload_integrity_error(&error) {
-                                state
+                                context
                                     .metrics
                                     .upload_storage_integrity_failures_total
                                     .fetch_add(1, Ordering::Relaxed);
                             }
                             tracing::error!(upload_id=%job.object_id, ?error, "upload object deletion failed");
-                            if let Err(db_error) = db::fail_queued_upload_cleanup(
-                                &state.pool,
-                                job.object_id,
-                                job.claim_token,
-                                &error.to_string(),
-                            )
-                            .await
+                            if let Err(db_error) = context
+                                .repository
+                                .fail_queued_upload_cleanup(
+                                    job.object_id,
+                                    job.claim_token,
+                                    &error.to_string(),
+                                )
+                                .await
                             {
                                 failures += 1;
-                                note_reconciliation_failure(&state);
+                                note_reconciliation_failure(&context);
                                 tracing::error!(upload_id=%job.object_id, ?db_error, "failed to release upload cleanup job");
                             }
                         }
@@ -603,7 +634,7 @@ pub async fn serve(
             }
             Err(error) => {
                 failures += 1;
-                note_reconciliation_failure(&state);
+                note_reconciliation_failure(&context);
                 tracing::error!(?error, "failed to claim upload cleanup jobs");
             }
         }
@@ -612,7 +643,7 @@ pub async fn serve(
         credential_ticks = credential_ticks.saturating_add(1);
         if credential_ticks >= 12 {
             credential_ticks = 0;
-            match state.upload_store().reload_credentials().await {
+            match context.store.reload_credentials().await {
                 Ok(_) => {}
                 Err(error) if crate::storage::is_upload_safety_error(&error) => {
                     tracing::warn!(
@@ -622,8 +653,8 @@ pub async fn serve(
                 }
                 Err(error) => {
                     failures += 1;
-                    note_reconciliation_failure(&state);
-                    state
+                    note_reconciliation_failure(&context);
+                    context
                         .metrics
                         .upload_storage_credential_refresh_failures_total
                         .fetch_add(1, Ordering::Relaxed);
@@ -631,12 +662,12 @@ pub async fn serve(
                 }
             }
         }
-        match db::claim_upload_scrub_jobs(&state.pool).await {
+        match context.repository.claim_upload_scrub_jobs().await {
             Ok(jobs) => {
                 for job in jobs {
                     let verified = tokio::time::timeout(
                         STORAGE_OPERATION_TIMEOUT,
-                        state.upload_store().commit(
+                        context.store.commit(
                             &job.object_id.to_string(),
                             &job.storage_attempt.to_string(),
                             job.object_version.as_deref(),
@@ -652,23 +683,21 @@ pub async fn serve(
                             if object.object_key == job.object_key
                                 && object.object_version == job.object_version =>
                         {
-                            match db::complete_upload_scrub(
-                                &state.pool,
-                                job.object_id,
-                                job.claim_token,
-                            )
-                            .await
+                            match context
+                                .repository
+                                .complete_upload_scrub(job.object_id, job.claim_token)
+                                .await
                             {
                                 Ok(true) => {
-                                    state
+                                    context
                                         .metrics
                                         .upload_storage_scrub_success_total
                                         .fetch_add(1, Ordering::Relaxed);
                                 }
                                 Ok(false) | Err(_) => {
                                     failures += 1;
-                                    note_reconciliation_failure(&state);
-                                    state
+                                    note_reconciliation_failure(&context);
+                                    context
                                         .metrics
                                         .upload_storage_scrub_failures_total
                                         .fetch_add(1, Ordering::Relaxed);
@@ -676,25 +705,27 @@ pub async fn serve(
                             }
                         }
                         Err(error) if crate::storage::is_upload_safety_error(&error) => {
-                            if let Err(db_error) =
-                                db::defer_upload_scrub(&state.pool, job.object_id, job.claim_token)
-                                    .await
+                            if let Err(db_error) = context
+                                .repository
+                                .defer_upload_scrub(job.object_id, job.claim_token)
+                                .await
                             {
                                 failures += 1;
-                                note_reconciliation_failure(&state);
+                                note_reconciliation_failure(&context);
                                 tracing::error!(upload_id=%job.object_id, ?db_error, "failed to defer upload scrub after authority invalidation");
                             }
                         }
                         Ok(_) | Err(_) => {
                             failures += 1;
-                            note_reconciliation_failure(&state);
-                            state
+                            note_reconciliation_failure(&context);
+                            context
                                 .metrics
                                 .upload_storage_scrub_failures_total
                                 .fetch_add(1, Ordering::Relaxed);
-                            let _ =
-                                db::fail_upload_scrub(&state.pool, job.object_id, job.claim_token)
-                                    .await;
+                            let _ = context
+                                .repository
+                                .fail_upload_scrub(job.object_id, job.claim_token)
+                                .await;
                             tracing::error!(upload_id=%job.object_id, "committed upload manifest scrub failed closed");
                         }
                     }
@@ -703,69 +734,69 @@ pub async fn serve(
             }
             Err(error) => {
                 failures += 1;
-                note_reconciliation_failure(&state);
+                note_reconciliation_failure(&context);
                 tracing::error!(?error, "failed to claim upload manifest scrub jobs");
             }
         }
-        match db::upload_queue_metrics(&state.pool).await {
+        match context.repository.upload_queue_metrics().await {
             Ok(snapshot) => {
-                state
+                context
                     .metrics
                     .upload_storage_jobs_pending
                     .store(snapshot.storage_jobs_pending, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_cleanup_pending
                     .store(snapshot.cleanup_jobs_pending, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_cleanup_obligation_debt
                     .store(snapshot.cleanup_obligation_debt, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_configured_pending_limit
                     .store(snapshot.configured_pending_limit, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_legacy_overcommit_draining
                     .store(snapshot.legacy_overcommit_draining, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_recovery_retained_files
                     .store(snapshot.recovery_retained_files, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_recovery_retained_bytes
                     .store(snapshot.recovery_retained_bytes, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_recovery_overcommit_draining
                     .store(snapshot.recovery_overcommit_draining, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_oldest_pending_age_seconds
                     .store(snapshot.oldest_pending_age_seconds, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_dead_letter_jobs
                     .store(snapshot.dead_letter_jobs_capped, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_scrub_failures
                     .store(snapshot.scrub_failures_capped, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_scrub_due_capped
                     .store(snapshot.scrub_due_capped, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_scrub_oldest_overdue_seconds
                     .store(snapshot.scrub_oldest_overdue_seconds, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_cleanup_obligations_due_capped
                     .store(snapshot.cleanup_obligations_due_capped, Ordering::Relaxed);
-                state
+                context
                     .metrics
                     .upload_storage_cleanup_oldest_overdue_seconds
                     .store(snapshot.cleanup_oldest_overdue_seconds, Ordering::Relaxed);
@@ -779,11 +810,11 @@ pub async fn serve(
                     || snapshot.cleanup_oldest_overdue_seconds > 900
                     || snapshot.legacy_overcommit_draining != 0
                     || snapshot.recovery_overcommit_draining != 0
-                    || reserved_recovery >= state.config.upload_storage_max_pending_jobs as u64
+                    || reserved_recovery >= context.policy.max_pending_jobs as u64
                     || snapshot.oldest_pending_age_seconds > 900
                 {
                     failures += 1;
-                    note_reconciliation_failure(&state);
+                    note_reconciliation_failure(&context);
                     tracing::error!(
                         pending,
                         cleanup_obligation_debt = snapshot.cleanup_obligation_debt,
@@ -805,7 +836,7 @@ pub async fn serve(
             }
             Err(error) => {
                 failures += 1;
-                note_reconciliation_failure(&state);
+                note_reconciliation_failure(&context);
                 tracing::error!(?error, "failed to refresh upload-storage queue metrics");
             }
         }
@@ -819,34 +850,47 @@ pub async fn serve(
     }
 }
 
-fn note_reconciliation_failure(state: &AppState) {
-    state
+fn note_reconciliation_failure<R: UploadMaintenanceRepository>(
+    context: &UploadMaintenanceContext<R>,
+) {
+    context
         .metrics
         .upload_storage_reconciliation_failures_total
         .fetch_add(1, Ordering::Relaxed);
 }
 
-fn note_storage_job_success(state: &AppState, action: &str) {
+fn note_storage_job_success<R: UploadMaintenanceRepository>(
+    context: &UploadMaintenanceContext<R>,
+    action: &str,
+) {
     let counter = match action {
-        "promote" => &state.metrics.upload_storage_promotion_success_total,
-        "delete_stage" => &state.metrics.upload_storage_stage_deletion_success_total,
-        "delete_object" => &state.metrics.upload_storage_object_deletion_success_total,
+        "promote" => &context.metrics.upload_storage_promotion_success_total,
+        "delete_stage" => &context.metrics.upload_storage_stage_deletion_success_total,
+        "delete_object" => &context.metrics.upload_storage_object_deletion_success_total,
         _ => return,
     };
     counter.fetch_add(1, Ordering::Relaxed);
 }
 
-fn note_storage_job_failure(state: &AppState, action: &str, error: &anyhow::Error) {
-    note_reconciliation_failure(state);
+fn note_storage_job_failure<R: UploadMaintenanceRepository>(
+    context: &UploadMaintenanceContext<R>,
+    action: &str,
+    error: &anyhow::Error,
+) {
+    note_reconciliation_failure(context);
     let counter = match action {
-        "promote" => &state.metrics.upload_storage_promotion_failures_total,
-        "delete_stage" => &state.metrics.upload_storage_stage_deletion_failures_total,
-        "delete_object" => &state.metrics.upload_storage_object_deletion_failures_total,
+        "promote" => &context.metrics.upload_storage_promotion_failures_total,
+        "delete_stage" => &context.metrics.upload_storage_stage_deletion_failures_total,
+        "delete_object" => {
+            &context
+                .metrics
+                .upload_storage_object_deletion_failures_total
+        }
         _ => return,
     };
     counter.fetch_add(1, Ordering::Relaxed);
     if crate::storage::is_upload_integrity_error(error) {
-        state
+        context
             .metrics
             .upload_storage_integrity_failures_total
             .fetch_add(1, Ordering::Relaxed);
@@ -858,34 +902,35 @@ enum StorageOutcome {
     Deferred,
 }
 
-async fn process_storage_job(
-    state: &AppState,
-    job: &db::UploadStorageJob,
+async fn process_storage_job<R: UploadMaintenanceRepository>(
+    context: &UploadMaintenanceContext<R>,
+    job: &UploadStorageJob,
 ) -> Result<StorageOutcome> {
     anyhow::ensure!(
-        job.storage_backend == state.upload_store().backend(),
+        job.storage_backend == context.store.backend(),
         "job targets a different upload storage backend"
     );
     match job.action.as_str() {
         "promote" => {
             let size = u64::try_from(job.expected_size.context("promote job has no size")?)?;
             let digest = job.expected_sha256.context("promote job has no digest")?;
-            if !db::begin_upload_promotion(
-                &state.pool,
-                job.object_id,
-                job.storage_attempt,
-                job.storage_fence,
-                job.claim_token,
-            )
-            .await?
+            if !context
+                .repository
+                .begin_upload_promotion(
+                    job.object_id,
+                    job.storage_attempt,
+                    job.storage_fence,
+                    job.claim_token,
+                )
+                .await?
             {
                 // The exact attempt is no longer authoritative. Its immutable
                 // stage cannot name a replacement attempt. Never remove the
                 // destination here: another reconciler may already have
                 // committed this same attempt after our queue lease expired.
-                if db::upload_attempt_is_committed(
-                    &state.pool,
-                    db::CommittedUploadIdentity {
+                if context
+                    .repository
+                    .upload_attempt_is_committed(CommittedUploadIdentity {
                         id: job.object_id,
                         storage_attempt: job.storage_attempt,
                         storage_backend: &job.storage_backend,
@@ -897,35 +942,37 @@ async fn process_storage_job(
                         content_sha256: &digest,
                         size,
                         storage_fence: job.storage_fence,
-                    },
-                )
-                .await?
+                    })
+                    .await?
                 {
-                    delete_distinct_stage_after_commit(state, job).await?;
+                    delete_distinct_stage_after_commit(context, job).await?;
                     anyhow::ensure!(
-                        db::complete_upload_storage_job(&state.pool, job.id, job.claim_token)
+                        context
+                            .repository
+                            .complete_upload_storage_job(job.id, job.claim_token)
                             .await?,
                         "upload promotion job lease changed before completion"
                     );
                     return Ok(StorageOutcome::Completed);
                 }
                 anyhow::ensure!(
-                    db::retire_upload_promotion_for_cleanup(
-                        &state.pool,
-                        job.object_id,
-                        job.storage_attempt,
-                        job.storage_fence,
-                        job.claim_token,
-                    )
-                    .await?,
+                    context
+                        .repository
+                        .retire_upload_promotion_for_cleanup(
+                            job.object_id,
+                            job.storage_attempt,
+                            job.storage_fence,
+                            job.claim_token,
+                        )
+                        .await?,
                     "promotion lost authority without an exact committed or deleting projection"
                 );
-                delete_uncommitted_attempt(state, job).await?;
+                delete_uncommitted_attempt(context, job).await?;
                 return Ok(StorageOutcome::Completed);
             }
             let promoted = tokio::time::timeout(
                 STORAGE_OPERATION_TIMEOUT,
-                state.upload_store().commit(
+                context.store.commit(
                     &job.object_id.to_string(),
                     &job.storage_attempt.to_string(),
                     job.stage_version.as_deref(),
@@ -935,9 +982,9 @@ async fn process_storage_job(
             )
             .await
             .context("upload promotion timed out")??;
-            let committed = db::complete_promoted_upload(
-                &state.pool,
-                db::PromotedUploadProjection {
+            let committed = context
+                .repository
+                .complete_promoted_upload(PromotedUploadProjection {
                     id: job.object_id,
                     claim_token: job.storage_attempt,
                     promotion_claim_token: job.claim_token,
@@ -946,15 +993,14 @@ async fn process_storage_job(
                     object_version: promoted.object_version.as_deref(),
                     content_sha256: &digest,
                     size: promoted.size,
-                    retention_seconds: state.config.upload_retention_seconds,
+                    retention_seconds: context.policy.retention_seconds,
                     storage_fence: job.storage_fence,
-                },
-            )
-            .await?;
+                })
+                .await?;
             if !committed {
-                if db::upload_attempt_is_committed(
-                    &state.pool,
-                    db::CommittedUploadIdentity {
+                if context
+                    .repository
+                    .upload_attempt_is_committed(CommittedUploadIdentity {
                         id: job.object_id,
                         storage_attempt: job.storage_attempt,
                         storage_backend: &promoted.backend,
@@ -963,39 +1009,41 @@ async fn process_storage_job(
                         content_sha256: &digest,
                         size: promoted.size,
                         storage_fence: job.storage_fence,
-                    },
-                )
-                .await?
+                    })
+                    .await?
                 {
                     // A concurrent worker may have committed the same immutable
                     // destination. Stage cleanup is idempotent; destination
                     // deletion is performed only by an exact durable delete job.
-                    delete_distinct_stage_after_commit(state, job).await?;
+                    delete_distinct_stage_after_commit(context, job).await?;
                     anyhow::ensure!(
-                        db::complete_upload_storage_job(&state.pool, job.id, job.claim_token)
+                        context
+                            .repository
+                            .complete_upload_storage_job(job.id, job.claim_token)
                             .await?,
                         "upload promotion job lease changed before completion"
                     );
                 } else {
                     anyhow::ensure!(
-                        db::retire_upload_promotion_for_cleanup(
-                            &state.pool,
-                            job.object_id,
-                            job.storage_attempt,
-                            job.storage_fence,
-                            job.claim_token,
-                        )
-                        .await?,
+                        context
+                            .repository
+                            .retire_upload_promotion_for_cleanup(
+                                job.object_id,
+                                job.storage_attempt,
+                                job.storage_fence,
+                                job.claim_token,
+                            )
+                            .await?,
                         "upload attempt lost authority without an exact cleanup projection"
                     );
-                    delete_uncommitted_attempt(state, job).await?;
+                    delete_uncommitted_attempt(context, job).await?;
                 }
             }
         }
         "delete_stage" => {
             let removed = tokio::time::timeout(
                 STORAGE_OPERATION_TIMEOUT,
-                state.upload_store().abort(
+                context.store.abort(
                     &job.object_id.to_string(),
                     &job.storage_attempt.to_string(),
                     job.stage_version.as_deref(),
@@ -1004,19 +1052,18 @@ async fn process_storage_job(
             .await
             .context("upload stage deletion timed out")??;
             if job.storage_backend == "s3"
-                && !db::confirm_upload_stage_absence(
-                    &state.pool,
-                    job.id,
-                    job.claim_token,
-                    removed,
-                    300,
-                )
-                .await?
+                && !context
+                    .repository
+                    .confirm_upload_stage_absence(job.id, job.claim_token, removed, 300)
+                    .await?
             {
                 return Ok(StorageOutcome::Deferred);
             }
             anyhow::ensure!(
-                db::complete_upload_storage_job(&state.pool, job.id, job.claim_token).await?,
+                context
+                    .repository
+                    .complete_upload_storage_job(job.id, job.claim_token)
+                    .await?,
                 "upload stage-deletion job lease changed before completion"
             );
         }
@@ -1027,14 +1074,15 @@ async fn process_storage_job(
                 .context("delete job has no object key")?;
             tokio::time::timeout(
                 STORAGE_OPERATION_TIMEOUT,
-                state
-                    .upload_store()
-                    .delete(key, job.object_version.as_deref()),
+                context.store.delete(key, job.object_version.as_deref()),
             )
             .await
             .context("upload object deletion timed out")??;
             anyhow::ensure!(
-                db::complete_upload_storage_job(&state.pool, job.id, job.claim_token).await?,
+                context
+                    .repository
+                    .complete_upload_storage_job(job.id, job.claim_token)
+                    .await?,
                 "upload object-deletion job lease changed before completion"
             );
         }
@@ -1043,20 +1091,23 @@ async fn process_storage_job(
     Ok(StorageOutcome::Completed)
 }
 
-async fn delete_distinct_stage_after_commit(
-    state: &AppState,
-    job: &db::UploadStorageJob,
+async fn delete_distinct_stage_after_commit<R: UploadMaintenanceRepository>(
+    context: &UploadMaintenanceContext<R>,
+    job: &UploadStorageJob,
 ) -> Result<()> {
     if job.stage_key == job.object_key {
         return Ok(());
     }
-    delete_uncommitted_attempt(state, job).await
+    delete_uncommitted_attempt(context, job).await
 }
 
-async fn delete_uncommitted_attempt(state: &AppState, job: &db::UploadStorageJob) -> Result<()> {
+async fn delete_uncommitted_attempt<R: UploadMaintenanceRepository>(
+    context: &UploadMaintenanceContext<R>,
+    job: &UploadStorageJob,
+) -> Result<()> {
     tokio::time::timeout(
         STORAGE_OPERATION_TIMEOUT,
-        state.upload_store().abort(
+        context.store.abort(
             &job.object_id.to_string(),
             &job.storage_attempt.to_string(),
             job.stage_version.as_deref(),
@@ -1072,12 +1123,12 @@ enum CleanupOutcome {
     Deferred,
 }
 
-async fn process_cleanup_job(
-    state: &AppState,
-    job: &db::UploadCleanupJob,
+async fn process_cleanup_job<R: UploadMaintenanceRepository>(
+    context: &UploadMaintenanceContext<R>,
+    job: &UploadCleanupJob,
 ) -> Result<CleanupOutcome> {
     anyhow::ensure!(
-        job.storage_backend == state.upload_store().backend(),
+        job.storage_backend == context.store.backend(),
         "cleanup targets a different upload storage backend"
     );
     // The generic object-store interface can delete only the current object
@@ -1093,22 +1144,21 @@ async fn process_cleanup_job(
             && job.stage_version.as_deref() != job.object_version.as_deref()),
         "cleanup names two object-store versions at one key; exact deletion is unsupported"
     );
-    if !db::upload_cleanup_generation_is_quiescent(
-        &state.pool,
-        job.object_id,
-        job.claim_token,
-        job.storage_fence,
-    )
-    .await?
+    if !context
+        .repository
+        .upload_cleanup_generation_is_quiescent(job.object_id, job.claim_token, job.storage_fence)
+        .await?
     {
-        let _ =
-            db::defer_queued_upload_cleanup(&state.pool, job.object_id, job.claim_token).await?;
+        let _ = context
+            .repository
+            .defer_queued_upload_cleanup(job.object_id, job.claim_token)
+            .await?;
         return Ok(CleanupOutcome::Deferred);
     }
     let object_removed = tokio::time::timeout(
         STORAGE_OPERATION_TIMEOUT,
-        state
-            .upload_store()
+        context
+            .store
             .delete(&job.object_key, job.object_version.as_deref()),
     )
     .await
@@ -1118,7 +1168,7 @@ async fn process_cleanup_job(
         if let Some(attempt) = job.storage_attempt {
             let stage_removed = tokio::time::timeout(
                 STORAGE_OPERATION_TIMEOUT,
-                state.upload_store().abort(
+                context.store.abort(
                     &job.object_id.to_string(),
                     &attempt.to_string(),
                     job.stage_version.as_deref(),
@@ -1130,21 +1180,20 @@ async fn process_cleanup_job(
         }
     }
     if job.storage_backend == "s3"
-        && !db::confirm_upload_cleanup_absence(
-            &state.pool,
-            job.object_id,
-            job.claim_token,
-            removed_any,
-            300,
-        )
-        .await?
+        && !context
+            .repository
+            .confirm_upload_cleanup_absence(job.object_id, job.claim_token, removed_any, 300)
+            .await?
     {
         // The durable tombstone remains queued. A later pass must observe the
         // same key absent after the quiet period before metadata can vanish.
         return Ok(CleanupOutcome::Deferred);
     }
     anyhow::ensure!(
-        db::complete_queued_upload_cleanup(&state.pool, job.object_id, job.claim_token).await?,
+        context
+            .repository
+            .complete_queued_upload_cleanup(job.object_id, job.claim_token)
+            .await?,
         "upload cleanup lease changed before completion"
     );
     Ok(CleanupOutcome::Completed)
@@ -1153,6 +1202,9 @@ async fn process_cleanup_job(
 #[cfg(test)]
 mod tests {
     use super::{Duration, StartupAuditHandoff, UploadAuthorityGeneration, UploadSafetyGate};
+    use crate::services::upload_maintenance::{
+        UploadCapacityAuthorityAudit, UploadCapacityReconciliation,
+    };
     use tokio::time::Instant;
 
     const STARTUP_GENERATION: UploadAuthorityGeneration = UploadAuthorityGeneration {
@@ -1199,8 +1251,8 @@ mod tests {
         next_audit: Duration,
     }
 
-    fn reconciliation(mismatch: bool) -> crate::db::UploadCapacityReconciliation {
-        crate::db::UploadCapacityReconciliation {
+    fn reconciliation(mismatch: bool) -> UploadCapacityReconciliation {
+        UploadCapacityReconciliation {
             ledger_retained_files: 1,
             fact_retained_files: if mismatch { 2 } else { 1 },
             ledger_retained_bytes: 2,
@@ -1315,11 +1367,11 @@ mod tests {
                                             AuditResult::Unavailable => {
                                                 anyhow::bail!("injected catalog statement timeout")
                                             }
-                                            AuditResult::Clean => Ok(
-                                                crate::db::UploadCapacityAuthorityAudit::default(),
-                                            ),
+                                            AuditResult::Clean => {
+                                                Ok(UploadCapacityAuthorityAudit::default())
+                                            }
                                             AuditResult::Violation => {
-                                                Ok(crate::db::UploadCapacityAuthorityAudit {
+                                                Ok(UploadCapacityAuthorityAudit {
                                                     trigger_authority_violations: 1,
                                                     ..Default::default()
                                                 })

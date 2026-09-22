@@ -173,3 +173,5 @@ pub async fn migrate_for_domain(pool: &PgPool, domain: &str) -> Result<()> {
         (Ok(()), Ok(())) => Ok(()),
     }
 }
+
+pub(crate) mod upload_maintenance;

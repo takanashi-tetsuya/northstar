@@ -2060,6 +2060,8 @@ for (const [name, source] of [
   ['PrivateStorageService', read('src/services/private_storage.rs')],
   ['RetentionContext', read('src/retention.rs')],
   ['SubscriptionCleanupContext', read('src/subscription_cleanup.rs')],
+  ['UploadMaintenanceContext', read('src/upload_worker.rs')],
+  ['UploadMaintenanceRepository', read('src/services/upload_maintenance.rs')],
 ]) {
   const production = productionWithoutCfgTestModules(source, name);
   for (const [label, pattern] of [

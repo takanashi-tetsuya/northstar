@@ -366,10 +366,12 @@ MUC, MIX, Profile, PubSub/PEP, Blocking, Privacy, Push, private XML storage, Pre
 offline/BOSH replay, stream management, account lifecycle, authentication, administrator commands
 and personal-message retractions. Their PostgreSQL adapters live in
 `src/db`; retention and subscription cleanup use narrow repository-backed
-contexts. Existing cross-table transactions, admission permits, account
+contexts. Upload reconciliation also has a dedicated context and repository
+with the same storage fences and one-use startup audit handoff.
+Existing cross-table transactions, admission permits, account
 fences and post-commit recovery behavior remain intact.
 
-Remaining work covers REST handlers and live-session/upload workers.
+Remaining work covers REST handlers and live-session/account-recovery workers.
 AppState still has nine public fields, so stage 1 remains open. Changing field
 visibility alone does not demonstrate reduced authority.
 

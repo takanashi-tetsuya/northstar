@@ -666,8 +666,8 @@ async fn run() -> Result<()> {
         },
     );
 
-    if state.config.upload_mode.keeps_storage_runtime() {
-        let upload_state = Arc::clone(&state);
+    if let Some(upload_context) = state.upload_maintenance_context() {
+        let upload_context = Arc::new(upload_context);
         let upload_cancel = cancel.clone();
         worker_registry.supervise(
             "upload-storage-reconciliation",
@@ -683,9 +683,9 @@ async fn run() -> Result<()> {
             Some(std::time::Duration::from_secs(600)),
             cancel.clone(),
             move |heartbeat| {
-                let upload_state = Arc::clone(&upload_state);
+                let upload_context = Arc::clone(&upload_context);
                 let upload_cancel = upload_cancel.clone();
-                async move { upload_worker::serve(upload_state, upload_cancel, heartbeat).await }
+                async move { upload_worker::serve(upload_context, upload_cancel, heartbeat).await }
             },
         );
     }

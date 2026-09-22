@@ -23,3 +23,5 @@ pub(crate) mod sm;
 pub(crate) mod sm_capacity;
 pub(crate) mod upload;
 pub(crate) mod upload_safety;
+
+pub(crate) mod upload_maintenance;

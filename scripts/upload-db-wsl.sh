@@ -132,9 +132,9 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_HOME="$project_dir/.cargo-local"
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$test_database?options=-csearch_path%3D$test_schema"
+export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$test_schema"
 cargo test --locked --offline db::upload::tests -- --ignored --nocapture --test-threads=1
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$test_database?options=-csearch_path%3D$admin_schema"
+export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$admin_schema"
 cargo test --locked --offline \
   db::upload_admin::tests::postgres_retry_idempotency_replay_target_generation_and_not_found_contract \
   -- --ignored --exact --nocapture --test-threads=1
@@ -144,7 +144,7 @@ cargo test --locked --offline \
 # The account-deletion fixture binds its own upload-capacity policy after
 # migration, so this invocation must not depend on a preceding test command's
 # durable state in the shared isolated schema.
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$test_database?options=-csearch_path%3D$test_schema"
+export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$test_schema"
 cargo test --locked --offline \
   db::users::tests::account_deletion_atomically_cancels_local_reverse_rosters \
   -- --ignored --nocapture --test-threads=1

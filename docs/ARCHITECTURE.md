@@ -161,6 +161,9 @@ Key ownership:
 - Embedded and standalone retention workers share the same narrow context.
   Retention and subscription cleanup receive repository operations, policy and
   metrics, with no raw pool or global application state.
+- Upload reconciliation receives a repository, its four maintenance limits,
+  the exact storage generation and namespace, the guarded object store and
+  shared metrics. Startup audit evidence remains one-use across worker restarts.
 - `src/db/` is the primary repository/routine layer for transactional
   persistence, replay, canonical identity and migration-time invariants.
   Several application services and API/cluster/federation/worker paths still

@@ -130,6 +130,13 @@ def publish_readiness(path: Path, nonce: str, purpose: str, port: int) -> None:
 
 
 def relay_connection(client: socket.socket, target_file: Path) -> None:
+    disconnect_file = target_file.with_suffix(".disconnect")
+    def disconnect_generation() -> bytes:
+        try:
+            return disconnect_file.read_bytes()
+        except FileNotFoundError:
+            return b""
+    generation = disconnect_generation()
     with client:
         client.settimeout(0.5)
         try:
@@ -198,6 +205,8 @@ def relay_connection(client: socket.socket, target_file: Path) -> None:
             selector.register(upstream, selectors.EVENT_READ)
             try:
                 while not STOP.is_set():
+                    if disconnect_generation() != generation:
+                        return
                     events = selector.select(0.25)
                     if not events:
                         continue

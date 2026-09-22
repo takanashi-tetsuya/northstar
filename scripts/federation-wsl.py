@@ -581,6 +581,25 @@ def verify_s2s_transport_boundaries() -> None:
         stream.close()
 
 
+def interrupt_federation_transport(destination: str, peer_domain: str) -> None:
+    source = "B" if destination == "A" else "A"
+    target = pathlib.Path(os.environ[f"FEDERATION_TEST_RELAY_{destination}"])
+    log = pathlib.Path(os.environ[f"FEDERATION_TEST_LOG_{source}"])
+
+    def resumed_count():
+        return sum("resumed outbound S2S stream" in line and f'"{peer_domain}"' in line
+                   for line in log.read_text().splitlines())
+
+    before = resumed_count()
+    target.with_suffix(".disconnect").write_text(str(time.monotonic_ns()))
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        if resumed_count() > before:
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"outbound S2S stream to {peer_domain} did not resume after the relay dropped TLS")
+
+
 def verify_s2s_outbox_acknowledgement(alice, bob) -> None:
     if os.environ.get("FEDERATION_TEST_EXTERNAL", "true").lower() != "true":
         return
@@ -594,9 +613,10 @@ def verify_s2s_outbox_acknowledgement(alice, bob) -> None:
 
     try:
         authenticate_external(stream, "remote.localhost", bidi=True)
-        stream.sendall(b"<enable xmlns='urn:xmpp:sm:3'/>")
-        receive_tls_until(stream, "/>")
-        for marker in ("SM-ACK-WIRE", "SM-RETRY-WIRE"):
+        stream.sendall(b"<enable xmlns='urn:xmpp:sm:3' resume='true'/>")
+        enabled = receive_tls_until(stream, "/>")
+        resume_id = re.search(r"\bid='([^']+)'", enabled).group(1)
+        for marker in ("SM-ACK-WIRE", "SM-RESUME-WIRE", "SM-RETRY-WIRE"):
             alice.send(f"<message xmlns='jabber:client' to='bob_fed@remote.localhost' type='chat' id='{marker}'><body>{marker}</body></message>")
             response = receive_tls_until(stream, "<r xmlns='urn:xmpp:sm:3'/>")
             fixture.check(marker in response, "managed BIDI route did not receive its stanza")
@@ -605,8 +625,25 @@ def verify_s2s_outbox_acknowledgement(alice, bob) -> None:
                 stream.sendall(b"<a xmlns='urn:xmpp:sm:3' h='1'/><r xmlns='urn:xmpp:sm:3'/>")
                 receive_tls_until(stream, "h='0'")
                 fixture.check(pending(marker) == 0, "peer ACK did not complete its fenced outbox row")
+            elif marker == "SM-RESUME-WIRE":
+                original = response[:response.index("<r xmlns=")]
+                stream.close()
+                stream = open_direct_s2s(str(cert_dir / "federation-b.crt"), str(cert_dir / "federation-b.key"))
+                authenticate_external(stream, "remote.localhost", bidi=True)
+                stream.sendall(f"<resume xmlns='urn:xmpp:sm:3' previd='{resume_id}' h='1'/>".encode())
+                replay = receive_tls_until(stream, "<r xmlns='urn:xmpp:sm:3'/>")
+                fixture.check(original in replay and pending(marker) == 1, "durable resume changed bytes or prematurely completed the outbox")
+                # Treat the stanza as handled but lose its normal ACK; resume h must complete it.
+                stream.close()
+                stream = open_direct_s2s(str(cert_dir / "federation-b.crt"), str(cert_dir / "federation-b.key"))
+                authenticate_external(stream, "remote.localhost", bidi=True)
+                stream.sendall(f"<resume xmlns='urn:xmpp:sm:3' previd='{resume_id}' h='2'/>".encode())
+                response = receive_tls_until(stream, "<r xmlns='urn:xmpp:sm:3'/>")
+                fixture.check(marker not in response and pending(marker) == 0, "resume h failed to complete the fenced durable row")
             else:
                 original = response
+                stream.sendall(b"</stream:stream>")
+                receive_tls_until(stream, "</stream:stream>")
     finally:
         stream.close()
     replay, _ = bob.receive_until("SM-RETRY-WIRE", timeout=30)
@@ -617,7 +654,41 @@ def verify_s2s_outbox_acknowledgement(alice, bob) -> None:
         return None
     fixture.check(stanza_id(original) is not None and stanza_id(original) == stanza_id(replay),
                   "S2S retry changed its stable stanza ID")
-    print("S2S outbox waits for ACK and retries disconnected deliveries with the same stanza ID")
+    # A resume ID does not grant authority over a row claimed by another worker.
+    stream = open_direct_s2s(str(cert_dir / "federation-b.crt"), str(cert_dir / "federation-b.key"))
+    try:
+        authenticate_external(stream, "remote.localhost", bidi=True)
+        stream.sendall(b"<enable xmlns='urn:xmpp:sm:3' resume='true'/>")
+        enabled = receive_tls_until(stream, "/>")
+        resume_id = re.search(r"\bid='([^']+)'", enabled).group(1)
+        marker = "SM-LOST-LEASE-WIRE"
+        alice.send(f"<message xmlns='jabber:client' to='bob_fed@remote.localhost' type='chat' id='{marker}'><body>{marker}</body></message>")
+        receive_tls_until(stream, "<r xmlns='urn:xmpp:sm:3'/>")
+        psql_schema(schema, database, f"UPDATE s2s_outbox SET lock_token = gen_random_uuid(), locked_until = NOW() + INTERVAL '90 seconds' WHERE stanza LIKE '%{marker}%'")
+        replacement = psql_schema(schema, database, f"SELECT lock_token FROM s2s_outbox WHERE stanza LIKE '%{marker}%'")
+        stream.close()
+        stream = open_direct_s2s(str(cert_dir / "federation-b.crt"), str(cert_dir / "federation-b.key"))
+        authenticate_external(stream, "remote.localhost", bidi=True)
+        stream.sendall(f"<resume xmlns='urn:xmpp:sm:3' previd='{resume_id}' h='1'/>".encode())
+        response = b""
+        try:
+            while len(response) < 8192:
+                chunk = stream.recv(8192)
+                if not chunk:
+                    break
+                response += chunk
+                if b"</failed>" in response or b"<resumed" in response:
+                    break
+        except (ConnectionError, ssl.SSLError):
+            pass
+        fixture.check(b"<resumed" not in response, "resumption accepted a lost outbox lease")
+        current = psql_schema(schema, database, f"SELECT lock_token FROM s2s_outbox WHERE stanza LIKE '%{marker}%'")
+        fixture.check(current == replacement and pending(marker) == 1, "stale resume completed or released another worker's row")
+    finally:
+        stream.close()
+    psql_schema(schema, database, f"UPDATE s2s_outbox SET locked_until = NULL, lock_token = NULL, next_attempt_at = NOW() WHERE stanza LIKE '%{marker}%'")
+    bob.receive_until(marker, timeout=30)
+    print("S2S outbox waits for ACK, resumes with exact bytes, consumes resume h and preserves IDs on retry")
 
 
 def verify_s2s_stream_management() -> None:
@@ -629,10 +700,11 @@ def verify_s2s_stream_management() -> None:
         authenticate_external(stream, "remote.localhost")
         stream.sendall(b"<resume xmlns='urn:xmpp:sm:3' previd='missing' h='0'/>")
         response = receive_tls_until(stream, "</failed>")
-        fixture.check("feature-not-implemented" in response, "S2S advertised unsupported resumption")
+        fixture.check("item-not-found" in response, "S2S accepted an unknown resume ID")
         stream.sendall(b"<enable xmlns='urn:xmpp:sm:3' resume='true'/>")
         response = receive_tls_until(stream, "/>")
-        fixture.check("<enabled xmlns='urn:xmpp:sm:3'/>" in response, "S2S did not negotiate acknowledgement-only SM")
+        fixture.check("resume='true'" in response and "max='60'" in response, "S2S did not grant bounded resumption")
+        resume_id = re.search(r"\bid='([^']+)'", response).group(1)
         stream.sendall(b"<r xmlns='urn:xmpp:sm:3'/>")
         fixture.check("h='0'" in receive_tls_until(stream, "/>"), "SM counter did not start at zero")
         stream.sendall(b"<iq xmlns='jabber:server' from='remote.localhost' to='localhost' type='get' id='sm-wire'><ping xmlns='urn:xmpp:ping'/></iq><r xmlns='urn:xmpp:sm:3'/>")
@@ -640,12 +712,62 @@ def verify_s2s_stream_management() -> None:
         fixture.check("sm-wire" in response and "<r xmlns='urn:xmpp:sm:3'/>" in response, "S2S response was not counted/requested")
         stream.sendall(b"<a xmlns='urn:xmpp:sm:3' h='1'/><r xmlns='urn:xmpp:sm:3'/>")
         fixture.check("h='1'" in receive_tls_until(stream, "h='1'"), "SM controls advanced the stanza counter")
-        stream.sendall(b"<a xmlns='urn:xmpp:sm:3' h='2'/>")
-        response = receive_tls_until(stream, "</stream:stream>")
-        fixture.check("handled-count-too-high" in response, "S2S accepted an acknowledgement for unsent stanzas")
+        # Invalid counters and a different BIDI scope must not steal the owner.
+        for bidi, h, condition in ((True, 1, "item-not-found"), (False, 9, "policy-violation")):
+            other = open_direct_s2s(str(cert_dir / "federation-b.crt"), str(cert_dir / "federation-b.key"))
+            try:
+                authenticate_external(other, "remote.localhost", bidi=bidi)
+                other.sendall(f"<resume xmlns='urn:xmpp:sm:3' previd='{resume_id}' h='{h}'/>".encode())
+                fixture.check(condition in receive_tls_until(other, "</failed>"), "invalid resumption displaced the active owner")
+                other.sendall(b"<enable xmlns='urn:xmpp:sm:3'/>")
+                fixture.check("<enabled" in receive_tls_until(other, "/>"), "failed resume prevented fresh SM negotiation")
+            finally:
+                other.close()
+        stream.sendall(b"<iq xmlns='jabber:server' from='remote.localhost' to='localhost' type='get' id='sm-replay'><ping xmlns='urn:xmpp:ping'/></iq><r xmlns='urn:xmpp:sm:3'/>")
+        first = receive_tls_until(stream, "h='2'")
+        fixture.check("sm-replay" in first, "missing reply before transport interruption")
+        stream.close()
+        stream = open_direct_s2s(str(cert_dir / "federation-b.crt"), str(cert_dir / "federation-b.key"))
+        authenticate_external(stream, "remote.localhost")
+        stream.sendall(f"<resume xmlns='urn:xmpp:sm:3' previd='{resume_id}' h='1'/>".encode())
+        replay = receive_tls_until(stream, "<r xmlns='urn:xmpp:sm:3'/>")
+        fixture.check("<resumed" in replay and "h='2'" in replay and "sm-replay" in replay, "resumption lost counters or the pending reply")
+        stream.sendall(b"<a xmlns='urn:xmpp:sm:3' h='2'/><r xmlns='urn:xmpp:sm:3'/>")
+        fixture.check("h='2'" in receive_tls_until(stream, "h='2'"), "replay advanced the receive counter")
+
+        other = open_direct_s2s(str(cert_dir / "federation-b.crt"), str(cert_dir / "federation-b.key"))
+        authenticate_external(other, "remote.localhost")
+        other.sendall(f"<resume xmlns='urn:xmpp:sm:3' previd='{resume_id}' h='2'/>".encode())
+        response = receive_tls_until(other, "<r xmlns='urn:xmpp:sm:3'/>")
+        fixture.check("<resumed" in response and "sm-replay" not in response, "acknowledged reply was replayed")
+        fixture.check("conflict" in receive_tls_until(stream, "</stream:stream>"), "resumption left two active transports")
+        stream.close()
+        stream = other
+        stream.sendall(b"<a xmlns='urn:xmpp:sm:3' h='3'/>")
+        fixture.check("handled-count-too-high" in receive_tls_until(stream, "</stream:stream>"), "S2S accepted an ACK for unsent stanzas")
     finally:
         stream.close()
-    print("S2S SM negotiation, stanza counters, acknowledgement and over-ack rejection passed")
+
+    for ending in ("clean", "expired"):
+        stream = open_direct_s2s(str(cert_dir / "federation-b.crt"), str(cert_dir / "federation-b.key"))
+        authenticate_external(stream, "remote.localhost")
+        stream.sendall(b"<enable xmlns='urn:xmpp:sm:3' resume='true' max='1'/>")
+        enabled = receive_tls_until(stream, "/>")
+        resume_id = re.search(r"\bid='([^']+)'", enabled).group(1)
+        if ending == "clean":
+            stream.sendall(b"</stream:stream>")
+            receive_tls_until(stream, "</stream:stream>")
+        stream.close()
+        if ending == "expired":
+            time.sleep(1.2)
+        stream = open_direct_s2s(str(cert_dir / "federation-b.crt"), str(cert_dir / "federation-b.key"))
+        try:
+            authenticate_external(stream, "remote.localhost")
+            stream.sendall(f"<resume xmlns='urn:xmpp:sm:3' previd='{resume_id}' h='0'/>".encode())
+            fixture.check("item-not-found" in receive_tls_until(stream, "</failed>"), f"{ending} stream remained resumable")
+        finally:
+            stream.close()
+    print("S2S SM counters, replay, takeover, scope fencing, clean close and expiry passed")
 
 
 def verify_s2s_authentication_boundaries() -> None:
@@ -863,6 +985,10 @@ def run(server_pids: tuple[int, ...] = ()) -> None:
     stress_phases.wait_for_fixture_phase("transport")
     alice, bob = initialize_clients()
     verify_s2s_outbox_acknowledgement(alice, bob)
+    if os.environ.get("FEDERATION_TEST_EXTERNAL", "true").lower() == "true":
+        interrupt_federation_transport("B", "remote.localhost")
+        alice.send("<message xmlns='jabber:client' to='bob_fed@remote.localhost' type='chat' id='sm-outbound-resumed'><body>After resumption</body></message>")
+        bob.receive_until("sm-outbound-resumed", timeout=20)
 
     # RFC 6121 distinguishes connected, available, and interested resources.
     # Subscription approvals and roster pushes are delivered to interested
@@ -1032,6 +1158,11 @@ def run(server_pids: tuple[int, ...] = ()) -> None:
         "bob_fed@remote.localhost/bob-federation" in remote_presence,
         "federated non-anonymous MUC presence omitted the authenticated real JID",
     )
+    interrupt_federation_transport("A", "conference.localhost")
+    bob.send(f"<message xmlns='jabber:client' to='{federated_room}' type='groupchat' id='sm-muc-resumed'><body>Still in the room</body></message>")
+    resumed_message, _ = alice.receive_until("sm-muc-resumed", timeout=20)
+    fixture.check(f"from='{federated_room}/RemoteBob'" in resumed_message, "S2S resumption lost federated room occupancy")
+    print("S2S outbound resumption preserved federated room occupancy without rejoining")
     bob.send(
         f"<presence xmlns='jabber:client' id='fed-muc-resync' to='{federated_room}/RemoteBob'>"
         "<x xmlns='http://jabber.org/protocol/muc'><history maxstanzas='0'/></x></presence>"

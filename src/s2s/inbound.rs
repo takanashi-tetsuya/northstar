@@ -1016,71 +1016,32 @@ async fn drive_authenticated_inbound(
         prepare_domainpart(&local_domain).context("local S2S stream domain became invalid")?;
     let route_key = bidi_connection_key(&local_domain, &domain)
         .context("bidirectional S2S route domains became invalid")?;
-    // When another stream already owns the route, retain this stream's sender
-    // until its authenticated loop exits. This preserves the prior
-    // conditionally-moved sender lifetime and prevents its receiver from being
-    // closed merely because the registry rejected publication.
-    let mut unregistered_bidi_session = None;
-    let registered = if bidi_enabled {
-        match state
-            .s2s_connection_registry()
-            .register_bidirectional_if_vacant(
-                route_key.clone(),
-                BidiS2sSession::new(
-                    connection_id,
-                    local_domain.clone(),
-                    sender,
-                    disconnect.clone(),
-                ),
-            ) {
-            Ok(()) => {
-                tracing::debug!(peer_domain = %domain, %local_domain, "XEP-0288 bidirectional S2S stream enabled");
-                // The authenticated registry owns a single scoped recovery
-                // hint. Wake dispatch after publication; no database wait may
-                // prevent this stream from entering its receive/write loop.
-                state.federation.wake_outbox();
-                true
-            }
-            Err(session) => {
-                unregistered_bidi_session = Some(session);
-                tracing::debug!(peer_domain = %domain, %local_domain, "kept the existing bidirectional S2S route");
-                false
-            }
-        }
-    } else {
-        // The unregistered sender remains alive across the authenticated loop,
-        // exactly as before the registry boundary.
-        unregistered_bidi_session = Some(BidiS2sSession::new(
-            connection_id,
-            local_domain.clone(),
-            sender,
-            disconnect.clone(),
-        ));
-        false
+    let scope = super::resume::Scope {
+        local: local_domain.clone(),
+        remote: domain,
+        external: via_external,
+        bidi: bidi_enabled,
+    };
+    let transport = super::resume::Transport {
+        stream: secure,
+        input,
+        limits: peer_limits,
+        disconnect,
+        _certificate: certificate_session,
     };
     let result = AssertUnwindSafe(drive_authenticated_inbound_inner(
-        secure,
+        transport,
         Arc::clone(&state),
-        authenticated_domain.clone(),
-        local_domain.clone(),
+        scope,
         connection_id,
-        registered,
-        peer_limits,
+        sender,
         receiver,
-        input,
-        disconnect,
     ))
     .catch_unwind()
     .await;
-    // Socket ownership ended with the authenticated loop. Unregister before
-    // potentially slow MUC/route reconciliation so a concurrent TLS reload
-    // cannot report a drain for a connection which is already closed.
-    drop(certificate_session);
-    if registered {
-        state
-            .s2s_connection_registry()
-            .remove_bidirectional_if_connection(&route_key, connection_id);
-    }
+    state
+        .s2s_connection_registry()
+        .remove_bidirectional_if_connection(&route_key, connection_id);
     crate::xmpp::protocol::caps::federated_caps_connection_closed(&state, connection_id).await;
     let cleanup = AssertUnwindSafe(
         crate::xmpp::protocol::federated_muc::federated_muc_connection_closed(
@@ -1091,7 +1052,6 @@ async fn drive_authenticated_inbound(
     )
     .catch_unwind()
     .await;
-    drop(unregistered_bidi_session);
     match result {
         Ok(result) => match cleanup {
             Ok(Ok(())) => result,
@@ -1126,118 +1086,265 @@ async fn drive_authenticated_inbound(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn drive_authenticated_inbound_inner(
-    mut secure: tokio_rustls::server::TlsStream<TcpStream>,
-    state: Arc<AppState>,
-    authenticated_domain: String,
-    local_domain: String,
+fn publish_inbound_route(
+    state: &AppState,
+    scope: &super::resume::Scope,
     connection_id: uuid::Uuid,
-    bidi_enabled: bool,
-    peer_limits: AdvertisedStreamLimits,
-    mut outgoing: mpsc::Receiver<FederationEnvelope>,
-    mut input: S2sInputState,
-    disconnect: tokio_util::sync::CancellationToken,
-) -> Result<()> {
-    let mut incoming_idle_deadline = tokio::time::Instant::now() + S2S_AUTHENTICATED_IDLE_TIMEOUT;
-    let peer_keepalive_period = keepalive_interval_for_peer(peer_limits);
-    let mut peer_keepalive = tokio::time::interval_at(
-        tokio::time::Instant::now() + peer_keepalive_period,
-        peer_keepalive_period,
+    sender: &mpsc::Sender<FederationEnvelope>,
+    disconnect: &tokio_util::sync::CancellationToken,
+) -> bool {
+    if !scope.bidi {
+        return false;
+    }
+    let key = bidi_connection_key(&scope.local, &scope.remote).expect("prepared stream domains");
+    let registered = state
+        .s2s_connection_registry()
+        .register_bidirectional_if_vacant(
+            key,
+            BidiS2sSession::new(
+                connection_id,
+                scope.local.clone(),
+                sender.clone(),
+                disconnect.clone(),
+            ),
+        )
+        .is_ok();
+    if registered {
+        state.federation.wake_outbox();
+    }
+    registered
+}
+
+async fn reject_resume(mut request: super::resume::Request, condition: &'static str) {
+    let _ = super::sm::failed(&mut request.transport.stream, condition).await;
+    let _ = request.result.send(Err(Box::new(request.transport)));
+}
+
+async fn accept_resume(
+    state: &AppState,
+    sm: &mut super::sm::StreamManagement,
+    registration: &mut super::resume::Registration,
+    scope: &super::resume::Scope,
+    mut request: super::resume::Request,
+) -> Result<Option<super::resume::Transport>> {
+    if request.result.is_closed() {
+        return Ok(None);
+    }
+    if request.epoch != registration.epoch || request.transport.disconnect.is_cancelled() {
+        reject_resume(request, "unexpected-request").await;
+        return Ok(None);
+    }
+    if sm
+        .validate_resume(request.h, request.transport.limits.max_bytes)
+        .is_err()
+    {
+        reject_resume(request, "policy-violation").await;
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        !state.island_mode_enabled() && state.federation_domain_allowed(&scope.remote),
+        "federation disabled during resumption"
     );
-    peer_keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let disconnect_signal = disconnect.cancelled_owned();
-    tokio::pin!(disconnect_signal);
-    let mut sm = super::sm::StreamManagement::default();
+    sm.renew(state).await?;
+    sm.acknowledge(state, request.h).await?;
+    registration.advance();
+    if request.result.send(Ok(())).is_err() {
+        anyhow::bail!("S2S resume requester disappeared");
+    }
+    write_xml(
+        &mut request.transport.stream,
+        &XmlElement::new("resumed")
+            .attr("xmlns", super::sm::NS)
+            .attr("previd", &registration.id)
+            .attr("h", sm.received().to_string())
+            .finish(),
+    )
+    .await?;
+    sm.replay(state, &mut request.transport.stream).await?;
+    Ok(Some(request.transport))
+}
+
+async fn drive_authenticated_inbound_inner(
+    transport: super::resume::Transport,
+    state: Arc<AppState>,
+    scope: super::resume::Scope,
+    connection_id: uuid::Uuid,
+    sender: mpsc::Sender<FederationEnvelope>,
+    mut outgoing: mpsc::Receiver<FederationEnvelope>,
+) -> Result<()> {
+    let route_key =
+        bidi_connection_key(&scope.local, &scope.remote).expect("prepared stream domains");
+    let mut transport = Some(transport);
+    let mut sm = super::sm::StreamManagement::with_budget(
+        state
+            .s2s_connection_registry()
+            .resumption
+            .replay_bytes
+            .clone(),
+    );
+    let (resume_sender, mut resumes) = mpsc::channel::<super::resume::Request>(1);
+    let mut registration: Option<super::resume::Registration> = None;
+    let mut used = false;
+    let mut suspended_until = None;
+    let mut resume_window = super::resume::WINDOW;
     let result = async {
     loop {
-        tokio::select! {
-            _ = tokio::time::sleep_until(sm.deadline()), if sm.is_enabled() => {
-                anyhow::bail!("S2S acknowledgement timed out");
-            }
-            _ = &mut disconnect_signal => {
-                let _ = send_stream_error(&mut secure, "not-authorized").await;
-                anyhow::bail!("inbound S2S certificate was explicitly revoked");
-            }
-            frame = read_frame_until_idle_deadline(
-                &mut secure,
-                &mut input,
-                S2S_AUTHENTICATED_IDLE_TIMEOUT,
-                &mut incoming_idle_deadline,
-            ) => {
-                let frame = match frame {
-                    Ok(Some(frame)) => frame,
-                    Err(error) => {
-                        if let Some(condition) = s2s_read_stream_error_condition(&error) {
-                            let _ = send_stream_error(&mut secure, condition).await;
+        if state.island_mode_enabled() || !state.federation_domain_allowed(&scope.remote) {
+            anyhow::bail!("S2S stream is denied by federation policy");
+        }
+        if transport.is_none() {
+            let deadline = suspended_until.context("missing S2S resume deadline")?;
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep_until(deadline) => anyhow::bail!("S2S resume window expired"),
+                    request = resumes.recv() => {
+                        let request = request.context("S2S resume owner closed")?;
+                        if let Some(resumed) = tokio::time::timeout_at(deadline, accept_resume(&state, &mut sm, registration.as_mut().expect("registered resume owner"), &scope, request)).await.context("S2S resume window expired")?? {
+                            transport = Some(resumed);
+                            suspended_until = None;
+                            break;
                         }
-                        return Err(error);
                     }
-                    Ok(None) => {
-                        tracing::debug!(peer_domain = authenticated_domain, "closed idle authenticated S2S stream");
-                        write_xml(&mut secure, &XmlElement::new("stream:stream").close()).await?;
-                        return Ok(());
+                }
+            }
+        }
+        let current = transport.as_mut().expect("active S2S transport");
+        if current.disconnect.is_cancelled() { anyhow::bail!("inbound S2S certificate was explicitly revoked"); }
+        let registered = publish_inbound_route(&state, &scope, connection_id, &sender, &current.disconnect);
+        let peer_limits = current.limits;
+        let mut incoming_idle_deadline = tokio::time::Instant::now() + S2S_AUTHENTICATED_IDLE_TIMEOUT;
+        let keepalive_period = keepalive_interval_for_peer(peer_limits);
+        let mut keepalive = tokio::time::interval_at(tokio::time::Instant::now() + keepalive_period, keepalive_period);
+        keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // A successful handoff restarts this loop with a freshly authenticated transport.
+        let mut restart = false;
+        let active_result: Result<Option<super::resume::Request>> = async {
+        loop {
+            let current = transport.as_mut().expect("active S2S transport");
+            tokio::select! {
+                biased;
+                _ = current.disconnect.cancelled() => {
+                    let _ = send_stream_error(&mut current.stream, "not-authorized").await;
+                    anyhow::bail!("inbound S2S certificate was explicitly revoked");
+                }
+                _ = tokio::time::sleep_until(sm.deadline()), if sm.is_enabled() => anyhow::bail!("S2S acknowledgement timed out"),
+                request = resumes.recv(), if registration.is_some() => return Ok(request),
+                frame = read_frame_until_idle_deadline(&mut current.stream, &mut current.input,
+                    S2S_AUTHENTICATED_IDLE_TIMEOUT, &mut incoming_idle_deadline) => {
+                    let frame = match frame {
+                        Ok(Some(frame)) => frame,
+                        Ok(None) => { let _ = write_xml(&mut current.stream, &XmlElement::new("stream:stream").close()).await; return Ok(None); }
+                        Err(error) => {
+                            if let Some(condition) = s2s_read_stream_error_condition(&error) { let _ = send_stream_error(&mut current.stream, condition).await; }
+                            return Err(error);
+                        }
+                    };
+                    if frame.starts_with("</stream:stream") {
+                        let _ = write_xml(&mut current.stream, &XmlElement::new("stream:stream").close()).await;
+                        return Ok(None);
                     }
-                };
-                if frame.starts_with("</stream:stream") {
-                    write_xml(&mut secure, &XmlElement::new("stream:stream").close()).await?;
-                    return Ok(());
-                }
-                if sm.control(&state, &mut secure, &frame, true).await? {
-                    continue;
-                }
-                match route_inbound_for_connection_owned(
-                    Arc::clone(&state),
-                    authenticated_domain.clone(),
-                    local_domain.clone(),
-                    connection_id,
-                    frame.clone(),
-                )
-                .await?
-                {
-                    InboundFederationRoute::Reply(Some(reply)) => {
-                        if let Some(reply) = reply_within_peer_limit(
-                            &reply,
-                            &frame,
-                            peer_limits.max_bytes,
-                        )? {
-                            sm.track(None)?;
-                            write_xml(&mut secure, &reply).await?;
-                            sm.request(&mut secure).await?;
-                            if peer_limits.idle_seconds.is_some() {
-                                peer_keepalive.reset_after(peer_keepalive_period);
+                    match super::sm::parse_control(&frame)? {
+                        Some(super::sm::Control::Resume { id, h }) if !sm.is_enabled() && !used => {
+                            let Some((epoch, owner)) = state.s2s_connection_registry().resumption.lookup(&id, &scope) else {
+                                super::sm::failed(&mut current.stream, "item-not-found").await?;
+                                continue;
+                            };
+                            state.s2s_connection_registry().remove_bidirectional_if_connection(&route_key, connection_id);
+                            while let Ok(envelope) = outgoing.try_recv() {
+                                fail_envelope(&state, &envelope, &anyhow::anyhow!("S2S route moved to resumed stream"), false).await;
+                            }
+                            let (reply, response) = tokio::sync::oneshot::channel();
+                            let request = super::resume::Request { transport: transport.take().expect("active transport"), h, epoch, result: reply };
+                            owner.try_send(request).map_err(|_| anyhow::anyhow!("S2S resume owner is busy or gone"))?;
+                            match tokio::time::timeout(std::time::Duration::from_secs(15), response).await.context("S2S resume handoff timed out")?? {
+                                Ok(()) => return Ok(None),
+                                Err(returned) => { transport = Some(*returned); restart = true; return Ok(None); }
                             }
                         }
+                        Some(super::sm::Control::Enable { resume, max }) if !sm.is_enabled() => {
+                            sm.enable();
+                            let mut enabled = XmlElement::new("enabled").attr("xmlns", super::sm::NS);
+                            if resume && max != Some(0) {
+                                resume_window = std::time::Duration::from_secs(u64::from(max.unwrap_or(60).min(60)));
+                                registration = state.s2s_connection_registry().resumption.register(scope.clone(), resume_sender.clone());
+                                if let Some(owner) = &registration {
+                                    enabled = enabled.attr("resume", "true").attr("id", &owner.id).attr("max", resume_window.as_secs().to_string());
+                                }
+                            }
+                            write_xml(&mut current.stream, &enabled.finish()).await?;
+                            continue;
+                        }
+                        _ => {}
                     }
-                    InboundFederationRoute::Reply(None) => {}
-                    InboundFederationRoute::StreamError(condition) => {
-                        send_stream_error(&mut secure, condition).await?;
-                        anyhow::bail!("remote S2S stanza violated stream addressing: {condition}");
+                    if sm.control(&state, &mut current.stream, &frame, false).await? { continue; }
+                    used = true;
+                    let routed = route_inbound_for_connection_owned(Arc::clone(&state), scope.remote.clone(), scope.local.clone(), connection_id, frame.clone()).await?;
+                    sm.handled(&frame);
+                    match routed {
+                        InboundFederationRoute::Reply(Some(reply)) => {
+                            if let Some(reply) = reply_within_peer_limit(&reply, &frame, peer_limits.max_bytes)? {
+                                sm.track(None, &reply)?;
+                                write_xml(&mut current.stream, &reply).await?;
+                                sm.request(&mut current.stream).await?;
+                                keepalive.reset_after(keepalive_period);
+                            }
+                        }
+                        InboundFederationRoute::Reply(None) => {}
+                        InboundFederationRoute::StreamError(condition) => {
+                            send_stream_error(&mut current.stream, condition).await?;
+                            anyhow::bail!("remote S2S stanza violated stream addressing: {condition}");
+                        }
                     }
                 }
-                sm.handled(&frame);
+                envelope = outgoing.recv(), if registered => {
+                    let Some(mut envelope) = envelope else { return Ok(None); };
+                    used = true;
+                    if let Err(error) = deliver_managed_envelope(&state, &mut current.stream, &mut envelope, peer_limits.max_bytes, &mut sm).await {
+                        let permanent = is_peer_stanza_limit_error(&error);
+                        if !sm.owns(&envelope) { fail_envelope(&state, &envelope, &error, permanent).await; }
+                        if permanent { continue; }
+                        return Err(error);
+                    }
+                    keepalive.reset_after(keepalive_period);
+                }
+                _ = keepalive.tick(), if scope.bidi && peer_limits.idle_seconds.is_some() => write_xml(&mut current.stream, " ").await?,
             }
-            envelope = outgoing.recv(), if bidi_enabled => {
-                let Some(mut envelope) = envelope else { return Ok(()) };
-                if let Err(error) = deliver_managed_envelope(&state, &mut secure, &mut envelope, peer_limits.max_bytes, &mut sm).await {
-                    let permanent = is_peer_stanza_limit_error(&error);
-                    fail_envelope(&state, &envelope, &error, permanent).await;
-                    if permanent {
-                        continue;
+        }
+        }.await;
+        state.s2s_connection_registry().remove_bidirectional_if_connection(&route_key, connection_id);
+        match active_result {
+            Ok(Some(request)) => {
+                if let Some(resumed) = accept_resume(&state, &mut sm, registration.as_mut().expect("registered resume owner"), &scope, request).await? {
+                    if let Some(mut old) = transport.take() {
+                        // Dropping the previous socket fences its writer before this loop resumes.
+                        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), send_stream_error(&mut old.stream, "conflict")).await;
                     }
-                    return Err(error);
-                }
-                if peer_limits.idle_seconds.is_some() {
-                    peer_keepalive.reset_after(peer_keepalive_period);
+                    transport = Some(resumed);
                 }
             }
-            _ = peer_keepalive.tick(), if bidi_enabled && peer_limits.idle_seconds.is_some() => {
-                write_xml(&mut secure, " ").await?;
+            Ok(None) if restart => continue,
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                if registration.is_none() || !super::util::transport_lost(&error)
+                    || transport.as_ref().is_some_and(|current| current.disconnect.is_cancelled()) { return Err(error); }
+                sm.renew(&state).await?;
+                transport.take();
+                suspended_until = Some(tokio::time::Instant::now() + resume_window);
             }
         }
     }
     }.await;
+    drop(registration);
     sm.retry_unacknowledged(&state).await;
+    while let Ok(envelope) = outgoing.try_recv() {
+        fail_envelope(
+            &state,
+            &envelope,
+            &anyhow::anyhow!("S2S connection closed"),
+            false,
+        )
+        .await;
+    }
     result
 }
 

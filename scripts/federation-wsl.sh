@@ -444,5 +444,9 @@ FEDERATION_TEST_SCHEMA_A="$schema_a" \
 FEDERATION_TEST_SCHEMA_B="$schema_b" \
 FEDERATION_TEST_DATABASE_A="$database_name_a" \
 FEDERATION_TEST_DATABASE_B="$database_name_b" \
+FEDERATION_TEST_RELAY_A="$target_a_s2s" \
+FEDERATION_TEST_RELAY_B="$target_b_s2s_tls" \
+FEDERATION_TEST_LOG_A="$log_a" \
+FEDERATION_TEST_LOG_B="$log_b" \
 python3 scripts/run-test-with-servers.py --server "$pid_a" --server "$pid_b" -- \
   python3 scripts/federation-wsl.py "$pid_a" "$pid_b"

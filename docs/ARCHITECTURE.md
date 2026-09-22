@@ -451,9 +451,18 @@ stamped once with a server-authoritative XEP-0359 `stanza-id` derived from the
 outbox UUID, and every retry reuses those exact stored bytes. A failed write
 keeps the row. S2S peers that negotiate XEP-0198 must acknowledge the stanza
 before its fenced outbox claim is completed. The acknowledgement window is
-bounded to 256 stanzas and 15 seconds; timeout or disconnection returns pending
-durable rows to the normal retry policy. Volatile stanzas count toward the
-stream sequence without retaining their payloads. S2S resumption is not enabled.
+bounded to 256 stanzas and 15 seconds. Peers can request up to 60 seconds of
+process-local resumption after a transport failure. A fresh TLS connection and
+the same authenticated domain pair, authentication method and BIDI mode are
+required. One actor owns the counters, replay buffer and federated room state;
+resumption transfers the transport and closes the previous connection.
+
+Replay is limited to 4 MiB per stream and 64 MiB per process, with at most 128
+resumable inbound streams. Outbox leases are checked before acknowledgement
+and replay. Volatile/no-store stanzas retain only their sequence position; a
+resume can succeed only if the peer has already handled them. Clean XML close,
+expiry, lost leases, process restart or reconnection to another node falls back
+to the durable outbox retry policy. There is no cross-process S2S resume cache.
 
 Peers without SM and XEP-0114/XEP-0225 components complete at socket write.
 An acknowledgement or database completion can still be lost, so delivery

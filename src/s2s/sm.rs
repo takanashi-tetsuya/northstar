@@ -1,8 +1,12 @@
-use std::{collections::VecDeque, time::Duration};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use anyhow::{bail, ensure, Context, Result};
 use roxmltree::Document;
-use tokio::{io::AsyncWrite, time::Instant};
+use tokio::{
+    io::AsyncWrite,
+    sync::{OwnedSemaphorePermit, Semaphore},
+    time::Instant,
+};
 
 use crate::{db, state::AppState, xmpp::xml_builder::XmlElement};
 
@@ -19,24 +23,142 @@ pub(crate) fn feature() -> String {
 struct Pending {
     durable: Option<db::S2sOutboxItem>,
     deadline: Instant,
+    replay: Option<String>,
+    _bytes: Option<OwnedSemaphorePermit>,
 }
 
-/// S2S acknowledgements are connection-scoped. Until resumable federation
-/// state has its own durable ownership fence, we never grant a resume ID.
+/// Counters and replay bytes belong to the logical stream, across transports.
 #[derive(Default)]
 pub(crate) struct StreamManagement {
     enabled: bool,
     received: u32,
     acknowledged: u32,
     pending: VecDeque<Pending>,
+    budget: Option<Arc<Semaphore>>,
+    bytes: usize,
 }
 
 impl StreamManagement {
+    #[cfg(test)]
     pub(crate) fn enabled() -> Self {
         Self {
             enabled: true,
             ..Self::default()
         }
+    }
+
+    pub(crate) fn with_budget(budget: Arc<Semaphore>) -> Self {
+        Self {
+            budget: Some(budget),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn enable(&mut self) {
+        self.enabled = true;
+    }
+    pub(crate) fn received(&self) -> u32 {
+        self.received
+    }
+
+    pub(crate) fn owns(&self, envelope: &FederationEnvelope) -> bool {
+        self.pending.iter().any(|pending| {
+            pending.durable.as_ref().is_some_and(|item| {
+                item.id == envelope.outbox_id && item.lock_token == envelope.lock_token
+            })
+        })
+    }
+
+    #[cfg(test)]
+    fn can_resume(&self) -> bool {
+        self.pending.iter().all(|item| item.replay.is_some())
+    }
+
+    pub(crate) fn validate_resume(&self, h: u32, max_bytes: Option<usize>) -> Result<()> {
+        let count = self.ack_count(h)?;
+        ensure!(
+            self.pending.iter().skip(count).all(|item| item
+                .replay
+                .as_ref()
+                .is_some_and(|xml| max_bytes.is_none_or(|limit| xml.len() <= limit))),
+            "S2S replay is unavailable or exceeds peer limit"
+        );
+        Ok(())
+    }
+
+    pub(crate) async fn renew(&self, state: &AppState) -> Result<()> {
+        // Never revive an expired claim: a different process may already own it.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            for item in self
+                .pending
+                .iter()
+                .filter_map(|pending| pending.durable.as_ref())
+            {
+                ensure!(
+                    db::renew_s2s_outbox_lease(
+                        &state.pool,
+                        item.id,
+                        item.lock_token,
+                        super::resume::WINDOW.as_secs() + 30
+                    )
+                    .await?,
+                    "S2S replay lost its outbox lease"
+                );
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .context("S2S replay lease renewal timed out")?
+    }
+
+    pub(crate) async fn acknowledge(&mut self, state: &AppState, h: u32) -> Result<()> {
+        let count = self.ack_count(h)?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            for _ in 0..count {
+                if let Some(item) = &self.pending.front().expect("validated ack count").durable {
+                    ensure!(
+                        db::complete_s2s_outbox(&state.pool, item.id, item.lock_token).await?,
+                        "S2S outbox lease was lost before acknowledgement"
+                    );
+                }
+                let item = self.pending.pop_front().expect("validated ack count");
+                self.bytes -= item
+                    ._bytes
+                    .as_ref()
+                    .map_or(0, |permit| permit.num_permits());
+                self.acknowledged = self.acknowledged.wrapping_add(1);
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .context("S2S acknowledgement database deadline elapsed")?
+    }
+
+    pub(crate) async fn replay<S: AsyncWrite + Unpin>(
+        &mut self,
+        state: &AppState,
+        stream: &mut S,
+    ) -> Result<()> {
+        self.renew(state).await?;
+        tokio::time::timeout(ACK_TIMEOUT, async {
+            let _permit = state
+                .federation_delivery_permit()
+                .await
+                .context("federation delivery is disabled by island mode")?;
+            for item in &mut self.pending {
+                write_xml(
+                    stream,
+                    item.replay
+                        .as_deref()
+                        .context("S2S stanza cannot be replayed")?,
+                )
+                .await?;
+                item.deadline = Instant::now() + ACK_TIMEOUT;
+            }
+            self.request(stream).await
+        })
+        .await
+        .context("S2S replay write deadline elapsed")?
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
@@ -50,7 +172,7 @@ impl StreamManagement {
         )
     }
 
-    pub(crate) fn track(&mut self, envelope: Option<&FederationEnvelope>) -> Result<()> {
+    pub(crate) fn track(&mut self, envelope: Option<&FederationEnvelope>, xml: &str) -> Result<()> {
         if !self.enabled {
             return Ok(());
         }
@@ -73,9 +195,37 @@ impl StreamManagement {
                 stanza: item.stanza.clone(),
                 attempt_count: item.attempt_count,
             });
+        let replayable = envelope.is_none_or(|item| item.is_durable())
+            && !Document::parse(xml).is_ok_and(|doc| {
+                doc.root_element()
+                    .children()
+                    .any(|node| node.has_tag_name(("urn:xmpp:hints", "no-store")))
+            });
+        let bytes = if replayable {
+            xml.len() + durable.as_ref().map_or(0, |item| item.stanza.len())
+        } else {
+            0
+        };
+        let permit = if let Some(budget) = &self.budget {
+            ensure!(
+                self.bytes + bytes <= 4 * 1024 * 1024,
+                "S2S stream replay buffer is full"
+            );
+            Some(
+                budget
+                    .clone()
+                    .try_acquire_many_owned(bytes.try_into()?)
+                    .context("S2S replay memory budget exhausted")?,
+            )
+        } else {
+            None
+        };
+        self.bytes += permit.as_ref().map_or(0, |permit| permit.num_permits());
         self.pending.push_back(Pending {
             durable,
             deadline: Instant::now() + ACK_TIMEOUT,
+            replay: (replayable && self.budget.is_some()).then(|| xml.to_owned()),
+            _bytes: permit,
         });
         Ok(())
     }
@@ -113,7 +263,7 @@ impl StreamManagement {
             return Ok(false);
         };
         match control {
-            Control::Enable if allow_enable && !self.enabled => {
+            Control::Enable { .. } if allow_enable && !self.enabled => {
                 self.enabled = true;
                 write_xml(
                     stream,
@@ -121,13 +271,13 @@ impl StreamManagement {
                 )
                 .await?;
             }
-            Control::Resume if !self.enabled => {
+            Control::Resume { .. } if !self.enabled => {
                 write_xml(
                     stream,
                     &XmlElement::new("failed")
                         .attr("xmlns", NS)
                         .child(
-                            XmlElement::new("feature-not-implemented")
+                            XmlElement::new("item-not-found")
                                 .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-stanzas"),
                         )
                         .finish(),
@@ -170,23 +320,7 @@ impl StreamManagement {
                     count == 0 || self.deadline() > Instant::now(),
                     "late S2S acknowledgement"
                 );
-                for _ in 0..count {
-                    if let Some(item) = &self.pending.front().expect("validated ack count").durable
-                    {
-                        let completed = tokio::time::timeout(
-                            Duration::from_secs(5),
-                            db::complete_s2s_outbox(&state.pool, item.id, item.lock_token),
-                        )
-                        .await
-                        .context("S2S acknowledgement database deadline elapsed")??;
-                        ensure!(
-                            completed,
-                            "S2S outbox lease was lost before acknowledgement"
-                        );
-                    }
-                    self.pending.pop_front();
-                    self.acknowledged = self.acknowledged.wrapping_add(1);
-                }
+                self.acknowledge(state, h).await?;
             }
             _ => {
                 super::send_stream_error(stream, "unexpected-request").await?;
@@ -198,6 +332,7 @@ impl StreamManagement {
 
     pub(crate) async fn retry_unacknowledged(&mut self, state: &AppState) {
         let error = anyhow::anyhow!("S2S stream closed before acknowledgement");
+        self.bytes = 0;
         while let Some(item) = self.pending.pop_front() {
             if let Some(item) = item.durable {
                 fail_envelope(state, &FederationEnvelope::from(item), &error, false).await;
@@ -207,15 +342,15 @@ impl StreamManagement {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-enum Control {
-    Enable,
-    Resume,
+pub(crate) enum Control {
+    Enable { resume: bool, max: Option<u32> },
+    Resume { id: String, h: u32 },
     Request,
     Ack(u32),
     Other,
 }
 
-fn parse_control(frame: &str) -> Result<Option<Control>> {
+pub(crate) fn parse_control(frame: &str) -> Result<Option<Control>> {
     let Ok(document) = Document::parse(frame) else {
         return Ok(None);
     };
@@ -229,8 +364,30 @@ fn parse_control(frame: &str) -> Result<Option<Control>> {
         "S2S SM command contains content"
     );
     Ok(Some(match root.tag_name().name() {
-        "enable" => Control::Enable,
-        "resume" => Control::Resume,
+        "enable" => {
+            ensure!(
+                root.attributes()
+                    .all(|attr| attr.namespace().is_none()
+                        && matches!(attr.name(), "resume" | "max")),
+                "invalid SM enable attributes"
+            );
+            let resume = match root.attribute("resume") {
+                None | Some("false" | "0") => false,
+                Some("true" | "1") => true,
+                _ => bail!("invalid SM resume boolean"),
+            };
+            let max = root.attribute("max").map(counter).transpose()?;
+            Control::Enable { resume, max }
+        }
+        "resume" => {
+            ensure!(root.attributes().len() == 2, "invalid SM resume attributes");
+            let id = root.attribute("previd").context("missing SM resume id")?;
+            ensure!(!id.is_empty() && id.len() <= 4000, "invalid SM resume id");
+            Control::Resume {
+                id: id.to_owned(),
+                h: counter(root.attribute("h").context("missing SM resume counter")?)?,
+            }
+        }
         "r" if root.attributes().len() == 0 => Control::Request,
         "a" if root.attributes().len() == 1 => {
             let h = root
@@ -247,6 +404,64 @@ fn parse_control(frame: &str) -> Result<Option<Control>> {
         }
         _ => Control::Other,
     }))
+}
+
+fn counter(value: &str) -> Result<u32> {
+    ensure!(
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()),
+        "invalid SM counter"
+    );
+    value.parse().context("SM counter exceeds u32")
+}
+
+pub(crate) fn enabled_resume(frame: &str) -> Result<Option<(String, Duration)>> {
+    let doc = Document::parse(frame)?;
+    let root = doc.root_element();
+    ensure!(root.has_tag_name((NS, "enabled")), "expected SM enabled");
+    match root.attribute("resume") {
+        None | Some("false" | "0") => Ok(None),
+        Some("true" | "1") => {
+            let id = root.attribute("id").context("resumable SM is missing id")?;
+            ensure!(!id.is_empty() && id.len() <= 4000, "invalid SM resume id");
+            let max = root
+                .attribute("max")
+                .map(counter)
+                .transpose()?
+                .unwrap_or(60)
+                .min(60);
+            ensure!(max > 0, "SM resume window is zero");
+            Ok(Some((id.to_owned(), Duration::from_secs(u64::from(max)))))
+        }
+        _ => bail!("invalid SM resume boolean"),
+    }
+}
+
+pub(crate) fn resumed(frame: &str, id: &str) -> Result<u32> {
+    let doc = Document::parse(frame)?;
+    let root = doc.root_element();
+    ensure!(
+        root.has_tag_name((NS, "resumed"))
+            && root.attribute("previd") == Some(id)
+            && root.attributes().len() == 2
+            && !root.children().any(|node| node.is_element()
+                || node.is_text() && !node.text().unwrap_or_default().trim().is_empty()),
+        "S2S resumption rejected or invalid"
+    );
+    counter(root.attribute("h").context("missing resumed counter")?)
+}
+
+pub(crate) async fn failed<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    condition: &'static str,
+) -> Result<()> {
+    write_xml(
+        stream,
+        &XmlElement::new("failed")
+            .attr("xmlns", NS)
+            .child(XmlElement::new(condition).attr("xmlns", "urn:ietf:params:xml:ns:xmpp-stanzas"))
+            .finish(),
+    )
+    .await
 }
 
 pub(crate) fn is_stanza(frame: &str) -> bool {
@@ -278,7 +493,11 @@ pub(crate) fn advertised(features: &str) -> bool {
 pub(crate) fn accepted(frame: &str) -> bool {
     Document::parse(frame).is_ok_and(|document| {
         let root = document.root_element();
-        root.has_tag_name((NS, "enabled")) && !root.children().any(|node| node.is_element())
+        root.has_tag_name((NS, "enabled"))
+            && !root.children().any(|node| {
+                node.is_element()
+                    || node.is_text() && !node.text().unwrap_or_default().trim().is_empty()
+            })
     })
 }
 
@@ -287,11 +506,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn replay_is_bounded_and_does_not_retain_volatile_payloads() {
+        let budget = Arc::new(Semaphore::new(32));
+        let mut sm = StreamManagement::with_budget(budget.clone());
+        sm.enable();
+        sm.track(None, "<iq id='one'/>").unwrap();
+        assert!(sm.can_resume());
+        assert!(sm.validate_resume(0, Some(2)).is_err());
+        assert!(sm.validate_resume(1, Some(2)).is_ok());
+        assert!(sm.track(None, &"x".repeat(32)).is_err());
+        assert_eq!(sm.pending.len(), 1);
+        let (volatile, _receipt) = FederationEnvelope::volatile(
+            "remote.example".into(),
+            "<presence/>".into(),
+            Instant::now() + Duration::from_secs(5),
+        );
+        sm.track(Some(&volatile), "<presence/>").unwrap();
+        assert!(!sm.can_resume());
+        assert!(sm.pending.back().unwrap().replay.is_none());
+        assert!(sm.validate_resume(1, None).is_err());
+        assert!(sm.validate_resume(2, None).is_ok());
+        drop(sm);
+        assert_eq!(budget.available_permits(), 32);
+    }
+
+    #[test]
+    fn resume_negotiation_rejects_malformed_identity_and_counters() {
+        for frame in [
+            "<resume xmlns='urn:xmpp:sm:3' previd='' h='0'/>",
+            "<resume xmlns='urn:xmpp:sm:3' previd='id' h='-1'/>",
+            "<resume xmlns='urn:xmpp:sm:3' previd='id' h='4294967296'/>",
+            "<enable xmlns='urn:xmpp:sm:3' resume='yes'/>",
+            "<enable xmlns='urn:xmpp:sm:3' resume='true' max='-1'/>",
+        ] {
+            assert!(parse_control(frame).is_err(), "{frame}");
+        }
+        assert!(enabled_resume("<enabled xmlns='urn:xmpp:sm:3' resume='true'/>").is_err());
+        assert!(
+            enabled_resume("<enabled xmlns='urn:xmpp:sm:3' resume='true' id='id' max='0'/>")
+                .is_err()
+        );
+        assert_eq!(
+            enabled_resume("<enabled xmlns='urn:xmpp:sm:3' resume='1' id='id' max='900'/>")
+                .unwrap(),
+            Some(("id".into(), Duration::from_secs(60)))
+        );
+        assert!(resumed(
+            "<resumed xmlns='urn:xmpp:sm:3' previd='other' h='0'/>",
+            "id"
+        )
+        .is_err());
+        assert!(resumed(
+            "<resumed xmlns='urn:xmpp:sm:3' previd='id' h='0'><r/></resumed>",
+            "id"
+        )
+        .is_err());
+    }
+
+    #[test]
     fn counters_wrap_and_never_ack_unsent_stanzas() {
         let mut sm = StreamManagement::enabled();
         sm.acknowledged = u32::MAX - 1;
-        sm.track(None).unwrap();
-        sm.track(None).unwrap();
+        sm.track(None, "<iq/>").unwrap();
+        sm.track(None, "<iq/>").unwrap();
         assert_eq!(sm.ack_count(0).unwrap(), 2);
         assert!(sm.ack_count(1).is_err());
         assert!(sm.ack_count(u32::MAX - 2).is_err());
@@ -319,9 +596,9 @@ mod tests {
         assert_eq!(parse_control("<a xmlns='urn:other' h='2'/>").unwrap(), None);
         let mut sm = StreamManagement::enabled();
         for _ in 0..MAX_PENDING {
-            sm.track(None).unwrap();
+            sm.track(None, "<iq/>").unwrap();
         }
-        assert!(sm.track(None).is_err());
+        assert!(sm.track(None, "<iq/>").is_err());
         assert!(sm.pending.iter().all(|item| item.durable.is_none()));
         sm.pending.front_mut().unwrap().deadline = Instant::now();
         assert!(sm.deadline() <= Instant::now());

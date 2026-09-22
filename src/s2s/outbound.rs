@@ -521,20 +521,26 @@ async fn connect_and_multiplex(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn connect_and_multiplex_inner(
+struct AuthenticatedTransport {
+    stream: tokio_rustls::client::TlsStream<TcpStream>,
+    input: S2sInputState,
+    features: String,
+    limits: AdvertisedStreamLimits,
+    external: bool,
+    bidi: bool,
+    certificate: Option<crate::tls::CertificateSessionGuard>,
+}
+
+async fn authenticate_transport(
     state: &Arc<AppState>,
     source_domain: &str,
     target_domain: &str,
-    connection_id: uuid::Uuid,
-    rx: &mut mpsc::Receiver<FederationEnvelope>,
-    initial: InitialDelivery<'_>,
-    authenticated: &AtomicBool,
-    disconnect: tokio_util::sync::CancellationToken,
-) -> Result<()> {
-    if state.island_mode_enabled() || !state.federation_domain_allowed(target_domain) {
-        anyhow::bail!("target domain is denied by federation policy");
-    }
+    disconnect: &tokio_util::sync::CancellationToken,
+) -> Result<AuthenticatedTransport> {
+    anyhow::ensure!(
+        !state.island_mode_enabled() && state.federation_domain_allowed(target_domain),
+        "target domain is denied by federation policy"
+    );
     let (mut secure, mut opening, mut features, mut input, peer_certificates, tls_generation) =
         connect_secure_stream_from(state, source_domain, target_domain).await?;
     let mut peer_limits = advertised_stream_limits(&features).unwrap_or_default();
@@ -582,9 +588,9 @@ async fn connect_and_multiplex_inner(
         .await?;
     }
 
-    let _certificate_session = if external {
+    let certificate_session = if external {
         Some(state.tls.register_certificate_session(
-            connection_id,
+            uuid::Uuid::new_v4(),
             crate::tls::CertificateSessionKind::OutboundS2s,
             peer_certificates,
             tls_generation,
@@ -597,13 +603,57 @@ async fn connect_and_multiplex_inner(
         return Err(outbound_cancellation_error(state, " before delivery"));
     }
 
-    let mut sm = super::sm::StreamManagement::default();
+    Ok(AuthenticatedTransport {
+        stream: secure,
+        input,
+        features,
+        limits: peer_limits,
+        external,
+        bidi: bidi_enabled,
+        certificate: certificate_session,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn connect_and_multiplex_inner(
+    state: &Arc<AppState>,
+    source_domain: &str,
+    target_domain: &str,
+    connection_id: uuid::Uuid,
+    rx: &mut mpsc::Receiver<FederationEnvelope>,
+    initial: InitialDelivery<'_>,
+    authenticated: &AtomicBool,
+    disconnect: tokio_util::sync::CancellationToken,
+) -> Result<()> {
+    if state.island_mode_enabled() || !state.federation_domain_allowed(target_domain) {
+        anyhow::bail!("target domain is denied by federation policy");
+    }
+    let AuthenticatedTransport {
+        stream: mut secure,
+        mut input,
+        features,
+        limits: mut peer_limits,
+        external,
+        bidi: bidi_enabled,
+        certificate: mut certificate_session,
+    } = authenticate_transport(state, source_domain, target_domain, &disconnect).await?;
+
+    let mut sm = super::sm::StreamManagement::with_budget(
+        state
+            .s2s_connection_registry()
+            .resumption
+            .replay_bytes
+            .clone(),
+    );
+    let mut resume = None;
     if super::sm::advertised(&features) {
-        sm = super::sm::StreamManagement::enabled();
+        sm.enable();
         write_xml(
             &mut secure,
             &XmlElement::new("enable")
                 .attr("xmlns", super::sm::NS)
+                .attr("resume", "true")
+                .attr("max", "60")
                 .finish(),
         )
         .await?;
@@ -611,6 +661,7 @@ async fn connect_and_multiplex_inner(
             loop {
                 let response = timed_read_frame(&mut secure, &mut input).await?;
                 if super::sm::accepted(&response) {
+                    resume = super::sm::enabled_resume(&response)?;
                     return Ok::<_, anyhow::Error>(());
                 }
                 // A BIDI route can emit stanzas before it reads our enable.
@@ -635,7 +686,7 @@ async fn connect_and_multiplex_inner(
                             &response,
                             peer_limits.max_bytes,
                         )? {
-                            sm.track(None)?;
+                            sm.track(None, &reply)?;
                             write_xml(&mut secure, &reply).await?;
                             sm.request(&mut secure).await?;
                         }
@@ -656,7 +707,7 @@ async fn connect_and_multiplex_inner(
     // The worker clears the flag before removing its route entry.
     authenticated.store(true, Ordering::Release);
 
-    let keepalive_period = keepalive_interval_for_peer(peer_limits);
+    let mut keepalive_period = keepalive_interval_for_peer(peer_limits);
     let mut keepalive_interval = tokio::time::interval_at(
         tokio::time::Instant::now() + keepalive_period,
         keepalive_period,
@@ -665,21 +716,26 @@ async fn connect_and_multiplex_inner(
     let mut incoming_idle_deadline = tokio::time::Instant::now() + S2S_AUTHENTICATED_IDLE_TIMEOUT;
 
     let result = async {
-    if !initial.lease_valid.load(Ordering::Acquire) {
-        anyhow::bail!("federation outbox lease was lost before first delivery");
-    }
-    tokio::select! {
-        biased;
-        _ = disconnect.cancelled() => {
-            return Err(outbound_cancellation_error(state, " before first delivery"));
+    let mut first = true;
+    loop {
+    let active_result: Result<()> = async {
+    if first {
+        if !initial.lease_valid.load(Ordering::Acquire) {
+            anyhow::bail!("federation outbox lease was lost before first delivery");
         }
-        result = deliver_managed_envelope(state, &mut secure, initial.envelope, peer_limits.max_bytes, &mut sm) => {
-            result?;
+        let delivery = tokio::select! {
+            biased;
+            _ = disconnect.cancelled() => return Err(outbound_cancellation_error(state, " before first delivery")),
+            result = deliver_managed_envelope(state, &mut secure, initial.envelope, peer_limits.max_bytes, &mut sm) => result,
+        };
+        if delivery.is_ok() || sm.owns(initial.envelope) {
+            *initial.delivered = true;
+            initial.lease_cancel.cancel();
+            first = false;
         }
+        delivery?;
+        keepalive_interval.reset_after(keepalive_period);
     }
-    keepalive_interval.reset_after(keepalive_period);
-    *initial.delivered = true;
-    initial.lease_cancel.cancel();
 
     loop {
         tokio::select! {
@@ -692,14 +748,14 @@ async fn connect_and_multiplex_inner(
             }
             _ = keepalive_interval.tick() => {
                 if let Err(e) = write_xml(&mut secure, " ").await {
-                    anyhow::bail!("keepalive failed: {}", e);
+                    return Err(e.context("S2S keepalive failed"));
                 }
             }
             envelope = rx.recv() => {
                 let Some(mut envelope) = envelope else { break };
                 if let Err(error) = deliver_managed_envelope(state, &mut secure, &mut envelope, peer_limits.max_bytes, &mut sm).await {
                     let permanent = is_peer_stanza_limit_error(&error);
-                    fail_envelope(state, &envelope, &error, permanent).await;
+                    if !sm.owns(&envelope) { fail_envelope(state, &envelope, &error, permanent).await; }
                     if permanent {
                         continue;
                     }
@@ -739,22 +795,18 @@ async fn connect_and_multiplex_inner(
                     send_stream_error(&mut secure, "unexpected-request").await?;
                     anyhow::bail!("remote sent a stanza on a unidirectional S2S connection");
                 }
-                match route_inbound_for_connection(
-                    state,
-                    target_domain,
-                    source_domain,
-                    connection_id,
-                    &frame,
-                )
-                .await?
-                {
+                let routed = route_inbound_for_connection(
+                    state, target_domain, source_domain, connection_id, &frame,
+                ).await?;
+                sm.handled(&frame);
+                match routed {
                     InboundFederationRoute::Reply(Some(reply)) => {
                         if let Some(reply) = super::inbound::reply_within_peer_limit(
                             &reply,
                             &frame,
                             peer_limits.max_bytes,
                         )? {
-                            sm.track(None)?;
+                            sm.track(None, &reply)?;
                             write_xml(&mut secure, &reply).await?;
                             sm.request(&mut secure).await?;
                             keepalive_interval.reset_after(keepalive_period);
@@ -766,15 +818,68 @@ async fn connect_and_multiplex_inner(
                         anyhow::bail!("remote S2S stanza violated stream addressing: {condition}");
                     }
                 }
-                sm.handled(&frame);
             }
         }
     }
 
-    write_xml(&mut secure, &XmlElement::new("stream:stream").close()).await?;
-    secure.shutdown().await?;
+    // A deliberate XML close ends the logical stream even if the footer write fails.
+    let _ = write_xml(&mut secure, &XmlElement::new("stream:stream").close()).await;
+    let _ = secure.shutdown().await;
     Ok(())
     }.await;
+    authenticated.store(false, Ordering::Release);
+    let error = match active_result { Ok(()) => return Ok(()), Err(error) => error };
+    let Some((id, window)) = &resume else { return Err(error); };
+    if first || !super::util::transport_lost(&error) || disconnect.is_cancelled() { return Err(error); }
+    sm.renew(state).await?;
+    drop(secure);
+    drop(certificate_session);
+    let deadline = tokio::time::Instant::now() + *window;
+    let reconnected = tokio::time::timeout_at(deadline, async {
+        let mut backoff = Duration::from_millis(100);
+        loop {
+            let attempt = async {
+                let mut next = authenticate_transport(state, source_domain, target_domain, &disconnect).await?;
+                anyhow::ensure!(next.external == external && next.bidi == bidi_enabled && super::sm::advertised(&next.features),
+                    "S2S resume authentication or stream features changed");
+                write_xml(&mut next.stream, &XmlElement::new("resume").attr("xmlns", super::sm::NS)
+                    .attr("previd", id).attr("h", sm.received().to_string()).finish()).await?;
+                let response = timed_read_frame(&mut next.stream, &mut next.input).await?;
+                let h = super::sm::resumed(&response, id)?;
+                sm.validate_resume(h, next.limits.max_bytes)?;
+                sm.renew(state).await?;
+                sm.acknowledge(state, h).await?;
+                sm.replay(state, &mut next.stream).await?;
+                Ok::<_, anyhow::Error>(next)
+            }.await;
+            match attempt {
+                Ok(next) => return Ok(next),
+                Err(error) if super::util::transport_lost(&error) => {
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_secs(2));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    });
+    let next = tokio::select! {
+        biased;
+        _ = disconnect.cancelled() => return Err(outbound_cancellation_error(state, " during resumption")),
+        result = reconnected => result.context("S2S resume window expired")??,
+    };
+    secure = next.stream;
+    input = next.input;
+    peer_limits = next.limits;
+    certificate_session = next.certificate;
+    tracing::info!(peer_domain = target_domain, %connection_id, "resumed outbound S2S stream");
+    authenticated.store(true, Ordering::Release);
+    incoming_idle_deadline = tokio::time::Instant::now() + S2S_AUTHENTICATED_IDLE_TIMEOUT;
+    keepalive_period = keepalive_interval_for_peer(peer_limits);
+    keepalive_interval = tokio::time::interval_at(tokio::time::Instant::now() + keepalive_period, keepalive_period);
+    keepalive_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    }
+    }.await;
+    authenticated.store(false, Ordering::Release);
     sm.retry_unacknowledged(state).await;
     result
 }
@@ -837,14 +942,14 @@ async fn deliver_envelope_inner<S: AsyncWrite + Unpin>(
             return Ok(());
         }
         if let Some(sm) = sm.as_mut() {
-            sm.track(Some(envelope))?;
+            sm.track(Some(envelope), &serialized)?;
         }
         tokio::time::timeout(write_budget, write_xml(secure, &serialized))
             .await
             .context("volatile federation delivery deadline elapsed")??;
     } else {
         if let Some(sm) = sm.as_mut() {
-            sm.track(Some(envelope))?;
+            sm.track(Some(envelope), &serialized)?;
         }
         write_xml(secure, &serialized)
             .await

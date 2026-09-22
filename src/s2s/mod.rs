@@ -4,6 +4,7 @@ pub mod dns;
 pub mod inbound;
 pub mod outbound;
 mod registry;
+mod resume;
 mod sm;
 pub mod tls;
 pub mod util;

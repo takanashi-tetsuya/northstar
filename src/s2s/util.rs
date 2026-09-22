@@ -187,6 +187,24 @@ pub(crate) async fn write_xml<S: AsyncWrite + Unpin>(stream: &mut S, xml: &str) 
     Ok(())
 }
 
+pub(crate) fn transport_lost(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<S2sReadError>(),
+        Some(S2sReadError::Ended)
+    ) || error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::NotConnected
+                | std::io::ErrorKind::TimedOut
+        )
+    })
+}
+
 pub(crate) async fn send_stream_error<S: AsyncWrite + Unpin>(
     stream: &mut S,
     condition: &str,

@@ -137,6 +137,7 @@ impl RegisteredBidi {
 /// never retain a shard lock or mutate the underlying maps directly.
 #[derive(Default)]
 pub(crate) struct S2sConnectionRegistry {
+    pub(crate) resumption: super::resume::Registry,
     outbound: DashMap<String, OutboundS2sSession>,
     bidirectional: DashMap<String, RegisteredBidi>,
     bidi_recovery_cursor: AtomicUsize,

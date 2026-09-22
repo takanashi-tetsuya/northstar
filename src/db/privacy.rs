@@ -924,3 +924,95 @@ mod tests {
         assert_eq!(remaining, 0);
     }
 }
+
+mod application_repository {
+    use crate::{db, services::privacy::*};
+    use anyhow::Result;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+    #[derive(Clone)]
+    pub(crate) struct PostgresPrivacyRepository {
+        pool: PgPool,
+    }
+    impl PostgresPrivacyRepository {
+        pub(crate) fn new(pool: PgPool) -> Self {
+            Self { pool }
+        }
+    }
+    impl PrivacyRepository for PostgresPrivacyRepository {
+        async fn overview(&self, owner_id: Uuid) -> Result<PrivacyOverview> {
+            let overview = db::privacy_overview(&self.pool, owner_id).await?;
+            Ok(PrivacyOverview {
+                default: overview.default,
+                names: overview.names,
+            })
+        }
+        async fn list(&self, owner_id: Uuid, name: &str) -> Result<Option<PrivacyList>> {
+            db::privacy_list(&self.pool, owner_id, name).await
+        }
+        async fn select_active(
+            &self,
+            owner_id: Uuid,
+            connection_id: Uuid,
+            name: Option<&str>,
+        ) -> Result<PrivacySelectionOutcome> {
+            Ok(
+                if db::set_active_privacy_list(&self.pool, owner_id, connection_id, name).await? {
+                    PrivacySelectionOutcome::Updated
+                } else {
+                    PrivacySelectionOutcome::Missing
+                },
+            )
+        }
+        async fn select_default(
+            &self,
+            owner_id: Uuid,
+            name: Option<&str>,
+        ) -> Result<PrivacySelectionOutcome> {
+            Ok(
+                if db::set_default_privacy_list(&self.pool, owner_id, name).await? {
+                    PrivacySelectionOutcome::Updated
+                } else {
+                    PrivacySelectionOutcome::Missing
+                },
+            )
+        }
+        async fn replace_list(
+            &self,
+            owner_id: Uuid,
+            list: &PrivacyList,
+        ) -> Result<PrivacyListMutationOutcome> {
+            Ok(
+                match db::replace_privacy_list(&self.pool, owner_id, list).await? {
+                    db::ReplacePrivacyListOutcome::Stored => PrivacyListMutationOutcome::Stored,
+                    db::ReplacePrivacyListOutcome::TooManyLists => {
+                        PrivacyListMutationOutcome::QuotaExceeded
+                    }
+                },
+            )
+        }
+        async fn remove_list(
+            &self,
+            owner_id: Uuid,
+            name: &str,
+        ) -> Result<PrivacyListMutationOutcome> {
+            Ok(
+                match db::remove_privacy_list(&self.pool, owner_id, name).await? {
+                    db::RemovePrivacyListOutcome::Removed => PrivacyListMutationOutcome::Removed,
+                    db::RemovePrivacyListOutcome::Missing => PrivacyListMutationOutcome::Missing,
+                    db::RemovePrivacyListOutcome::Conflict => PrivacyListMutationOutcome::Conflict,
+                },
+            )
+        }
+        async fn denies(
+            &self,
+            owner_id: Uuid,
+            active_privacy_list: Option<&str>,
+            candidate: &str,
+            kind: PrivacyStanzaKind,
+        ) -> Result<bool> {
+            db::privacy_denies(&self.pool, owner_id, active_privacy_list, candidate, kind).await
+        }
+    }
+}
+pub(crate) use application_repository::PostgresPrivacyRepository;

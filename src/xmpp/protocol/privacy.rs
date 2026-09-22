@@ -12,9 +12,6 @@ use roxmltree::Node;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
-#[cfg(test)]
-use crate::services::privacy::PrivacyService;
-
 const PRIVACY_NS: &str = northstar_xep_0016::NAMESPACE;
 const MAX_PRIVACY_QUERY_BYTES: usize = 64 * 1024;
 
@@ -565,8 +562,10 @@ mod tests {
 
     #[test]
     fn default_change_conflicts_with_any_other_connected_resource() {
-        assert!(!PrivacyService::default_change_conflicts(1, false));
-        assert!(PrivacyService::default_change_conflicts(2, false));
-        assert!(PrivacyService::default_change_conflicts(1, true));
+        assert!(!crate::services::privacy::default_change_conflicts(
+            1, false
+        ));
+        assert!(crate::services::privacy::default_change_conflicts(2, false));
+        assert!(crate::services::privacy::default_change_conflicts(1, true));
     }
 }

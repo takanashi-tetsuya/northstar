@@ -1705,12 +1705,16 @@ pub struct AppState {
     mam_service: crate::services::mam::MamService<db::mam::PostgresMamRepository>,
     mix_service: crate::services::mix::MixService,
     sm_service: crate::services::sm::SmService,
-    blocking_service: crate::services::blocking::BlockingService,
+    blocking_service:
+        crate::services::blocking::BlockingService<db::roster::PostgresBlockingRepository>,
     presence_service: crate::services::presence::PresenceService,
     replay_service: crate::services::replay::ReplayService,
     roster_service: RosterService,
-    privacy_service: crate::services::privacy::PrivacyService,
-    private_storage_service: crate::services::private_storage::PrivateStorageService,
+    privacy_service:
+        crate::services::privacy::PrivacyService<db::privacy::PostgresPrivacyRepository>,
+    private_storage_service: crate::services::private_storage::PrivateStorageService<
+        db::private::PostgresPrivateStorageRepository,
+    >,
     account_service: crate::services::account::AccountService,
     /// Credential lookup, verification and XEP-0484 mutation authority. The
     /// protocol layer receives typed outcomes but neither PgPool nor the FAST
@@ -1719,7 +1723,7 @@ pub struct AppState {
     /// XEP-0050/XEP-0133 session and execution authority. Protocol handlers
     /// never receive the backing PostgreSQL pool through this capability.
     admin_command_service: crate::services::admin_commands::AdminCommandService,
-    push_service: crate::services::push::PushService,
+    push_service: crate::services::push::PushService<db::push::PostgresPushRepository>,
     pub cluster: crate::cluster::ClusterManager,
     bosh: Option<crate::bosh::BoshManager>,
     pub sessions: DashMap<String, OnlineSession>,
@@ -2726,7 +2730,9 @@ impl AppState {
                 config.upload_max_bytes,
             )
         });
-        let privacy_service = crate::services::privacy::PrivacyService::new(pool.clone());
+        let privacy_service = crate::services::privacy::PrivacyService::new(
+            db::privacy::PostgresPrivacyRepository::new(pool.clone()),
+        );
         let replay_service = crate::services::replay::ReplayService::new(
             pool.clone(),
             &config.domain,
@@ -2748,7 +2754,7 @@ impl AppState {
         let roster_service =
             RosterService::new(db::roster::PostgresRosterRepository::new(pool.clone()));
         let private_storage_service = crate::services::private_storage::PrivateStorageService::new(
-            pool.clone(),
+            db::private::PostgresPrivateStorageRepository::new(pool.clone()),
             config.pep_max_nodes_per_account,
             config.pep_max_storage_bytes_per_account,
         );
@@ -2850,7 +2856,9 @@ impl AppState {
             mam_service,
             mix_service,
             sm_service,
-            blocking_service: crate::services::blocking::BlockingService::new(pool.clone()),
+            blocking_service: crate::services::blocking::BlockingService::new(
+                db::roster::PostgresBlockingRepository::new(pool.clone()),
+            ),
             presence_service: crate::services::presence::PresenceService::new(pool.clone()),
             replay_service,
             roster_service,
@@ -2863,7 +2871,9 @@ impl AppState {
                 pool.clone(),
                 command_pool,
             ),
-            push_service: crate::services::push::PushService::new(pool.clone()),
+            push_service: crate::services::push::PushService::new(
+                db::push::PostgresPushRepository::new(pool.clone()),
+            ),
             pool,
             cluster,
             bosh,
@@ -3217,7 +3227,9 @@ impl AppState {
         &self.sm_service
     }
 
-    pub(crate) fn blocking_service(&self) -> &crate::services::blocking::BlockingService {
+    pub(crate) fn blocking_service(
+        &self,
+    ) -> &crate::services::blocking::BlockingService<db::roster::PostgresBlockingRepository> {
         &self.blocking_service
     }
 
@@ -3237,13 +3249,17 @@ impl AppState {
         &self.roster_service
     }
 
-    pub(crate) fn privacy_service(&self) -> &crate::services::privacy::PrivacyService {
+    pub(crate) fn privacy_service(
+        &self,
+    ) -> &crate::services::privacy::PrivacyService<db::privacy::PostgresPrivacyRepository> {
         &self.privacy_service
     }
 
     pub(crate) fn private_storage_service(
         &self,
-    ) -> &crate::services::private_storage::PrivateStorageService {
+    ) -> &crate::services::private_storage::PrivateStorageService<
+        db::private::PostgresPrivateStorageRepository,
+    > {
         &self.private_storage_service
     }
 
@@ -3263,7 +3279,9 @@ impl AppState {
         &self.admin_command_service
     }
 
-    pub(crate) fn push_service(&self) -> &crate::services::push::PushService {
+    pub(crate) fn push_service(
+        &self,
+    ) -> &crate::services::push::PushService<db::push::PostgresPushRepository> {
         &self.push_service
     }
 

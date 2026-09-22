@@ -1,8 +1,6 @@
 //! Application boundary for XEP-0191 roster/blocking policy.
 
-use crate::db;
 use anyhow::Result;
-use sqlx::PgPool;
 use uuid::Uuid;
 
 pub(crate) type RosterEntry = (String, Option<String>, String, Option<String>);
@@ -20,44 +18,51 @@ pub(crate) enum UnblockUpdateOutcome {
     Unavailable,
 }
 
-#[derive(Clone)]
-pub(crate) struct BlockingService {
-    pool: PgPool,
+pub(crate) trait BlockingRepository: Send + Sync {
+    fn blocked_jids(
+        &self,
+        owner: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
+    fn roster(
+        &self,
+        owner: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<RosterEntry>>> + Send;
+    fn block(
+        &self,
+        owner: Uuid,
+        jids: &[String],
+    ) -> impl std::future::Future<Output = Result<BlockUpdateOutcome>> + Send;
+    fn unblock(
+        &self,
+        owner: Uuid,
+        jids: Option<&[String]>,
+    ) -> impl std::future::Future<Output = Result<UnblockUpdateOutcome>> + Send;
 }
-
-impl BlockingService {
-    pub(crate) fn new(pool: PgPool) -> Self {
-        Self { pool }
+#[derive(Clone)]
+pub(crate) struct BlockingService<R> {
+    repository: R,
+}
+impl<R: BlockingRepository> BlockingService<R> {
+    pub(crate) fn new(repository: R) -> Self {
+        Self { repository }
     }
-
     pub(crate) async fn blocked_jids(&self, owner: Uuid) -> Result<Vec<String>> {
-        db::blocked_jids(&self.pool, owner).await
+        self.repository.blocked_jids(owner).await
     }
-
     pub(crate) async fn roster(&self, owner: Uuid) -> Result<Vec<RosterEntry>> {
-        db::roster(&self.pool, owner).await
+        self.repository.roster(owner).await
     }
-
     pub(crate) async fn block(&self, owner: Uuid, jids: &[String]) -> Result<BlockUpdateOutcome> {
-        Ok(match db::block_jids(&self.pool, owner, jids).await? {
-            db::BlockJidsUpdate::Changed(changed) => BlockUpdateOutcome::Changed(changed),
-            db::BlockJidsUpdate::QuotaExceeded => BlockUpdateOutcome::QuotaExceeded,
-            db::BlockJidsUpdate::Unavailable => BlockUpdateOutcome::Unavailable,
-        })
+        self.repository.block(owner, jids).await
     }
-
     pub(crate) async fn unblock(
         &self,
         owner: Uuid,
         jids: Option<&[String]>,
     ) -> Result<UnblockUpdateOutcome> {
-        Ok(match db::unblock_jids(&self.pool, owner, jids).await? {
-            db::UnblockJidsUpdate::Changed(changed) => UnblockUpdateOutcome::Changed(changed),
-            db::UnblockJidsUpdate::Unavailable => UnblockUpdateOutcome::Unavailable,
-        })
+        self.repository.unblock(owner, jids).await
     }
-
-    pub(crate) fn matches(pattern: &str, jid: &str) -> bool {
-        db::blocked_jid_matches(pattern, jid)
-    }
+}
+pub(crate) fn matches(pattern: &str, jid: &str) -> bool {
+    northstar_xmpp_types::jid_scope_matches(pattern, jid)
 }

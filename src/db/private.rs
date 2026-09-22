@@ -294,33 +294,8 @@ pub struct BookmarkCompatibilityWrite<'a> {
     pub expected_previous_items: Option<&'a [(String, String)]>,
 }
 
-pub(crate) fn preserve_bookmark_extensions(
-    items: &mut [(String, String)],
-    previous: &[(String, String)],
-) {
-    let previous = previous
-        .iter()
-        .map(|(item_id, payload)| (item_id.as_str(), payload.as_str()))
-        .collect::<std::collections::HashMap<_, _>>();
-    for (item_id, item_xml) in items {
-        let Some(previous_xml) = previous.get(item_id.as_str()) else {
-            continue;
-        };
-        let Ok(document) = roxmltree::Document::parse(previous_xml) else {
-            continue;
-        };
-        let Some(extensions) = document.descendants().find(|node| {
-            node.is_element()
-                && node.tag_name().name() == "extensions"
-                && node.tag_name().namespace() == Some("urn:xmpp:bookmarks:1")
-        }) else {
-            continue;
-        };
-        if let Some(end) = item_xml.rfind("</conference>") {
-            item_xml.insert_str(end, &previous_xml[extensions.range()]);
-        }
-    }
-}
+#[cfg(test)]
+use crate::services::private_storage::preserve_bookmark_extensions;
 
 #[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -579,3 +554,68 @@ mod tests {
         admin.close().await;
     }
 }
+
+mod application_repository {
+    use crate::{db, services::private_storage::*};
+    use anyhow::Result;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+    #[derive(Clone)]
+    pub(crate) struct PostgresPrivateStorageRepository {
+        pool: PgPool,
+    }
+    impl PostgresPrivateStorageRepository {
+        pub(crate) fn new(pool: PgPool) -> Self {
+            Self { pool }
+        }
+    }
+    impl PrivateStorageRepository for PostgresPrivateStorageRepository {
+        async fn get(
+            &self,
+            owner_id: Uuid,
+            element_name: &str,
+            element_ns: &str,
+        ) -> Result<Option<String>> {
+            db::get_private_xml(&self.pool, owner_id, element_name, element_ns).await
+        }
+        async fn legacy_bookmark_snapshot(&self, owner_id: Uuid) -> Result<LegacyBookmarkSnapshot> {
+            let snapshot = db::legacy_bookmark_snapshot(
+                &self.pool,
+                owner_id,
+                LEGACY_BOOKMARKS,
+                BOOKMARKS2,
+                i64::from(db::PEP_MAX_ITEMS),
+            )
+            .await?;
+            Ok(LegacyBookmarkSnapshot {
+                private_xml: snapshot.private_xml,
+                modern_node_exists: snapshot.modern_node_exists,
+                modern_items: snapshot.modern_items,
+            })
+        }
+        async fn set_batch(
+            &self,
+            owner_id: Uuid,
+            entries: &[PrivateXmlEntry<'_>],
+            max_bytes: i64,
+        ) -> Result<PrivateXmlWriteOutcome> {
+            let entries = entries
+                .iter()
+                .map(|entry| db::PrivateXmlEntry {
+                    element_name: entry.element_name,
+                    element_ns: entry.element_ns,
+                    xml_data: entry.xml_data,
+                })
+                .collect::<Vec<_>>();
+            Ok(
+                match db::set_private_xml_batch(&self.pool, owner_id, &entries, max_bytes).await? {
+                    db::PrivateXmlWriteOutcome::Stored => PrivateXmlWriteOutcome::Stored,
+                    db::PrivateXmlWriteOutcome::QuotaExceeded => {
+                        PrivateXmlWriteOutcome::QuotaExceeded
+                    }
+                },
+            )
+        }
+    }
+}
+pub(crate) use application_repository::PostgresPrivateStorageRepository;

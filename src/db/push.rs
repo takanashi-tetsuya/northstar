@@ -505,3 +505,106 @@ mod integration_tests {
             .unwrap();
     }
 }
+
+mod application_repository {
+    use crate::{db, services::push::*};
+    use anyhow::Result;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+    #[derive(Clone)]
+    pub(crate) struct PostgresPushRepository {
+        pool: PgPool,
+    }
+    impl PostgresPushRepository {
+        pub(crate) fn new(pool: PgPool) -> Self {
+            Self { pool }
+        }
+    }
+    impl PushRepository for PostgresPushRepository {
+        async fn enable(
+            &self,
+            user_id: Uuid,
+            service_jid: &str,
+            node: &str,
+            options: Option<&str>,
+        ) -> Result<PushEnableOutcome> {
+            Ok(
+                match db::enable_push_subscription(&self.pool, user_id, service_jid, node, options)
+                    .await?
+                {
+                    db::PushEnableOutcome::Enabled => PushEnableOutcome::Enabled,
+                    db::PushEnableOutcome::QuotaExceeded => PushEnableOutcome::QuotaExceeded,
+                    db::PushEnableOutcome::RateLimited => PushEnableOutcome::RateLimited,
+                },
+            )
+        }
+        async fn disable(
+            &self,
+            user_id: Uuid,
+            service_jid: &str,
+            node: Option<&str>,
+        ) -> Result<u64> {
+            db::disable_push_subscriptions(&self.pool, user_id, service_jid, node).await
+        }
+        async fn claim_batch(&self, user_id: Uuid) -> Result<PushBatch> {
+            let message_count = db::offline_message_count(&self.pool, user_id).await?;
+            let pending_subscription_count =
+                db::pending_presence_subscription_count(&self.pool, user_id).await?;
+            let deliveries = db::claim_push_deliveries(&self.pool, user_id)
+                .await?
+                .into_iter()
+                .map(|delivery| PushDelivery {
+                    request_id: delivery.request_id,
+                    service_jid: delivery.service_jid,
+                    node: delivery.node,
+                    options: delivery.options,
+                })
+                .collect();
+            Ok(PushBatch {
+                message_count,
+                pending_subscription_count,
+                deliveries,
+            })
+        }
+        async fn mark_unroutable(&self, request_id: Uuid) -> Result<()> {
+            db::mark_push_unroutable(&self.pool, request_id).await
+        }
+        async fn complete_response(
+            &self,
+            request_id: Uuid,
+            sender_bare: &str,
+            kind: PushResponseKind,
+        ) -> Result<PushResponseOutcome> {
+            let kind = match kind {
+                PushResponseKind::Success => db::PushResponseKind::Success,
+                PushResponseKind::PermanentError => db::PushResponseKind::PermanentError,
+            };
+            Ok(
+                match db::complete_push_response(&self.pool, request_id, sender_bare, kind).await? {
+                    db::PushResponseOutcome::Completed => PushResponseOutcome::Completed,
+                    db::PushResponseOutcome::SubscriptionDisabled => {
+                        PushResponseOutcome::SubscriptionDisabled
+                    }
+                    db::PushResponseOutcome::SenderMismatch => PushResponseOutcome::SenderMismatch,
+                    db::PushResponseOutcome::Unknown => PushResponseOutcome::Unknown,
+                },
+            )
+        }
+        async fn disable_from_service(
+            &self,
+            target_username: &str,
+            service_jid: &str,
+            node: &str,
+        ) -> Result<bool> {
+            let Some(recipient) = db::find_user(&self.pool, target_username).await? else {
+                return Ok(false);
+            };
+            Ok(
+                db::disable_push_subscriptions(&self.pool, recipient.id, service_jid, Some(node))
+                    .await?
+                    > 0,
+            )
+        }
+    }
+}
+pub(crate) use application_repository::PostgresPushRepository;

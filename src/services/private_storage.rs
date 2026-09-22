@@ -1,18 +1,16 @@
 //! Application boundary for XEP-0049 private XML and bookmark compatibility.
 //!
-//! XML parsing/rendering remains in the protocol module.  This service owns
-//! all persistence, the cross-table legacy/modern bookmark snapshot, quota
-//! policy, extension preservation and the atomic private+PEP+outbox commit.
+//! Applies storage quotas and preserves modern bookmark extensions when a
+//! legacy client writes bookmarks. The repository supplies a coherent snapshot;
+//! publication commits private XML, PEP and its outbox together.
 
-use crate::db;
 use anyhow::Result;
-use sqlx::PgPool;
 use uuid::Uuid;
 
-const LEGACY_BOOKMARKS: &str = "storage:bookmarks";
-const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
+pub(crate) const LEGACY_BOOKMARKS: &str = "storage:bookmarks";
+pub(crate) const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
 const PRIVATE_XML_MAX_ACCOUNT_BYTES: i64 = 8 * 1024 * 1024;
-pub(crate) const MAX_BOOKMARK_ITEMS: usize = db::PEP_MAX_ITEMS as usize;
+pub(crate) const MAX_BOOKMARK_ITEMS: usize = northstar_pubsub_core::PEP_MAX_ITEMS as usize;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PrivateXmlEntry<'a> {
@@ -34,95 +32,145 @@ pub(crate) enum PrivateXmlWriteOutcome {
     QuotaExceeded,
 }
 
+pub(crate) trait PrivateStorageRepository: Send + Sync {
+    fn get(
+        &self,
+        owner_id: Uuid,
+        element_name: &str,
+        element_ns: &str,
+    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send;
+    fn legacy_bookmark_snapshot(
+        &self,
+        owner_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<LegacyBookmarkSnapshot>> + Send;
+    fn set_batch(
+        &self,
+        owner_id: Uuid,
+        entries: &[PrivateXmlEntry<'_>],
+        max_bytes: i64,
+    ) -> impl std::future::Future<Output = Result<PrivateXmlWriteOutcome>> + Send;
+}
 #[derive(Clone)]
-pub(crate) struct PrivateStorageService {
-    pool: PgPool,
+pub(crate) struct PrivateStorageService<R> {
+    repository: R,
     pep_max_nodes: i64,
     pep_max_storage_bytes: i64,
 }
-
-impl PrivateStorageService {
-    pub(crate) fn new(pool: PgPool, pep_max_nodes: i64, pep_max_storage_bytes: i64) -> Self {
+impl<R: PrivateStorageRepository> PrivateStorageService<R> {
+    pub(crate) fn new(repository: R, pep_max_nodes: i64, pep_max_storage_bytes: i64) -> Self {
         Self {
-            pool,
+            repository,
             pep_max_nodes,
             pep_max_storage_bytes,
         }
     }
-
     pub(crate) async fn get(
         &self,
         owner_id: Uuid,
         element_name: &str,
         element_ns: &str,
     ) -> Result<Option<String>> {
-        db::get_private_xml(&self.pool, owner_id, element_name, element_ns).await
+        self.repository
+            .get(owner_id, element_name, element_ns)
+            .await
     }
-
     pub(crate) async fn legacy_bookmark_snapshot(
         &self,
         owner_id: Uuid,
     ) -> Result<LegacyBookmarkSnapshot> {
-        let snapshot = db::legacy_bookmark_snapshot(
-            &self.pool,
-            owner_id,
-            LEGACY_BOOKMARKS,
-            BOOKMARKS2,
-            i64::from(db::PEP_MAX_ITEMS),
-        )
-        .await?;
-        Ok(LegacyBookmarkSnapshot {
-            private_xml: snapshot.private_xml,
-            modern_node_exists: snapshot.modern_node_exists,
-            modern_items: snapshot.modern_items,
-        })
+        self.repository.legacy_bookmark_snapshot(owner_id).await
     }
-
-    /// Capture the optimistic PEP revision and merge opaque modern bookmark
-    /// extensions exactly once before the protocol constructs event bytes.
+    /// Capture one optimistic revision before the protocol renders event bytes.
     pub(crate) async fn prepare_legacy_bookmark_write(
         &self,
         owner_id: Uuid,
         items: &mut [(String, String)],
     ) -> Result<Vec<(String, String)>> {
         let snapshot = self.legacy_bookmark_snapshot(owner_id).await?;
-        db::private::preserve_bookmark_extensions(items, &snapshot.modern_items);
+        preserve_bookmark_extensions(items, &snapshot.modern_items);
         Ok(snapshot.modern_items)
     }
-
     pub(crate) async fn set_batch(
         &self,
         owner_id: Uuid,
         entries: &[PrivateXmlEntry<'_>],
     ) -> Result<PrivateXmlWriteOutcome> {
-        let entries = entries
-            .iter()
-            .map(|entry| db::PrivateXmlEntry {
-                element_name: entry.element_name,
-                element_ns: entry.element_ns,
-                xml_data: entry.xml_data,
-            })
-            .collect::<Vec<_>>();
-        Ok(
-            match db::set_private_xml_batch(
-                &self.pool,
-                owner_id,
-                &entries,
-                PRIVATE_XML_MAX_ACCOUNT_BYTES,
-            )
-            .await?
-            {
-                db::PrivateXmlWriteOutcome::Stored => PrivateXmlWriteOutcome::Stored,
-                db::PrivateXmlWriteOutcome::QuotaExceeded => PrivateXmlWriteOutcome::QuotaExceeded,
-            },
-        )
+        self.repository
+            .set_batch(owner_id, entries, PRIVATE_XML_MAX_ACCOUNT_BYTES)
+            .await
     }
-
     pub(crate) fn legacy_bookmark_limits(&self) -> (i64, i64, i64) {
         (
             PRIVATE_XML_MAX_ACCOUNT_BYTES,
             self.pep_max_nodes,
             self.pep_max_storage_bytes,
         )
+    }
+}
+pub(crate) fn preserve_bookmark_extensions(
+    items: &mut [(String, String)],
+    previous: &[(String, String)],
+) {
+    let previous = previous
+        .iter()
+        .map(|(item_id, payload)| (item_id.as_str(), payload.as_str()))
+        .collect::<std::collections::HashMap<_, _>>();
+    for (item_id, item_xml) in items {
+        let Some(previous_xml) = previous.get(item_id.as_str()) else {
+            continue;
+        };
+        let Ok(document) = roxmltree::Document::parse(previous_xml) else {
+            continue;
+        };
+        let Some(extensions) = document.descendants().find(|node| {
+            node.is_element()
+                && node.tag_name().name() == "extensions"
+                && node.tag_name().namespace() == Some("urn:xmpp:bookmarks:1")
+        }) else {
+            continue;
+        };
+        if let Some(end) = item_xml.rfind("</conference>") {
+            item_xml.insert_str(end, &previous_xml[extensions.range()]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct UnavailableSnapshot;
+    impl PrivateStorageRepository for UnavailableSnapshot {
+        async fn get(&self, _: Uuid, _: &str, _: &str) -> Result<Option<String>> {
+            unreachable!()
+        }
+        async fn legacy_bookmark_snapshot(&self, _: Uuid) -> Result<LegacyBookmarkSnapshot> {
+            anyhow::bail!("snapshot unavailable")
+        }
+        async fn set_batch(
+            &self,
+            _: Uuid,
+            _: &[PrivateXmlEntry<'_>],
+            _: i64,
+        ) -> Result<PrivateXmlWriteOutcome> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_snapshot_leaves_the_callers_bookmark_payload_intact() {
+        let service = PrivateStorageService::new(UnavailableSnapshot, 100, 8_000_000);
+        let mut items = vec![(
+            "room@conference.test".to_owned(),
+            "<conference xmlns='urn:xmpp:bookmarks:1'></conference>".to_owned(),
+        )];
+        let original = items.clone();
+        assert!(service
+            .prepare_legacy_bookmark_write(Uuid::new_v4(), &mut items)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("snapshot unavailable"));
+        assert_eq!(items, original);
     }
 }

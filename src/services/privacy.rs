@@ -1,15 +1,12 @@
 //! Application boundary for XEP-0016 privacy-list persistence and mutations.
 //!
-//! The stanza layer remains responsible for XML validation and for delivering
-//! list-change pushes.  This service owns PostgreSQL access and maps repository
-//! outcomes into protocol-neutral business outcomes.
+//! Applies live-resource policy before requesting an account-scoped mutation.
+//! The protocol adapter validates XML and sends list-change notifications.
 
-use crate::db;
 use anyhow::Result;
-use sqlx::PgPool;
 use uuid::Uuid;
 
-pub(crate) use crate::db::{
+pub(crate) use northstar_xep_0016::{
     PrivacyAction, PrivacyItem, PrivacyList, PrivacyMatchType, PrivacyStanzaKind, MAX_PRIVACY_ITEMS,
 };
 
@@ -35,47 +32,71 @@ pub(crate) enum PrivacyListMutationOutcome {
     QuotaExceeded,
 }
 
-#[derive(Clone)]
-pub(crate) struct PrivacyService {
-    pool: PgPool,
+pub(crate) trait PrivacyRepository: Send + Sync {
+    fn overview(
+        &self,
+        owner_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<PrivacyOverview>> + Send;
+    fn list(
+        &self,
+        owner_id: Uuid,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<Option<PrivacyList>>> + Send;
+    fn select_active(
+        &self,
+        owner_id: Uuid,
+        connection_id: Uuid,
+        name: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<PrivacySelectionOutcome>> + Send;
+    fn select_default(
+        &self,
+        owner_id: Uuid,
+        name: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<PrivacySelectionOutcome>> + Send;
+    fn replace_list(
+        &self,
+        owner_id: Uuid,
+        list: &PrivacyList,
+    ) -> impl std::future::Future<Output = Result<PrivacyListMutationOutcome>> + Send;
+    fn remove_list(
+        &self,
+        owner_id: Uuid,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<PrivacyListMutationOutcome>> + Send;
+    fn denies(
+        &self,
+        owner_id: Uuid,
+        active_privacy_list: Option<&str>,
+        candidate: &str,
+        kind: PrivacyStanzaKind,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
 }
-
-impl PrivacyService {
-    pub(crate) fn new(pool: PgPool) -> Self {
-        Self { pool }
+#[derive(Clone)]
+pub(crate) struct PrivacyService<R> {
+    repository: R,
+}
+impl<R: PrivacyRepository> PrivacyService<R> {
+    pub(crate) fn new(repository: R) -> Self {
+        Self { repository }
     }
-
     pub(crate) async fn overview(&self, owner_id: Uuid) -> Result<PrivacyOverview> {
-        let overview = db::privacy_overview(&self.pool, owner_id).await?;
-        Ok(PrivacyOverview {
-            default: overview.default,
-            names: overview.names,
-        })
+        self.repository.overview(owner_id).await
     }
-
     pub(crate) async fn list(&self, owner_id: Uuid, name: &str) -> Result<Option<PrivacyList>> {
-        db::privacy_list(&self.pool, owner_id, name).await
+        self.repository.list(owner_id, name).await
     }
-
     pub(crate) async fn select_active(
         &self,
         owner_id: Uuid,
         connection_id: Uuid,
         name: Option<&str>,
     ) -> Result<PrivacySelectionOutcome> {
-        Ok(
-            if db::set_active_privacy_list(&self.pool, owner_id, connection_id, name).await? {
-                PrivacySelectionOutcome::Updated
-            } else {
-                PrivacySelectionOutcome::Missing
-            },
-        )
+        self.repository
+            .select_active(owner_id, connection_id, name)
+            .await
     }
-
-    /// XEP-0016 only permits a default-list change from the account's sole
-    /// connected resource.  The protocol/runtime layer supplies the exact
-    /// local and clustered resource observation; the service owns the policy
-    /// decision and the durable mutation.
+    /// Reject changes while another resource is connected. Durable policy
+    /// checks still run under the repository's account lock.
     pub(crate) async fn select_default(
         &self,
         owner_id: Uuid,
@@ -83,36 +104,21 @@ impl PrivacyService {
         local_resource_count: usize,
         remote_resource_exists: bool,
     ) -> Result<PrivacySelectionOutcome> {
-        if Self::default_change_conflicts(local_resource_count, remote_resource_exists) {
+        if default_change_conflicts(local_resource_count, remote_resource_exists) {
             return Ok(PrivacySelectionOutcome::Conflict);
         }
-        Ok(
-            if db::set_default_privacy_list(&self.pool, owner_id, name).await? {
-                PrivacySelectionOutcome::Updated
-            } else {
-                PrivacySelectionOutcome::Missing
-            },
-        )
-    }
 
+        self.repository.select_default(owner_id, name).await
+    }
     pub(crate) async fn replace_list(
         &self,
         owner_id: Uuid,
         list: &PrivacyList,
     ) -> Result<PrivacyListMutationOutcome> {
-        Ok(
-            match db::replace_privacy_list(&self.pool, owner_id, list).await? {
-                db::ReplacePrivacyListOutcome::Stored => PrivacyListMutationOutcome::Stored,
-                db::ReplacePrivacyListOutcome::TooManyLists => {
-                    PrivacyListMutationOutcome::QuotaExceeded
-                }
-            },
-        )
+        self.repository.replace_list(owner_id, list).await
     }
-
-    /// `active_in_process` closes the small gap between an in-memory live
-    /// resource and its renewable durable activity row.  PostgreSQL performs
-    /// the authoritative default/active/resumable checks under the owner lock.
+    /// A local resource can precede its durable activity row. Keep this guard
+    /// in addition to the repository's default/active/resumable checks.
     pub(crate) async fn remove_list(
         &self,
         owner_id: Uuid,
@@ -122,24 +128,9 @@ impl PrivacyService {
         if active_in_process {
             return Ok(PrivacyListMutationOutcome::Conflict);
         }
-        Ok(
-            match db::remove_privacy_list(&self.pool, owner_id, name).await? {
-                db::RemovePrivacyListOutcome::Removed => PrivacyListMutationOutcome::Removed,
-                db::RemovePrivacyListOutcome::Missing => PrivacyListMutationOutcome::Missing,
-                db::RemovePrivacyListOutcome::Conflict => PrivacyListMutationOutcome::Conflict,
-            },
-        )
-    }
 
-    pub(crate) fn default_change_conflicts(
-        local_resource_count: usize,
-        remote_resource_exists: bool,
-    ) -> bool {
-        northstar_xep_0016::default_change_conflicts(local_resource_count, remote_resource_exists)
+        self.repository.remove_list(owner_id, name).await
     }
-
-    /// Forward the repository's account-scoped XEP-0016 evaluation so stanza
-    /// handlers can check sender policy without naming a storage-level kind.
     pub(crate) async fn denies(
         &self,
         owner_id: Uuid,
@@ -147,13 +138,102 @@ impl PrivacyService {
         candidate: &str,
         kind: PrivacyStanzaKind,
     ) -> Result<bool> {
-        db::privacy_denies(&self.pool, owner_id, active_privacy_list, candidate, kind).await
+        self.repository
+            .denies(owner_id, active_privacy_list, candidate, kind)
+            .await
     }
 }
-
+pub(crate) fn default_change_conflicts(
+    local_resource_count: usize,
+    remote_resource_exists: bool,
+) -> bool {
+    northstar_xep_0016::default_change_conflicts(local_resource_count, remote_resource_exists)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db;
+
+    struct UnavailableRepository(std::sync::atomic::AtomicUsize);
+
+    impl PrivacyRepository for UnavailableRepository {
+        async fn overview(&self, _: Uuid) -> Result<PrivacyOverview> {
+            unreachable!()
+        }
+        async fn list(&self, _: Uuid, _: &str) -> Result<Option<PrivacyList>> {
+            unreachable!()
+        }
+        async fn select_active(
+            &self,
+            _: Uuid,
+            _: Uuid,
+            _: Option<&str>,
+        ) -> Result<PrivacySelectionOutcome> {
+            unreachable!()
+        }
+        async fn select_default(
+            &self,
+            _: Uuid,
+            _: Option<&str>,
+        ) -> Result<PrivacySelectionOutcome> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            anyhow::bail!("repository unavailable")
+        }
+        async fn replace_list(
+            &self,
+            _: Uuid,
+            _: &PrivacyList,
+        ) -> Result<PrivacyListMutationOutcome> {
+            unreachable!()
+        }
+        async fn remove_list(&self, _: Uuid, _: &str) -> Result<PrivacyListMutationOutcome> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            anyhow::bail!("repository unavailable")
+        }
+        async fn denies(
+            &self,
+            _: Uuid,
+            _: Option<&str>,
+            _: &str,
+            _: PrivacyStanzaKind,
+        ) -> Result<bool> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn local_conflicts_do_not_acquire_persistence_and_storage_errors_remain_errors() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let service = PrivacyService::new(UnavailableRepository(AtomicUsize::new(0)));
+        let owner = Uuid::new_v4();
+        for (local, remote) in [(2, false), (1, true)] {
+            assert_eq!(
+                service
+                    .select_default(owner, Some("work"), local, remote)
+                    .await
+                    .unwrap(),
+                PrivacySelectionOutcome::Conflict
+            );
+        }
+        assert_eq!(
+            service.remove_list(owner, "work", true).await.unwrap(),
+            PrivacyListMutationOutcome::Conflict
+        );
+        assert_eq!(service.repository.0.load(Ordering::SeqCst), 0);
+        assert!(service
+            .select_default(owner, Some("work"), 1, false)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("repository unavailable"));
+        assert!(service
+            .remove_list(owner, "work", false)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("repository unavailable"));
+        assert_eq!(service.repository.0.load(Ordering::SeqCst), 2);
+    }
 
     #[test]
     fn stanza_kind_conversions_preserve_every_stanza_classification() {
@@ -190,7 +270,8 @@ mod tests {
             .await
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
-        let service = PrivacyService::new(pool.clone());
+        let service =
+            PrivacyService::new(db::privacy::PostgresPrivacyRepository::new(pool.clone()));
         let messaging = crate::services::messaging::MessageService::new(
             crate::db::messaging::PostgresMessageRepository::new(
                 pool.clone(),

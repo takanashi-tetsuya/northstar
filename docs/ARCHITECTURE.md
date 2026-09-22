@@ -125,6 +125,10 @@ Key ownership:
   XML rendering uses domain snapshots while those locks are held. Notification
   claims carry their payload digest and lease token without a hidden database
   row or a second copy of the payload.
+- Blocking, privacy, Push and private XML storage use injected repository
+  ports. Privacy keeps live-resource conflict checks in the service, and
+  private storage keeps quota policy and bookmark extension preservation.
+  Adapters retain the existing account locks and complete batch mutations.
 - Embedded and standalone retention workers share the same narrow context.
   Retention and subscription cleanup receive repository operations, policy and
   metrics, with no raw pool or global application state.

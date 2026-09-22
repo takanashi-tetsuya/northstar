@@ -3889,3 +3889,45 @@ mod blocking_match_tests {
         admin.close().await;
     }
 }
+
+mod application_repository {
+    use crate::{db, services::blocking::*};
+    use anyhow::Result;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+    #[derive(Clone)]
+    pub(crate) struct PostgresBlockingRepository {
+        pool: PgPool,
+    }
+    impl PostgresBlockingRepository {
+        pub(crate) fn new(pool: PgPool) -> Self {
+            Self { pool }
+        }
+    }
+    impl BlockingRepository for PostgresBlockingRepository {
+        async fn blocked_jids(&self, owner: Uuid) -> Result<Vec<String>> {
+            db::blocked_jids(&self.pool, owner).await
+        }
+        async fn roster(&self, owner: Uuid) -> Result<Vec<RosterEntry>> {
+            db::roster(&self.pool, owner).await
+        }
+        async fn block(&self, owner: Uuid, jids: &[String]) -> Result<BlockUpdateOutcome> {
+            Ok(match db::block_jids(&self.pool, owner, jids).await? {
+                db::BlockJidsUpdate::Changed(changed) => BlockUpdateOutcome::Changed(changed),
+                db::BlockJidsUpdate::QuotaExceeded => BlockUpdateOutcome::QuotaExceeded,
+                db::BlockJidsUpdate::Unavailable => BlockUpdateOutcome::Unavailable,
+            })
+        }
+        async fn unblock(
+            &self,
+            owner: Uuid,
+            jids: Option<&[String]>,
+        ) -> Result<UnblockUpdateOutcome> {
+            Ok(match db::unblock_jids(&self.pool, owner, jids).await? {
+                db::UnblockJidsUpdate::Changed(changed) => UnblockUpdateOutcome::Changed(changed),
+                db::UnblockJidsUpdate::Unavailable => UnblockUpdateOutcome::Unavailable,
+            })
+        }
+    }
+}
+pub(crate) use application_repository::PostgresBlockingRepository;

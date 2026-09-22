@@ -1710,7 +1710,8 @@ pub struct AppState {
     presence_service: crate::services::presence::PresenceService<
         db::presence_repository::PostgresPresenceRepository,
     >,
-    replay_service: crate::services::replay::ReplayService,
+    replay_service:
+        crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>,
     roster_service: RosterService,
     privacy_service:
         crate::services::privacy::PrivacyService<db::privacy::PostgresPrivacyRepository>,
@@ -2736,7 +2737,7 @@ impl AppState {
             db::privacy::PostgresPrivacyRepository::new(pool.clone()),
         );
         let replay_service = crate::services::replay::ReplayService::new(
-            pool.clone(),
+            db::replay_repository::PostgresReplayRepository::new(pool.clone()),
             &config.domain,
             config.offline_message_ttl_days,
         );
@@ -3245,7 +3246,10 @@ impl AppState {
         &self.presence_service
     }
 
-    pub(crate) fn replay_service(&self) -> &crate::services::replay::ReplayService {
+    pub(crate) fn replay_service(
+        &self,
+    ) -> &crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>
+    {
         &self.replay_service
     }
 

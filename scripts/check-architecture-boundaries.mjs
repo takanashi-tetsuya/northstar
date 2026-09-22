@@ -2057,6 +2057,7 @@ for (const [name, source] of [
   ['BlockingService', read('src/services/blocking.rs')],
   ['PrivacyService', read('src/services/privacy.rs')],
   ['PresenceService', read('src/services/presence.rs')],
+  ['ReplayService', read('src/services/replay.rs')],
   ['PushService', read('src/services/push.rs')],
   ['PrivateStorageService', read('src/services/private_storage.rs')],
   ['RetentionContext', read('src/retention.rs')],

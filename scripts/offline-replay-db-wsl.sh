@@ -40,7 +40,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_HOME="$project_dir/.cargo-local"
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$database?options=-csearch_path%3D$schema"
+export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$database?options=-csearch_path%3D$schema"
 cargo test --locked --offline \
   db::replay::tests::durable_ack_batch_validates_every_fence_before_deleting_any_row \
   -- --ignored --exact --nocapture --test-threads=1

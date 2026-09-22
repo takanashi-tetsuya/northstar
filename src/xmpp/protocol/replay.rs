@@ -93,7 +93,7 @@ async fn wait_for_replay_retry(
 
 #[allow(clippy::too_many_arguments)]
 async fn acquire_replay_session(
-    service: &ReplayService,
+    service: &ReplayService<impl crate::services::replay::ReplayRepository>,
     outbound: &crate::outbound::OutboundSender,
     recipient_id: Uuid,
     current_full_jid: &str,
@@ -135,7 +135,7 @@ async fn acquire_replay_session(
 }
 
 async fn release_unsent_suffix(
-    service: &ReplayService,
+    service: &ReplayService<impl crate::services::replay::ReplayRepository>,
     session: &ReplaySession,
     page_claim_token: Uuid,
     ids: &[Uuid],
@@ -240,7 +240,7 @@ async fn drain_offline(
     reason = "the owned replay loop must carry both lease deadlines and the exact policy/availability fences"
 )]
 async fn drain_owned_offline(
-    service: &ReplayService,
+    service: &ReplayService<impl crate::services::replay::ReplayRepository>,
     session: &ReplaySession,
     outbound: &crate::outbound::OutboundSender,
     active_privacy_list: Option<&str>,

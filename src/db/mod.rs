@@ -42,6 +42,7 @@ pub mod push;
 pub mod push_identity;
 pub mod remaining_identity;
 pub mod replay;
+pub mod replay_repository;
 pub mod reports;
 pub mod retention;
 pub mod role_attestation;

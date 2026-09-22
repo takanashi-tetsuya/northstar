@@ -133,6 +133,9 @@ Key ownership:
   Account generations, privacy, roster changes and federation outbox admission
   remain in one repository transaction; the service keeps outbound policy order.
   Administrative notice claims carry domain values rather than database rows.
+- Offline replay separates resource validation and policy from durable lease,
+  page and transport-fence operations. Cursor and lease values belong to the
+  service boundary; the adapter retains PostgreSQL clock and ownership checks.
 - Embedded and standalone retention workers share the same narrow context.
   Retention and subscription cleanup receive repository operations, policy and
   metrics, with no raw pool or global application state.

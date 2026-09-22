@@ -15,51 +15,12 @@ const BOSH_FENCE_MAX_AGE_SECONDS: i64 = 300;
 // claiming a page, takeover cannot occur until those row claims are already
 // eligible in the same pass; otherwise the replacement would observe an
 // apparently empty queue and messages would wait for another login.
-pub(crate) const REPLAY_OWNER_LEASE_SECONDS: i64 = 90;
+pub(crate) use crate::services::replay::OWNER_LEASE_SECONDS as REPLAY_OWNER_LEASE_SECONDS;
 
-#[derive(Clone, Debug)]
-pub struct PendingPresenceCursor {
-    created_at: DateTime<Utc>,
-    source: i16,
-    key: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct PendingPresenceReplay {
-    pub requester: String,
-    pub stanza: Option<String>,
-    pub cursor: PendingPresenceCursor,
-}
-
-#[derive(Debug)]
-pub struct PendingPresenceReplayPage {
-    pub items: Vec<PendingPresenceReplay>,
-    pub next_cursor: Option<PendingPresenceCursor>,
-    pub complete: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OfflineReplayLease {
-    pub recipient_id: Uuid,
-    pub resource: String,
-    pub owner_token: Uuid,
-    pub replay_started_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OfflineReplayBusyUntil {
-    pub expires_at: DateTime<Utc>,
-    /// Remaining lease time measured by PostgreSQL in the same query which
-    /// returned `expires_at`. Callers must use this monotonic duration rather
-    /// than subtracting an application-wall-clock value.
-    pub retry_after: Duration,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum OfflineReplayLeaseAcquire {
-    Acquired(OfflineReplayLease),
-    BusyUntil(OfflineReplayBusyUntil),
-}
+pub use crate::services::replay::{
+    OfflineReplayBusyUntil, OfflineReplayLease, OfflineReplayLeaseAcquire, PendingPresenceCursor,
+    PendingPresenceReplay, PendingPresenceReplayPage,
+};
 
 #[cfg(test)]
 impl OfflineReplayLeaseAcquire {

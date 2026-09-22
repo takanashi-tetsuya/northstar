@@ -15,11 +15,12 @@ export const REGULAR_REQUIRED = ['listener-readiness-stress-regular'];
 export const SCHEDULED_REQUIRED = ['listener-readiness-stress-scheduled'];
 export const ALL_JOBS = [...ALWAYS_REQUIRED, ...REGULAR_REQUIRED, ...SCHEDULED_REQUIRED];
 
-export function expectedJobResults(event) {
+export function expectedJobResults(event, endurance = false) {
   if (!['push', 'pull_request', 'schedule', 'workflow_dispatch'].includes(event)) {
     throw new Error(`unsupported CI event: ${event}`);
   }
-  const scheduled = ['schedule', 'workflow_dispatch'].includes(event);
+  if (typeof endurance !== 'boolean') throw new Error('CI endurance selection must be a boolean');
+  const scheduled = event === 'schedule' || event === 'workflow_dispatch' && endurance;
   return Object.fromEntries([
     ...ALWAYS_REQUIRED.map((job) => [job, 'success']),
     ...REGULAR_REQUIRED.map((job) => [job, scheduled ? 'skipped' : 'success']),
@@ -27,8 +28,8 @@ export function expectedJobResults(event) {
   ]);
 }
 
-export function verifyJobResults(event, needs) {
-  const expected = expectedJobResults(event);
+export function verifyJobResults(event, needs, endurance = false) {
+  const expected = expectedJobResults(event, endurance);
   const errors = [];
   if (!needs || typeof needs !== 'object' || Array.isArray(needs)) {
     throw new Error('CI dependency results must be an object');
@@ -61,7 +62,8 @@ export function verifyWorkflowCoverage(workflow) {
   }
   if (!aggregate?.includes(`    name: ${REQUIRED_CHECK_NAME}\n`) ||
       !aggregate.includes('    if: ${{ always() }}') ||
-      !aggregate.includes('CI_REQUIRED_NEEDS: ${{ toJSON(needs) }}')) {
+      !aggregate.includes('CI_REQUIRED_NEEDS: ${{ toJSON(needs) }}') ||
+      !aggregate.includes('CI_ENDURANCE_STRESS: ${{ inputs.scheduled_stress || inputs.extended_stress || false }}')) {
     throw new Error('CI required must retain its stable name, unconditional evaluation and dependency evidence');
   }
 }

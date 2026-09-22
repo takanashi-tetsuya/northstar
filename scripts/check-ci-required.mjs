@@ -7,7 +7,9 @@ try {
     .replaceAll('\r\n', '\n');
   verifyWorkflowCoverage(workflow);
   if (!process.argv.includes('--workflow-only')) {
-    const count = verifyJobResults(process.env.GITHUB_EVENT_NAME, JSON.parse(process.env.CI_REQUIRED_NEEDS ?? 'null'));
+    const endurance = process.env.CI_ENDURANCE_STRESS ?? 'false';
+    if (!['true', 'false'].includes(endurance)) throw new Error('invalid CI endurance selection');
+    const count = verifyJobResults(process.env.GITHUB_EVENT_NAME, JSON.parse(process.env.CI_REQUIRED_NEEDS ?? 'null'), endurance === 'true');
     const summary = `CI required: all ${count} jobs satisfy the ${process.env.GITHUB_EVENT_NAME} policy.\n`;
     process.stdout.write(summary);
     if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);

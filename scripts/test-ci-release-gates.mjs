@@ -165,23 +165,26 @@ const branchRules = [
 ];
 
 test('every supported event requires all applicable jobs and precisely classifies legitimate skips', () => {
-  for (const event of ['push', 'pull_request', 'schedule', 'workflow_dispatch']) {
-    const expected = expectedJobResults(event);
+  for (const [event, endurance] of [['push', false], ['pull_request', false], ['schedule', false], ['workflow_dispatch', false], ['workflow_dispatch', true]]) {
+    const expected = expectedJobResults(event, endurance);
     const needs = Object.fromEntries(Object.entries(expected).map(([job, result]) => [job, { result }]));
-    assert.equal(verifyJobResults(event, needs), ALL_JOBS.length);
+    assert.equal(verifyJobResults(event, needs, endurance), ALL_JOBS.length);
     for (const job of ALL_JOBS) {
       for (const result of ['failure', 'cancelled', 'skipped', 'success', 'pending', undefined]) {
         if (result !== expected[job]) {
-          assert.throws(() => verifyJobResults(event, { ...needs, [job]: { result } }), /expected/);
+          assert.throws(() => verifyJobResults(event, { ...needs, [job]: { result } }, endurance), /expected/);
         }
       }
       const missing = { ...needs };
       delete missing[job];
-      assert.throws(() => verifyJobResults(event, missing), /missing/);
+      assert.throws(() => verifyJobResults(event, missing, endurance), /missing/);
     }
-    assert.throws(() => verifyJobResults(event, { ...needs, unknown: { result: 'success' } }), /unclassified/);
+    assert.throws(() => verifyJobResults(event, { ...needs, unknown: { result: 'success' } }, endurance), /unclassified/);
   }
   assert.throws(() => expectedJobResults('pull_request_target'), /unsupported/);
+  assert.throws(() => expectedJobResults('workflow_dispatch', 'false'), /boolean/);
+  assert.equal(expectedJobResults('workflow_dispatch')['listener-readiness-stress-regular'], 'success');
+  assert.equal(expectedJobResults('workflow_dispatch', true)['listener-readiness-stress-scheduled'], 'success');
 });
 
 test('the stable aggregate covers every actual workflow job and executes even after failures', () => {

@@ -28,7 +28,8 @@ and security invariants, parser fuzzing, the 1,000-session production envelope,
 cluster faults and raw 1,000-session load. Both listener fixtures run five
 rounds with 50 pairs and retain their observer and cleanup checks.
 
-Weekly and ordinary manual runs use 20 rounds. The manual `extended_stress`
+Manual runs default to the same 5-round verification as pull requests. Weekly
+runs and the manual `scheduled_stress` option use 20 rounds. The manual `extended_stress`
 option selects 100 rounds for endurance investigations. These profiles use
 the same protocol cases, pair concurrency and worker/recovery deadlines.
 

@@ -10,8 +10,12 @@ on:
         description: "Immutable commit SHA used for the manual contract compatibility comparison"
         required: true
         type: string
+      scheduled_stress:
+        description: "Run the 20x50 endurance matrix instead of the regular 5x50 verification"
+        type: boolean
+        default: false
       extended_stress:
-        description: "Run the 100x50 endurance matrix instead of the standard 20x50 scheduled matrix"
+        description: "Run the 100x50 endurance matrix (overrides scheduled_stress)"
         type: boolean
         default: false
   schedule:
@@ -1090,7 +1094,8 @@ jobs:
     name: Listener/readiness stress (regular 5x50 · ${{ matrix.fixture }})
     needs: [listener-readiness-stress-smoke, listener-diagnostics]
     if: >-
-      ${{ (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+           (github.event_name == 'workflow_dispatch' && !inputs.scheduled_stress && !inputs.extended_stress)) &&
           needs.listener-readiness-stress-smoke.result == 'success' &&
           needs.listener-diagnostics.result == 'success' }}
     runs-on: ubuntu-latest
@@ -1192,7 +1197,8 @@ jobs:
     name: Scheduled listener/readiness stress (${{ github.event_name == 'workflow_dispatch' && inputs.extended_stress && '100x50' || '20x50' }} · ${{ matrix.fixture }})
     needs: [listener-readiness-stress-smoke, listener-diagnostics]
     if: >-
-      ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      ${{ (github.event_name == 'schedule' ||
+           (github.event_name == 'workflow_dispatch' && (inputs.scheduled_stress || inputs.extended_stress))) &&
           needs.listener-readiness-stress-smoke.result == 'success' &&
           needs.listener-diagnostics.result == 'success' }}
     runs-on: ubuntu-latest
@@ -1386,4 +1392,5 @@ jobs:
       - name: Require every applicable job to succeed
         env:
           CI_REQUIRED_NEEDS: ${{ toJSON(needs) }}
+          CI_ENDURANCE_STRESS: ${{ inputs.scheduled_stress || inputs.extended_stress || false }}
         run: node scripts/check-ci-required.mjs

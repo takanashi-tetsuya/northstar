@@ -4,6 +4,7 @@ use dashmap::DashMap;
 use tokio::{
     net::TcpStream,
     sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore},
+    time::Instant,
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -45,6 +46,7 @@ struct Entry {
     scope: Scope,
     epoch: Uuid,
     sender: mpsc::Sender<Request>,
+    expires_at: Option<Instant>,
 }
 
 pub(crate) struct Registry {
@@ -66,15 +68,30 @@ impl Default for Registry {
 pub(crate) struct Registration {
     pub(crate) id: String,
     pub(crate) epoch: Uuid,
+    expires_at: Option<Instant>,
     entries: Arc<DashMap<String, Entry>>,
     _slot: OwnedSemaphorePermit,
 }
 
 impl Registration {
+    pub(crate) fn suspend(&mut self, deadline: Instant) {
+        self.expires_at = Some(deadline);
+        if let Some(mut entry) = self.entries.get_mut(&self.id) {
+            entry.expires_at = Some(deadline);
+        }
+    }
+
+    pub(crate) fn expired(&self) -> bool {
+        self.expires_at
+            .is_some_and(|deadline| deadline <= Instant::now())
+    }
+
     pub(crate) fn advance(&mut self) {
         self.epoch = Uuid::new_v4();
+        self.expires_at = None;
         if let Some(mut entry) = self.entries.get_mut(&self.id) {
             entry.epoch = self.epoch;
+            entry.expires_at = None;
         }
     }
 }
@@ -100,11 +117,13 @@ impl Registry {
                 scope,
                 epoch,
                 sender,
+                expires_at: None,
             },
         );
         Some(Registration {
             id,
             epoch,
+            expires_at: None,
             entries: self.entries.clone(),
             _slot: slot,
         })
@@ -112,8 +131,12 @@ impl Registry {
 
     pub(crate) fn lookup(&self, id: &str, scope: &Scope) -> Option<(Uuid, mpsc::Sender<Request>)> {
         let entry = self.entries.get(id)?;
-        (entry.scope == *scope && !entry.sender.is_closed())
-            .then(|| (entry.epoch, entry.sender.clone()))
+        (entry.scope == *scope
+            && !entry.sender.is_closed()
+            && entry
+                .expires_at
+                .is_none_or(|deadline| deadline > Instant::now()))
+        .then(|| (entry.epoch, entry.sender.clone()))
     }
 }
 
@@ -156,6 +179,13 @@ mod tests {
         }
         registration.advance();
         assert_ne!(old, registry.lookup(&id, &scope).unwrap().0);
+        // Expiry must not depend on the owning actor getting CPU time to clean up.
+        registration.suspend(Instant::now());
+        assert!(registration.expired());
+        assert!(registry.lookup(&id, &scope).is_none());
+        registration.advance();
+        assert!(!registration.expired());
+        assert!(registry.lookup(&id, &scope).is_some());
         drop(registration);
         assert!(registry.lookup(&id, &scope).is_none());
         assert_eq!(registry.slots.available_permits(), MAX_SESSIONS);

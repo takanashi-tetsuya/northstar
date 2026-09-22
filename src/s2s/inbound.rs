@@ -1130,6 +1130,10 @@ async fn accept_resume(
     if request.result.is_closed() {
         return Ok(None);
     }
+    if registration.expired() {
+        reject_resume(request, "item-not-found").await;
+        return Ok(None);
+    }
     if request.epoch != registration.epoch || request.transport.disconnect.is_cancelled() {
         reject_resume(request, "unexpected-request").await;
         return Ok(None);
@@ -1146,6 +1150,10 @@ async fn accept_resume(
         "federation disabled during resumption"
     );
     sm.renew(state).await?;
+    if registration.expired() {
+        reject_resume(request, "item-not-found").await;
+        return Ok(None);
+    }
     sm.acknowledge(state, request.h).await?;
     registration.advance();
     if request.result.send(Ok(())).is_err() {
@@ -1327,9 +1335,11 @@ async fn drive_authenticated_inbound_inner(
             Err(error) => {
                 if registration.is_none() || !super::util::transport_lost(&error)
                     || transport.as_ref().is_some_and(|current| current.disconnect.is_cancelled()) { return Err(error); }
+                let deadline = tokio::time::Instant::now() + resume_window;
+                registration.as_mut().expect("registered resume owner").suspend(deadline);
                 sm.renew(&state).await?;
                 transport.take();
-                suspended_until = Some(tokio::time::Instant::now() + resume_window);
+                suspended_until = Some(deadline);
             }
         }
     }

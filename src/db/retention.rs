@@ -2,6 +2,54 @@ use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 
+#[derive(Clone)]
+pub(crate) struct PostgresMaintenanceRepository {
+    pool: PgPool,
+}
+
+impl PostgresMaintenanceRepository {
+    pub(crate) fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+impl crate::retention::RetentionRepository for PostgresMaintenanceRepository {
+    async fn purge_resolved_retention_batch(
+        &self,
+        store: RetentionStore,
+        now: chrono::DateTime<Utc>,
+        days: i64,
+        batch_size: i64,
+    ) -> Result<u64> {
+        crate::db::purge_resolved_retention_batch(&self.pool, store, now, days, batch_size).await
+    }
+    async fn purge_released_hold_snapshots_batch(&self, days: i64, batch_size: i64) -> Result<u64> {
+        crate::db::purge_released_hold_snapshots_batch(&self.pool, days, batch_size).await
+    }
+    async fn purge_audit_log_batch(&self, days: i64, batch_size: i64) -> Result<u64> {
+        crate::db::purge_audit_log_batch(&self.pool, days, batch_size).await
+    }
+    async fn purge_governance_export_leases_batch(
+        &self,
+        days: i64,
+        batch_size: i64,
+    ) -> Result<u64> {
+        crate::db::purge_governance_export_leases_batch(&self.pool, days, batch_size).await
+    }
+    async fn cleanup_omemo_recovery_transfers(&self, batch_size: i64) -> Result<u64> {
+        crate::db::cleanup_omemo_recovery_transfers(&self.pool, batch_size).await
+    }
+    async fn purge_expired_retraction_intents(&self, batch_size: i64) -> Result<u64> {
+        crate::db::purge_expired_retraction_intents(&self.pool, batch_size).await
+    }
+}
+
+impl crate::subscription_cleanup::SubscriptionCleanupRepository for PostgresMaintenanceRepository {
+    async fn cleanup_expired_subscriptions(&self, batch_size: i64) -> Result<u64> {
+        crate::db::cleanup_expired_subscriptions(&self.pool, batch_size).await
+    }
+}
+
 /// Remove expired replay evidence only after its durable delivery owners have
 /// released it. This repository operation needs no message HMAC capability.
 pub(crate) async fn purge_expired_retraction_intents(
@@ -32,28 +80,7 @@ pub(crate) async fn purge_expired_retraction_intents(
     .rows_affected())
 }
 
-/// A separately bounded retention source. These are intentionally the only
-/// tables touched by automated history cleanup. In particular, reports,
-/// appeals, copied report evidence, moderation state, and the audit log are
-/// outside this enum and cannot be selected by a retention sweep.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RetentionStore {
-    PersonalMam,
-    MucMam,
-    OfflineMessages,
-    PersonalDeliveryAdmissions,
-}
-
-impl RetentionStore {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::PersonalMam => "personal_mam",
-            Self::MucMam => "muc_mam",
-            Self::OfflineMessages => "offline_messages",
-            Self::PersonalDeliveryAdmissions => "personal_delivery_admissions",
-        }
-    }
-}
+pub use crate::retention::RetentionStore;
 
 /// `0` deliberately means that automated deletion is disabled. It never
 /// means "delete everything now", which keeps a missing/zero configuration

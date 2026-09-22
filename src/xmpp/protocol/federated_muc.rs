@@ -4453,7 +4453,6 @@ async fn federated_muc_mam(
     let outcome = state
         .mam_service()
         .admit_federated_room_stream(
-            &state.federation,
             crate::services::mam::FederatedMamStreamRequest::new(
                 authenticated_domain,
                 room_localpart,

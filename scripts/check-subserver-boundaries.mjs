@@ -72,8 +72,8 @@ export function verifySubserverBoundaries({ main, subservers, retention, subscri
     'maintenance_bind', 'mam_retention_days', 'muc_mam_retention_days', 'offline_message_ttl_days',
     'audit_log_retention_days', 'retention_cleanup_batch_size', 'retention_cleanup_interval_seconds',
   ]);
-  exactFields(retention, 'struct RetentionContext', ['pool', 'policy', 'metrics', 'readiness']);
-  exactFields(subscriptionCleanup, 'struct SubscriptionCleanupContext', ['pool', 'metrics', 'readiness']);
+  exactFields(retention, 'struct RetentionContext', ['repository', 'policy', 'metrics', 'readiness']);
+  exactFields(subscriptionCleanup, 'struct SubscriptionCleanupContext', ['repository', 'metrics', 'readiness']);
   // Mask only the known test module and retain later production items.
   const testStart = subscriptionCleanup.indexOf('#[cfg(test)]');
   requireBoundary(testStart >= 0 && /^#\[cfg\(test\)\]\s*mod tests\s*\{/.test(subscriptionCleanup.slice(testStart)),
@@ -141,7 +141,7 @@ export function verifySubserverBoundaries({ main, subservers, retention, subscri
   const guardedRegistrations = [...main.matchAll(/if process_role\.embeds_retention\(\)/g)]
     .map((match) => body(main.slice(match.index), 'if process_role.embeds_retention()'));
   requireBoundary(guardedRegistrations.filter((block) => block.includes('"archive-retention"') &&
-    block.includes('retention::serve(')).length === 1, 'standalone retention worker must have one explicit role guard');
+    block.includes('retention::serve_context(')).length === 1, 'standalone retention worker must have one explicit role guard');
   requireBoundary(guardedRegistrations.filter((block) => block.includes('"pubsub-subscription-cleanup"') &&
     block.includes('subscription_cleanup::serve_context(')).length === 1 &&
     [...main.matchAll(/\.supervise\(\s*"pubsub-subscription-cleanup"/g)].length === 1,

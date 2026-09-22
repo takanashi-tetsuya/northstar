@@ -1,4 +1,4 @@
-use crate::{config::Config, db, metrics::Metrics, state::AppState};
+use crate::{config::Config, metrics::Metrics};
 use chrono::Utc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -6,6 +6,62 @@ use std::sync::{
 };
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
+
+/// A separately bounded retention source. These are intentionally the only
+/// tables touched by automated history cleanup. In particular, reports,
+/// appeals, copied report evidence, moderation state, and the audit log are
+/// outside this enum and cannot be selected by a retention sweep.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetentionStore {
+    PersonalMam,
+    MucMam,
+    OfflineMessages,
+    PersonalDeliveryAdmissions,
+}
+
+impl RetentionStore {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::PersonalMam => "personal_mam",
+            Self::MucMam => "muc_mam",
+            Self::OfflineMessages => "offline_messages",
+            Self::PersonalDeliveryAdmissions => "personal_delivery_admissions",
+        }
+    }
+}
+
+pub(crate) trait RetentionRepository: Send + Sync {
+    fn purge_resolved_retention_batch(
+        &self,
+        store: RetentionStore,
+        now: chrono::DateTime<Utc>,
+        days: i64,
+        batch_size: i64,
+    ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;
+    fn purge_released_hold_snapshots_batch(
+        &self,
+        days: i64,
+        batch_size: i64,
+    ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;
+    fn purge_audit_log_batch(
+        &self,
+        days: i64,
+        batch_size: i64,
+    ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;
+    fn purge_governance_export_leases_batch(
+        &self,
+        days: i64,
+        batch_size: i64,
+    ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;
+    fn cleanup_omemo_recovery_transfers(
+        &self,
+        batch_size: i64,
+    ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;
+    fn purge_expired_retraction_intents(
+        &self,
+        batch_size: i64,
+    ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;
+}
 
 /// The complete retention policy. This value carries no listener, identity,
 /// cryptographic key or live-session authority.
@@ -84,19 +140,19 @@ impl RetentionReadiness {
     }
 }
 
-/// Independent-process dependencies. A standalone retention worker never
-/// constructs AppState or receives the message/retraction secret keyrings.
-pub(crate) struct RetentionContext {
-    pool: sqlx::PgPool,
+/// Shared by embedded and standalone retention workers. It carries no
+/// listener, routing or content-key capabilities.
+pub(crate) struct RetentionContext<R> {
+    repository: R,
     policy: RetentionPolicy,
     metrics: Arc<Metrics>,
     readiness: RetentionReadiness,
 }
 
-impl RetentionContext {
-    pub(crate) fn new(pool: sqlx::PgPool, policy: RetentionPolicy, metrics: Arc<Metrics>) -> Self {
+impl<R: RetentionRepository> RetentionContext<R> {
+    pub(crate) fn new(repository: R, policy: RetentionPolicy, metrics: Arc<Metrics>) -> Self {
         Self {
-            pool,
+            repository,
             policy,
             metrics,
             readiness: RetentionReadiness::default(),
@@ -108,10 +164,12 @@ impl RetentionContext {
     }
 }
 
-pub(crate) async fn run_once_context(context: &RetentionContext) -> anyhow::Result<()> {
+pub(crate) async fn run_once_context<R: RetentionRepository>(
+    context: &RetentionContext<R>,
+) -> anyhow::Result<()> {
     context.policy.validate()?;
     run_once_with(
-        &context.pool,
+        &context.repository,
         &context.policy,
         &context.metrics,
         Some(&context.readiness),
@@ -120,32 +178,8 @@ pub(crate) async fn run_once_context(context: &RetentionContext) -> anyhow::Resu
     Ok(())
 }
 
-pub async fn run_once(state: &AppState) {
-    let policy = RetentionPolicy::from_config(&state.config);
-    run_once_with(&state.pool, &policy, &state.metrics, None).await;
-}
-
-pub async fn serve(
-    state: Arc<AppState>,
-    cancel: CancellationToken,
-    heartbeat: crate::workers::WorkerHeartbeat,
-) -> anyhow::Result<()> {
-    let policy = RetentionPolicy::from_config(&state.config);
-    serve_with(
-        &policy,
-        &state.metrics,
-        || async {
-            run_once(&state).await;
-            Ok(())
-        },
-        cancel,
-        heartbeat,
-    )
-    .await
-}
-
-pub(crate) async fn serve_context(
-    context: Arc<RetentionContext>,
+pub(crate) async fn serve_context<R: RetentionRepository>(
+    context: Arc<RetentionContext<R>>,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> anyhow::Result<()> {
@@ -161,12 +195,12 @@ pub(crate) async fn serve_context(
 
 #[derive(Clone, Copy)]
 struct RetentionTarget {
-    store: db::RetentionStore,
+    store: RetentionStore,
     days: i64,
 }
 
-async fn run_once_with(
-    pool: &sqlx::PgPool,
+async fn run_once_with<R: RetentionRepository>(
+    repository: &R,
     policy: &RetentionPolicy,
     metrics: &Metrics,
     readiness: Option<&RetentionReadiness>,
@@ -181,48 +215,48 @@ async fn run_once_with(
     let now = Utc::now();
     let targets = [
         RetentionTarget {
-            store: db::RetentionStore::PersonalMam,
+            store: RetentionStore::PersonalMam,
             days: policy.mam_retention_days,
         },
         RetentionTarget {
-            store: db::RetentionStore::MucMam,
+            store: RetentionStore::MucMam,
             days: policy.muc_mam_retention_days,
         },
         RetentionTarget {
-            store: db::RetentionStore::OfflineMessages,
+            store: RetentionStore::OfflineMessages,
             days: policy.offline_message_ttl_days,
         },
         // Delivery-only XEP-0359 tombstones retain only a purpose-separated
         // keyed content commitment. Their replay grace is fixed and must
         // remain bounded even when offline content retention is disabled.
         RetentionTarget {
-            store: db::RetentionStore::PersonalDeliveryAdmissions,
+            store: RetentionStore::PersonalDeliveryAdmissions,
             days: 30,
         },
     ];
 
     for target in targets {
-        match db::purge_resolved_retention_batch(
-            pool,
-            target.store,
-            now,
-            target.days,
-            policy.retention_cleanup_batch_size,
-        )
-        .await
+        match repository
+            .purge_resolved_retention_batch(
+                target.store,
+                now,
+                target.days,
+                policy.retention_cleanup_batch_size,
+            )
+            .await
         {
             Ok(deleted) => {
                 match target.store {
-                    db::RetentionStore::PersonalMam => metrics
+                    RetentionStore::PersonalMam => metrics
                         .retention_personal_mam_deleted_total
                         .fetch_add(deleted, Ordering::Relaxed),
-                    db::RetentionStore::MucMam => metrics
+                    RetentionStore::MucMam => metrics
                         .retention_muc_mam_deleted_total
                         .fetch_add(deleted, Ordering::Relaxed),
-                    db::RetentionStore::OfflineMessages => metrics
+                    RetentionStore::OfflineMessages => metrics
                         .retention_offline_messages_deleted_total
                         .fetch_add(deleted, Ordering::Relaxed),
-                    db::RetentionStore::PersonalDeliveryAdmissions => metrics
+                    RetentionStore::PersonalDeliveryAdmissions => metrics
                         .retention_personal_delivery_admissions_deleted_total
                         .fetch_add(deleted, Ordering::Relaxed),
                 };
@@ -255,12 +289,12 @@ async fn run_once_with(
         }
     }
 
-    match db::purge_released_hold_snapshots_batch(
-        pool,
-        policy.offline_message_ttl_days,
-        policy.retention_cleanup_batch_size,
-    )
-    .await
+    match repository
+        .purge_released_hold_snapshots_batch(
+            policy.offline_message_ttl_days,
+            policy.retention_cleanup_batch_size,
+        )
+        .await
     {
         Ok(deleted) if deleted > 0 => {
             metrics
@@ -279,12 +313,12 @@ async fn run_once_with(
         }
     }
 
-    match db::purge_audit_log_batch(
-        pool,
-        policy.audit_log_retention_days,
-        policy.retention_cleanup_batch_size,
-    )
-    .await
+    match repository
+        .purge_audit_log_batch(
+            policy.audit_log_retention_days,
+            policy.retention_cleanup_batch_size,
+        )
+        .await
     {
         Ok(deleted) if deleted > 0 => {
             metrics
@@ -303,12 +337,12 @@ async fn run_once_with(
         }
     }
 
-    match db::purge_governance_export_leases_batch(
-        pool,
-        policy.audit_log_retention_days,
-        policy.retention_cleanup_batch_size,
-    )
-    .await
+    match repository
+        .purge_governance_export_leases_batch(
+            policy.audit_log_retention_days,
+            policy.retention_cleanup_batch_size,
+        )
+        .await
     {
         Ok(deleted) if deleted > 0 => {
             metrics
@@ -327,11 +361,9 @@ async fn run_once_with(
         }
     }
 
-    match db::cleanup_omemo_recovery_transfers(
-        pool,
-        policy.retention_cleanup_batch_size.clamp(1, 10_000),
-    )
-    .await
+    match repository
+        .cleanup_omemo_recovery_transfers(policy.retention_cleanup_batch_size.clamp(1, 10_000))
+        .await
     {
         Ok(deleted) if deleted > 0 => {
             metrics
@@ -350,11 +382,9 @@ async fn run_once_with(
         }
     }
 
-    match db::purge_expired_retraction_intents(
-        pool,
-        policy.retention_cleanup_batch_size.clamp(1, 10_000),
-    )
-    .await
+    match repository
+        .purge_expired_retraction_intents(policy.retention_cleanup_batch_size.clamp(1, 10_000))
+        .await
     {
         Ok(deleted) if deleted > 0 => {
             tracing::info!(deleted, "expired personal retraction intents removed");
@@ -423,10 +453,10 @@ mod tests {
     #[test]
     fn all_automated_targets_exclude_evidence_and_policy_tables() {
         let labels = [
-            db::RetentionStore::PersonalMam.label(),
-            db::RetentionStore::MucMam.label(),
-            db::RetentionStore::OfflineMessages.label(),
-            db::RetentionStore::PersonalDeliveryAdmissions.label(),
+            RetentionStore::PersonalMam.label(),
+            RetentionStore::MucMam.label(),
+            RetentionStore::OfflineMessages.label(),
+            RetentionStore::PersonalDeliveryAdmissions.label(),
         ];
         assert_eq!(
             labels,

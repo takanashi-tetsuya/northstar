@@ -138,25 +138,6 @@ impl PrivacyService {
         northstar_xep_0016::default_change_conflicts(local_resource_count, remote_resource_exists)
     }
 
-    /// Evaluate one connection's XEP-0016 selection (or the account default
-    /// when no active list is selected) for `peer`, refreshing the durable
-    /// lease of an explicitly selected active list first. Callers must apply
-    /// XEP-0191 first; matching order and the fail-closed posture stay in the
-    /// repository.
-    pub(crate) async fn session_allows(
-        &self,
-        owner_id: Uuid,
-        connection_id: Uuid,
-        active_privacy_list: Option<&str>,
-        peer: &str,
-        kind: PrivacyStanzaKind,
-    ) -> Result<bool> {
-        if active_privacy_list.is_some() {
-            db::refresh_active_privacy_session(&self.pool, owner_id, connection_id).await?;
-        }
-        Ok(!db::privacy_denies(&self.pool, owner_id, active_privacy_list, peer, kind).await?)
-    }
-
     /// Forward the repository's account-scoped XEP-0016 evaluation so stanza
     /// handlers can check sender policy without naming a storage-level kind.
     pub(crate) async fn denies(
@@ -210,6 +191,17 @@ mod tests {
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
         let service = PrivacyService::new(pool.clone());
+        let messaging = crate::services::messaging::MessageService::new(
+            crate::db::messaging::PostgresMessageRepository::new(
+                pool.clone(),
+                crate::abuse::test_personal_message_content_keyring(),
+                "example.test",
+                100,
+                8_000_000,
+                30,
+            ),
+            false,
+        );
         let owner_id = Uuid::new_v4();
         sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test-only')")
             .bind(owner_id)
@@ -281,8 +273,8 @@ mod tests {
                 PrivacySelectionOutcome::Updated
             );
             assert_eq!(
-                service
-                    .session_allows(
+                messaging
+                    .privacy_allows_session(
                         owner_id,
                         connection_id,
                         Some("boundary"),
@@ -295,8 +287,8 @@ mod tests {
                 "session-scoped evaluation drifted for {kind:?}"
             );
             assert_eq!(
-                service
-                    .session_allows(
+                messaging
+                    .privacy_allows_session(
                         owner_id,
                         connection_id,
                         None,

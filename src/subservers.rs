@@ -255,7 +255,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
             .saturating_add(60),
     );
     let retention = Arc::new(RetentionContext::new(
-        pool.clone(),
+        db::retention::PostgresMaintenanceRepository::new(pool.clone()),
         policy,
         Arc::clone(&metrics),
     ));
@@ -277,7 +277,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
     );
     let subscriptions = Arc::new(
         crate::subscription_cleanup::SubscriptionCleanupContext::new(
-            pool.clone(),
+            db::retention::PostgresMaintenanceRepository::new(pool.clone()),
             Arc::clone(&metrics.subscription_cleanup),
         ),
     );

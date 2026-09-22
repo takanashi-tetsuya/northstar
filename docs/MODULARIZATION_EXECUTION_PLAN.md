@@ -326,12 +326,75 @@ randomness, delivery and background work. It must also prove:
 Environment-dependent tests are required before release, but they are not
 replaced by static/unit evidence.
 
-## 7. Immediate next packet
+## 7. Ordered service, role and recovery work
 
-The next code packet continues Phase C at the PubSub/PEP mutation boundary.
-It will first define an owned publish command and immutable authorization
-snapshot, then inject one repository operation for the existing atomic
-item/audience/outbox transaction. Only after C2S PEP and service PubSub paths
-share that command will fan-out execution move out of the XML adapters. This
-preserves the current transaction and non-coalescing OMEMO semantics while
-removing protocol ownership of persistence composition.
+The next work follows four stages on `dev`. Each stage preserves existing
+transaction guarantees and must pass its regression and CI gates before the
+next stage changes runtime behavior. The issue ledger remains
+[KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+
+| Stage | Deliverable | Exit evidence |
+| --- | --- | --- |
+| 1 — ARCH-SVC | Inject existing use-case repository ports, move persistence adapters into `src/db`, and replace broad API/worker state with narrow contexts | No raw SQL or transaction handles in application services or transport adapters; no broad state hidden in contexts; AppState public capabilities reach zero; rollback and post-commit failures retain their existing semantics |
+| 2 — ARCH-DB-ROLE | Separate database identities and pools by transaction responsibility | Per-role negative SQL tests, exact routine/ACL attestation, bounded aggregate connection budgets, and existing-volume upgrade/restore rehearsals |
+| 3 — ARCH-CLU-MUC | Atomic legal batches of role and affiliation operations | Consistent single-node/cluster authorization, exact occupant generations, final-owner protection, stable events/audiences and whole-batch rollback/retry tests |
+| 4 — storage and restore | Resumable offline Local/S3 migration and independently restartable restore diagnosis/recovery | Full manifest verification, fenced cutover, retained rollback data, and interruption tests at every durable transition |
+
+### Transaction and authority map
+
+A repository operation represents a complete use case rather than one table.
+The application owns the transaction intent; the PostgreSQL adapter owns the
+connection, locks and commit. Neither SQLx transactions nor a general pool
+cross the application port. Network and object-store I/O occur outside database
+transactions. Cross-domain atomic operations retain one database transaction.
+
+| Use case | Must commit together | Authority needed before splitting roles |
+| --- | --- | --- |
+| Personal message admission | Stable identity, archive projections, C2S/offline delivery or federation outbox | Current account and privacy policy, message/archive admission and bounded delivery queues |
+| Roster mutation | Credential-generation check, roster/version changes and removal notifications | Account fence, roster state, local presence or exact federation outbox admission |
+| MUC discussion/administration | Actor/occupant checks, room changes, sequence, audience and event outbox | Room policy, account/occupancy generations and per-room delivery records |
+| PubSub/PEP mutation | Account/node policy, items or subscriptions, recipient snapshot and event outbox | Narrow account/roster visibility plus node/item/outbox writes; OMEMO events remain non-coalescing |
+| Upload reservation | Account eligibility, quota/capacity ledger and bearer hash | Narrow account admission, storage namespace generation and upload reservation capability |
+| Upload reconciliation | Exact object/fence/job transition and capacity obligations | Storage queue leases and locator metadata; object bytes stay outside SQL transactions |
+| Passkey login | Credential revision/counter acceptance, generation-bound FAST issuance and API session creation | Authentication/session capabilities, with no transaction returned to HTTP code |
+| REST administrator mutation | Session/generation authorization, idempotency journal, business change and result | Purpose-specific command capability rather than a generic administrator pool |
+| Account revocation/deletion | Authority generation/revocation record and required durable cleanup intents | Reviewed cross-domain mutation capability; do not replace it with independently committed service calls |
+| Retention and background delivery | Exact claim/fence completion and cleanup obligations | Dedicated worker operations, not every table in the associated foreground domain |
+
+The first packet connects Roster, Upload reservation, Messaging, MAM and
+Passkeys to injected repository ports. Their SQL adapters reside in `src/db`.
+Embedded and standalone maintenance also share repository-backed retention and
+subscription cleanup contexts. Remaining packets cover PubSub/PEP, room
+mutations, the other authentication/REST paths and live-session/upload workers.
+The public AppState budget is still nine; this stage remains open. Updating a field's visibility
+alone is not evidence of reduced authority.
+
+Role names follow this map after the transaction boundaries are stable. Each
+cross-domain operation must either have one narrowly authorized transaction
+owner or a reviewed typed routine. Pools must not regain union privileges
+through role inheritance or unrestricted role switching. Capacity includes all
+nodes, background observers and rolling-upgrade overlap. Separate credentials
+inside one OS process limit SQL authority but do not isolate a compromised
+process.
+
+MUC batching continues to reject an individual item containing both `role` and
+`affiliation`, as required by XEP-0045. Legal batches need explicit duplicate
+and conflicting-target rules, authorization against the original authority,
+final-state validation and consistent room/occupancy lock order. Repeatable
+read alone is not an authorization or serialization guarantee. Single-node
+in-memory role updates must converge with the durable cluster model before a
+SQL transaction can cover the complete operation.
+
+Storage migration first requires maintenance mode, bounded copying to immutable
+destination keys, a durable manifest/checkpoint and complete version/size/SHA-256
+verification. Locator and namespace activation share a database cutover; object
+copying is not part of that atomic commit. Source cleanup is a later explicit
+operation. S3-to-Local migration requires a single-node destination.
+
+Restore recovery reuses the existing fsynced XID intent and transaction barrier.
+A restartable tool must verify database identity/lineage, restore generation,
+journal and exact object locations before resuming or compensating. It must
+also support controlled maintenance reconnection while the workload fence is
+active. A missing/old XID outcome, damaged journal or conflicting evidence keeps
+the fence and recovery artifacts intact; it must not guess or promise universal
+automatic recovery.

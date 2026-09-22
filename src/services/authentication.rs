@@ -450,28 +450,6 @@ impl AuthenticationService {
         }
     }
 
-    pub(crate) async fn issue_passkey_token(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        fence: AuthenticationFence,
-        device_id: Uuid,
-        ttl_days: i64,
-        strong_reauth_days: i64,
-    ) -> anyhow::Result<db::IssuedFastToken> {
-        db::issue_fast_token_in_transaction(
-            tx,
-            &self.fast_token_secret,
-            fence.user_id,
-            device_id,
-            "HT-SHA-256-NONE",
-            fence.auth_generation,
-            ttl_days,
-            strong_reauth_days,
-            None,
-        )
-        .await
-    }
-
     /// Return deployment-keyed dummy SCRAM material for an unknown or
     /// disabled account. Keeping selection and derivation behind this service
     /// prevents protocol handlers from ever receiving the master secret.

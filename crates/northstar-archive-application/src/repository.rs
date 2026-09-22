@@ -1,42 +1,67 @@
-//! Repository port traits for MAM archive queries and metadata.
-
-use northstar_archive_core::{ArchiveBoundary, ArchivePage, MamPreferences, MamRoomAccess};
+//! Persistence operations for authorized archive reads and federated responses.
 
 use crate::{
-    MamMetadataCommand, MamPreferencesGetCommand, MamPreferencesSetCommand, MamQueryCommand,
+    ArchiveBoundary, FederatedMamAdmissionOutcome, FederatedMamStreamPage,
+    FederatedMamStreamRequest, MamMetadataCommand, MamMetadataResult, MamPreferences,
+    MamPreferencesGetCommand, MamPreferencesSetCommand, MamQueryCommand, MamQueryResult,
+    MamRoomAccessOutcome, MamRoomReadOutcome,
 };
+use std::future::Future;
 
-pub type MamRepoResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+pub type MamArchiveBoundaries = (Option<ArchiveBoundary>, Option<ArchiveBoundary>);
 
-/// Repository port for persistent MAM message archives.
+#[derive(Clone, Copy)]
+pub struct FederatedMamOutboxLimits {
+    pub ttl_seconds: u64,
+    pub max_rows: i64,
+    pub max_bytes: i64,
+    pub max_per_domain: i64,
+}
+
 pub trait MamRepository: Send + Sync {
-    /// Query archived messages matching the given command scope and filter.
+    type Error;
     fn query_archive(
         &self,
-        command: &MamQueryCommand,
-    ) -> impl std::future::Future<Output = MamRepoResult<(Option<MamRoomAccess>, ArchivePage)>> + Send;
-
-    /// Retrieve the start/end boundary timestamps for an archive scope.
+        command: MamQueryCommand,
+    ) -> impl Future<Output = Result<MamQueryResult, Self::Error>> + Send;
     fn get_boundaries(
         &self,
-        command: &MamMetadataCommand,
-    ) -> impl std::future::Future<
-        Output = MamRepoResult<(
-            Option<MamRoomAccess>,
-            Option<ArchiveBoundary>,
-            Option<ArchiveBoundary>,
-        )>,
-    > + Send;
-
-    /// Read MAM archiving preferences for a user.
+        command: MamMetadataCommand,
+    ) -> impl Future<Output = Result<MamMetadataResult, Self::Error>> + Send;
     fn get_preferences(
         &self,
-        command: &MamPreferencesGetCommand,
-    ) -> impl std::future::Future<Output = MamRepoResult<MamPreferences>> + Send;
-
-    /// Set MAM archiving preferences for a user.
+        command: MamPreferencesGetCommand,
+    ) -> impl Future<Output = Result<MamPreferences, Self::Error>> + Send;
     fn set_preferences(
         &self,
-        command: &MamPreferencesSetCommand,
-    ) -> impl std::future::Future<Output = MamRepoResult<()>> + Send;
+        command: MamPreferencesSetCommand,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn authorize_room(
+        &self,
+        localpart: &str,
+        viewer_id: uuid::Uuid,
+        currently_joined: bool,
+    ) -> impl Future<Output = Result<MamRoomAccessOutcome, Self::Error>> + Send;
+    fn authorize_federated_room(
+        &self,
+        localpart: &str,
+        viewer_bare_jid: &str,
+        currently_joined: bool,
+    ) -> impl Future<Output = Result<MamRoomAccessOutcome, Self::Error>> + Send;
+    fn authorized_federated_room_boundaries(
+        &self,
+        localpart: &str,
+        viewer_bare_jid: &str,
+        currently_joined: bool,
+    ) -> impl Future<Output = Result<MamRoomReadOutcome<MamArchiveBoundaries>, Self::Error>> + Send;
+    /// Keep room authorization and all response rows, including the terminal
+    /// IQ, in one transaction. Rendering must be synchronous and side-effect free.
+    fn admit_federated_room_stream<F>(
+        &self,
+        limits: FederatedMamOutboxLimits,
+        request: FederatedMamStreamRequest<'_>,
+        render: F,
+    ) -> impl Future<Output = Result<FederatedMamAdmissionOutcome, Self::Error>> + Send
+    where
+        F: FnOnce(&FederatedMamStreamPage) -> Result<Vec<String>, Self::Error> + Send;
 }

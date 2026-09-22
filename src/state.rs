@@ -1671,9 +1671,15 @@ impl UploadRuntime {
     }
 }
 
+type PasskeyService =
+    crate::services::passkeys::PasskeyService<db::passkeys::PostgresPasskeyRepository>;
+type RosterService = crate::services::roster::RosterService<db::roster::PostgresRosterRepository>;
+type UploadService = crate::services::upload::UploadService<db::upload::PostgresUploadRepository>;
+
 pub struct AppState {
     pub config: Config,
     pub pool: PgPool,
+    passkey_service: PasskeyService,
     /// Narrow persistence/orchestration capability for XEP-0060 and PEP.
     /// Protocol handlers receive this service rather than database authority.
     pubsub_service: crate::services::pubsub::PubSubService,
@@ -1689,17 +1695,18 @@ pub struct AppState {
     muc_service: crate::services::muc::MucService,
     /// Personal-message authorization and durable admission boundary. The
     /// protocol layer must not compose its own archive/outbox/offline writes.
-    message_service: crate::services::messaging::MessageService,
+    message_service:
+        crate::services::messaging::MessageService<db::messaging::PostgresMessageRepository>,
     /// XEP-0424/XEP-0444 tombstone, action archive and federation admission
     /// transaction boundary.
     retraction_service: crate::services::retractions::RetractionService,
-    mam_service: crate::services::mam::MamService,
+    mam_service: crate::services::mam::MamService<db::mam::PostgresMamRepository>,
     mix_service: crate::services::mix::MixService,
     sm_service: crate::services::sm::SmService,
     blocking_service: crate::services::blocking::BlockingService,
     presence_service: crate::services::presence::PresenceService,
     replay_service: crate::services::replay::ReplayService,
-    roster_service: crate::services::roster::RosterService,
+    roster_service: RosterService,
     privacy_service: crate::services::privacy::PrivacyService,
     private_storage_service: crate::services::private_storage::PrivateStorageService,
     account_service: crate::services::account::AccountService,
@@ -1724,7 +1731,7 @@ pub struct AppState {
     /// sealed until this queue proves a durable handoff.
     sm_suspension_recovery: Arc<crate::services::session_cleanup::SmSuspensionRecoveryQueue>,
     sm_memory_governor: Arc<crate::services::sm_capacity::SmMemoryGovernor>,
-    pub metrics: Metrics,
+    pub metrics: Arc<Metrics>,
     /// Optional credential for the dedicated observability listener. Callers
     /// can ask for an authorization decision but cannot read the token.
     metrics_bearer_token: Option<Arc<Zeroizing<String>>>,
@@ -1749,7 +1756,7 @@ pub struct AppState {
     api_cursor: crate::api::cursor::CursorKeyring,
     /// XEP-0363 bearer-token and capacity admission authority. Protocol code
     /// receives typed slot outcomes, never the PostgreSQL pool.
-    upload_service: Option<crate::services::upload::UploadService>,
+    upload_service: Option<UploadService>,
     upload_store: Option<Arc<dyn UploadStore>>,
     upload_storage_namespace_sha256: [u8; 32],
     upload_authority_generation: UploadAuthorityGeneration,
@@ -2654,13 +2661,15 @@ impl AppState {
                 config.database_max_connections,
             );
         let message_service = crate::services::messaging::MessageService::new(
-            pool.clone(),
-            message_content_identity,
-            config.domain.clone(),
+            db::messaging::PostgresMessageRepository::new(
+                pool.clone(),
+                message_content_identity,
+                config.domain.clone(),
+                config.offline_max_messages_per_account,
+                config.offline_max_bytes_per_account,
+                config.offline_message_ttl_days,
+            ),
             config.require_encrypted_archive,
-            config.offline_max_messages_per_account,
-            config.offline_max_bytes_per_account,
-            config.offline_message_ttl_days,
         );
         let retraction_service = crate::services::retractions::RetractionService::new(
             pool.clone(),
@@ -2699,10 +2708,19 @@ impl AppState {
             config.domain.clone(),
             pubsub_service.mutation_admission(),
         );
-        let mam_service = crate::services::mam::MamService::new(pool.clone());
+        let mam_service = crate::services::mam::MamService::new(
+            db::mam::PostgresMamRepository::new(pool.clone()),
+            crate::services::mam::FederatedMamOutboxLimits {
+                ttl_seconds: config.s2s_outbox_ttl_seconds,
+                max_rows: config.s2s_outbox_max_rows,
+                max_bytes: config.s2s_outbox_max_bytes,
+                max_per_domain: config.s2s_outbox_max_per_domain,
+            },
+            federation.outbox_wakeup(),
+        );
         let upload_service = config.upload_mode.admits_new_uploads().then(|| {
             crate::services::upload::UploadService::new(
-                pool.clone(),
+                db::upload::PostgresUploadRepository::new(pool.clone()),
                 Arc::clone(&upload_safety_gate),
                 config.upload_max_bytes,
             )
@@ -2713,7 +2731,21 @@ impl AppState {
             &config.domain,
             config.offline_message_ttl_days,
         );
-        let roster_service = crate::services::roster::RosterService::new(pool.clone());
+        let passkey_service = PasskeyService::new(
+            db::passkeys::PostgresPasskeyRepository::new(pool.clone(), fast_token_secret.clone()),
+            crate::services::passkeys::PasskeyConfig {
+                enabled: config.web_client_enabled && config.fast_token_enabled,
+                public_url: config.public_url.clone(),
+                domain: config.domain.clone(),
+                scram_iterations: config.scram_iterations,
+                scram_sha1_enabled: config.scram_sha1_enabled,
+                fast_token_ttl_days: config.fast_token_ttl_days,
+                fast_strong_reauth_max_days: config.fast_strong_reauth_max_days,
+                session_ttl_hours: config.session_ttl_hours,
+            },
+        );
+        let roster_service =
+            RosterService::new(db::roster::PostgresRosterRepository::new(pool.clone()));
         let private_storage_service = crate::services::private_storage::PrivateStorageService::new(
             pool.clone(),
             config.pep_max_nodes_per_account,
@@ -2819,6 +2851,7 @@ impl AppState {
             presence_service: crate::services::presence::PresenceService::new(pool.clone()),
             replay_service,
             roster_service,
+            passkey_service,
             privacy_service,
             private_storage_service,
             account_service,
@@ -2842,7 +2875,7 @@ impl AppState {
                     Arc::clone(&sm_memory_governor),
                 ),
             sm_memory_governor,
-            metrics: Metrics::default(),
+            metrics: Arc::new(Metrics::default()),
             metrics_bearer_token,
             web_admin_gateway_token,
             omemo_recovery_poll_pool,
@@ -3124,7 +3157,7 @@ impl AppState {
         self.upload_startup_audits.take()
     }
 
-    pub(crate) fn upload_service(&self) -> &crate::services::upload::UploadService {
+    pub(crate) fn upload_service(&self) -> &UploadService {
         self.upload_service
             .as_ref()
             .expect("upload slot admission requires UploadMode::Enabled")
@@ -3154,7 +3187,9 @@ impl AppState {
         &self.muc_service
     }
 
-    pub(crate) fn message_service(&self) -> &crate::services::messaging::MessageService {
+    pub(crate) fn message_service(
+        &self,
+    ) -> &crate::services::messaging::MessageService<db::messaging::PostgresMessageRepository> {
         &self.message_service
     }
 
@@ -3162,7 +3197,9 @@ impl AppState {
         &self.retraction_service
     }
 
-    pub(crate) fn mam_service(&self) -> &crate::services::mam::MamService {
+    pub(crate) fn mam_service(
+        &self,
+    ) -> &crate::services::mam::MamService<db::mam::PostgresMamRepository> {
         &self.mam_service
     }
 
@@ -3182,7 +3219,11 @@ impl AppState {
         &self.replay_service
     }
 
-    pub(crate) fn roster_service(&self) -> &crate::services::roster::RosterService {
+    pub(crate) fn passkey_service(&self) -> &PasskeyService {
+        &self.passkey_service
+    }
+
+    pub(crate) fn roster_service(&self) -> &RosterService {
         &self.roster_service
     }
 

@@ -1,184 +1,56 @@
-//! RFC 6121/XEP-0237 roster application boundary.
+//! Roster commands and per-resource push ordering.
 //!
-//! PostgreSQL reads and mutations live behind `RosterService`.  The per-
-//! resource [`RosterSyncGate`] closes the initial-result/push race without
-//! holding a database transaction across transport backpressure.
-//!
+//! The repository owns authorization and atomic persistence. RosterSyncGate
+//! handles the initial-result/push race without retaining a database connection.
 //! Safety Invariants: MAX_BUFFERED_ROSTER_CHANGES, RosterSyncState::Flushing
 
-use crate::db;
 use anyhow::Result;
 use northstar_roster_application::{
     validate_roster_get_command, validate_roster_remove_command, validate_roster_upsert_command,
-    RosterGetCommand, RosterRemovalRoute, RosterRemoveCommand, RosterUpsertCommand,
+    RosterGetCommand, RosterRemoveCommand, RosterRepository, RosterUpsertCommand,
 };
 use northstar_roster_core::{
     RosterAuthorization, RosterChange, RosterReadSnapshot, RosterRemovalTransition,
 };
-use sqlx::PgPool;
-use uuid::Uuid;
-
-fn removal_route_to_db<'a>(route: RosterRemovalRoute<'a>) -> db::RosterRemovalRoute<'a> {
-    match route {
-        RosterRemovalRoute::Local {
-            owner_jid,
-            contact_username,
-        } => db::RosterRemovalRoute::Local {
-            owner_jid,
-            contact_username,
-        },
-        RosterRemovalRoute::Remote {
-            target_domain,
-            unsubscribe_stanza,
-            unsubscribed_stanza,
-            bounce_to,
-            policy,
-        } => db::RosterRemovalRoute::Remote {
-            target_domain,
-            unsubscribe_stanza,
-            unsubscribed_stanza,
-            bounce_to,
-            policy: crate::db::S2sOutboxPolicy {
-                ttl_seconds: policy.ttl_seconds,
-                max_rows: policy.max_rows,
-                max_bytes: policy.max_bytes,
-                max_per_domain: policy.max_per_domain,
-            },
-        },
-    }
-}
 
 #[derive(Clone)]
-pub(crate) struct RosterService {
-    pool: PgPool,
+pub(crate) struct RosterService<R> {
+    repository: R,
 }
 
-impl RosterService {
-    pub(crate) fn new(pool: PgPool) -> Self {
-        Self { pool }
+impl<R: RosterRepository<Error = anyhow::Error>> RosterService<R> {
+    pub(crate) fn new(repository: R) -> Self {
+        Self { repository }
     }
 
     pub(crate) async fn execute_roster_get(
         &self,
         command: RosterGetCommand,
     ) -> Result<RosterAuthorization<RosterReadSnapshot>> {
-        if let Err(_err) = validate_roster_get_command(&command) {
+        if validate_roster_get_command(&command).is_err() {
             return Ok(RosterAuthorization::Unauthorized);
         }
-        self.read_snapshot(
-            command.owner_id,
-            command.expected_auth_generation,
-            command.requested_version,
-            command.annotations_requested,
-        )
-        .await
+        self.repository.get_roster(&command).await
     }
 
     pub(crate) async fn execute_roster_upsert(
         &self,
         command: RosterUpsertCommand,
     ) -> Result<RosterAuthorization<RosterChange>> {
-        if let Err(_err) = validate_roster_upsert_command(&command) {
+        if validate_roster_upsert_command(&command).is_err() {
             return Ok(RosterAuthorization::Unauthorized);
         }
-        self.upsert(
-            command.owner_id,
-            command.expected_auth_generation,
-            &command.jid,
-            command.name.as_deref(),
-            &command.groups,
-        )
-        .await
+        self.repository.upsert_item(&command).await
     }
 
     pub(crate) async fn execute_roster_remove(
         &self,
         command: RosterRemoveCommand<'_>,
     ) -> Result<RosterAuthorization<Option<RosterRemovalTransition>>> {
-        if let Err(_err) = validate_roster_remove_command(&command) {
+        if validate_roster_remove_command(&command).is_err() {
             return Ok(RosterAuthorization::Unauthorized);
         }
-        self.remove(
-            command.owner_id,
-            command.expected_auth_generation,
-            command.jid,
-            removal_route_to_db(command.route),
-        )
-        .await
-    }
-
-    pub(crate) async fn read_snapshot(
-        &self,
-        owner_id: Uuid,
-        expected_auth_generation: i64,
-        requested_version: Option<i64>,
-        annotations_requested: bool,
-    ) -> Result<RosterAuthorization<RosterReadSnapshot>> {
-        Ok(
-            match db::roster_read_snapshot(
-                &self.pool,
-                owner_id,
-                expected_auth_generation,
-                requested_version,
-                annotations_requested,
-            )
-            .await?
-            {
-                Some(snapshot) => RosterAuthorization::Authorized(snapshot),
-                None => RosterAuthorization::Unauthorized,
-            },
-        )
-    }
-
-    pub(crate) async fn upsert(
-        &self,
-        owner_id: Uuid,
-        expected_auth_generation: i64,
-        jid: &str,
-        name: Option<&str>,
-        groups: &[String],
-    ) -> Result<RosterAuthorization<RosterChange>> {
-        Ok(
-            match db::upsert_roster_authorized(
-                &self.pool,
-                owner_id,
-                expected_auth_generation,
-                jid,
-                name,
-                groups,
-            )
-            .await?
-            {
-                Some(change) => RosterAuthorization::Authorized(change),
-                None => RosterAuthorization::Unauthorized,
-            },
-        )
-    }
-
-    pub(crate) async fn remove(
-        &self,
-        owner_id: Uuid,
-        expected_auth_generation: i64,
-        jid: &str,
-        route: db::RosterRemovalRoute<'_>,
-    ) -> Result<RosterAuthorization<Option<RosterRemovalTransition>>> {
-        Ok(
-            match db::remove_roster_item_authorized(
-                &self.pool,
-                owner_id,
-                expected_auth_generation,
-                jid,
-                route,
-            )
-            .await?
-            {
-                db::AuthorizedRosterRemoval::Unauthorized => RosterAuthorization::Unauthorized,
-                db::AuthorizedRosterRemoval::Missing => RosterAuthorization::Authorized(None),
-                db::AuthorizedRosterRemoval::Removed(transition) => {
-                    RosterAuthorization::Authorized(Some(*transition))
-                }
-            },
-        )
+        self.repository.remove_item(&command).await
     }
 }
 
@@ -186,6 +58,150 @@ impl RosterService {
 mod tests {
     use northstar_roster_application::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct DenyingRepository {
+        calls: std::sync::atomic::AtomicUsize,
+        failed: AtomicBool,
+        owner: uuid::Uuid,
+    }
+
+    impl DenyingRepository {
+        fn reject<T>(
+            &self,
+            owner: uuid::Uuid,
+            generation: i64,
+        ) -> anyhow::Result<RosterAuthorization<T>> {
+            assert_eq!(owner, self.owner);
+            assert_eq!(generation, 7);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.failed.load(Ordering::SeqCst) {
+                anyhow::bail!("repository unavailable");
+            }
+            Ok(RosterAuthorization::Unauthorized)
+        }
+    }
+
+    impl RosterRepository for DenyingRepository {
+        type Error = anyhow::Error;
+
+        async fn get_roster(
+            &self,
+            command: &RosterGetCommand,
+        ) -> anyhow::Result<RosterAuthorization<RosterReadSnapshot>> {
+            self.reject(command.owner_id, command.expected_auth_generation)
+        }
+
+        async fn upsert_item(
+            &self,
+            command: &RosterUpsertCommand,
+        ) -> anyhow::Result<RosterAuthorization<RosterChange>> {
+            self.reject(command.owner_id, command.expected_auth_generation)
+        }
+
+        async fn remove_item(
+            &self,
+            command: &RosterRemoveCommand<'_>,
+        ) -> anyhow::Result<RosterAuthorization<Option<RosterRemovalTransition>>> {
+            let RosterRemovalRoute::Remote {
+                target_domain,
+                policy,
+                ..
+            } = command.route
+            else {
+                panic!("expected remote notification in the same command");
+            };
+            assert_eq!(target_domain, "remote.test");
+            assert_eq!(policy.max_rows, 20);
+            self.reject(command.owner_id, command.expected_auth_generation)
+        }
+    }
+
+    #[tokio::test]
+    async fn repository_denials_and_failures_preserve_authority() {
+        let owner = uuid::Uuid::new_v4();
+        let service = super::RosterService::new(DenyingRepository {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            failed: AtomicBool::new(false),
+            owner,
+        });
+        let get = RosterGetCommand {
+            owner_id: owner,
+            expected_auth_generation: 7,
+            requested_version: Some(-1),
+            annotations_requested: false,
+        };
+        assert_eq!(
+            service.execute_roster_get(get.clone()).await.unwrap(),
+            RosterAuthorization::Unauthorized
+        );
+        assert_eq!(service.repository.calls.load(Ordering::SeqCst), 0);
+        let get = RosterGetCommand {
+            requested_version: None,
+            ..get
+        };
+        assert_eq!(
+            service.execute_roster_get(get.clone()).await.unwrap(),
+            RosterAuthorization::Unauthorized
+        );
+        let upsert = RosterUpsertCommand {
+            owner_id: owner,
+            expected_auth_generation: 7,
+            jid: "bob@remote.test".into(),
+            name: None,
+            groups: vec![],
+        };
+        assert_eq!(
+            service.execute_roster_upsert(upsert.clone()).await.unwrap(),
+            RosterAuthorization::Unauthorized
+        );
+        let remove = RosterRemoveCommand {
+            owner_id: owner,
+            expected_auth_generation: 7,
+            jid: "bob@remote.test",
+            route: RosterRemovalRoute::Remote {
+                target_domain: "remote.test",
+                unsubscribe_stanza: "<presence/>",
+                unsubscribed_stanza: "<presence/>",
+                bounce_to: None,
+                policy: RemoteRemovalPolicy {
+                    ttl_seconds: 60,
+                    max_rows: 20,
+                    max_bytes: 10240,
+                    max_per_domain: 10,
+                },
+            },
+        };
+        assert_eq!(
+            service.execute_roster_remove(remove).await.unwrap(),
+            RosterAuthorization::Unauthorized
+        );
+        service.repository.failed.store(true, Ordering::SeqCst);
+        assert_eq!(
+            service
+                .execute_roster_get(get)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "repository unavailable"
+        );
+        assert_eq!(
+            service
+                .execute_roster_upsert(upsert)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "repository unavailable"
+        );
+        assert_eq!(
+            service
+                .execute_roster_remove(remove)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "repository unavailable"
+        );
+        assert_eq!(service.repository.calls.load(Ordering::SeqCst), 6);
+    }
 
     #[test]
     fn synchronization_buffers_orders_and_atomically_exits() {

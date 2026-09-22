@@ -4,6 +4,47 @@ use sqlx::{PgPool, Row};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+#[derive(Clone)]
+pub(crate) struct PostgresUploadRepository {
+    pool: PgPool,
+}
+
+impl PostgresUploadRepository {
+    pub(crate) fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+impl northstar_upload_application::UploadRepository for PostgresUploadRepository {
+    type Error = anyhow::Error;
+
+    async fn reserve_slot(
+        &self,
+        request: &northstar_upload_application::UploadSlotRequest<'_>,
+        token_hash: &[u8],
+    ) -> Result<Option<Uuid>> {
+        let size = i64::try_from(request.size)
+            .map_err(|_| anyhow::anyhow!("upload reservation exceeds PostgreSQL BIGINT"))?;
+        create_upload_slot_bounded(
+            &self.pool,
+            UploadReservation {
+                user_id: request.user_id,
+                filename: request.filename,
+                content_type: request.content_type,
+                size,
+                token_hash,
+                max_files_per_user: request.max_files_per_user,
+                max_bytes_per_user: request.max_bytes_per_user,
+                storage_backend: request.storage_backend,
+            },
+            request.max_retained_files,
+            request.max_retained_bytes,
+            request.max_pending_jobs,
+        )
+        .await
+    }
+}
+
 const MAX_UPLOAD_ATTEMPTS: i64 = 8;
 const MAX_UPLOAD_REPLAYS: i64 = 3;
 const UPLOAD_HEALTH_COUNT_SATURATION: i64 = 1001;

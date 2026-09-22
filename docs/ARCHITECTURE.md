@@ -82,7 +82,9 @@ Key ownership:
 - `src/services/messaging.rs` owns personal-message communication policy and
   durable admission. The stanza handler still owns XML and live routing, but
   cannot directly query users/blocking/privacy or compose MAM, S2S outbox, C2S
-  spool and offline writes. Typed decisions keep blocked, privacy-denied,
+  spool and offline writes. `src/db/messaging.rs` implements the injected
+  repository and retains each complete admission transaction, including
+  members-only invitations. Typed decisions keep blocked, privacy-denied,
   missing, stored, replay and quota outcomes explicit at the boundary.
 - `northstar-message-core` and `northstar-message-application` own the
   capability-free personal-message command/result contract and injected
@@ -106,6 +108,13 @@ Key ownership:
   failure disconnects the resource and forces a full resync. Local and
   cluster removal delivery is fenced by the exact account UUID so a deleted
   localpart cannot redirect an old transition to a recreated account.
+- Roster and upload reservation services use their existing application ports.
+  Passkeys HTTP delegates WebAuthn ceremonies to its service; accepting a
+  credential revision, issuing FAST and creating the API session commit together.
+  MAM uses an archive port and only a wake channel for post-commit delivery.
+- Embedded and standalone retention workers share the same narrow context.
+  Retention and subscription cleanup receive repository operations, policy and
+  metrics, with no raw pool or global application state.
 - `src/db/` is the primary repository/routine layer for transactional
   persistence, replay, canonical identity and migration-time invariants.
   Several application services and API/cluster/federation/worker paths still

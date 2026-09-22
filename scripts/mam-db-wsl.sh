@@ -25,11 +25,11 @@ cleanup() {
   trap - EXIT INT TERM
   local inner_schema
   while IFS= read -r inner_schema; do
-    [[ "$inner_schema" =~ ^history_identity_test_[a-f0-9]{32}$ ]] || continue
+    [[ "$inner_schema" =~ ^(history_identity_test_|message_invite_test_)[a-f0-9]{32}$ ]] || continue
     PGPASSWORD=xmpp-test-password psql "${database_args[@]}" \
       --set ON_ERROR_STOP=1 \
       --command "DROP SCHEMA IF EXISTS \"$inner_schema\" CASCADE" >/dev/null || status=1
-  done < <(sed -n 's/^isolated_schema_created=\(history_identity_test_[a-f0-9]\{32\}\)$/\1/p' "$test_log" | sort -u)
+  done < <(sed -nE 's/^isolated_schema_created=((history_identity_test_|message_invite_test_)[a-f0-9]{32})$/\1/p' "$test_log" | sort -u)
   if [[ "$created" == 1 ]]; then
     PGPASSWORD=xmpp-test-password psql "${database_args[@]}" \
       --set ON_ERROR_STOP=1 \
@@ -66,7 +66,12 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
 
-TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$runner_schema" \
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$runner_schema" \
   cargo test --locked --offline \
   db::archive::history_identity_pg_tests:: \
   -- --ignored --nocapture --test-threads=1 2>&1 | tee "$test_log"
+
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$runner_schema" \
+  cargo test --locked --offline \
+  db::messaging::tests::members_only_invite_is_one_replay_safe_transaction \
+  -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee -a "$test_log"

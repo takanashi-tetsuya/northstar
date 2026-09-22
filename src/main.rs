@@ -691,7 +691,11 @@ async fn run() -> Result<()> {
     }
 
     if process_role.embeds_retention() {
-        let retention_state = Arc::clone(&state);
+        let retention_context = Arc::new(retention::RetentionContext::new(
+            db::retention::PostgresMaintenanceRepository::new(state.pool.clone()),
+            retention::RetentionPolicy::from_config(&state.config),
+            Arc::clone(&state.metrics),
+        ));
         let retention_cancel = cancel.clone();
         let retention_max_silence = std::time::Duration::from_secs(
             state
@@ -707,13 +711,13 @@ async fn run() -> Result<()> {
             Some(retention_max_silence),
             cancel.clone(),
             move |heartbeat| {
-                let retention_state = Arc::clone(&retention_state);
+                let context = Arc::clone(&retention_context);
                 let retention_cancel = retention_cancel.clone();
-                async move { retention::serve(retention_state, retention_cancel, heartbeat).await }
+                async move { retention::serve_context(context, retention_cancel, heartbeat).await }
             },
         );
         let subscriptions = Arc::new(subscription_cleanup::SubscriptionCleanupContext::new(
-            state.pool.clone(),
+            db::retention::PostgresMaintenanceRepository::new(state.pool.clone()),
             Arc::clone(&state.metrics.subscription_cleanup),
         ));
         let subscription_cancel = cancel.clone();

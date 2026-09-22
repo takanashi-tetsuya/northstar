@@ -5,6 +5,118 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use uuid::Uuid;
 
+use northstar_roster_application::{
+    RosterGetCommand, RosterRemoveCommand, RosterRepository, RosterUpsertCommand,
+};
+use northstar_roster_core::RosterAuthorization;
+
+#[derive(Clone)]
+pub(crate) struct PostgresRosterRepository {
+    pool: PgPool,
+}
+
+impl PostgresRosterRepository {
+    pub(crate) fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+impl RosterRepository for PostgresRosterRepository {
+    type Error = anyhow::Error;
+
+    async fn get_roster(
+        &self,
+        command: &RosterGetCommand,
+    ) -> Result<RosterAuthorization<RosterReadSnapshot>> {
+        Ok(
+            match roster_read_snapshot(
+                &self.pool,
+                command.owner_id,
+                command.expected_auth_generation,
+                command.requested_version,
+                command.annotations_requested,
+            )
+            .await?
+            {
+                Some(snapshot) => RosterAuthorization::Authorized(snapshot),
+                None => RosterAuthorization::Unauthorized,
+            },
+        )
+    }
+
+    async fn upsert_item(
+        &self,
+        command: &RosterUpsertCommand,
+    ) -> Result<RosterAuthorization<RosterChange>> {
+        Ok(
+            match upsert_roster_authorized(
+                &self.pool,
+                command.owner_id,
+                command.expected_auth_generation,
+                &command.jid,
+                command.name.as_deref(),
+                &command.groups,
+            )
+            .await?
+            {
+                Some(change) => RosterAuthorization::Authorized(change),
+                None => RosterAuthorization::Unauthorized,
+            },
+        )
+    }
+
+    async fn remove_item(
+        &self,
+        command: &RosterRemoveCommand<'_>,
+    ) -> Result<RosterAuthorization<Option<RosterRemovalTransition>>> {
+        use northstar_roster_application::RosterRemovalRoute as Route;
+        let route = match command.route {
+            Route::Local {
+                owner_jid,
+                contact_username,
+            } => RosterRemovalRoute::Local {
+                owner_jid,
+                contact_username,
+            },
+            Route::Remote {
+                target_domain,
+                unsubscribe_stanza,
+                unsubscribed_stanza,
+                bounce_to,
+                policy,
+            } => RosterRemovalRoute::Remote {
+                target_domain,
+                unsubscribe_stanza,
+                unsubscribed_stanza,
+                bounce_to,
+                policy: super::S2sOutboxPolicy {
+                    ttl_seconds: policy.ttl_seconds,
+                    max_rows: policy.max_rows,
+                    max_bytes: policy.max_bytes,
+                    max_per_domain: policy.max_per_domain,
+                },
+            },
+        };
+        Ok(
+            match remove_roster_item_authorized(
+                &self.pool,
+                command.owner_id,
+                command.expected_auth_generation,
+                command.jid,
+                route,
+            )
+            .await?
+            {
+                AuthorizedRosterRemoval::Unauthorized => RosterAuthorization::Unauthorized,
+                AuthorizedRosterRemoval::Missing => RosterAuthorization::Authorized(None),
+                AuthorizedRosterRemoval::Removed(transition) => {
+                    RosterAuthorization::Authorized(Some(*transition))
+                }
+            },
+        )
+    }
+}
+
 async fn begin_authorized_roster_mutation<'a>(
     pool: &'a PgPool,
     owner_id: Uuid,

@@ -332,6 +332,7 @@ for (const field of [
   'profile_service',
   'account_service',
   'authentication_service',
+  'passkey_service',
   'admin_command_service',
   'push_service',
   'extdisco_service',
@@ -1736,11 +1737,8 @@ for (const [name, serviceAccessor, source] of [
 
 const rosterServiceSource = read('src/services/roster.rs');
 const rosterServiceBody = structBody(rosterServiceSource, 'pub(crate) struct RosterService');
-if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(rosterServiceBody)) {
-  throw new Error('RosterService PostgreSQL capability must remain a private PgPool field');
-}
-if (/^\s*pub(?:\(crate\))?\s+pool\s*:/m.test(rosterServiceBody)) {
-  throw new Error('RosterService must not expose its PostgreSQL capability');
+if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(rosterServiceBody)) {
+  throw new Error('RosterService must receive its repository port');
 }
 for (const invariant of [
   'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY',
@@ -1995,21 +1993,23 @@ for (const forbidden of [
 }
 const mamServiceSource = read('src/services/mam.rs');
 const mamServiceBody = structBody(mamServiceSource, 'pub(crate) struct MamService');
-if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(mamServiceBody)
-    || /^\s*pub(?:\(crate\))?\s+pool\s*:/m.test(mamServiceBody)) {
-  throw new Error('MamService must retain a private PostgreSQL capability');
+if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mamServiceBody)) {
+  throw new Error('MamService must receive its repository port');
 }
+const mamRepositorySource = read('src/db/mam.rs');
 for (const invariant of [
   'mam_federated_room_archive_page_authorized_in_transaction',
   'enqueue_s2s_outbox_in_transaction',
   'transaction.commit().await?',
   'transaction.rollback().await?',
-  'federation.wake_outbox()',
   'FederatedMamAdmissionOutcome::OutboxRejected',
 ]) {
-  if (!mamServiceSource.includes(invariant)) {
-    throw new Error(`MamService federated stream lost atomicity invariant: ${invariant}`);
+  if (!mamRepositorySource.includes(invariant)) {
+    throw new Error(`MAM repository federated stream lost atomicity invariant: ${invariant}`);
   }
+}
+if (!/if matches!\(outcome, FederatedMamAdmissionOutcome::Queued\)\s*\{[\s\S]*?self\.outbox_wake\.try_send\(\(\)\)/.test(mamServiceSource)) {
+  throw new Error('MamService must wake delivery only after a successful outbox commit');
 }
 const archiveSource = read('src/db/archive.rs');
 for (const invariant of [
@@ -2042,9 +2042,34 @@ for (const [name, accessor, forbiddenAuthority] of [
 
 const uploadServiceSource = read('src/services/upload.rs');
 const uploadServiceBody = structBody(uploadServiceSource, 'pub(crate) struct UploadService');
-if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(uploadServiceBody)
-    || /^\s*pub(?:\(crate\))?\s+pool\s*:/m.test(uploadServiceBody)) {
-  throw new Error('UploadService must retain a private PostgreSQL capability');
+if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(uploadServiceBody)) {
+  throw new Error('UploadService must receive its repository port');
+}
+for (const [name, source] of [
+  ['RosterService', rosterServiceSource],
+  ['UploadService', uploadServiceSource],
+  ['PasskeyService', read('src/services/passkeys.rs')],
+  ['MessageService', read('src/services/messaging.rs')],
+  ['MamService', mamServiceSource],
+  ['RetentionContext', read('src/retention.rs')],
+  ['SubscriptionCleanupContext', read('src/subscription_cleanup.rs')],
+]) {
+  const production = productionWithoutCfgTestModules(source, name);
+  for (const [label, pattern] of [
+    ['SQLx', /\bsqlx\s*::/],
+    ['database pools', /\bPgPool\b/],
+    ['concrete database adapters', /\bdb\b/],
+    ['global state', /\bAppState\b/],
+  ]) {
+    if (pattern.test(production)) throw new Error(`${name} regained ${label} authority`);
+  }
+}
+const passkeyApiSource = productionWithoutCfgTestModules(read('src/api/passkeys.rs'), 'Passkeys HTTP');
+for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bstate\s*\.\s*pool\b/, /\.begin_authorized_read\s*\(/]) {
+  if (forbidden.test(passkeyApiSource)) throw new Error('Passkeys HTTP regained direct persistence authority');
+}
+if (!passkeyApiSource.includes('.passkey_service()')) {
+  throw new Error('Passkeys HTTP must use its application service');
 }
 // ARCH-SVC local XEP-0045 boundary: protocol code owns XML/session routing,
 // while all PostgreSQL reads, mutations and committed-outbox wake authority
@@ -2517,9 +2542,9 @@ if (sourceFilesNamingContentPurpose.length > 0) {
     `application/DB/protocol code regained caller-selectable content purpose: ${sourceFilesNamingContentPurpose.join(', ')}`,
   );
 }
-const keyedMessageServiceSource = read('src/services/messaging.rs');
+const keyedMessageRepositorySource = read('src/db/messaging.rs');
 for (const [serviceName, body, expectedKeyring] of [
-  ['MessageService', structBody(keyedMessageServiceSource, 'pub(crate) struct MessageService'), 'PersonalMessageContentKeyring'],
+  ['PostgresMessageRepository', structBody(keyedMessageRepositorySource, 'pub(crate) struct PostgresMessageRepository'), 'PersonalMessageContentKeyring'],
   ['RetractionService', retractionServiceBody, 'PersonalRetractionContentKeyring'],
 ]) {
   if (!new RegExp(`^\\s*content_identity\\s*:\\s*${expectedKeyring}\\s*,?\\s*$`, 'm').test(body)) {
@@ -3004,6 +3029,7 @@ for (const task of serviceTaskNames) {
 }
 const stateServiceAccessors = [
   'authentication_service',
+  'passkey_service',
   'account_service',
   'admin_command_service',
   'message_service',

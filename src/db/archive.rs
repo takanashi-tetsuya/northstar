@@ -3414,56 +3414,116 @@ mod history_identity_pg_tests {
         .await
         .unwrap();
 
-        // A failure while appending the terminal response must leave neither
-        // a visible prefix nor a successful fin in the durable outbox.
-        let mut atomic_stream = pool.begin().await.unwrap();
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-            .execute(&mut *atomic_stream)
-            .await
-            .unwrap();
-        assert!(matches!(
-            mam_federated_room_archive_page_authorized_in_transaction(
-                &mut atomic_stream,
-                "snapshot-room",
-                "remote@remote.test",
-                false,
-                &page_query(),
-            )
-            .await
-            .unwrap(),
-            MamRoomReadOutcome::Allowed { value: Some(_), .. }
-        ));
-        let one_row_policy = crate::db::S2sOutboxPolicy {
+        // Rejecting the terminal response rolls back the prefix and must not
+        // wake delivery. Exercise the application port as well as the SQL.
+        use crate::services::mam::{
+            FederatedMamAdmissionOutcome, FederatedMamOutboxLimits, FederatedMamStreamRequest,
+            MamService,
+        };
+        let (wake, mut receiver) = tokio::sync::mpsc::channel(1);
+        let limits = FederatedMamOutboxLimits {
             ttl_seconds: 300,
             max_rows: 1,
             max_bytes: 1024 * 1024,
             max_per_domain: 1,
         };
-        crate::db::enqueue_s2s_outbox_in_transaction(
-            &mut atomic_stream,
+        let service = MamService::new(
+            crate::db::mam::PostgresMamRepository::new(pool.clone()),
+            limits,
+            wake.clone(),
+        );
+        let query = page_query();
+        let request = FederatedMamStreamRequest::new(
             "remote.test",
-            "<iq xmlns='jabber:server' type='result' id='first'/>",
-            None,
-            one_row_policy,
-        )
-        .await
-        .unwrap();
-        assert!(crate::db::enqueue_s2s_outbox_in_transaction(
-            &mut atomic_stream,
-            "remote.test",
-            "<iq xmlns='jabber:server' type='result' id='fin'/>",
-            None,
-            one_row_policy,
-        )
-        .await
-        .is_err());
-        atomic_stream.rollback().await.unwrap();
+            "snapshot-room",
+            "remote@remote.test",
+            false,
+            &query,
+        );
+        let render = |_: &crate::services::mam::FederatedMamStreamPage| {
+            Ok(vec![
+                "<message xmlns='jabber:server' from='snapshot-room@conference.local.test' to='remote@remote.test' id='first'/>".to_owned(),
+                "<iq xmlns='jabber:server' type='result' id='fin'/>".to_owned(),
+            ])
+        };
+        assert_eq!(
+            service
+                .admit_federated_room_stream(request, render)
+                .await
+                .unwrap(),
+            FederatedMamAdmissionOutcome::OutboxRejected,
+        );
+        assert!(receiver.try_recv().is_err());
+        assert!(service
+            .admit_federated_room_stream(request, |_| {
+                anyhow::bail!("injected renderer failure")
+            })
+            .await
+            .is_err());
+        assert!(receiver.try_recv().is_err());
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM s2s_outbox")
                 .fetch_one(&pool)
                 .await
                 .unwrap(),
-            0
+            0,
+        );
+        assert_eq!(
+            service
+                .admit_federated_room_stream(
+                    FederatedMamStreamRequest {
+                        localpart: "missing-room",
+                        ..request
+                    },
+                    |_| panic!("missing room must not reach the renderer"),
+                )
+                .await
+                .unwrap(),
+            FederatedMamAdmissionOutcome::Missing
+        );
+        assert!(receiver.try_recv().is_err());
+
+        let service = MamService::new(
+            crate::db::mam::PostgresMamRepository::new(pool.clone()),
+            FederatedMamOutboxLimits {
+                max_rows: 8,
+                max_per_domain: 8,
+                ..limits
+            },
+            wake,
+        );
+        assert_eq!(
+            service
+                .admit_federated_room_stream(request, render)
+                .await
+                .unwrap(),
+            FederatedMamAdmissionOutcome::Queued
+        );
+        receiver
+            .try_recv()
+            .expect("committed stream wakes delivery");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM s2s_outbox")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            2
+        );
+        drop(receiver);
+        assert_eq!(
+            service
+                .admit_federated_room_stream(request, render)
+                .await
+                .unwrap(),
+            FederatedMamAdmissionOutcome::Queued
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM s2s_outbox")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            4,
+            "a closed wake channel cannot undo committed delivery"
         );
 
         // The exact room UUID remains fenced until the authorized projection

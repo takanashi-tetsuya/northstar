@@ -97,6 +97,99 @@ async fn ceremonies_are_single_use_and_key_removal_fences_sessions() {
     .await
     .unwrap()
     .is_none());
+    let repository = PostgresPasskeyRepository::new(
+        pool.clone(),
+        Arc::new(Zeroizing::new(
+            crate::auth::new_session_token().into_bytes(),
+        )),
+    );
+    assert_eq!(repository.account("Alice").await.unwrap().unwrap().id, user);
+    let actor = PasskeyActor {
+        id: user,
+        username: "alice",
+        auth_generation: generation,
+        session_token: &token,
+    };
+    assert_eq!(
+        repository
+            .authorized_credentials(&actor)
+            .await
+            .unwrap()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(repository
+        .authorized_credentials(&PasskeyActor {
+            auth_generation: generation + 1,
+            ..actor
+        })
+        .await
+        .unwrap()
+        .is_none());
+    let revision = credentials(&pool, user).await.unwrap()[0].revision;
+    let device_id = Uuid::new_v4();
+    let commit = || PasskeyLoginCommit {
+        user_id: user,
+        auth_generation: generation,
+        credential_id: id,
+        credential_revision: revision,
+        credential: &state,
+        counter: 0,
+        device_id,
+        fast_token_ttl_days: 1,
+        fast_strong_reauth_max_days: 1,
+        session_ttl_hours: 1,
+    };
+    // Fail after accepting the credential and issuing FAST, before the API
+    // session can commit. All three writes must roll back together.
+    sqlx::query("ALTER TABLE api_sessions ADD CONSTRAINT passkey_fixture_reject_session CHECK (FALSE) NOT VALID")
+        .execute(&pool).await.unwrap();
+    assert!(repository.complete_login(commit()).await.is_err());
+    assert_eq!(
+        credentials(&pool, user).await.unwrap()[0].revision,
+        revision
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM fast_tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM api_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    sqlx::query("ALTER TABLE api_sessions DROP CONSTRAINT passkey_fixture_reject_session")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let logged_in = repository.complete_login(commit()).await.unwrap().unwrap();
+    assert_eq!(logged_in.username, "alice");
+    assert!(crate::db::user_for_token(&pool, &logged_in.token)
+        .await
+        .unwrap()
+        .is_some());
+    assert!(repository.complete_login(commit()).await.unwrap().is_none());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM fast_tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM api_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        2
+    );
+
     let old_revision = credentials(&pool, user).await.unwrap()[0].revision;
     let mut tx = pool.begin().await.unwrap();
     assert!(
@@ -139,6 +232,10 @@ async fn ceremonies_are_single_use_and_key_removal_fences_sessions() {
     );
     assert!(credentials(&pool, user).await.unwrap().is_empty());
     assert!(crate::db::user_for_token(&pool, &token)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(crate::db::user_for_token(&pool, &logged_in.token)
         .await
         .unwrap()
         .is_none());

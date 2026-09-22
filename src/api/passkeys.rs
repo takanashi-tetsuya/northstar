@@ -1,27 +1,47 @@
 use super::*;
-use crate::services::passkeys::{CredentialVersion, Login, Registration};
+use crate::services::passkeys::{PasskeyActor, PasskeyError};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
-use webauthn_rs::prelude::{Passkey, PublicKeyCredential, RegisterPublicKeyCredential, Webauthn};
+use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
 use zeroize::{Zeroize, Zeroizing};
 
-fn relying_party(state: &AppState, headers: &HeaderMap) -> Result<Webauthn> {
-    if !state.config.web_client_enabled || !state.config.fast_token_enabled {
-        return Err(AppError::NotFound("Passkeys are unavailable".into()));
+impl From<PasskeyError> for AppError {
+    fn from(error: PasskeyError) -> Self {
+        match error {
+            PasskeyError::Unauthorized => Self::Unauthorized,
+            PasskeyError::Disabled => Self::NotFound("Passkeys are unavailable".into()),
+            PasskeyError::InvalidOrigin => {
+                Self::Unavailable("Passkeys are unavailable for this origin".into())
+            }
+            PasskeyError::Invalid(message) => Self::BadRequest(message.into()),
+            PasskeyError::Busy => Self::TooManyRequests {
+                message: "Too many unfinished Passkey requests; try again later".into(),
+                retry_after: 300,
+            },
+            PasskeyError::Backend(error) => Self::Internal(error),
+        }
     }
-    let party = crate::services::passkeys::relying_party(&state.config.public_url)
-        .map_err(|_| AppError::Unavailable("Passkeys are unavailable for this origin".into()))?;
-    let expected = party.get_allowed_origins()[0]
-        .origin()
-        .ascii_serialization();
+}
+
+fn check_origin(state: &AppState, headers: &HeaderMap) -> Result<()> {
+    let expected = state.passkey_service().allowed_origin()?;
     let mut origins = headers.get_all(header::ORIGIN).iter();
     if origins.next().and_then(|origin| origin.to_str().ok()) != Some(expected.as_str())
         || origins.next().is_some()
     {
         return Err(AppError::Forbidden);
     }
-    Ok(party)
+    Ok(())
+}
+
+fn actor(user: &ApiUser) -> PasskeyActor<'_> {
+    PasskeyActor {
+        id: user.id,
+        username: &user.username,
+        auth_generation: user.auth_generation,
+        session_token: user.session_token(),
+    }
 }
 
 async fn guard_start(
@@ -44,34 +64,12 @@ async fn guard_start(
     Ok(())
 }
 
-async fn verify_password(state: &AppState, user: &ApiUser, password: &str) -> Result<()> {
-    if password.is_empty() || password.len() > 1024 {
-        return Err(AppError::Unauthorized);
-    }
-    let prepared = db::prepare_login(
-        &state.pool,
-        &user.username,
-        password,
-        state.config.scram_iterations,
-        state.config.scram_sha1_enabled,
-    )
-    .await?;
-    if !prepared.is_some_and(|login| {
-        login.user.id == user.id && login.user.auth_generation == user.auth_generation
-    }) {
-        return Err(AppError::Unauthorized);
-    }
-    Ok(())
-}
-
 pub(super) async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<Value>> {
     let user = current_user(&state, &headers).await?;
-    let mut tx = user.begin_authorized_read(&state).await?;
-    let credentials = db::passkeys::credentials_in_tx(&mut tx, user.id).await?;
-    tx.commit().await?;
+    let credentials = state.passkey_service().list(actor(&user)).await?;
     Ok(Json(json!({"passkeys":credentials})))
 }
 
@@ -89,17 +87,9 @@ pub(super) async fn register_start(
     headers: HeaderMap,
     Json(mut body): Json<RegisterStart>,
 ) -> Result<Json<Value>> {
-    let party = relying_party(&state, &headers)?;
+    check_origin(&state, &headers)?;
     let user = current_user(&state, &headers).await?;
     let password = Zeroizing::new(std::mem::take(&mut body.password));
-    if body.label.trim().is_empty()
-        || body.label.chars().count() > 64
-        || body.label.chars().any(char::is_control)
-    {
-        return Err(AppError::BadRequest(
-            "Passkey name must contain 1 to 64 characters".into(),
-        ));
-    }
     guard_start(
         &state,
         peer,
@@ -110,42 +100,13 @@ pub(super) async fn register_start(
         body.pow.as_ref(),
     )
     .await?;
-    verify_password(&state, &user, &password).await?;
-    let keys = db::passkeys::credentials(&state.pool, user.id).await?;
-    if keys.len() >= 10 {
-        return Err(AppError::BadRequest(
-            "An account can have at most 10 Passkeys".into(),
-        ));
-    }
-    let excluded = keys
-        .into_iter()
-        .map(|key| {
-            serde_json::from_value::<Passkey>(key.credential).map(|key| key.cred_id().clone())
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|error| AppError::Internal(error.into()))?;
-    let (options, registration) = party
-        .start_passkey_registration(user.id, &user.username, &user.username, Some(excluded))
-        .map_err(|error| AppError::Internal(error.into()))?;
-    let stored = serde_json::to_value(Registration {
-        state: registration,
-        label: std::mem::take(&mut body.label),
-    })
-    .map_err(|error| AppError::Internal(error.into()))?;
-    let id = db::passkeys::challenge(
-        &state.pool,
-        user.id,
-        user.auth_generation,
-        "register",
-        Some(&auth::token_hash(user.session_token())),
-        &stored,
-    )
-    .await?
-    .ok_or_else(|| AppError::TooManyRequests {
-        message: "Too many unfinished Passkey requests; try again later".into(),
-        retry_after: 300,
-    })?;
-    Ok(Json(json!({"challenge_id":id,"options":options})))
+    let start = state
+        .passkey_service()
+        .register_start(actor(&user), &password, std::mem::take(&mut body.label))
+        .await?;
+    Ok(Json(
+        json!({"challenge_id":start.challenge_id,"options":start.options}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -160,33 +121,12 @@ pub(super) async fn register_finish(
     headers: HeaderMap,
     Json(body): Json<RegisterFinish>,
 ) -> Result<Json<Value>> {
-    let party = relying_party(&state, &headers)?;
+    check_origin(&state, &headers)?;
     let user = current_user(&state, &headers).await?;
-    let session = auth::token_hash(user.session_token());
-    let challenge =
-        db::passkeys::consume(&state.pool, body.challenge_id, "register", Some(&session))
-            .await?
-            .ok_or(AppError::Unauthorized)?;
-    if challenge.user_id != user.id || challenge.auth_generation != user.auth_generation {
-        return Err(AppError::Unauthorized);
-    }
-    let registration: Registration = serde_json::from_value(challenge.state)
-        .map_err(|error| AppError::Internal(error.into()))?;
-    let key = party
-        .finish_passkey_registration(&body.credential, &registration.state)
-        .map_err(|_| AppError::Unauthorized)?;
-    let stored = serde_json::to_value(&key).map_err(|error| AppError::Internal(error.into()))?;
-    let id = db::passkeys::register(
-        &state.pool,
-        user.id,
-        user.auth_generation,
-        &session,
-        key.cred_id().as_ref(),
-        &stored,
-        &registration.label,
-    )
-    .await?
-    .ok_or_else(|| AppError::BadRequest("Passkey could not be added; start again".into()))?;
+    let id = state
+        .passkey_service()
+        .register_finish(actor(&user), body.challenge_id, body.credential)
+        .await?;
     Ok(Json(json!({"id":id})))
 }
 
@@ -204,10 +144,7 @@ pub(super) async fn login_start(
     headers: HeaderMap,
     Json(body): Json<LoginStart>,
 ) -> Result<Json<Value>> {
-    let party = relying_party(&state, &headers)?;
-    if body.device_id.get_version_num() != 4 {
-        return Err(AppError::BadRequest("Invalid device ID".into()));
-    }
+    check_origin(&state, &headers)?;
     guard_start(
         &state,
         peer,
@@ -218,51 +155,13 @@ pub(super) async fn login_start(
         body.pow.as_ref(),
     )
     .await?;
-    let user = db::find_enabled_user(&state.pool, &body.username)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-    let credentials = db::passkeys::credentials(&state.pool, user.id)
-        .await?
-        .into_iter()
-        .map(|key| {
-            Ok(CredentialVersion {
-                id: key.id,
-                revision: key.revision,
-                passkey: serde_json::from_value(key.credential)?,
-            })
-        })
-        .collect::<std::result::Result<Vec<_>, serde_json::Error>>()
-        .map_err(|error| AppError::Internal(error.into()))?;
-    if credentials.is_empty() {
-        return Err(AppError::Unauthorized);
-    }
-    let keys = credentials
-        .iter()
-        .map(|key| key.passkey.clone())
-        .collect::<Vec<_>>();
-    let (options, login) = party
-        .start_passkey_authentication(&keys)
-        .map_err(|error| AppError::Internal(error.into()))?;
-    let stored = serde_json::to_value(Login {
-        state: login,
-        device_id: body.device_id,
-        credentials,
-    })
-    .map_err(|error| AppError::Internal(error.into()))?;
-    let id = db::passkeys::challenge(
-        &state.pool,
-        user.id,
-        user.auth_generation,
-        "login",
-        None,
-        &stored,
-    )
-    .await?
-    .ok_or_else(|| AppError::TooManyRequests {
-        message: "Too many unfinished Passkey requests; try again later".into(),
-        retry_after: 300,
-    })?;
-    Ok(Json(json!({"challenge_id":id,"options":options})))
+    let start = state
+        .passkey_service()
+        .login_start(&body.username, body.device_id)
+        .await?;
+    Ok(Json(
+        json!({"challenge_id":start.challenge_id,"options":start.options}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -277,67 +176,15 @@ pub(super) async fn login_finish(
     headers: HeaderMap,
     Json(body): Json<LoginFinish>,
 ) -> Result<Json<Value>> {
-    let party = relying_party(&state, &headers)?;
-    let challenge = db::passkeys::consume(&state.pool, body.challenge_id, "login", None)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-    let login: Login = serde_json::from_value(challenge.state)
-        .map_err(|error| AppError::Internal(error.into()))?;
-    let result = party
-        .finish_passkey_authentication(&body.credential, &login.state)
-        .map_err(|_| AppError::Unauthorized)?;
-    let mut key = login
-        .credentials
-        .into_iter()
-        .find(|key| key.passkey.cred_id() == result.cred_id())
-        .ok_or(AppError::Unauthorized)?;
-    key.passkey
-        .update_credential(&result)
-        .ok_or(AppError::Unauthorized)?;
-    let stored =
-        serde_json::to_value(&key.passkey).map_err(|error| AppError::Internal(error.into()))?;
-    let mut tx = state.pool.begin().await?;
-    if !db::passkeys::accept(
-        &mut tx,
-        challenge.user_id,
-        challenge.auth_generation,
-        key.id,
-        key.revision,
-        &stored,
-        result.counter(),
-    )
-    .await?
-    {
-        return Err(AppError::Unauthorized);
-    }
-    let fast = state
-        .authentication_service()
-        .issue_passkey_token(
-            &mut tx,
-            crate::services::authentication::AuthenticationFence {
-                user_id: challenge.user_id,
-                auth_generation: challenge.auth_generation,
-            },
-            login.device_id,
-            state.config.fast_token_ttl_days,
-            state.config.fast_strong_reauth_max_days,
-        )
+    check_origin(&state, &headers)?;
+    let login = state
+        .passkey_service()
+        .login_finish(body.challenge_id, body.credential)
         .await?;
-    let session = db::create_api_session_in_tx(
-        &mut tx,
-        challenge.user_id,
-        state.config.session_ttl_hours,
-        None,
-    )
-    .await?;
-    let user = db::user_for_token_in_tx(&mut tx, &session.token)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-    tx.commit().await?;
     Ok(Json(
-        json!({"token":session.token,"jid":format!("{}@{}",user.username,state.config.domain),
-        "is_admin":user.is_admin,"device_id":login.device_id,
-        "fast":{"mechanism":"HT-SHA-256-NONE","token":fast.token.as_str(),"expiry":fast.expires_at.timestamp_millis()}}),
+        json!({"token":login.session.token.as_str(),"jid":login.jid,
+        "is_admin":login.session.is_admin,"device_id":login.device_id,
+        "fast":{"mechanism":"HT-SHA-256-NONE","token":login.session.fast_token.as_str(),"expiry":login.session.fast_expires_at.timestamp_millis()}}),
     ))
 }
 
@@ -355,7 +202,7 @@ pub(super) async fn remove(
     headers: HeaderMap,
     Json(mut body): Json<Remove>,
 ) -> Result<Json<Value>> {
-    relying_party(&state, &headers)?;
+    check_origin(&state, &headers)?;
     let user = current_user(&state, &headers).await?;
     let password = Zeroizing::new(std::mem::take(&mut body.password));
     guard_start(
@@ -368,16 +215,10 @@ pub(super) async fn remove(
         body.pow.as_ref(),
     )
     .await?;
-    verify_password(&state, &user, &password).await?;
-    let generation = db::passkeys::remove(
-        &state.pool,
-        user.id,
-        user.auth_generation,
-        &auth::token_hash(user.session_token()),
-        body.id,
-    )
-    .await?
-    .ok_or(AppError::Unauthorized)?;
+    let generation = state
+        .passkey_service()
+        .remove(actor(&user), &password, body.id)
+        .await?;
     state
         .disconnect_account_before_auth_generation(
             user.id,

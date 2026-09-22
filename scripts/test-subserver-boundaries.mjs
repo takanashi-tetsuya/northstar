@@ -32,7 +32,7 @@ test('subscription cleanup authority after tests stays checked', () => {
 rejectsMutation('reject core state authority', 'subservers', 'use std::', 'use crate::state::AppState;\nuse std::', /core state/);
 rejectsMutation('reject general configuration loading', 'subservers', 'config.validate()?;', 'Config::from_env()?;\nconfig.validate()?;', /general runtime config/);
 rejectsMutation('reject expanding maintenance input secrets', 'subservers', 'struct MaintenanceConfig {', 'struct MaintenanceConfig {\n signing_key: String,', /capability inventory/);
-rejectsMutation('reject expanding retention context authority', 'retention', 'struct RetentionContext {', 'struct RetentionContext {\n session_authority: usize,', /capability inventory/);
+rejectsMutation('reject expanding retention context authority', 'retention', 'struct RetentionContext<R> {', 'struct RetentionContext<R> {\n session_authority: usize,', /capability inventory/);
 rejectsMutation('reject public maintenance bind', 'subservers', 'self.maintenance_bind.ip().is_loopback()', 'true', /reject public/);
 rejectsMutation('reject kernel-selected production port', 'subservers', 'self.maintenance_bind.port() != 0', 'true', /reject public/);
 rejectsMutation('recheck the actual health listener', 'subservers', 'listener.local_addr()?.ip().is_loopback()', 'true', /bounded local authority/);
@@ -41,7 +41,7 @@ rejectsMutation('reject increased health header budget', 'subservers', '[0u8; 40
 rejectsMutation('reject increased request deadline', 'subservers', 'Duration::from_secs(2)', 'Duration::from_secs(200)', /bounded local authority/);
 rejectsMutation('readiness requires a successful retention pass', 'subservers', 'retention_readiness.is_ready()', 'true', /bounded local authority/);
 rejectsMutation('readiness requires successful subscription cleanup', 'subservers', 'subscription_readiness.is_ready()', 'true', /bounded local authority/);
-rejectsMutation('subscription cleanup cannot gain core state', 'subscriptionCleanup', 'struct SubscriptionCleanupContext {', 'struct SubscriptionCleanupContext {\n state: AppState,', /capability inventory/);
+rejectsMutation('subscription cleanup cannot gain core state', 'subscriptionCleanup', 'struct SubscriptionCleanupContext<R> {', 'struct SubscriptionCleanupContext<R> {\n state: AppState,', /capability inventory/);
 rejectsMutation('subscription cleanup cannot allocate another pool', 'subscriptionCleanup', 'use std::', 'use sqlx::postgres::PgPoolOptions;\nuse std::', /narrow existing-pool/);
 rejectsMutation('subscription cleanup keeps its total execution budget', 'subscriptionCleanup', 'Duration::from_secs(40)', 'Duration::from_secs(5)', /CLEANUP_BUDGET/);
 rejectsMutation('subscription cleanup keeps the physical cleanup cadence', 'subscriptionCleanup', 'Duration::from_secs(60)', 'Duration::from_secs(3600)', /CLEANUP_INTERVAL/);

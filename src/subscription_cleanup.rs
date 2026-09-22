@@ -5,8 +5,7 @@
 //! receives protocol state, routing capabilities, or a separate database pool.
 
 use crate::{
-    db, metrics::SubscriptionCleanupMetrics, retention::RetentionReadiness,
-    workers::WorkerHeartbeat,
+    metrics::SubscriptionCleanupMetrics, retention::RetentionReadiness, workers::WorkerHeartbeat,
 };
 use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
@@ -21,16 +20,23 @@ pub(crate) const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
 pub(crate) const CLEANUP_BUDGET: Duration = Duration::from_secs(40);
 pub(crate) const MAX_SILENCE: Duration = Duration::from_secs(110);
 
-pub(crate) struct SubscriptionCleanupContext {
-    pool: sqlx::PgPool,
+pub(crate) trait SubscriptionCleanupRepository: Send + Sync {
+    fn cleanup_expired_subscriptions(
+        &self,
+        batch_size: i64,
+    ) -> impl std::future::Future<Output = anyhow::Result<u64>> + Send;
+}
+
+pub(crate) struct SubscriptionCleanupContext<R> {
+    repository: R,
     metrics: Arc<SubscriptionCleanupMetrics>,
     readiness: RetentionReadiness,
 }
 
-impl SubscriptionCleanupContext {
-    pub(crate) fn new(pool: sqlx::PgPool, metrics: Arc<SubscriptionCleanupMetrics>) -> Self {
+impl<R: SubscriptionCleanupRepository> SubscriptionCleanupContext<R> {
+    pub(crate) fn new(repository: R, metrics: Arc<SubscriptionCleanupMetrics>) -> Self {
         Self {
-            pool,
+            repository,
             metrics,
             readiness: RetentionReadiness::default(),
         }
@@ -51,15 +57,19 @@ impl Drop for ClearReadinessOnDrop {
     }
 }
 
-pub(crate) async fn serve_context(
-    context: Arc<SubscriptionCleanupContext>,
+pub(crate) async fn serve_context<R: SubscriptionCleanupRepository>(
+    context: Arc<SubscriptionCleanupContext<R>>,
     cancel: CancellationToken,
     heartbeat: WorkerHeartbeat,
 ) -> anyhow::Result<()> {
     serve_with(
         &context.readiness,
         &context.metrics,
-        || db::cleanup_expired_subscriptions(&context.pool, CLEANUP_BATCH_SIZE),
+        || {
+            context
+                .repository
+                .cleanup_expired_subscriptions(CLEANUP_BATCH_SIZE)
+        },
         cancel,
         heartbeat,
     )
@@ -381,7 +391,7 @@ mod tests {
                  ORDER BY expire,node_id,jid LIMIT 1;"
         ).execute(&pool).await.unwrap();
         let context = SubscriptionCleanupContext::new(
-            pool.clone(),
+            crate::db::retention::PostgresMaintenanceRepository::new(pool.clone()),
             Arc::new(SubscriptionCleanupMetrics::default()),
         );
         let readiness = context.readiness();
@@ -392,7 +402,11 @@ mod tests {
             &context.metrics,
             &cancel,
             Instant::now() + CLEANUP_BUDGET,
-            || db::cleanup_expired_subscriptions(&context.pool, CLEANUP_BATCH_SIZE),
+            || {
+                context
+                    .repository
+                    .cleanup_expired_subscriptions(CLEANUP_BATCH_SIZE)
+            },
         )
         .await
         .unwrap();
@@ -440,7 +454,11 @@ mod tests {
             &context.metrics,
             &cancel,
             Instant::now() + CLEANUP_BUDGET,
-            || db::cleanup_expired_subscriptions(&context.pool, CLEANUP_BATCH_SIZE),
+            || {
+                context
+                    .repository
+                    .cleanup_expired_subscriptions(CLEANUP_BATCH_SIZE)
+            },
         )
         .await
         .unwrap();
@@ -456,7 +474,11 @@ mod tests {
             &context.metrics,
             &cancel,
             Instant::now() + CLEANUP_BUDGET,
-            || db::cleanup_expired_subscriptions(&context.pool, CLEANUP_BATCH_SIZE),
+            || {
+                context
+                    .repository
+                    .cleanup_expired_subscriptions(CLEANUP_BATCH_SIZE)
+            },
         )
         .await;
         assert!(failure.is_err());

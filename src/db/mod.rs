@@ -23,6 +23,8 @@ pub mod data_lifecycle;
 pub mod fast;
 pub mod identity_migration;
 pub mod jid_identity;
+pub(crate) mod mam;
+pub(crate) mod messaging;
 #[cfg(test)]
 mod migration_upgrade_test;
 pub mod mix;

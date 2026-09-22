@@ -171,6 +171,10 @@ impl FederationRouter {
     pub(crate) fn wake_outbox(&self) {
         let _ = self.wake.try_send(());
     }
+
+    pub(crate) fn outbox_wakeup(&self) -> mpsc::Sender<()> {
+        self.wake.clone()
+    }
 }
 
 pub const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);

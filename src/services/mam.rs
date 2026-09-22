@@ -1,157 +1,79 @@
-//! Application boundary for XEP-0313 archive preferences, authorization and
-//! visibility-aware paging.
-//!
-//! Protocol code parses XMPP forms and renders forwarded stanzas.  This
-//! service owns PostgreSQL access and exposes only an authorized room handle,
-//! preventing stanza handlers from composing room and affiliation reads.
+//! MAM validation and post-commit delivery through an archive repository.
 
-use crate::db;
 use anyhow::Result;
-use sqlx::PgPool;
 use uuid::Uuid;
 
 pub(crate) use northstar_archive_application::{
     validate_mam_preferences, validate_mam_query_command, ArchiveBoundary, ArchivePage, ArchiveRow,
-    FederatedMamAdmissionOutcome, FederatedMamStreamPage, FederatedMamStreamRequest,
-    FederatedMamStreamRow, MamArchiveQuery, MamMetadataCommand, MamMetadataResult, MamPreferences,
-    MamPreferencesGetCommand, MamPreferencesSetCommand, MamQueryCommand, MamQueryResult,
-    MamQueryScope, MamRoomAccess, MamRoomAccessOutcome, MamRoomReadOutcome, MamRsmPage,
+    FederatedMamAdmissionOutcome, FederatedMamOutboxLimits, FederatedMamStreamPage,
+    FederatedMamStreamRequest, FederatedMamStreamRow, MamArchiveQuery, MamMetadataCommand,
+    MamMetadataResult, MamPreferences, MamPreferencesGetCommand, MamPreferencesSetCommand,
+    MamQueryCommand, MamQueryResult, MamQueryScope, MamRepository, MamRoomAccess,
+    MamRoomAccessOutcome, MamRoomReadOutcome, MamRsmPage,
 };
 
 #[derive(Clone)]
-pub(crate) struct MamService {
-    pool: PgPool,
+pub(crate) struct MamService<R> {
+    repository: R,
+    outbox_limits: FederatedMamOutboxLimits,
+    outbox_wake: tokio::sync::mpsc::Sender<()>,
 }
 
-impl MamService {
-    pub(crate) fn new(pool: PgPool) -> Self {
-        Self { pool }
+impl<R: MamRepository<Error = anyhow::Error>> MamService<R> {
+    pub(crate) fn new(
+        repository: R,
+        outbox_limits: FederatedMamOutboxLimits,
+        outbox_wake: tokio::sync::mpsc::Sender<()>,
+    ) -> Self {
+        Self {
+            repository,
+            outbox_limits,
+            outbox_wake,
+        }
     }
 
     pub(crate) async fn execute_mam_query(
         &self,
         command: MamQueryCommand,
     ) -> Result<MamQueryResult> {
-        if let Err(err) = validate_mam_query_command(&command) {
-            return Ok(MamQueryResult::ValidationFailed(err));
+        if let Err(error) = validate_mam_query_command(&command) {
+            return Ok(MamQueryResult::ValidationFailed(error));
         }
-        match command.scope {
-            MamQueryScope::Personal { owner_id } => {
-                match self.personal_page(owner_id, &command.query).await? {
-                    Some(page) => Ok(MamQueryResult::Page { room: None, page }),
-                    None => Ok(MamQueryResult::ItemNotFound),
-                }
-            }
-            MamQueryScope::Room {
-                localpart,
-                viewer_id,
-                currently_joined,
-            } => {
-                match self
-                    .authorized_room_page(&localpart, viewer_id, currently_joined, &command.query)
-                    .await?
-                {
-                    MamRoomReadOutcome::Allowed {
-                        access,
-                        value: Some(page),
-                    } => Ok(MamQueryResult::Page {
-                        room: Some(access),
-                        page,
-                    }),
-                    MamRoomReadOutcome::Allowed { value: None, .. }
-                    | MamRoomReadOutcome::Missing => Ok(MamQueryResult::ItemNotFound),
-                    MamRoomReadOutcome::Forbidden => Ok(MamQueryResult::Forbidden),
-                }
-            }
-            MamQueryScope::FederatedRoom { .. } => Ok(MamQueryResult::Forbidden),
-        }
+        self.repository.query_archive(command).await
     }
 
     pub(crate) async fn execute_mam_metadata(
         &self,
         command: MamMetadataCommand,
     ) -> Result<MamMetadataResult> {
-        match command.scope {
-            MamQueryScope::Personal { owner_id } => {
-                let (start, end) = self.personal_boundaries(owner_id).await?;
-                Ok(MamMetadataResult::Boundaries {
-                    room: None,
-                    start,
-                    end,
-                })
-            }
-            MamQueryScope::Room {
-                localpart,
-                viewer_id,
-                currently_joined,
-            } => {
-                match self
-                    .authorized_room_boundaries(&localpart, viewer_id, currently_joined)
-                    .await?
-                {
-                    MamRoomReadOutcome::Allowed { access, value } => {
-                        Ok(MamMetadataResult::Boundaries {
-                            room: Some(access),
-                            start: value.0,
-                            end: value.1,
-                        })
-                    }
-                    MamRoomReadOutcome::Missing => Ok(MamMetadataResult::ItemNotFound),
-                    MamRoomReadOutcome::Forbidden => Ok(MamMetadataResult::Forbidden),
-                }
-            }
-            MamQueryScope::FederatedRoom { .. } => Ok(MamMetadataResult::Forbidden),
-        }
+        self.repository.get_boundaries(command).await
     }
 
     pub(crate) async fn execute_mam_preferences_get(
         &self,
         command: MamPreferencesGetCommand,
     ) -> Result<MamPreferences> {
-        self.preferences(command.owner_id).await
+        self.repository.get_preferences(command).await
     }
 
     pub(crate) async fn execute_mam_preferences_set(
         &self,
         command: MamPreferencesSetCommand,
     ) -> Result<()> {
-        if let Err(err) = validate_mam_preferences(&command.preferences) {
-            anyhow::bail!("invalid mam preferences: {:?}", err);
+        if let Err(error) = validate_mam_preferences(&command.preferences) {
+            anyhow::bail!("invalid mam preferences: {error:?}");
         }
-        self.set_preferences(command.owner_id, &command.preferences)
-            .await
+        self.repository.set_preferences(command).await
     }
-
-    pub(crate) async fn preferences(&self, owner_id: Uuid) -> Result<MamPreferences> {
-        db::mam_preferences(&self.pool, owner_id).await
-    }
-
-    pub(crate) async fn set_preferences(
-        &self,
-        owner_id: Uuid,
-        preferences: &MamPreferences,
-    ) -> Result<()> {
-        db::set_mam_preferences(&self.pool, owner_id, preferences).await
-    }
-
-    /// Resolve room policy and affiliation in one repository snapshot, then
-    /// return a capability that can be used for MAM reads.
     pub(crate) async fn authorize_room(
         &self,
         localpart: &str,
         viewer_id: Uuid,
         currently_joined: bool,
     ) -> Result<MamRoomAccessOutcome> {
-        Ok(
-            match db::authorize_mam_room(&self.pool, localpart, viewer_id, currently_joined).await?
-            {
-                db::MamRoomReadOutcome::Allowed { access, .. } => {
-                    MamRoomAccessOutcome::Allowed(map_room_access(access))
-                }
-                db::MamRoomReadOutcome::Missing => MamRoomAccessOutcome::Missing,
-                db::MamRoomReadOutcome::Forbidden => MamRoomAccessOutcome::Forbidden,
-            },
-        )
+        self.repository
+            .authorize_room(localpart, viewer_id, currently_joined)
+            .await
     }
 
     pub(crate) async fn authorize_federated_room(
@@ -160,73 +82,9 @@ impl MamService {
         viewer_bare_jid: &str,
         currently_joined: bool,
     ) -> Result<MamRoomAccessOutcome> {
-        Ok(
-            match db::authorize_federated_mam_room(
-                &self.pool,
-                localpart,
-                viewer_bare_jid,
-                currently_joined,
-            )
-            .await?
-            {
-                db::MamRoomReadOutcome::Allowed { access, .. } => {
-                    MamRoomAccessOutcome::Allowed(map_room_access(access))
-                }
-                db::MamRoomReadOutcome::Missing => MamRoomAccessOutcome::Missing,
-                db::MamRoomReadOutcome::Forbidden => MamRoomAccessOutcome::Forbidden,
-            },
-        )
-    }
-
-    pub(crate) async fn personal_boundaries(
-        &self,
-        owner_id: Uuid,
-    ) -> Result<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)> {
-        db::archive_boundaries_visible(&self.pool, owner_id).await
-    }
-
-    pub(crate) async fn authorized_room_boundaries(
-        &self,
-        localpart: &str,
-        viewer_id: Uuid,
-        currently_joined: bool,
-    ) -> Result<MamRoomReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
-        map_room_read(
-            db::mam_room_archive_boundaries_authorized(
-                &self.pool,
-                localpart,
-                viewer_id,
-                currently_joined,
-            )
-            .await?,
-        )
-    }
-
-    pub(crate) async fn personal_page(
-        &self,
-        owner_id: Uuid,
-        query: &MamArchiveQuery,
-    ) -> Result<Option<ArchivePage>> {
-        db::mam_user_archive_page(&self.pool, owner_id, query).await
-    }
-
-    pub(crate) async fn authorized_room_page(
-        &self,
-        localpart: &str,
-        viewer_id: Uuid,
-        currently_joined: bool,
-        query: &MamArchiveQuery,
-    ) -> Result<MamRoomReadOutcome<Option<ArchivePage>>> {
-        map_room_read(
-            db::mam_room_archive_page_authorized(
-                &self.pool,
-                localpart,
-                viewer_id,
-                currently_joined,
-                query,
-            )
-            .await?,
-        )
+        self.repository
+            .authorize_federated_room(localpart, viewer_bare_jid, currently_joined)
+            .await
     }
 
     pub(crate) async fn authorized_federated_room_boundaries(
@@ -235,136 +93,27 @@ impl MamService {
         viewer_bare_jid: &str,
         currently_joined: bool,
     ) -> Result<MamRoomReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
-        map_room_read(
-            db::mam_federated_room_archive_boundaries_authorized(
-                &self.pool,
-                localpart,
-                viewer_bare_jid,
-                currently_joined,
-            )
-            .await?,
-        )
+        self.repository
+            .authorized_federated_room_boundaries(localpart, viewer_bare_jid, currently_joined)
+            .await
     }
 
-    /// Authorize a federated room archive read, render its complete wire
-    /// response, and admit every result plus the terminal IQ to the durable
-    /// S2S outbox in one PostgreSQL transaction. Room identity/policy and the
-    /// external affiliation remain locked until the outbox projection commits.
     pub(crate) async fn admit_federated_room_stream<F>(
         &self,
-        federation: &crate::s2s::FederationRouter,
         request: FederatedMamStreamRequest<'_>,
         render: F,
     ) -> Result<FederatedMamAdmissionOutcome>
     where
-        F: FnOnce(&FederatedMamStreamPage) -> Result<Vec<String>>,
+        F: FnOnce(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
     {
-        let mut transaction = self.pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-            .execute(&mut *transaction)
+        let outcome = self
+            .repository
+            .admit_federated_room_stream(self.outbox_limits, request, render)
             .await?;
-        let page = match db::mam_federated_room_archive_page_authorized_in_transaction(
-            &mut transaction,
-            request.localpart,
-            request.viewer_bare_jid,
-            request.currently_joined,
-            request.query,
-        )
-        .await?
-        {
-            db::MamRoomReadOutcome::Allowed {
-                access,
-                value: Some(page),
-            } => map_federated_stream_page(access, page),
-            db::MamRoomReadOutcome::Allowed { value: None, .. } => {
-                transaction.commit().await?;
-                return Ok(FederatedMamAdmissionOutcome::PageMissing);
-            }
-            db::MamRoomReadOutcome::Missing => {
-                transaction.commit().await?;
-                return Ok(FederatedMamAdmissionOutcome::Missing);
-            }
-            db::MamRoomReadOutcome::Forbidden => {
-                transaction.commit().await?;
-                return Ok(FederatedMamAdmissionOutcome::Forbidden);
-            }
-        };
-
-        let responses = match render(&page) {
-            Ok(responses) => responses,
-            Err(error) => {
-                transaction.rollback().await?;
-                return Err(error);
-            }
-        };
-        if responses.is_empty() {
-            transaction.rollback().await?;
-            anyhow::bail!("federated MAM renderer omitted the terminal response");
+        if matches!(outcome, FederatedMamAdmissionOutcome::Queued) {
+            // The committed outbox survives a closed or coalesced wake channel.
+            let _ = self.outbox_wake.try_send(());
         }
-        let policy = federation.outbox_policy();
-        for response in &responses {
-            if let Err(error) = db::enqueue_s2s_outbox_in_transaction(
-                &mut transaction,
-                request.target_domain,
-                response,
-                None,
-                policy,
-            )
-            .await
-            {
-                transaction.rollback().await?;
-                tracing::warn!(
-                    domain = request.target_domain,
-                    room = request.localpart,
-                    ?error,
-                    "federated MAM response stream was rejected atomically"
-                );
-                return Ok(FederatedMamAdmissionOutcome::OutboxRejected);
-            }
-        }
-        transaction.commit().await?;
-        federation.wake_outbox();
-        Ok(FederatedMamAdmissionOutcome::Queued)
-    }
-}
-
-fn map_room_access(access: db::MamRoomArchiveAccess) -> MamRoomAccess {
-    MamRoomAccess {
-        localpart: access.localpart,
-        occupant_id_secret: access.occupant_id_secret,
-        reveal_real_jid: access.reveal_real_jid,
-    }
-}
-
-fn map_room_read<T>(outcome: db::MamRoomReadOutcome<T>) -> Result<MamRoomReadOutcome<T>> {
-    Ok(match outcome {
-        db::MamRoomReadOutcome::Allowed { access, value } => MamRoomReadOutcome::Allowed {
-            access: map_room_access(access),
-            value,
-        },
-        db::MamRoomReadOutcome::Missing => MamRoomReadOutcome::Missing,
-        db::MamRoomReadOutcome::Forbidden => MamRoomReadOutcome::Forbidden,
-    })
-}
-
-fn map_federated_stream_page(
-    access: db::MamRoomArchiveAccess,
-    page: db::ArchivePage,
-) -> FederatedMamStreamPage {
-    FederatedMamStreamPage {
-        access: map_room_access(access),
-        rows: page
-            .rows
-            .into_iter()
-            .map(|row| FederatedMamStreamRow {
-                id: row.id,
-                peer_jid: row.peer_jid,
-                stanza: row.stanza,
-                created_at: row.created_at,
-            })
-            .collect(),
-        total: page.total,
-        first_index: page.first_index,
-        complete: page.complete,
+        Ok(outcome)
     }
 }

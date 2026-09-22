@@ -2672,8 +2672,8 @@ impl Config {
             anyhow::bail!("XEP_0487_TTL_SECONDS must be between 1 and 604800");
         }
 
-        if raw.registration_rate_per_hour == 0 {
-            anyhow::bail!("REGISTRATION_RATE_PER_HOUR must be greater than zero");
+        if !(1..=1_000_000).contains(&raw.registration_rate_per_hour) {
+            anyhow::bail!("REGISTRATION_RATE_PER_HOUR must be between 1 and 1000000");
         }
 
         let trusted_proxy_ips = raw

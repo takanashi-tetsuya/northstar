@@ -1718,7 +1718,8 @@ pub struct AppState {
     private_storage_service: crate::services::private_storage::PrivateStorageService<
         db::private::PostgresPrivateStorageRepository,
     >,
-    account_service: crate::services::account::AccountService,
+    account_service:
+        crate::services::account::AccountService<db::account_repository::PostgresAccountRepository>,
     /// Credential lookup, verification and XEP-0484 mutation authority. The
     /// protocol layer receives typed outcomes but neither PgPool nor the FAST
     /// derivation key.
@@ -1821,7 +1822,7 @@ pub struct AppState {
     s2s_connection_attempts: Arc<Semaphore>,
     component_connections: Arc<Semaphore>,
     connection_actors: crate::connection_actors::ConnectionActorRegistry,
-    pub abuse: AbuseGuard,
+    pub abuse: Arc<AbuseGuard>,
     /// Public, irreversible key IDs and the configured generation used by the
     /// readiness path to detect a node that drifted from PostgreSQL authority.
     abuse_key_deployment: Option<db::AbuseKeyDeploymentIdentity>,
@@ -2415,7 +2416,7 @@ impl AppState {
         // fence after which every node switches its primary to the new key.
         let write_abuse_artifacts_with_previous =
             abuse_state_hmac_previous_key.is_some() && !config.abuse_state_hmac_retire_previous;
-        let abuse = AbuseGuard::new_persistent_for_deployment(
+        let abuse = Arc::new(AbuseGuard::new_persistent_for_deployment(
             AbuseConfig {
                 base_work_factor: config.pow_base_work_factor,
                 max_work_factor: config.pow_max_work_factor,
@@ -2434,7 +2435,7 @@ impl AppState {
                 .map(|secret| secret.as_bytes()),
             write_abuse_artifacts_with_previous,
             config.pow_v1_compatibility_until,
-        );
+        ));
         // Inline key material is accepted only by the explicit disposable
         // loopback development profile. Mounted persistent keys, including
         // every Redis/non-loopback deployment, participate in DB authority.
@@ -2686,8 +2687,11 @@ impl AppState {
             config.domain.clone(),
         );
         let account_service = crate::services::account::AccountService::new(
-            pool.clone(),
-            config.domain.clone(),
+            db::account_repository::PostgresAccountRepository::new(
+                pool.clone(),
+                config.domain.clone(),
+                Arc::clone(&abuse),
+            ),
             config.configured_registration_mode()
                 == crate::config::RegistrationMode::InvitationOnly,
             config.registration_rate_per_hour,
@@ -3275,7 +3279,10 @@ impl AppState {
         &self.private_storage_service
     }
 
-    pub(crate) fn account_service(&self) -> &crate::services::account::AccountService {
+    pub(crate) fn account_service(
+        &self,
+    ) -> &crate::services::account::AccountService<db::account_repository::PostgresAccountRepository>
+    {
         &self.account_service
     }
 

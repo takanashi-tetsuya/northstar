@@ -2742,11 +2742,19 @@
     ],
     [
       "northstar-pubsub-core",
+      "base64"
+    ],
+    [
+      "northstar-pubsub-core",
       "chrono"
     ],
     [
       "northstar-pubsub-core",
       "northstar-xmpp-types"
+    ],
+    [
+      "northstar-pubsub-core",
+      "sha2"
     ],
     [
       "northstar-pubsub-core",

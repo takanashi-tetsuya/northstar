@@ -1759,7 +1759,7 @@ for (const invariant of ['expected_user_id', 'roster_version', 'roster_annotated
 
 // ARCH-SVC XEP-0160 replay boundary: only transport ordering/backpressure is
 // allowed in protocol code. PostgreSQL account/page leases, policy snapshots
-// and claim cleanup remain private to ReplayService. Bind 2 uses the same
+// and claim cleanup run through ReplayService. Bind 2 uses the same
 // service path and may not resurrect the former pool-owning repository drain.
 const replayProtocolSource = read('src/xmpp/protocol/replay.rs');
 const replayDependencies = classifyDbDependencies(replayProtocolSource, 'replay.rs');
@@ -1780,11 +1780,14 @@ if (!/\.replay_service\s*\(\s*\)/.test(replayProtocolSource)) {
 }
 const replayServiceSource = read('src/services/replay.rs');
 const replayServiceBody = structBody(replayServiceSource, 'pub(crate) struct ReplayService');
-if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(replayServiceBody)) {
-  throw new Error('ReplayService PostgreSQL capability must remain a private PgPool field');
+if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(replayServiceBody)) {
+  throw new Error('ReplayService must receive its repository port');
 }
-if (/^\s*pub(?:\(crate\))?\s+pool\s*:/m.test(replayServiceBody)) {
-  throw new Error('ReplayService must not expose its PostgreSQL capability');
+const replayAdapterBody = structBody(
+  read('src/db/replay_repository.rs'), 'pub(crate) struct PostgresReplayRepository',
+);
+if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(replayAdapterBody)) {
+  throw new Error('Replay repository PostgreSQL capability must remain private');
 }
 const replayMigration = read('migrations/0103_offline_replay_leases.sql');
 if (/\bpublic\s*\./i.test(replayMigration)) {
@@ -1829,12 +1832,15 @@ if (replayDbSource.split(resourceOwnerFence).length - 1 < 3) {
 }
 for (const invariant of [
   'OfflineReplayLeaseAcquire',
-  'BusyUntil(OfflineReplayBusyUntil)',
   'Some("40001")',
 ]) {
   if (!replayDbSource.includes(invariant)) {
     throw new Error(`offline replay database boundary lost invariant: ${invariant}`);
   }
+}
+if (!structBody(replayServiceSource, 'pub enum OfflineReplayLeaseAcquire')
+  .includes('BusyUntil(OfflineReplayBusyUntil)')) {
+  throw new Error('offline replay lease result lost its explicit busy outcome');
 }
 for (const invariant of ['ReplayStartOutcome', 'ReplayStartOutcome::BusyUntil']) {
   if (!replayServiceSource.includes(invariant) && !replayProtocolSource.includes(invariant)) {
@@ -2058,6 +2064,7 @@ for (const [name, source] of [
   ['PrivacyService', read('src/services/privacy.rs')],
   ['PresenceService', read('src/services/presence.rs')],
   ['ReplayService', read('src/services/replay.rs')],
+  ['AccountService', accountServiceSource],
   ['PushService', read('src/services/push.rs')],
   ['PrivateStorageService', read('src/services/private_storage.rs')],
   ['RetentionContext', read('src/retention.rs')],

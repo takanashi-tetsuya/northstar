@@ -246,18 +246,15 @@ impl ProtocolSession {
         let outcome = match self
             .state
             .account_service()
-            .register(
-                &self.state.abuse,
-                RegistrationRequest {
-                    username: &username,
-                    password: &password,
-                    invitation_token: invitation_token.as_deref().map(String::as_str),
-                    proof: proof.as_ref(),
-                    intent: &intent,
-                    subject: &subject,
-                    actors: &actors,
-                },
-            )
+            .register(RegistrationRequest {
+                username: &username,
+                password: &password,
+                invitation_token: invitation_token.as_deref().map(String::as_str),
+                proof: proof.as_ref(),
+                intent: &intent,
+                subject: &subject,
+                actors: &actors,
+            })
             .await
         {
             Ok(outcome) => outcome,
@@ -390,18 +387,15 @@ impl ProtocolSession {
         let changed = self
             .state
             .account_service()
-            .change_password(
-                &self.state.abuse,
-                PasswordChangeRequest {
-                    subject: &subject,
-                    actors: &actors,
-                    proof: proof.as_ref(),
-                    intent: &intent,
-                    user_id: user.id,
-                    expected_auth_generation: user.auth_generation,
-                    password: &password,
-                },
-            )
+            .change_password(PasswordChangeRequest {
+                subject: &subject,
+                actors: &actors,
+                proof: proof.as_ref(),
+                intent: &intent,
+                user_id: user.id,
+                expected_auth_generation: user.auth_generation,
+                password: &password,
+            })
             .await;
         match changed {
             Ok(PasswordChangeOutcome::Changed) => {}
@@ -477,17 +471,14 @@ impl ProtocolSession {
         match self
             .state
             .account_service()
-            .quiesce_for_deletion(
-                &self.state.abuse,
-                DeletionQuiesceRequest {
-                    subject: &subject,
-                    actors: &actors,
-                    proof: proof.as_ref(),
-                    intent: &intent,
-                    user_id: user.id,
-                    expected_auth_generation: user.auth_generation,
-                },
-            )
+            .quiesce_for_deletion(DeletionQuiesceRequest {
+                subject: &subject,
+                actors: &actors,
+                proof: proof.as_ref(),
+                intent: &intent,
+                user_id: user.id,
+                expected_auth_generation: user.auth_generation,
+            })
             .await
         {
             Ok(DeletionQuiesceOutcome::Quiesced) => {}

@@ -9,6 +9,7 @@ pub(crate) static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migratio
 
 pub mod abuse_keys;
 pub mod account_deletion;
+pub mod account_repository;
 pub mod account_revocations;
 pub mod admin_commands;
 pub mod api_control;

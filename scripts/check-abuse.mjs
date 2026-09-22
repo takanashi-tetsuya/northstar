@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const root = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
-const [abuse, config, envExample, apiRouter, authRoutes, reportRoutes, protocolSession, dispatch, messaging, miscProtocol, ibrProtocol, accountService, accountRecovery, dbUsers, apiControl, appError, xmlUtil, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, main, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
+const [abuse, config, envExample, apiRouter, authRoutes, reportRoutes, protocolSession, dispatch, messaging, miscProtocol, ibrProtocol, accountService, accountRepository, accountRecovery, dbUsers, apiControl, appError, xmlUtil, migration, messageAdmissionMigration, powIntentMigration, parallelChallengeMigration, deletionRecoveryMigration, main, client, powClient, clientHtml, admin, adminHtml, workerSource] = await Promise.all([
   Promise.all([
     read('src/abuse.rs'),
     read('crates/northstar-abuse-policy/src/lib.rs'),
@@ -18,7 +18,7 @@ const [abuse, config, envExample, apiRouter, authRoutes, reportRoutes, protocolS
   ]).then(parts => parts.join('\n')), read('src/config.rs'), read('.env.example'),
   read('src/api/mod.rs'), read('src/api/auth_routes.rs'),
   read('src/api/reports.rs'), read('src/xmpp/protocol.rs'), read('src/xmpp/protocol/dispatch.rs'),
-  read('src/xmpp/protocol/messaging.rs'), read('src/xmpp/protocol/misc.rs'), read('src/xmpp/protocol/ibr.rs'), read('src/services/account.rs'), read('src/account_recovery.rs'), read('src/db/users.rs'), read('src/db/api_control.rs'), read('src/error.rs'), read('src/xmpp/xml_util.rs'),
+  read('src/xmpp/protocol/messaging.rs'), read('src/xmpp/protocol/misc.rs'), read('src/xmpp/protocol/ibr.rs'), read('src/services/account.rs'), read('src/db/account_repository.rs'), read('src/account_recovery.rs'), read('src/db/users.rs'), read('src/db/api_control.rs'), read('src/error.rs'), read('src/xmpp/xml_util.rs'),
   read('migrations/0009_abuse_reports.sql'), read('migrations/0078_message_pow_admissions.sql'),
   read('migrations/0084_pow_intent_v2.sql'), read('migrations/0100_parallel_pow_challenges.sql'), read('migrations/0101_durable_account_deletion_recovery.sql'), read('src/main.rs'), read('web/client.js'), read('web/pow.js'), read('web/client.html'),
   read('web/app.js'), read('web/index.html'), read('web/pow-worker.js'),
@@ -96,18 +96,26 @@ assert.match(abuse, /PasswordChange, "XMPP", "\/xmpp\/account-remove"/,
   'authenticated XMPP account removal must have a closed v2 intent route');
 assert.match(miscProtocol, /PasswordChangeRequest[\s\S]+\/xmpp\/account-remove[\s\S]+DeletionQuiesceRequest/,
   'XMPP password changes and account removal must reconstruct a v2 body commitment through the account service');
-assert.match(accountService, /change_password_guarded_v2[\s\S]+begin_account_deletion_quiesce_guarded_v2/,
-  'the account service must own guarded credential and deletion transactions');
-const xmppRegistration = accountService.slice(
+assert.match(accountRepository, /change_password_guarded_v2[\s\S]+begin_account_deletion_quiesce_guarded_v2/,
+  'the account repository must own guarded credential and deletion transactions');
+const registrationService = accountService.slice(
   accountService.indexOf('pub(crate) async fn register('),
   accountService.indexOf('pub(crate) async fn change_password('),
 );
 assert.ok(
-  xmppRegistration.indexOf('password_work::reserve()') >= 0
-    && xmppRegistration.indexOf('password_work::reserve()')
-      < xmppRegistration.indexOf('.pool\n            .begin()'),
-  'XMPP registration must reserve bounded CPU capacity before borrowing PostgreSQL',
+  registrationService.indexOf('password_work::reserve()') >= 0
+    && registrationService.indexOf('password_work::reserve()')
+      < registrationService.indexOf('.register(request, self.policy, password_work)'),
+  'XMPP registration must reserve bounded CPU capacity before invoking persistence',
 );
+const xmppRegistration = accountRepository.slice(
+  accountRepository.indexOf('async fn register('),
+  accountRepository.indexOf('async fn change_password('),
+);
+assert.match(xmppRegistration, /password_work: crate::password_work::PasswordWorkReservation/,
+  'the registration transaction must require the service-reserved CPU permit');
+assert.match(xmppRegistration, /\.pool\s*\.begin\(\)/,
+  'the complete registration operation must have one repository-owned transaction');
 assert.match(xmppRegistration,
   /verify_or_allow_in_tx_v2[\s\S]+prepare_registration_with_reservation[\s\S]+create_user_with_invitation_guarded_in_tx_v2/,
   'XMPP registration must reject invalid body-bound proofs before password derivation');
@@ -152,8 +160,8 @@ assert.match(deletionRecoveryMigration, /recovery_after TIMESTAMPTZ NOT NULL[\s\
   'account deletion recovery must be delayed and lease-fenced');
 assert.match(accountRecovery, /revoke_user_sm_sessions_with_teardown[\s\S]+delete_quiesced/,
   'durable SM state must be torn down before the account row can cascade it');
-assert.match(accountService, /claim_account_deletion_jobs[\s\S]+release_account_deletion_job/,
-  'the account service must retain deletion claim-token authority');
+assert.match(accountRepository, /claim_account_deletion_jobs[\s\S]+release_account_deletion_job/,
+  'the account repository must retain deletion claim-token authority');
 assert.match(accountRecovery, /claim_deletion_recovery[\s\S]+release_deletion_recovery/,
   'failed deletion recovery must release its durable lease with backoff');
 assert.match(main, /"account-deletion-recovery"[\s\S]+WorkerCriticality::Restartable/,

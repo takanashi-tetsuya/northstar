@@ -48,7 +48,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_HOME="$project_dir/.cargo-local"
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$test_database?options=-csearch_path%3D$test_schema"
+export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$test_database?options=-csearch_path%3D$test_schema"
 
 scope="${AUTH_ADMIN_TEST_SCOPE:-all}"
 run_exact_ignored() {
@@ -65,6 +65,10 @@ run_exact_ignored() {
   fi
 }
 if [[ "$scope" == "all" || "$scope" == "users" ]]; then
+  run_exact_ignored \
+    db::users::tests::concurrent_registration_cannot_exceed_the_global_hourly_limit
+  run_exact_ignored \
+    db::users::tests::guarded_registration_rolls_back_and_replays_proof_invitation_user_and_audit
   run_exact_ignored \
     db::users::tests::scram_families_hide_unknown_and_disabled_accounts_but_surface_corruption
   run_exact_ignored \

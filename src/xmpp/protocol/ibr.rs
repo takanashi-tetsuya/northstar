@@ -325,18 +325,15 @@ impl ProtocolSession {
         let outcome = match self
             .state
             .account_service()
-            .register(
-                &self.state.abuse,
-                RegistrationRequest {
-                    username: &submission.username,
-                    password: &submission.password,
-                    invitation_token: submission.invitation_token.as_deref(),
-                    proof: submission.proof.as_ref(),
-                    intent: &intent,
-                    subject: &subject,
-                    actors: &actors,
-                },
-            )
+            .register(RegistrationRequest {
+                username: &submission.username,
+                password: &submission.password,
+                invitation_token: submission.invitation_token.as_deref(),
+                proof: submission.proof.as_ref(),
+                intent: &intent,
+                subject: &subject,
+                actors: &actors,
+            })
             .await
         {
             Ok(outcome) => outcome,

@@ -8,13 +8,7 @@ use anyhow::{Context, Result};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-#[derive(Clone, Debug)]
-pub struct AccountDeletionJob {
-    pub user_id: Uuid,
-    pub username: String,
-    pub claim_token: Uuid,
-    pub attempts: i32,
-}
+pub use crate::services::account::DeletionRecoveryJob as AccountDeletionJob;
 
 pub async fn claim_account_deletion_jobs(
     pool: &PgPool,
@@ -54,11 +48,13 @@ pub async fn claim_account_deletion_jobs(
     .context("could not claim durable account-deletion recovery jobs")?;
     Ok(rows
         .into_iter()
-        .map(|row| AccountDeletionJob {
-            user_id: row.get("user_id"),
-            username: row.get("username"),
-            claim_token,
-            attempts: row.get("attempts"),
+        .map(|row| {
+            AccountDeletionJob::from_lease(
+                row.get("user_id"),
+                row.get("username"),
+                claim_token,
+                row.get("attempts"),
+            )
         })
         .collect())
 }
@@ -77,7 +73,7 @@ pub async fn release_account_deletion_job(
     // A bounded exponential retry keeps a broken storage or SM dependency from
     // becoming a tight database loop. The durable row remains visible to
     // operators while another process may claim it after this delay.
-    let exponent = u32::try_from(job.attempts.clamp(1, 10)).unwrap_or(10);
+    let exponent = u32::try_from(job.attempts().clamp(1, 10)).unwrap_or(10);
     let retry_seconds = 2_i64.saturating_pow(exponent).clamp(2, 3_600);
     Ok(sqlx::query(
         "UPDATE account_deletion_requests
@@ -88,7 +84,7 @@ pub async fn release_account_deletion_job(
           WHERE user_id=$1 AND claim_token=$2",
     )
     .bind(job.user_id)
-    .bind(job.claim_token)
+    .bind(job.claim_token())
     .bind(retry_seconds)
     .bind(error_code)
     .execute(pool)
@@ -183,8 +179,12 @@ mod tests {
         assert_eq!(job.user_id, user.id);
         assert_eq!(job.username, username);
 
-        let mut wrong = job.clone();
-        wrong.claim_token = Uuid::new_v4();
+        let wrong = AccountDeletionJob::from_lease(
+            job.user_id,
+            job.username.clone(),
+            Uuid::new_v4(),
+            job.attempts(),
+        );
         assert!(
             !release_account_deletion_job(&pool, &wrong, "injected-failure")
                 .await

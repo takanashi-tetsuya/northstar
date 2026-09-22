@@ -361,24 +361,17 @@ transactions. Cross-domain atomic operations retain one database transaction.
 | Account revocation/deletion | Authority generation/revocation record and required durable cleanup intents | Reviewed cross-domain mutation capability; do not replace it with independently committed service calls |
 | Retention and background delivery | Exact claim/fence completion and cleanup obligations | Dedicated worker operations, not every table in the associated foreground domain |
 
-The first packet connects Roster, Upload reservation, Messaging, MAM and
-Passkeys to injected repository ports. Their SQL adapters reside in `src/db`.
-Embedded and standalone maintenance also share repository-backed retention and
-subscription cleanup contexts. MUC now uses a room repository and a separate
-committed-operation wake port; its existing locks, generations and outbox
-transactions remain intact. Profile publication also uses an injected port,
-with its shared mutation admission held by the service and complete publication
-transactions held by the adapter. PubSub/PEP now uses its existing repository
-traits with complete mutations and outbox operations, while the service retains
-foreground and background admission. Blocking, privacy, Push and private XML
-storage also use injected ports, retaining live-resource checks and storage
-quotas in the services. Presence uses complete repository subscription operations
-with the same account and privacy fences. Offline/BOSH replay also uses injected
-lease and delivery ports while preserving ownership, cutoff and ACK fences.
-Remaining packets cover the other account,
-session, collaboration and REST services, plus live-session/upload workers.
-The public AppState budget is still nine; this stage remains open. Updating a field's visibility
-alone is not evidence of reduced authority.
+Repository ports now cover Roster, upload reservation, Messaging, MAM, Passkeys,
+MUC, Profile, PubSub/PEP, Blocking, Privacy, Push, private XML storage, Presence,
+offline/BOSH replay and account lifecycle. Their PostgreSQL adapters live in
+`src/db`; retention and subscription cleanup use narrow repository-backed
+contexts. Existing cross-table transactions, admission permits, account
+fences and post-commit recovery behavior remain intact.
+
+Remaining work covers authentication, administrator commands, retractions,
+MIX, stream management, REST handlers and live-session/upload workers.
+AppState still has nine public fields, so stage 1 remains open. Changing field
+visibility alone does not demonstrate reduced authority.
 
 Role names follow this map after the transaction boundaries are stable. Each
 cross-domain operation must either have one narrowly authorized transaction

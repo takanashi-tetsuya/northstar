@@ -3239,7 +3239,7 @@ mod tests {
             .await
             .unwrap();
 
-        let guard = AbuseGuard::new_persistent(
+        let guard = std::sync::Arc::new(AbuseGuard::new_persistent(
             AbuseConfig {
                 base_work_factor: 2,
                 max_work_factor: 64,
@@ -3252,7 +3252,7 @@ mod tests {
             pool.clone(),
             Some(b"guarded-registration-test-key-at-least-32-bytes"),
             None,
-        );
+        ));
         let suffix = Uuid::new_v4().simple().to_string();
         let username = format!("atomic{}", &suffix[..12]);
         let replay_username = format!("replay{}", &suffix[..12]);
@@ -3313,7 +3313,7 @@ mod tests {
                 prepared,
                 Some(&invitation),
                 true,
-                u32::MAX,
+                1_000_000,
                 None,
             )
             .await
@@ -3350,70 +3350,51 @@ mod tests {
         .await
         .unwrap());
 
-        let prepared = prepare_registration(
-            &username,
-            registration_password,
+        let service = crate::services::account::AccountService::new(
+            crate::db::account_repository::PostgresAccountRepository::new(
+                pool.clone(),
+                "example.test".to_owned(),
+                std::sync::Arc::clone(&guard),
+            ),
+            true,
+            1_000_000,
             auth::MIN_SCRAM_ITERATIONS,
             false,
-        )
-        .await
-        .unwrap();
-        let mut retry = pool.begin().await.unwrap();
-        assert!(matches!(
-            create_user_with_invitation_guarded_in_tx_v2(
-                &mut retry,
-                &guard,
-                &subject,
-                &actors,
-                Some(&proof),
-                &intent,
-                false,
-                prepared,
-                Some(&invitation),
-                true,
-                u32::MAX,
-                None,
-            )
-            .await
-            .unwrap(),
-            GuardedRegistrationOutcome::Created(_)
-        ));
-        retry.commit().await.unwrap();
+        );
+        let request = crate::services::account::RegistrationRequest {
+            username: &username,
+            password: registration_password,
+            invitation_token: Some(&invitation),
+            proof: Some(&proof),
+            intent: &intent,
+            subject: &subject,
+            actors: &actors,
+        };
+        let crate::services::account::RegistrationOutcome::Created(created) =
+            service.register(request).await.unwrap()
+        else {
+            panic!("a rolled-back proof and invitation must remain usable");
+        };
+        assert_eq!(created.username, username);
 
-        let replay_prepared = prepare_registration(
-            &replay_username,
-            registration_password,
-            auth::MIN_SCRAM_ITERATIONS,
-            false,
-        )
-        .await
-        .unwrap();
         let replay_intent = crate::abuse::PowIntent::xmpp_registration(
             &replay_username,
             registration_password,
             Some(&invitation),
         );
-        let mut replay = pool.begin().await.unwrap();
+        let replay = crate::services::account::RegistrationRequest {
+            username: &replay_username,
+            password: registration_password,
+            invitation_token: Some(&invitation),
+            proof: Some(&proof),
+            intent: &replay_intent,
+            subject: &subject,
+            actors: &actors,
+        };
         assert!(matches!(
-            create_user_with_invitation_guarded_in_tx_v2(
-                &mut replay,
-                &guard,
-                &subject,
-                &actors,
-                Some(&proof),
-                &replay_intent,
-                false,
-                replay_prepared,
-                Some(&invitation),
-                true,
-                u32::MAX,
-                None,
-            )
-            .await
-            .unwrap(),
-            GuardedRegistrationOutcome::AbuseDenied(_)
+            service.register(replay).await.unwrap(),
+            crate::services::account::RegistrationOutcome::AbuseDenied(_)
         ));
-        replay.commit().await.unwrap();
         assert!(find_user(&pool, &replay_username).await.unwrap().is_none());
         assert_eq!(
             sqlx::query_scalar::<_, i32>(

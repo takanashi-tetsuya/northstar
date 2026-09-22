@@ -136,6 +136,10 @@ Key ownership:
 - Offline replay separates resource validation and policy from durable lease,
   page and transport-fence operations. Cursor and lease values belong to the
   service boundary; the adapter retains PostgreSQL clock and ownership checks.
+- Account registration reserves password-work capacity before entering its
+  repository. The adapter holds the shared abuse authority and commits proof,
+  invitation, credential and account changes together. Deletion recovery uses
+  a typed claim with the original token and retry count.
 - Embedded and standalone retention workers share the same narrow context.
   Retention and subscription cleanup receive repository operations, policy and
   metrics, with no raw pool or global application state.

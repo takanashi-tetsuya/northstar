@@ -57,7 +57,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_HOME="$project_dir/.cargo-local"
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema"
+export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema"
 
 run_exact_ignored() {
   local test_name="$1"

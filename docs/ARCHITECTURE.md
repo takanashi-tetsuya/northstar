@@ -136,6 +136,16 @@ Key ownership:
 - Offline replay separates resource validation and policy from durable lease,
   page and transport-fence operations. Cursor and lease values belong to the
   service boundary; the adapter retains PostgreSQL clock and ownership checks.
+- Administrator commands validate claim identity and page bounds before the
+  repository. Sensitive reads retain their generation lock and snapshot;
+  command mutations retain their dedicated database authority.
+- Authentication keeps mechanism policy and dummy SCRAM derivation in the
+  service. Its repository owns verifier reads, FAST derivation and atomic
+  generation, epoch and binding checks; authenticated identities contain no
+  reusable credential material.
+- Retractions validate owner projections and compute content commitments before
+  persistence. Tombstones, action archives and delivery share one repository
+  transaction, including replay and account fences.
 - Account registration reserves password-work capacity before entering its
   repository. The adapter holds the shared abuse authority and commits proof,
   invitation, credential and account changes together. Deletion recovery uses

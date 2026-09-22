@@ -973,7 +973,7 @@ impl SmService {
             tx.rollback().await?;
             return Ok(BindingFinalizationOutcome::ReservationLost);
         }
-        let staged_login_epoch = crate::services::authentication::stage_login_epoch_in_transaction(
+        let staged_login_epoch = crate::db::authentication::stage_login_epoch_in_transaction(
             &mut tx,
             user_id,
             device_id,
@@ -1040,7 +1040,7 @@ impl SmService {
         else {
             return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
         };
-        let staged_login_epoch = crate::services::authentication::stage_login_epoch_in_transaction(
+        let staged_login_epoch = crate::db::authentication::stage_login_epoch_in_transaction(
             &mut tx,
             request.user_id,
             request.user_agent_id,
@@ -2137,8 +2137,10 @@ mod tests {
         );
 
         let authentication = crate::services::authentication::AuthenticationService::new(
-            pool.clone(),
-            std::sync::Arc::new(zeroize::Zeroizing::new(vec![0x56; 32])),
+            crate::db::authentication::PostgresAuthenticationRepository::new(
+                pool.clone(),
+                std::sync::Arc::new(zeroize::Zeroizing::new(vec![0x56; 32])),
+            ),
             std::sync::Arc::new(zeroize::Zeroizing::new(vec![0xa7; 32])),
             crate::auth::MIN_SCRAM_ITERATIONS,
             false,

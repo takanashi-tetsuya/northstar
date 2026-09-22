@@ -68,7 +68,7 @@ create_active_schema() {
   active_schema_created=true
   psql "${db[@]}" --set ON_ERROR_STOP=1 \
     --command "CREATE SCHEMA \"$active_schema\"" >/dev/null
-  export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/$database?options=-csearch_path%3D$active_schema"
+  export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/$database?options=-csearch_path%3D$active_schema"
 }
 
 trap cleanup_on_exit EXIT

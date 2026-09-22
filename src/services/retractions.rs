@@ -2,18 +2,19 @@
 //!
 //! The protocol layer validates the incoming XML shape and supplies an
 //! authenticated sender plus bounded owner projections. This service owns the
-//! PostgreSQL capability and the transaction spanning original-message
-//! tombstones, action archives and the optional durable S2S outbox row.
+//! validation and keyed content commitments. The repository commits original
+//! tombstones, action archives and local or federated delivery together.
 
-use crate::{abuse::PersonalRetractionContentKeyring, db, xmpp::xml_builder::XmlElement};
+use crate::{
+    abuse::{ContentIdentityAuthenticators, PersonalRetractionContentKeyring},
+    xmpp::xml_builder::XmlElement,
+};
 use anyhow::{Context, Result};
 pub(crate) use northstar_message_core::ArchiveProjection as ArchiveWrite;
 
 use roxmltree::{Document, Node};
 use sha2::{Digest, Sha256, Sha512};
-use sqlx::{PgPool, Row};
 use std::collections::{HashMap, HashSet};
-use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 const NS_RETRACT: &str = "urn:xmpp:message-retract:1";
@@ -45,8 +46,8 @@ pub(crate) struct FederationOutboxPolicy {
     pub(crate) max_per_domain: i64,
 }
 
-impl From<db::S2sOutboxPolicy> for FederationOutboxPolicy {
-    fn from(value: db::S2sOutboxPolicy) -> Self {
+impl From<northstar_federation_core::S2sOutboxPolicy> for FederationOutboxPolicy {
+    fn from(value: northstar_federation_core::S2sOutboxPolicy) -> Self {
         Self {
             ttl_seconds: value.ttl_seconds,
             max_rows: value.max_rows,
@@ -56,7 +57,7 @@ impl From<db::S2sOutboxPolicy> for FederationOutboxPolicy {
     }
 }
 
-impl From<FederationOutboxPolicy> for db::S2sOutboxPolicy {
+impl From<FederationOutboxPolicy> for northstar_federation_core::S2sOutboxPolicy {
     fn from(value: FederationOutboxPolicy) -> Self {
         Self {
             ttl_seconds: value.ttl_seconds,
@@ -114,40 +115,71 @@ pub(crate) enum RetractionOutcome {
     CapacityExceeded,
 }
 
+/// A bounded retraction whose identities, archive projections and commitments
+/// have been validated before persistence borrows a connection.
+pub(crate) struct PreparedRetraction<'a> {
+    pub(crate) command: &'a RetractionCommand<'a>,
+    pub(crate) command_encrypted: bool,
+    pub(crate) canonical_sender: String,
+    pub(crate) configured_domain: String,
+    pub(crate) canonical_semantics: Vec<u8>,
+    pub(crate) normalized_owners: Vec<NormalizedOwner>,
+    pub(crate) normalized_writes: Vec<NormalizedWrite<'a>>,
+    pub(crate) normalized_delivery: Option<NormalizedDelivery<'a>>,
+    pub(crate) normalized_outbound: Option<NormalizedOutbound<'a>>,
+    pub(crate) action_digest: [u8; 32],
+    pub(crate) semantic_sha256: Vec<u8>,
+    pub(crate) semantic_sha512: Vec<u8>,
+    pub(crate) semantic_length: i64,
+    pub(crate) semantic_authenticators: ContentIdentityAuthenticators,
+    pub(crate) owner_projection_sha256: Vec<u8>,
+    pub(crate) owner_projection_sha512: Vec<u8>,
+    pub(crate) owner_projection_length: i64,
+    pub(crate) owner_authenticators: ContentIdentityAuthenticators,
+    pub(crate) delivery_authenticators: Option<ContentIdentityAuthenticators>,
+}
+
+pub(crate) trait RetractionRepository: Send + Sync {
+    fn apply_prepared(
+        &self,
+        prepared: PreparedRetraction<'_>,
+    ) -> impl std::future::Future<Output = Result<RetractionOutcome>> + Send;
+}
+
 #[derive(Clone)]
-pub(crate) struct RetractionService {
-    pool: PgPool,
+pub(crate) struct RetractionService<R> {
+    repository: R,
     content_identity: PersonalRetractionContentKeyring,
     configured_domain: String,
 }
 
-struct NormalizedOwner {
-    owner_id: Uuid,
-    peer_bare_jid: String,
+pub(crate) struct NormalizedOwner {
+    pub(crate) owner_id: Uuid,
+    pub(crate) peer_bare_jid: String,
 }
 
-struct NormalizedWrite<'a> {
-    write: &'a ArchiveWrite<'a>,
-    peer_bare_jid: String,
-    peer_full_jid: String,
+pub(crate) struct NormalizedWrite<'a> {
+    pub(crate) write: &'a ArchiveWrite<'a>,
+    pub(crate) peer_bare_jid: String,
+    pub(crate) peer_full_jid: String,
 }
 
-struct NormalizedDelivery<'a> {
-    projection: &'a DeliveryProjection<'a>,
-    sender_full_jid: String,
-    sender_bare_jid: String,
-    recipient_bare_jid: String,
-    target_full_jid: Option<String>,
-    commitment: Vec<u8>,
+pub(crate) struct NormalizedDelivery<'a> {
+    pub(crate) projection: &'a DeliveryProjection<'a>,
+    pub(crate) sender_full_jid: String,
+    pub(crate) sender_bare_jid: String,
+    pub(crate) recipient_bare_jid: String,
+    pub(crate) target_full_jid: Option<String>,
+    pub(crate) commitment: Vec<u8>,
 }
 
-struct NormalizedOutbound<'a> {
-    projection: &'a OutboundProjection<'a>,
-    target_domain: String,
-    recipient_bare_jid: String,
+pub(crate) struct NormalizedOutbound<'a> {
+    pub(crate) projection: &'a OutboundProjection<'a>,
+    pub(crate) target_domain: String,
+    pub(crate) recipient_bare_jid: String,
 }
 
-enum TargetClassification {
+pub(crate) enum TargetClassification {
     OwnedOriginal(String),
     SameTombstone,
     ConflictingTombstone,
@@ -155,14 +187,14 @@ enum TargetClassification {
     Irrelevant,
 }
 
-impl RetractionService {
+impl<R: RetractionRepository> RetractionService<R> {
     pub(crate) fn new(
-        pool: PgPool,
+        repository: R,
         content_identity: PersonalRetractionContentKeyring,
         configured_domain: impl Into<String>,
     ) -> Self {
         Self {
-            pool,
+            repository,
             content_identity,
             configured_domain: configured_domain.into(),
         }
@@ -345,530 +377,29 @@ impl RetractionService {
             .content_identity
             .authenticators(&owner_projection_value);
 
-        let mut transaction = self.pool.begin().await?;
-        let mut required_accounts = normalized_owners
-            .iter()
-            .map(|owner| owner.owner_id)
-            .collect::<Vec<_>>();
-        if let Some(delivery) = normalized_delivery.as_ref() {
-            required_accounts.push(delivery.projection.recipient_id);
-            required_accounts.extend(delivery.projection.local_actor_id);
-        }
-        if !db::lock_enabled_users_in_transaction(&mut transaction, &required_accounts).await? {
-            transaction.rollback().await?;
-            return Ok(RetractionOutcome::AccountUnavailable);
-        }
-        let account_rows = sqlx::query(
-            "SELECT id,username FROM users
-              WHERE id=ANY($1) AND NOT is_disabled
-              ORDER BY id FOR SHARE",
-        )
-        .bind(&required_accounts)
-        .fetch_all(&mut *transaction)
-        .await?;
-        let mut account_bares = HashMap::with_capacity(account_rows.len());
-        for row in account_rows {
-            let id: Uuid = row.get("id");
-            let username: String = row.get("username");
-            let bare = crate::jid::canonical_bare_key(&format!("{username}@{configured_domain}"))?;
-            account_bares.insert(id, bare);
-        }
-        validate_owner_authority(
-            &normalized_owners,
-            &account_bares,
-            &canonical_sender,
-            &configured_domain,
-            normalized_delivery.as_ref(),
-            normalized_outbound.as_ref(),
-        )?;
-        let lock_key = retraction_lock_key(&canonical_sender, command.action_id);
-        sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(lock_key)
-            .execute(&mut *transaction)
-            .await?;
-
-        let intent_id = Uuid::new_v4();
-        let primary_semantic = semantic_authenticators.primary();
-        let primary_delivery = delivery_authenticators
-            .as_ref()
-            .map(|authenticators| authenticators.primary());
-        let primary_owner = owner_authenticators.primary();
-        let inserted_intent = sqlx::query(
-            "INSERT INTO personal_retraction_intents
-             (id,sender_bare_jid,action_id,action_digest,target_id,
-              semantic_key_id,semantic_mac,
-              owner_projection_key_id,owner_projection_mac,
-              outbound_requested,c2s_delivery_requested,
-              c2s_projection_key_id,c2s_projection_mac)
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-             ON CONFLICT (sender_bare_jid,action_digest) DO NOTHING",
-        )
-        .bind(intent_id)
-        .bind(&canonical_sender)
-        .bind(command.action_id)
-        .bind(action_digest.as_slice())
-        .bind(command.target_id)
-        .bind(primary_semantic.key_id())
-        .bind(primary_semantic.mac().as_slice())
-        .bind(primary_owner.key_id())
-        .bind(primary_owner.mac().as_slice())
-        .bind(outbound.is_some())
-        .bind(delivery.is_some())
-        .bind(primary_delivery.map(|authenticator| authenticator.key_id()))
-        .bind(primary_delivery.map(|authenticator| authenticator.mac().as_slice()))
-        .execute(&mut *transaction)
-        .await?
-        .rows_affected()
-            == 1;
-        if !inserted_intent {
-            let row = sqlx::query(
-                "SELECT id,action_id,target_id,semantic_key_id,semantic_mac,
-                        semantic_sha256,semantic_sha512,semantic_length,
-                        owner_projection_key_id,owner_projection_mac,
-                        owner_projection_sha256,owner_projection_sha512,owner_projection_length,
-                        outbound_requested,c2s_delivery_requested,
-                        c2s_projection_key_id,c2s_projection_mac
-                   FROM personal_retraction_intents
-                  WHERE sender_bare_jid=$1 AND action_digest=$2
-                  FOR UPDATE",
-            )
-            .bind(&canonical_sender)
-            .bind(action_digest.as_slice())
-            .fetch_optional(&mut *transaction)
-            .await?;
-            let Some(row) = row else {
-                anyhow::bail!("retraction intent disappeared during exact replay comparison");
-            };
-            let stored_key_id = row.get::<Option<String>, _>("semantic_key_id");
-            let stored_mac = row.get::<Option<Vec<u8>>, _>("semantic_mac");
-            let legacy_sha256 = row.get::<Option<Vec<u8>>, _>("semantic_sha256");
-            let legacy_sha512 = row.get::<Option<Vec<u8>>, _>("semantic_sha512");
-            let legacy_length = row.get::<Option<i64>, _>("semantic_length");
-            let stored_delivery_key_id = row.get::<Option<String>, _>("c2s_projection_key_id");
-            let stored_delivery_mac = row.get::<Option<Vec<u8>>, _>("c2s_projection_mac");
-            let stored_owner_key_id = row.get::<Option<String>, _>("owner_projection_key_id");
-            let stored_owner_mac = row.get::<Option<Vec<u8>>, _>("owner_projection_mac");
-            let legacy_owner_sha256 = row.get::<Option<Vec<u8>>, _>("owner_projection_sha256");
-            let legacy_owner_sha512 = row.get::<Option<Vec<u8>>, _>("owner_projection_sha512");
-            let legacy_owner_length = row.get::<Option<i64>, _>("owner_projection_length");
-            let keyed_semantic_exact = match (stored_key_id.as_deref(), stored_mac.as_deref()) {
-                (Some(key_id), Some(mac))
-                    if legacy_sha256.is_none()
-                        && legacy_sha512.is_none()
-                        && legacy_length.is_none() =>
-                {
-                    semantic_authenticators.verifies(key_id, mac)
-                }
-                _ => false,
-            };
-            let legacy_semantic_exact = match (
-                stored_key_id.as_deref(),
-                stored_mac.as_deref(),
-                legacy_sha256.as_deref(),
-                legacy_sha512.as_deref(),
-                legacy_length,
-            ) {
-                (None, None, Some(sha256), Some(sha512), Some(length))
-                    if sha256.len() == 32 && sha512.len() == 64 =>
-                {
-                    length == semantic_length
-                        && bool::from(
-                            sha256.ct_eq(semantic_sha256.as_slice())
-                                & sha512.ct_eq(semantic_sha512.as_slice()),
-                        )
-                }
-                _ => false,
-            };
-            let delivery_exact = match (
-                delivery_authenticators.as_ref(),
-                stored_delivery_key_id.as_deref(),
-                stored_delivery_mac.as_deref(),
-            ) {
-                (None, None, None) => true,
-                (Some(authenticators), Some(key_id), Some(mac)) => {
-                    authenticators.verifies(key_id, mac)
-                }
-                _ => false,
-            };
-            let keyed_owner_exact = match (
-                stored_owner_key_id.as_deref(),
-                stored_owner_mac.as_deref(),
-                legacy_owner_sha256.as_deref(),
-                legacy_owner_sha512.as_deref(),
-                legacy_owner_length,
-            ) {
-                (Some(key_id), Some(mac), None, None, None) => {
-                    owner_authenticators.verifies(key_id, mac)
-                }
-                _ => false,
-            };
-            let legacy_owner_exact = match (
-                stored_owner_key_id.as_deref(),
-                stored_owner_mac.as_deref(),
-                legacy_owner_sha256.as_deref(),
-                legacy_owner_sha512.as_deref(),
-                legacy_owner_length,
-            ) {
-                (None, None, Some(sha256), Some(sha512), Some(length))
-                    if sha256.len() == 32 && sha512.len() == 64 =>
-                {
-                    length == owner_projection_length
-                        && bool::from(
-                            sha256.ct_eq(owner_projection_sha256.as_slice())
-                                & sha512.ct_eq(owner_projection_sha512.as_slice()),
-                        )
-                }
-                _ => false,
-            };
-            let exact = row.get::<String, _>("action_id") == command.action_id
-                && row.get::<String, _>("target_id") == command.target_id
-                && (keyed_semantic_exact || legacy_semantic_exact)
-                && (keyed_owner_exact || legacy_owner_exact)
-                && row.get::<bool, _>("outbound_requested") == outbound.is_some()
-                && row.get::<bool, _>("c2s_delivery_requested") == delivery.is_some()
-                && delivery_exact;
-            if !exact {
-                transaction.rollback().await?;
-                return Ok(RetractionOutcome::Conflict);
-            }
-            let persisted_intent_id: Uuid = row.get("id");
-            let projections = sqlx::query(
-                "SELECT owner_id,archive_id
-                   FROM personal_retraction_action_projections
-                  WHERE intent_id=$1
-                  ORDER BY ordinal
-                  FOR UPDATE",
-            )
-            .bind(persisted_intent_id)
-            .fetch_all(&mut *transaction)
-            .await?;
-            for projection in projections {
-                let owner_id: Uuid = projection.get("owner_id");
-                let Some(peer_bare_jid) = normalized_owners.iter().find_map(|owner| {
-                    (owner.owner_id == owner_id).then_some(owner.peer_bare_jid.as_str())
-                }) else {
-                    transaction.rollback().await?;
-                    return Ok(RetractionOutcome::Conflict);
-                };
-                let Some(archive_id) = projection.get::<Option<Uuid>, _>("archive_id") else {
-                    // The projection row is the immutable replay plan. MAM
-                    // retention may legitimately delete its archive row and
-                    // clear this SET NULL foreign key; the keyed intent still
-                    // proves exact operation equivalence.
-                    continue;
-                };
-                let existing = sqlx::query(
-                    "SELECT stanza,encrypted FROM message_archive
-                      WHERE id=$1 AND owner_id=$2 AND peer_jid=$3 AND stanza_id=$4
-                      FOR UPDATE",
-                )
-                .bind(archive_id)
-                .bind(owner_id)
-                .bind(peer_bare_jid)
-                .bind(command.action_id)
-                .fetch_optional(&mut *transaction)
-                .await?;
-                let Some(existing) = existing else {
-                    transaction.rollback().await?;
-                    return Ok(RetractionOutcome::Conflict);
-                };
-                let existing_stanza = existing.get::<String, _>("stanza");
-                let existing_encrypted = existing.get::<bool, _>("encrypted");
-                let existing_encryption_shape = Document::parse(&existing_stanza)
-                    .ok()
-                    .map(|document| crate::xmpp::xml_util::is_encrypted(document.root_element()));
-                if existing_encrypted != command_encrypted
-                    || existing_encryption_shape != Some(existing_encrypted)
-                {
-                    transaction.rollback().await?;
-                    return Ok(RetractionOutcome::Conflict);
-                }
-                let existing_semantics = canonical_retraction_semantics(
-                    &existing_stanza,
-                    &canonical_sender,
-                    command.action_id,
-                    command.target_id,
-                );
-                let expected_semantics = if command_encrypted {
-                    let sanitized = crate::xmpp::xml_util::encrypted_retraction_archive_stanza(
-                        command.semantic_payload,
-                        command.target_id,
-                    );
-                    canonical_retraction_semantics(
-                        &sanitized,
-                        &canonical_sender,
-                        command.action_id,
-                        command.target_id,
-                    )?
-                } else {
-                    canonical_semantics.clone()
-                };
-                if existing_semantics
-                    .ok()
-                    .is_none_or(|semantics| semantics != expected_semantics)
-                {
-                    transaction.rollback().await?;
-                    return Ok(RetractionOutcome::Conflict);
-                }
-            }
-            if legacy_semantic_exact {
-                let upgraded = sqlx::query(
-                    "UPDATE personal_retraction_intents
-                        SET semantic_key_id=$2,semantic_mac=$3,
-                            semantic_sha256=NULL,semantic_sha512=NULL,semantic_length=NULL
-                      WHERE id=$1 AND semantic_key_id IS NULL AND semantic_mac IS NULL
-                        AND semantic_sha256 IS NOT NULL AND semantic_sha512 IS NOT NULL
-                        AND semantic_length IS NOT NULL",
-                )
-                .bind(persisted_intent_id)
-                .bind(primary_semantic.key_id())
-                .bind(primary_semantic.mac().as_slice())
-                .execute(&mut *transaction)
-                .await?;
-                anyhow::ensure!(
-                    upgraded.rows_affected() == 1,
-                    "legacy retraction commitment changed while locked"
-                );
-            }
-            if legacy_owner_exact {
-                let upgraded = sqlx::query(
-                    "UPDATE personal_retraction_intents
-                        SET owner_projection_key_id=$2,owner_projection_mac=$3,
-                            owner_projection_sha256=NULL,owner_projection_sha512=NULL,
-                            owner_projection_length=NULL
-                      WHERE id=$1
-                        AND owner_projection_key_id IS NULL
-                        AND owner_projection_mac IS NULL
-                        AND owner_projection_sha256 IS NOT NULL
-                        AND owner_projection_sha512 IS NOT NULL
-                        AND owner_projection_length IS NOT NULL",
-                )
-                .bind(persisted_intent_id)
-                .bind(primary_owner.key_id())
-                .bind(primary_owner.mac().as_slice())
-                .execute(&mut *transaction)
-                .await?;
-                anyhow::ensure!(
-                    upgraded.rows_affected() == 1,
-                    "legacy retraction owner commitment changed while locked"
-                );
-            }
-            if legacy_semantic_exact || legacy_owner_exact {
-                transaction.commit().await?;
-            } else {
-                transaction.rollback().await?;
-            }
-            return Ok(RetractionOutcome::Replay);
-        }
-
-        // A newly recorded intent must not adopt legacy or manually inserted
-        // action rows whose full operation identity was never committed with
-        // it. The immutable projection plan below is the only replay snapshot.
-        for write in &normalized_writes {
-            let existing: bool = sqlx::query_scalar(
-                "SELECT EXISTS(
-                    SELECT 1 FROM message_archive
-                     WHERE owner_id=$1
-                       AND pg_catalog.md5(peer_jid)=pg_catalog.md5($2::TEXT)
-                       AND pg_catalog.md5(stanza_id)=pg_catalog.md5($3::TEXT)
-                       AND peer_jid=$2 AND stanza_id=$3
-                     LIMIT 1
-                 )",
-            )
-            .bind(write.write.owner_id)
-            .bind(&write.peer_bare_jid)
-            .bind(command.action_id)
-            .fetch_one(&mut *transaction)
-            .await?;
-            if existing {
-                transaction.rollback().await?;
-                return Ok(RetractionOutcome::Conflict);
-            }
-        }
-        for (ordinal, write) in normalized_writes.iter().enumerate() {
-            sqlx::query(
-                "INSERT INTO personal_retraction_action_projections
-                 (intent_id,ordinal,owner_id,archive_id)
-                 VALUES($1,$2,$3,$4)",
-            )
-            .bind(intent_id)
-            .bind(i16::try_from(ordinal)?)
-            .bind(write.write.owner_id)
-            .bind(write.write.id)
-            .execute(&mut *transaction)
-            .await?;
-        }
-
-        let mut tombstones = Vec::new();
-        let mut saw_same_tombstone = false;
-        let mut saw_foreign_original = false;
-        for owner in &normalized_owners {
-            let rows = sqlx::query(
-                "SELECT id,stanza FROM message_archive
-                  WHERE owner_id=$1
-                    AND pg_catalog.md5(peer_jid)=pg_catalog.md5($2::TEXT)
-                    AND pg_catalog.md5(stanza_id)=pg_catalog.md5($3::TEXT)
-                    AND peer_jid=$2 AND stanza_id=$3
-                  ORDER BY created_at DESC,id DESC LIMIT 3 FOR UPDATE",
-            )
-            .bind(owner.owner_id)
-            .bind(&owner.peer_bare_jid)
-            .bind(command.target_id)
-            .fetch_all(&mut *transaction)
-            .await?;
-            if rows.len() == 3 {
-                // Three exact owner/peer/stanza-id matches exhaust this
-                // deliberately bounded ambiguity probe. Fail closed instead
-                // of allowing newer decoy rows to hide an older retractable
-                // message beyond the query limit.
-                transaction.rollback().await?;
-                return Ok(RetractionOutcome::Conflict);
-            }
-            let mut owned = Vec::new();
-            for row in rows {
-                let archive_id: Uuid = row.get("id");
-                let stanza: String = row.get("stanza");
-                match classify_target(&stanza, &canonical_sender, command.action_id)? {
-                    TargetClassification::OwnedOriginal(tombstone) => {
-                        owned.push((owner.owner_id, archive_id, tombstone));
-                    }
-                    TargetClassification::SameTombstone => saw_same_tombstone = true,
-                    TargetClassification::ConflictingTombstone => {
-                        transaction.rollback().await?;
-                        return Ok(RetractionOutcome::Conflict);
-                    }
-                    TargetClassification::ForeignOriginal => saw_foreign_original = true,
-                    TargetClassification::Irrelevant => {}
-                }
-            }
-            if owned.len() > 1 {
-                transaction.rollback().await?;
-                return Ok(RetractionOutcome::Conflict);
-            }
-            tombstones.extend(owned);
-        }
-        if saw_foreign_original {
-            transaction.rollback().await?;
-            return Ok(RetractionOutcome::Forbidden);
-        }
-        if tombstones.is_empty() && saw_same_tombstone {
-            if normalized_writes.is_empty() && normalized_delivery.is_none() && outbound.is_none() {
-                transaction.commit().await?;
-                return Ok(RetractionOutcome::Replay);
-            }
-            transaction.rollback().await?;
-            return Ok(RetractionOutcome::Conflict);
-        }
-
-        for (owner_id, archive_id, tombstone) in &tombstones {
-            let updated = sqlx::query(
-                "UPDATE message_archive SET stanza=$3,encrypted=FALSE
-                  WHERE owner_id=$1 AND id=$2",
-            )
-            .bind(owner_id)
-            .bind(archive_id)
-            .bind(tombstone)
-            .execute(&mut *transaction)
-            .await?;
-            anyhow::ensure!(
-                updated.rows_affected() == 1,
-                "locked retraction target disappeared before tombstoning"
-            );
-        }
-        for write in &normalized_writes {
-            sqlx::query(
-                "INSERT INTO message_archive
-                 (id,owner_id,peer_jid,peer_full_jid,stanza,encrypted,stanza_id)
-                 VALUES($1,$2,$3,$4,$5,$6,$7)",
-            )
-            .bind(write.write.id)
-            .bind(write.write.owner_id)
-            .bind(&write.peer_bare_jid)
-            .bind(&write.peer_full_jid)
-            .bind(write.write.stanza)
-            .bind(write.write.encrypted)
-            .bind(write.write.stanza_id)
-            .execute(&mut *transaction)
-            .await?;
-        }
-        if let Some(delivery) = normalized_delivery.as_ref() {
-            let projection = delivery.projection;
-            let bound = sqlx::query(
-                "UPDATE personal_retraction_intents
-                    SET c2s_delivery_id=$2
-                  WHERE id=$1",
-            )
-            .bind(intent_id)
-            .bind(projection.id)
-            .execute(&mut *transaction)
-            .await?;
-            anyhow::ensure!(
-                bound.rows_affected() == 1,
-                "retraction intent disappeared before C2S delivery binding"
-            );
-            let db_delivery = db::PersonalC2sDeliveryAdmission {
-                id: projection.id,
-                recipient_id: projection.recipient_id,
-                recipient_bare_jid: &delivery.recipient_bare_jid,
-                local_actor_id: projection.local_actor_id,
-                sender_jid: &delivery.sender_full_jid,
-                stanza: projection.stanza,
-                target_full_jid: delivery.target_full_jid.as_deref(),
-                encrypted: projection.encrypted,
-                policy: db::OfflineStorePolicy {
-                    max_messages: projection.max_messages,
-                    max_bytes: projection.max_bytes,
-                    ttl_days: projection.ttl_days,
-                    mam_backed: projection.mam_backed,
-                },
-            };
-            if let Err(error) = db::archive::insert_c2s_delivery_in_transaction(
-                &mut transaction,
-                &db_delivery,
-                &delivery.sender_full_jid,
-            )
+        self.repository
+            .apply_prepared(PreparedRetraction {
+                command,
+                command_encrypted,
+                canonical_sender,
+                configured_domain,
+                canonical_semantics,
+                normalized_owners,
+                normalized_writes,
+                normalized_delivery,
+                normalized_outbound,
+                action_digest,
+                semantic_sha256,
+                semantic_sha512,
+                semantic_length,
+                semantic_authenticators,
+                owner_projection_sha256,
+                owner_projection_sha512,
+                owner_projection_length,
+                owner_authenticators,
+                delivery_authenticators,
+            })
             .await
-            {
-                if error
-                    .downcast_ref::<db::archive::C2sDeliveryCapacityExceeded>()
-                    .is_some()
-                {
-                    transaction.rollback().await?;
-                    return Ok(RetractionOutcome::CapacityExceeded);
-                }
-                return Err(error);
-            }
-        }
-        if let Some(outbound) = normalized_outbound.as_ref() {
-            let projection = outbound.projection;
-            let outbox_id = Uuid::new_v4();
-            let bound = sqlx::query(
-                "UPDATE personal_retraction_intents
-                    SET s2s_outbox_id=$2
-                  WHERE id=$1",
-            )
-            .bind(intent_id)
-            .bind(outbox_id)
-            .execute(&mut *transaction)
-            .await?;
-            anyhow::ensure!(
-                bound.rows_affected() == 1,
-                "retraction intent disappeared before outbox binding"
-            );
-            db::s2s::enqueue_s2s_outbox_with_id_in_transaction(
-                &mut transaction,
-                outbox_id,
-                &outbound.target_domain,
-                projection.stanza,
-                projection.bounce_to,
-                projection.policy.into(),
-            )
-            .await?;
-        }
-        transaction.commit().await?;
-        Ok(RetractionOutcome::Applied {
-            tombstones: tombstones.len(),
-        })
     }
 }
 
@@ -1040,7 +571,7 @@ fn normalize_outbound_projection<'a>(
     })
 }
 
-fn validate_owner_authority(
+pub(crate) fn validate_owner_authority(
     owners: &[NormalizedOwner],
     account_bares: &HashMap<Uuid, String>,
     canonical_sender: &str,
@@ -1141,7 +672,7 @@ fn bounded_action_digest(action_id: &str) -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn retraction_lock_key(sender: &str, action_id: &str) -> i64 {
+pub(crate) fn retraction_lock_key(sender: &str, action_id: &str) -> i64 {
     let mut digest = Sha256::new();
     digest.update(RETRACTION_LOCK_DOMAIN);
     update_digest_component(&mut digest, sender);
@@ -1161,7 +692,7 @@ fn canonical_owner_projection(owners: &[NormalizedOwner]) -> Vec<u8> {
     value
 }
 
-fn canonical_retraction_semantics(
+pub(crate) fn canonical_retraction_semantics(
     stanza: &str,
     sender: &str,
     expected_action_id: &str,
@@ -1320,7 +851,11 @@ fn update_digest_component(digest: &mut Sha256, value: &str) {
     digest.update(value.as_bytes());
 }
 
-fn classify_target(stanza: &str, sender: &str, action_id: &str) -> Result<TargetClassification> {
+pub(crate) fn classify_target(
+    stanza: &str,
+    sender: &str,
+    action_id: &str,
+) -> Result<TargetClassification> {
     let document = match Document::parse(stanza) {
         Ok(document) => document,
         Err(_) => return Ok(TargetClassification::Irrelevant),
@@ -1447,12 +982,74 @@ pub(crate) fn tombstone_message(original: Node<'_, '_>, retraction_id: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db;
+    use sqlx::PgPool;
+
+    #[tokio::test]
+    async fn validation_precedes_persistence_and_repository_failure_remains_an_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct UnavailableRepository(AtomicUsize);
+        impl RetractionRepository for UnavailableRepository {
+            async fn apply_prepared(
+                &self,
+                prepared: PreparedRetraction<'_>,
+            ) -> Result<RetractionOutcome> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(prepared.canonical_sender, "alice@local.test");
+                assert_eq!(prepared.normalized_owners.len(), 1);
+                assert_eq!(
+                    prepared.normalized_owners[0].peer_bare_jid,
+                    "bob@remote.test"
+                );
+                let primary = prepared.semantic_authenticators.primary();
+                assert!(crate::abuse::test_personal_retraction_content_keyring()
+                    .authenticators(&prepared.canonical_semantics)
+                    .verifies(primary.key_id(), primary.mac()));
+                anyhow::bail!("injected repository unavailable")
+            }
+        }
+
+        let service = RetractionService::new(
+            UnavailableRepository(AtomicUsize::new(0)),
+            crate::abuse::test_personal_retraction_content_keyring(),
+            "local.test",
+        );
+        let command = RetractionCommand {
+            target_id: "original",
+            action_id: "action",
+            semantic_payload: "<message from='alice@local.test/Phone' to='bob@remote.test' id='action'><retract xmlns='urn:xmpp:message-retract:1' id='original'/></message>",
+        };
+        let owners = [OwnerProjection {
+            owner_id: Uuid::new_v4(),
+            peer_jid: "bob@remote.test/Tablet",
+        }];
+        assert!(service
+            .apply(&[], "alice@local.test/Phone", &command, &[], None)
+            .await
+            .is_err());
+        let invalid = RetractionCommand {
+            target_id: "mismatch",
+            ..command
+        };
+        assert!(service
+            .apply(&owners, "alice@local.test/Phone", &invalid, &[], None)
+            .await
+            .is_err());
+        assert_eq!(service.repository.0.load(Ordering::SeqCst), 0);
+        let error = service
+            .apply(&owners, "alice@local.test/Phone", &command, &[], None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "injected repository unavailable");
+        assert_eq!(service.repository.0.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn owner_lookup_uses_peer_and_stanza_buckets_with_exists_collision_probe() {
         let migration =
             include_str!("../../migrations/0119_personal_retraction_owner_identity.sql");
-        let source = include_str!("retractions.rs");
+        let source = include_str!("../db/retractions.rs");
         assert!(migration.contains("pg_catalog.md5(peer_jid)"));
         assert!(migration.contains("pg_catalog.md5(stanza_id)"));
         assert!(source.contains("pg_catalog.md5(peer_jid)=pg_catalog.md5($2::TEXT)"));
@@ -1642,7 +1239,7 @@ mod tests {
             max_bytes: 100_000,
             max_per_domain: 20,
         };
-        let db_policy: db::S2sOutboxPolicy = p1.into();
+        let db_policy: northstar_federation_core::S2sOutboxPolicy = p1.into();
         assert_eq!(db_policy.ttl_seconds, 300);
         assert_eq!(db_policy.max_rows, 50);
         assert_eq!(db_policy.max_bytes, 100_000);
@@ -1897,7 +1494,7 @@ mod tests {
             .await
             .unwrap();
         let service = RetractionService::new(
-            pool.clone(),
+            crate::db::retractions::PostgresRetractionRepository::new(pool.clone()),
             crate::abuse::test_personal_retraction_content_keyring(),
             "local.test",
         );
@@ -2001,7 +1598,7 @@ mod tests {
                     &owners,
                     "alice@local.test/Other",
                     &command,
-                    &[],
+                    &action_rows,
                     Some(&replay_delivery),
                     None,
                 )
@@ -2030,7 +1627,7 @@ mod tests {
                     &owners,
                     "alice@local.test/Other",
                     &command,
-                    &[],
+                    &action_rows,
                     Some(&replay_delivery),
                     None,
                 )
@@ -2062,7 +1659,7 @@ mod tests {
                     &owners,
                     "alice@local.test/Other",
                     &command,
-                    &[],
+                    &action_rows,
                     Some(&replay_delivery),
                     None,
                 )
@@ -2091,7 +1688,7 @@ mod tests {
                     &owners,
                     "alice@local.test/Laptop",
                     &command,
-                    &[],
+                    &action_rows,
                     Some(&changed_recipient_delivery),
                     None,
                 )
@@ -2152,6 +1749,7 @@ mod tests {
         let missing_owner_delivery = DeliveryProjection {
             id: Uuid::new_v4(),
             recipient_id: Uuid::new_v4(),
+            mam_backed: false,
             ..delivery
         };
         assert_eq!(
@@ -2172,6 +1770,10 @@ mod tests {
             semantic_payload: "<message from='alice@local.test/Laptop' to='alice@local.test/Phone' id='delivery-action'><body>changed</body><retract xmlns='urn:xmpp:message-retract:1' id='delivery-target'/></message>",
             ..command
         };
+        let changed_payload_rows = [ArchiveWrite {
+            stanza: changed.semantic_payload,
+            ..action_rows[0]
+        }];
         let changed_payload_delivery = DeliveryProjection {
             id: Uuid::new_v4(),
             stanza: changed.semantic_payload,
@@ -2183,7 +1785,7 @@ mod tests {
                     &owners,
                     "alice@local.test/Laptop",
                     &changed,
-                    &[],
+                    &changed_payload_rows,
                     Some(&changed_payload_delivery),
                     None,
                 )
@@ -2201,7 +1803,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            db::purge_expired_retraction_intents(&service.pool, 10)
+            db::purge_expired_retraction_intents(&pool, 10)
                 .await
                 .unwrap(),
             0
@@ -2220,7 +1822,7 @@ mod tests {
         .unwrap();
         assert_eq!(cleared, (true, None));
         assert_eq!(
-            db::purge_expired_retraction_intents(&service.pool, 10)
+            db::purge_expired_retraction_intents(&pool, 10)
                 .await
                 .unwrap(),
             1
@@ -2425,7 +2027,7 @@ mod tests {
             .unwrap();
 
         let service = RetractionService::new(
-            pool.clone(),
+            crate::db::retractions::PostgresRetractionRepository::new(pool.clone()),
             crate::abuse::test_personal_retraction_content_keyring(),
             "local.test",
         );
@@ -2699,7 +2301,7 @@ mod tests {
         let semantic_primary = semantic_authenticators.primary();
         let normalized_legacy_owners = [NormalizedOwner {
             owner_id,
-            peer_bare_jid: "alice@local.test".to_owned(),
+            peer_bare_jid: "bob@local.test".to_owned(),
         }];
         let legacy_owner_value = canonical_owner_projection(&normalized_legacy_owners);
         let legacy_owner_intent_id = Uuid::new_v4();
@@ -2936,7 +2538,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            db::purge_expired_retraction_intents(&service.pool, 10)
+            db::purge_expired_retraction_intents(&pool, 10)
                 .await
                 .unwrap(),
             1

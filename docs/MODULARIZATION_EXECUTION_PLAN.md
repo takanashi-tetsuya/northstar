@@ -363,13 +363,13 @@ transactions. Cross-domain atomic operations retain one database transaction.
 
 Repository ports now cover Roster, upload reservation, Messaging, MAM, Passkeys,
 MUC, Profile, PubSub/PEP, Blocking, Privacy, Push, private XML storage, Presence,
-offline/BOSH replay and account lifecycle. Their PostgreSQL adapters live in
+offline/BOSH replay, account lifecycle, authentication, administrator commands
+and personal-message retractions. Their PostgreSQL adapters live in
 `src/db`; retention and subscription cleanup use narrow repository-backed
 contexts. Existing cross-table transactions, admission permits, account
 fences and post-commit recovery behavior remain intact.
 
-Remaining work covers authentication, administrator commands, retractions,
-MIX, stream management, REST handlers and live-session/upload workers.
+Remaining work covers MIX, stream management, REST handlers and live-session/upload workers.
 AppState still has nine public fields, so stage 1 remains open. Changing field
 visibility alone does not demonstrate reduced authority.
 

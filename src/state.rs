@@ -1701,7 +1701,9 @@ pub struct AppState {
         crate::services::messaging::MessageService<db::messaging::PostgresMessageRepository>,
     /// XEP-0424/XEP-0444 tombstone, action archive and federation admission
     /// transaction boundary.
-    retraction_service: crate::services::retractions::RetractionService,
+    retraction_service: crate::services::retractions::RetractionService<
+        db::retractions::PostgresRetractionRepository,
+    >,
     mam_service: crate::services::mam::MamService<db::mam::PostgresMamRepository>,
     mix_service: crate::services::mix::MixService,
     sm_service: crate::services::sm::SmService,
@@ -1723,10 +1725,14 @@ pub struct AppState {
     /// Credential lookup, verification and XEP-0484 mutation authority. The
     /// protocol layer receives typed outcomes but neither PgPool nor the FAST
     /// derivation key.
-    authentication_service: crate::services::authentication::AuthenticationService,
+    authentication_service: crate::services::authentication::AuthenticationService<
+        db::authentication::PostgresAuthenticationRepository,
+    >,
     /// XEP-0050/XEP-0133 session and execution authority. Protocol handlers
     /// never receive the backing PostgreSQL pool through this capability.
-    admin_command_service: crate::services::admin_commands::AdminCommandService,
+    admin_command_service: crate::services::admin_commands::AdminCommandService<
+        db::admin_command_repository::PostgresAdminCommandRepository,
+    >,
     push_service: crate::services::push::PushService<db::push::PostgresPushRepository>,
     pub cluster: crate::cluster::ClusterManager,
     bosh: Option<crate::bosh::BoshManager>,
@@ -2682,7 +2688,7 @@ impl AppState {
             config.require_encrypted_archive,
         );
         let retraction_service = crate::services::retractions::RetractionService::new(
-            pool.clone(),
+            db::retractions::PostgresRetractionRepository::new(pool.clone()),
             retraction_content_identity,
             config.domain.clone(),
         );
@@ -2703,8 +2709,7 @@ impl AppState {
                 .await
                 .context("failed to load dummy SCRAM iteration profiles")?;
         let authentication_service = crate::services::authentication::AuthenticationService::new_with_dummy_scram_iteration_profiles(
-                pool.clone(),
-                Arc::clone(&fast_token_secret),
+                db::authentication::PostgresAuthenticationRepository::new(pool.clone(), Arc::clone(&fast_token_secret)),
                 dummy_scram_secret,
                 config.scram_iterations,
                 dummy_scram_iteration_profiles,
@@ -2877,8 +2882,10 @@ impl AppState {
             account_service,
             authentication_service,
             admin_command_service: crate::services::admin_commands::AdminCommandService::new(
-                pool.clone(),
-                command_pool,
+                db::admin_command_repository::PostgresAdminCommandRepository::new(
+                    pool.clone(),
+                    command_pool,
+                ),
             ),
             push_service: crate::services::push::PushService::new(
                 db::push::PostgresPushRepository::new(pool.clone()),
@@ -3222,7 +3229,11 @@ impl AppState {
         &self.message_service
     }
 
-    pub(crate) fn retraction_service(&self) -> &crate::services::retractions::RetractionService {
+    pub(crate) fn retraction_service(
+        &self,
+    ) -> &crate::services::retractions::RetractionService<
+        db::retractions::PostgresRetractionRepository,
+    > {
         &self.retraction_service
     }
 
@@ -3288,13 +3299,17 @@ impl AppState {
 
     pub(crate) fn authentication_service(
         &self,
-    ) -> &crate::services::authentication::AuthenticationService {
+    ) -> &crate::services::authentication::AuthenticationService<
+        db::authentication::PostgresAuthenticationRepository,
+    > {
         &self.authentication_service
     }
 
     pub(crate) fn admin_command_service(
         &self,
-    ) -> &crate::services::admin_commands::AdminCommandService {
+    ) -> &crate::services::admin_commands::AdminCommandService<
+        db::admin_command_repository::PostgresAdminCommandRepository,
+    > {
         &self.admin_command_service
     }
 

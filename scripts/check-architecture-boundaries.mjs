@@ -1865,20 +1865,25 @@ if (!/super\s*::\s*replay\s*::\s*replay_bind2_offline\s*\(/.test(sasl2Source)) {
 }
 
 // ARCH-SVC authentication vertical slice: protocol code owns SASL wire state
-// only. PostgreSQL account/verifier authority and the independent FAST and
-// dummy-SCRAM derivation keys stay
-// inside AuthenticationService, whose successful result is structurally
+// only. The repository owns PostgreSQL and FAST authority; the service owns
+// dummy-SCRAM derivation. A successful identity is structurally
 // incapable of carrying password or SCRAM verifier fields.
 const authenticationServiceSource = read('src/services/authentication.rs');
 const authenticationServiceBody = structBody(
   authenticationServiceSource,
   'pub(crate) struct AuthenticationService',
 );
-if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(authenticationServiceBody)) {
-  throw new Error('AuthenticationService PostgreSQL capability must remain a private PgPool field');
+if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(authenticationServiceBody)) {
+  throw new Error('AuthenticationService must receive its repository port');
 }
-if (!/^\s*fast_token_secret\s*:\s*Arc<Zeroizing<Vec<u8>>>\s*,?\s*$/m.test(authenticationServiceBody)) {
-  throw new Error('AuthenticationService FAST key must remain private Arc<Zeroizing<Vec<u8>>>');
+const authenticationAdapterBody = structBody(
+  read('src/db/authentication.rs'), 'pub(crate) struct PostgresAuthenticationRepository',
+);
+if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(authenticationAdapterBody)) {
+  throw new Error('Authentication repository PostgreSQL capability must remain private');
+}
+if (!/^\s*fast_token_secret\s*:\s*Arc<Zeroizing<Vec<u8>>>\s*,?\s*$/m.test(authenticationAdapterBody)) {
+  throw new Error('Authentication repository FAST key must remain private Arc<Zeroizing<Vec<u8>>>');
 }
 if (!/^\s*dummy_scram_secret\s*:\s*Arc<Zeroizing<Vec<u8>>>\s*,?\s*$/m.test(authenticationServiceBody)) {
   throw new Error('AuthenticationService dummy SCRAM key must remain private Arc<Zeroizing<Vec<u8>>>');
@@ -2065,6 +2070,9 @@ for (const [name, source] of [
   ['PresenceService', read('src/services/presence.rs')],
   ['ReplayService', read('src/services/replay.rs')],
   ['AccountService', accountServiceSource],
+  ['AdminCommandService', read('src/services/admin_commands.rs')],
+  ['AuthenticationService', authenticationServiceSource],
+  ['RetractionService', read('src/services/retractions.rs')],
   ['PushService', read('src/services/push.rs')],
   ['PrivateStorageService', read('src/services/private_storage.rs')],
   ['RetentionContext', read('src/retention.rs')],
@@ -2276,13 +2284,10 @@ if (!/\.admin_command_service\s*\(\s*\)/.test(commandsProductionSource)) {
   throw new Error('commands.rs no longer routes persistence through admin_command_service()');
 }
 const adminCommandServiceSource = productionWithoutCfgTestModules(
-  read('src/services/admin_commands.rs'),
-  'admin_commands service',
+  read('src/db/admin_command_repository.rs'),
+  'admin_commands repository',
 );
-const adminReadBoundary = structBody(
-  adminCommandServiceSource,
-  'impl AdminCommandService',
-);
+const adminReadBoundary = adminCommandServiceSource;
 for (const required of [
   'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ',
   'auth_generation=$3',
@@ -2290,7 +2295,7 @@ for (const required of [
   'FOR SHARE',
 ]) {
   if (!adminReadBoundary.includes(required)) {
-    throw new Error(`AdminCommandService read authorization lost required boundary: ${required}`);
+    throw new Error(`Admin command repository read authorization lost required boundary: ${required}`);
   }
 }
 for (const method of [
@@ -2306,7 +2311,7 @@ for (const method of [
   'service_message_body',
   'federation_rule_domains',
 ]) {
-  const declaration = `pub(crate) async fn ${method}`;
+  const declaration = `async fn ${method}`;
   const start = adminCommandServiceSource.indexOf(declaration);
   if (start < 0) throw new Error(`AdminCommandService lost sensitive read method ${method}`);
   const opening = adminCommandServiceSource.indexOf('{', start + declaration.length);
@@ -2360,11 +2365,13 @@ const retractionServiceBody = structBody(
   retractionServiceSource,
   'pub(crate) struct RetractionService',
 );
-if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(retractionServiceBody)) {
-  throw new Error('RetractionService PostgreSQL capability must remain a private PgPool field');
+if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(retractionServiceBody)) {
+  throw new Error('RetractionService must receive its repository port');
 }
-if (/^\s*pub(?:\(crate\))?\s+pool\s*:/m.test(retractionServiceBody)) {
-  throw new Error('RetractionService must not expose its PostgreSQL capability');
+const retractionRepositorySource = read('src/db/retractions.rs');
+const retractionRepositoryBody = structBody(retractionRepositorySource, 'pub(crate) struct PostgresRetractionRepository');
+if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(retractionRepositoryBody)) {
+  throw new Error('Retraction repository PostgreSQL capability must remain private');
 }
 for (const signature of retractionServiceSource.matchAll(
   /pub\(crate\)\s+(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/gs,
@@ -2574,14 +2581,14 @@ if (/\b(?:PersonalMessageContentKeyring|PersonalRetractionContentKeyring)\b/.tes
   throw new Error('protocol tree must not receive durable content-key capabilities');
 }
 const retractionProductionSource = productionWithoutCfgTestModules(
-  retractionServiceSource,
-  'retractions service production',
+  retractionRepositorySource,
+  'retractions repository production',
 );
 const retractionIntentInserts = [...retractionProductionSource.matchAll(
   /INSERT\s+INTO\s+personal_retraction_intents\s*\(([^)]*)\)/gsi,
 )];
 if (retractionIntentInserts.length !== 1) {
-  throw new Error(`RetractionService must have one reviewed intent insert, found ${retractionIntentInserts.length}`);
+  throw new Error(`Retraction repository must have one reviewed intent insert, found ${retractionIntentInserts.length}`);
 }
 const retractionIntentInsertColumns = retractionIntentInserts[0][1];
 for (const keyedColumn of ['semantic_key_id', 'semantic_mac']) {

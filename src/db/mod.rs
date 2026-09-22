@@ -43,6 +43,7 @@ pub mod replay;
 pub mod reports;
 pub mod retention;
 pub mod role_attestation;
+pub(crate) mod room;
 pub mod roster;
 pub mod s2s;
 pub mod schema;

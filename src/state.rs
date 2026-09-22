@@ -1692,7 +1692,7 @@ pub struct AppState {
     extdisco_service: crate::services::extdisco::ExtDiscoService,
     /// PostgreSQL-authoritative MUC application service. Redis capabilities
     /// deliberately do not cross this boundary.
-    muc_service: crate::services::muc::MucService,
+    muc_service: crate::services::muc::MucService<db::room::PostgresMucRepository>,
     /// Personal-message authorization and durable admission boundary. The
     /// protocol layer must not compose its own archive/outbox/offline writes.
     message_service:
@@ -2834,8 +2834,10 @@ impl AppState {
         config.raw.database_url.clear();
         config.raw.admin_command_database_url.zeroize();
         config.raw.admin_command_database_url.clear();
-        let muc_service =
-            crate::services::muc::MucService::new(pool.clone(), config.domain.clone());
+        let muc_service = crate::services::muc::MucService::new(
+            db::room::PostgresMucRepository::new(pool.clone()),
+            config.domain.clone(),
+        );
         let state = Arc::new(Self {
             config,
             pubsub_service,
@@ -3183,7 +3185,9 @@ impl AppState {
         &self.extdisco_service
     }
 
-    pub(crate) fn muc_service(&self) -> &crate::services::muc::MucService {
+    pub(crate) fn muc_service(
+        &self,
+    ) -> &crate::services::muc::MucService<db::room::PostgresMucRepository> {
         &self.muc_service
     }
 

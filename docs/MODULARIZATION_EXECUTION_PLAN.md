@@ -364,8 +364,10 @@ transactions. Cross-domain atomic operations retain one database transaction.
 The first packet connects Roster, Upload reservation, Messaging, MAM and
 Passkeys to injected repository ports. Their SQL adapters reside in `src/db`.
 Embedded and standalone maintenance also share repository-backed retention and
-subscription cleanup contexts. Remaining packets cover PubSub/PEP, room
-mutations, the other authentication/REST paths and live-session/upload workers.
+subscription cleanup contexts. MUC now uses a room repository and a separate
+committed-operation wake port; its existing locks, generations and outbox
+transactions remain intact. Remaining packets cover PubSub/PEP and profile
+publication, the other authentication/REST paths and live-session/upload workers.
 The public AppState budget is still nine; this stage remains open. Updating a field's visibility
 alone is not evidence of reduced authority.
 

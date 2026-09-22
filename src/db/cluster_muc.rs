@@ -352,14 +352,7 @@ pub struct ClusterMucEventContext {
     pub target: Option<ClusterMucEventOccupant>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ClusterMucWakeDescriptor {
-    pub operation_id: Uuid,
-    pub room_id: Uuid,
-    pub event_id: Uuid,
-    pub event_sequence: i64,
-    pub target_nodes: Vec<String>,
-}
+pub use northstar_room_core::ClusterMucWakeDescriptor;
 
 #[derive(Clone, Debug)]
 pub struct ClusterMucEventOccupant {

@@ -1456,7 +1456,7 @@ async fn federated_muc_presence_owned(
         .await
     {
         Ok(result) => result,
-        Err(error) if crate::services::muc::MucService::is_capacity_exhausted(&error) => {
+        Err(error) if crate::services::muc::is_capacity_exhausted(&error) => {
             state
                 .metrics
                 .capacity_reservations_rejected_total
@@ -1510,7 +1510,7 @@ async fn federated_muc_presence_owned(
         let supplied = zeroize::Zeroizing::new(request.password.clone());
         let password_hash = zeroize::Zeroizing::new(password_hash.to_owned());
         let valid = match crate::password_work::run(move || {
-            Ok(crate::services::muc::MucService::verify_room_password(
+            Ok(crate::services::muc::verify_room_password(
                 &password_hash,
                 &supplied,
             ))
@@ -2447,12 +2447,11 @@ async fn federated_muc_message_owned(
                         "item-not-found",
                     ));
                 }
-                let operation_id =
-                    crate::services::muc::MucService::operation_id(&serde_json::json!({
-                        "kind":"voice_approval","stream":connection_id,
-                        "stanza_id":request.stanza.id,"room":room_jid,
-                        "actor":actor_target,"target":target_authority,"role":"participant"
-                    }))?;
+                let operation_id = crate::services::muc::operation_id(&serde_json::json!({
+                    "kind":"voice_approval","stream":connection_id,
+                    "stanza_id":request.stanza.id,"room":room_jid,
+                    "actor":actor_target,"target":target_authority,"role":"participant"
+                }))?;
                 match service
                     .change_local_cluster_role(
                         operation_id,
@@ -2629,13 +2628,11 @@ async fn federated_muc_message_owned(
             }
             let local_durable_invite_id =
                 if room.members_only && invitee_domain == state.config.domain {
-                    Some(crate::services::muc::MucService::operation_id(
-                        &serde_json::json!({
-                            "kind":"muc_invitation","stream":connection_id,
-                            "stanza_id":request.stanza.id,"room":room_jid,
-                            "actor":actor_full_jid,"invitee":invitee_bare,"reason":reason,
-                        }),
-                    )?)
+                    Some(crate::services::muc::operation_id(&serde_json::json!({
+                        "kind":"muc_invitation","stream":connection_id,
+                        "stanza_id":request.stanza.id,"room":room_jid,
+                        "actor":actor_full_jid,"invitee":invitee_bare,"reason":reason,
+                    }))?)
                 } else {
                     None
                 };
@@ -2918,12 +2915,11 @@ async fn federated_muc_message_owned(
                     }
                 }
             } else if room.members_only {
-                let operation_id =
-                    crate::services::muc::MucService::operation_id(&serde_json::json!({
-                        "kind":"muc_invitation","stream":connection_id,
-                        "stanza_id":request.stanza.id,"room":room_jid,
-                        "actor":actor_full_jid,"invitee":invitee_bare,"reason":reason,
-                    }))?;
+                let operation_id = crate::services::muc::operation_id(&serde_json::json!({
+                    "kind":"muc_invitation","stream":connection_id,
+                    "stanza_id":request.stanza.id,"room":room_jid,
+                    "actor":actor_full_jid,"invitee":invitee_bare,"reason":reason,
+                }))?;
                 let cluster_authority = if state.cluster.is_enabled() {
                     state
                         .cluster
@@ -3287,11 +3283,10 @@ async fn federated_muc_message_owned(
             {
                 return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
             }
-            let operation_id =
-                crate::services::muc::MucService::operation_id(&serde_json::json!({
-                    "kind":"subject","stream":connection_id,"stanza_id":request.stanza.id,
-                    "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
-                }))?;
+            let operation_id = crate::services::muc::operation_id(&serde_json::json!({
+                "kind":"subject","stream":connection_id,"stanza_id":request.stanza.id,
+                "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
+            }))?;
             match service
                 .set_local_cluster_subject(
                     operation_id,
@@ -4947,7 +4942,7 @@ async fn federated_muc_owner(
             let replacement_password_hash = if let Some(secret) = config.password_secret {
                 let secret = zeroize::Zeroizing::new(secret);
                 match crate::password_work::run(move || {
-                    crate::services::muc::MucService::hash_room_password(&secret)
+                    crate::services::muc::hash_room_password(&secret)
                 })
                 .await
                 {
@@ -5777,7 +5772,7 @@ async fn federated_muc_admin_set(
         else {
             return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
         };
-        let operation_id = crate::services::muc::MucService::operation_id(&serde_json::json!({
+        let operation_id = crate::services::muc::operation_id(&serde_json::json!({
             "kind":"admin_affiliation_batch","stream":requester.connection_id,
             "iq_id":stanza.id,"room":requester.room_jid,"actor":requester.full_jid,
             "changes":durable_changes,
@@ -5873,12 +5868,11 @@ async fn federated_muc_admin_set(
                 ));
             };
             let new_role = item.role.as_deref().expect("role item validated above");
-            let operation_id =
-                crate::services::muc::MucService::operation_id(&serde_json::json!({
-                    "kind":"admin_role","stream":requester.connection_id,"iq_id":stanza.id,
-                    "room":requester.room_jid,"actor":actor_target,"target":target,
-                    "role":new_role,"reason":item.reason,
-                }))?;
+            let operation_id = crate::services::muc::operation_id(&serde_json::json!({
+                "kind":"admin_role","stream":requester.connection_id,"iq_id":stanza.id,
+                "room":requester.room_jid,"actor":actor_target,"target":target,
+                "role":new_role,"reason":item.reason,
+            }))?;
             let outcome = if new_role == "none" {
                 state
                     .muc_service()
@@ -6883,7 +6877,7 @@ mod tests {
         assert_eq!(query.query_id.as_deref(), Some("q1"));
         assert_eq!(query.query.with_jid.as_deref(), Some("alice@remote.test"));
         assert_eq!(query.query.max, 100);
-        assert!(crate::services::muc::MucService::archive_page_is_last(
+        assert!(crate::services::muc::archive_page_is_last(
             &query.query.page
         ));
 

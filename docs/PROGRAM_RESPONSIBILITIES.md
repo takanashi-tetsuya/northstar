@@ -97,10 +97,11 @@ its Compose overlay. These are independent OS processes; domain services under
 Supported split deployment runs one core and one maintenance process against a
 shared PostgreSQL runtime role. This is process/secret separation, while the
 runtime credential retains the existing broad database grants. It is not
-per-domain database privilege isolation. The archive context holds only a
-pool, immutable retention policy, metrics and a readiness handle. The separate
-subscription cleanup context holds the same existing pool, narrow counters and
-its own readiness handle. Its health server receives only the two read-only
+per-domain database privilege isolation. The archive context holds repository
+operations, immutable retention policy, metrics and a readiness handle. The
+subscription cleanup context holds its own repository port, narrow counters and
+readiness handle. Their PostgreSQL adapters share the existing maintenance pool.
+The health server receives only the two read-only
 readiness handles, registry and metrics.
 The production source gate fixes this capability inventory. Maintenance uses
 three connections at most; the core primary-pool cap is derived from the

@@ -112,6 +112,10 @@ Key ownership:
   Passkeys HTTP delegates WebAuthn ceremonies to its service; accepting a
   credential revision, issuing FAST and creating the API session commit together.
   MAM uses an archive port and only a wake channel for post-commit delivery.
+- MUC uses an injected room repository for complete mutations and snapshots.
+  Room and occupant fences stay inside the PostgreSQL adapter. A separate wake
+  port sends committed operation notifications; notification failure records
+  degraded health and leaves the durable outbox available for polling.
 - Embedded and standalone retention workers share the same narrow context.
   Retention and subscription cleanup receive repository operations, policy and
   metrics, with no raw pool or global application state.

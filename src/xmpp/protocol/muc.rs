@@ -2099,12 +2099,11 @@ impl ProtocolSession {
                             "item-not-found",
                         )));
                     }
-                    let operation_id =
-                        crate::services::muc::MucService::operation_id(&serde_json::json!({
-                            "kind":"voice_approval","stream":self.connection_id,
-                            "stanza_id":root.attribute("id"),"room":room_jid,
-                            "actor":actor_target,"target":target_authority,"role":"participant"
-                        }))?;
+                    let operation_id = crate::services::muc::operation_id(&serde_json::json!({
+                        "kind":"voice_approval","stream":self.connection_id,
+                        "stanza_id":root.attribute("id"),"room":room_jid,
+                        "actor":actor_target,"target":target_authority,"role":"participant"
+                    }))?;
                     match service
                         .change_local_cluster_role(
                             operation_id,
@@ -2347,13 +2346,11 @@ impl ProtocolSession {
                             let local_durable_invite_id = if room.members_only
                                 && invitee_domain == self.state.config.domain
                             {
-                                Some(crate::services::muc::MucService::operation_id(
-                                    &serde_json::json!({
-                                        "kind":"muc_invitation","stream":self.connection_id,
-                                        "stanza_id":root.attribute("id"),"room":room_jid,
-                                        "actor":from,"invitee":invitee_bare,"reason":reason,
-                                    }),
-                                )?)
+                                Some(crate::services::muc::operation_id(&serde_json::json!({
+                                    "kind":"muc_invitation","stream":self.connection_id,
+                                    "stanza_id":root.attribute("id"),"room":room_jid,
+                                    "actor":from,"invitee":invitee_bare,"reason":reason,
+                                }))?)
                             } else {
                                 None
                             };
@@ -2767,13 +2764,12 @@ impl ProtocolSession {
                                     }
                                 }
                             } else if room.members_only {
-                                let operation_id = crate::services::muc::MucService::operation_id(
-                                    &serde_json::json!({
+                                let operation_id =
+                                    crate::services::muc::operation_id(&serde_json::json!({
                                         "kind":"muc_invitation","stream":self.connection_id,
                                         "stanza_id":root.attribute("id"),"room":room_jid,
                                         "actor":from,"invitee":invitee_bare,"reason":reason,
-                                    }),
-                                )?;
+                                    }))?;
                                 let cluster_authority = if self.state.cluster.is_enabled() {
                                     self.state
                                         .cluster
@@ -3210,12 +3206,10 @@ impl ProtocolSession {
                         "forbidden",
                     )));
                 }
-                let operation_id = crate::services::muc::MucService::operation_id(
-                    &serde_json::json!({
-                        "kind":"subject","stream":self.connection_id,"stanza_id":root.attribute("id"),
-                        "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
-                    }),
-                )?;
+                let operation_id = crate::services::muc::operation_id(&serde_json::json!({
+                    "kind":"subject","stream":self.connection_id,"stanza_id":root.attribute("id"),
+                    "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
+                }))?;
                 match service
                     .set_local_cluster_subject(
                         operation_id,
@@ -3994,7 +3988,7 @@ impl ProtocolSession {
                     // snapshot before committing the prepared hash.
                     drop(local_room_guard.take());
                     let password_hash = match crate::password_work::run(move || {
-                        crate::services::muc::MucService::hash_room_password(&secret)
+                        crate::services::muc::hash_room_password(&secret)
                     })
                     .await
                     {
@@ -5448,7 +5442,7 @@ impl ProtocolSession {
             .await
         {
             Ok(result) => result,
-            Err(error) if crate::services::muc::MucService::is_capacity_exhausted(&error) => {
+            Err(error) if crate::services::muc::is_capacity_exhausted(&error) => {
                 self.state
                     .metrics
                     .capacity_reservations_rejected_total
@@ -5524,7 +5518,7 @@ impl ProtocolSession {
             let password_hash = zeroize::Zeroizing::new(password_hash.to_owned());
             let supplied_password = zeroize::Zeroizing::new(supplied_password.to_owned());
             let password_valid = match crate::password_work::run(move || {
-                Ok(crate::services::muc::MucService::verify_room_password(
+                Ok(crate::services::muc::verify_room_password(
                     &password_hash,
                     &supplied_password,
                 ))
@@ -6459,11 +6453,10 @@ impl ProtocolSession {
             else {
                 return Ok(Action::Send(iq_error_from(id, room_jid, "forbidden")));
             };
-            let operation_id =
-                crate::services::muc::MucService::operation_id(&serde_json::json!({
-                    "kind":"admin_affiliation_batch","stream":self.connection_id,"iq_id":id,
-                    "room":room_jid,"actor":full_jid,"changes":durable_changes,
-                }))?;
+            let operation_id = crate::services::muc::operation_id(&serde_json::json!({
+                "kind":"admin_affiliation_batch","stream":self.connection_id,"iq_id":id,
+                "room":room_jid,"actor":full_jid,"changes":durable_changes,
+            }))?;
             let outcome = self
                 .state
                 .muc_service()
@@ -6572,12 +6565,11 @@ impl ProtocolSession {
                     };
                     let new_role = item.attribute("role").expect("role item validated above");
                     let reason = child_text(*item, "reason");
-                    let operation_id =
-                        crate::services::muc::MucService::operation_id(&serde_json::json!({
-                            "kind":"admin_role","stream":self.connection_id,"iq_id":id,
-                            "room":room_jid,"actor":actor_target,"target":target,
-                            "role":new_role,"reason":reason,
-                        }))?;
+                    let operation_id = crate::services::muc::operation_id(&serde_json::json!({
+                        "kind":"admin_role","stream":self.connection_id,"iq_id":id,
+                        "room":room_jid,"actor":actor_target,"target":target,
+                        "role":new_role,"reason":reason,
+                    }))?;
                     let outcome = if new_role == "none" {
                         self.state
                             .muc_service()

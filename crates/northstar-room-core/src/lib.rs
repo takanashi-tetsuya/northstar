@@ -581,3 +581,21 @@ mod tests {
         assert!(!command.authority_is_consistent("local.test"));
     }
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClusterMucWakeDescriptor {
+    pub operation_id: Uuid,
+    pub room_id: Uuid,
+    pub event_id: Uuid,
+    pub event_sequence: i64,
+    pub target_nodes: Vec<String>,
+}
+
+#[derive(Debug)]
+pub struct MucCapacityExceeded;
+impl std::fmt::Display for MucCapacityExceeded {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("room capacity exhausted")
+    }
+}
+impl std::error::Error for MucCapacityExceeded {}

@@ -2051,6 +2051,7 @@ for (const [name, source] of [
   ['PasskeyService', read('src/services/passkeys.rs')],
   ['MessageService', read('src/services/messaging.rs')],
   ['MamService', mamServiceSource],
+  ['MucService', read('src/services/muc.rs')],
   ['RetentionContext', read('src/retention.rs')],
   ['SubscriptionCleanupContext', read('src/subscription_cleanup.rs')],
 ]) {
@@ -2121,16 +2122,13 @@ if (!/\.muc_service\s*\(\s*\)\s*\.wake_committed_operation\s*\(\s*&state\.cluste
 }
 const mucServiceSource = read('src/services/muc.rs');
 const mucServiceBody = structBody(mucServiceSource, 'pub(crate) struct MucService');
-if (!/^\s*pool\s*:\s*PgPool\s*,?\s*$/m.test(mucServiceBody)) {
-  throw new Error('MucService PostgreSQL capability must remain a private PgPool field');
-}
-if (/^\s*pub(?:\(crate\))?\s+pool\s*:/m.test(mucServiceBody)) {
-  throw new Error('MucService must not expose its PostgreSQL capability');
+if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mucServiceBody)) {
+  throw new Error('MucService must receive its repository port');
 }
 if (/find_user[\s\S]*Result<Option<\s*db::User\s*>>/.test(mucServiceSource)) {
   throw new Error('MucService leaks the credential-bearing db::User DTO');
 }
-if (!/enabled_local_account[\s\S]*db::enabled_user_id/.test(mucServiceSource)) {
+if (!/enabled_local_account[\s\S]*db::enabled_user_id/.test(read('src/db/room.rs'))) {
   throw new Error('MucService no longer fails closed for disabled local routing targets');
 }
 if (!/find_enabled_user[\s\S]*?FROM users\s+WHERE username=\$1 AND NOT is_disabled/.test(usersSource)) {

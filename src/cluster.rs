@@ -1262,6 +1262,16 @@ pub enum MucRoleChange {
     Stale,
 }
 
+impl crate::services::muc::MucWakePort for ClusterManager {
+    async fn wake(&self, descriptor: &northstar_room_core::ClusterMucWakeDescriptor) -> Result<()> {
+        self.send_muc_operation_wake(descriptor).await
+    }
+
+    fn record_failure(&self, error: &anyhow::Error) {
+        self.record_control_plane_failure(error);
+    }
+}
+
 impl ClusterManager {
     pub async fn new(
         redis_url: Option<&str>,
@@ -4878,7 +4888,7 @@ impl ClusterManager {
     /// authorize the operation/outbox row from PostgreSQL.
     pub async fn send_muc_operation_wake(
         &self,
-        descriptor: &crate::db::ClusterMucWakeDescriptor,
+        descriptor: &northstar_room_core::ClusterMucWakeDescriptor,
     ) -> Result<()> {
         if descriptor
             .target_nodes
@@ -4907,30 +4917,6 @@ impl ClusterManager {
             let _ = self
                 .publish_signed(&mut conn, node_id, &channel, payload.clone())
                 .await?;
-        }
-        Ok(())
-    }
-
-    pub async fn wake_committed_muc_operation(
-        &self,
-        pool: &sqlx::PgPool,
-        operation_id: uuid::Uuid,
-    ) -> Result<()> {
-        let result = async {
-            if let Some(descriptor) =
-                crate::db::cluster_muc_wake_descriptor(pool, operation_id).await?
-            {
-                self.send_muc_operation_wake(&descriptor).await?;
-            }
-            Ok::<_, anyhow::Error>(())
-        }
-        .await;
-        if let Err(error) = result {
-            // The PostgreSQL operation/outbox is already committed. Redis is
-            // only a wake accelerator; surfacing this as protocol failure
-            // would invite an unsafe duplicate mutation retry.
-            tracing::warn!(?error, %operation_id, "committed MUC operation wake failed; PostgreSQL poller will catch up");
-            self.record_control_plane_failure(&error);
         }
         Ok(())
     }

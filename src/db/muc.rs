@@ -1,8 +1,4 @@
 use anyhow::{Context, Result};
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Argon2,
-};
 use chrono::{DateTime, Utc};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -2290,29 +2286,10 @@ fn muc_room_from_row(row: &sqlx::postgres::PgRow) -> MucRoom {
     }
 }
 
-/// Hash a room password for storage. XEP-0045 transmits this value inside the
-/// TLS-protected XMPP stream, but the server never stores the cleartext value.
-pub fn hash_muc_password(password: &str) -> Result<String> {
-    if password.is_empty() || password.len() > 1024 {
-        anyhow::bail!("room password must contain 1 to 1024 bytes");
-    }
-    let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|hash| hash.to_string())
-        .map_err(|error| anyhow::anyhow!("room password hashing failed: {error}"))
-}
-
-pub fn verify_muc_password(password_hash: &str, candidate: &str) -> bool {
-    if candidate.len() > 1024 {
-        return false;
-    }
-    PasswordHash::new(password_hash).ok().is_some_and(|parsed| {
-        Argon2::default()
-            .verify_password(candidate.as_bytes(), &parsed)
-            .is_ok()
-    })
-}
+#[cfg(test)]
+pub(crate) use crate::services::muc::{
+    hash_room_password as hash_muc_password, verify_room_password as verify_muc_password,
+};
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

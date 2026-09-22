@@ -13,12 +13,12 @@ use crate::services::mix::{
     JoinMixRequest, MamArchiveQuery, MixAccessEntryOperation, MixAccessEntryUpdate, MixAccessList,
     MixBusinessReplay, MixChannel, MixConfigUpdate, MixEvent, MixInfoUpdate, MixInvitationProof,
     MixMutationOutcome, MixParticipant, MixParticipantPreference, MixPresenceProbeTarget,
-    MixReadOutcome, MixReplayIdentity, MixRoleUpdate, MixService, PamMembership,
-    PamOperationReplay, PresenceOutcome, RegisterMixNickOutcome, RemotePamCompletionOutcome,
-    RemotePamJoin, RetractMixMessageOutcome, RetractMixMessageRequest, SetNickError,
-    SourceArchiveAdmission, StoreEventOutcome, StoreMixMessageRequest, ALL_NODES, NODE_ALLOWED,
-    NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG, NODE_INFO, NODE_JIDMAP,
-    NODE_MESSAGES, NODE_PRESENCE,
+    MixReadOutcome, MixReplayIdentity, MixRoleUpdate, PamMembership, PamOperationReplay,
+    PresenceOutcome, RegisterMixNickOutcome, RemotePamCompletionOutcome, RemotePamJoin,
+    RetractMixMessageOutcome, RetractMixMessageRequest, SetNickError, SourceArchiveAdmission,
+    StoreEventOutcome, StoreMixMessageRequest, ALL_NODES, NODE_ALLOWED, NODE_AVATAR_DATA,
+    NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG, NODE_INFO, NODE_JIDMAP, NODE_MESSAGES,
+    NODE_PRESENCE,
 };
 use crate::state::{AppState, MixIqRelayStage, PendingMixIqRelay};
 use crate::xmpp::xml_builder::XmlElement;
@@ -1090,7 +1090,7 @@ fn parse_iq(raw: &str) -> Result<Option<OwnedIq>> {
                         && !nick[0].children().any(|node| node.is_element()),
                     "invalid MIX setnick"
                 );
-                IqOperation::SetNick(MixService::prepare_mix_nick(
+                IqOperation::SetNick(crate::services::mix::prepare_mix_nick(
                     nick[0].text().unwrap_or_default(),
                 )?)
             }
@@ -1148,7 +1148,7 @@ fn parse_iq(raw: &str) -> Result<Option<OwnedIq>> {
                             && nick.tag_name().namespace() == Some(MISC_NS)
                             && !nick.children().any(|node| node.is_element()) =>
                     {
-                        Some(MixService::prepare_mix_nick(
+                        Some(crate::services::mix::prepare_mix_nick(
                             nick.text().unwrap_or_default(),
                         )?)
                     }
@@ -1281,7 +1281,7 @@ fn parse_join(node: Node<'_, '_>) -> Result<JoinData> {
                     !child.children().any(|node| node.is_element()),
                     "invalid MIX nick payload"
                 );
-                nick = Some(MixService::prepare_mix_nick(
+                nick = Some(crate::services::mix::prepare_mix_nick(
                     child.text().unwrap_or_default(),
                 )?);
             }
@@ -1325,7 +1325,7 @@ fn parse_join(node: Node<'_, '_>) -> Result<JoinData> {
             _ => anyhow::bail!("unknown MIX join child"),
         }
     }
-    let nodes = MixService::valid_join_nodes(&nodes)?;
+    let nodes = crate::services::mix::valid_join_nodes(&nodes)?;
     Ok(JoinData {
         nodes,
         nick,
@@ -1356,8 +1356,8 @@ fn parse_subscription_changes(node: Node<'_, '_>) -> Result<(Vec<String>, Vec<St
         );
     }
     Ok((
-        MixService::valid_join_nodes(&subscribe)?,
-        MixService::valid_join_nodes(&unsubscribe)?,
+        crate::services::mix::valid_join_nodes(&subscribe)?,
+        crate::services::mix::valid_join_nodes(&unsubscribe)?,
     ))
 }
 
@@ -1702,7 +1702,7 @@ fn core_join_payload(
 /// the opaque ID in an RFC 7622 localpart does not change it under PRECIS.
 fn encoded_participant_jid(channel_jid: &str, participant_id: &str) -> Result<String> {
     anyhow::ensure!(
-        MixService::valid_stable_participant_id(participant_id),
+        crate::services::mix::valid_stable_participant_id(participant_id),
         "invalid MIX stable participant id"
     );
     let channel = crate::jid::CanonicalJid::parse_bare(channel_jid)?;
@@ -1736,7 +1736,7 @@ fn decode_participant_jid(value: &str) -> Result<(String, String)> {
         .and_then(|localpart| localpart.split_once('#'))
         .context("encoded MIX participant JID is missing its channel")?;
     anyhow::ensure!(
-        MixService::valid_stable_participant_id(participant_id),
+        crate::services::mix::valid_stable_participant_id(participant_id),
         "invalid MIX stable participant id"
     );
     let channel = crate::jid::CanonicalJid::parse_bare(&format!(
@@ -1871,7 +1871,7 @@ fn parse_remote_join_result(raw: &str, channel_jid: &str) -> Result<RemoteJoinRe
     let participant_id = match (join.attribute("id"), join.attribute("jid")) {
         (Some(participant_id), None) => {
             anyhow::ensure!(
-                MixService::valid_stable_participant_id(participant_id),
+                crate::services::mix::valid_stable_participant_id(participant_id),
                 "invalid MIX stable participant id"
             );
             participant_id.to_owned()
@@ -3842,7 +3842,7 @@ impl ProtocolSession {
                             request_digest,
                             remote_domain: domain.to_owned(),
                             outbound_stanza: outbound,
-                            policy: self.state.federation.outbox_policy().into(),
+                            policy: self.state.federation.outbox_policy(),
                         })
                         .await?;
                     match admitted {
@@ -3992,7 +3992,7 @@ impl ProtocolSession {
                             request_digest,
                             remote_domain: domain.to_owned(),
                             outbound_stanza: outbound,
-                            policy: self.state.federation.outbox_policy().into(),
+                            policy: self.state.federation.outbox_policy(),
                         })
                         .await?;
                     match admitted {
@@ -5057,7 +5057,7 @@ async fn pubsub_publish(
             let name = field_first(fields, "Name").or(current.name.as_deref());
             let description = field_first(fields, "Description").or(current.description.as_deref());
             let contacts = fields.get("Contact").cloned().unwrap_or(current.contacts);
-            let item_id = MixService::mix_timestamp_item_id();
+            let item_id = crate::services::mix::mix_timestamp_item_id();
             let mutation = state
                 .mix_service()
                 .update_mix_info(
@@ -5208,7 +5208,7 @@ async fn pubsub_publish(
             let max_events = field_first(fields, "max_events")
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(channel.max_events);
-            let item_id = MixService::mix_timestamp_item_id();
+            let item_id = crate::services::mix::mix_timestamp_item_id();
             let mutation = state
                 .mix_service()
                 .update_mix_config(
@@ -5288,7 +5288,7 @@ async fn pubsub_publish(
                 fields.is_empty(),
                 "MIX access items do not contain payloads"
             );
-            let pattern = MixService::canonical_mix_access_pattern(&item_ids[0])?;
+            let pattern = crate::services::mix::canonical_mix_access_pattern(&item_ids[0])?;
             let Some(outcome) = state
                 .mix_service()
                 .set_mix_access_entry(
@@ -5393,7 +5393,7 @@ async fn pubsub_retract(
             "forbidden",
         ));
     }
-    let pattern = MixService::canonical_mix_access_pattern(&item_ids[0])?;
+    let pattern = crate::services::mix::canonical_mix_access_pattern(&item_ids[0])?;
     let Some(_) = state
         .mix_service()
         .set_mix_access_entry(
@@ -6207,7 +6207,7 @@ fn validate_reflected_mix_identity(root: Node<'_, '_>) -> Result<()> {
         match (child.tag_name().name(), child.tag_name().namespace()) {
             ("nick", Some(CORE_NS)) => {
                 anyhow::ensure!(nick.is_none(), "duplicate reflected MIX nick");
-                nick = Some(MixService::prepare_mix_nick(
+                nick = Some(crate::services::mix::prepare_mix_nick(
                     child.text().unwrap_or_default(),
                 )?);
             }
@@ -6290,7 +6290,7 @@ fn validate_reflected_mix_presence_identity(root: Node<'_, '_>) -> Result<()> {
         match (child.tag_name().name(), child.tag_name().namespace()) {
             ("nick", Some(PRESENCE_NS)) => {
                 anyhow::ensure!(nick.is_none(), "duplicate reflected MIX presence nick");
-                nick = Some(MixService::prepare_mix_nick(
+                nick = Some(crate::services::mix::prepare_mix_nick(
                     child.text().unwrap_or_default(),
                 )?);
             }
@@ -6608,8 +6608,8 @@ async fn process_channel_message(
             .finish();
         let tombstone = add_stanza_id(&tombstone, &channel.jid(), target_id);
         let archived_jid = (channel.jid_visibility == "visible").then_some(actor_bare);
-        let live_jid =
-            MixService::participant_jid_visible(&channel, &preference).then_some(actor_bare);
+        let live_jid = crate::services::mix::participant_jid_visible(&channel, &preference)
+            .then_some(actor_bare);
         let archived_action = mix_retraction_action(
             &channel.jid(),
             None,
@@ -6667,7 +6667,8 @@ async fn process_channel_message(
     let children = message_children.expect("non-retraction MIX message has parsed children");
     let archive_id = Uuid::new_v4();
     let archived_jid = (channel.jid_visibility == "visible").then_some(actor_bare);
-    let live_jid = MixService::participant_jid_visible(&channel, &preference).then_some(actor_bare);
+    let live_jid =
+        crate::services::mix::participant_jid_visible(&channel, &preference).then_some(actor_bare);
     let archive = mix_channel_message(MixChannelMessage {
         from: &channel.jid(),
         to: None,
@@ -6973,7 +6974,7 @@ pub(crate) async fn federated_mix_iq(
             request_digest,
             addressed: to_jid.to_string(),
             reply_to: actor.reply_to.clone(),
-            policy: state.federation.outbox_policy().into(),
+            policy: state.federation.outbox_policy(),
         });
         if mutation {
             match state
@@ -6992,7 +6993,7 @@ pub(crate) async fn federated_mix_iq(
                         .enqueue_s2s_response_batch(
                             authenticated_domain,
                             &[response],
-                            state.federation.outbox_policy().into(),
+                            state.federation.outbox_policy(),
                         )
                         .await?;
                     state.federation.wake_outbox();
@@ -7011,7 +7012,7 @@ pub(crate) async fn federated_mix_iq(
                         .enqueue_s2s_response_batch(
                             authenticated_domain,
                             &[response],
-                            state.federation.outbox_policy().into(),
+                            state.federation.outbox_policy(),
                         )
                         .await?;
                     state.federation.wake_outbox();
@@ -7042,7 +7043,7 @@ pub(crate) async fn federated_mix_iq(
             let policy = state.federation.outbox_policy();
             if let Err(error) = state
                 .mix_service()
-                .enqueue_s2s_response_batch(authenticated_domain, &responses, policy.into())
+                .enqueue_s2s_response_batch(authenticated_domain, &responses, policy)
                 .await
             {
                 tracing::warn!(
@@ -7119,7 +7120,7 @@ pub(crate) async fn federated_mix_iq(
                             .enqueue_s2s_response_batch(
                                 authenticated_domain,
                                 &[conflict],
-                                state.federation.outbox_policy().into(),
+                                state.federation.outbox_policy(),
                             )
                             .await?;
                         state.federation.wake_outbox();
@@ -7161,7 +7162,7 @@ pub(crate) async fn federated_mix_iq(
                         .enqueue_s2s_response_batch(
                             authenticated_domain,
                             &[conflict],
-                            state.federation.outbox_policy().into(),
+                            state.federation.outbox_policy(),
                         )
                         .await?;
                     state.federation.wake_outbox();
@@ -7182,7 +7183,7 @@ pub(crate) async fn federated_mix_iq(
                             &request.id,
                             &request_digest,
                             &response,
-                            state.federation.outbox_policy().into(),
+                            state.federation.outbox_policy(),
                         )
                         .await?
                     {
@@ -7555,7 +7556,7 @@ pub(crate) async fn federated_mix_message(
             .resourcepart()
             .context("reflected MIX message requires a stable participant resource")?;
         anyhow::ensure!(
-            MixService::valid_stable_participant_id(participant_id),
+            crate::services::mix::valid_stable_participant_id(participant_id),
             "invalid reflected MIX stable participant id"
         );
         anyhow::ensure!(
@@ -8992,12 +8993,20 @@ mod tests {
 
     #[test]
     fn remote_stable_participant_ids_are_opaque_but_delimiter_safe() {
-        assert!(MixService::valid_stable_participant_id("not-a-uuid"));
-        assert!(MixService::valid_stable_participant_id("αβγ"));
-        assert!(!MixService::valid_stable_participant_id(""));
-        assert!(!MixService::valid_stable_participant_id("id#channel"));
-        assert!(!MixService::valid_stable_participant_id("id@example.test"));
-        assert!(!MixService::valid_stable_participant_id("id/resource"));
+        assert!(crate::services::mix::valid_stable_participant_id(
+            "not-a-uuid"
+        ));
+        assert!(crate::services::mix::valid_stable_participant_id("αβγ"));
+        assert!(!crate::services::mix::valid_stable_participant_id(""));
+        assert!(!crate::services::mix::valid_stable_participant_id(
+            "id#channel"
+        ));
+        assert!(!crate::services::mix::valid_stable_participant_id(
+            "id@example.test"
+        ));
+        assert!(!crate::services::mix::valid_stable_participant_id(
+            "id/resource"
+        ));
         assert_eq!(
             decode_participant_jid("opaque#room@mix.remote.test").unwrap(),
             ("opaque".to_owned(), "room@mix.remote.test".to_owned())

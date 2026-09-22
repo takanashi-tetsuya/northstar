@@ -61,7 +61,7 @@ else
   database_name_b=xmpp_test
 fi
 database_host=127.0.0.1
-database_port=5432
+database_port="${PGPORT:-5432}"
 if [[ "$fixture_preprovisioned" == true ]]; then
   database_host="$stress_database_host"
   database_port="$stress_database_port"

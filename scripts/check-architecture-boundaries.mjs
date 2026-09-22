@@ -1084,41 +1084,13 @@ const mixOutboxDbMethods = new Map([
   ],
   ['claim_mix_deliveries', 'claim_mix_deliveries'],
   ['maintain_mix_delivery_retention', 'maintain_mix_delivery_retention'],
-  ['prune_expired_business_intents', 'prune_expired_mix_business_intents'],
-  ['prune_expired_federated_iq_results', 'prune_expired_federated_mix_iq_results'],
+  ['prune_expired_business_intents', 'prune_expired_business_intents'],
+  ['prune_expired_federated_iq_results', 'prune_expired_federated_iq_results'],
   ['acknowledge_mix_delivery', 'acknowledge_mix_delivery'],
-  [
-    'fence_mix_socket_write',
-    {
-      description: 'db::mix::fence_mix_socket_write repository turn',
-      callPattern: /\bdb\s*::\s*mix\s*::\s*fence_mix_socket_write\s*\(/,
-      awaitPattern: /\bdb\s*::\s*mix\s*::/,
-    },
-  ],
-  [
-    'transfer_mix_delivery_to_cluster',
-    {
-      description: 'db::mix::transfer_mix_delivery_to_cluster repository turn',
-      callPattern: /\bdb\s*::\s*mix\s*::\s*transfer_mix_delivery_to_cluster\s*\(/,
-      awaitPattern: /\bdb\s*::\s*mix\s*::/,
-    },
-  ],
-  [
-    'release_mix_cluster_delivery',
-    {
-      description: 'db::mix::release_mix_cluster_delivery repository turn',
-      callPattern: /\bdb\s*::\s*mix\s*::\s*release_mix_cluster_delivery\s*\(/,
-      awaitPattern: /\bdb\s*::\s*mix\s*::/,
-    },
-  ],
-  [
-    'transfer_mix_delivery_to_bosh',
-    {
-      description: 'db::mix::transfer_mix_delivery_to_bosh repository turn',
-      callPattern: /\bdb\s*::\s*mix\s*::\s*transfer_mix_delivery_to_bosh\s*\(/,
-      awaitPattern: /\bdb\s*::\s*mix\s*::/,
-    },
-  ],
+  ['fence_mix_socket_write', 'fence_mix_socket_write'],
+  ['transfer_mix_delivery_to_cluster', 'transfer_mix_delivery_to_cluster'],
+  ['release_mix_cluster_delivery', 'release_mix_cluster_delivery'],
+  ['transfer_mix_delivery_to_bosh', 'transfer_mix_delivery_to_bosh'],
   ['renew_mix_delivery_lease', 'renew_mix_delivery_lease'],
   ['dead_letter_mix_delivery', 'dead_letter_mix_delivery'],
   ['retry_mix_delivery', 'retry_mix_delivery'],
@@ -1194,9 +1166,9 @@ for (const [serviceMethod, repositoryMethod] of mixOutboxDbMethods) {
   const reviewedTurn =
     typeof repositoryMethod === 'string'
       ? {
-          description: `db::${repositoryMethod} repository turn`,
-          callPattern: new RegExp(`\\bdb\\s*::\\s*${repositoryMethod}\\s*\\(`),
-          awaitPattern: /\bdb\s*::/,
+          description: `${repositoryMethod} repository turn`,
+          callPattern: new RegExp(`self\\s*\\.\\s*repository\\s*\\.\\s*${repositoryMethod}\\s*\\(`),
+          awaitPattern: new RegExp(`self\\s*\\.\\s*repository\\s*\\.\\s*${repositoryMethod}\\s*\\(`),
         }
       : repositoryMethod;
   if (!reviewedTurn.callPattern.test(body)) {
@@ -1295,10 +1267,15 @@ if (
 ) {
   throw new Error('claimed MIX outbox work must select the bounded durable database lane before transport I/O');
 }
+const mixAdapterSource = read('src/db/mix_repository.rs');
 for (const [serviceMethod] of mixProducerMappings) {
   const body = structBody(mixServiceSource, `pub(crate) async fn ${serviceMethod}(`);
   const gate = body.indexOf('self.delivery_admission_guard().await');
-  const repositoryCall = body.indexOf(`db::${serviceMethod}(`);
+  const adapter = structBody(mixAdapterSource, `async fn ${serviceMethod}(`);
+  if (!adapter.includes(`db::${serviceMethod}(`)) {
+    throw new Error(`MIX producer adapter ${serviceMethod} lost its reviewed atomic repository operation`);
+  }
+  const repositoryCall = body.search(new RegExp(`self\\s*\\.\\s*repository\\s*\\.\\s*${serviceMethod}\\s*\\(`));
   if (gate < 0 || repositoryCall < 0 || gate > repositoryCall) {
     throw new Error(
       `MIX producer ${serviceMethod} must acquire the shared fair gate before its repository call`,
@@ -1321,7 +1298,7 @@ while (pendingMixDeliveryBoundaryFiles.length > 0) {
     }
     if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
     const relative = path.relative(root, full).replaceAll('\\', '/');
-    if (relative === 'src/services/mix.rs' || relative === 'src/db/mix.rs') continue;
+    if (relative === 'src/db/mix_repository.rs' || relative === 'src/db/mix.rs') continue;
     const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
     if (mixDeliveryProducerBypassPattern.test(production)) {
       mixDeliveryProducerBypasses.push(relative);
@@ -1530,7 +1507,7 @@ for (const entry of [
 ]) {
   const body = structBody(mixServiceSource, `pub(crate) async fn ${entry}(`);
   const gate = body.indexOf('self.pam_capacity_admission_guard().await');
-  const repository = body.indexOf(`db::${entry}(`);
+  const repository = body.search(new RegExp(`self\\s*\\.\\s*repository\\s*\\.\\s*${entry}\\s*\\(`));
   if (gate < 0 || repository < 0 || gate > repository) {
     throw new Error(
       `MIX service ${entry} must take the clone-shared PAM FIFO gate before repository/PgPool access`,
@@ -1551,7 +1528,7 @@ while (pendingPamBoundaryFiles.length > 0) {
     }
     if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
     const relative = path.relative(root, full).replaceAll('\\', '/');
-    if (relative === 'src/services/mix.rs' || relative === 'src/db/mix.rs') continue;
+    if (relative === 'src/db/mix_repository.rs' || relative === 'src/db/mix.rs') continue;
     const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
     if (mixPamCapacityCallPattern.test(production)) mixPamCapacityBypasses.push(relative);
   }
@@ -1577,7 +1554,7 @@ while (pendingMixBoundaryFiles.length > 0) {
     }
     if (!entry.isFile() || !entry.name.endsWith('.rs')) continue;
     const relative = path.relative(root, full).replaceAll('\\', '/');
-    if (relative === 'src/services/mix.rs' || relative === 'src/db/mix.rs') continue;
+    if (relative === 'src/db/mix_repository.rs' || relative === 'src/db/mix.rs') continue;
     const production = productionWithoutCfgTestModules(fs.readFileSync(full, 'utf8'), relative);
     if (mixProducerCallPattern.test(production)) mixProducerBypasses.push(relative);
   }
@@ -2078,6 +2055,7 @@ for (const [name, source] of [
   ['AuthenticationService', authenticationServiceSource],
   ['RetractionService', read('src/services/retractions.rs')],
   ['SmService', read('src/services/sm.rs')],
+  ['MixService', mixServiceSource],
   ['PushService', read('src/services/push.rs')],
   ['PrivateStorageService', read('src/services/private_storage.rs')],
   ['RetentionContext', read('src/retention.rs')],

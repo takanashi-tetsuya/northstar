@@ -62,7 +62,7 @@ fi
 
 run_exact_ignored() {
   local test_name="$1" output
-  output="$(TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+  output="$(TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
     cargo test --locked --offline "$test_name" \
     -- --ignored --exact --nocapture --test-threads=1 2>&1)" || {
     printf '%s\n' "$output"
@@ -93,12 +93,12 @@ run_exact_ignored \
 run_exact_ignored \
   db::mix::delivery_route_wake_integration_tests::an_expired_unowned_head_blocks_until_terminalized
 
-TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline \
   db::mix::mam_integration_tests::mix_anon_misc_permissions_are_atomic_and_private \
   -- --ignored --nocapture
 
-TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline \
   db::mix::delivery_capacity_integration_tests::delivery_ack_is_independent_of_the_producer_fence_and_release_is_atomic \
   -- --ignored --nocapture
@@ -106,17 +106,17 @@ TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_t
 # A verified recipient route may appear while the ordered head is leased.
 # Exercise the persisted wake epoch and recovery ordering against the same
 # fully migrated isolated schema used by the other MIX authority tests.
-TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline \
   db::mix::delivery_route_wake_integration_tests::leased_route_wake_defeats_defer_and_retry_but_not_unrelated_backoff \
   -- --ignored --nocapture
 
-TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline \
   db::mix::delivery_route_wake_integration_tests::attempt_limit_route_wake_gets_one_fresh_claim_before_dead_letter \
   -- --ignored --nocapture
 
-TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline \
   db::mix::delivery_route_wake_integration_tests::dead_letter_requeue_uses_tail_and_preserves_current_head_wake \
   -- --ignored --nocapture

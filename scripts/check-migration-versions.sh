@@ -1216,7 +1216,7 @@ for required_source_fragment in \
     'route_wake_generation: delivery.route_wake_generation' \
     'delivery.route_wake_generation,'
 do
-    if ! grep -Fq "$required_source_fragment" src/db/mix.rs src/services/mix.rs src/xmpp/protocol/mix.rs; then
+    if ! grep -Fq "$required_source_fragment" src/db/mix.rs src/db/mix_repository.rs src/services/mix.rs src/xmpp/protocol/mix.rs; then
         echo "MIX route-wake epoch source invariant is missing: $required_source_fragment" >&2
         exit 1
     fi
@@ -1248,8 +1248,8 @@ if printf '%s\n' "$mix_delivery_retry_source" | grep -Fq 'dead_letter_mix_delive
 fi
 mix_delivery_retry_service_source=$(sed -n '/^    pub(crate) async fn retry_mix_delivery(/,/^    pub(crate) async fn defer_mix_delivery(/p' src/services/mix.rs)
 for required_service_fragment in \
-    'db::MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit' \
-    'db::MixDeliveryRetryOutcome::DeadLettered' \
+    'MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit' \
+    'MixDeliveryRetryOutcome::DeadLettered' \
     'self.publish_delivery_local_commit();'
 do
     if ! printf '%s\n' "$mix_delivery_retry_service_source" | grep -Fq "$required_service_fragment"; then

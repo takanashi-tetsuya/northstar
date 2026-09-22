@@ -34,6 +34,7 @@ mod migration_upgrade_test;
 pub mod mix;
 pub mod mix_identity;
 pub mod mix_muc;
+pub mod mix_repository;
 pub mod muc;
 pub mod omemo_recovery;
 pub mod pep;

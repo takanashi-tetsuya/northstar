@@ -1,15 +1,12 @@
 //! Application-service boundary for XEP-0369/XEP-0405 MIX.
 //!
-//! The protocol module owns XML parsing and stanza error mapping. This type is
-//! the only MIX capability exposed by `AppState`; it owns PostgreSQL access,
-//! cross-table transactions and durable federation admission.
+//! The service owns replay proofs, admission limits and committed delivery wakes.
+//! Repository operations preserve each cross-table transaction.
 
 use crate::abuse::{MixMessageContentKeyring, MixRetractionContentKeyring};
-use crate::db;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use northstar_xml_builder::XmlElement;
-use sqlx::PgPool;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex, MutexGuard, OwnedSemaphorePermit};
@@ -34,6 +31,14 @@ pub(crate) const NODE_AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
 /// row.  It is never authorization data: workers still claim the fenced row
 /// from PostgreSQL before producing any externally visible effect.
 pub(crate) const MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL: &str = "northstar_mix_delivery_v1";
+pub(crate) const SUBSCRIBABLE_NODES: [&str; 6] = [
+    NODE_MESSAGES,
+    NODE_PRESENCE,
+    NODE_PARTICIPANTS,
+    NODE_INFO,
+    NODE_AVATAR_DATA,
+    NODE_AVATAR_METADATA,
+];
 pub(crate) const CORE_NODES: [&str; 4] =
     [NODE_MESSAGES, NODE_PRESENCE, NODE_PARTICIPANTS, NODE_INFO];
 pub(crate) const ALL_NODES: [&str; 10] = [
@@ -186,15 +191,6 @@ pub(crate) struct MixDeliveryDeadLetter {
     pub(crate) terminal_reason: String,
     pub(crate) last_error: Option<String>,
     pub(crate) failed_at: DateTime<Utc>,
-}
-
-impl From<db::MixPresenceProbeTarget> for MixPresenceProbeTarget {
-    fn from(target: db::MixPresenceProbeTarget) -> Self {
-        Self {
-            channel_jid: target.channel_jid,
-            participant_jid: target.participant_jid,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -528,13 +524,7 @@ pub(crate) enum MixMutationOutcome {
 
 /// Owned mirror of the federation admission policy the protocol reads from
 /// the S2S router before batching a federated MAM response stream.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct S2sOutboxPolicy {
-    pub(crate) ttl_seconds: u64,
-    pub(crate) max_rows: i64,
-    pub(crate) max_bytes: i64,
-    pub(crate) max_per_domain: i64,
-}
+pub(crate) use northstar_federation_core::S2sOutboxPolicy;
 
 /// Authenticated identity and exact replay key for one remote mutating IQ.
 /// Production protocol code must attach this context to the repository
@@ -550,39 +540,11 @@ pub(crate) struct FederatedMixMutation {
     pub(crate) policy: S2sOutboxPolicy,
 }
 
-fn federated_mutation_db(context: &FederatedMixMutation) -> db::FederatedMixMutation {
-    db::FederatedMixMutation {
-        authenticated_domain: context.authenticated_domain.clone(),
-        actor_jid: context.actor_jid.clone(),
-        request_id: context.request_id.clone(),
-        request_digest: context.request_digest,
-        addressed: context.addressed.clone(),
-        reply_to: context.reply_to.clone(),
-        policy: db::S2sOutboxPolicy {
-            ttl_seconds: context.policy.ttl_seconds,
-            max_rows: context.policy.max_rows,
-            max_bytes: context.policy.max_bytes,
-            max_per_domain: context.policy.max_per_domain,
-        },
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum FederatedMixIqReplay {
     Miss,
     Replay(String),
     Conflict,
-}
-
-impl From<db::S2sOutboxPolicy> for S2sOutboxPolicy {
-    fn from(policy: db::S2sOutboxPolicy) -> Self {
-        Self {
-            ttl_seconds: policy.ttl_seconds,
-            max_rows: policy.max_rows,
-            max_bytes: policy.max_bytes,
-            max_per_domain: policy.max_per_domain,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -636,46 +598,6 @@ pub(crate) struct MamArchiveQuery {
     pub(crate) ids: Vec<Uuid>,
     pub(crate) page: MamRsmPage,
     pub(crate) max: i64,
-}
-
-impl From<db::MamArchiveQuery> for MamArchiveQuery {
-    fn from(query: db::MamArchiveQuery) -> Self {
-        Self {
-            with_jid: query.with_jid,
-            start: query.start,
-            end: query.end,
-            before_id: query.before_id,
-            after_id: query.after_id,
-            ids: query.ids,
-            page: match query.page {
-                db::MamRsmPage::First => MamRsmPage::First,
-                db::MamRsmPage::Last => MamRsmPage::Last,
-                db::MamRsmPage::Before(id) => MamRsmPage::Before(id),
-                db::MamRsmPage::After(id) => MamRsmPage::After(id),
-                db::MamRsmPage::Index(index) => MamRsmPage::Index(index),
-            },
-            max: query.max,
-        }
-    }
-}
-
-fn mam_query_db(query: &MamArchiveQuery) -> db::MamArchiveQuery {
-    db::MamArchiveQuery {
-        with_jid: query.with_jid.clone(),
-        start: query.start,
-        end: query.end,
-        before_id: query.before_id,
-        after_id: query.after_id,
-        ids: query.ids.clone(),
-        page: match query.page {
-            MamRsmPage::First => db::MamRsmPage::First,
-            MamRsmPage::Last => db::MamRsmPage::Last,
-            MamRsmPage::Before(id) => db::MamRsmPage::Before(id),
-            MamRsmPage::After(id) => db::MamRsmPage::After(id),
-            MamRsmPage::Index(index) => db::MamRsmPage::Index(index),
-        },
-        max: query.max,
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -820,8 +742,8 @@ impl MixDeliveryWakeSubscription {
 }
 
 #[derive(Clone)]
-pub(crate) struct MixService {
-    pool: PgPool,
+pub(crate) struct MixService<R> {
+    repository: R,
     message_identity: MixMessageContentKeyring,
     retraction_identity: MixRetractionContentKeyring,
     /// The bounded durable MIX outbox budget derived once from the configured
@@ -829,7 +751,7 @@ pub(crate) struct MixService {
     /// scheduling limit rather than a raw database-pool capability.
     outbox_background_budget: usize,
     /// Fair, process-local admission gate. Every application operation that
-    /// can add a durable MIX delivery acquires this before asking PgPool for a
+    /// can add a durable MIX delivery acquires this before asking database connection for a
     /// transaction. PostgreSQL keeps the cross-process authority; this gate
     /// prevents ordinary same-process concurrency from occupying a pool of
     /// connections while queued behind that authority.
@@ -851,26 +773,510 @@ pub(crate) struct MixService {
     delivery_wake: Arc<MixDeliveryWakeBroker>,
 }
 
-macro_rules! delegate {
-    ($(#[$meta:meta])* $name:ident($($arg:ident : $ty:ty),* $(,)?) -> $ret:ty => $path:path;) => {
-        $(#[$meta])*
-        pub(crate) async fn $name(&self, $($arg: $ty),*) -> Result<$ret> {
-            $path(&self.pool, $($arg),*).await
-        }
-    };
+pub(crate) trait MixRepository: Send + Sync {
+    fn link_local_muc_mirror(
+        &self,
+        mix_domain: &str,
+        localpart: &str,
+        actor_bare_jid: &str,
+        local_domain: &str,
+    ) -> impl std::future::Future<Output = Result<MixMucLinkOutcome>> + Send;
+    fn create_mix_channel(
+        &self,
+        service_domain: &str,
+        requested_localpart: Option<&str>,
+        creator_jid: &str,
+        max_channels_per_owner: i64,
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<(CreateChannelOutcome, String)>> + Send;
+    fn mix_channel(
+        &self,
+        service_domain: &str,
+        localpart: &str,
+    ) -> impl std::future::Future<Output = Result<Option<MixChannel>>> + Send;
+    fn discoverable_mix_channel_page(
+        &self,
+        service_domain: &str,
+        requester: &str,
+        after: Option<&str>,
+        before: Option<Option<&str>>,
+        max: i64,
+    ) -> impl std::future::Future<Output = Result<Option<MixDiscoPage>>> + Send;
+    fn mix_role(
+        &self,
+        channel_id: Uuid,
+        jid: &str,
+    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send;
+    fn mix_channel_discoverable_to(
+        &self,
+        channel: &MixChannel,
+        actor: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn destroy_mix_channel(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn join_mix_channel(
+        &self,
+        channel_id: Uuid,
+        request: JoinMixRequest,
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<JoinChannelOutcome>> + Send;
+    fn mix_participant(
+        &self,
+        channel_id: Uuid,
+        jid: &str,
+    ) -> impl std::future::Future<Output = Result<Option<MixParticipant>>> + Send;
+    fn mix_participant_by_id(
+        &self,
+        channel_id: Uuid,
+        participant_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Option<MixParticipant>>> + Send;
+    fn mix_presence_source_jid(
+        &self,
+        channel_id: Uuid,
+        item_id: &str,
+    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send;
+    fn expire_unrefreshed_mix_presence(
+        &self,
+        cutoff: DateTime<Utc>,
+    ) -> impl std::future::Future<Output = Result<Vec<ExpiredMixPresence>>> + Send;
+    fn update_mix_subscriptions(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        subscribe: &[String],
+        unsubscribe: &[String],
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<Option<UpdateSubscriptionsOutcome>>> + Send;
+    fn set_mix_nick(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        nick: &str,
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<std::result::Result<MixParticipant, SetNickError>>>
+           + Send;
+    fn leave_mix_channel(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        pam_user_id: Option<Uuid>,
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<Option<LeaveMixOutcome>>> + Send;
+    fn store_mix_presence(
+        &self,
+        channel_id: Uuid,
+        actor_bare: &str,
+        actor_full: &str,
+        payload: &str,
+        unavailable: bool,
+    ) -> impl std::future::Future<Output = Result<PresenceOutcome>> + Send;
+    fn ensure_mix_presence(
+        &self,
+        channel_id: Uuid,
+        actor_bare: &str,
+        actor_full: &str,
+        payload: &str,
+    ) -> impl std::future::Future<Output = Result<PresenceOutcome>> + Send;
+    fn store_mix_message(
+        &self,
+        request: StoreMixMessageRequest<'_>,
+        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+    ) -> impl std::future::Future<Output = Result<StoreMixMessageAdmission>> + Send;
+    fn lookup_mix_message_replay(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        identity: &MixReplayIdentity,
+        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+    ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send;
+    fn lookup_mix_retraction_replay(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        target_id: Uuid,
+        identity: &MixReplayIdentity,
+        authenticators: &crate::abuse::ContentIdentityAuthenticators,
+    ) -> impl std::future::Future<Output = Result<MixBusinessReplay>> + Send;
+    fn authorized_mix_event_page(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        node: &str,
+        before: Option<(DateTime<Utc>, Uuid)>,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<MixReadOutcome<MixEventPage>>> + Send;
+    fn publish_mix_avatar(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        node: &str,
+        item_id: &str,
+        payload: &str,
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn retract_mix_avatar(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        node: &str,
+        item_id: &str,
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn authorized_mix_mam_page(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        viewer_id: Option<Uuid>,
+        query: &MamArchiveQuery,
+    ) -> impl std::future::Future<Output = Result<MixReadOutcome<MixMamPage>>> + Send;
+    fn authorized_mix_mam_boundaries(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        viewer_id: Option<Uuid>,
+    ) -> impl std::future::Future<
+        Output = Result<MixReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>>,
+    > + Send;
+    fn authorized_mix_access_entries(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        banned: bool,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<MixReadOutcome<Vec<String>>>> + Send;
+    fn update_mix_info(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        update: MixInfoUpdate,
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<MixMutationOutcome>> + Send;
+    fn update_mix_config(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        update: MixConfigUpdate,
+        roles: MixRoleUpdate,
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<MixMutationOutcome>> + Send;
+    fn set_mix_access_entry(
+        &self,
+        update: MixAccessEntryUpdate<'_>,
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<Option<AccessChangeOutcome>>> + Send;
+    fn register_mix_nick(
+        &self,
+        service_domain: &str,
+        actor: &str,
+        nick: &str,
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<RegisterMixNickOutcome>> + Send;
+    fn mix_participant_preference(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+    ) -> impl std::future::Future<Output = Result<Option<MixParticipantPreference>>> + Send;
+    fn update_mix_participant_preference(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        preference: &MixParticipantPreference,
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<Option<MixParticipantPreferenceUpdateOutcome>>> + Send;
+    fn authorized_mix_jid_map_entries(
+        &self,
+        channel_id: Uuid,
+        actor: &str,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<MixReadOutcome<Vec<(String, String)>>>> + Send;
+    fn issue_mix_invitation(
+        &self,
+        channel_id: Uuid,
+        inviter: &str,
+        invitee: &str,
+        token: &str,
+        lifetime: chrono::Duration,
+        federated: Option<&FederatedMixMutation>,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn mix_private_message_recipient(
+        &self,
+        channel_id: Uuid,
+        sender: &str,
+        recipient_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Option<(MixParticipant, MixParticipant)>>> + Send;
+    fn retract_mix_message(
+        &self,
+        request: RetractMixMessageRequest<'_>,
+        authenticators: Option<&crate::abuse::ContentIdentityAuthenticators>,
+    ) -> impl std::future::Future<Output = Result<RetractMixMessageAdmission>> + Send;
+    fn begin_remote_pam_join(
+        &self,
+        request: BeginRemotePamJoin,
+    ) -> impl std::future::Future<Output = Result<PamOperationReplay>> + Send;
+    fn lookup_remote_pam_operation(
+        &self,
+        user_id: Uuid,
+        requester_full_jid: &str,
+        client_request_id: &str,
+        request_digest: &[u8; 32],
+    ) -> impl std::future::Future<Output = Result<PamOperationReplay>> + Send;
+    fn begin_remote_pam_leave(
+        &self,
+        request: BeginRemotePamLeave,
+    ) -> impl std::future::Future<Output = Result<PamOperationReplay>> + Send;
+    fn complete_remote_pam_success(
+        &self,
+        authenticated_domain: &str,
+        channel_jid: &str,
+        recipient_bare: &str,
+        request_id: &str,
+        response_digest: &[u8; 32],
+        join: Option<RemotePamJoin<'_>>,
+    ) -> impl std::future::Future<Output = Result<RemotePamCompletionOutcome>> + Send;
+    #[allow(clippy::too_many_arguments)]
+    fn complete_remote_pam_error(
+        &self,
+        authenticated_domain: &str,
+        channel_jid: &str,
+        recipient_bare: &str,
+        request_id: &str,
+        response_digest: &[u8; 32],
+        error_type: &str,
+        condition: &str,
+    ) -> impl std::future::Future<Output = Result<RemotePamCompletionOutcome>> + Send;
+    fn pam_memberships(
+        &self,
+        user_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<PamMembership>>> + Send;
+    fn pam_membership(
+        &self,
+        user_id: Uuid,
+        channel_jid: &str,
+    ) -> impl std::future::Future<Output = Result<Option<PamMembership>>> + Send;
+    fn local_pam_users_for_channel(
+        &self,
+        channel_jid: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<Uuid>>> + Send;
+    fn reconcile_expired_remote_pam(
+        &self,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<u64>> + Send;
+    fn claim_pam_results(
+        &self,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<ClaimedPamResult>>> + Send;
+    fn renew_pam_result_lease(
+        &self,
+        operation_id: Uuid,
+        lease_token: Uuid,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn acknowledge_pam_result(
+        &self,
+        operation_id: Uuid,
+        lease_token: Uuid,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn defer_pam_result(
+        &self,
+        operation_id: Uuid,
+        lease_token: Uuid,
+        delay_seconds: i64,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn retry_pam_result(
+        &self,
+        operation_id: Uuid,
+        lease_token: Uuid,
+        attempt_count: i32,
+        error: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn prune_expired_pam_results(
+        &self,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<u64>> + Send;
+    fn find_enabled_user(
+        &self,
+        username: &str,
+    ) -> impl std::future::Future<Output = Result<Option<MixAccount>>> + Send;
+
+    fn find_enabled_user_by_id(
+        &self,
+        user_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Option<MixAccount>>> + Send;
+    fn is_blocked(
+        &self,
+        owner_id: Uuid,
+        candidate: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+
+    fn pep_node(
+        &self,
+        owner_id: Uuid,
+        node: &str,
+    ) -> impl std::future::Future<Output = Result<Option<PepNodeConfig>>> + Send;
+    fn pep_items(
+        &self,
+        owner_id: Uuid,
+        node: &str,
+        item_id: Option<&str>,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<(String, String)>>> + Send;
+    fn get_vcard(
+        &self,
+        user_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<VCardRecord>> + Send;
+    fn latest_roster_change_for_contact(
+        &self,
+        user_id: Uuid,
+        contact_jid: &str,
+    ) -> impl std::future::Future<Output = Result<Option<northstar_roster_core::RosterChange>>> + Send;
+    fn mix_muc_mirror_for_mix(
+        &self,
+        mix_channel_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Option<MixMucMirror>>> + Send;
+    fn mix_muc_mirror_for_muc(
+        &self,
+        muc_room_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Option<MixMucMirror>>> + Send;
+    fn mix_muc_mirror_service_complete(
+        &self,
+        mix_domain: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    #[allow(clippy::too_many_arguments)]
+    fn archive_mix_message_once(
+        &self,
+        personal_archive_id: Uuid,
+        owner_id: Uuid,
+        channel_jid: &str,
+        authoritative_stanza_id: Uuid,
+        stanza: &str,
+        encrypted: bool,
+        client_stanza_id: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<SourceArchiveAdmission>> + Send;
+
+    fn enqueue_s2s_response_batch(
+        &self,
+        target_domain: &str,
+        responses: &[String],
+        policy: S2sOutboxPolicy,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn federated_mix_iq_replay(
+        &self,
+        authenticated_domain: &str,
+        actor_jid: &str,
+        request_id: &str,
+        request_digest: &[u8; 32],
+    ) -> impl std::future::Future<Output = Result<FederatedMixIqReplay>> + Send;
+    fn admit_federated_mix_iq_result(
+        &self,
+        authenticated_domain: &str,
+        actor_jid: &str,
+        request_id: &str,
+        request_digest: &[u8; 32],
+        response: &str,
+        policy: S2sOutboxPolicy,
+    ) -> impl std::future::Future<Output = Result<FederatedMixIqReplay>> + Send;
+    fn claim_mix_deliveries(
+        &self,
+        limit: i64,
+        max_bytes: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<ClaimedMixDelivery>>> + Send;
+    fn maintain_mix_delivery_retention(
+        &self,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn prune_expired_business_intents(
+        &self,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<u64>> + Send;
+    fn prune_expired_federated_iq_results(
+        &self,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<u64>> + Send;
+    fn acknowledge_mix_delivery(
+        &self,
+        delivery_id: Uuid,
+        lease_token: Uuid,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn fence_mix_socket_write(
+        &self,
+        source: crate::outbound::MixDelivery,
+    ) -> impl std::future::Future<Output = Result<crate::outbound::MixDelivery>> + Send;
+    fn transfer_mix_delivery_to_cluster(
+        &self,
+        source: crate::outbound::MixDelivery,
+        node_id: &str,
+        request_id: Uuid,
+        ttl_seconds: u64,
+    ) -> impl std::future::Future<Output = Result<crate::outbound::MixDelivery>> + Send;
+    fn release_mix_cluster_delivery(
+        &self,
+        source: crate::outbound::MixDelivery,
+        node_id: &str,
+        request_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn transfer_mix_delivery_to_bosh(
+        &self,
+        source: crate::outbound::MixDelivery,
+        session_id: Uuid,
+        ttl_seconds: u64,
+    ) -> impl std::future::Future<Output = Result<crate::outbound::MixDelivery>> + Send;
+    fn renew_mix_delivery_lease(
+        &self,
+        delivery_id: Uuid,
+        lease_token: Uuid,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn dead_letter_mix_delivery(
+        &self,
+        delivery_id: Uuid,
+        lease_token: Uuid,
+        terminal_reason: &str,
+        error: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn retry_mix_delivery(
+        &self,
+        delivery_id: Uuid,
+        lease_token: Uuid,
+        _claimed_attempt_count: i32,
+        route_wake_generation: i64,
+        error: &str,
+    ) -> impl std::future::Future<Output = Result<MixDeliveryRetryOutcome>> + Send;
+    fn defer_mix_delivery(
+        &self,
+        delivery_id: Uuid,
+        lease_token: Uuid,
+        route_wake_generation: i64,
+        delay_seconds: i64,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn wake_mix_delivery_recipient(
+        &self,
+        recipient_jid: &str,
+    ) -> impl std::future::Future<Output = Result<u64>> + Send;
+    #[allow(dead_code)]
+    fn mix_delivery_dead_letters(
+        &self,
+        before: Option<(DateTime<Utc>, Uuid)>,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<MixDeliveryDeadLetter>>> + Send;
+    #[allow(dead_code)]
+    fn requeue_mix_delivery_dead_letter(
+        &self,
+        dead_letter_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
 }
 
-impl MixService {
+impl<R: MixRepository> MixService<R> {
     #[cfg(test)]
     pub(crate) fn new(
-        pool: PgPool,
+        repository: R,
         message_identity: MixMessageContentKeyring,
         retraction_identity: MixRetractionContentKeyring,
         primary_pool_max_connections: u32,
         schema: String,
     ) -> Result<Self> {
         Self::new_with_outbox_database_admission(
-            pool,
+            repository,
             message_identity,
             retraction_identity,
             crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
@@ -881,7 +1287,7 @@ impl MixService {
     }
 
     pub(crate) fn new_with_outbox_database_admission(
-        pool: PgPool,
+        repository: R,
         message_identity: MixMessageContentKeyring,
         retraction_identity: MixRetractionContentKeyring,
         outbox_db_admission: crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
@@ -889,7 +1295,7 @@ impl MixService {
     ) -> Result<Self> {
         let outbox_background_budget = outbox_db_admission.capacity();
         Ok(Self {
-            pool,
+            repository,
             message_identity,
             retraction_identity,
             outbox_background_budget,
@@ -902,7 +1308,7 @@ impl MixService {
 
     /// Maximum concurrent durable MIX outbox operations permitted for this
     /// process.  The service owns the primary-pool capacity policy so callers
-    /// cannot infer it by reaching into a `PgPool`.
+    /// cannot infer it by reaching into a `database connection`.
     pub(crate) const fn outbox_background_budget(&self) -> usize {
         self.outbox_background_budget
     }
@@ -937,18 +1343,6 @@ impl MixService {
         self.delivery_wake.publish_local_commit();
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_with_test_keyrings(pool: PgPool) -> Self {
-        Self::new(
-            pool,
-            crate::abuse::test_mix_message_content_keyring(),
-            crate::abuse::test_mix_retraction_content_keyring(),
-            32,
-            "public".to_owned(),
-        )
-        .expect("test MIX service schema is valid")
-    }
-
     /// Atomically link existing same-localpart MIX and MUC entities after the
     /// repository proves that the authenticated bare JID still owns both.
     /// The protocol receives only a typed business outcome, never the pool or
@@ -960,16 +1354,9 @@ impl MixService {
         actor_bare_jid: &str,
         local_domain: &str,
     ) -> Result<MixMucLinkOutcome> {
-        Ok(map_mix_muc_link_outcome(
-            db::link_mix_muc_by_localpart(
-                &self.pool,
-                mix_domain,
-                localpart,
-                actor_bare_jid,
-                local_domain,
-            )
-            .await?,
-        ))
+        self.repository
+            .link_local_muc_mirror(mix_domain, localpart, actor_bare_jid, local_domain)
+            .await
     }
 
     pub(crate) async fn create_mix_channel(
@@ -980,27 +1367,22 @@ impl MixService {
         max_channels_per_owner: i64,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<(CreateChannelOutcome, String)> {
-        let federated = federated.map(federated_mutation_db);
-        let (outcome, localpart) = db::create_mix_channel(
-            &self.pool,
-            service_domain,
-            requested_localpart,
-            creator_jid,
-            max_channels_per_owner,
-            self,
-            federated.as_ref(),
-        )
-        .await?;
-        Ok((create_outcome(outcome), localpart))
+        self.repository
+            .create_mix_channel(
+                service_domain,
+                requested_localpart,
+                creator_jid,
+                max_channels_per_owner,
+                federated,
+            )
+            .await
     }
     pub(crate) async fn mix_channel(
         &self,
         service_domain: &str,
         localpart: &str,
     ) -> Result<Option<MixChannel>> {
-        Ok(db::mix_channel(&self.pool, service_domain, localpart)
-            .await?
-            .map(map_channel))
+        self.repository.mix_channel(service_domain, localpart).await
     }
     pub(crate) async fn discoverable_mix_channel_page(
         &self,
@@ -1010,28 +1392,21 @@ impl MixService {
         before: Option<Option<&str>>,
         max: i64,
     ) -> Result<Option<MixDiscoPage>> {
-        Ok(db::discoverable_mix_channel_page(
-            &self.pool,
-            service_domain,
-            requester,
-            after,
-            before,
-            max,
-        )
-        .await?
-        .map(|page| MixDiscoPage {
-            channels: page.channels.into_iter().map(map_channel).collect(),
-            total: page.total,
-            first_index: page.first_index,
-        }))
+        self.repository
+            .discoverable_mix_channel_page(service_domain, requester, after, before, max)
+            .await
     }
-    delegate!(mix_role(channel_id: Uuid, jid: &str) -> Option<String> => db::mix_role;);
+    pub(crate) async fn mix_role(&self, channel_id: Uuid, jid: &str) -> Result<Option<String>> {
+        self.repository.mix_role(channel_id, jid).await
+    }
     pub(crate) async fn mix_channel_discoverable_to(
         &self,
         channel: &MixChannel,
         actor: &str,
     ) -> Result<bool> {
-        db::mix_channel_discoverable_to(&self.pool, &channel_db(channel), actor).await
+        self.repository
+            .mix_channel_discoverable_to(channel, actor)
+            .await
     }
     pub(crate) async fn destroy_mix_channel(
         &self,
@@ -1039,9 +1414,10 @@ impl MixService {
         actor: &str,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
-        let federated = federated.map(federated_mutation_db);
         let _admission = self.delivery_admission_guard().await;
-        db::destroy_mix_channel(&self.pool, channel_id, actor, self, federated.as_ref()).await
+        self.repository
+            .destroy_mix_channel(channel_id, actor, federated)
+            .await
     }
     pub(crate) async fn join_mix_channel(
         &self,
@@ -1049,76 +1425,44 @@ impl MixService {
         request: JoinMixRequest,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<JoinChannelOutcome> {
-        // The repository borrows the parsed request; owned invitation and
-        // preference mirrors are materialized here so their lifetimes cover
-        // the awaited transaction.
-        let db_invitation = request
-            .invitation
-            .as_ref()
-            .map(db::MixInvitationProof::from);
-        let db_preference = request
-            .preference
-            .as_ref()
-            .map(db::MixParticipantPreference::from);
-        let federated = federated.map(federated_mutation_db);
         let _admission = self.delivery_admission_guard().await;
-        let outcome = db::join_mix_channel(
-            &self.pool,
-            channel_id,
-            db::JoinMixRequest {
-                actor_jid: &request.actor_jid,
-                nick: request.nick.as_deref(),
-                nodes: &request.nodes,
-                pam_user_id: request.pam_user_id,
-                invitation: db_invitation.as_ref(),
-                preference: db_preference.as_ref(),
-                anonymous_profile: request.anonymous_profile,
-            },
-            self,
-            federated.as_ref(),
-        )
-        .await?;
-        Ok(join_outcome(outcome))
+        self.repository
+            .join_mix_channel(channel_id, request, federated)
+            .await
     }
     pub(crate) async fn mix_participant(
         &self,
         channel_id: Uuid,
         jid: &str,
     ) -> Result<Option<MixParticipant>> {
-        Ok(db::mix_participant(&self.pool, channel_id, jid)
-            .await?
-            .map(map_participant))
+        self.repository.mix_participant(channel_id, jid).await
     }
     pub(crate) async fn mix_participant_by_id(
         &self,
         channel_id: Uuid,
         participant_id: Uuid,
     ) -> Result<Option<MixParticipant>> {
-        Ok(
-            db::mix_participant_by_id(&self.pool, channel_id, participant_id)
-                .await?
-                .map(map_participant),
-        )
+        self.repository
+            .mix_participant_by_id(channel_id, participant_id)
+            .await
     }
-    delegate!(mix_presence_source_jid(channel_id: Uuid, item_id: &str) -> Option<String> => db::mix_presence_source_jid;);
+    pub(crate) async fn mix_presence_source_jid(
+        &self,
+        channel_id: Uuid,
+        item_id: &str,
+    ) -> Result<Option<String>> {
+        self.repository
+            .mix_presence_source_jid(channel_id, item_id)
+            .await
+    }
     pub(crate) async fn expire_unrefreshed_mix_presence(
         &self,
         cutoff: DateTime<Utc>,
     ) -> Result<Vec<ExpiredMixPresence>> {
         let _admission = self.delivery_admission_guard().await;
-        Ok(
-            db::expire_unrefreshed_mix_presence(&self.pool, cutoff, self)
-                .await?
-                .into_iter()
-                .map(|expired| ExpiredMixPresence {
-                    channel_id: expired.channel_id,
-                    participant: map_participant(expired.participant),
-                    item_id: expired.item_id,
-                    payload: expired.payload,
-                    source_full_jid: expired.source_full_jid,
-                })
-                .collect(),
-        )
+        self.repository
+            .expire_unrefreshed_mix_presence(cutoff)
+            .await
     }
     pub(crate) async fn update_mix_subscriptions(
         &self,
@@ -1128,27 +1472,10 @@ impl MixService {
         unsubscribe: &[String],
         federated: Option<&FederatedMixMutation>,
     ) -> Result<Option<UpdateSubscriptionsOutcome>> {
-        let federated = federated.map(federated_mutation_db);
         let _admission = self.delivery_admission_guard().await;
-        Ok(db::update_mix_subscriptions(
-            &self.pool,
-            channel_id,
-            actor,
-            subscribe,
-            unsubscribe,
-            self,
-            federated.as_ref(),
-        )
-        .await?
-        .map(|outcome| UpdateSubscriptionsOutcome {
-            subscriptions: outcome.subscriptions,
-            participant: map_participant(outcome.participant),
-            removed_presence: outcome
-                .removed_presence
-                .into_iter()
-                .map(presence_item)
-                .collect(),
-        }))
+        self.repository
+            .update_mix_subscriptions(channel_id, actor, subscribe, unsubscribe, federated)
+            .await
     }
     pub(crate) async fn set_mix_nick(
         &self,
@@ -1157,24 +1484,10 @@ impl MixService {
         nick: &str,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<std::result::Result<MixParticipant, SetNickError>> {
-        let federated = federated.map(federated_mutation_db);
         let _admission = self.delivery_admission_guard().await;
-        Ok(
-            match db::set_mix_nick(
-                &self.pool,
-                channel_id,
-                actor,
-                nick,
-                self,
-                federated.as_ref(),
-            )
-            .await?
-            {
-                Ok(stored_participant) => Ok(map_participant(stored_participant)),
-                Err(db::SetNickError::NotParticipant) => Err(SetNickError::NotParticipant),
-                Err(db::SetNickError::Conflict) => Err(SetNickError::Conflict),
-            },
-        )
+        self.repository
+            .set_mix_nick(channel_id, actor, nick, federated)
+            .await
     }
     pub(crate) async fn leave_mix_channel(
         &self,
@@ -1183,22 +1496,10 @@ impl MixService {
         pam_user_id: Option<Uuid>,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<Option<LeaveMixOutcome>> {
-        let federated = federated.map(federated_mutation_db);
         let _admission = self.delivery_admission_guard().await;
-        Ok(db::leave_mix_channel(
-            &self.pool,
-            channel_id,
-            actor,
-            pam_user_id,
-            self,
-            federated.as_ref(),
-        )
-        .await?
-        .map(|left| LeaveMixOutcome {
-            participant: map_participant(left.participant),
-            presence_items: left.presence_items.into_iter().map(presence_item).collect(),
-            roster_change: left.roster_change,
-        }))
+        self.repository
+            .leave_mix_channel(channel_id, actor, pam_user_id, federated)
+            .await
     }
     pub(crate) async fn store_mix_presence(
         &self,
@@ -1209,18 +1510,9 @@ impl MixService {
         unavailable: bool,
     ) -> Result<PresenceOutcome> {
         let _admission = self.delivery_admission_guard().await;
-        Ok(presence_outcome(
-            db::store_mix_presence(
-                &self.pool,
-                channel_id,
-                actor_bare,
-                actor_full,
-                payload,
-                unavailable,
-                self,
-            )
-            .await?,
-        ))
+        self.repository
+            .store_mix_presence(channel_id, actor_bare, actor_full, payload, unavailable)
+            .await
     }
     pub(crate) async fn ensure_mix_presence(
         &self,
@@ -1230,96 +1522,28 @@ impl MixService {
         payload: &str,
     ) -> Result<PresenceOutcome> {
         let _admission = self.delivery_admission_guard().await;
-        Ok(presence_outcome(
-            db::ensure_mix_presence(
-                &self.pool, channel_id, actor_bare, actor_full, payload, self,
-            )
-            .await?,
-        ))
+        self.repository
+            .ensure_mix_presence(channel_id, actor_bare, actor_full, payload)
+            .await
     }
     pub(crate) async fn store_mix_message(
         &self,
         request: StoreMixMessageRequest<'_>,
     ) -> Result<StoreMixMessageAdmission> {
-        let StoreMixMessageRequest {
-            channel_id,
-            actor,
-            item_id,
-            payload,
-            identity,
-            delivery_payload,
-            visible_jid,
-            encrypted,
-        } = request;
-        let authenticators = identity
-            .as_ref()
-            .map(|identity| {
-                Ok::<_, anyhow::Error>(
-                    self.message_identity
-                        .authenticators(&identity.canonical_semantics),
-                )
-            })
-            .transpose()?;
-        let db_identity =
-            identity
-                .as_ref()
-                .zip(authenticators.as_ref())
-                .map(|(identity, authenticators)| {
-                    let primary = authenticators.primary();
-                    db::MixBusinessIdentity {
-                        client_id: &identity.client_id,
-                        semantic_key_id: primary.key_id(),
-                        semantic_mac: primary.mac(),
-                    }
-                });
+        let authenticators = request.identity.as_ref().map(|identity| {
+            self.message_identity
+                .authenticators(&identity.canonical_semantics)
+        });
         let _admission = self.delivery_admission_guard().await;
-        let admission = db::store_mix_message(
-            &self.pool,
-            channel_id,
-            actor,
-            item_id,
-            payload,
-            db_identity,
-            delivery_payload,
-            visible_jid,
-            encrypted,
-            self,
-        )
-        .await?;
-        // Only a fresh committed event with an actual audience inserted a
-        // recipient projection.  Exact replays and empty-audience messages
-        // must not let client retry traffic manufacture background DB turns.
-        if matches!(&admission.outcome, db::StoreEventOutcome::Stored(_))
-            && !admission.recipients.is_empty()
+        let result = self
+            .repository
+            .store_mix_message(request, authenticators.as_ref())
+            .await?;
+        if matches!(&result.outcome, StoreEventOutcome::Stored(_)) && !result.recipients.is_empty()
         {
-            // Publish locally now rather than waiting for this process to
-            // receive its own transaction-ordered PostgreSQL notification.
-            // Migration 0133 broadcasts the identical durable fact to peers.
             self.publish_delivery_local_commit();
         }
-        let outcome = match admission.outcome {
-            db::StoreEventOutcome::Existing(existing) => {
-                let exact = authenticators.as_ref().is_some_and(|authenticators| {
-                    existing.target_id.is_none()
-                        && authenticators
-                            .verifies(&existing.semantic_key_id, &existing.semantic_mac)
-                });
-                if exact {
-                    StoreEventOutcome::Replay(existing.authoritative_id)
-                } else {
-                    StoreEventOutcome::Conflict
-                }
-            }
-            outcome => store_event_outcome(outcome),
-        };
-        Ok(StoreMixMessageAdmission {
-            outcome,
-            recipients: admission
-                .recipients
-                .into_iter()
-                .map(map_participant)
-                .collect(),
-        })
+        Ok(result)
     }
 
     /// Consult the immutable replay commitment before any mutable participant
@@ -1334,25 +1558,9 @@ impl MixService {
         let authenticators = self
             .message_identity
             .authenticators(&identity.canonical_semantics);
-        let existing = db::lookup_mix_business_intent(
-            &self.pool,
-            channel_id,
-            actor,
-            "message",
-            &identity.client_id,
-        )
-        .await?;
-        Ok(match existing {
-            None => MixBusinessReplay::Miss,
-            Some(existing)
-                if existing.target_id.is_none()
-                    && authenticators
-                        .verifies(&existing.semantic_key_id, &existing.semantic_mac) =>
-            {
-                MixBusinessReplay::Replay(existing.authoritative_id)
-            }
-            Some(_) => MixBusinessReplay::Conflict,
-        })
+        self.repository
+            .lookup_mix_message_replay(channel_id, actor, identity, &authenticators)
+            .await
     }
 
     pub(crate) async fn lookup_mix_retraction_replay(
@@ -1365,25 +1573,9 @@ impl MixService {
         let authenticators = self
             .retraction_identity
             .authenticators(&identity.canonical_semantics);
-        let existing = db::lookup_mix_business_intent(
-            &self.pool,
-            channel_id,
-            actor,
-            "retraction",
-            &identity.client_id,
-        )
-        .await?;
-        Ok(match existing {
-            None => MixBusinessReplay::Miss,
-            Some(existing)
-                if existing.target_id == Some(target_id)
-                    && authenticators
-                        .verifies(&existing.semantic_key_id, &existing.semantic_mac) =>
-            {
-                MixBusinessReplay::Replay(existing.authoritative_id)
-            }
-            Some(_) => MixBusinessReplay::Conflict,
-        })
+        self.repository
+            .lookup_mix_retraction_replay(channel_id, actor, target_id, identity, &authenticators)
+            .await
     }
     pub(crate) async fn authorized_mix_event_page(
         &self,
@@ -1393,17 +1585,9 @@ impl MixService {
         before: Option<(DateTime<Utc>, Uuid)>,
         limit: i64,
     ) -> Result<MixReadOutcome<MixEventPage>> {
-        Ok(
-            match db::authorized_mix_event_page(&self.pool, channel_id, actor, node, before, limit)
-                .await?
-            {
-                db::MixReadOutcome::Found(page) => MixReadOutcome::Found(MixEventPage {
-                    events: page.events.into_iter().map(event).collect(),
-                }),
-                db::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
-                db::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
-            },
-        )
+        self.repository
+            .authorized_mix_event_page(channel_id, actor, node, before, limit)
+            .await
     }
     pub(crate) async fn publish_mix_avatar(
         &self,
@@ -1414,19 +1598,10 @@ impl MixService {
         payload: &str,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
-        let federated = federated.map(federated_mutation_db);
         let _admission = self.delivery_admission_guard().await;
-        db::publish_mix_avatar(
-            &self.pool,
-            channel_id,
-            actor,
-            node,
-            item_id,
-            payload,
-            self,
-            federated.as_ref(),
-        )
-        .await
+        self.repository
+            .publish_mix_avatar(channel_id, actor, node, item_id, payload, federated)
+            .await
     }
 
     pub(crate) async fn retract_mix_avatar(
@@ -1437,18 +1612,10 @@ impl MixService {
         item_id: &str,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
-        let federated = federated.map(federated_mutation_db);
         let _admission = self.delivery_admission_guard().await;
-        db::retract_mix_avatar(
-            &self.pool,
-            channel_id,
-            actor,
-            node,
-            item_id,
-            self,
-            federated.as_ref(),
-        )
-        .await
+        self.repository
+            .retract_mix_avatar(channel_id, actor, node, item_id, federated)
+            .await
     }
     pub(crate) async fn authorized_mix_mam_page(
         &self,
@@ -1457,21 +1624,9 @@ impl MixService {
         viewer_id: Option<Uuid>,
         query: &MamArchiveQuery,
     ) -> Result<MixReadOutcome<MixMamPage>> {
-        Ok(
-            match db::authorized_mix_mam_page(
-                &self.pool,
-                channel_id,
-                actor,
-                viewer_id,
-                &mam_query_db(query),
-            )
-            .await?
-            {
-                db::MixReadOutcome::Found(page) => MixReadOutcome::Found(mam_page(page)),
-                db::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
-                db::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
-            },
-        )
+        self.repository
+            .authorized_mix_mam_page(channel_id, actor, viewer_id, query)
+            .await
     }
     pub(crate) async fn authorized_mix_mam_boundaries(
         &self,
@@ -1479,17 +1634,9 @@ impl MixService {
         actor: &str,
         viewer_id: Option<Uuid>,
     ) -> Result<MixReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
-        Ok(
-            match db::authorized_mix_mam_boundaries(&self.pool, channel_id, actor, viewer_id)
-                .await?
-            {
-                db::MixReadOutcome::Found((first, last)) => {
-                    MixReadOutcome::Found((first.map(boundary), last.map(boundary)))
-                }
-                db::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
-                db::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
-            },
-        )
+        self.repository
+            .authorized_mix_mam_boundaries(channel_id, actor, viewer_id)
+            .await
     }
     pub(crate) async fn authorized_mix_access_entries(
         &self,
@@ -1498,15 +1645,9 @@ impl MixService {
         banned: bool,
         limit: i64,
     ) -> Result<MixReadOutcome<Vec<String>>> {
-        Ok(
-            match db::authorized_mix_access_entries(&self.pool, channel_id, actor, banned, limit)
-                .await?
-            {
-                db::MixReadOutcome::Found(entries) => MixReadOutcome::Found(entries),
-                db::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
-                db::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
-            },
-        )
+        self.repository
+            .authorized_mix_access_entries(channel_id, actor, banned, limit)
+            .await
     }
     pub(crate) async fn update_mix_info(
         &self,
@@ -1515,33 +1656,10 @@ impl MixService {
         update: MixInfoUpdate,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<MixMutationOutcome> {
-        let federated = federated.map(federated_mutation_db);
         let _admission = self.delivery_admission_guard().await;
-        Ok(
-            match db::update_mix_info(
-                &self.pool,
-                channel_id,
-                actor,
-                db::MixInfoUpdate {
-                    item_id: &update.item_id,
-                    expected_revision: update.expected_revision,
-                    name: update.name.as_deref(),
-                    description: update.description.as_deref(),
-                    contacts: &update.contacts,
-                },
-                self,
-                federated.as_ref(),
-            )
-            .await?
-            {
-                db::MixMutationOutcome::Applied(admission) => {
-                    MixMutationOutcome::Applied(Box::new(mutation_admission(*admission)))
-                }
-                db::MixMutationOutcome::Conflict => MixMutationOutcome::Conflict,
-                db::MixMutationOutcome::Forbidden => MixMutationOutcome::Forbidden,
-                db::MixMutationOutcome::NotFound => MixMutationOutcome::NotFound,
-            },
-        )
+        self.repository
+            .update_mix_info(channel_id, actor, update, federated)
+            .await
     }
 
     pub(crate) async fn update_mix_config(
@@ -1552,44 +1670,10 @@ impl MixService {
         roles: MixRoleUpdate,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<MixMutationOutcome> {
-        let federated = federated.map(federated_mutation_db);
         let _admission = self.delivery_admission_guard().await;
-        Ok(
-            match db::update_mix_config(
-                &self.pool,
-                channel_id,
-                actor,
-                db::MixConfigUpdate {
-                    item_id: &update.item_id,
-                    expected_revision: update.expected_revision,
-                    access_model: &update.access_model,
-                    jid_visibility: &update.jid_visibility,
-                    nick_required: update.nick_required,
-                    max_participants: update.max_participants,
-                    max_events: update.max_events,
-                    allow_private_messages: update.allow_private_messages,
-                    allow_participant_invites: update.allow_participant_invites,
-                    allow_user_message_retraction: update.allow_user_message_retraction,
-                    administrator_retraction_rights: &update.administrator_retraction_rights,
-                    enforce_registered_nick: update.enforce_registered_nick,
-                },
-                db::MixRoleUpdate {
-                    owners: roles.owners.as_deref(),
-                    administrators: roles.administrators.as_deref(),
-                },
-                self,
-                federated.as_ref(),
-            )
-            .await?
-            {
-                db::MixMutationOutcome::Applied(admission) => {
-                    MixMutationOutcome::Applied(Box::new(mutation_admission(*admission)))
-                }
-                db::MixMutationOutcome::Conflict => MixMutationOutcome::Conflict,
-                db::MixMutationOutcome::Forbidden => MixMutationOutcome::Forbidden,
-                db::MixMutationOutcome::NotFound => MixMutationOutcome::NotFound,
-            },
-        )
+        self.repository
+            .update_mix_config(channel_id, actor, update, roles, federated)
+            .await
     }
 
     pub(crate) async fn set_mix_access_entry(
@@ -1597,32 +1681,10 @@ impl MixService {
         update: MixAccessEntryUpdate<'_>,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<Option<AccessChangeOutcome>> {
-        let list = match update.list {
-            MixAccessList::Allowed => db::MixAccessList::Allowed,
-            MixAccessList::Banned => db::MixAccessList::Banned,
-        };
-        let operation = match update.operation {
-            MixAccessEntryOperation::Publish { reason } => {
-                db::MixAccessEntryOperation::Publish { reason }
-            }
-            MixAccessEntryOperation::Retract => db::MixAccessEntryOperation::Retract,
-        };
-        let federated = federated.map(federated_mutation_db);
         let _admission = self.delivery_admission_guard().await;
-        Ok(db::set_mix_access_entry(
-            &self.pool,
-            db::MixAccessEntryUpdate {
-                channel_id: update.channel_id,
-                actor: update.actor,
-                pattern: update.pattern,
-                list,
-                operation,
-            },
-            self,
-            federated.as_ref(),
-        )
-        .await?
-        .map(access_change_outcome))
+        self.repository
+            .set_mix_access_entry(update, federated)
+            .await
     }
     pub(crate) async fn register_mix_nick(
         &self,
@@ -1631,36 +1693,19 @@ impl MixService {
         nick: &str,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<RegisterMixNickOutcome> {
-        let federated = federated.map(federated_mutation_db);
         let _admission = self.delivery_admission_guard().await;
-        Ok(
-            match db::register_mix_nick(
-                &self.pool,
-                service_domain,
-                actor,
-                nick,
-                self,
-                federated.as_ref(),
-            )
-            .await?
-            {
-                db::RegisterMixNickOutcome::Registered { nick } => {
-                    RegisterMixNickOutcome::Registered { nick }
-                }
-                db::RegisterMixNickOutcome::Conflict => RegisterMixNickOutcome::Conflict,
-            },
-        )
+        self.repository
+            .register_mix_nick(service_domain, actor, nick, federated)
+            .await
     }
     pub(crate) async fn mix_participant_preference(
         &self,
         channel_id: Uuid,
         actor: &str,
     ) -> Result<Option<MixParticipantPreference>> {
-        Ok(
-            db::mix_participant_preference(&self.pool, channel_id, actor)
-                .await?
-                .map(map_preference),
-        )
+        self.repository
+            .mix_participant_preference(channel_id, actor)
+            .await
     }
     pub(crate) async fn update_mix_participant_preference(
         &self,
@@ -1669,21 +1714,10 @@ impl MixService {
         preference: &MixParticipantPreference,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<Option<MixParticipantPreferenceUpdateOutcome>> {
-        let federated = federated.map(federated_mutation_db);
         let _admission = self.delivery_admission_guard().await;
-        Ok(db::update_mix_participant_preference(
-            &self.pool,
-            channel_id,
-            actor,
-            &preference_db(preference),
-            self,
-            federated.as_ref(),
-        )
-        .await?
-        .map(|outcome| MixParticipantPreferenceUpdateOutcome {
-            participant: map_participant(outcome.participant),
-            roster_changes: outcome.roster_changes,
-        }))
+        self.repository
+            .update_mix_participant_preference(channel_id, actor, preference, federated)
+            .await
     }
     pub(crate) async fn authorized_mix_jid_map_entries(
         &self,
@@ -1691,13 +1725,9 @@ impl MixService {
         actor: &str,
         limit: i64,
     ) -> Result<MixReadOutcome<Vec<(String, String)>>> {
-        Ok(
-            match db::authorized_mix_jid_map_entries(&self.pool, channel_id, actor, limit).await? {
-                db::MixReadOutcome::Found(entries) => MixReadOutcome::Found(entries),
-                db::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
-                db::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
-            },
-        )
+        self.repository
+            .authorized_mix_jid_map_entries(channel_id, actor, limit)
+            .await
     }
     pub(crate) async fn issue_mix_invitation(
         &self,
@@ -1708,18 +1738,9 @@ impl MixService {
         lifetime: chrono::Duration,
         federated: Option<&FederatedMixMutation>,
     ) -> Result<bool> {
-        let federated = federated.map(federated_mutation_db);
-        db::issue_mix_invitation(
-            &self.pool,
-            channel_id,
-            inviter,
-            invitee,
-            token,
-            lifetime,
-            self,
-            federated.as_ref(),
-        )
-        .await
+        self.repository
+            .issue_mix_invitation(channel_id, inviter, invitee, token, lifetime, federated)
+            .await
     }
     pub(crate) async fn mix_private_message_recipient(
         &self,
@@ -1727,110 +1748,36 @@ impl MixService {
         sender: &str,
         recipient_id: Uuid,
     ) -> Result<Option<(MixParticipant, MixParticipant)>> {
-        Ok(
-            db::mix_private_message_recipient(&self.pool, channel_id, sender, recipient_id)
-                .await?
-                .map(|(sender, recipient)| (map_participant(sender), map_participant(recipient))),
-        )
+        self.repository
+            .mix_private_message_recipient(channel_id, sender, recipient_id)
+            .await
     }
     pub(crate) async fn retract_mix_message(
         &self,
         request: RetractMixMessageRequest<'_>,
     ) -> Result<RetractMixMessageAdmission> {
-        let RetractMixMessageRequest {
-            channel_id,
-            actor,
-            target_id,
-            retraction_id,
-            tombstone_payload,
-            retraction_payload,
-            identity,
-            visible_jid,
-        } = request;
-        let authenticators = identity
-            .as_ref()
-            .map(|identity| {
-                Ok::<_, anyhow::Error>(
-                    self.retraction_identity
-                        .authenticators(&identity.canonical_semantics),
-                )
-            })
-            .transpose()?;
-        let db_identity =
-            identity
-                .as_ref()
-                .zip(authenticators.as_ref())
-                .map(|(identity, authenticators)| {
-                    let primary = authenticators.primary();
-                    db::MixBusinessIdentity {
-                        client_id: &identity.client_id,
-                        semantic_key_id: primary.key_id(),
-                        semantic_mac: primary.mac(),
-                    }
-                });
+        let authenticators = request.identity.as_ref().map(|identity| {
+            self.retraction_identity
+                .authenticators(&identity.canonical_semantics)
+        });
         let _admission = self.delivery_admission_guard().await;
-        let admission = db::retract_mix_message(
-            &self.pool,
-            channel_id,
-            actor,
-            target_id,
-            retraction_id,
-            tombstone_payload,
-            retraction_payload,
-            db_identity,
-            visible_jid,
-            self,
-        )
-        .await?;
-        if matches!(&admission.outcome, db::RetractMixMessageOutcome::Retracted)
-            && !admission.recipients.is_empty()
+        let result = self
+            .repository
+            .retract_mix_message(request, authenticators.as_ref())
+            .await?;
+        if matches!(&result.outcome, RetractMixMessageOutcome::Retracted)
+            && !result.recipients.is_empty()
         {
-            // The statement trigger is cross-process coverage; this is the
-            // writer's immediate, lossless local accelerator.
             self.publish_delivery_local_commit();
         }
-        Ok(retract_mix_message_admission(admission, |existing| {
-            let exact = authenticators.as_ref().is_some_and(|authenticators| {
-                existing.target_id == Some(target_id)
-                    && authenticators.verifies(&existing.semantic_key_id, &existing.semantic_mac)
-            });
-            if exact {
-                RetractMixMessageOutcome::Replay(existing.authoritative_id)
-            } else {
-                RetractMixMessageOutcome::Conflict
-            }
-        }))
+        Ok(result)
     }
     pub(crate) async fn begin_remote_pam_join(
         &self,
         request: BeginRemotePamJoin,
     ) -> Result<PamOperationReplay> {
         let _admission = self.pam_capacity_admission_guard().await;
-        Ok(map_pam_replay(
-            db::begin_remote_pam_join(
-                &self.pool,
-                db::BeginRemotePamJoin {
-                    user_id: request.user_id,
-                    actor_jid: &request.actor_jid,
-                    channel_jid: &request.channel_jid,
-                    nick: request.nick.as_deref(),
-                    nodes: &request.nodes,
-                    request_id: &request.request_id,
-                    client_request_id: &request.client_request_id,
-                    requester_full_jid: &request.requester_full_jid,
-                    request_digest: &request.request_digest,
-                    remote_domain: &request.remote_domain,
-                    outbound_stanza: &request.outbound_stanza,
-                    policy: db::S2sOutboxPolicy {
-                        ttl_seconds: request.policy.ttl_seconds,
-                        max_rows: request.policy.max_rows,
-                        max_bytes: request.policy.max_bytes,
-                        max_per_domain: request.policy.max_per_domain,
-                    },
-                },
-            )
-            .await?,
-        ))
+        self.repository.begin_remote_pam_join(request).await
     }
 
     pub(crate) async fn lookup_remote_pam_operation(
@@ -1840,16 +1787,14 @@ impl MixService {
         client_request_id: &str,
         request_digest: &[u8; 32],
     ) -> Result<PamOperationReplay> {
-        Ok(map_pam_replay(
-            db::lookup_remote_pam_operation(
-                &self.pool,
+        self.repository
+            .lookup_remote_pam_operation(
                 user_id,
                 requester_full_jid,
                 client_request_id,
                 request_digest,
             )
-            .await?,
-        ))
+            .await
     }
 
     pub(crate) async fn begin_remote_pam_leave(
@@ -1857,29 +1802,7 @@ impl MixService {
         request: BeginRemotePamLeave,
     ) -> Result<PamOperationReplay> {
         let _admission = self.pam_capacity_admission_guard().await;
-        Ok(map_pam_replay(
-            db::begin_remote_pam_leave(
-                &self.pool,
-                db::BeginRemotePamLeave {
-                    user_id: request.user_id,
-                    actor_jid: &request.actor_jid,
-                    channel_jid: &request.channel_jid,
-                    request_id: &request.request_id,
-                    client_request_id: &request.client_request_id,
-                    requester_full_jid: &request.requester_full_jid,
-                    request_digest: &request.request_digest,
-                    remote_domain: &request.remote_domain,
-                    outbound_stanza: &request.outbound_stanza,
-                    policy: db::S2sOutboxPolicy {
-                        ttl_seconds: request.policy.ttl_seconds,
-                        max_rows: request.policy.max_rows,
-                        max_bytes: request.policy.max_bytes,
-                        max_per_domain: request.policy.max_per_domain,
-                    },
-                },
-            )
-            .await?,
-        ))
+        self.repository.begin_remote_pam_leave(request).await
     }
 
     pub(crate) async fn complete_remote_pam_success(
@@ -1891,24 +1814,16 @@ impl MixService {
         response_digest: &[u8; 32],
         join: Option<RemotePamJoin<'_>>,
     ) -> Result<RemotePamCompletionOutcome> {
-        let join = join.map(|join| db::RemotePamJoin {
-            participant_id: join.participant_id,
-            subscriptions: join.subscriptions,
-            nick: join.nick,
-        });
-        Ok(map_pam_completion(
-            db::complete_remote_pam_success(
-                &self.pool,
+        self.repository
+            .complete_remote_pam_success(
                 authenticated_domain,
                 channel_jid,
                 recipient_bare,
                 request_id,
                 response_digest,
                 join,
-                self,
             )
-            .await?,
-        ))
+            .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1922,9 +1837,8 @@ impl MixService {
         error_type: &str,
         condition: &str,
     ) -> Result<RemotePamCompletionOutcome> {
-        Ok(map_pam_completion(
-            db::complete_remote_pam_error(
-                &self.pool,
+        self.repository
+            .complete_remote_pam_error(
                 authenticated_domain,
                 channel_jid,
                 recipient_bare,
@@ -1932,56 +1846,36 @@ impl MixService {
                 response_digest,
                 error_type,
                 condition,
-                self,
             )
-            .await?,
-        ))
+            .await
     }
     pub(crate) async fn pam_memberships(&self, user_id: Uuid) -> Result<Vec<PamMembership>> {
-        Ok(db::pam_memberships(&self.pool, user_id)
-            .await?
-            .into_iter()
-            .map(pam_membership)
-            .collect())
+        self.repository.pam_memberships(user_id).await
     }
     pub(crate) async fn pam_membership(
         &self,
         user_id: Uuid,
         channel_jid: &str,
     ) -> Result<Option<PamMembership>> {
-        Ok(db::pam_membership(&self.pool, user_id, channel_jid)
-            .await?
-            .map(pam_membership))
+        self.repository.pam_membership(user_id, channel_jid).await
     }
-    delegate!(local_pam_users_for_channel(channel_jid: &str) -> Vec<Uuid> => db::local_pam_users_for_channel;);
+    pub(crate) async fn local_pam_users_for_channel(&self, channel_jid: &str) -> Result<Vec<Uuid>> {
+        self.repository
+            .local_pam_users_for_channel(channel_jid)
+            .await
+    }
     pub(crate) async fn reconcile_expired_remote_pam(&self, limit: i64) -> Result<u64> {
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
-        db::reconcile_expired_remote_pam(&self.pool, limit, self).await
+        self.repository.reconcile_expired_remote_pam(limit).await
     }
 
     pub(crate) async fn claim_pam_results(&self, limit: i64) -> Result<Vec<ClaimedPamResult>> {
-        let results = {
-            tracing::debug!(
-                available_permits = self.outbox_db_admission.available_permits(),
-                "MIX PAM result claim waiting for durable database admission"
-            );
-            let _outbox_db_admission = self.outbox_db_admission_guard().await;
-            tracing::debug!("MIX PAM result claim acquired durable database admission");
-            let results = db::claim_pam_results(&self.pool, limit).await?;
-            tracing::debug!("MIX PAM result claim releasing durable database admission");
-            results
-        };
-        Ok(results
-            .into_iter()
-            .map(|result| ClaimedPamResult {
-                operation_id: result.operation_id,
-                user_id: result.user_id,
-                requester_full_jid: result.requester_full_jid,
-                response_xml: result.response_xml,
-                attempt_count: result.attempt_count,
-                lease_token: result.lease_token,
-            })
-            .collect())
+        tracing::debug!(
+            available_permits = self.outbox_db_admission.available_permits(),
+            "MIX PAM result claim waiting for database admission"
+        );
+        let _outbox_db_admission = self.outbox_db_admission_guard().await;
+        self.repository.claim_pam_results(limit).await
     }
 
     pub(crate) async fn renew_pam_result_lease(
@@ -1990,7 +1884,9 @@ impl MixService {
         lease_token: Uuid,
     ) -> Result<bool> {
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
-        db::renew_pam_result_lease(&self.pool, operation_id, lease_token).await
+        self.repository
+            .renew_pam_result_lease(operation_id, lease_token)
+            .await
     }
 
     pub(crate) async fn acknowledge_pam_result(
@@ -1999,7 +1895,9 @@ impl MixService {
         lease_token: Uuid,
     ) -> Result<bool> {
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
-        db::acknowledge_pam_result(&self.pool, operation_id, lease_token).await
+        self.repository
+            .acknowledge_pam_result(operation_id, lease_token)
+            .await
     }
 
     pub(crate) async fn defer_pam_result(
@@ -2009,7 +1907,9 @@ impl MixService {
         delay_seconds: i64,
     ) -> Result<bool> {
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
-        db::defer_pam_result(&self.pool, operation_id, lease_token, delay_seconds).await
+        self.repository
+            .defer_pam_result(operation_id, lease_token, delay_seconds)
+            .await
     }
 
     pub(crate) async fn retry_pam_result(
@@ -2020,22 +1920,19 @@ impl MixService {
         error: &str,
     ) -> Result<bool> {
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
-        db::retry_pam_result(&self.pool, operation_id, lease_token, attempt_count, error).await
+        self.repository
+            .retry_pam_result(operation_id, lease_token, attempt_count, error)
+            .await
     }
 
     pub(crate) async fn prune_expired_pam_results(&self, limit: i64) -> Result<u64> {
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
         let _admission = self.pam_capacity_admission_guard().await;
-        db::prune_expired_pam_results(&self.pool, limit).await
+        self.repository.prune_expired_pam_results(limit).await
     }
 
     pub(crate) async fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>> {
-        Ok(db::find_enabled_user(&self.pool, username)
-            .await?
-            .map(|user| MixAccount {
-                id: user.id,
-                username: user.username,
-            }))
+        self.repository.find_enabled_user(username).await
     }
 
     /// Read a local recipient while processing a claimed durable MIX outbox
@@ -2053,36 +1950,25 @@ impl MixService {
             "MIX durable local-account lookup waiting for database admission"
         );
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
-        tracing::debug!("MIX durable local-account lookup acquired database admission");
-        let user = db::find_enabled_user(&self.pool, username)
-            .await?
-            .map(|user| MixAccount {
-                id: user.id,
-                username: user.username,
-            });
-        tracing::debug!("MIX durable local-account lookup completed database query");
-        Ok(user)
+        self.repository.find_enabled_user(username).await
     }
 
     pub(crate) async fn find_enabled_user_by_id(
         &self,
         user_id: Uuid,
     ) -> Result<Option<MixAccount>> {
-        Ok(db::find_enabled_user_by_id(&self.pool, user_id)
-            .await?
-            .map(|user| MixAccount {
-                id: user.id,
-                username: user.username,
-            }))
+        self.repository.find_enabled_user_by_id(user_id).await
     }
-    delegate!(is_blocked(owner_id: Uuid, candidate: &str) -> bool => db::is_blocked;);
+    pub(crate) async fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
+        self.repository.is_blocked(owner_id, candidate).await
+    }
 
     /// Outbox-only variant of the live privacy lookup.  Keep the permit
     /// scoped to this database await rather than to the enclosing durable
     /// delivery attempt, which can wait on a local transport or remote peer.
     pub(crate) async fn outbox_is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
-        db::is_blocked(&self.pool, owner_id, candidate).await
+        self.repository.is_blocked(owner_id, candidate).await
     }
 
     /// Resolve the cluster authority route for a claimed durable outbox row.
@@ -2122,49 +2008,48 @@ impl MixService {
         owner_id: Uuid,
         node: &str,
     ) -> Result<Option<PepNodeConfig>> {
-        Ok(db::pep_node(&self.pool, owner_id, node)
-            .await?
-            .map(|config| PepNodeConfig {
-                access_model: config.access_model,
-                max_items: config.max_items,
-                persist_items: config.persist_items,
-                send_last_published_item: config.send_last_published_item,
-                deliver_notifications: config.deliver_notifications,
-                roster_groups_allowed: config.roster_groups_allowed,
-                access_whitelist: config.access_whitelist,
-            }))
+        self.repository.pep_node(owner_id, node).await
     }
-    delegate!(pep_items(owner_id: Uuid, node: &str, item_id: Option<&str>, limit: i64) -> Vec<(String, String)> => db::pep_items;);
+    pub(crate) async fn pep_items(
+        &self,
+        owner_id: Uuid,
+        node: &str,
+        item_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<(String, String)>> {
+        self.repository
+            .pep_items(owner_id, node, item_id, limit)
+            .await
+    }
     pub(crate) async fn get_vcard(&self, user_id: Uuid) -> Result<VCardRecord> {
-        let record = db::get_vcard(&self.pool, user_id).await?;
-        Ok(VCardRecord {
-            payload_vcard_temp: record.payload_vcard_temp,
-        })
+        self.repository.get_vcard(user_id).await
     }
     pub(crate) async fn latest_roster_change_for_contact(
         &self,
         user_id: Uuid,
         contact_jid: &str,
     ) -> Result<Option<northstar_roster_core::RosterChange>> {
-        db::latest_roster_change_for_contact(&self.pool, user_id, contact_jid).await
+        self.repository
+            .latest_roster_change_for_contact(user_id, contact_jid)
+            .await
     }
     pub(crate) async fn mix_muc_mirror_for_mix(
         &self,
         mix_channel_id: Uuid,
     ) -> Result<Option<MixMucMirror>> {
-        Ok(db::mix_muc_mirror_for_mix(&self.pool, mix_channel_id)
-            .await?
-            .map(mix_muc_mirror))
+        self.repository.mix_muc_mirror_for_mix(mix_channel_id).await
     }
     pub(crate) async fn mix_muc_mirror_for_muc(
         &self,
         muc_room_id: Uuid,
     ) -> Result<Option<MixMucMirror>> {
-        Ok(db::mix_muc_mirror_for_muc(&self.pool, muc_room_id)
-            .await?
-            .map(mix_muc_mirror))
+        self.repository.mix_muc_mirror_for_muc(muc_room_id).await
     }
-    delegate!(mix_muc_mirror_service_complete(mix_domain: &str) -> bool => db::mix_muc_mirror_service_complete;);
+    pub(crate) async fn mix_muc_mirror_service_complete(&self, mix_domain: &str) -> Result<bool> {
+        self.repository
+            .mix_muc_mirror_service_complete(mix_domain)
+            .await
+    }
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn archive_mix_message_once(
         &self,
@@ -2176,9 +2061,8 @@ impl MixService {
         encrypted: bool,
         client_stanza_id: Option<&str>,
     ) -> Result<SourceArchiveAdmission> {
-        Ok(
-            match db::archive_mix_message_once(
-                &self.pool,
+        self.repository
+            .archive_mix_message_once(
                 personal_archive_id,
                 owner_id,
                 channel_jid,
@@ -2187,12 +2071,7 @@ impl MixService {
                 encrypted,
                 client_stanza_id,
             )
-            .await?
-            {
-                db::SourceArchiveAdmission::Stored(id) => SourceArchiveAdmission::Stored(id),
-                db::SourceArchiveAdmission::Replay(id) => SourceArchiveAdmission::Replay(id),
-            },
-        )
+            .await
     }
 
     /// Idempotently archive one claimed durable MIX delivery under the same
@@ -2211,9 +2090,8 @@ impl MixService {
         client_stanza_id: Option<&str>,
     ) -> Result<SourceArchiveAdmission> {
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
-        Ok(
-            match db::archive_mix_message_once(
-                &self.pool,
+        self.repository
+            .archive_mix_message_once(
                 personal_archive_id,
                 owner_id,
                 channel_jid,
@@ -2222,12 +2100,7 @@ impl MixService {
                 encrypted,
                 client_stanza_id,
             )
-            .await?
-            {
-                db::SourceArchiveAdmission::Stored(id) => SourceArchiveAdmission::Stored(id),
-                db::SourceArchiveAdmission::Replay(id) => SourceArchiveAdmission::Replay(id),
-            },
-        )
+            .await
     }
 
     /// Admit one ordered federation response stream atomically. A capacity or
@@ -2239,25 +2112,9 @@ impl MixService {
         responses: &[String],
         policy: S2sOutboxPolicy,
     ) -> Result<()> {
-        let policy = db::S2sOutboxPolicy {
-            ttl_seconds: policy.ttl_seconds,
-            max_rows: policy.max_rows,
-            max_bytes: policy.max_bytes,
-            max_per_domain: policy.max_per_domain,
-        };
-        let mut transaction = self.pool.begin().await?;
-        for response in responses {
-            db::enqueue_s2s_outbox_in_transaction(
-                &mut transaction,
-                target_domain,
-                response,
-                None,
-                policy,
-            )
-            .await?;
-        }
-        transaction.commit().await?;
-        Ok(())
+        self.repository
+            .enqueue_s2s_response_batch(target_domain, responses, policy)
+            .await
     }
 
     pub(crate) async fn federated_mix_iq_replay(
@@ -2267,23 +2124,9 @@ impl MixService {
         request_id: &str,
         request_digest: &[u8; 32],
     ) -> Result<FederatedMixIqReplay> {
-        Ok(
-            match db::federated_mix_iq_replay(
-                &self.pool,
-                authenticated_domain,
-                actor_jid,
-                request_id,
-                request_digest,
-            )
-            .await?
-            {
-                db::FederatedMixIqReplay::Miss => FederatedMixIqReplay::Miss,
-                db::FederatedMixIqReplay::Replay(response) => {
-                    FederatedMixIqReplay::Replay(response)
-                }
-                db::FederatedMixIqReplay::Conflict => FederatedMixIqReplay::Conflict,
-            },
-        )
+        self.repository
+            .federated_mix_iq_replay(authenticated_domain, actor_jid, request_id, request_digest)
+            .await
     }
 
     pub(crate) async fn admit_federated_mix_iq_result(
@@ -2295,15 +2138,8 @@ impl MixService {
         response: &str,
         policy: S2sOutboxPolicy,
     ) -> Result<FederatedMixIqReplay> {
-        let policy = db::S2sOutboxPolicy {
-            ttl_seconds: policy.ttl_seconds,
-            max_rows: policy.max_rows,
-            max_bytes: policy.max_bytes,
-            max_per_domain: policy.max_per_domain,
-        };
-        Ok(
-            match db::admit_federated_mix_iq_result(
-                &self.pool,
+        self.repository
+            .admit_federated_mix_iq_result(
                 authenticated_domain,
                 actor_jid,
                 request_id,
@@ -2311,15 +2147,7 @@ impl MixService {
                 response,
                 policy,
             )
-            .await?
-            {
-                db::FederatedMixIqReplay::Miss => FederatedMixIqReplay::Miss,
-                db::FederatedMixIqReplay::Replay(response) => {
-                    FederatedMixIqReplay::Replay(response)
-                }
-                db::FederatedMixIqReplay::Conflict => FederatedMixIqReplay::Conflict,
-            },
-        )
+            .await
     }
 
     pub(crate) async fn claim_mix_deliveries(
@@ -2327,34 +2155,12 @@ impl MixService {
         limit: i64,
         max_bytes: i64,
     ) -> Result<Vec<ClaimedMixDelivery>> {
-        let deliveries = {
-            tracing::debug!(
-                available_permits = self.outbox_db_admission.available_permits(),
-                "MIX delivery claim waiting for durable database admission"
-            );
-            let _admission = self.outbox_db_admission_guard().await;
-            tracing::debug!("MIX delivery claim acquired durable database admission");
-            let deliveries = db::claim_mix_deliveries(&self.pool, limit, max_bytes).await?;
-            tracing::debug!("MIX delivery claim releasing durable database admission");
-            deliveries
-        };
-        Ok(deliveries
-            .into_iter()
-            .map(|delivery| ClaimedMixDelivery {
-                delivery_id: delivery.delivery_id,
-                event_id: delivery.event_id,
-                channel_id: delivery.channel_id,
-                channel_jid: delivery.channel_jid,
-                recipient: map_participant(delivery.recipient),
-                stanza: delivery.stanza,
-                authoritative_stanza_id: delivery.authoritative_stanza_id,
-                archive: delivery.archive,
-                encrypted: delivery.encrypted,
-                attempt_count: delivery.attempt_count,
-                lease_token: delivery.lease_token,
-                route_wake_generation: delivery.route_wake_generation,
-            })
-            .collect())
+        tracing::debug!(
+            available_permits = self.outbox_db_admission.available_permits(),
+            "MIX delivery claim waiting for database admission"
+        );
+        let _admission = self.outbox_db_admission_guard().await;
+        self.repository.claim_mix_deliveries(limit, max_bytes).await
     }
 
     /// Keep MIX retention bounded without putting cleanup ahead of a live
@@ -2362,17 +2168,19 @@ impl MixService {
     /// private outbox admission capability.
     pub(crate) async fn maintain_mix_delivery_retention(&self) -> Result<()> {
         let _admission = self.outbox_db_admission_guard().await;
-        db::maintain_mix_delivery_retention(&self.pool).await
+        self.repository.maintain_mix_delivery_retention().await
     }
 
     pub(crate) async fn prune_expired_business_intents(&self, limit: i64) -> Result<u64> {
         let _admission = self.outbox_db_admission_guard().await;
-        db::prune_expired_mix_business_intents(&self.pool, limit).await
+        self.repository.prune_expired_business_intents(limit).await
     }
 
     pub(crate) async fn prune_expired_federated_iq_results(&self, limit: i64) -> Result<u64> {
         let _admission = self.outbox_db_admission_guard().await;
-        db::prune_expired_federated_mix_iq_results(&self.pool, limit).await
+        self.repository
+            .prune_expired_federated_iq_results(limit)
+            .await
     }
 
     pub(crate) async fn acknowledge_mix_delivery(
@@ -2381,14 +2189,14 @@ impl MixService {
         lease_token: Uuid,
     ) -> Result<bool> {
         let _admission = self.outbox_db_admission_guard().await;
-        let acknowledged =
-            db::acknowledge_mix_delivery(&self.pool, delivery_id, lease_token).await?;
-        if acknowledged {
-            // Removing the head of one recipient's ordered projection can
-            // make its successor claimable immediately.
+        let result = self
+            .repository
+            .acknowledge_mix_delivery(delivery_id, lease_token)
+            .await?;
+        if result {
             self.publish_delivery_local_commit();
         }
-        Ok(acknowledged)
+        Ok(result)
     }
 
     /// Give a direct C2S writer a rotated, bounded MIX source lease before
@@ -2399,7 +2207,7 @@ impl MixService {
         source: crate::outbound::MixDelivery,
     ) -> Result<crate::outbound::MixDelivery> {
         let _admission = self.outbox_db_admission_guard().await;
-        db::mix::fence_mix_socket_write(&self.pool, source).await
+        self.repository.fence_mix_socket_write(source).await
     }
 
     /// Persist a remote-node ownership fence before a signed cluster command
@@ -2412,14 +2220,9 @@ impl MixService {
         ttl_seconds: u64,
     ) -> Result<crate::outbound::MixDelivery> {
         let _admission = self.outbox_db_admission_guard().await;
-        db::mix::transfer_mix_delivery_to_cluster(
-            &self.pool,
-            source,
-            node_id,
-            request_id,
-            ttl_seconds,
-        )
-        .await
+        self.repository
+            .transfer_mix_delivery_to_cluster(source, node_id, request_id, ttl_seconds)
+            .await
     }
 
     /// Release only the exact remote-node MIX hand-off which never reached a
@@ -2431,12 +2234,14 @@ impl MixService {
         request_id: Uuid,
     ) -> Result<bool> {
         let _admission = self.outbox_db_admission_guard().await;
-        let released =
-            db::mix::release_mix_cluster_delivery(&self.pool, source, node_id, request_id).await?;
-        if released {
+        let result = self
+            .repository
+            .release_mix_cluster_delivery(source, node_id, request_id)
+            .await?;
+        if result {
             self.publish_delivery_local_commit();
         }
-        Ok(released)
+        Ok(result)
     }
 
     /// Persist a typed BOSH owner for a claimed MIX recipient row. This is a
@@ -2449,7 +2254,9 @@ impl MixService {
         ttl_seconds: u64,
     ) -> Result<crate::outbound::MixDelivery> {
         let _admission = self.outbox_db_admission_guard().await;
-        db::mix::transfer_mix_delivery_to_bosh(&self.pool, source, session_id, ttl_seconds).await
+        self.repository
+            .transfer_mix_delivery_to_bosh(source, session_id, ttl_seconds)
+            .await
     }
 
     pub(crate) async fn renew_mix_delivery_lease(
@@ -2458,7 +2265,9 @@ impl MixService {
         lease_token: Uuid,
     ) -> Result<bool> {
         let _admission = self.outbox_db_admission_guard().await;
-        db::renew_mix_delivery_lease(&self.pool, delivery_id, lease_token).await
+        self.repository
+            .renew_mix_delivery_lease(delivery_id, lease_token)
+            .await
     }
 
     pub(crate) async fn dead_letter_mix_delivery(
@@ -2469,20 +2278,14 @@ impl MixService {
         error: &str,
     ) -> Result<bool> {
         let _admission = self.outbox_db_admission_guard().await;
-        let moved = db::dead_letter_mix_delivery(
-            &self.pool,
-            delivery_id,
-            lease_token,
-            terminal_reason,
-            error,
-        )
-        .await?;
-        if moved {
-            // Dead-lettering has the same sequence-unblocking property as a
-            // successful acknowledgement.
+        let result = self
+            .repository
+            .dead_letter_mix_delivery(delivery_id, lease_token, terminal_reason, error)
+            .await?;
+        if result {
             self.publish_delivery_local_commit();
         }
-        Ok(moved)
+        Ok(result)
     }
 
     pub(crate) async fn retry_mix_delivery(
@@ -2494,26 +2297,21 @@ impl MixService {
         error: &str,
     ) -> Result<bool> {
         let _admission = self.outbox_db_admission_guard().await;
-        // The repository rereads the authoritative attempt count under the
-        // exact lease row lock. Keep the protocol-facing snapshot argument
-        // until the protocol completion DTO can be narrowed independently,
-        // but never let it decide the terminal boundary.
-        let outcome = db::retry_mix_delivery(
-            &self.pool,
-            delivery_id,
-            lease_token,
-            route_wake_generation,
-            error,
-        )
-        .await?;
-        match outcome {
-            db::MixDeliveryRetryOutcome::LeaseLost => Ok(false),
-            db::MixDeliveryRetryOutcome::Retried => Ok(true),
-            db::MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit
-            | db::MixDeliveryRetryOutcome::DeadLettered => {
-                // The database trigger wakes peers, while this direct edge
-                // makes the committing process re-probe immediately. Both
-                // outcomes can expose an immediately eligible ordered head.
+        let result = self
+            .repository
+            .retry_mix_delivery(
+                delivery_id,
+                lease_token,
+                _claimed_attempt_count,
+                route_wake_generation,
+                error,
+            )
+            .await?;
+        match result {
+            MixDeliveryRetryOutcome::LeaseLost => Ok(false),
+            MixDeliveryRetryOutcome::Retried => Ok(true),
+            MixDeliveryRetryOutcome::RouteWokenAtAttemptLimit
+            | MixDeliveryRetryOutcome::DeadLettered => {
                 self.publish_delivery_local_commit();
                 Ok(true)
             }
@@ -2528,14 +2326,14 @@ impl MixService {
         delay_seconds: i64,
     ) -> Result<bool> {
         let _admission = self.outbox_db_admission_guard().await;
-        db::defer_mix_delivery(
-            &self.pool,
-            delivery_id,
-            lease_token,
-            route_wake_generation,
-            delay_seconds,
-        )
-        .await
+        self.repository
+            .defer_mix_delivery(
+                delivery_id,
+                lease_token,
+                route_wake_generation,
+                delay_seconds,
+            )
+            .await
     }
 
     /// A locally verified MIX-capable resource can make an already-persisted
@@ -2544,11 +2342,14 @@ impl MixService {
     /// route epoch and brings an unleased head's next claim forward.
     pub(crate) async fn wake_mix_delivery_recipient(&self, recipient_jid: &str) -> Result<u64> {
         let _admission = self.outbox_db_admission_guard().await;
-        let woken = db::wake_mix_delivery_recipient(&self.pool, recipient_jid).await?;
-        if woken > 0 {
+        let result = self
+            .repository
+            .wake_mix_delivery_recipient(recipient_jid)
+            .await?;
+        if result > 0 {
             self.publish_delivery_local_commit();
         }
-        Ok(woken)
+        Ok(result)
     }
 
     #[allow(dead_code)] // Exposed for the pending admin recovery endpoint wiring.
@@ -2557,25 +2358,10 @@ impl MixService {
         before: Option<(DateTime<Utc>, Uuid)>,
         limit: i64,
     ) -> Result<Vec<MixDeliveryDeadLetter>> {
-        let dead_letters = {
-            let _admission = self.outbox_db_admission_guard().await;
-            db::mix_delivery_dead_letters(&self.pool, before, limit).await?
-        };
-        Ok(dead_letters
-            .into_iter()
-            .map(|dead| MixDeliveryDeadLetter {
-                dead_letter_id: dead.dead_letter_id,
-                delivery_id: dead.delivery_id,
-                event_id: dead.event_id,
-                channel_id: dead.channel_id,
-                channel_jid: dead.channel_jid,
-                recipient_jid: dead.recipient_jid,
-                attempt_count: dead.attempt_count,
-                terminal_reason: dead.terminal_reason,
-                last_error: dead.last_error,
-                failed_at: dead.failed_at,
-            })
-            .collect())
+        let _admission = self.outbox_db_admission_guard().await;
+        self.repository
+            .mix_delivery_dead_letters(before, limit)
+            .await
     }
 
     #[allow(dead_code)] // Exposed for the pending admin recovery endpoint wiring.
@@ -2585,42 +2371,18 @@ impl MixService {
     ) -> Result<bool> {
         let _admission = self.delivery_admission_guard().await;
         let _outbox_db_admission = self.outbox_db_admission_guard().await;
-        let requeued = db::requeue_mix_delivery_dead_letter(&self.pool, dead_letter_id).await?;
-        if requeued {
+        let result = self
+            .repository
+            .requeue_mix_delivery_dead_letter(dead_letter_id)
+            .await?;
+        if result {
             self.publish_delivery_local_commit();
         }
-        Ok(requeued)
-    }
-
-    pub(crate) fn valid_stable_participant_id(value: &str) -> bool {
-        db::valid_stable_participant_id(value)
-    }
-
-    pub(crate) fn mix_timestamp_item_id() -> String {
-        db::mix_timestamp_item_id()
-    }
-
-    pub(crate) fn valid_join_nodes(nodes: &[String]) -> Result<Vec<String>> {
-        db::valid_join_nodes(nodes)
-    }
-
-    pub(crate) fn prepare_mix_nick(nick: &str) -> Result<String> {
-        db::prepare_mix_nick(nick)
-    }
-
-    pub(crate) fn canonical_mix_access_pattern(pattern: &str) -> Result<String> {
-        db::canonical_mix_access_pattern(pattern)
-    }
-
-    pub(crate) fn participant_jid_visible(
-        channel: &MixChannel,
-        preference: &MixParticipantPreference,
-    ) -> bool {
-        db::participant_jid_visible(&channel_db(channel), &preference_db(preference))
+        Ok(result)
     }
 }
 
-fn mix_preference_result_form(preference: &db::MixParticipantPreference) -> String {
+fn mix_preference_result_form(preference: &MixParticipantPreference) -> String {
     let value = |variable: &'static str, kind: Option<&'static str>, text: &str| {
         XmlElement::new("field")
             .attr("var", variable)
@@ -2650,26 +2412,26 @@ fn mix_preference_result_form(preference: &db::MixParticipantPreference) -> Stri
 }
 
 fn render_federated_mix_iq_result(
-    context: &db::FederatedMixMutation,
-    success: &db::FederatedMixSuccess,
+    context: &FederatedMixMutation,
+    success: &FederatedMixSuccess,
 ) -> Result<String> {
     let payload = match success {
-        db::FederatedMixSuccess::Create { channel } => {
+        FederatedMixSuccess::Create { channel } => {
             XmlElement::namespaced("create", "urn:xmpp:mix:core:1")
                 .attr("channel", channel)
                 .finish()
         }
-        db::FederatedMixSuccess::Destroy { channel } => {
+        FederatedMixSuccess::Destroy { channel } => {
             XmlElement::namespaced("destroy", "urn:xmpp:mix:core:1")
                 .attr("channel", channel)
                 .finish()
         }
-        db::FederatedMixSuccess::RegisterNick { nick } => {
+        FederatedMixSuccess::RegisterNick { nick } => {
             XmlElement::namespaced("register", "urn:xmpp:mix:misc:0")
                 .child(XmlElement::new("nick").text(nick))
                 .finish()
         }
-        db::FederatedMixSuccess::Join {
+        FederatedMixSuccess::Join {
             participant,
             subscriptions,
             preference,
@@ -2695,22 +2457,22 @@ fn render_federated_mix_iq_result(
             }
             join.finish()
         }
-        db::FederatedMixSuccess::Leave => {
+        FederatedMixSuccess::Leave => {
             XmlElement::namespaced("leave", "urn:xmpp:mix:core:1").finish()
         }
-        db::FederatedMixSuccess::SetNick { nick } => {
+        FederatedMixSuccess::SetNick { nick } => {
             XmlElement::namespaced("setnick", "urn:xmpp:mix:core:1")
                 .child(XmlElement::new("nick").text(nick))
                 .finish()
         }
-        db::FederatedMixSuccess::UpdateSubscriptions { subscriptions } => {
+        FederatedMixSuccess::UpdateSubscriptions { subscriptions } => {
             let mut update = XmlElement::namespaced("update-subscription", "urn:xmpp:mix:core:1");
             for node in subscriptions {
                 update.push_child(XmlElement::new("subscribe").attr("node", node));
             }
             update.finish()
         }
-        db::FederatedMixSuccess::PubSubPublish { node, item_id } => {
+        FederatedMixSuccess::PubSubPublish { node, item_id } => {
             XmlElement::namespaced("pubsub", "http://jabber.org/protocol/pubsub")
                 .child(
                     XmlElement::new("publish")
@@ -2719,15 +2481,15 @@ fn render_federated_mix_iq_result(
                 )
                 .finish()
         }
-        db::FederatedMixSuccess::PubSubEmpty => {
+        FederatedMixSuccess::PubSubEmpty => {
             XmlElement::namespaced("pubsub", "http://jabber.org/protocol/pubsub").finish()
         }
-        db::FederatedMixSuccess::Preference { preference } => {
+        FederatedMixSuccess::Preference { preference } => {
             XmlElement::namespaced("user-preference", "urn:xmpp:mix:anon:0")
                 .validated_fragment(&mix_preference_result_form(preference))?
                 .finish()
         }
-        db::FederatedMixSuccess::Invitation {
+        FederatedMixSuccess::Invitation {
             inviter,
             invitee,
             channel,
@@ -2751,14 +2513,17 @@ fn render_federated_mix_iq_result(
         .finish())
 }
 
-impl db::MixEventPayloadRenderer for MixService {
-    fn info_payload(&self, channel: &db::MixChannel) -> String {
+#[derive(Clone)]
+pub(crate) struct MixPayloads;
+
+impl MixEventPayloadRenderer for MixPayloads {
+    fn info_payload(&self, channel: &MixChannel) -> String {
         render_info_payload(channel)
     }
 
     fn config_payload(
         &self,
-        channel: &db::MixChannel,
+        channel: &MixChannel,
         last_changed_by: &str,
         owners: &BTreeSet<String>,
         administrators: &BTreeSet<String>,
@@ -2768,9 +2533,9 @@ impl db::MixEventPayloadRenderer for MixService {
 
     fn participant_payload(
         &self,
-        channel: &db::MixChannel,
-        participant: &db::MixParticipant,
-        preference: &db::MixParticipantPreference,
+        channel: &MixChannel,
+        participant: &MixParticipant,
+        preference: &MixParticipantPreference,
     ) -> String {
         render_participant_payload(channel, participant, preference)
     }
@@ -2779,8 +2544,8 @@ impl db::MixEventPayloadRenderer for MixService {
         render_access_payload(pattern)
     }
 
-    fn presence_delivery_stanza(&self, delivery: db::MixPresenceDelivery<'_>) -> Result<String> {
-        let db::MixPresenceDelivery {
+    fn presence_delivery_stanza(&self, delivery: MixPresenceDelivery<'_>) -> Result<String> {
+        let MixPresenceDelivery {
             channel,
             participant,
             preference,
@@ -2796,7 +2561,7 @@ impl db::MixEventPayloadRenderer for MixService {
             "MIX reflected presence requires an encoded full JID"
         );
         let mut mix = XmlElement::namespaced("mix", "urn:xmpp:mix:presence:0");
-        if db::participant_jid_visible(channel, preference) {
+        if participant_jid_visible(channel, preference) {
             mix.push_child(XmlElement::new("jid").text(actor_full));
         }
         if let Some(nick) = participant.nick.as_deref() {
@@ -2814,8 +2579,8 @@ impl db::MixEventPayloadRenderer for MixService {
 
     fn node_event_stanza(
         &self,
-        channel: &db::MixChannel,
-        recipient: &db::MixParticipant,
+        channel: &MixChannel,
+        recipient: &MixParticipant,
         node: &str,
         item_id: &str,
         payload: Option<&str>,
@@ -2844,9 +2609,9 @@ impl db::MixEventPayloadRenderer for MixService {
 
     fn message_delivery_stanza(
         &self,
-        channel: &db::MixChannel,
-        sender: &db::MixParticipant,
-        recipient: &db::MixParticipant,
+        channel: &MixChannel,
+        sender: &MixParticipant,
+        recipient: &MixParticipant,
         authoritative_id: Uuid,
         payload: &str,
         visible_jid: Option<&str>,
@@ -2875,9 +2640,9 @@ impl db::MixEventPayloadRenderer for MixService {
 
     fn retraction_delivery_stanza(
         &self,
-        channel: &db::MixChannel,
-        sender: &db::MixParticipant,
-        recipient: &db::MixParticipant,
+        channel: &MixChannel,
+        sender: &MixParticipant,
+        recipient: &MixParticipant,
         authoritative_id: Uuid,
         target_id: Uuid,
         visible_jid: Option<&str>,
@@ -2897,14 +2662,14 @@ impl db::MixEventPayloadRenderer for MixService {
 
     fn federated_iq_result(
         &self,
-        context: &db::FederatedMixMutation,
-        success: &db::FederatedMixSuccess,
+        context: &FederatedMixMutation,
+        success: &FederatedMixSuccess,
     ) -> Result<String> {
         render_federated_mix_iq_result(context, success)
     }
 
-    fn pam_join_result(&self, result: db::PamJoinResult<'_>) -> Result<String> {
-        let db::PamJoinResult {
+    fn pam_join_result(&self, result: PamJoinResult<'_>) -> Result<String> {
+        let PamJoinResult {
             client_request_id,
             actor_bare,
             requester_full_jid,
@@ -2914,7 +2679,7 @@ impl db::MixEventPayloadRenderer for MixService {
             nick,
         } = result;
         anyhow::ensure!(
-            db::valid_stable_participant_id(participant_id),
+            valid_stable_participant_id(participant_id),
             "invalid MIX stable participant id"
         );
         let channel = crate::jid::CanonicalJid::parse_bare(channel_jid)?;
@@ -2998,310 +2763,6 @@ impl db::MixEventPayloadRenderer for MixService {
     }
 }
 
-fn map_mix_muc_link_outcome(outcome: db::LinkMixMucOutcome) -> MixMucLinkOutcome {
-    match outcome {
-        db::LinkMixMucOutcome::Linked => MixMucLinkOutcome::Linked,
-        db::LinkMixMucOutcome::AlreadyLinked => MixMucLinkOutcome::AlreadyLinked,
-        db::LinkMixMucOutcome::MissingCounterpart => MixMucLinkOutcome::MissingCounterpart,
-        db::LinkMixMucOutcome::NotCommonOwner => MixMucLinkOutcome::NotCommonOwner,
-        db::LinkMixMucOutcome::Conflict => MixMucLinkOutcome::Conflict,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Explicit repository <-> boundary translations. Every MIX DTO crossing into
-// the protocol layer passes through exactly one of these functions; field
-// names mirror the repository row so each mapping is reviewable by diff.
-// ---------------------------------------------------------------------------
-
-fn map_channel(channel: db::MixChannel) -> MixChannel {
-    MixChannel {
-        id: channel.id,
-        revision: channel.revision,
-        service_domain: channel.service_domain,
-        localpart: channel.localpart,
-        creator_jid: channel.creator_jid,
-        name: channel.name,
-        description: channel.description,
-        contacts: channel.contacts,
-        access_model: channel.access_model,
-        jid_visibility: channel.jid_visibility,
-        nick_required: channel.nick_required,
-        max_participants: channel.max_participants,
-        max_events: channel.max_events,
-        allow_private_messages: channel.allow_private_messages,
-        allow_participant_invites: channel.allow_participant_invites,
-        allow_user_message_retraction: channel.allow_user_message_retraction,
-        administrator_retraction_rights: channel.administrator_retraction_rights,
-        enforce_registered_nick: channel.enforce_registered_nick,
-    }
-}
-
-fn channel_db(channel: &MixChannel) -> db::MixChannel {
-    db::MixChannel {
-        id: channel.id,
-        revision: channel.revision,
-        service_domain: channel.service_domain.clone(),
-        localpart: channel.localpart.clone(),
-        creator_jid: channel.creator_jid.clone(),
-        name: channel.name.clone(),
-        description: channel.description.clone(),
-        contacts: channel.contacts.clone(),
-        access_model: channel.access_model.clone(),
-        jid_visibility: channel.jid_visibility.clone(),
-        nick_required: channel.nick_required,
-        max_participants: channel.max_participants,
-        max_events: channel.max_events,
-        allow_private_messages: channel.allow_private_messages,
-        allow_participant_invites: channel.allow_participant_invites,
-        allow_user_message_retraction: channel.allow_user_message_retraction,
-        administrator_retraction_rights: channel.administrator_retraction_rights.clone(),
-        enforce_registered_nick: channel.enforce_registered_nick,
-    }
-}
-
-fn map_participant(participant: db::MixParticipant) -> MixParticipant {
-    MixParticipant {
-        participant_id: participant.participant_id,
-        jid: participant.jid,
-        nick: participant.nick,
-    }
-}
-
-#[cfg(test)]
-fn participant_db(participant: &MixParticipant) -> db::MixParticipant {
-    db::MixParticipant {
-        participant_id: participant.participant_id,
-        jid: participant.jid.clone(),
-        nick: participant.nick.clone(),
-    }
-}
-
-fn map_preference(preference: db::MixParticipantPreference) -> MixParticipantPreference {
-    MixParticipantPreference {
-        jid_visibility: preference.jid_visibility,
-        private_messages: preference.private_messages,
-        vcard: preference.vcard,
-        share_presence: preference.share_presence,
-    }
-}
-
-fn preference_db(preference: &MixParticipantPreference) -> db::MixParticipantPreference {
-    db::MixParticipantPreference {
-        jid_visibility: preference.jid_visibility.clone(),
-        private_messages: preference.private_messages.clone(),
-        vcard: preference.vcard.clone(),
-        share_presence: preference.share_presence,
-    }
-}
-
-fn event(event: db::MixEvent) -> MixEvent {
-    MixEvent {
-        id: event.id,
-        item_id: event.item_id,
-        payload: event.payload,
-        created_at: event.created_at,
-    }
-}
-
-fn mutation_admission(admission: db::MixMutationAdmission) -> MixMutationAdmission {
-    MixMutationAdmission {
-        channel: map_channel(admission.channel),
-        node: admission.node,
-        item_id: admission.item_id,
-        payload: admission.payload,
-        recipients: admission
-            .recipients
-            .into_iter()
-            .map(map_participant)
-            .collect(),
-    }
-}
-
-fn retract_mix_message_admission(
-    admission: db::RetractMixMessageAdmission,
-    existing_outcome: impl FnOnce(&db::MixIntentEvidence) -> RetractMixMessageOutcome,
-) -> RetractMixMessageAdmission {
-    let outcome = match &admission.outcome {
-        db::RetractMixMessageOutcome::Existing(existing) => existing_outcome(existing),
-        db::RetractMixMessageOutcome::Retracted => RetractMixMessageOutcome::Retracted,
-        db::RetractMixMessageOutcome::NotFound => RetractMixMessageOutcome::NotFound,
-        db::RetractMixMessageOutcome::Forbidden => RetractMixMessageOutcome::Forbidden,
-    };
-    RetractMixMessageAdmission {
-        outcome,
-        recipients: admission
-            .recipients
-            .into_iter()
-            .map(map_participant)
-            .collect(),
-    }
-}
-
-fn presence_item(item: db::MixPresenceItem) -> MixPresenceItem {
-    MixPresenceItem {
-        item_id: item.item_id,
-        payload: item.payload,
-        source_full_jid: item.source_full_jid,
-    }
-}
-
-fn pam_membership(membership: db::PamMembership) -> PamMembership {
-    PamMembership {
-        id: membership.id,
-        user_id: membership.user_id,
-        channel_jid: membership.channel_jid,
-        participant_id: membership.participant_id,
-        state: membership.state,
-        request_id: membership.request_id,
-        client_request_id: membership.client_request_id,
-        requester_full_jid: membership.requester_full_jid,
-        subscriptions: membership.subscriptions,
-    }
-}
-
-fn map_pam_replay(replay: db::PamOperationReplay) -> PamOperationReplay {
-    match replay {
-        db::PamOperationReplay::Miss => PamOperationReplay::Miss,
-        db::PamOperationReplay::Pending => PamOperationReplay::Pending,
-        db::PamOperationReplay::Replay(response) => PamOperationReplay::Replay(response),
-        db::PamOperationReplay::Conflict => PamOperationReplay::Conflict,
-    }
-}
-
-fn map_pam_completion(outcome: db::RemotePamCompletionOutcome) -> RemotePamCompletionOutcome {
-    fn completion(value: db::RemotePamCompletion) -> RemotePamCompletion {
-        RemotePamCompletion {
-            response_xml: value.response_xml,
-            membership: value.membership.map(pam_membership),
-            applied: value.applied,
-            roster_removed: value.roster_removed,
-        }
-    }
-    match outcome {
-        db::RemotePamCompletionOutcome::Applied(value) => {
-            RemotePamCompletionOutcome::Applied(completion(value))
-        }
-        db::RemotePamCompletionOutcome::Replay(value) => {
-            RemotePamCompletionOutcome::Replay(completion(value))
-        }
-        db::RemotePamCompletionOutcome::Conflict => RemotePamCompletionOutcome::Conflict,
-        db::RemotePamCompletionOutcome::Missing => RemotePamCompletionOutcome::Missing,
-    }
-}
-
-fn boundary(boundary: db::ArchiveBoundary) -> ArchiveBoundary {
-    ArchiveBoundary {
-        id: boundary.id,
-        created_at: boundary.created_at,
-    }
-}
-
-fn mix_muc_mirror(mirror: db::MixMucMirror) -> MixMucMirror {
-    MixMucMirror {
-        mix_channel_id: mirror.mix_channel_id,
-        muc_room_id: mirror.muc_room_id,
-        localpart: mirror.localpart,
-        mix_domain: mirror.mix_domain,
-    }
-}
-
-fn mam_page(page: db::MixMamPage) -> MixMamPage {
-    MixMamPage {
-        events: page.events.into_iter().map(event).collect(),
-        total: page.total,
-        first_index: page.first_index,
-        complete: page.complete,
-    }
-}
-
-fn create_outcome(outcome: db::CreateChannelOutcome) -> CreateChannelOutcome {
-    match outcome {
-        db::CreateChannelOutcome::Created(id) => CreateChannelOutcome::Created(id),
-        db::CreateChannelOutcome::Conflict => CreateChannelOutcome::Conflict,
-        db::CreateChannelOutcome::QuotaExceeded => CreateChannelOutcome::QuotaExceeded,
-    }
-}
-
-fn store_event_outcome(outcome: db::StoreEventOutcome) -> StoreEventOutcome {
-    match outcome {
-        db::StoreEventOutcome::Stored(id) => StoreEventOutcome::Stored(id),
-        db::StoreEventOutcome::Existing(_) => {
-            unreachable!("existing MIX identity is resolved by the service keyring")
-        }
-        db::StoreEventOutcome::NotParticipant => StoreEventOutcome::NotParticipant,
-        db::StoreEventOutcome::Conflict => StoreEventOutcome::Conflict,
-        db::StoreEventOutcome::TooLarge => StoreEventOutcome::TooLarge,
-    }
-}
-
-fn join_outcome(outcome: db::JoinChannelOutcome) -> JoinChannelOutcome {
-    match outcome {
-        db::JoinChannelOutcome::Joined {
-            participant,
-            preference,
-            subscriptions,
-            newly_joined,
-            roster_change,
-        } => JoinChannelOutcome::Joined {
-            participant: map_participant(participant),
-            preference: map_preference(preference),
-            subscriptions,
-            newly_joined,
-            roster_change,
-        },
-        db::JoinChannelOutcome::Banned => JoinChannelOutcome::Banned,
-        db::JoinChannelOutcome::NotAllowed => JoinChannelOutcome::NotAllowed,
-        db::JoinChannelOutcome::Full => JoinChannelOutcome::Full,
-        db::JoinChannelOutcome::MissingNick => JoinChannelOutcome::MissingNick,
-        db::JoinChannelOutcome::NickConflict => JoinChannelOutcome::NickConflict,
-    }
-}
-
-fn presence_outcome(outcome: db::PresenceOutcome) -> PresenceOutcome {
-    match outcome {
-        db::PresenceOutcome::Published => PresenceOutcome::Published,
-        db::PresenceOutcome::Retracted => PresenceOutcome::Retracted,
-        db::PresenceOutcome::Unchanged => PresenceOutcome::Unchanged,
-        db::PresenceOutcome::NotSharing => PresenceOutcome::NotSharing,
-        db::PresenceOutcome::NotParticipant => PresenceOutcome::NotParticipant,
-    }
-}
-
-fn access_change_outcome(outcome: db::AccessChangeOutcome) -> AccessChangeOutcome {
-    AccessChangeOutcome {
-        removed_participants: outcome.removed_participants,
-        removed_local_users: outcome.removed_local_users,
-        removed_presence: outcome
-            .removed_presence
-            .into_iter()
-            .map(|(participant, items)| {
-                (
-                    map_participant(participant),
-                    items.into_iter().map(presence_item).collect(),
-                )
-            })
-            .collect(),
-    }
-}
-
-impl From<&MixInvitationProof> for db::MixInvitationProof {
-    fn from(proof: &MixInvitationProof) -> Self {
-        db::MixInvitationProof {
-            inviter_jid: proof.inviter_jid.clone(),
-            invitee_jid: proof.invitee_jid.clone(),
-            channel_jid: proof.channel_jid.clone(),
-            token: proof.token.clone(),
-        }
-    }
-}
-
-impl From<&MixParticipantPreference> for db::MixParticipantPreference {
-    fn from(preference: &MixParticipantPreference) -> Self {
-        preference_db(preference)
-    }
-}
-
 fn form_field(
     name: &str,
     field_type: Option<&str>,
@@ -3321,7 +2782,7 @@ fn value_field(name: &str, value: impl ToString) -> XmlElement {
     form_field(name, None, [value.to_string()])
 }
 
-fn render_info_payload(channel: &db::MixChannel) -> String {
+fn render_info_payload(channel: &MixChannel) -> String {
     let mut form = XmlElement::namespaced("x", "jabber:x:data").attr("type", "result");
     form.push_child(form_field(
         "FORM_TYPE",
@@ -3353,7 +2814,7 @@ fn render_info_payload(channel: &db::MixChannel) -> String {
 }
 
 fn render_config_payload(
-    channel: &db::MixChannel,
+    channel: &MixChannel,
     last_changed_by: &str,
     owners: &BTreeSet<String>,
     administrators: &BTreeSet<String>,
@@ -3458,15 +2919,15 @@ fn bool_value(value: bool) -> &'static str {
 }
 
 fn render_participant_payload(
-    channel: &db::MixChannel,
-    participant: &db::MixParticipant,
-    preference: &db::MixParticipantPreference,
+    channel: &MixChannel,
+    participant: &MixParticipant,
+    preference: &MixParticipantPreference,
 ) -> String {
     let mut element = XmlElement::namespaced("participant", "urn:xmpp:mix:core:1");
     if let Some(nick) = &participant.nick {
         element.push_child(XmlElement::new("nick").text(nick));
     }
-    if db::participant_jid_visible(channel, preference) {
+    if participant_jid_visible(channel, preference) {
         element.push_child(XmlElement::new("jid").text(&participant.jid));
     }
     element.finish()
@@ -3476,6 +2937,191 @@ fn render_access_payload(pattern: &str) -> String {
     XmlElement::namespaced("jid", "urn:xmpp:mix:admin:0")
         .text(pattern)
         .finish()
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum FederatedMixSuccess {
+    Create {
+        channel: String,
+    },
+    Destroy {
+        channel: String,
+    },
+    RegisterNick {
+        nick: String,
+    },
+    Join {
+        participant: MixParticipant,
+        subscriptions: Vec<String>,
+        preference: Option<MixParticipantPreference>,
+        anonymous_profile: bool,
+    },
+    Leave,
+    SetNick {
+        nick: String,
+    },
+    UpdateSubscriptions {
+        subscriptions: Vec<String>,
+    },
+    PubSubPublish {
+        node: String,
+        item_id: String,
+    },
+    PubSubEmpty,
+    Preference {
+        preference: MixParticipantPreference,
+    },
+    Invitation {
+        inviter: String,
+        invitee: String,
+        channel: String,
+        token: String,
+    },
+}
+
+pub(crate) struct MixPresenceDelivery<'a> {
+    pub channel: &'a MixChannel,
+    pub participant: &'a MixParticipant,
+    pub preference: &'a MixParticipantPreference,
+    pub recipient: &'a MixParticipant,
+    pub item_id: &'a str,
+    pub actor_full: &'a str,
+    pub children: &'a str,
+    pub unavailable: bool,
+}
+
+pub(crate) struct PamJoinResult<'a> {
+    pub client_request_id: &'a str,
+    pub actor_bare: &'a str,
+    pub requester_full_jid: &'a str,
+    pub channel_jid: &'a str,
+    pub participant_id: &'a str,
+    pub subscriptions: &'a [String],
+    pub nick: Option<&'a str>,
+}
+
+pub(crate) trait MixEventPayloadRenderer: Sync {
+    fn info_payload(&self, channel: &MixChannel) -> String;
+    fn config_payload(
+        &self,
+        channel: &MixChannel,
+        last_changed_by: &str,
+        owners: &BTreeSet<String>,
+        administrators: &BTreeSet<String>,
+    ) -> String;
+    fn participant_payload(
+        &self,
+        channel: &MixChannel,
+        participant: &MixParticipant,
+        preference: &MixParticipantPreference,
+    ) -> String;
+    fn access_payload(&self, pattern: &str) -> String;
+    fn presence_delivery_stanza(&self, delivery: MixPresenceDelivery<'_>) -> Result<String>;
+    fn node_event_stanza(
+        &self,
+        channel: &MixChannel,
+        recipient: &MixParticipant,
+        node: &str,
+        item_id: &str,
+        payload: Option<&str>,
+        retract: bool,
+    ) -> Result<String>;
+    fn message_delivery_stanza(
+        &self,
+        channel: &MixChannel,
+        sender: &MixParticipant,
+        recipient: &MixParticipant,
+        authoritative_id: Uuid,
+        payload: &str,
+        visible_jid: Option<&str>,
+    ) -> Result<String>;
+    fn retraction_delivery_stanza(
+        &self,
+        channel: &MixChannel,
+        sender: &MixParticipant,
+        recipient: &MixParticipant,
+        authoritative_id: Uuid,
+        target_id: Uuid,
+        visible_jid: Option<&str>,
+    ) -> Result<String>;
+    fn federated_iq_result(
+        &self,
+        context: &FederatedMixMutation,
+        success: &FederatedMixSuccess,
+    ) -> Result<String>;
+    fn pam_join_result(&self, result: PamJoinResult<'_>) -> Result<String>;
+    fn pam_leave_result(
+        &self,
+        client_request_id: &str,
+        actor_bare: &str,
+        requester_full_jid: &str,
+        channel_jid: &str,
+    ) -> Result<String>;
+    fn pam_error_result(
+        &self,
+        client_request_id: &str,
+        actor_bare: &str,
+        requester_full_jid: &str,
+        error_type: &str,
+        condition: &str,
+    ) -> Result<String>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MixDeliveryRetryOutcome {
+    /// The exact lease was no longer owned when finalization began.
+    LeaseLost,
+    /// The row was retained with the normal retry backoff (or a newer wake
+    /// advanced a non-terminal retry to now).
+    Retried,
+    /// A newer route wake defeated the terminal boundary and released the
+    /// existing attempt count for one immediate fresh claim.
+    RouteWokenAtAttemptLimit,
+    /// The unchanged route epoch reached the normal terminal attempt limit.
+    DeadLettered,
+}
+
+pub(crate) fn valid_stable_participant_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 1023
+        && !value.contains('@')
+        && !value.contains('/')
+        && !value.contains('#')
+}
+pub(crate) fn mix_timestamp_item_id() -> String {
+    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
+}
+pub(crate) fn valid_join_nodes(nodes: &[String]) -> Result<Vec<String>> {
+    let mut unique = std::collections::BTreeSet::new();
+    anyhow::ensure!(
+        nodes.len() <= SUBSCRIBABLE_NODES.len(),
+        "too many MIX subscriptions"
+    );
+    for node in nodes {
+        anyhow::ensure!(
+            SUBSCRIBABLE_NODES.contains(&node.as_str()),
+            "unknown MIX subscription node"
+        );
+        unique.insert(node.clone());
+    }
+    Ok(unique.into_iter().collect())
+}
+pub(crate) fn prepare_mix_nick(nick: &str) -> Result<String> {
+    crate::jid::prepare_resourcepart(nick)
+}
+pub(crate) fn canonical_mix_access_pattern(pattern: &str) -> Result<String> {
+    crate::jid::CanonicalJid::parse_bare(pattern).map(|jid| jid.to_string())
+}
+pub(crate) fn participant_jid_visible(
+    channel: &MixChannel,
+    preference: &MixParticipantPreference,
+) -> bool {
+    match channel.jid_visibility.as_str() {
+        "visible" => true,
+        "hidden" => false,
+        "maybe" => preference.jid_visibility == "always",
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -3615,7 +3261,7 @@ mod tests {
         // A two-connection primary pool leaves one foreground connection and
         // therefore gives this outbox gate exactly one FIFO permit.
         let service = MixService::new(
-            pool,
+            crate::db::mix_repository::PostgresMixRepository::new(pool),
             crate::abuse::test_mix_message_content_keyring(),
             crate::abuse::test_mix_retraction_content_keyring(),
             2,
@@ -3664,7 +3310,7 @@ mod tests {
             .connect_lazy("postgresql://localhost/northstar_outbox_gate_budget_unit_test")
             .expect("a lazy test pool does not connect");
         let service = MixService::new(
-            pool,
+            crate::db::mix_repository::PostgresMixRepository::new(pool),
             crate::abuse::test_mix_message_content_keyring(),
             crate::abuse::test_mix_retraction_content_keyring(),
             3,
@@ -3716,30 +3362,8 @@ mod tests {
         second_waiter.await.expect("second waiter completed");
     }
 
-    #[test]
-    fn mix_muc_repository_outcomes_map_without_collapsing_authority_failures() {
-        for (repository, service) in [
-            (db::LinkMixMucOutcome::Linked, MixMucLinkOutcome::Linked),
-            (
-                db::LinkMixMucOutcome::AlreadyLinked,
-                MixMucLinkOutcome::AlreadyLinked,
-            ),
-            (
-                db::LinkMixMucOutcome::MissingCounterpart,
-                MixMucLinkOutcome::MissingCounterpart,
-            ),
-            (
-                db::LinkMixMucOutcome::NotCommonOwner,
-                MixMucLinkOutcome::NotCommonOwner,
-            ),
-            (db::LinkMixMucOutcome::Conflict, MixMucLinkOutcome::Conflict),
-        ] {
-            assert_eq!(map_mix_muc_link_outcome(repository), service);
-        }
-    }
-
-    fn channel() -> db::MixChannel {
-        db::MixChannel {
+    fn channel() -> MixChannel {
+        MixChannel {
             id: Uuid::new_v4(),
             revision: 0,
             service_domain: "mix.example.test".to_owned(),
@@ -3799,7 +3423,7 @@ mod tests {
     #[test]
     fn participant_and_access_payloads_cannot_inject_siblings() {
         let channel = channel();
-        let participant = db::MixParticipant {
+        let participant = MixParticipant {
             participant_id: Uuid::new_v4(),
             jid: "</jid><evil xmlns='urn:evil'>jid</evil><jid>".to_owned(),
             nick: Some("</nick><evil xmlns='urn:evil'>nick</evil><nick>".to_owned()),
@@ -3807,7 +3431,7 @@ mod tests {
         let payload = render_participant_payload(
             &channel,
             &participant,
-            &db::MixParticipantPreference::default(),
+            &MixParticipantPreference::default(),
         );
         assert_no_injected_element(&payload, &participant.jid);
         let document = roxmltree::Document::parse(&payload).unwrap();
@@ -3827,405 +3451,5 @@ mod tests {
                 .namespace(),
             Some("urn:xmpp:mix:admin:0")
         );
-    }
-
-    // -- DTO boundary contract tests -------------------------------------
-    //
-    // The mirrors exist so the protocol layer never names a `db::` type. These
-    // tests pin every mapped field and both translation directions, so a
-    // repository column or boundary field added on one side only fails here
-    // instead of silently dropping data at the service edge.
-
-    #[test]
-    fn mix_node_vocabulary_matches_the_repository_constants() {
-        assert_eq!(NODE_MESSAGES, db::NODE_MESSAGES);
-        assert_eq!(NODE_PRESENCE, db::NODE_PRESENCE);
-        assert_eq!(NODE_PARTICIPANTS, db::NODE_PARTICIPANTS);
-        assert_eq!(NODE_INFO, db::NODE_INFO);
-        assert_eq!(NODE_CONFIG, db::NODE_CONFIG);
-        assert_eq!(NODE_ALLOWED, db::NODE_ALLOWED);
-        assert_eq!(NODE_BANNED, db::NODE_BANNED);
-        assert_eq!(NODE_JIDMAP, db::NODE_JIDMAP);
-        assert_eq!(NODE_AVATAR_DATA, db::NODE_AVATAR_DATA);
-        assert_eq!(NODE_AVATAR_METADATA, db::NODE_AVATAR_METADATA);
-        assert_eq!(ALL_NODES, db::ALL_NODES);
-    }
-
-    #[test]
-    fn channel_map_preserves_every_field_and_round_trips() {
-        let row = channel();
-        let mapped = map_channel(row.clone());
-        assert_eq!(mapped.id, row.id);
-        assert_eq!(mapped.service_domain, row.service_domain);
-        assert_eq!(mapped.localpart, row.localpart);
-        assert_eq!(mapped.creator_jid, row.creator_jid);
-        assert_eq!(mapped.name, row.name);
-        assert_eq!(mapped.description, row.description);
-        assert_eq!(mapped.contacts, row.contacts);
-        assert_eq!(mapped.access_model, row.access_model);
-        assert_eq!(mapped.jid_visibility, row.jid_visibility);
-        assert_eq!(mapped.nick_required, row.nick_required);
-        assert_eq!(mapped.max_participants, row.max_participants);
-        assert_eq!(mapped.max_events, row.max_events);
-        assert_eq!(mapped.allow_private_messages, row.allow_private_messages);
-        assert_eq!(
-            mapped.allow_participant_invites,
-            row.allow_participant_invites
-        );
-        assert_eq!(
-            mapped.allow_user_message_retraction,
-            row.allow_user_message_retraction
-        );
-        assert_eq!(
-            mapped.administrator_retraction_rights,
-            row.administrator_retraction_rights
-        );
-        assert_eq!(mapped.enforce_registered_nick, row.enforce_registered_nick);
-        assert_eq!(mapped.jid(), row.jid());
-
-        let round_trip = channel_db(&mapped);
-        assert_eq!(round_trip.id, row.id);
-        assert_eq!(round_trip.service_domain, row.service_domain);
-        assert_eq!(round_trip.localpart, row.localpart);
-        assert_eq!(round_trip.creator_jid, row.creator_jid);
-        assert_eq!(round_trip.name, row.name);
-        assert_eq!(round_trip.description, row.description);
-        assert_eq!(round_trip.contacts, row.contacts);
-        assert_eq!(round_trip.access_model, row.access_model);
-        assert_eq!(round_trip.jid_visibility, row.jid_visibility);
-        assert_eq!(round_trip.nick_required, row.nick_required);
-        assert_eq!(round_trip.max_participants, row.max_participants);
-        assert_eq!(round_trip.max_events, row.max_events);
-        assert_eq!(
-            round_trip.allow_private_messages,
-            row.allow_private_messages
-        );
-        assert_eq!(
-            round_trip.allow_participant_invites,
-            row.allow_participant_invites
-        );
-        assert_eq!(
-            round_trip.allow_user_message_retraction,
-            row.allow_user_message_retraction
-        );
-        assert_eq!(
-            round_trip.administrator_retraction_rights,
-            row.administrator_retraction_rights
-        );
-        assert_eq!(
-            round_trip.enforce_registered_nick,
-            row.enforce_registered_nick
-        );
-    }
-
-    #[test]
-    fn participant_and_preference_maps_preserve_fields_and_defaults_agree() {
-        let row = db::MixParticipant {
-            participant_id: Uuid::new_v4(),
-            jid: "alice@example.test".to_owned(),
-            nick: Some("Alice".to_owned()),
-        };
-        let mapped = map_participant(row.clone());
-        assert_eq!(mapped.participant_id, row.participant_id);
-        assert_eq!(mapped.jid, row.jid);
-        assert_eq!(mapped.nick, row.nick);
-        let round_trip = participant_db(&mapped);
-        assert_eq!(round_trip.participant_id, row.participant_id);
-        assert_eq!(round_trip.jid, row.jid);
-        assert_eq!(round_trip.nick, row.nick);
-
-        let db_default = db::MixParticipantPreference::default();
-        let preference = map_preference(db_default.clone());
-        assert_eq!(preference, MixParticipantPreference::default());
-        assert_eq!(preference_db(&preference), db_default);
-    }
-
-    #[test]
-    fn pam_membership_map_preserves_every_field() {
-        let row = db::PamMembership {
-            id: Uuid::new_v4(),
-            user_id: Uuid::new_v4(),
-            channel_jid: "room@mix.example.test".to_owned(),
-            participant_id: Some("stable-id".to_owned()),
-            state: "pending_join".to_owned(),
-            request_id: Some("request-1".to_owned()),
-            client_request_id: Some("client-1".to_owned()),
-            requester_full_jid: Some("alice@example.test/Phone".to_owned()),
-            subscriptions: vec![NODE_MESSAGES.to_owned(), NODE_PRESENCE.to_owned()],
-        };
-        let mapped = pam_membership(row.clone());
-        assert_eq!(mapped.id, row.id);
-        assert_eq!(mapped.user_id, row.user_id);
-        assert_eq!(mapped.channel_jid, row.channel_jid);
-        assert_eq!(mapped.participant_id, row.participant_id);
-        assert_eq!(mapped.state, row.state);
-        assert_eq!(mapped.request_id, row.request_id);
-        assert_eq!(mapped.client_request_id, row.client_request_id);
-        assert_eq!(mapped.requester_full_jid, row.requester_full_jid);
-        assert_eq!(mapped.subscriptions, row.subscriptions);
-    }
-
-    #[test]
-    fn event_and_page_maps_preserve_ordering_and_metadata() {
-        let row = db::MixEvent {
-            id: Uuid::new_v4(),
-            item_id: db::mix_timestamp_item_id(),
-            payload: "<body/>".to_owned(),
-            created_at: Utc::now(),
-        };
-        let mapped = event(row.clone());
-        assert_eq!(mapped.id, row.id);
-        assert_eq!(mapped.item_id, row.item_id);
-        assert_eq!(mapped.payload, row.payload);
-        assert_eq!(mapped.created_at, row.created_at);
-
-        let page = db::MixEventPage {
-            events: vec![row.clone()],
-        };
-        let mapped_page = MixEventPage {
-            events: page.events.clone().into_iter().map(event).collect(),
-        };
-        assert_eq!(
-            page.events.iter().map(|e| e.id).collect::<Vec<_>>(),
-            mapped_page.events.iter().map(|e| e.id).collect::<Vec<_>>(),
-            "event order must be preserved"
-        );
-    }
-
-    #[test]
-    fn mam_page_and_boundary_maps_preserve_paging_metadata() {
-        let first = db::ArchiveBoundary {
-            id: Uuid::new_v4(),
-            created_at: Utc::now(),
-        };
-        let last = db::ArchiveBoundary {
-            id: Uuid::new_v4(),
-            created_at: Utc::now(),
-        };
-        let mapped_page = mam_page(db::MixMamPage {
-            events: Vec::new(),
-            total: 42,
-            first_index: 7,
-            complete: false,
-        });
-        assert_eq!(mapped_page.total, 42);
-        assert_eq!(mapped_page.first_index, 7);
-        assert!(!mapped_page.complete);
-        assert!(mapped_page.events.is_empty());
-
-        let first_id = first.id;
-        let last_id = last.id;
-        let (mapped_first, mapped_last) = (Some(boundary(first)), Some(boundary(last)));
-        assert_eq!(mapped_first.as_ref().map(|b| b.id), Some(first_id));
-        assert_eq!(mapped_last.as_ref().map(|b| b.id), Some(last_id));
-    }
-
-    #[test]
-    fn mam_query_translates_every_rsm_shape_in_both_directions() {
-        let shapes = [
-            db::MamRsmPage::First,
-            db::MamRsmPage::Last,
-            db::MamRsmPage::Before(Uuid::new_v4()),
-            db::MamRsmPage::After(Uuid::new_v4()),
-            db::MamRsmPage::Index(17),
-        ];
-        for page in shapes {
-            let db_query = db::MamArchiveQuery {
-                with_jid: Some("peer@example.test".to_owned()),
-                start: Some(Utc::now()),
-                end: None,
-                before_id: None,
-                after_id: Some(Uuid::new_v4()),
-                ids: vec![Uuid::new_v4()],
-                page,
-                max: 25,
-            };
-            let mapped = MamArchiveQuery::from(db_query.clone());
-            assert_eq!(mapped.with_jid, db_query.with_jid);
-            assert_eq!(mapped.start, db_query.start);
-            assert_eq!(mapped.end, db_query.end);
-            assert_eq!(mapped.before_id, db_query.before_id);
-            assert_eq!(mapped.after_id, db_query.after_id);
-            assert_eq!(mapped.ids, db_query.ids);
-            assert_eq!(mapped.max, db_query.max);
-            match (db_query.page, mapped.page) {
-                (db::MamRsmPage::First, MamRsmPage::First)
-                | (db::MamRsmPage::Last, MamRsmPage::Last) => {}
-                (db::MamRsmPage::Before(a), MamRsmPage::Before(b)) => assert_eq!(a, b),
-                (db::MamRsmPage::After(a), MamRsmPage::After(b)) => assert_eq!(a, b),
-                (db::MamRsmPage::Index(a), MamRsmPage::Index(b)) => assert_eq!(a, b),
-                _ => panic!("MIX RSM shape changed during translation"),
-            }
-            let round_trip = mam_query_db(&mapped);
-            assert_eq!(round_trip.with_jid, db_query.with_jid);
-            assert_eq!(round_trip.max, db_query.max);
-        }
-    }
-
-    #[test]
-    fn s2s_policy_and_probe_target_maps_preserve_admission_bounds() {
-        let policy = db::S2sOutboxPolicy {
-            ttl_seconds: 600,
-            max_rows: 1_024,
-            max_bytes: 1_048_576,
-            max_per_domain: 128,
-        };
-        let mapped: S2sOutboxPolicy = policy.into();
-        assert_eq!(mapped.ttl_seconds, 600);
-        assert_eq!(mapped.max_rows, 1_024);
-        assert_eq!(mapped.max_bytes, 1_048_576);
-        assert_eq!(mapped.max_per_domain, 128);
-
-        let probe = db::MixPresenceProbeTarget {
-            channel_jid: "room@mix.example.test".to_owned(),
-            participant_jid: "alice@remote.test/Phone".to_owned(),
-        };
-        let mapped: MixPresenceProbeTarget = probe.into();
-        assert_eq!(mapped.channel_jid, "room@mix.example.test");
-        assert_eq!(mapped.participant_jid, "alice@remote.test/Phone");
-    }
-
-    #[test]
-    fn access_change_map_preserves_removal_observations() {
-        let participant_row = db::MixParticipant {
-            participant_id: Uuid::new_v4(),
-            jid: "alice@example.test".to_owned(),
-            nick: None,
-        };
-        let presence_row = db::MixPresenceItem {
-            item_id: "item-1".to_owned(),
-            payload: "<presence/>".to_owned(),
-            source_full_jid: Some("alice@example.test/Phone".to_owned()),
-        };
-        let mapped = access_change_outcome(db::AccessChangeOutcome {
-            removed_participants: vec![Uuid::new_v4()],
-            removed_local_users: vec![Uuid::new_v4()],
-            removed_presence: vec![(participant_row.clone(), vec![presence_row.clone()])],
-        });
-        assert_eq!(mapped.removed_participants.len(), 1);
-        assert_eq!(mapped.removed_local_users.len(), 1);
-        assert_eq!(mapped.removed_presence.len(), 1);
-        assert_eq!(
-            mapped.removed_presence[0].0.participant_id,
-            participant_row.participant_id
-        );
-        assert_eq!(mapped.removed_presence[0].1[0].item_id, "item-1");
-    }
-
-    #[test]
-    fn outcome_maps_preserve_retraction_store_and_join_variants() {
-        for (repository, service) in [
-            (
-                db::RetractMixMessageOutcome::Retracted,
-                RetractMixMessageOutcome::Retracted,
-            ),
-            (
-                db::RetractMixMessageOutcome::NotFound,
-                RetractMixMessageOutcome::NotFound,
-            ),
-            (
-                db::RetractMixMessageOutcome::Forbidden,
-                RetractMixMessageOutcome::Forbidden,
-            ),
-        ] {
-            let admission = retract_mix_message_admission(
-                db::RetractMixMessageAdmission {
-                    outcome: repository,
-                    recipients: vec![db::MixParticipant {
-                        participant_id: Uuid::new_v4(),
-                        jid: "alice@example.test".to_owned(),
-                        nick: None,
-                    }],
-                },
-                |_| panic!("test case must not contain an existing replay intent"),
-            );
-            assert_eq!(admission.outcome, service);
-        }
-
-        for repository in [
-            db::StoreEventOutcome::Stored(Uuid::new_v4()),
-            db::StoreEventOutcome::NotParticipant,
-            db::StoreEventOutcome::Conflict,
-            db::StoreEventOutcome::TooLarge,
-        ] {
-            let mapped = store_event_outcome(repository.clone());
-            match (repository, mapped) {
-                (db::StoreEventOutcome::Stored(a), StoreEventOutcome::Stored(b)) => {
-                    assert_eq!(a, b)
-                }
-                (db::StoreEventOutcome::NotParticipant, StoreEventOutcome::NotParticipant) => {}
-                (db::StoreEventOutcome::Conflict, StoreEventOutcome::Conflict) => {}
-                (db::StoreEventOutcome::TooLarge, StoreEventOutcome::TooLarge) => {}
-                _ => panic!("store-event outcome variant changed during translation"),
-            }
-        }
-
-        for repository in [
-            db::CreateChannelOutcome::Created(Uuid::new_v4()),
-            db::CreateChannelOutcome::Conflict,
-            db::CreateChannelOutcome::QuotaExceeded,
-        ] {
-            let mapped = create_outcome(repository);
-            match (repository, mapped) {
-                (db::CreateChannelOutcome::Created(a), CreateChannelOutcome::Created(b)) => {
-                    assert_eq!(a, b)
-                }
-                (db::CreateChannelOutcome::Conflict, CreateChannelOutcome::Conflict) => {}
-                (db::CreateChannelOutcome::QuotaExceeded, CreateChannelOutcome::QuotaExceeded) => {}
-                _ => panic!("create-channel outcome variant changed during translation"),
-            }
-        }
-
-        let joined = join_outcome(db::JoinChannelOutcome::Joined {
-            participant: db::MixParticipant {
-                participant_id: Uuid::new_v4(),
-                jid: "alice@example.test".to_owned(),
-                nick: Some("Alice".to_owned()),
-            },
-            preference: db::MixParticipantPreference::default(),
-            subscriptions: vec![NODE_MESSAGES.to_owned()],
-            newly_joined: true,
-            roster_change: None,
-        });
-        assert!(matches!(
-            joined,
-            JoinChannelOutcome::Joined {
-                newly_joined: true,
-                ..
-            }
-        ));
-        assert!(matches!(
-            join_outcome(db::JoinChannelOutcome::Banned),
-            JoinChannelOutcome::Banned
-        ));
-        assert!(matches!(
-            join_outcome(db::JoinChannelOutcome::NotAllowed),
-            JoinChannelOutcome::NotAllowed
-        ));
-        assert!(matches!(
-            join_outcome(db::JoinChannelOutcome::Full),
-            JoinChannelOutcome::Full
-        ));
-        assert!(matches!(
-            join_outcome(db::JoinChannelOutcome::MissingNick),
-            JoinChannelOutcome::MissingNick
-        ));
-        assert!(matches!(
-            join_outcome(db::JoinChannelOutcome::NickConflict),
-            JoinChannelOutcome::NickConflict
-        ));
-
-        assert!(matches!(
-            presence_outcome(db::PresenceOutcome::Unchanged),
-            PresenceOutcome::Unchanged
-        ));
-        assert!(matches!(
-            presence_outcome(db::PresenceOutcome::NotSharing),
-            PresenceOutcome::NotSharing
-        ));
-        assert!(matches!(
-            presence_outcome(db::PresenceOutcome::NotParticipant),
-            PresenceOutcome::NotParticipant
-        ));
     }
 }

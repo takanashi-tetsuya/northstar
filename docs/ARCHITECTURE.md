@@ -136,6 +136,10 @@ Key ownership:
 - Offline replay separates resource validation and policy from durable lease,
   page and transport-fence operations. Cursor and lease values belong to the
   service boundary; the adapter retains PostgreSQL clock and ownership checks.
+- MIX keeps bounded FIFO admission, content commitments and committed delivery
+  wakes in the service. Its repository handles channel transactions and durable
+  projections; a stateless application serializer builds the exact persisted
+  replies and recipient payloads from shared domain values.
 - Stream management retains device policy, memory accounting and local wake
   subscriptions in its service. The repository commits binding, FAST, privacy
   and transport ownership together. A database adapter runs the shared authority

@@ -1705,7 +1705,7 @@ pub struct AppState {
         db::retractions::PostgresRetractionRepository,
     >,
     mam_service: crate::services::mam::MamService<db::mam::PostgresMamRepository>,
-    mix_service: crate::services::mix::MixService,
+    mix_service: crate::services::mix::MixService<db::mix_repository::PostgresMixRepository>,
     sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
     blocking_service:
         crate::services::blocking::BlockingService<db::roster::PostgresBlockingRepository>,
@@ -2845,7 +2845,7 @@ impl AppState {
         // notification as delivery authority; schema matching only prevents
         // a shared database's unrelated schema from creating local scan load.
         let mix_service = crate::services::mix::MixService::new_with_outbox_database_admission(
-            pool.clone(),
+            db::mix_repository::PostgresMixRepository::new(pool.clone()),
             mix_message_content_identity,
             mix_retraction_content_identity,
             durable_outbox_database_admission.clone(),
@@ -3206,7 +3206,9 @@ impl AppState {
         &self.profile_service
     }
 
-    pub(crate) fn mix_service(&self) -> &crate::services::mix::MixService {
+    pub(crate) fn mix_service(
+        &self,
+    ) -> &crate::services::mix::MixService<db::mix_repository::PostgresMixRepository> {
         &self.mix_service
     }
 

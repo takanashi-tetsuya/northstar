@@ -86,7 +86,7 @@ cargo_args=(--locked)
 if [[ "${XMPP_TEST_OFFLINE:-true}" != "false" ]]; then cargo_args+=(--offline); fi
 cargo build "${cargo_args[@]}"
 binary="${CARGO_TARGET_DIR:-$project_dir/target}/debug/rust-xmpp-server"
-mix_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema"
+mix_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$schema"
 
 # The runtime identity is verification-only. Apply the random schema with the
 # explicit migrator capability before any listener is configured or started.

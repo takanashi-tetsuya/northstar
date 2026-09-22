@@ -18,14 +18,7 @@ pub const NODE_BANNED: &str = "urn:xmpp:mix:nodes:banned";
 pub const NODE_JIDMAP: &str = "urn:xmpp:mix:nodes:jidmap";
 pub const NODE_AVATAR_DATA: &str = "urn:xmpp:avatar:data";
 pub const NODE_AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
-pub const SUBSCRIBABLE_NODES: [&str; 6] = [
-    NODE_MESSAGES,
-    NODE_PRESENCE,
-    NODE_PARTICIPANTS,
-    NODE_INFO,
-    NODE_AVATAR_DATA,
-    NODE_AVATAR_METADATA,
-];
+
 pub const ALL_NODES: [&str; 10] = [
     NODE_MESSAGES,
     NODE_PRESENCE,
@@ -39,52 +32,13 @@ pub const ALL_NODES: [&str; 10] = [
     NODE_AVATAR_METADATA,
 ];
 
-pub(crate) fn valid_stable_participant_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 1023
-        && !value.contains('@')
-        && !value.contains('/')
-        && !value.contains('#')
-}
+pub(crate) use crate::services::mix::valid_stable_participant_id;
 
-pub(crate) fn mix_timestamp_item_id() -> String {
-    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
-}
+pub(crate) use crate::services::mix::mix_timestamp_item_id;
 
-#[derive(Clone, Debug)]
-pub struct MixChannel {
-    pub id: Uuid,
-    pub revision: i64,
-    pub service_domain: String,
-    pub localpart: String,
-    pub creator_jid: String,
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub contacts: Vec<String>,
-    pub access_model: String,
-    pub jid_visibility: String,
-    pub nick_required: bool,
-    pub max_participants: i32,
-    pub max_events: i32,
-    pub allow_private_messages: bool,
-    pub allow_participant_invites: bool,
-    pub allow_user_message_retraction: bool,
-    pub administrator_retraction_rights: String,
-    pub enforce_registered_nick: bool,
-}
+pub(crate) use crate::services::mix::MixChannel;
 
-impl MixChannel {
-    pub fn jid(&self) -> String {
-        format!("{}@{}", self.localpart, self.service_domain)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct MixParticipant {
-    pub participant_id: Uuid,
-    pub jid: String,
-    pub nick: Option<String>,
-}
+pub(crate) use crate::services::mix::MixParticipant;
 
 #[derive(Clone, Debug)]
 pub struct MixEvent {
@@ -142,173 +96,27 @@ pub struct PamMembership {
     pub subscriptions: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MixParticipantPreference {
-    pub jid_visibility: String,
-    pub private_messages: String,
-    pub vcard: String,
-    pub share_presence: bool,
-}
-
-impl Default for MixParticipantPreference {
-    fn default() -> Self {
-        Self {
-            jid_visibility: "default".to_owned(),
-            private_messages: "allow".to_owned(),
-            vcard: "block".to_owned(),
-            share_presence: true,
-        }
-    }
-}
+pub(crate) use crate::services::mix::MixParticipantPreference;
 
 /// Authenticated federation identity and durable reply policy attached to one
 /// mutating MIX IQ.  A successful repository mutation must journal its exact
 /// result and enqueue that result before the business transaction commits.
 /// Keeping this context explicit avoids task-local state leaking across
 /// unrelated async work and makes every mutation boundary reviewable.
-#[derive(Clone, Debug)]
-pub struct FederatedMixMutation {
-    pub authenticated_domain: String,
-    pub actor_jid: String,
-    pub request_id: String,
-    pub request_digest: [u8; 32],
-    pub addressed: String,
-    pub reply_to: String,
-    pub policy: super::S2sOutboxPolicy,
-}
+pub(crate) use crate::services::mix::FederatedMixMutation;
 
 /// Typed successful effects from which the application serializer produces
 /// the exact IQ result persisted by the mutation transaction.
-#[derive(Clone, Debug)]
-pub enum FederatedMixSuccess {
-    Create {
-        channel: String,
-    },
-    Destroy {
-        channel: String,
-    },
-    RegisterNick {
-        nick: String,
-    },
-    Join {
-        participant: MixParticipant,
-        subscriptions: Vec<String>,
-        preference: Option<MixParticipantPreference>,
-        anonymous_profile: bool,
-    },
-    Leave,
-    SetNick {
-        nick: String,
-    },
-    UpdateSubscriptions {
-        subscriptions: Vec<String>,
-    },
-    PubSubPublish {
-        node: String,
-        item_id: String,
-    },
-    PubSubEmpty,
-    Preference {
-        preference: MixParticipantPreference,
-    },
-    Invitation {
-        inviter: String,
-        invitee: String,
-        channel: String,
-        token: String,
-    },
-}
+pub(crate) use crate::services::mix::FederatedMixSuccess;
 
-pub(crate) struct MixPresenceDelivery<'a> {
-    pub channel: &'a MixChannel,
-    pub participant: &'a MixParticipant,
-    pub preference: &'a MixParticipantPreference,
-    pub recipient: &'a MixParticipant,
-    pub item_id: &'a str,
-    pub actor_full: &'a str,
-    pub children: &'a str,
-    pub unavailable: bool,
-}
+pub(crate) use crate::services::mix::MixPresenceDelivery;
 
-pub(crate) struct PamJoinResult<'a> {
-    pub client_request_id: &'a str,
-    pub actor_bare: &'a str,
-    pub requester_full_jid: &'a str,
-    pub channel_jid: &'a str,
-    pub participant_id: &'a str,
-    pub subscriptions: &'a [String],
-    pub nick: Option<&'a str>,
-}
+pub(crate) use crate::services::mix::PamJoinResult;
 
 /// Application-layer serializer used while a durable MIX mutation is still
 /// inside its database transaction. Persistence owns atomic storage, but it
 /// never constructs protocol XML or interpolates untrusted stanza values.
-pub(crate) trait MixEventPayloadRenderer: Sync {
-    fn info_payload(&self, channel: &MixChannel) -> String;
-    fn config_payload(
-        &self,
-        channel: &MixChannel,
-        last_changed_by: &str,
-        owners: &BTreeSet<String>,
-        administrators: &BTreeSet<String>,
-    ) -> String;
-    fn participant_payload(
-        &self,
-        channel: &MixChannel,
-        participant: &MixParticipant,
-        preference: &MixParticipantPreference,
-    ) -> String;
-    fn access_payload(&self, pattern: &str) -> String;
-    fn presence_delivery_stanza(&self, delivery: MixPresenceDelivery<'_>) -> Result<String>;
-    fn node_event_stanza(
-        &self,
-        channel: &MixChannel,
-        recipient: &MixParticipant,
-        node: &str,
-        item_id: &str,
-        payload: Option<&str>,
-        retract: bool,
-    ) -> Result<String>;
-    fn message_delivery_stanza(
-        &self,
-        channel: &MixChannel,
-        sender: &MixParticipant,
-        recipient: &MixParticipant,
-        authoritative_id: Uuid,
-        payload: &str,
-        visible_jid: Option<&str>,
-    ) -> Result<String>;
-    fn retraction_delivery_stanza(
-        &self,
-        channel: &MixChannel,
-        sender: &MixParticipant,
-        recipient: &MixParticipant,
-        authoritative_id: Uuid,
-        target_id: Uuid,
-        visible_jid: Option<&str>,
-    ) -> Result<String>;
-    fn federated_iq_result(
-        &self,
-        context: &FederatedMixMutation,
-        success: &FederatedMixSuccess,
-    ) -> Result<String>;
-    fn pam_join_result(&self, result: PamJoinResult<'_>) -> Result<String>;
-    fn pam_leave_result(
-        &self,
-        client_request_id: &str,
-        actor_bare: &str,
-        requester_full_jid: &str,
-        channel_jid: &str,
-    ) -> Result<String>;
-    fn pam_error_result(
-        &self,
-        client_request_id: &str,
-        actor_bare: &str,
-        requester_full_jid: &str,
-        error_type: &str,
-        condition: &str,
-    ) -> Result<String>;
-}
+pub(crate) use crate::services::mix::MixEventPayloadRenderer;
 
 #[derive(Clone, Debug)]
 pub struct ClaimedMixDelivery {
@@ -335,19 +143,7 @@ pub struct ClaimedMixDelivery {
 /// snapshot can be stale by the time the worker releases its lease.  In
 /// particular, a committed route wake at the attempt limit is a durable
 /// routing fact which gets one fresh claim before the normal terminal path.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MixDeliveryRetryOutcome {
-    /// The exact lease was no longer owned when finalization began.
-    LeaseLost,
-    /// The row was retained with the normal retry backoff (or a newer wake
-    /// advanced a non-terminal retry to now).
-    Retried,
-    /// A newer route wake defeated the terminal boundary and released the
-    /// existing attempt count for one immediate fresh claim.
-    RouteWokenAtAttemptLimit,
-    /// The unchanged route epoch reached the normal terminal attempt limit.
-    DeadLettered,
-}
+pub(crate) use crate::services::mix::MixDeliveryRetryOutcome;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PamOperationReplay {
@@ -2772,9 +2568,7 @@ fn canonical_channel_localpart(localpart: &str) -> Result<String> {
 /// MIX recommends the RFC 7700 nickname profile of PRECIS OpaqueString. The
 /// resourcepart preparation used by RFC 7622 has the same case-preserving
 /// OpaqueString behavior and enforces the protocol's 1023-octet bound.
-pub(crate) fn prepare_mix_nick(nick: &str) -> Result<String> {
-    crate::jid::prepare_resourcepart(nick)
-}
+pub(crate) use crate::services::mix::prepare_mix_nick;
 
 fn channel_from_row(row: &sqlx::postgres::PgRow) -> MixChannel {
     let contacts = row
@@ -3237,21 +3031,7 @@ pub struct MixInvitationProof {
     pub token: String,
 }
 
-pub(crate) fn valid_join_nodes(nodes: &[String]) -> Result<Vec<String>> {
-    let mut unique = std::collections::BTreeSet::new();
-    anyhow::ensure!(
-        nodes.len() <= SUBSCRIBABLE_NODES.len(),
-        "too many MIX subscriptions"
-    );
-    for node in nodes {
-        anyhow::ensure!(
-            SUBSCRIBABLE_NODES.contains(&node.as_str()),
-            "unknown MIX subscription node"
-        );
-        unique.insert(node.clone());
-    }
-    Ok(unique.into_iter().collect())
-}
+pub(crate) use crate::services::mix::valid_join_nodes;
 
 async fn prune_mix_events_tx(
     transaction: &mut Transaction<'_, Postgres>,
@@ -5712,9 +5492,7 @@ pub enum MixMutationOutcome {
     NotFound,
 }
 
-pub(crate) fn canonical_mix_access_pattern(pattern: &str) -> Result<String> {
-    crate::jid::CanonicalJid::parse_bare(pattern).map(|jid| jid.to_string())
-}
+pub(crate) use crate::services::mix::canonical_mix_access_pattern;
 
 pub async fn authorized_mix_access_entries(
     pool: &PgPool,
@@ -6893,17 +6671,7 @@ pub async fn update_mix_participant_preference(
     }))
 }
 
-pub fn participant_jid_visible(
-    channel: &MixChannel,
-    preference: &MixParticipantPreference,
-) -> bool {
-    match channel.jid_visibility.as_str() {
-        "visible" => true,
-        "hidden" => false,
-        "maybe" => preference.jid_visibility == "always",
-        _ => false,
-    }
-}
+pub(crate) use crate::services::mix::participant_jid_visible;
 
 #[cfg(test)]
 pub async fn mix_jid_map_entries(
@@ -9527,7 +9295,7 @@ mod mam_integration_tests {
             .await
             .unwrap();
         db::migrate(&pool).await.unwrap();
-        let payloads = crate::services::mix::MixService::new_with_test_keyrings(pool.clone());
+        let payloads = crate::services::mix::MixPayloads;
 
         let suffix = Uuid::new_v4().simple().to_string();
         let owner = format!("owner-{suffix}@example.test");
@@ -9730,7 +9498,7 @@ mod mam_integration_tests {
             .await
             .unwrap();
         db::migrate(&pool).await.unwrap();
-        let payloads = crate::services::mix::MixService::new_with_test_keyrings(pool.clone());
+        let payloads = crate::services::mix::MixPayloads;
 
         let suffix = Uuid::new_v4().simple().to_string();
         let owner_user_id = Uuid::new_v4();
@@ -10152,7 +9920,7 @@ mod mam_integration_tests {
             .await
             .unwrap();
         db::migrate(&pool).await.unwrap();
-        let payloads = crate::services::mix::MixService::new_with_test_keyrings(pool.clone());
+        let payloads = crate::services::mix::MixPayloads;
         let suffix = Uuid::new_v4().simple().to_string();
         let localpart = format!("atomic-{}", &suffix[..16]);
         let actor = format!("owner-{suffix}@remote.example.test");

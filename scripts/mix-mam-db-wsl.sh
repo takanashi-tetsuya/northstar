@@ -60,7 +60,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
 
-TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema" \
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline \
   db::mix::mam_integration_tests::mix_mam_snapshot_filters_cursors_and_metadata_are_consistent \
   -- --ignored --nocapture

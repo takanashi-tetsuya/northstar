@@ -2,17 +2,14 @@
 //!
 //! Protocol handlers own stanza validation, recipient fan-out and the
 //! notification-before-roster-push ordering required by RFC 6121. This
-//! service owns PostgreSQL reads and subscription transitions so the XML
-//! layer cannot compose authorization checks against an unrelated pool or
-//! accidentally split a durable roster/outbox transaction.
+//! service applies outbound policy and requests complete subscription
+//! transitions through its repository port.
 
-use crate::db;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-pub(crate) use crate::db::{
+pub(crate) use northstar_roster_core::{
     InboundRemotePresenceEffect, LocalPresenceEffect, PresencePolicyDenial, RosterChange,
 };
 
@@ -23,23 +20,27 @@ pub(crate) struct PresenceAccount {
     pub(crate) auth_generation: i64,
 }
 
-/// A leased administrative notice. The repository lease token/revision stays
-/// private so protocol code can only acknowledge the exact claim returned by
-/// this service.
+/// An administrative notice with the revision, date and token needed to
+/// acknowledge its exact delivery claim.
 #[derive(Clone, Debug)]
 pub(crate) struct ServiceMessageClaim {
-    kind: String,
-    body: String,
-    repository_claim: db::ClaimedAdminServiceMessage,
+    repository_claim: ServiceMessageDeliveryClaim,
 }
 
 impl ServiceMessageClaim {
+    pub(crate) fn from_lease(repository_claim: ServiceMessageDeliveryClaim) -> Self {
+        Self { repository_claim }
+    }
+    pub(crate) fn lease(&self) -> &ServiceMessageDeliveryClaim {
+        &self.repository_claim
+    }
+
     pub(crate) fn kind(&self) -> &str {
-        &self.kind
+        &self.repository_claim.kind
     }
 
     pub(crate) fn body(&self) -> &str {
-        &self.body
+        &self.repository_claim.body
     }
 }
 
@@ -92,23 +93,117 @@ pub(crate) struct LocalSubscriptionRequest<'a> {
     pub(crate) stanza: &'a str,
 }
 
-#[derive(Clone)]
-pub(crate) struct PresenceService {
-    pool: PgPool,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServiceMessageDeliveryClaim {
+    pub kind: String,
+    pub body: String,
+    pub revision: Uuid,
+    pub delivery_date: chrono::NaiveDate,
+    pub claim_id: Uuid,
 }
 
-impl PresenceService {
-    pub(crate) fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
+pub(crate) trait PresenceRepository: Send + Sync {
+    fn is_blocked_for_account(
+        &self,
+        owner_id: Uuid,
+        owner_bare_jid: &str,
+        candidate: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn privacy_denies(
+        &self,
+        owner_id: Uuid,
+        active_list: Option<&str>,
+        candidate: &str,
+        kind: northstar_xep_0016::PrivacyStanzaKind,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn avatar_hash(
+        &self,
+        user_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send;
+    fn find_enabled_user(
+        &self,
+        username: &str,
+    ) -> impl std::future::Future<Output = Result<Option<PresenceAccount>>> + Send;
+    fn roster_subscription(
+        &self,
+        owner_id: Uuid,
+        contact: &str,
+    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send;
+    fn replay_cutoff(&self) -> impl std::future::Future<Output = Result<DateTime<Utc>>> + Send;
+    fn claim_service_messages(
+        &self,
+        user_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<ServiceMessageClaim>>> + Send;
+    fn complete_service_message_claim(
+        &self,
+        user_id: Uuid,
+        claim: &ServiceMessageClaim,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    #[allow(clippy::too_many_arguments)]
+    fn transition_remote_with_outbox(
+        &self,
+        actor_id: Uuid,
+        expected_auth_generation: i64,
+        connection_id: Uuid,
+        local_domain: &str,
+        contact: &str,
+        kind: &str,
+        target_domain: &str,
+        stanza: &str,
+        bounce_to: Option<&str>,
+        policy: northstar_federation_core::S2sOutboxPolicy,
+    ) -> impl std::future::Future<Output = Result<PresenceMutation<RemoteSubscriptionTransition>>> + Send;
+    fn transition_remote(
+        &self,
+        actor_id: Uuid,
+        expected_auth_generation: i64,
+        connection_id: Uuid,
+        local_domain: &str,
+        contact: &str,
+        kind: &str,
+    ) -> impl std::future::Future<Output = Result<PresenceMutation<RemoteSubscriptionTransition>>> + Send;
+    fn transition_local(
+        &self,
+        request: LocalSubscriptionRequest<'_>,
+    ) -> impl std::future::Future<Output = Result<PresenceMutation<LocalSubscriptionTransition>>> + Send;
+    fn transition_inbound(
+        &self,
+        recipient_id: Uuid,
+        local_domain: &str,
+        contact: &str,
+        kind: &str,
+        stanza: &str,
+    ) -> impl std::future::Future<Output = Result<PresenceMutation<InboundSubscriptionTransition>>> + Send;
+    #[allow(clippy::too_many_arguments)]
+    fn cluster_authority_is_current(
+        &self,
+        local_domain: &str,
+        owner_jid: &str,
+        owner_id: Uuid,
+        owner_auth_generation: i64,
+        recipient_jid: &str,
+        recipient_id: Uuid,
+        recipient_auth_generation: i64,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+}
 
+#[derive(Clone)]
+pub(crate) struct PresenceService<R> {
+    repository: R,
+}
+impl<R: PresenceRepository> PresenceService<R> {
+    pub(crate) fn new(repository: R) -> Self {
+        Self { repository }
+    }
     pub(crate) async fn is_blocked_for_account(
         &self,
         owner_id: Uuid,
         owner_bare_jid: &str,
         candidate: &str,
     ) -> Result<bool> {
-        db::is_blocked_for_account(&self.pool, owner_id, owner_bare_jid, candidate).await
+        self.repository
+            .is_blocked_for_account(owner_id, owner_bare_jid, candidate)
+            .await
     }
 
     pub(crate) async fn privacy_denies(
@@ -116,14 +211,14 @@ impl PresenceService {
         owner_id: Uuid,
         active_list: Option<&str>,
         candidate: &str,
-        kind: db::PrivacyStanzaKind,
+        kind: northstar_xep_0016::PrivacyStanzaKind,
     ) -> Result<bool> {
-        db::privacy_denies(&self.pool, owner_id, active_list, candidate, kind).await
+        self.repository
+            .privacy_denies(owner_id, active_list, candidate, kind)
+            .await
     }
 
-    /// One policy boundary for an account's outbound presence. Blocking is
-    /// evaluated before the active/default privacy list and therefore avoids
-    /// both needless policy reads and inconsistent call-site ordering.
+    /// Blocking takes precedence over the active/default privacy list.
     pub(crate) async fn outbound_denied(
         &self,
         owner_id: Uuid,
@@ -141,26 +236,20 @@ impl PresenceService {
             owner_id,
             active_list,
             candidate,
-            db::PrivacyStanzaKind::PresenceOut,
+            northstar_xep_0016::PrivacyStanzaKind::PresenceOut,
         )
         .await
     }
 
     pub(crate) async fn avatar_hash(&self, user_id: Uuid) -> Result<Option<String>> {
-        Ok(db::get_vcard(&self.pool, user_id).await?.avatar_hash)
+        self.repository.avatar_hash(user_id).await
     }
 
     pub(crate) async fn find_enabled_user(
         &self,
         username: &str,
     ) -> Result<Option<PresenceAccount>> {
-        Ok(db::find_enabled_user(&self.pool, username)
-            .await?
-            .map(|user| PresenceAccount {
-                id: user.id,
-                username: user.username,
-                auth_generation: user.auth_generation,
-            }))
+        self.repository.find_enabled_user(username).await
     }
 
     pub(crate) async fn roster_subscription(
@@ -168,33 +257,19 @@ impl PresenceService {
         owner_id: Uuid,
         contact: &str,
     ) -> Result<Option<String>> {
-        Ok(db::roster_item(&self.pool, owner_id, contact)
-            .await?
-            .map(|item| item.2))
+        self.repository.roster_subscription(owner_id, contact).await
     }
 
-    /// PostgreSQL time is the replay fence authority. Capturing it here keeps
-    /// protocol code from obtaining a general-purpose SQL capability.
+    /// Use the repository clock as the durable replay fence.
     pub(crate) async fn replay_cutoff(&self) -> Result<DateTime<Utc>> {
-        sqlx::query_scalar("SELECT clock_timestamp()")
-            .fetch_one(&self.pool)
-            .await
-            .map_err(Into::into)
+        self.repository.replay_cutoff().await
     }
 
     pub(crate) async fn claim_service_messages(
         &self,
         user_id: Uuid,
     ) -> Result<Vec<ServiceMessageClaim>> {
-        Ok(db::claim_admin_service_messages(&self.pool, user_id)
-            .await?
-            .into_iter()
-            .map(|claim| ServiceMessageClaim {
-                kind: claim.kind.clone(),
-                body: claim.body.clone(),
-                repository_claim: claim,
-            })
-            .collect())
+        self.repository.claim_service_messages(user_id).await
     }
 
     pub(crate) async fn complete_service_message_claim(
@@ -202,7 +277,9 @@ impl PresenceService {
         user_id: Uuid,
         claim: &ServiceMessageClaim,
     ) -> Result<bool> {
-        db::complete_admin_service_message_claim(&self.pool, user_id, &claim.repository_claim).await
+        self.repository
+            .complete_service_message_claim(user_id, claim)
+            .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -217,23 +294,22 @@ impl PresenceService {
         target_domain: &str,
         stanza: &str,
         bounce_to: Option<&str>,
-        policy: db::S2sOutboxPolicy,
+        policy: northstar_federation_core::S2sOutboxPolicy,
     ) -> Result<PresenceMutation<RemoteSubscriptionTransition>> {
-        let outcome = db::transition_remote_presence_subscription_with_outbox_authorized(
-            &self.pool,
-            actor_id,
-            expected_auth_generation,
-            connection_id,
-            local_domain,
-            contact,
-            kind,
-            target_domain,
-            stanza,
-            bounce_to,
-            policy,
-        )
-        .await?;
-        Ok(map_remote_transition(outcome))
+        self.repository
+            .transition_remote_with_outbox(
+                actor_id,
+                expected_auth_generation,
+                connection_id,
+                local_domain,
+                contact,
+                kind,
+                target_domain,
+                stanza,
+                bounce_to,
+                policy,
+            )
+            .await
     }
 
     pub(crate) async fn transition_remote(
@@ -245,71 +321,25 @@ impl PresenceService {
         contact: &str,
         kind: &str,
     ) -> Result<PresenceMutation<RemoteSubscriptionTransition>> {
-        let outcome = db::transition_remote_presence_subscription_authorized(
-            &self.pool,
-            actor_id,
-            expected_auth_generation,
-            connection_id,
-            local_domain,
-            contact,
-            kind,
-        )
-        .await?;
-        Ok(map_remote_transition(outcome))
+        self.repository
+            .transition_remote(
+                actor_id,
+                expected_auth_generation,
+                connection_id,
+                local_domain,
+                contact,
+                kind,
+            )
+            .await
     }
 
     pub(crate) async fn transition_local(
         &self,
         request: LocalSubscriptionRequest<'_>,
     ) -> Result<PresenceMutation<LocalSubscriptionTransition>> {
-        let LocalSubscriptionRequest {
-            actor_id,
-            expected_auth_generation,
-            connection_id,
-            local_domain,
-            target_username,
-            kind,
-            stanza,
-        } = request;
-        let outcome = db::transition_local_presence_subscription_authorized(
-            &self.pool,
-            actor_id,
-            expected_auth_generation,
-            connection_id,
-            local_domain,
-            target_username,
-            kind,
-            stanza,
-        )
-        .await?;
-        Ok(match outcome {
-            db::AuthorizedLocalPresenceTransition::Unauthorized => PresenceMutation::Unauthorized,
-            db::AuthorizedLocalPresenceTransition::PolicyDenied(reason) => {
-                PresenceMutation::PolicyDenied(reason)
-            }
-            db::AuthorizedLocalPresenceTransition::Missing => PresenceMutation::Missing,
-            db::AuthorizedLocalPresenceTransition::Transition(authorized) => {
-                let db::AuthorizedLocalPresence {
-                    actor,
-                    target,
-                    transition,
-                } = *authorized;
-                PresenceMutation::Transition(LocalSubscriptionTransition {
-                    actor: map_account(actor),
-                    target: map_account(target),
-                    effect: transition.effect,
-                    actor_subscription: transition.actor_subscription,
-                    actor_change: transition.actor_change,
-                    target_change: transition.target_change,
-                })
-            }
-        })
+        self.repository.transition_local(request).await
     }
 
-    /// Inbound federation is authorized by the exact enabled local recipient
-    /// and its account-wide inbound policy. It deliberately has no C2S
-    /// auth-generation input because the authenticated actor is a remote
-    /// server, not one of the recipient's client sessions.
     pub(crate) async fn transition_inbound(
         &self,
         recipient_id: Uuid,
@@ -318,43 +348,11 @@ impl PresenceService {
         kind: &str,
         stanza: &str,
     ) -> Result<PresenceMutation<InboundSubscriptionTransition>> {
-        Ok(
-            match db::transition_inbound_remote_presence_subscription(
-                &self.pool,
-                recipient_id,
-                local_domain,
-                contact,
-                kind,
-                stanza,
-            )
-            .await?
-            {
-                db::AuthorizedInboundRemotePresenceTransition::Missing => PresenceMutation::Missing,
-                db::AuthorizedInboundRemotePresenceTransition::PolicyDenied(reason) => {
-                    PresenceMutation::PolicyDenied(reason)
-                }
-                db::AuthorizedInboundRemotePresenceTransition::Transition(authorized) => {
-                    let db::AuthorizedInboundRemotePresence {
-                        recipient,
-                        transition,
-                    } = *authorized;
-                    PresenceMutation::Transition(InboundSubscriptionTransition {
-                        recipient: map_account(recipient),
-                        effect: transition.effect,
-                        subscription: transition.subscription,
-                        change: transition.change,
-                        auto_reply: transition.auto_reply,
-                        send_unavailable: transition.send_unavailable,
-                    })
-                }
-            },
-        )
+        self.repository
+            .transition_inbound(recipient_id, local_domain, contact, kind, stanza)
+            .await
     }
 
-    /// Revalidate a signed cluster current-presence/subscription authority
-    /// against PostgreSQL before a peer node touches live sessions. Both UUID
-    /// incarnations, credential generations, canonical local JIDs and enabled
-    /// flags must still describe the exact accounts named by the payload.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn cluster_authority_is_current(
         &self,
@@ -366,71 +364,24 @@ impl PresenceService {
         recipient_id: Uuid,
         recipient_auth_generation: i64,
     ) -> Result<bool> {
-        let domain = crate::jid::prepare_domainpart(local_domain)?;
-        let owner = crate::jid::CanonicalJid::parse(owner_jid)?;
-        let recipient = crate::jid::CanonicalJid::parse(recipient_jid)?;
-        if owner.domainpart() != domain || recipient.domainpart() != domain {
-            return Ok(false);
-        }
-        let (Some(owner_username), Some(recipient_username)) =
-            (owner.localpart(), recipient.localpart())
-        else {
-            return Ok(false);
-        };
-        let mut ids = vec![owner_id, recipient_id];
-        ids.sort_unstable();
-        ids.dedup();
-        let rows = sqlx::query(
-            "SELECT id,username,auth_generation,is_disabled
-               FROM users WHERE id=ANY($1)",
-        )
-        .bind(&ids)
-        .fetch_all(&self.pool)
-        .await?;
-        let matches = |id: Uuid, username: &str, generation: i64| {
-            rows.iter().any(|row| {
-                row.get::<Uuid, _>("id") == id
-                    && row.get::<String, _>("username") == username
-                    && row.get::<i64, _>("auth_generation") == generation
-                    && !row.get::<bool, _>("is_disabled")
-            })
-        };
-        Ok(matches(owner_id, owner_username, owner_auth_generation)
-            && matches(recipient_id, recipient_username, recipient_auth_generation))
+        self.repository
+            .cluster_authority_is_current(
+                local_domain,
+                owner_jid,
+                owner_id,
+                owner_auth_generation,
+                recipient_jid,
+                recipient_id,
+                recipient_auth_generation,
+            )
+            .await
     }
 }
-
-fn map_account(account: db::PresenceAccount) -> PresenceAccount {
-    PresenceAccount {
-        id: account.id,
-        username: account.username,
-        auth_generation: account.auth_generation,
-    }
-}
-
-fn map_remote_transition(
-    outcome: db::AuthorizedRemotePresenceTransition,
-) -> PresenceMutation<RemoteSubscriptionTransition> {
-    match outcome {
-        db::AuthorizedRemotePresenceTransition::Unauthorized => PresenceMutation::Unauthorized,
-        db::AuthorizedRemotePresenceTransition::PolicyDenied(reason) => {
-            PresenceMutation::PolicyDenied(reason)
-        }
-        db::AuthorizedRemotePresenceTransition::Transition(authorized) => {
-            let db::AuthorizedRemotePresence { actor, transition } = *authorized;
-            PresenceMutation::Transition(RemoteSubscriptionTransition {
-                actor: map_account(actor),
-                subscription: transition.subscription,
-                change: transition.change,
-                routed: transition.routed,
-            })
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db;
+    use sqlx::PgPool;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -515,7 +466,9 @@ mod tests {
         let database = IsolatedDatabase::create("auth_fence").await;
         let (actor_id, actor_name, generation) = insert_user(&database.pool, "actor").await;
         let (_, target_name, _) = insert_user(&database.pool, "target").await;
-        let service = Arc::new(PresenceService::new(database.pool.clone()));
+        let service = Arc::new(PresenceService::new(
+            db::presence_repository::PostgresPresenceRepository::new(database.pool.clone()),
+        ));
 
         let mut password_change = database.pool.begin().await.unwrap();
         sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
@@ -704,7 +657,9 @@ mod tests {
         let database = IsolatedDatabase::create("inverse").await;
         let (alice_id, alice, alice_generation) = insert_user(&database.pool, "alice").await;
         let (bob_id, bob, bob_generation) = insert_user(&database.pool, "bob").await;
-        let service = PresenceService::new(database.pool.clone());
+        let service = PresenceService::new(
+            db::presence_repository::PostgresPresenceRepository::new(database.pool.clone()),
+        );
         let alice_request = format!(
             "<presence xmlns='jabber:client' from='{alice}@example.test' to='{bob}@example.test' type='subscribe'/>"
         );
@@ -774,7 +729,9 @@ mod tests {
         .execute(&database.pool)
         .await
         .unwrap();
-        let service = PresenceService::new(database.pool.clone());
+        let service = PresenceService::new(
+            db::presence_repository::PostgresPresenceRepository::new(database.pool.clone()),
+        );
         let stanza = format!(
             "<presence xmlns='jabber:client' from='{actor}@example.test' to='peer@remote.test' type='subscribe'/>"
         );
@@ -816,7 +773,9 @@ mod tests {
         let database = IsolatedDatabase::create("duplicate").await;
         let (actor_id, actor, generation) = insert_user(&database.pool, "actor").await;
         let (_, target, _) = insert_user(&database.pool, "target").await;
-        let service = PresenceService::new(database.pool.clone());
+        let service = PresenceService::new(
+            db::presence_repository::PostgresPresenceRepository::new(database.pool.clone()),
+        );
         let stanza = format!(
             "<presence xmlns='jabber:client' from='{actor}@example.test' to='{target}@example.test' type='subscribe'/>"
         );
@@ -946,7 +905,9 @@ mod tests {
         let stanza = format!(
             "<presence xmlns='jabber:client' from='{actor}@example.test' to='{target}@example.test' type='subscribe'/>"
         );
-        let service = Arc::new(PresenceService::new(database.pool.clone()));
+        let service = Arc::new(PresenceService::new(
+            db::presence_repository::PostgresPresenceRepository::new(database.pool.clone()),
+        ));
         assert!(matches!(
             service
                 .transition_local(LocalSubscriptionRequest {
@@ -1017,7 +978,9 @@ mod tests {
         let database = IsolatedDatabase::create("block_inbound").await;
         let (actor_id, actor, generation) = insert_user(&database.pool, "actor").await;
         let (target_id, target, _) = insert_user(&database.pool, "target").await;
-        let service = Arc::new(PresenceService::new(database.pool.clone()));
+        let service = Arc::new(PresenceService::new(
+            db::presence_repository::PostgresPresenceRepository::new(database.pool.clone()),
+        ));
         let mut blocker = database.pool.begin().await.unwrap();
         // Production block/unblock takes the exact enabled owner row before
         // the block-policy advisory lock. Reproduce that order here so the
@@ -1126,7 +1089,9 @@ mod tests {
         let (owner_id, owner, owner_generation) = insert_user(&database.pool, "owner").await;
         let (recipient_id, recipient, recipient_generation) =
             insert_user(&database.pool, "recipient").await;
-        let service = PresenceService::new(database.pool.clone());
+        let service = PresenceService::new(
+            db::presence_repository::PostgresPresenceRepository::new(database.pool.clone()),
+        );
         let owner_jid = format!("{owner}@example.test/Phone");
         let recipient_jid = format!("{recipient}@example.test");
         assert!(service

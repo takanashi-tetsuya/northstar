@@ -2056,6 +2056,7 @@ for (const [name, source] of [
   ['PubSubService', read('src/services/pubsub.rs')],
   ['BlockingService', read('src/services/blocking.rs')],
   ['PrivacyService', read('src/services/privacy.rs')],
+  ['PresenceService', read('src/services/presence.rs')],
   ['PushService', read('src/services/push.rs')],
   ['PrivateStorageService', read('src/services/private_storage.rs')],
   ['RetentionContext', read('src/retention.rs')],

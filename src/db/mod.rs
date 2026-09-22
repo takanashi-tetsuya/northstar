@@ -33,6 +33,7 @@ pub mod mix_muc;
 pub mod muc;
 pub mod omemo_recovery;
 pub mod pep;
+pub mod presence_repository;
 pub mod privacy;
 pub mod private;
 pub mod profile;

@@ -129,6 +129,10 @@ Key ownership:
   ports. Privacy keeps live-resource conflict checks in the service, and
   private storage keeps quota policy and bookmark extension preservation.
   Adapters retain the existing account locks and complete batch mutations.
+- Presence uses complete subscription operations through an injected port.
+  Account generations, privacy, roster changes and federation outbox admission
+  remain in one repository transaction; the service keeps outbound policy order.
+  Administrative notice claims carry domain values rather than database rows.
 - Embedded and standalone retention workers share the same narrow context.
   Retention and subscription cleanup receive repository operations, policy and
   metrics, with no raw pool or global application state.

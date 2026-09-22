@@ -48,14 +48,7 @@ pub struct AdminCommandFence<'a> {
     pub result_payload: &'a str,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ClaimedAdminServiceMessage {
-    pub kind: String,
-    pub body: String,
-    pub revision: Uuid,
-    pub delivery_date: chrono::NaiveDate,
-    pub claim_id: Uuid,
-}
+pub use crate::services::presence::ServiceMessageDeliveryClaim as ClaimedAdminServiceMessage;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DurableServiceControl {

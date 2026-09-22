@@ -217,13 +217,7 @@ pub struct AuthorizedInboundRemotePresence {
     pub transition: InboundRemotePresenceTransition,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InboundRemotePresenceEffect {
-    /// Deliver the received subscription stanza after the transaction commits.
-    Forward,
-    /// RFC 6121 says this transition has no effect in the current state.
-    Suppressed,
-}
+pub use northstar_roster_core::InboundRemotePresenceEffect;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct InboundRemotePresenceTransition {

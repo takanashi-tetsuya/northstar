@@ -372,7 +372,8 @@ transactions held by the adapter. PubSub/PEP now uses its existing repository
 traits with complete mutations and outbox operations, while the service retains
 foreground and background admission. Blocking, privacy, Push and private XML
 storage also use injected ports, retaining live-resource checks and storage
-quotas in the services. Remaining packets cover the other account,
+quotas in the services. Presence uses complete repository subscription operations
+with the same account and privacy fences. Remaining packets cover the other account,
 session, collaboration and REST services, plus live-session/upload workers.
 The public AppState budget is still nine; this stage remains open. Updating a field's visibility
 alone is not evidence of reduced authority.

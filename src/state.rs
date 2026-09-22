@@ -1707,7 +1707,9 @@ pub struct AppState {
     sm_service: crate::services::sm::SmService,
     blocking_service:
         crate::services::blocking::BlockingService<db::roster::PostgresBlockingRepository>,
-    presence_service: crate::services::presence::PresenceService,
+    presence_service: crate::services::presence::PresenceService<
+        db::presence_repository::PostgresPresenceRepository,
+    >,
     replay_service: crate::services::replay::ReplayService,
     roster_service: RosterService,
     privacy_service:
@@ -2859,7 +2861,9 @@ impl AppState {
             blocking_service: crate::services::blocking::BlockingService::new(
                 db::roster::PostgresBlockingRepository::new(pool.clone()),
             ),
-            presence_service: crate::services::presence::PresenceService::new(pool.clone()),
+            presence_service: crate::services::presence::PresenceService::new(
+                db::presence_repository::PostgresPresenceRepository::new(pool.clone()),
+            ),
             replay_service,
             roster_service,
             passkey_service,
@@ -3233,7 +3237,11 @@ impl AppState {
         &self.blocking_service
     }
 
-    pub(crate) fn presence_service(&self) -> &crate::services::presence::PresenceService {
+    pub(crate) fn presence_service(
+        &self,
+    ) -> &crate::services::presence::PresenceService<
+        db::presence_repository::PostgresPresenceRepository,
+    > {
         &self.presence_service
     }
 

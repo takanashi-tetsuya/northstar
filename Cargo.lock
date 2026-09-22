@@ -2103,8 +2103,10 @@ name = "northstar-pubsub-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "northstar-xmpp-types",
+ "sha2",
  "uuid",
 ]
 

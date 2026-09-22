@@ -1,159 +1,490 @@
-//! Fine-grained repository port traits for PubSub and PEP domain operations.
-//!
-//! Decomposed into cohesive, single-responsibility traits:
-//! - [`PubSubNodeRepository`]: Node lifecycle, configuration, metadata
-//! - [`PubSubItemRepository`]: Item publication, retraction, purging
-//! - [`PubSubSubscriptionRepository`]: PubSub subscription management
-//! - [`PubSubAffiliationRepository`]: PubSub affiliation management
-//! - [`PubSubOutboxRepository`]: PubSub notification delivery persistence
-//! - [`PepNodeRepository`]: PEP personal node management
-//! - [`PepItemRepository`]: PEP item publication and retraction
-//! - [`PepSubscriptionRepository`]: PEP presence subscription hooks
-//! - [`PepAffiliationRepository`]: PEP personal affiliations
-
-use anyhow::Result;
-use northstar_pubsub_core::{
-    CreateNodeOutcome, OwnerMutationOutcome, PepConfigureNodeWrite, PepDeleteNodeWrite,
-    PepOwnerMutationOutcome, PepPublishOutcome, PepPublishWrite, PepPurgeNodeWrite,
-    PepRetractWrite, PepSetAffiliationsWrite, PepSubscribeOutcome, PepSubscribeWrite,
-    PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubConfigOutcome, PubSubConfigureNodeWrite,
-    PubSubCreateNodeWrite, PubSubDeleteNodeWrite, PubSubNodeConfig, PubSubPublishOutcome,
-    PubSubPublishWrite, PubSubPurgeNodeWrite, PubSubRetractOutcome, PubSubRetractWrite,
-    PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite, PubSubSubscribeOutcome,
-    PubSubSubscribeWrite, PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, SetAffiliationsOutcome,
-    SetSubscriptionsOutcome,
+//! Complete PubSub and PEP repository operations. Mutations include their
+//! authorization snapshot and durable audience; no transaction escapes a port.
+use crate::{
+    PepPublishItemsCommand, PepPublishItemsResult, PepSubscribeCommand, PepSubscribeResult,
+    PepUnsubscribeCommand, PepUnsubscribeResult,
 };
+use anyhow::Result;
+use northstar_pubsub_core::*;
 use uuid::Uuid;
-
-/// Repository port for generic PubSub node lifecycle and configuration.
 pub trait PubSubNodeRepository: Send + Sync {
-    fn get_node_config(
+    fn delete_node_as_owner_with_redirect_and_outbox(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        redirect: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<OwnerMutationOutcome>> + Send;
+
+    fn update_node_config_and_graph_with_outbox(
+        &self,
+        node: &PubSubNode,
+        requester: &str,
+        expected: &PubSubNodeConfig,
+        config: &PubSubNodeConfig,
+    ) -> impl std::future::Future<Output = Result<PubSubConfigOutcome>> + Send;
+
+    fn get_node(
         &self,
         node: &str,
-    ) -> impl std::future::Future<Output = Result<Option<PubSubNodeConfig>>> + Send;
-
+    ) -> impl std::future::Future<Output = Result<Option<PubSubNode>>> + Send;
+    fn node_redirect(
+        &self,
+        node: &str,
+    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send;
+    fn collection_parents(
+        &self,
+        child_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<PubSubNode>>> + Send;
+    fn collection_children(
+        &self,
+        collection_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<PubSubNode>>> + Send;
+    fn visible_root_disco_count(
+        &self,
+        requester: &str,
+    ) -> impl std::future::Future<Output = Result<i64>> + Send;
+    fn visible_root_disco_cursor_exists(
+        &self,
+        requester: &str,
+        cursor: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn visible_root_disco_index(
+        &self,
+        requester: &str,
+        node: &str,
+    ) -> impl std::future::Future<Output = Result<i64>> + Send;
+    fn visible_root_disco_page(
+        &self,
+        requester: &str,
+        cursor: Option<&str>,
+        backwards: bool,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<PubSubDiscoNode>>> + Send;
+    fn is_owner(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn create_node(
         &self,
-        write: &PubSubCreateNodeWrite<'_>,
+        node: &str,
+        creator_jid: &str,
+        config: &PubSubNodeConfig,
+        max_nodes_per_owner: i64,
     ) -> impl std::future::Future<Output = Result<CreateNodeOutcome>> + Send;
-
-    fn delete_node(
+    fn associate_collection_child(
         &self,
-        write: &PubSubDeleteNodeWrite<'_>,
+        collection: &PubSubNode,
+        child: &PubSubNode,
+        requester: &str,
+    ) -> impl std::future::Future<Output = Result<CollectionUpdateOutcome>> + Send;
+    fn dissociate_collection_child(
+        &self,
+        collection: &PubSubNode,
+        child: &PubSubNode,
+        requester: &str,
+    ) -> impl std::future::Future<Output = Result<CollectionUpdateOutcome>> + Send;
+}
+pub trait PubSubItemRepository: Send + Sync {
+    fn purge_node_as_owner_with_outbox(
+        &self,
+        node_id: Uuid,
+        requester: &str,
     ) -> impl std::future::Future<Output = Result<OwnerMutationOutcome>> + Send;
 
-    fn configure_node(
+    fn get_items(
         &self,
-        write: &PubSubConfigureNodeWrite<'_>,
-    ) -> impl std::future::Future<Output = Result<PubSubConfigOutcome>> + Send;
-}
-
-/// Repository port for PubSub item operations.
-pub trait PubSubItemRepository: Send + Sync {
+        node_id: Uuid,
+        item_ids: &[String],
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<PubSubItem>>> + Send;
+    fn item_ids_for_disco(
+        &self,
+        node_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
+    fn collection_visible_items(
+        &self,
+        collection_id: Uuid,
+        requester: &str,
+        global_item_limit: i64,
+        xml_byte_limit: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<CollectionVisibleItem>>> + Send;
+    fn can_publish(
+        &self,
+        node: &PubSubNode,
+        requester: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn publish_items(
         &self,
-        write: &PubSubPublishWrite<'_>,
-    ) -> impl std::future::Future<Output = Result<PubSubPublishOutcome>> + Send;
-
+        node: &PubSubNode,
+        publisher_jid: &str,
+        items: &[(String, String)],
+        max_storage_bytes_per_owner: i64,
+    ) -> impl std::future::Future<Output = Result<PublishItemsOutcome>> + Send;
     fn retract_items(
         &self,
-        write: &PubSubRetractWrite<'_>,
-    ) -> impl std::future::Future<Output = Result<PubSubRetractOutcome>> + Send;
-
-    fn purge_node(
-        &self,
-        write: &PubSubPurgeNodeWrite<'_>,
-    ) -> impl std::future::Future<Output = Result<OwnerMutationOutcome>> + Send;
+        node_id: Uuid,
+        item_ids: &[String],
+        publisher_jid: &str,
+        force_notification: bool,
+    ) -> impl std::future::Future<Output = Result<RetractItemsOutcome>> + Send;
 }
-
-/// Repository port for PubSub subscription operations.
 pub trait PubSubSubscriptionRepository: Send + Sync {
-    fn subscribe(
+    fn is_subscribed(
         &self,
-        write: &PubSubSubscribeWrite<'_>,
-    ) -> impl std::future::Future<Output = Result<PubSubSubscribeOutcome>> + Send;
-
-    fn unsubscribe(
+        node_id: Uuid,
+        jid: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn subscriptions_for_jid(
         &self,
-        write: &PubSubUnsubscribeWrite<'_>,
-    ) -> impl std::future::Future<Output = Result<PubSubUnsubscribeOutcome>> + Send;
-
+        jid: &str,
+        node: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<Vec<PubSubSubscription>>> + Send;
+    fn subscriptions_addressing_jid_page(
+        &self,
+        jid: &str,
+        after: Option<(&str, &str)>,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<PubSubSubscription>>> + Send;
+    fn node_subscriptions(
+        &self,
+        node_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<PubSubSubscription>>> + Send;
+    fn get_subscription(
+        &self,
+        node_id: Uuid,
+        jid: &str,
+    ) -> impl std::future::Future<Output = Result<Option<PubSubSubscription>>> + Send;
+    fn active_subscriber_count(
+        &self,
+        node_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<i64>> + Send;
+    fn update_subscription_options_checked(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        subscriber_jid: &str,
+        expected_subid: Option<&str>,
+        options: &PubSubSubscriptionOptions,
+    ) -> impl std::future::Future<Output = Result<SubscriptionOptionsOutcome>> + Send;
+    #[allow(clippy::too_many_arguments)]
+    fn set_subscription_limited_with_options(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        jid: &str,
+        state: &str,
+        expected_node_type: &str,
+        expected_access_model: &str,
+        max_subscriptions: i64,
+        options: Option<&PubSubSubscriptionOptions>,
+        requested_subid: &str,
+    ) -> impl std::future::Future<Output = Result<SubscribeOutcome>> + Send;
+    fn unsubscribe_checked(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        subscriber_jid: &str,
+        expected_subid: &str,
+    ) -> impl std::future::Future<Output = Result<UnsubscribeOutcome>> + Send;
     fn set_subscriptions(
         &self,
-        write: &PubSubSetSubscriptionsWrite<'_>,
+        node_id: Uuid,
+        requester: &str,
+        changes: &[(String, String, Option<String>)],
     ) -> impl std::future::Future<Output = Result<SetSubscriptionsOutcome>> + Send;
+    fn resolve_pending_subscription(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        subscriber_jid: &str,
+        expected_subid: &str,
+        allow: bool,
+    ) -> impl std::future::Future<Output = Result<SubscriptionAuthorizationOutcome>> + Send;
 }
-
-/// Repository port for PubSub affiliation operations.
 pub trait PubSubAffiliationRepository: Send + Sync {
+    fn get_node_affiliation(
+        &self,
+        node_id: Uuid,
+        jid: &str,
+    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send;
+    fn affiliations_for_jid(
+        &self,
+        jid: &str,
+        node: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<Vec<PubSubAffiliation>>> + Send;
+    fn node_affiliations(
+        &self,
+        node_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<PubSubAffiliation>>> + Send;
+    fn get_owner_jids(
+        &self,
+        node_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
+    fn get_publisher_jids(
+        &self,
+        node_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
     fn set_affiliations(
         &self,
-        write: &PubSubSetAffiliationsWrite<'_>,
+        node_id: Uuid,
+        requester: &str,
+        changes: &[(String, String)],
     ) -> impl std::future::Future<Output = Result<SetAffiliationsOutcome>> + Send;
 }
-
-/// Repository port for PubSub outbox delivery tracking.
 pub trait PubSubOutboxRepository: Send + Sync {
-    fn record_outbox(
+    fn cleanup_idle_pubsub_event_streams(
         &self,
-        recipient_jid: &str,
-        payload: &str,
-    ) -> impl std::future::Future<Output = Result<Uuid>> + Send;
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<u64>> + Send;
+
+    fn cleanup_pubsub_dead_letters(
+        &self,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<u64>> + Send;
+
+    fn outbox_get_subscription(
+        &self,
+        node_id: Uuid,
+        jid: &str,
+    ) -> impl std::future::Future<Output = Result<Option<PubSubSubscription>>> + Send;
+
+    fn local_account_blocks_pubsub(
+        &self,
+        username: &str,
+        service: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn presence_delivery_denied(
+        &self,
+        recipient_id: Uuid,
+        active_privacy_list: Option<&str>,
+        connection_id: Uuid,
+        service: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn authorize_pep_outbox_delivery(
+        &self,
+        item: &ClaimedPubSubOutboxDelivery,
+    ) -> impl std::future::Future<Output = Result<PepOutboxAuthorizationOutcome>> + Send;
+    fn claim_pubsub_outbox(
+        &self,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<ClaimedPubSubOutboxDelivery>>> + Send;
+    fn acknowledge_pubsub_outbox(
+        &self,
+        delivery_id: Uuid,
+        lease_token: Uuid,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn renew_pubsub_outbox_lease(
+        &self,
+        delivery_id: Uuid,
+        lease_token: Uuid,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn retry_pubsub_outbox(
+        &self,
+        item: &ClaimedPubSubOutboxDelivery,
+        error: &str,
+    ) -> impl std::future::Future<Output = Result<PubSubOutboxFailureDisposition>> + Send;
+    fn dead_letter_pubsub_outbox(
+        &self,
+        delivery_id: Uuid,
+        lease_token: Uuid,
+        reason: &str,
+        error: &str,
+    ) -> impl std::future::Future<Output = Result<PubSubOutboxFailureDisposition>> + Send;
+    fn expire_pubsub_outbox(
+        &self,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<u64>> + Send;
+    fn pubsub_outbox_snapshot(
+        &self,
+    ) -> impl std::future::Future<Output = Result<PubSubOutboxSnapshot>> + Send;
+    fn enqueue_pubsub_digest_snapshot(
+        &self,
+        source_delivery_id: Uuid,
+        node_id: Uuid,
+        subscriber_jid: &str,
+        event_xml: &str,
+        frequency_ms: i32,
+        show_values: &[String],
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn enqueue_pubsub_digest(
+        &self,
+        node_id: Uuid,
+        subscriber_jid: &str,
+        event_xml: &str,
+        frequency_ms: i32,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn claim_due_pubsub_digests(
+        &self,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<DuePubSubDigest>>> + Send;
+    fn release_pubsub_digests(
+        &self,
+        ids: &[Uuid],
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn acknowledge_pubsub_digests(
+        &self,
+        ids: &[Uuid],
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
-
-/// Repository port for PEP personal node lifecycle operations.
 pub trait PepNodeRepository: Send + Sync {
-    fn delete_pep_node(
+    fn roster_item(
         &self,
-        write: &PepDeleteNodeWrite<'_>,
-    ) -> impl std::future::Future<Output = Result<PepOwnerMutationOutcome>> + Send;
+        owner_id: Uuid,
+        jid: &str,
+    ) -> impl std::future::Future<Output = Result<Option<PubSubRosterEntry>>> + Send;
 
-    fn configure_pep_node(
+    fn pep_node(
         &self,
-        write: &PepConfigureNodeWrite<'_>,
+        owner_id: Uuid,
+        node: &str,
+    ) -> impl std::future::Future<Output = Result<Option<PepNodeConfig>>> + Send;
+    fn pep_nodes(
+        &self,
+        owner_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
+    fn find_enabled_user(
+        &self,
+        username: &str,
+    ) -> impl std::future::Future<Output = Result<Option<PubSubAccount>>> + Send;
+    fn roster(
+        &self,
+        owner_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<PubSubRosterEntry>>> + Send;
+    fn is_blocked(
+        &self,
+        owner_id: Uuid,
+        candidate: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn roster_group_allowed(
+        &self,
+        owner_id: Uuid,
+        jid: &str,
+        groups: &[String],
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn create_pep_node(
+        &self,
+        owner_id: Uuid,
+        node: &str,
+        config: &PepNodeConfig,
+        max_nodes: i64,
+    ) -> impl std::future::Future<Output = Result<PepCreateOutcome>> + Send;
+    fn update_pep_node_config(
+        &self,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        node: &str,
+        expected: &PepNodeConfig,
+        config: &PepNodeConfig,
+        factory: &dyn PepOutboxFactory,
     ) -> impl std::future::Future<Output = Result<PepOwnerMutationOutcome>> + Send;
-
     fn purge_pep_node(
         &self,
-        write: &PepPurgeNodeWrite<'_>,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        node: &str,
+        factory: &dyn PepOutboxFactory,
+    ) -> impl std::future::Future<Output = Result<PepOwnerMutationOutcome>> + Send;
+    fn delete_pep_node(
+        &self,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        node: &str,
+        factory: &dyn PepOutboxFactory,
     ) -> impl std::future::Future<Output = Result<PepOwnerMutationOutcome>> + Send;
 }
-
-/// Repository port for PEP item publication and retraction.
 pub trait PepItemRepository: Send + Sync {
-    fn publish_pep_items(
+    fn pep_items(
         &self,
-        write: &PepPublishWrite<'_>,
-    ) -> impl std::future::Future<Output = Result<PepPublishOutcome>> + Send;
+        owner_id: Uuid,
+        node: &str,
+        item_id: Option<&str>,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<(String, String)>>> + Send;
+    fn pep_items_by_ids(
+        &self,
+        owner_id: Uuid,
+        node: &str,
+        item_ids: &[&str],
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<(String, String)>>> + Send;
+    fn pep_items_with_timestamp(
+        &self,
+        owner_id: Uuid,
+        node: &str,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<PepItem>>> + Send;
 
     fn retract_pep_items(
         &self,
-        write: &PepRetractWrite<'_>,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        node: &str,
+        item_ids: &[&str],
+        notify: bool,
+        factory: &dyn PepOutboxFactory,
     ) -> impl std::future::Future<Output = Result<PepOwnerMutationOutcome>> + Send;
+    #[allow(clippy::too_many_arguments)]
+    fn commit_legacy_bookmarks(
+        &self,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        private_xml: &str,
+        items: &mut [(String, String)],
+        expected_previous_items: &[(String, String)],
+        max_private_bytes: i64,
+        quotas: PepQuotas,
+        factory: &dyn PepOutboxFactory,
+    ) -> impl std::future::Future<Output = Result<PepBookmarkMutationOutcome>> + Send;
+    fn publish_pep_items(
+        &self,
+        command: PepPublishItemsCommand<'_>,
+        factory: &dyn PepOutboxFactory,
+    ) -> impl std::future::Future<Output = Result<PepPublishItemsResult>> + Send;
 }
-
-/// Repository port for PEP subscription operations.
 pub trait PepSubscriptionRepository: Send + Sync {
-    fn subscribe_pep(
+    fn pep_subscribers(
         &self,
-        write: &PepSubscribeWrite<'_>,
-    ) -> impl std::future::Future<Output = Result<PepSubscribeOutcome>> + Send;
-
-    fn unsubscribe_pep(
+        owner_id: Uuid,
+        node: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<PepSubscription>>> + Send;
+    fn pep_subscriptions_for_available_resource(
         &self,
-        write: &PepUnsubscribeWrite<'_>,
-    ) -> impl std::future::Future<Output = Result<PepUnsubscribeOutcome>> + Send;
-}
-
-/// Repository port for PEP affiliation operations.
-pub trait PepAffiliationRepository: Send + Sync {
-    fn set_pep_affiliations(
+        subscriber_jid: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<PepPresenceSubscription>>> + Send;
+    fn pep_owner_usernames_for_presence_subscriber(
         &self,
-        write: &PepSetAffiliationsWrite<'_>,
+        subscriber_bare: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
+    fn subscribe_pep_node(
+        &self,
+        command: PepSubscribeCommand<'_>,
+        factory: &dyn PepSubscribeOutboxFactory,
+    ) -> impl std::future::Future<Output = Result<PepSubscribeResult>> + Send;
+    fn unsubscribe_pep_node(
+        &self,
+        command: PepUnsubscribeCommand<'_>,
+    ) -> impl std::future::Future<Output = Result<PepUnsubscribeResult>> + Send;
+    fn unsubscribe_pep_nodes_batch(
+        &self,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        node: &str,
+        changes: &[(String, Option<String>)],
+        factory: &dyn PepDirectOutboxFactory,
     ) -> impl std::future::Future<Output = Result<PepOwnerMutationOutcome>> + Send;
 }
-
-/// Aggregate trait combining all fine-grained PubSub and PEP repository capabilities.
+pub trait PepAffiliationRepository: Send + Sync {
+    fn update_pep_affiliations(
+        &self,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        node: &str,
+        expected: &PepNodeConfig,
+        changes: &[(String, String)],
+        factory: &dyn PepDirectOutboxFactory,
+    ) -> impl std::future::Future<Output = Result<PepOwnerMutationOutcome>> + Send;
+}
 pub trait PubSubRepository:
     PubSubNodeRepository
     + PubSubItemRepository
@@ -164,11 +495,8 @@ pub trait PubSubRepository:
     + PepItemRepository
     + PepSubscriptionRepository
     + PepAffiliationRepository
-    + Send
-    + Sync
 {
 }
-
 impl<T> PubSubRepository for T where
     T: PubSubNodeRepository
         + PubSubItemRepository
@@ -179,7 +507,5 @@ impl<T> PubSubRepository for T where
         + PepItemRepository
         + PepSubscriptionRepository
         + PepAffiliationRepository
-        + Send
-        + Sync
 {
 }

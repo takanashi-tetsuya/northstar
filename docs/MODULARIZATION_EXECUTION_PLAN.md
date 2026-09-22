@@ -368,8 +368,10 @@ subscription cleanup contexts. MUC now uses a room repository and a separate
 committed-operation wake port; its existing locks, generations and outbox
 transactions remain intact. Profile publication also uses an injected port,
 with its shared mutation admission held by the service and complete publication
-transactions held by the adapter. Remaining packets cover PubSub/PEP, the other
-authentication/REST paths and live-session/upload workers.
+transactions held by the adapter. PubSub/PEP now uses its existing repository
+traits with complete mutations and outbox operations, while the service retains
+foreground and background admission. Remaining packets cover the other account,
+session, collaboration and REST services, plus live-session/upload workers.
 The public AppState budget is still nine; this stage remains open. Updating a field's visibility
 alone is not evidence of reduced authority.
 

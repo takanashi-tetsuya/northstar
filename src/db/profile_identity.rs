@@ -25,21 +25,7 @@ struct ProfileItemIdentity {
     canonical_payload: String,
 }
 
-pub(crate) fn canonical_profile_item_id(node: &str, item_id: &str) -> Result<String> {
-    if !PROFILE_JID_NODES.contains(&node) {
-        return Ok(item_id.to_owned());
-    }
-    let canonical = crate::jid::CanonicalJid::parse_bare(item_id).map_err(|error| {
-        error.context(format!(
-            "profile PEP node {node:?} requires a valid bare-JID ItemID; rejected {item_id:?}"
-        ))
-    })?;
-    anyhow::ensure!(
-        canonical.localpart().is_some(),
-        "profile PEP node {node:?} requires an account bare-JID ItemID; rejected domain-only {item_id:?}"
-    );
-    Ok(canonical.to_string())
-}
+pub(crate) use northstar_pubsub_core::canonical_profile_item_id;
 
 #[cfg(test)]
 pub async fn canonicalize_profile_identity_storage(pool: &PgPool) -> Result<()> {

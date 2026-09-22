@@ -87,6 +87,7 @@ pub use users::*;
 pub use vcard::*;
 pub mod pubsub;
 pub mod pubsub_outbox;
+pub mod pubsub_repository;
 pub use pubsub::*;
 pub use pubsub_outbox::*;
 

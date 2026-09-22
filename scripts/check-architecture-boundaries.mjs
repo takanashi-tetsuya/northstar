@@ -2053,6 +2053,7 @@ for (const [name, source] of [
   ['MamService', mamServiceSource],
   ['MucService', read('src/services/muc.rs')],
   ['ProfileService', read('src/services/profile.rs')],
+  ['PubSubService', read('src/services/pubsub.rs')],
   ['RetentionContext', read('src/retention.rs')],
   ['SubscriptionCleanupContext', read('src/subscription_cleanup.rs')],
 ]) {

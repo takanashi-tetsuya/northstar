@@ -6,6 +6,7 @@
 //! It is meant to be used by application services that bind protocol input/output
 //! and persistence adapters.
 
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 pub use northstar_xmpp_types::CanonicalJid;
 use uuid::Uuid;
@@ -435,20 +436,6 @@ pub enum SubscriptionAuthorizationOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PubSubOutboxSource {
-    PubSub,
-    Pep,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PubSubOutboxDeliveryKind {
-    PubSubChildren,
-    PubSubDigest,
-    PubSubDirect,
-    PepStanza,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PepOutboxDropReason {
     UnverifiableIdentity,
     SenderUnavailable,
@@ -744,3 +731,105 @@ pub struct PepSetAffiliationsWrite<'a> {
     pub expected: &'a PepNodeConfig,
     pub changes: &'a [(String, String)],
 }
+
+pub mod outbox;
+pub use outbox::*;
+
+pub const PEP_MAX_ITEMS: i32 = 100;
+pub fn default_pep_node_config(node: &str) -> PepNodeConfig {
+    let (access_model, max_items, send_last) = match node {
+        "urn:xmpp:omemo:2:devices" | "eu.siacs.conversations.axolotl.devicelist" => {
+            ("open", 1, "on_sub_and_presence")
+        }
+        "urn:xmpp:omemo:2:bundles" => ("open", PEP_MAX_ITEMS, "on_sub_and_presence"),
+        node if node.starts_with("eu.siacs.conversations.axolotl.bundles") => {
+            ("open", PEP_MAX_ITEMS, "on_sub_and_presence")
+        }
+        "urn:xmpp:avatar:data" => ("open", PEP_MAX_ITEMS, "never"),
+        "urn:xmpp:avatar:metadata" | "urn:xmpp:vcard4" => ("open", 1, "on_sub_and_presence"),
+        "urn:xmpp:contacts" | "urn:xmpp:bookmarks:1" | "storage:bookmarks" => {
+            ("whitelist", PEP_MAX_ITEMS, "never")
+        }
+        _ => ("presence", 100, "on_sub_and_presence"),
+    };
+    PepNodeConfig {
+        access_model: access_model.to_owned(),
+        max_items,
+        persist_items: true,
+        send_last_published_item: send_last.to_owned(),
+        deliver_notifications: true,
+        roster_groups_allowed: Vec::new(),
+        access_whitelist: Vec::new(),
+    }
+}
+
+pub fn canonical_profile_item_id(node: &str, item_id: &str) -> Result<String> {
+    if !["urn:xmpp:bookmarks:1", "urn:xmpp:contacts"].contains(&node) {
+        return Ok(item_id.to_owned());
+    }
+    let canonical = northstar_xmpp_types::CanonicalJid::parse_bare(item_id).map_err(|error| {
+        error.context(format!(
+            "profile PEP node {node:?} requires a valid bare-JID ItemID; rejected {item_id:?}"
+        ))
+    })?;
+    anyhow::ensure!(
+        canonical.localpart().is_some(),
+        "profile PEP node {node:?} requires an account bare-JID ItemID; rejected domain-only {item_id:?}"
+    );
+    Ok(canonical.to_string())
+}
+
+/// Pure renderer invoked while the authoritative subscription transaction is
+/// open. It receives only values read under the policy locks and cannot add a
+/// recipient other than the newly subscribed JID.
+pub trait PepSubscribeOutboxFactory: Send + Sync {
+    fn build(&self, snapshot: &PepSubscribeSnapshot) -> Result<Vec<PubSubOutboxInsert>>;
+}
+
+impl<F> PepSubscribeOutboxFactory for F
+where
+    F: Fn(&PepSubscribeSnapshot) -> Result<Vec<PubSubOutboxInsert>> + Send + Sync,
+{
+    fn build(&self, snapshot: &PepSubscribeSnapshot) -> Result<Vec<PubSubOutboxInsert>> {
+        self(snapshot)
+    }
+}
+
+/// Synchronous payload factory used under the publication transaction. It may
+/// consult in-memory caps/resources, but cannot perform I/O or introduce a
+/// principal absent from `PepAudienceSnapshot`.
+pub trait PepOutboxFactory: Send + Sync {
+    fn build(&self, audience: &PepAudienceSnapshot) -> Result<Vec<(String, String)>>;
+}
+
+pub trait PepDirectOutboxFactory: Send + Sync {
+    fn build(&self, snapshot: &PepDirectStateSnapshot) -> Result<Vec<(String, String)>>;
+}
+
+impl<F> PepDirectOutboxFactory for F
+where
+    F: Fn(&PepDirectStateSnapshot) -> Result<Vec<(String, String)>> + Send + Sync,
+{
+    fn build(&self, snapshot: &PepDirectStateSnapshot) -> Result<Vec<(String, String)>> {
+        self(snapshot)
+    }
+}
+
+impl<F> PepOutboxFactory for F
+where
+    F: Fn(&PepAudienceSnapshot) -> Result<Vec<(String, String)>> + Send + Sync,
+{
+    fn build(&self, audience: &PepAudienceSnapshot) -> Result<Vec<(String, String)>> {
+        self(audience)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PubSubNotificationDelivery {
+    pub subscription_node_id: Uuid,
+    pub subscription: PubSubSubscription,
+    pub collection: Option<String>,
+}
+
+/// Contact JID, display name, subscription state and pending request.
+pub type PubSubRosterEntry = (String, Option<String>, String, Option<String>);

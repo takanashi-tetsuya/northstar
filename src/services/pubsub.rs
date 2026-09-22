@@ -1,15 +1,8 @@
-//! Application-service boundary for XEP-0060 PubSub and PEP.
-//!
-//! The protocol layer owns XML parsing and stanza error mapping. This service
-//! owns the PostgreSQL capability and the durable mutation/outbox workflow, so
-//! protocol handlers cannot accidentally compose transactions with unrelated
-//! repositories or bypass the durable audience snapshot.
-
-use crate::db;
+//! PubSub command validation, mutation admission and publication policy.
 use crate::services::profile::{
     ProfileOutboxFactory, ProfilePepWrite, ProfilePublishResult, ProfileRepository, ProfileService,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 pub(crate) use northstar_pubsub_application::{
     is_pubsub_mutation_busy as is_pubsub_mutation_busy_core,
     pubsub_mutation_admission_active as pubsub_mutation_admission_active_core,
@@ -53,9 +46,21 @@ pub(crate) use northstar_pubsub_core::{
     SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscribeOutcome,
     SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome, UnsubscribeOutcome,
 };
+
+pub(crate) use northstar_pubsub_application::{
+    PepAffiliationRepository, PepItemRepository, PepNodeRepository, PepSubscriptionRepository,
+    PubSubAffiliationRepository, PubSubItemRepository, PubSubNodeRepository,
+    PubSubOutboxRepository, PubSubRepository, PubSubSubscriptionRepository,
+};
+pub(crate) use northstar_pubsub_core::{
+    canonical_profile_item_id, default_pep_node_config, ClaimedPubSubOutboxDelivery,
+    DuePubSubDigest, PepDirectOutboxFactory, PepOutboxAuthorizationMode,
+    PepOutboxAuthorizationOutcome, PepOutboxDropReason, PepOutboxEventKind, PepOutboxFactory,
+    PepSubscribeOutboxFactory, PubSubNotificationDelivery, PubSubOutboxDeliveryKind,
+    PubSubOutboxFailureDisposition, PubSubOutboxInsert, PubSubOutboxSnapshot, PubSubOutboxSource,
+    PEP_MAX_ITEMS,
+};
 use northstar_xml_builder::XmlElement;
-use sqlx::{PgPool, Postgres, Row, Transaction};
-use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -74,869 +79,39 @@ pub(crate) fn pubsub_mutation_admission_active() -> u64 {
     pubsub_mutation_admission_active_core()
 }
 
-/// True only for retryable PubSub capacity/lock pressure.  Authentication,
-/// policy and data-integrity errors must keep their existing stanza mapping.
 pub(crate) fn is_pubsub_mutation_busy(error: &anyhow::Error) -> bool {
-    if is_pubsub_mutation_busy_core(error) {
-        return true;
-    }
-    error.chain().any(|cause| {
-        if cause
-            .downcast_ref::<db::pubsub::PubSubMutationBusy>()
-            .is_some()
-        {
-            return true;
-        }
-        cause
-            .downcast_ref::<sqlx::Error>()
-            .is_some_and(|error| match error {
-                sqlx::Error::PoolTimedOut => true,
-                sqlx::Error::Database(error) => error
-                    .code()
-                    .is_some_and(|code| matches!(code.as_ref(), "55P03" | "57014")),
-                _ => false,
-            })
-    })
+    is_pubsub_mutation_busy_core(error)
 }
 
 #[derive(Clone)]
-pub(crate) struct PubSubService {
-    pool: PgPool,
-    domain: String,
-    service_jid: String,
+pub(crate) struct PubSubService<R> {
+    repository: R,
     mutation_admission: Arc<PubSubMutationAdmission>,
-    /// Shared admission for short, background durable-outbox database turns.
-    /// Foreground XEP-0060 mutations retain their own transaction admission;
-    /// a delayed notification must not exhaust that foreground budget.
     durable_outbox_database_admission:
         crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
 }
 
-/// Pure renderer invoked while the authoritative subscription transaction is
-/// open. It receives only values read under the policy locks and cannot add a
-/// recipient other than the newly subscribed JID.
-pub(crate) trait PepSubscribeOutboxFactory: Send + Sync {
-    fn build(&self, snapshot: &PepSubscribeSnapshot) -> Result<Vec<PubSubOutboxInsert>>;
-}
-
-impl<F> PepSubscribeOutboxFactory for F
-where
-    F: Fn(&PepSubscribeSnapshot) -> Result<Vec<PubSubOutboxInsert>> + Send + Sync,
-{
-    fn build(&self, snapshot: &PepSubscribeSnapshot) -> Result<Vec<PubSubOutboxInsert>> {
-        self(snapshot)
-    }
-}
-
-/// Synchronous payload factory used under the publication transaction. It may
-/// consult in-memory caps/resources, but cannot perform I/O or introduce a
-/// principal absent from `PepAudienceSnapshot`.
-pub(crate) trait PepOutboxFactory: Send + Sync {
-    fn build(&self, audience: &PepAudienceSnapshot) -> Result<Vec<(String, String)>>;
-}
-
-pub(crate) trait PepDirectOutboxFactory: Send + Sync {
-    fn build(&self, snapshot: &PepDirectStateSnapshot) -> Result<Vec<(String, String)>>;
-}
-
-impl<F> PepDirectOutboxFactory for F
-where
-    F: Fn(&PepDirectStateSnapshot) -> Result<Vec<(String, String)>> + Send + Sync,
-{
-    fn build(&self, snapshot: &PepDirectStateSnapshot) -> Result<Vec<(String, String)>> {
-        self(snapshot)
-    }
-}
-
-impl<F> PepOutboxFactory for F
-where
-    F: Fn(&PepAudienceSnapshot) -> Result<Vec<(String, String)>> + Send + Sync,
-{
-    fn build(&self, audience: &PepAudienceSnapshot) -> Result<Vec<(String, String)>> {
-        self(audience)
-    }
-}
-
-struct PepRosterAudienceEntry {
-    subscription: String,
-    groups: Vec<String>,
-}
-
-async fn lock_pep_audience(
-    transaction: &mut Transaction<'_, Postgres>,
-    owner_id: Uuid,
-    node: &str,
-) -> Result<()> {
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 5))")
-        .bind(format!("{owner_id}:{node}"))
-        .execute(&mut **transaction)
-        .await?;
-    Ok(())
-}
-
-async fn lock_pep_block_policy(
-    transaction: &mut Transaction<'_, Postgres>,
-    owner_id: Uuid,
-) -> Result<()> {
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 0))")
-        .bind(owner_id)
-        .execute(&mut **transaction)
-        .await?;
-    Ok(())
-}
-
-struct LockedPepSubscriptionPrincipal {
-    subscriber_jid: String,
-    subscriber_bare: String,
-    owner_bare: String,
-    local_subscriber_id: Option<Uuid>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PubSubOutboxSource {
-    PubSub,
-    Pep,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PubSubOutboxDeliveryKind {
-    PubSubChildren,
-    PubSubDigest,
-    PubSubDirect,
-    PepStanza,
-}
-
-pub(crate) type PepOutboxEventKind = db::PepOutboxEventKind;
-pub(crate) type PepOutboxAuthorizationMode = db::PepOutboxAuthorizationMode;
-pub(crate) type PepOutboxSubject = db::PepOutboxSubject;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PepOutboxAuthorizationLockPlan {
-    BlockPolicyOnly,
-    AudienceThenBlockPolicy,
-}
-
-fn pep_outbox_authorization_lock_plan(
-    authorization_mode: PepOutboxAuthorizationMode,
-) -> PepOutboxAuthorizationLockPlan {
-    if authorization_mode == PepOutboxAuthorizationMode::LiveNodeAccess {
-        PepOutboxAuthorizationLockPlan::AudienceThenBlockPolicy
-    } else {
-        PepOutboxAuthorizationLockPlan::BlockPolicyOnly
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PubSubOutboxInsert {
-    inner: db::PubSubOutboxInsert,
-}
-
-impl PubSubOutboxInsert {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_pep_stanza(
-        event_id: Uuid,
-        sender_account_id: Uuid,
-        sender_bare_jid: &str,
-        sender_connection_id: Option<Uuid>,
-        recipient_jid: impl Into<String>,
-        recipient_account_id: Option<Uuid>,
-        event_kind: PepOutboxEventKind,
-        authorization_mode: PepOutboxAuthorizationMode,
-        payload_xml: impl Into<String>,
-        node: &str,
-        local_domain: &str,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Self> {
-        Ok(Self {
-            inner: db::PubSubOutboxInsert::new_pep_stanza(
-                event_id,
-                sender_account_id,
-                sender_bare_jid,
-                sender_connection_id,
-                recipient_jid,
-                recipient_account_id,
-                event_kind,
-                authorization_mode,
-                payload_xml,
-                node,
-                local_domain,
-                now,
-            )?,
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ClaimedPubSubOutboxDelivery {
-    inner: db::ClaimedPubSubOutboxDelivery,
-    pub(crate) delivery_id: Uuid,
-    pub(crate) event_id: Uuid,
-    pub(crate) ordering_key: String,
-    pub(crate) event_sequence: i64,
-    pub(crate) source: PubSubOutboxSource,
-    pub(crate) source_node: String,
-    pub(crate) delivery_kind: PubSubOutboxDeliveryKind,
-    pub(crate) recipient_jid: String,
-    pub(crate) target_domain: String,
-    pub(crate) payload_xml: String,
-    pub(crate) show_values: Option<Vec<String>>,
-    pub(crate) subscription_node_id: Option<Uuid>,
-    pub(crate) digest_frequency_ms: Option<i32>,
-    pub(crate) attempt_count: i32,
-    pub(crate) lease_token: Uuid,
-    pub(crate) expires_at: chrono::DateTime<chrono::Utc>,
-    pub(crate) security_sensitive: bool,
-    pub(crate) pep_subject: Option<PepOutboxSubject>,
-    pub(crate) legacy_unverifiable: bool,
-}
-
-impl ClaimedPubSubOutboxDelivery {
-    pub(crate) fn payload_binding_valid(&self) -> bool {
-        self.inner.payload_binding_valid()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PepOutboxDropReason {
-    UnverifiableIdentity,
-    SenderUnavailable,
-    RecipientUnavailable,
-    Blocked,
-    PrivacyDenied,
-    NodeAccessRevoked,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PepOutboxAuthorizationOutcome {
-    Deliver,
-    Drop(PepOutboxDropReason),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PubSubOutboxFailureDisposition {
-    Retry,
-    DeadLettered,
-    LeaseLost,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PubSubOutboxSnapshot {
-    pub(crate) pending_rows: i64,
-    pub(crate) pending_bytes: i64,
-    pub(crate) leased_rows: i64,
-    pub(crate) due_rows: i64,
-    pub(crate) dead_letter_rows: i64,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct DuePubSubDigest {
-    pub(crate) ids: Vec<Uuid>,
-    pub(crate) subscription_node_id: Uuid,
-    pub(crate) subscriber_jid: String,
-    pub(crate) event_xml: Vec<String>,
-    pub(crate) show_values: Option<Vec<String>>,
-}
-
-impl From<db::CreateNodeOutcome> for CreateNodeOutcome {
-    fn from(value: db::CreateNodeOutcome) -> Self {
-        match value {
-            db::CreateNodeOutcome::Created(_) => Self::Created,
-            db::CreateNodeOutcome::Conflict => Self::Conflict,
-            db::CreateNodeOutcome::QuotaExceeded => Self::QuotaExceeded,
-            db::CreateNodeOutcome::InvalidOptions => Self::InvalidOptions,
-            db::CreateNodeOutcome::Forbidden => Self::Forbidden,
-            db::CreateNodeOutcome::CollectionLimitExceeded => Self::CollectionLimitExceeded,
-            db::CreateNodeOutcome::Cycle => Self::Cycle,
-        }
-    }
-}
-
-impl From<db::PublishItemsOutcome> for PublishItemsOutcome {
-    fn from(value: db::PublishItemsOutcome) -> Self {
-        match value {
-            db::PublishItemsOutcome::Published => Self::Published,
-            db::PublishItemsOutcome::Conflict => Self::Conflict,
-            db::PublishItemsOutcome::QuotaExceeded => Self::QuotaExceeded,
-            db::PublishItemsOutcome::Forbidden => Self::Forbidden,
-            db::PublishItemsOutcome::PreconditionFailed => Self::PreconditionFailed,
-        }
-    }
-}
-
-impl From<db::RetractItemsOutcome> for RetractItemsOutcome {
-    fn from(value: db::RetractItemsOutcome) -> Self {
-        match value {
-            db::RetractItemsOutcome::Retracted => Self::Retracted,
-            db::RetractItemsOutcome::NotFound => Self::NotFound,
-            db::RetractItemsOutcome::Forbidden => Self::Forbidden,
-        }
-    }
-}
-
-impl From<db::CollectionUpdateOutcome> for CollectionUpdateOutcome {
-    fn from(value: db::CollectionUpdateOutcome) -> Self {
-        match value {
-            db::CollectionUpdateOutcome::Updated => Self::Updated,
-            db::CollectionUpdateOutcome::NotFound => Self::NotFound,
-            db::CollectionUpdateOutcome::NotAssociated => Self::NotAssociated,
-            db::CollectionUpdateOutcome::NotCollection => Self::NotCollection,
-            db::CollectionUpdateOutcome::Forbidden => Self::Forbidden,
-            db::CollectionUpdateOutcome::LimitExceeded => Self::LimitExceeded,
-            db::CollectionUpdateOutcome::DepthExceeded => Self::DepthExceeded,
-            db::CollectionUpdateOutcome::Cycle => Self::Cycle,
-        }
-    }
-}
-
-impl From<db::PubSubConfigOutcome> for PubSubConfigOutcome {
-    fn from(value: db::PubSubConfigOutcome) -> Self {
-        match value {
-            db::PubSubConfigOutcome::Updated => Self::Updated,
-            db::PubSubConfigOutcome::Conflict => Self::Conflict,
-            db::PubSubConfigOutcome::NotFound => Self::NotFound,
-            db::PubSubConfigOutcome::InvalidOptions => Self::InvalidOptions,
-            db::PubSubConfigOutcome::Forbidden => Self::Forbidden,
-            db::PubSubConfigOutcome::LimitExceeded => Self::LimitExceeded,
-            db::PubSubConfigOutcome::Cycle => Self::Cycle,
-        }
-    }
-}
-
-impl From<db::SetSubscriptionsOutcome> for SetSubscriptionsOutcome {
-    fn from(value: db::SetSubscriptionsOutcome) -> Self {
-        match value {
-            db::SetSubscriptionsOutcome::Updated(transitions) => Self::Updated(transitions),
-            db::SetSubscriptionsOutcome::LimitExceeded => Self::LimitExceeded,
-            db::SetSubscriptionsOutcome::InvalidSubid => Self::InvalidSubid,
-            db::SetSubscriptionsOutcome::NotFound => Self::NotFound,
-            db::SetSubscriptionsOutcome::Forbidden => Self::Forbidden,
-        }
-    }
-}
-
-impl From<db::SetAffiliationsOutcome> for SetAffiliationsOutcome {
-    fn from(value: db::SetAffiliationsOutcome) -> Self {
-        match value {
-            db::SetAffiliationsOutcome::Updated {
-                revoked_subscriptions,
-                approved_subscriptions,
-            } => Self::Updated {
-                revoked_subscriptions,
-                approved_subscriptions,
-            },
-            db::SetAffiliationsOutcome::LastOwner => Self::LastOwner,
-            db::SetAffiliationsOutcome::NotFound => Self::NotFound,
-            db::SetAffiliationsOutcome::Forbidden => Self::Forbidden,
-        }
-    }
-}
-
-impl From<db::OwnerMutationOutcome> for OwnerMutationOutcome {
-    fn from(value: db::OwnerMutationOutcome) -> Self {
-        match value {
-            db::OwnerMutationOutcome::Applied => Self::Applied,
-            db::OwnerMutationOutcome::NotFound => Self::NotFound,
-            db::OwnerMutationOutcome::Forbidden => Self::Forbidden,
-            db::OwnerMutationOutcome::Invalid => Self::Invalid,
-        }
-    }
-}
-
-impl From<db::SubscribeOutcome> for SubscribeOutcome {
-    fn from(value: db::SubscribeOutcome) -> Self {
-        match value {
-            db::SubscribeOutcome::Subscribed(subscription) => Self::Subscribed(subscription.into()),
-            db::SubscribeOutcome::LimitExceeded => Self::LimitExceeded,
-            db::SubscribeOutcome::NotFound => Self::NotFound,
-            db::SubscribeOutcome::Forbidden => Self::Forbidden,
-            db::SubscribeOutcome::ClosedNode => Self::ClosedNode,
-            db::SubscribeOutcome::PreconditionFailed => Self::PreconditionFailed,
-        }
-    }
-}
-
-impl From<db::UnsubscribeOutcome> for UnsubscribeOutcome {
-    fn from(value: db::UnsubscribeOutcome) -> Self {
-        match value {
-            db::UnsubscribeOutcome::Unsubscribed => Self::Unsubscribed,
-            db::UnsubscribeOutcome::NotFound => Self::NotFound,
-            db::UnsubscribeOutcome::InvalidSubid => Self::InvalidSubid,
-            db::UnsubscribeOutcome::Forbidden => Self::Forbidden,
-        }
-    }
-}
-
-impl From<db::SubscriptionOptionsOutcome> for SubscriptionOptionsOutcome {
-    fn from(value: db::SubscriptionOptionsOutcome) -> Self {
-        match value {
-            db::SubscriptionOptionsOutcome::Updated => Self::Updated,
-            db::SubscriptionOptionsOutcome::NotFound => Self::NotFound,
-            db::SubscriptionOptionsOutcome::InvalidSubid => Self::InvalidSubid,
-            db::SubscriptionOptionsOutcome::Forbidden => Self::Forbidden,
-        }
-    }
-}
-
-impl From<db::PepNodeConfig> for PepNodeConfig {
-    fn from(value: db::PepNodeConfig) -> Self {
-        Self {
-            access_model: value.access_model,
-            max_items: value.max_items,
-            persist_items: value.persist_items,
-            send_last_published_item: value.send_last_published_item,
-            deliver_notifications: value.deliver_notifications,
-            roster_groups_allowed: value.roster_groups_allowed,
-            access_whitelist: value.access_whitelist,
-        }
-    }
-}
-
-impl From<&PepNodeConfig> for db::PepNodeConfig {
-    fn from(value: &PepNodeConfig) -> Self {
-        Self {
-            access_model: value.access_model.clone(),
-            max_items: value.max_items,
-            persist_items: value.persist_items,
-            send_last_published_item: value.send_last_published_item.clone(),
-            deliver_notifications: value.deliver_notifications,
-            roster_groups_allowed: value.roster_groups_allowed.clone(),
-            access_whitelist: value.access_whitelist.clone(),
-        }
-    }
-}
-
-impl From<PepQuotas> for db::PepQuotas {
-    fn from(value: PepQuotas) -> Self {
-        Self {
-            max_nodes: value.max_nodes,
-            max_storage_bytes: value.max_storage_bytes,
-        }
-    }
-}
-
-impl From<db::PepCreateOutcome> for PepCreateOutcome {
-    fn from(value: db::PepCreateOutcome) -> Self {
-        match value {
-            db::PepCreateOutcome::Created => Self::Created,
-            db::PepCreateOutcome::Conflict => Self::Conflict,
-            db::PepCreateOutcome::QuotaExceeded => Self::QuotaExceeded,
-        }
-    }
-}
-
-impl From<db::PepPublishOutcome> for PepPublishOutcome {
-    fn from(value: db::PepPublishOutcome) -> Self {
-        match value {
-            db::PepPublishOutcome::Published => Self::Published,
-            db::PepPublishOutcome::PreconditionFailed => Self::PreconditionFailed,
-            db::PepPublishOutcome::MaxItemsExceeded => Self::MaxItemsExceeded,
-            db::PepPublishOutcome::QuotaExceeded => Self::QuotaExceeded,
-        }
-    }
-}
-
-impl From<db::PepSubscription> for PepSubscription {
-    fn from(value: db::PepSubscription) -> Self {
-        Self {
-            jid: value.jid,
-            subid: value.subid,
-        }
-    }
-}
-
-impl From<db::PepPresenceSubscription> for PepPresenceSubscription {
-    fn from(value: db::PepPresenceSubscription) -> Self {
-        Self {
-            owner_id: value.owner_id,
-            owner_username: value.owner_username,
-            node: value.node,
-        }
-    }
-}
-
-impl From<db::PepItem> for PepItem {
-    fn from(value: db::PepItem) -> Self {
-        Self {
-            item_id: value.item_id,
-            payload: value.payload,
-            updated_at: value.updated_at,
-        }
-    }
-}
-
-impl From<db::PubSubNode> for PubSubNode {
-    fn from(value: db::PubSubNode) -> Self {
-        Self {
-            id: value.id,
-            node: value.node,
-            creator_jid: value.creator_jid,
-            access_model: value.access_model,
-            publish_model: value.publish_model,
-            max_items: value.max_items,
-            title: value.title,
-            description: value.description,
-            deliver_payloads: value.deliver_payloads,
-            notify_delete: value.notify_delete,
-            notify_retract: value.notify_retract,
-            persist_items: value.persist_items,
-            send_last_published_item: value.send_last_published_item,
-            node_type: value.node_type,
-            deliver_notifications: value.deliver_notifications,
-            notify_config: value.notify_config,
-            notify_sub: value.notify_sub,
-            language: value.language,
-            payload_type: value.payload_type,
-            max_payload_size: value.max_payload_size,
-            children_max: value.children_max,
-            children_association_policy: value.children_association_policy,
-            children_association_whitelist: value.children_association_whitelist,
-            created_at: value.created_at,
-        }
-    }
-}
-
-impl From<&PubSubNode> for db::PubSubNode {
-    fn from(value: &PubSubNode) -> Self {
-        Self {
-            id: value.id,
-            node: value.node.clone(),
-            creator_jid: value.creator_jid.clone(),
-            access_model: value.access_model.clone(),
-            publish_model: value.publish_model.clone(),
-            max_items: value.max_items,
-            title: value.title.clone(),
-            description: value.description.clone(),
-            deliver_payloads: value.deliver_payloads,
-            notify_delete: value.notify_delete,
-            notify_retract: value.notify_retract,
-            persist_items: value.persist_items,
-            send_last_published_item: value.send_last_published_item.clone(),
-            node_type: value.node_type.clone(),
-            deliver_notifications: value.deliver_notifications,
-            notify_config: value.notify_config,
-            notify_sub: value.notify_sub,
-            language: value.language.clone(),
-            payload_type: value.payload_type.clone(),
-            max_payload_size: value.max_payload_size,
-            children_max: value.children_max,
-            children_association_policy: value.children_association_policy.clone(),
-            children_association_whitelist: value.children_association_whitelist.clone(),
-            created_at: value.created_at,
-        }
-    }
-}
-
-impl From<db::PubSubNodeConfig> for PubSubNodeConfig {
-    fn from(value: db::PubSubNodeConfig) -> Self {
-        Self {
-            access_model: value.access_model,
-            publish_model: value.publish_model,
-            max_items: value.max_items,
-            title: value.title,
-            description: value.description,
-            deliver_payloads: value.deliver_payloads,
-            notify_delete: value.notify_delete,
-            notify_retract: value.notify_retract,
-            persist_items: value.persist_items,
-            send_last_published_item: value.send_last_published_item,
-            node_type: value.node_type,
-            deliver_notifications: value.deliver_notifications,
-            notify_config: value.notify_config,
-            notify_sub: value.notify_sub,
-            language: value.language,
-            payload_type: value.payload_type,
-            max_payload_size: value.max_payload_size,
-            children_max: value.children_max,
-            children_association_policy: value.children_association_policy,
-            children_association_whitelist: value.children_association_whitelist,
-            collections: value.collections,
-            children: value.children,
-        }
-    }
-}
-
-impl From<&PubSubNodeConfig> for db::PubSubNodeConfig {
-    fn from(value: &PubSubNodeConfig) -> Self {
-        Self {
-            access_model: value.access_model.clone(),
-            publish_model: value.publish_model.clone(),
-            max_items: value.max_items,
-            title: value.title.clone(),
-            description: value.description.clone(),
-            deliver_payloads: value.deliver_payloads,
-            notify_delete: value.notify_delete,
-            notify_retract: value.notify_retract,
-            persist_items: value.persist_items,
-            send_last_published_item: value.send_last_published_item.clone(),
-            node_type: value.node_type.clone(),
-            deliver_notifications: value.deliver_notifications,
-            notify_config: value.notify_config,
-            notify_sub: value.notify_sub,
-            language: value.language.clone(),
-            payload_type: value.payload_type.clone(),
-            max_payload_size: value.max_payload_size,
-            children_max: value.children_max,
-            children_association_policy: value.children_association_policy.clone(),
-            children_association_whitelist: value.children_association_whitelist.clone(),
-            collections: value.collections.clone(),
-            children: value.children.clone(),
-        }
-    }
-}
-
-impl From<db::PubSubItem> for PubSubItem {
-    fn from(value: db::PubSubItem) -> Self {
-        Self {
-            item_id: value.item_id,
-            xml_payload: value.xml_payload,
-            created_at: value.created_at,
-        }
-    }
-}
-
-impl From<db::CollectionVisibleItem> for CollectionVisibleItem {
-    fn from(value: db::CollectionVisibleItem) -> Self {
-        Self {
-            node: value.node,
-            xml_payload: value.xml_payload,
-        }
-    }
-}
-
-impl From<db::PubSubSubscription> for PubSubSubscription {
-    fn from(value: db::PubSubSubscription) -> Self {
-        Self {
-            node: value.node,
-            jid: value.jid,
-            state: value.state,
-            subid: value.subid,
-            deliver: value.deliver,
-            digest: value.digest,
-            digest_frequency: value.digest_frequency,
-            expire: value.expire,
-            include_body: value.include_body,
-            show_values: value.show_values,
-            subscription_type: value.subscription_type,
-            subscription_depth: value.subscription_depth,
-        }
-    }
-}
-
-impl From<&PubSubSubscription> for db::PubSubSubscription {
-    fn from(value: &PubSubSubscription) -> Self {
-        Self {
-            node: value.node.clone(),
-            jid: value.jid.clone(),
-            state: value.state.clone(),
-            subid: value.subid.clone(),
-            deliver: value.deliver,
-            digest: value.digest,
-            digest_frequency: value.digest_frequency,
-            expire: value.expire,
-            include_body: value.include_body,
-            show_values: value.show_values.clone(),
-            subscription_type: value.subscription_type.clone(),
-            subscription_depth: value.subscription_depth,
-        }
-    }
-}
-
-impl From<db::PubSubSubscriptionOptions> for PubSubSubscriptionOptions {
-    fn from(value: db::PubSubSubscriptionOptions) -> Self {
-        Self {
-            deliver: value.deliver,
-            digest: value.digest,
-            digest_frequency: value.digest_frequency,
-            expire: value.expire,
-            include_body: value.include_body,
-            show_values: value.show_values,
-            subscription_type: value.subscription_type,
-            subscription_depth: value.subscription_depth,
-        }
-    }
-}
-
-impl From<&PubSubSubscriptionOptions> for db::PubSubSubscriptionOptions {
-    fn from(value: &PubSubSubscriptionOptions) -> Self {
-        Self {
-            deliver: value.deliver,
-            digest: value.digest,
-            digest_frequency: value.digest_frequency,
-            expire: value.expire,
-            include_body: value.include_body,
-            show_values: value.show_values.clone(),
-            subscription_type: value.subscription_type.clone(),
-            subscription_depth: value.subscription_depth,
-        }
-    }
-}
-
-impl From<db::PubSubAffiliation> for PubSubAffiliation {
-    fn from(value: db::PubSubAffiliation) -> Self {
-        Self {
-            node: value.node,
-            jid: value.jid,
-            affiliation: value.affiliation,
-        }
-    }
-}
-
-impl From<db::PubSubDiscoNode> for PubSubDiscoNode {
-    fn from(value: db::PubSubDiscoNode) -> Self {
-        Self {
-            node: value.node,
-            title: value.title,
-        }
-    }
-}
-
-impl From<db::SubscriptionAuthorizationOutcome> for SubscriptionAuthorizationOutcome {
-    fn from(value: db::SubscriptionAuthorizationOutcome) -> Self {
-        match value {
-            db::SubscriptionAuthorizationOutcome::Applied => Self::Applied,
-            db::SubscriptionAuthorizationOutcome::NotFound => Self::NotFound,
-            db::SubscriptionAuthorizationOutcome::Forbidden => Self::Forbidden,
-            db::SubscriptionAuthorizationOutcome::Stale => Self::Stale,
-        }
-    }
-}
-
-impl From<PubSubOutboxSource> for db::PubSubOutboxSource {
-    fn from(value: PubSubOutboxSource) -> Self {
-        match value {
-            PubSubOutboxSource::PubSub => Self::PubSub,
-            PubSubOutboxSource::Pep => Self::Pep,
-        }
-    }
-}
-
-impl From<PubSubOutboxDeliveryKind> for db::PubSubOutboxDeliveryKind {
-    fn from(value: PubSubOutboxDeliveryKind) -> Self {
-        match value {
-            PubSubOutboxDeliveryKind::PubSubChildren => Self::PubSubChildren,
-            PubSubOutboxDeliveryKind::PubSubDigest => Self::PubSubDigest,
-            PubSubOutboxDeliveryKind::PubSubDirect => Self::PubSubDirect,
-            PubSubOutboxDeliveryKind::PepStanza => Self::PepStanza,
-        }
-    }
-}
-
-impl From<db::PubSubOutboxDeliveryKind> for PubSubOutboxDeliveryKind {
-    fn from(value: db::PubSubOutboxDeliveryKind) -> Self {
-        match value {
-            db::PubSubOutboxDeliveryKind::PubSubChildren => Self::PubSubChildren,
-            db::PubSubOutboxDeliveryKind::PubSubDigest => Self::PubSubDigest,
-            db::PubSubOutboxDeliveryKind::PubSubDirect => Self::PubSubDirect,
-            db::PubSubOutboxDeliveryKind::PepStanza => Self::PepStanza,
-        }
-    }
-}
-
-impl From<db::ClaimedPubSubOutboxDelivery> for ClaimedPubSubOutboxDelivery {
-    fn from(inner: db::ClaimedPubSubOutboxDelivery) -> Self {
-        Self {
-            delivery_id: inner.delivery_id,
-            event_id: inner.event_id,
-            ordering_key: inner.ordering_key.clone(),
-            event_sequence: inner.event_sequence,
-            source: match inner.source {
-                db::PubSubOutboxSource::PubSub => PubSubOutboxSource::PubSub,
-                db::PubSubOutboxSource::Pep => PubSubOutboxSource::Pep,
-            },
-            source_node: inner.source_node.clone(),
-            delivery_kind: inner.delivery_kind.into(),
-            recipient_jid: inner.recipient_jid.clone(),
-            target_domain: inner.target_domain.clone(),
-            payload_xml: inner.payload_xml.clone(),
-            show_values: inner.show_values.clone(),
-            subscription_node_id: inner.subscription_node_id,
-            digest_frequency_ms: inner.digest_frequency_ms,
-            attempt_count: inner.attempt_count,
-            lease_token: inner.lease_token,
-            expires_at: inner.expires_at,
-            security_sensitive: inner.security_sensitive,
-            pep_subject: inner.pep_subject.clone(),
-            legacy_unverifiable: inner.legacy_unverifiable,
-            inner,
-        }
-    }
-}
-
-impl From<db::PubSubOutboxFailureDisposition> for PubSubOutboxFailureDisposition {
-    fn from(value: db::PubSubOutboxFailureDisposition) -> Self {
-        match value {
-            db::PubSubOutboxFailureDisposition::Retry => Self::Retry,
-            db::PubSubOutboxFailureDisposition::DeadLettered => Self::DeadLettered,
-            db::PubSubOutboxFailureDisposition::LeaseLost => Self::LeaseLost,
-        }
-    }
-}
-
-impl From<db::PubSubOutboxSnapshot> for PubSubOutboxSnapshot {
-    fn from(value: db::PubSubOutboxSnapshot) -> Self {
-        Self {
-            pending_rows: value.pending_rows,
-            pending_bytes: value.pending_bytes,
-            leased_rows: value.leased_rows,
-            due_rows: value.due_rows,
-            dead_letter_rows: value.dead_letter_rows,
-        }
-    }
-}
-
-impl From<db::DuePubSubDigest> for DuePubSubDigest {
-    fn from(value: db::DuePubSubDigest) -> Self {
-        Self {
-            ids: value.ids,
-            subscription_node_id: value.subscription_node_id,
-            subscriber_jid: value.subscriber_jid,
-            event_xml: value.event_xml,
-            show_values: value.show_values,
-        }
-    }
-}
-
-fn db_outbox(entries: &[PubSubOutboxInsert]) -> Vec<db::PubSubOutboxInsert> {
-    entries.iter().map(|entry| entry.inner.clone()).collect()
-}
-
-impl PubSubService {
-    #[cfg(test)]
-    pub(crate) fn new(pool: PgPool, domain: &str) -> Self {
-        let durable_outbox_database_admission =
-            crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
-                pool.options().get_max_connections(),
-            );
-        Self::new_with_durable_outbox_database_admission(
-            pool,
-            domain,
-            durable_outbox_database_admission,
-        )
-    }
-
+impl<R: PubSubRepository> PubSubService<R> {
     pub(crate) fn new_with_durable_outbox_database_admission(
-        pool: PgPool,
-        domain: &str,
+        repository: R,
+        primary_pool_max_connections: u32,
         durable_outbox_database_admission: crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
     ) -> Self {
-        let mutation_admission = Arc::new(PubSubMutationAdmission::new(
-            pool.options().get_max_connections() as usize,
-        ));
         Self {
-            pool,
-            domain: domain.to_owned(),
-            service_jid: format!("pubsub.{domain}"),
-            mutation_admission,
+            repository,
+            mutation_admission: Arc::new(PubSubMutationAdmission::new(
+                primary_pool_max_connections as usize,
+            )),
             durable_outbox_database_admission,
         }
     }
-
-    pub(crate) const PEP_MAX_ITEMS: i32 = db::PEP_MAX_ITEMS;
-
+    #[cfg(test)]
+    pub(crate) fn repository_for_tests(&self) -> &R {
+        &self.repository
+    }
     pub(crate) fn mutation_admission(&self) -> Arc<PubSubMutationAdmission> {
         Arc::clone(&self.mutation_admission)
     }
-
     async fn admit_mutation(
         &self,
         keys: &[&str],
@@ -945,1583 +120,10 @@ impl PubSubService {
         self.mutation_admission
             .acquire(keys, collection_graph)
             .await
-            .map_err(|_| db::pubsub::PubSubMutationBusy.into())
     }
-
-    async fn begin_mutation(&self) -> Result<Transaction<'_, Postgres>> {
-        db::pubsub::begin_bounded_pubsub_mutation(&self.pool).await
-    }
-
     async fn durable_outbox_database_turn(&self) -> tokio::sync::OwnedSemaphorePermit {
         self.durable_outbox_database_admission.acquire().await
     }
-
-    pub(crate) fn default_pep_node_config(node: &str) -> PepNodeConfig {
-        db::default_pep_node_config(node).into()
-    }
-
-    pub(crate) fn canonical_profile_item_id(node: &str, item_id: &str) -> Result<String> {
-        db::profile_identity::canonical_profile_item_id(node, item_id)
-    }
-
-    // PEP query and mutation slice -------------------------------------------------
-
-    pub(crate) async fn pep_node(
-        &self,
-        owner_id: Uuid,
-        node: &str,
-    ) -> Result<Option<PepNodeConfig>> {
-        Ok(db::pep_node(&self.pool, owner_id, node)
-            .await?
-            .map(Into::into))
-    }
-
-    pub(crate) async fn pep_items(
-        &self,
-        owner_id: Uuid,
-        node: &str,
-        item_id: Option<&str>,
-        limit: i64,
-    ) -> Result<Vec<(String, String)>> {
-        db::pep_items(&self.pool, owner_id, node, item_id, limit).await
-    }
-
-    pub(crate) async fn pep_items_by_ids(
-        &self,
-        owner_id: Uuid,
-        node: &str,
-        item_ids: &[&str],
-        limit: i64,
-    ) -> Result<Vec<(String, String)>> {
-        db::pep_items_by_ids(&self.pool, owner_id, node, item_ids, limit).await
-    }
-
-    pub(crate) async fn pep_items_with_timestamp(
-        &self,
-        owner_id: Uuid,
-        node: &str,
-        limit: i64,
-    ) -> Result<Vec<PepItem>> {
-        Ok(
-            db::pep_items_with_timestamp(&self.pool, owner_id, node, limit)
-                .await?
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-        )
-    }
-
-    pub(crate) async fn pep_nodes(&self, owner_id: Uuid) -> Result<Vec<String>> {
-        db::pep_nodes(&self.pool, owner_id).await
-    }
-
-    pub(crate) async fn pep_subscribers(
-        &self,
-        owner_id: Uuid,
-        node: &str,
-    ) -> Result<Vec<PepSubscription>> {
-        Ok(db::pep_subscribers(&self.pool, owner_id, node)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    }
-
-    pub(crate) async fn pep_subscriptions_for_available_resource(
-        &self,
-        subscriber_jid: &str,
-    ) -> Result<Vec<PepPresenceSubscription>> {
-        Ok(
-            db::pep_subscriptions_for_available_resource(&self.pool, subscriber_jid)
-                .await?
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-        )
-    }
-
-    pub(crate) async fn pep_owner_usernames_for_presence_subscriber(
-        &self,
-        subscriber_bare: &str,
-    ) -> Result<Vec<String>> {
-        db::pep_owner_usernames_for_presence_subscriber(&self.pool, subscriber_bare).await
-    }
-
-    pub(crate) async fn find_enabled_user(&self, username: &str) -> Result<Option<PubSubAccount>> {
-        Ok(db::find_enabled_user(&self.pool, username)
-            .await?
-            .map(|user| PubSubAccount {
-                id: user.id,
-                username: user.username,
-                auth_generation: user.auth_generation,
-            }))
-    }
-
-    pub(crate) async fn roster(
-        &self,
-        owner_id: Uuid,
-    ) -> Result<Vec<(String, Option<String>, String, Option<String>)>> {
-        db::roster(&self.pool, owner_id).await
-    }
-
-    pub(crate) async fn roster_item(
-        &self,
-        owner_id: Uuid,
-        jid: &str,
-    ) -> Result<Option<(String, Option<String>, String, Option<String>)>> {
-        db::roster_item(&self.pool, owner_id, jid).await
-    }
-
-    pub(crate) async fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
-        db::is_blocked(&self.pool, owner_id, candidate).await
-    }
-
-    pub(crate) async fn roster_group_allowed(
-        &self,
-        owner_id: Uuid,
-        jid: &str,
-        groups: &[String],
-    ) -> Result<bool> {
-        db::roster_group_allowed(&self.pool, owner_id, jid, groups).await
-    }
-
-    pub(crate) async fn create_pep_node(
-        &self,
-        owner_id: Uuid,
-        node: &str,
-        config: &PepNodeConfig,
-        max_nodes: i64,
-    ) -> Result<PepCreateOutcome> {
-        let owner_key = owner_id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
-        let config = db::PepNodeConfig::from(config);
-        Ok(
-            db::create_pep_node(&self.pool, owner_id, node, &config, max_nodes)
-                .await?
-                .into(),
-        )
-    }
-
-    /// Creates an explicit PEP subscription from one authoritative policy
-    /// snapshot. Identity, account incarnation, node policy, roster state,
-    /// both locally enforceable block directions, quotas, the subscription
-    /// row and the optional last-item outbox projection are linearized here.
-    pub(crate) async fn subscribe_pep_node(
-        &self,
-        command: PepSubscribeCommand<'_>,
-        factory: &dyn PepSubscribeOutboxFactory,
-    ) -> Result<PepSubscribeResult> {
-        validate_pep_subscribe_command(&command)?;
-        let write = command.write;
-        let owner_key = write.owner.id.to_string();
-        let _permit = self
-            .admit_mutation(&[&owner_key, write.subscriber_jid, write.node], false)
-            .await?;
-        let mut transaction = self.begin_mutation().await?;
-        let Some(principal) = self
-            .lock_pep_subscription_principal(
-                &mut transaction,
-                write.owner,
-                &write.actor,
-                write.subscriber_jid,
-            )
-            .await?
-        else {
-            transaction.rollback().await?;
-            return Ok(PepSubscribeResult::from(PepSubscribeOutcome::Forbidden));
-        };
-
-        // Per-bare-JID quota first, then per-node serialization. All callers
-        // use this order, so concurrent subscriptions cannot deadlock by
-        // choosing different nodes for the same subscriber.
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 4))")
-            .bind(&principal.subscriber_bare)
-            .execute(&mut *transaction)
-            .await?;
-        lock_pep_audience(&mut transaction, write.owner.id, write.node).await?;
-
-        let policy = sqlx::query(
-            "SELECT access_model,send_last_published_item,deliver_notifications,
-                    roster_groups_allowed,access_whitelist
-               FROM pep_nodes
-              WHERE owner_id=$1 AND node=$2
-              FOR SHARE",
-        )
-        .bind(write.owner.id)
-        .bind(write.node)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        let Some(policy) = policy else {
-            transaction.rollback().await?;
-            return Ok(PepSubscribeResult::from(PepSubscribeOutcome::NotFound));
-        };
-
-        let mut block_owners = vec![write.owner.id];
-        if let Some(subscriber_id) = principal.local_subscriber_id {
-            block_owners.push(subscriber_id);
-        }
-        block_owners.sort_unstable();
-        block_owners.dedup();
-        for block_owner in &block_owners {
-            lock_pep_block_policy(&mut transaction, *block_owner).await?;
-        }
-        let block_rows = sqlx::query(
-            "SELECT owner_id,blocked_jid FROM blocked_jids
-              WHERE owner_id=ANY($1)
-              ORDER BY owner_id,blocked_jid
-              FOR SHARE",
-        )
-        .bind(&block_owners)
-        .fetch_all(&mut *transaction)
-        .await?;
-        let mut blocks: HashMap<Uuid, Vec<String>> = HashMap::new();
-        for row in block_rows {
-            blocks
-                .entry(row.try_get("owner_id")?)
-                .or_default()
-                .push(row.try_get("blocked_jid")?);
-        }
-
-        let owner_blocks_subscriber = blocks.get(&write.owner.id).is_some_and(|patterns| {
-            patterns
-                .iter()
-                .any(|pattern| db::roster::blocked_jid_matches(pattern, &principal.subscriber_jid))
-        });
-        let subscriber_blocks_owner = principal.local_subscriber_id.is_some_and(|subscriber_id| {
-            blocks.get(&subscriber_id).is_some_and(|patterns| {
-                patterns
-                    .iter()
-                    .any(|pattern| db::roster::blocked_jid_matches(pattern, &principal.owner_bare))
-            })
-        });
-
-        let roster = sqlx::query("SELECT subscription,groups FROM roster_items WHERE owner_id=$1 AND contact_jid=$2 FOR SHARE")
-            .bind(write.owner.id)
-            .bind(&principal.subscriber_bare)
-            .fetch_optional(&mut *transaction)
-            .await?
-            .map(|row| {
-                Ok::<PepRosterAudienceEntry, anyhow::Error>(PepRosterAudienceEntry {
-                    subscription: row.try_get("subscription")?,
-                    groups: serde_json::from_value(row.try_get("groups")?)
-                        .context("stored PEP roster groups are not a string array")?,
-                })
-            })
-            .transpose()?;
-        let access_model: String = policy.try_get("access_model")?;
-        let authorized = if principal.subscriber_bare == principal.owner_bare {
-            true
-        } else if owner_blocks_subscriber || subscriber_blocks_owner {
-            false
-        } else {
-            match access_model.as_str() {
-                "open" => true,
-                "whitelist" => {
-                    let whitelist: Vec<String> = policy.try_get("access_whitelist")?;
-                    whitelist.iter().any(|jid| {
-                        crate::jid::canonical_bare_key(jid)
-                            .is_ok_and(|jid| jid == principal.subscriber_bare)
-                    })
-                }
-                "presence" => roster
-                    .as_ref()
-                    .is_some_and(|entry| matches!(entry.subscription.as_str(), "from" | "both")),
-                "roster" => {
-                    let allowed: Vec<String> = policy.try_get("roster_groups_allowed")?;
-                    roster.as_ref().is_some_and(|entry| {
-                        entry.groups.iter().any(|group| allowed.contains(group))
-                    })
-                }
-                _ => false,
-            }
-        };
-        if !authorized {
-            transaction.rollback().await?;
-            return Ok(PepSubscribeResult::from(
-                PepSubscribeOutcome::NotAuthorized(access_model),
-            ));
-        }
-
-        let existing = sqlx::query_scalar::<_, String>(
-            "SELECT subid FROM pep_subscriptions
-              WHERE owner_id=$1 AND node=$2 AND subscriber_jid=$3
-              FOR UPDATE",
-        )
-        .bind(write.owner.id)
-        .bind(write.node)
-        .bind(&principal.subscriber_jid)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        if let Some(subid) = existing {
-            transaction.commit().await?;
-            return Ok(PepSubscribeResult::from(PepSubscribeOutcome::Subscribed(
-                PepSubscription {
-                    jid: principal.subscriber_jid,
-                    subid,
-                },
-            )));
-        }
-
-        let subscriber_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM pep_subscriptions
-              WHERE split_part(subscriber_jid, '/', 1)=$1",
-        )
-        .bind(&principal.subscriber_bare)
-        .fetch_one(&mut *transaction)
-        .await?;
-        let node_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM pep_subscriptions WHERE owner_id=$1 AND node=$2",
-        )
-        .bind(write.owner.id)
-        .bind(write.node)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if write.max_subscriptions <= 0
-            || subscriber_count >= write.max_subscriptions
-            || node_count >= db::PEP_MAX_SUBSCRIBERS_PER_NODE
-        {
-            transaction.rollback().await?;
-            return Ok(PepSubscribeResult::from(PepSubscribeOutcome::LimitExceeded));
-        }
-
-        let last_item = if policy.try_get::<bool, _>("deliver_notifications")?
-            && policy.try_get::<String, _>("send_last_published_item")? != "never"
-        {
-            sqlx::query(
-                "SELECT item_id,payload,updated_at FROM pep_items
-                  WHERE owner_id=$1 AND node=$2
-                  ORDER BY updated_at DESC,item_id DESC LIMIT 1
-                  FOR SHARE",
-            )
-            .bind(write.owner.id)
-            .bind(write.node)
-            .fetch_optional(&mut *transaction)
-            .await?
-            .map(|row| {
-                Ok::<PepItem, sqlx::Error>(PepItem {
-                    item_id: row.try_get("item_id")?,
-                    payload: row.try_get("payload")?,
-                    updated_at: row.try_get("updated_at")?,
-                })
-            })
-            .transpose()?
-        } else {
-            None
-        };
-        sqlx::query(
-            "INSERT INTO pep_subscriptions(owner_id,node,subscriber_jid,subid)
-             VALUES($1,$2,$3,$4)",
-        )
-        .bind(write.owner.id)
-        .bind(write.node)
-        .bind(&principal.subscriber_jid)
-        .bind(write.requested_subid)
-        .execute(&mut *transaction)
-        .await?;
-        let snapshot = PepSubscribeSnapshot {
-            owner_id: write.owner.id,
-            owner_bare_jid: principal.owner_bare,
-            node: write.node.to_owned(),
-            subscriber_jid: principal.subscriber_jid.clone(),
-            subscriber_account_id: principal.local_subscriber_id,
-            local_domain: self.domain.clone(),
-            last_item,
-        };
-        let outbox = db_outbox(&factory.build(&snapshot)?);
-        anyhow::ensure!(
-            outbox.iter().all(|entry| {
-                entry.source == db::PubSubOutboxSource::Pep
-                    && entry.delivery_kind == db::PubSubOutboxDeliveryKind::PepStanza
-                    && entry.source_node == write.node
-                    && entry.recipient_jid == principal.subscriber_jid
-            }),
-            "PEP subscription renderer escaped the transaction-owned recipient"
-        );
-        db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
-        transaction.commit().await?;
-        Ok(PepSubscribeResult::from(PepSubscribeOutcome::Subscribed(
-            PepSubscription {
-                jid: principal.subscriber_jid,
-                subid: write.requested_subid.to_owned(),
-            },
-        )))
-    }
-
-    /// Idempotently removes only the subscription identity controlled by the
-    /// authenticated actor. A resource may remove its own full-JID row or a
-    /// bare row, but cannot name a sibling resource's full-JID subscription.
-    pub(crate) async fn unsubscribe_pep_node(
-        &self,
-        command: PepUnsubscribeCommand<'_>,
-    ) -> Result<PepUnsubscribeResult> {
-        validate_pep_unsubscribe_command(&command)?;
-        let write = command.write;
-        let owner_key = write.owner.id.to_string();
-        let _permit = self
-            .admit_mutation(&[&owner_key, write.subscriber_jid, write.node], false)
-            .await?;
-        let mut transaction = self.begin_mutation().await?;
-        let Some(principal) = self
-            .lock_pep_subscription_principal(
-                &mut transaction,
-                write.owner,
-                &write.actor,
-                write.subscriber_jid,
-            )
-            .await?
-        else {
-            transaction.rollback().await?;
-            return Ok(PepUnsubscribeResult::from(PepUnsubscribeOutcome::Forbidden));
-        };
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 4))")
-            .bind(&principal.subscriber_bare)
-            .execute(&mut *transaction)
-            .await?;
-        lock_pep_audience(&mut transaction, write.owner.id, write.node).await?;
-        let exists = sqlx::query_scalar::<_, bool>(
-            "SELECT TRUE FROM pep_nodes WHERE owner_id=$1 AND node=$2 FOR SHARE",
-        )
-        .bind(write.owner.id)
-        .bind(write.node)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        if exists.is_none() {
-            transaction.rollback().await?;
-            return Ok(PepUnsubscribeResult::from(PepUnsubscribeOutcome::NotFound));
-        }
-        let existing = sqlx::query_scalar::<_, String>(
-            "SELECT subid FROM pep_subscriptions
-              WHERE owner_id=$1 AND node=$2 AND subscriber_jid=$3
-              FOR UPDATE",
-        )
-        .bind(write.owner.id)
-        .bind(write.node)
-        .bind(&principal.subscriber_jid)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        let Some(existing) = existing else {
-            transaction.commit().await?;
-            return Ok(PepUnsubscribeResult::from(
-                PepUnsubscribeOutcome::Unsubscribed(None),
-            ));
-        };
-        if write.subid.is_some_and(|subid| subid != existing.as_str()) {
-            transaction.rollback().await?;
-            return Ok(PepUnsubscribeResult::from(
-                PepUnsubscribeOutcome::InvalidSubid,
-            ));
-        }
-        sqlx::query(
-            "DELETE FROM pep_subscriptions
-              WHERE owner_id=$1 AND node=$2 AND subscriber_jid=$3 AND subid=$4",
-        )
-        .bind(write.owner.id)
-        .bind(write.node)
-        .bind(&principal.subscriber_jid)
-        .bind(&existing)
-        .execute(&mut *transaction)
-        .await?;
-        transaction.commit().await?;
-        Ok(PepUnsubscribeResult::from(
-            PepUnsubscribeOutcome::Unsubscribed(Some(existing)),
-        ))
-    }
-
-    async fn lock_pep_subscription_principal(
-        &self,
-        transaction: &mut Transaction<'_, Postgres>,
-        owner: &PubSubAccount,
-        actor: &PepSubscriptionActor<'_>,
-        subscriber_jid: &str,
-    ) -> Result<Option<LockedPepSubscriptionPrincipal>> {
-        let actor_jid = crate::jid::CanonicalJid::parse(actor.jid)?;
-        let subscriber = crate::jid::CanonicalJid::parse(subscriber_jid)?;
-        if actor_jid.bare() != subscriber.bare()
-            || subscriber.resourcepart().is_some()
-                && actor_jid.to_string() != subscriber.to_string()
-        {
-            return Ok(None);
-        }
-        let actor_is_local = actor_jid.domainpart() == self.domain.as_str();
-        let local_subscriber_id = match (actor_is_local, actor.local_account) {
-            (true, Some(account)) if actor_jid.localpart() == Some(account.username.as_str()) => {
-                Some(account.id)
-            }
-            (false, None) => None,
-            _ => return Ok(None),
-        };
-        let owner_bare =
-            crate::jid::CanonicalJid::parse_bare(&format!("{}@{}", owner.username, self.domain))?
-                .to_string();
-
-        // Node configuration/deletion takes the owner advisory first. Account
-        // rows follow in UUID order, then subscriber/node advisories and block
-        // policy locks. This order is shared with publication and revocation.
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 2))")
-            .bind(owner.id.to_string())
-            .execute(&mut **transaction)
-            .await?;
-        let mut account_ids = vec![owner.id];
-        if let Some(id) = local_subscriber_id {
-            account_ids.push(id);
-        }
-        account_ids.sort_unstable();
-        account_ids.dedup();
-        let rows = sqlx::query(
-            "SELECT id,username,auth_generation,is_disabled FROM users
-              WHERE id=ANY($1) ORDER BY id FOR SHARE",
-        )
-        .bind(&account_ids)
-        .fetch_all(&mut **transaction)
-        .await?;
-        if rows.len() != account_ids.len() {
-            return Ok(None);
-        }
-        let mut accounts = HashMap::with_capacity(rows.len());
-        for row in rows {
-            accounts.insert(
-                row.try_get::<Uuid, _>("id")?,
-                (
-                    row.try_get::<String, _>("username")?,
-                    row.try_get::<i64, _>("auth_generation")?,
-                    row.try_get::<bool, _>("is_disabled")?,
-                ),
-            );
-        }
-        if !accounts
-            .get(&owner.id)
-            .is_some_and(|(username, generation, disabled)| {
-                username == &owner.username && *generation == owner.auth_generation && !*disabled
-            })
-        {
-            return Ok(None);
-        }
-        if let Some(account) = actor.local_account {
-            if !accounts
-                .get(&account.id)
-                .is_some_and(|(username, generation, disabled)| {
-                    username == &account.username
-                        && *generation == account.auth_generation
-                        && !*disabled
-                })
-            {
-                return Ok(None);
-            }
-        }
-        Ok(Some(LockedPepSubscriptionPrincipal {
-            subscriber_jid: subscriber.to_string(),
-            subscriber_bare: subscriber.bare(),
-            owner_bare,
-            local_subscriber_id,
-        }))
-    }
-
-    async fn begin_authorized_pep_owner_mutation(
-        &self,
-        owner: &PubSubAccount,
-        node: &str,
-    ) -> Result<Option<(Transaction<'_, Postgres>, String)>> {
-        let mut transaction = self.begin_mutation().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 2))")
-            .bind(owner.id.to_string())
-            .execute(&mut *transaction)
-            .await?;
-        let username = sqlx::query_scalar::<_, String>(
-            "SELECT username FROM users
-              WHERE id=$1 AND username=$2 AND auth_generation=$3 AND NOT is_disabled
-              FOR SHARE",
-        )
-        .bind(owner.id)
-        .bind(&owner.username)
-        .bind(owner.auth_generation)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        let Some(username) = username else {
-            transaction.rollback().await?;
-            return Ok(None);
-        };
-        lock_pep_audience(&mut transaction, owner.id, node).await?;
-        let owner_bare_jid =
-            crate::jid::CanonicalJid::parse_bare(&format!("{username}@{}", self.domain))?
-                .to_string();
-        Ok(Some((transaction, owner_bare_jid)))
-    }
-
-    async fn locked_pep_node_config(
-        transaction: &mut Transaction<'_, Postgres>,
-        owner_id: Uuid,
-        node: &str,
-    ) -> Result<Option<PepNodeConfig>> {
-        let row = sqlx::query(
-            "SELECT access_model,max_items,persist_items,send_last_published_item,
-                    deliver_notifications,roster_groups_allowed,access_whitelist
-               FROM pep_nodes
-              WHERE owner_id=$1 AND node=$2
-              FOR UPDATE",
-        )
-        .bind(owner_id)
-        .bind(node)
-        .fetch_optional(&mut **transaction)
-        .await?;
-        row.map(|row| {
-            Ok(PepNodeConfig {
-                access_model: row.try_get("access_model")?,
-                max_items: row.try_get("max_items")?,
-                persist_items: row.try_get("persist_items")?,
-                send_last_published_item: row.try_get("send_last_published_item")?,
-                deliver_notifications: row.try_get("deliver_notifications")?,
-                roster_groups_allowed: row.try_get("roster_groups_allowed")?,
-                access_whitelist: row.try_get("access_whitelist")?,
-            })
-        })
-        .transpose()
-    }
-
-    async fn store_pep_node_config(
-        transaction: &mut Transaction<'_, Postgres>,
-        owner_id: Uuid,
-        node: &str,
-        config: &PepNodeConfig,
-    ) -> Result<()> {
-        sqlx::query(
-            "UPDATE pep_nodes
-                SET access_model=$3,max_items=$4,persist_items=$5,
-                    send_last_published_item=$6,deliver_notifications=$7,
-                    roster_groups_allowed=$8,access_whitelist=$9,
-                    updated_at=clock_timestamp()
-              WHERE owner_id=$1 AND node=$2",
-        )
-        .bind(owner_id)
-        .bind(node)
-        .bind(&config.access_model)
-        .bind(config.max_items)
-        .bind(config.persist_items)
-        .bind(&config.send_last_published_item)
-        .bind(config.deliver_notifications)
-        .bind(&config.roster_groups_allowed)
-        .bind(&config.access_whitelist)
-        .execute(&mut **transaction)
-        .await?;
-        if config.persist_items {
-            sqlx::query(
-                "DELETE FROM pep_items
-                  WHERE owner_id=$1 AND node=$2
-                    AND item_id NOT IN (
-                        SELECT item_id FROM pep_items
-                         WHERE owner_id=$1 AND node=$2
-                         ORDER BY updated_at DESC,item_id DESC LIMIT $3
-                    )",
-            )
-            .bind(owner_id)
-            .bind(node)
-            .bind(config.max_items)
-            .execute(&mut **transaction)
-            .await?;
-        } else {
-            sqlx::query("DELETE FROM pep_items WHERE owner_id=$1 AND node=$2")
-                .bind(owner_id)
-                .bind(node)
-                .execute(&mut **transaction)
-                .await?;
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn update_pep_node_config(
-        &self,
-        owner: &PubSubAccount,
-        sender_connection_id: Uuid,
-        node: &str,
-        expected: &PepNodeConfig,
-        config: &PepNodeConfig,
-        factory: &dyn PepOutboxFactory,
-    ) -> Result<PepOwnerMutationOutcome> {
-        let owner_key = owner.id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
-        let Some((mut transaction, _)) = self
-            .begin_authorized_pep_owner_mutation(owner, node)
-            .await?
-        else {
-            return Ok(PepOwnerMutationOutcome::Forbidden);
-        };
-        let Some(current) = Self::locked_pep_node_config(&mut transaction, owner.id, node).await?
-        else {
-            transaction.rollback().await?;
-            return Ok(PepOwnerMutationOutcome::NotFound);
-        };
-        if &current != expected {
-            transaction.rollback().await?;
-            return Ok(PepOwnerMutationOutcome::Stale);
-        }
-        let outbox = self
-            .exact_pep_outbox(
-                &mut transaction,
-                owner.id,
-                &owner.username,
-                Some(sender_connection_id),
-                node,
-                PepOutboxEventKind::Configuration,
-                PepOutboxAuthorizationMode::CausalAudience,
-                factory,
-            )
-            .await?;
-        Self::store_pep_node_config(&mut transaction, owner.id, node, config).await?;
-        db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
-        transaction.commit().await?;
-        Ok(PepOwnerMutationOutcome::Applied(0))
-    }
-
-    pub(crate) async fn update_pep_affiliations(
-        &self,
-        owner: &PubSubAccount,
-        sender_connection_id: Uuid,
-        node: &str,
-        expected: &PepNodeConfig,
-        changes: &[(String, String)],
-        factory: &dyn PepDirectOutboxFactory,
-    ) -> Result<PepOwnerMutationOutcome> {
-        let owner_key = owner.id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
-        let Some((mut transaction, owner_bare_jid)) = self
-            .begin_authorized_pep_owner_mutation(owner, node)
-            .await?
-        else {
-            return Ok(PepOwnerMutationOutcome::Forbidden);
-        };
-        let Some(mut current) =
-            Self::locked_pep_node_config(&mut transaction, owner.id, node).await?
-        else {
-            transaction.rollback().await?;
-            return Ok(PepOwnerMutationOutcome::NotFound);
-        };
-        if &current != expected {
-            transaction.rollback().await?;
-            return Ok(PepOwnerMutationOutcome::Stale);
-        }
-        let mut whitelist = current
-            .access_whitelist
-            .iter()
-            .cloned()
-            .collect::<HashSet<_>>();
-        let mut transitions = Vec::with_capacity(changes.len());
-        let mut seen = HashSet::new();
-        for (jid, affiliation) in changes {
-            let jid = crate::jid::canonicalize_bare(jid)?;
-            if jid == owner_bare_jid
-                || !matches!(affiliation.as_str(), "member" | "none")
-                || !seen.insert(jid.clone())
-            {
-                transaction.rollback().await?;
-                return Ok(PepOwnerMutationOutcome::Forbidden);
-            }
-            if affiliation == "member" {
-                whitelist.insert(jid.clone());
-            } else {
-                whitelist.remove(&jid);
-            }
-            transitions.push(PepDirectStateTransition::Affiliation {
-                recipient_jid: jid,
-                affiliation: affiliation.clone(),
-            });
-        }
-        if transitions.is_empty() || whitelist.len() > 10_000 {
-            transaction.rollback().await?;
-            return Ok(PepOwnerMutationOutcome::Forbidden);
-        }
-        current.access_whitelist = whitelist.into_iter().collect();
-        current.access_whitelist.sort_unstable();
-        let snapshot = PepDirectStateSnapshot {
-            owner_bare_jid,
-            node: node.to_owned(),
-            transitions,
-        };
-        let outbox = self
-            .direct_pep_outbox(
-                &mut transaction,
-                owner.id,
-                Some(sender_connection_id),
-                PepOutboxEventKind::AffiliationState,
-                &snapshot,
-                factory,
-            )
-            .await?;
-        Self::store_pep_node_config(&mut transaction, owner.id, node, &current).await?;
-        db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
-        transaction.commit().await?;
-        Ok(PepOwnerMutationOutcome::Applied(0))
-    }
-
-    pub(crate) async fn purge_pep_node(
-        &self,
-        owner: &PubSubAccount,
-        sender_connection_id: Uuid,
-        node: &str,
-        factory: &dyn PepOutboxFactory,
-    ) -> Result<PepOwnerMutationOutcome> {
-        let owner_key = owner.id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
-        let Some((mut transaction, _)) = self
-            .begin_authorized_pep_owner_mutation(owner, node)
-            .await?
-        else {
-            return Ok(PepOwnerMutationOutcome::Forbidden);
-        };
-        if Self::locked_pep_node_config(&mut transaction, owner.id, node)
-            .await?
-            .is_none()
-        {
-            transaction.rollback().await?;
-            return Ok(PepOwnerMutationOutcome::NotFound);
-        }
-        let outbox = self
-            .exact_pep_outbox(
-                &mut transaction,
-                owner.id,
-                &owner.username,
-                Some(sender_connection_id),
-                node,
-                PepOutboxEventKind::Purge,
-                PepOutboxAuthorizationMode::CausalAudience,
-                factory,
-            )
-            .await?;
-        sqlx::query("DELETE FROM pep_items WHERE owner_id=$1 AND node=$2")
-            .bind(owner.id)
-            .bind(node)
-            .execute(&mut *transaction)
-            .await?;
-        db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
-        transaction.commit().await?;
-        Ok(PepOwnerMutationOutcome::Applied(0))
-    }
-
-    pub(crate) async fn delete_pep_node(
-        &self,
-        owner: &PubSubAccount,
-        sender_connection_id: Uuid,
-        node: &str,
-        factory: &dyn PepOutboxFactory,
-    ) -> Result<PepOwnerMutationOutcome> {
-        let owner_key = owner.id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
-        let Some((mut transaction, _)) = self
-            .begin_authorized_pep_owner_mutation(owner, node)
-            .await?
-        else {
-            return Ok(PepOwnerMutationOutcome::Forbidden);
-        };
-        if Self::locked_pep_node_config(&mut transaction, owner.id, node)
-            .await?
-            .is_none()
-        {
-            transaction.rollback().await?;
-            return Ok(PepOwnerMutationOutcome::NotFound);
-        }
-        let outbox = self
-            .exact_pep_outbox(
-                &mut transaction,
-                owner.id,
-                &owner.username,
-                Some(sender_connection_id),
-                node,
-                PepOutboxEventKind::Delete,
-                PepOutboxAuthorizationMode::CausalAudience,
-                factory,
-            )
-            .await?;
-        sqlx::query("DELETE FROM pep_nodes WHERE owner_id=$1 AND node=$2")
-            .bind(owner.id)
-            .bind(node)
-            .execute(&mut *transaction)
-            .await?;
-        db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
-        transaction.commit().await?;
-        Ok(PepOwnerMutationOutcome::Applied(0))
-    }
-
-    pub(crate) async fn retract_pep_items(
-        &self,
-        owner: &PubSubAccount,
-        sender_connection_id: Uuid,
-        node: &str,
-        item_ids: &[&str],
-        notify: bool,
-        factory: &dyn PepOutboxFactory,
-    ) -> Result<PepOwnerMutationOutcome> {
-        let owner_key = owner.id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
-        let Some((mut transaction, _)) = self
-            .begin_authorized_pep_owner_mutation(owner, node)
-            .await?
-        else {
-            return Ok(PepOwnerMutationOutcome::Forbidden);
-        };
-        if Self::locked_pep_node_config(&mut transaction, owner.id, node)
-            .await?
-            .is_none()
-        {
-            transaction.rollback().await?;
-            return Ok(PepOwnerMutationOutcome::NotFound);
-        }
-        let matched: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM pep_items
-              WHERE owner_id=$1 AND node=$2 AND item_id=ANY($3)",
-        )
-        .bind(owner.id)
-        .bind(node)
-        .bind(item_ids)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if matched != i64::try_from(item_ids.len())? {
-            transaction.rollback().await?;
-            return Ok(PepOwnerMutationOutcome::NotFound);
-        }
-        let outbox = if notify {
-            self.exact_pep_outbox(
-                &mut transaction,
-                owner.id,
-                &owner.username,
-                Some(sender_connection_id),
-                node,
-                PepOutboxEventKind::Retract,
-                PepOutboxAuthorizationMode::CausalAudience,
-                factory,
-            )
-            .await?
-        } else {
-            Vec::new()
-        };
-        let removed =
-            sqlx::query("DELETE FROM pep_items WHERE owner_id=$1 AND node=$2 AND item_id=ANY($3)")
-                .bind(owner.id)
-                .bind(node)
-                .bind(item_ids)
-                .execute(&mut *transaction)
-                .await?
-                .rows_affected();
-        db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
-        transaction.commit().await?;
-        Ok(PepOwnerMutationOutcome::Applied(removed))
-    }
-
-    pub(crate) async fn unsubscribe_pep_nodes_batch(
-        &self,
-        owner: &PubSubAccount,
-        sender_connection_id: Uuid,
-        node: &str,
-        changes: &[(String, Option<String>)],
-        factory: &dyn PepDirectOutboxFactory,
-    ) -> Result<PepOwnerMutationOutcome> {
-        let owner_key = owner.id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
-        let Some((mut transaction, owner_bare_jid)) = self
-            .begin_authorized_pep_owner_mutation(owner, node)
-            .await?
-        else {
-            return Ok(PepOwnerMutationOutcome::Forbidden);
-        };
-        if Self::locked_pep_node_config(&mut transaction, owner.id, node)
-            .await?
-            .is_none()
-        {
-            transaction.rollback().await?;
-            return Ok(PepOwnerMutationOutcome::NotFound);
-        }
-        let mut canonical = Vec::with_capacity(changes.len());
-        let mut unique = HashSet::new();
-        for (jid, requested_subid) in changes {
-            let jid = crate::jid::canonicalize(jid)?;
-            if !unique.insert((jid.clone(), requested_subid.clone())) {
-                transaction.rollback().await?;
-                return Ok(PepOwnerMutationOutcome::NotSubscribed);
-            }
-            let stored = sqlx::query_scalar::<_, String>(
-                "SELECT subid FROM pep_subscriptions
-                  WHERE owner_id=$1 AND node=$2 AND subscriber_jid=$3
-                  FOR UPDATE",
-            )
-            .bind(owner.id)
-            .bind(node)
-            .bind(&jid)
-            .fetch_optional(&mut *transaction)
-            .await?;
-            let Some(stored) = stored.filter(|stored| {
-                requested_subid
-                    .as_ref()
-                    .is_none_or(|requested| requested == stored)
-            }) else {
-                transaction.rollback().await?;
-                return Ok(PepOwnerMutationOutcome::NotSubscribed);
-            };
-            canonical.push((jid, stored));
-        }
-        if canonical.is_empty() {
-            transaction.rollback().await?;
-            return Ok(PepOwnerMutationOutcome::NotSubscribed);
-        }
-        let snapshot = PepDirectStateSnapshot {
-            owner_bare_jid,
-            node: node.to_owned(),
-            transitions: canonical
-                .iter()
-                .map(
-                    |(recipient_jid, subid)| PepDirectStateTransition::Subscription {
-                        recipient_jid: recipient_jid.clone(),
-                        subid: subid.clone(),
-                        state: "none".to_owned(),
-                    },
-                )
-                .collect(),
-        };
-        let outbox = self
-            .direct_pep_outbox(
-                &mut transaction,
-                owner.id,
-                Some(sender_connection_id),
-                PepOutboxEventKind::SubscriptionState,
-                &snapshot,
-                factory,
-            )
-            .await?;
-        for (jid, subid) in &canonical {
-            sqlx::query(
-                "DELETE FROM pep_subscriptions
-                  WHERE owner_id=$1 AND node=$2 AND subscriber_jid=$3 AND subid=$4",
-            )
-            .bind(owner.id)
-            .bind(node)
-            .bind(jid)
-            .bind(subid)
-            .execute(&mut *transaction)
-            .await?;
-        }
-        db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
-        transaction.commit().await?;
-        Ok(PepOwnerMutationOutcome::Applied(u64::try_from(
-            canonical.len(),
-        )?))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn commit_legacy_bookmarks(
-        &self,
-        owner: &PubSubAccount,
-        sender_connection_id: Uuid,
-        private_xml: &str,
-        items: &mut [(String, String)],
-        expected_previous_items: &[(String, String)],
-        max_private_bytes: i64,
-        quotas: PepQuotas,
-        factory: &dyn PepOutboxFactory,
-    ) -> Result<PepBookmarkMutationOutcome> {
-        const LEGACY_BOOKMARKS: &str = "storage:bookmarks";
-        const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
-        let owner_key = owner.id.to_string();
-        let _permit = self
-            .admit_mutation(&[&owner_key, BOOKMARKS2], false)
-            .await?;
-        let Some((mut transaction, _)) = self
-            .begin_authorized_pep_owner_mutation(owner, BOOKMARKS2)
-            .await?
-        else {
-            return Ok(PepBookmarkMutationOutcome::Forbidden);
-        };
-        db::private::lock_private_xml_owner(&mut transaction, owner.id).await?;
-        let previous_items = sqlx::query(
-            "SELECT item_id,payload FROM pep_items
-              WHERE owner_id=$1 AND node=$2
-              ORDER BY item_id
-              FOR UPDATE",
-        )
-        .bind(owner.id)
-        .bind(BOOKMARKS2)
-        .fetch_all(&mut *transaction)
-        .await?
-        .into_iter()
-        .map(|row| Ok::<_, sqlx::Error>((row.try_get("item_id")?, row.try_get("payload")?)))
-        .collect::<std::result::Result<Vec<(String, String)>, _>>()?;
-        if previous_items != expected_previous_items {
-            transaction.rollback().await?;
-            return Ok(PepBookmarkMutationOutcome::ConcurrentChange);
-        }
-        let borrowed = items
-            .iter()
-            .map(|(item_id, payload)| (item_id.as_str(), payload.as_str()))
-            .collect::<Vec<_>>();
-        let config = db::default_pep_node_config(BOOKMARKS2);
-        let pep_outcome = db::pep::replace_pep_items_in_transaction(
-            &mut transaction,
-            owner.id,
-            BOOKMARKS2,
-            &config,
-            &borrowed,
-            quotas.into(),
-        )
-        .await?;
-        if pep_outcome != db::PepPublishOutcome::Published {
-            transaction.rollback().await?;
-            return Ok(PepBookmarkMutationOutcome::ResourceConstraint);
-        }
-        let private_outcome = db::private::set_private_xml_batch_in_transaction(
-            &mut transaction,
-            owner.id,
-            &[db::PrivateXmlEntry {
-                element_name: "storage",
-                element_ns: LEGACY_BOOKMARKS,
-                xml_data: private_xml,
-            }],
-            max_private_bytes,
-        )
-        .await?;
-        if private_outcome != db::PrivateXmlWriteOutcome::Stored {
-            transaction.rollback().await?;
-            return Ok(PepBookmarkMutationOutcome::ResourceConstraint);
-        }
-        let outbox = self
-            .exact_pep_outbox(
-                &mut transaction,
-                owner.id,
-                &owner.username,
-                Some(sender_connection_id),
-                BOOKMARKS2,
-                PepOutboxEventKind::Publish,
-                PepOutboxAuthorizationMode::CausalAudience,
-                factory,
-            )
-            .await?;
-        db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
-        transaction.commit().await?;
-        Ok(PepBookmarkMutationOutcome::Stored)
-    }
-
-    /// Publish generic PEP items and derive the durable notification audience
-    /// inside the same transaction. `require_content_change` preserves the
-    /// Bookmarks 2 duplicate-suppression behavior; other PEP nodes may emit a
-    /// refresh event for an idempotent publication as before.
-    pub(crate) async fn publish_pep_items(
-        &self,
-        command: PepPublishItemsCommand<'_>,
-        factory: &dyn PepOutboxFactory,
-    ) -> Result<PepPublishItemsResult> {
-        validate_pep_publish_command(&command)?;
-        let write = command.write;
-        let owner_key = write.user_id.to_string();
-        let _permit = self
-            .admit_mutation(&[&owner_key, write.node], false)
-            .await?;
-        let mut transaction = self.begin_mutation().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 2))")
-            .bind(write.user_id.to_string())
-            .execute(&mut *transaction)
-            .await?;
-        let owner_username = sqlx::query_scalar::<_, String>(
-            "SELECT username FROM users
-              WHERE id=$1 AND username=$2 AND auth_generation=$3 AND NOT is_disabled
-              FOR SHARE",
-        )
-        .bind(write.user_id)
-        .bind(write.username)
-        .bind(write.auth_generation)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        let Some(owner_username) = owner_username else {
-            transaction.rollback().await?;
-            return Ok(PepPublishItemsResult {
-                outcome: PepPublishItemsOutcome::Unauthorized,
-                content_changed: false,
-            });
-        };
-        lock_pep_audience(&mut transaction, write.user_id, write.node).await?;
-
-        let item_ids = write
-            .items
-            .iter()
-            .map(|(item_id, _)| *item_id)
-            .collect::<Vec<_>>();
-        let previous = sqlx::query(
-            "SELECT item_id,payload FROM pep_items
-              WHERE owner_id=$1 AND node=$2 AND item_id=ANY($3)
-              FOR UPDATE",
-        )
-        .bind(write.user_id)
-        .bind(write.node)
-        .bind(&item_ids)
-        .fetch_all(&mut *transaction)
-        .await?
-        .into_iter()
-        .map(|row| {
-            Ok::<_, sqlx::Error>((
-                row.try_get::<String, _>("item_id")?,
-                row.try_get::<String, _>("payload")?,
-            ))
-        })
-        .collect::<std::result::Result<HashMap<_, _>, _>>()?;
-        let changed = previous.len() != write.items.len()
-            || write.items.iter().any(|(item_id, payload)| {
-                previous.get(*item_id).map(String::as_str) != Some(*payload)
-            });
-        let requested = db::PepNodeConfig::from(write.requested);
-        let outcome = db::pep::publish_pep_items_in_transaction(
-            &mut transaction,
-            write.user_id,
-            write.node,
-            &requested,
-            write.enforce_preconditions,
-            write.items,
-            write.quotas.into(),
-        )
-        .await?;
-        if outcome != db::PepPublishOutcome::Published {
-            transaction.rollback().await?;
-            return Ok(PepPublishItemsResult {
-                outcome: PepPublishItemsOutcome::from(PepPublishOutcome::from(outcome)),
-                content_changed: false,
-            });
-        }
-        if changed || !command.require_content_change {
-            let outbox = self
-                .exact_pep_outbox(
-                    &mut transaction,
-                    write.user_id,
-                    &owner_username,
-                    Some(write.connection_id),
-                    write.node,
-                    PepOutboxEventKind::Publish,
-                    PepOutboxAuthorizationMode::CausalAudience,
-                    factory,
-                )
-                .await?;
-            db::enqueue_pubsub_outbox_in_transaction(&mut transaction, &outbox).await?;
-        }
-        transaction.commit().await?;
-        Ok(PepPublishItemsResult {
-            outcome: PepPublishItemsOutcome::Published,
-            content_changed: changed,
-        })
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the transaction plus immutable PEP authority and event coordinates must stay explicit at this atomic outbox boundary"
-    )]
-    async fn exact_pep_outbox(
-        &self,
-        transaction: &mut Transaction<'_, Postgres>,
-        owner_id: Uuid,
-        owner_username: &str,
-        sender_connection_id: Option<Uuid>,
-        node: &str,
-        event_kind: PepOutboxEventKind,
-        authorization_mode: PepOutboxAuthorizationMode,
-        factory: &dyn PepOutboxFactory,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
-        let owner_bare_jid =
-            crate::jid::CanonicalJid::parse_bare(&format!("{owner_username}@{}", self.domain))?
-                .to_string();
-        let policy = sqlx::query(
-            "SELECT access_model,deliver_notifications,roster_groups_allowed,access_whitelist
-               FROM pep_nodes
-              WHERE owner_id=$1 AND node=$2
-              FOR SHARE",
-        )
-        .bind(owner_id)
-        .bind(node)
-        .fetch_one(&mut **transaction)
-        .await?;
-        let deliver_notifications: bool = policy.try_get("deliver_notifications")?;
-        if !deliver_notifications {
-            return Ok(Vec::new());
-        }
-        let access_model: String = policy.try_get("access_model")?;
-        let roster_groups_allowed: Vec<String> = policy.try_get("roster_groups_allowed")?;
-        let access_whitelist = policy
-            .try_get::<Vec<String>, _>("access_whitelist")?
-            .into_iter()
-            .map(|jid| crate::jid::canonical_bare_key(&jid))
-            .collect::<Result<HashSet<_>>>()?;
-
-        // The owner users row is held FOR SHARE by the caller. Production
-        // roster mutations take it FOR UPDATE, so rows and groups below cannot
-        // change until this event has been projected.
-        let roster_rows = sqlx::query(
-            "SELECT contact_jid,subscription,groups
-               FROM roster_items
-              WHERE owner_id=$1
-              ORDER BY contact_jid
-              FOR SHARE",
-        )
-        .bind(owner_id)
-        .fetch_all(&mut **transaction)
-        .await?;
-        let mut roster = BTreeMap::new();
-        for row in roster_rows {
-            let jid = crate::jid::canonicalize_bare(&row.try_get::<String, _>("contact_jid")?)?;
-            roster.insert(
-                jid,
-                PepRosterAudienceEntry {
-                    subscription: row.try_get("subscription")?,
-                    groups: serde_json::from_value(row.try_get("groups")?)
-                        .context("stored PEP roster groups are not a string array")?,
-                },
-            );
-        }
-
-        // Subscribe/unsubscribe and roster-driven cancellation serialize on
-        // this node advisory. FOR SHARE also protects direct legacy cleanup.
-        let explicit = sqlx::query_scalar::<_, String>(
-            "SELECT subscriber_jid FROM pep_subscriptions
-              WHERE owner_id=$1 AND node=$2 AND state='subscribed'
-              ORDER BY subscriber_jid
-              FOR SHARE",
-        )
-        .bind(owner_id)
-        .bind(node)
-        .fetch_all(&mut **transaction)
-        .await?
-        .into_iter()
-        .map(|jid| crate::jid::canonicalize(&jid))
-        .collect::<Result<Vec<_>>>()?;
-
-        let mut localparts = roster
-            .keys()
-            .chain(explicit.iter())
-            .filter_map(|jid| crate::jid::CanonicalJid::parse(jid).ok())
-            .filter(|jid| jid.domainpart() == self.domain.as_str())
-            .filter_map(|jid| jid.localpart().map(str::to_owned))
-            .collect::<Vec<_>>();
-        localparts.sort_unstable();
-        localparts.dedup();
-        let local_rows = sqlx::query(
-            "SELECT id,username FROM users
-              WHERE username=ANY($1) AND NOT is_disabled",
-        )
-        .bind(&localparts)
-        .fetch_all(&mut **transaction)
-        .await?;
-        let mut local_accounts = HashMap::with_capacity(local_rows.len());
-        let mut block_owners = vec![owner_id];
-        for row in local_rows {
-            let id: Uuid = row.try_get("id")?;
-            let username: String = row.try_get("username")?;
-            let bare =
-                crate::jid::CanonicalJid::parse_bare(&format!("{username}@{}", self.domain))?
-                    .to_string();
-            local_accounts.insert(bare, id);
-            block_owners.push(id);
-        }
-        block_owners.sort_unstable();
-        block_owners.dedup();
-        for block_owner in &block_owners {
-            lock_pep_block_policy(transaction, *block_owner).await?;
-        }
-        let block_rows = sqlx::query(
-            "SELECT owner_id,blocked_jid FROM blocked_jids
-              WHERE owner_id=ANY($1)
-              ORDER BY owner_id,blocked_jid",
-        )
-        .bind(&block_owners)
-        .fetch_all(&mut **transaction)
-        .await?;
-        let mut blocks: HashMap<Uuid, Vec<String>> = HashMap::new();
-        for row in block_rows {
-            blocks
-                .entry(row.try_get("owner_id")?)
-                .or_default()
-                .push(row.try_get("blocked_jid")?);
-        }
-
-        let authorized = |jid: &str,
-                          roster_entry: Option<&PepRosterAudienceEntry>|
-         -> Result<bool> {
-            let bare = crate::jid::canonical_bare_key(jid)?;
-            if bare == owner_bare_jid {
-                return Ok(true);
-            }
-            let parsed = crate::jid::CanonicalJid::parse(jid)?;
-            if parsed.domainpart() == self.domain && !local_accounts.contains_key(&bare) {
-                return Ok(false);
-            }
-            if blocks.get(&owner_id).is_some_and(|patterns| {
-                patterns
-                    .iter()
-                    .any(|pattern| db::roster::blocked_jid_matches(pattern, jid))
-            }) {
-                return Ok(false);
-            }
-            if let Some(recipient_id) = local_accounts.get(&bare) {
-                if blocks.get(recipient_id).is_some_and(|patterns| {
-                    patterns
-                        .iter()
-                        .any(|pattern| db::roster::blocked_jid_matches(pattern, &owner_bare_jid))
-                }) {
-                    return Ok(false);
-                }
-            }
-            Ok(match access_model.as_str() {
-                "open" => true,
-                "whitelist" => access_whitelist.contains(&bare),
-                "presence" => roster_entry
-                    .is_some_and(|entry| matches!(entry.subscription.as_str(), "from" | "both")),
-                "roster" => roster_entry.is_some_and(|entry| {
-                    entry
-                        .groups
-                        .iter()
-                        .any(|group| roster_groups_allowed.contains(group))
-                }),
-                _ => false,
-            })
-        };
-
-        let mut roster_jids = Vec::new();
-        for (jid, entry) in &roster {
-            if matches!(entry.subscription.as_str(), "from" | "both")
-                && authorized(jid, Some(entry))?
-            {
-                roster_jids.push(jid.clone());
-            }
-        }
-        let mut explicit_jids = Vec::new();
-        for jid in explicit {
-            let bare = crate::jid::canonical_bare_key(&jid)?;
-            if authorized(&jid, roster.get(&bare))? {
-                explicit_jids.push(jid);
-            }
-        }
-        let audience = PepAudienceSnapshot {
-            owner_bare_jid: owner_bare_jid.clone(),
-            roster_jids,
-            explicit_jids,
-        };
-        let deliveries = factory.build(&audience)?;
-        anyhow::ensure!(
-            deliveries
-                .iter()
-                .all(|(recipient, _)| audience.authorizes_routed_jid(recipient)),
-            "PEP renderer escaped the transaction-owned audience"
-        );
-        let event_id = Uuid::new_v4();
-        let created_at = chrono::Utc::now();
-        let mut seen = HashSet::new();
-        deliveries
-            .into_iter()
-            .filter_map(|(recipient, payload)| {
-                let recipient = crate::jid::canonicalize(&recipient).ok()?;
-                seen.insert(recipient.clone())
-                    .then_some((recipient, payload))
-            })
-            .map(|(recipient, payload)| {
-                let recipient_bare = crate::jid::canonical_bare_key(&recipient)?;
-                let recipient_account_id = if recipient_bare == owner_bare_jid {
-                    Some(owner_id)
-                } else {
-                    local_accounts.get(&recipient_bare).copied()
-                };
-                db::PubSubOutboxInsert::new_pep_stanza(
-                    event_id,
-                    owner_id,
-                    &owner_bare_jid,
-                    sender_connection_id,
-                    recipient,
-                    recipient_account_id,
-                    event_kind,
-                    authorization_mode,
-                    payload,
-                    node,
-                    &self.domain,
-                    created_at,
-                )
-            })
-            .collect()
-    }
-
-    async fn direct_pep_outbox(
-        &self,
-        transaction: &mut Transaction<'_, Postgres>,
-        owner_id: Uuid,
-        sender_connection_id: Option<Uuid>,
-        event_kind: PepOutboxEventKind,
-        snapshot: &PepDirectStateSnapshot,
-        factory: &dyn PepDirectOutboxFactory,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
-        let authorized = snapshot
-            .transitions
-            .iter()
-            .map(|transition| transition.recipient_jid().to_owned())
-            .collect::<HashSet<_>>();
-        let deliveries = factory.build(snapshot)?;
-        anyhow::ensure!(
-            deliveries.iter().all(|(recipient, _)| {
-                crate::jid::canonicalize(recipient)
-                    .is_ok_and(|recipient| authorized.contains(&recipient))
-            }),
-            "PEP direct-state renderer escaped the transaction-owned recipients"
-        );
-        let mut localparts = authorized
-            .iter()
-            .filter_map(|jid| crate::jid::CanonicalJid::parse(jid).ok())
-            .filter(|jid| jid.domainpart() == self.domain)
-            .filter_map(|jid| jid.localpart().map(str::to_owned))
-            .collect::<Vec<_>>();
-        localparts.sort_unstable();
-        localparts.dedup();
-        let rows = sqlx::query(
-            "SELECT id,username FROM users
-              WHERE username=ANY($1) AND NOT is_disabled
-              ORDER BY id
-              FOR SHARE",
-        )
-        .bind(&localparts)
-        .fetch_all(&mut **transaction)
-        .await?;
-        let mut local_accounts = HashMap::with_capacity(rows.len());
-        for row in rows {
-            let id: Uuid = row.try_get("id")?;
-            let username: String = row.try_get("username")?;
-            let bare =
-                crate::jid::CanonicalJid::parse_bare(&format!("{username}@{}", self.domain))?
-                    .to_string();
-            local_accounts.insert(bare, id);
-        }
-        let event_id = Uuid::new_v4();
-        let created_at = chrono::Utc::now();
-        let mut seen = HashSet::new();
-        let mut outbox = Vec::new();
-        for (recipient, payload) in deliveries {
-            let recipient = crate::jid::canonicalize(&recipient)?;
-            if !seen.insert(recipient.clone()) {
-                continue;
-            }
-            let recipient_bare = crate::jid::canonical_bare_key(&recipient)?;
-            let recipient_account_id = if recipient_bare == snapshot.owner_bare_jid {
-                Some(owner_id)
-            } else {
-                local_accounts.get(&recipient_bare).copied()
-            };
-            if crate::jid::CanonicalJid::parse(&recipient)?.domainpart() == self.domain
-                && recipient_account_id.is_none()
-            {
-                // Account deletion/disable committed before this mutation's
-                // lock snapshot. There is no valid local delivery subject.
-                continue;
-            }
-            outbox.push(db::PubSubOutboxInsert::new_pep_stanza(
-                event_id,
-                owner_id,
-                &snapshot.owner_bare_jid,
-                sender_connection_id,
-                recipient,
-                recipient_account_id,
-                event_kind,
-                PepOutboxAuthorizationMode::CausalAudience,
-                payload,
-                &snapshot.node,
-                &self.domain,
-                created_at,
-            )?);
-        }
-        Ok(outbox)
-    }
-
     pub(crate) async fn publish_profile_items(
         &self,
         profile_service: &ProfileService<impl ProfileRepository>,
@@ -2547,7 +149,6 @@ impl PubSubService {
             )
             .await
     }
-
     pub(crate) async fn publish_avatar_metadata(
         &self,
         profile_service: &ProfileService<impl ProfileRepository>,
@@ -2571,652 +172,6 @@ impl PubSubService {
             )
             .await
     }
-
-    // XEP-0060 read slice ----------------------------------------------------------
-
-    pub(crate) async fn get_node(&self, node: &str) -> Result<Option<PubSubNode>> {
-        Ok(db::get_node(&self.pool, node).await?.map(Into::into))
-    }
-
-    pub(crate) async fn get_node_affiliation(
-        &self,
-        node_id: Uuid,
-        jid: &str,
-    ) -> Result<Option<String>> {
-        db::get_node_affiliation(&self.pool, node_id, jid).await
-    }
-
-    pub(crate) async fn affiliations_for_jid(
-        &self,
-        jid: &str,
-        node: Option<&str>,
-    ) -> Result<Vec<PubSubAffiliation>> {
-        Ok(db::affiliations_for_jid(&self.pool, jid, node)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    }
-
-    pub(crate) async fn node_affiliations(&self, node_id: Uuid) -> Result<Vec<PubSubAffiliation>> {
-        Ok(db::node_affiliations(&self.pool, node_id)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    }
-
-    pub(crate) async fn is_subscribed(&self, node_id: Uuid, jid: &str) -> Result<bool> {
-        db::is_subscribed(&self.pool, node_id, jid).await
-    }
-
-    pub(crate) async fn subscriptions_for_jid(
-        &self,
-        jid: &str,
-        node: Option<&str>,
-    ) -> Result<Vec<PubSubSubscription>> {
-        Ok(db::subscriptions_for_jid(&self.pool, jid, node)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    }
-
-    pub(crate) async fn subscriptions_addressing_jid_page(
-        &self,
-        jid: &str,
-        after: Option<(&str, &str)>,
-        limit: i64,
-    ) -> Result<Vec<PubSubSubscription>> {
-        Ok(
-            db::subscriptions_addressing_jid_page(&self.pool, jid, after, limit)
-                .await?
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-        )
-    }
-
-    pub(crate) async fn node_subscriptions(
-        &self,
-        node_id: Uuid,
-    ) -> Result<Vec<PubSubSubscription>> {
-        Ok(db::node_subscriptions(&self.pool, node_id)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    }
-
-    pub(crate) async fn get_subscription(
-        &self,
-        node_id: Uuid,
-        jid: &str,
-    ) -> Result<Option<PubSubSubscription>> {
-        Ok(db::get_subscription(&self.pool, node_id, jid)
-            .await?
-            .map(Into::into))
-    }
-
-    /// Read only for a claimed digest projection.  Keep it under the durable
-    /// outbox capability rather than allowing a background worker to race
-    /// foreground XEP-0060 traffic for an unbounded primary-pool checkout.
-    pub(crate) async fn outbox_get_subscription(
-        &self,
-        node_id: Uuid,
-        jid: &str,
-    ) -> Result<Option<PubSubSubscription>> {
-        let _database_turn = self.durable_outbox_database_turn().await;
-        Ok(db::get_subscription(&self.pool, node_id, jid)
-            .await?
-            .map(Into::into))
-    }
-
-    pub(crate) async fn get_owner_jids(&self, node_id: Uuid) -> Result<Vec<String>> {
-        db::get_owner_jids(&self.pool, node_id).await
-    }
-
-    pub(crate) async fn get_publisher_jids(&self, node_id: Uuid) -> Result<Vec<String>> {
-        db::get_publisher_jids(&self.pool, node_id).await
-    }
-
-    pub(crate) async fn active_subscriber_count(&self, node_id: Uuid) -> Result<i64> {
-        db::active_subscriber_count(&self.pool, node_id).await
-    }
-
-    pub(crate) async fn get_items(
-        &self,
-        node_id: Uuid,
-        item_ids: &[String],
-        limit: i64,
-    ) -> Result<Vec<PubSubItem>> {
-        Ok(db::get_items(&self.pool, node_id, item_ids, limit)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    }
-
-    pub(crate) async fn item_ids_for_disco(&self, node_id: Uuid) -> Result<Vec<String>> {
-        db::item_ids_for_disco(&self.pool, node_id).await
-    }
-
-    pub(crate) async fn node_redirect(&self, node: &str) -> Result<Option<String>> {
-        db::node_redirect(&self.pool, node).await
-    }
-
-    pub(crate) async fn collection_parents(&self, child_id: Uuid) -> Result<Vec<PubSubNode>> {
-        Ok(db::collection_parents(&self.pool, child_id)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    }
-
-    pub(crate) async fn collection_children(&self, collection_id: Uuid) -> Result<Vec<PubSubNode>> {
-        Ok(db::collection_children(&self.pool, collection_id)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    }
-
-    pub(crate) async fn collection_visible_items(
-        &self,
-        collection_id: Uuid,
-        requester: &str,
-        global_item_limit: i64,
-        xml_byte_limit: i64,
-    ) -> Result<Vec<CollectionVisibleItem>> {
-        Ok(db::collection_visible_items(
-            &self.pool,
-            collection_id,
-            requester,
-            global_item_limit,
-            xml_byte_limit,
-        )
-        .await?
-        .into_iter()
-        .map(Into::into)
-        .collect())
-    }
-
-    pub(crate) async fn visible_root_disco_count(&self, requester: &str) -> Result<i64> {
-        db::visible_root_disco_count(&self.pool, requester).await
-    }
-
-    pub(crate) async fn visible_root_disco_cursor_exists(
-        &self,
-        requester: &str,
-        cursor: &str,
-    ) -> Result<bool> {
-        db::visible_root_disco_cursor_exists(&self.pool, requester, cursor).await
-    }
-
-    pub(crate) async fn visible_root_disco_index(
-        &self,
-        requester: &str,
-        node: &str,
-    ) -> Result<i64> {
-        db::visible_root_disco_index(&self.pool, requester, node).await
-    }
-
-    pub(crate) async fn visible_root_disco_page(
-        &self,
-        requester: &str,
-        cursor: Option<&str>,
-        backwards: bool,
-        limit: i64,
-    ) -> Result<Vec<PubSubDiscoNode>> {
-        Ok(
-            db::visible_root_disco_page(&self.pool, requester, cursor, backwards, limit)
-                .await?
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-        )
-    }
-
-    /// Cheap preflight used before expensive XML serialization.  Mutations
-    /// repeat this decision under a node lock; this method is never the
-    /// authority that permits a write.
-    pub(crate) async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {
-        let affiliation = db::get_node_affiliation(&self.pool, node.id, requester).await?;
-        let affiliation = affiliation
-            .as_deref()
-            .map(str::parse::<northstar_xep_0060::Affiliation>)
-            .transpose()
-            .map_err(|error| anyhow::anyhow!("invalid stored PubSub affiliation: {error}"))?;
-        let publish_model = node
-            .publish_model
-            .parse::<northstar_xep_0060::PublishModel>()
-            .map_err(|error| anyhow::anyhow!("invalid stored PubSub publish model: {error}"))?;
-        let access_model = node
-            .access_model
-            .parse::<northstar_xep_0060::AccessModel>()
-            .map_err(|error| anyhow::anyhow!("invalid stored PubSub access model: {error}"))?;
-        let subscribed = db::is_subscribed(&self.pool, node.id, requester).await?;
-        Ok(northstar_xep_0060::can_publish_pure(
-            publish_model,
-            access_model,
-            affiliation,
-            subscribed,
-        ))
-    }
-
-    /// Preflight only. Every owner mutation rechecks this under its
-    /// transaction lock before changing state.
-    pub(crate) async fn is_owner(&self, node_id: Uuid, requester: &str) -> Result<bool> {
-        Ok(db::get_node_affiliation(&self.pool, node_id, requester)
-            .await?
-            .as_deref()
-            == Some("owner"))
-    }
-
-    // XEP-0060 mutation slice ------------------------------------------------------
-    //
-    // Keep every mutation which can change PubSub authority or project a
-    // notification behind this capability.  The protocol module may validate
-    // XML and map the domain outcome to a stanza error, but it must not obtain
-    // a PgPool and compose a partial workflow itself.
-
-    pub(crate) async fn update_subscription_options_checked(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-        subscriber_jid: &str,
-        expected_subid: Option<&str>,
-        options: &PubSubSubscriptionOptions,
-    ) -> Result<SubscriptionOptionsOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self
-            .admit_mutation(&[requester, subscriber_jid, &node_key], false)
-            .await?;
-        let options = db::PubSubSubscriptionOptions::from(options);
-        Ok(db::update_subscription_options_checked(
-            &self.pool,
-            node_id,
-            requester,
-            subscriber_jid,
-            expected_subid,
-            &options,
-        )
-        .await?
-        .into())
-    }
-
-    pub(crate) async fn create_node(
-        &self,
-        node: &str,
-        creator_jid: &str,
-        config: &PubSubNodeConfig,
-        max_nodes_per_owner: i64,
-    ) -> Result<CreateNodeOutcome> {
-        let _permit = self.admit_mutation(&[creator_jid, node], true).await?;
-        let config = db::PubSubNodeConfig::from(config);
-        Ok(db::create_node_with_renderer(
-            &self.pool,
-            node,
-            creator_jid,
-            &config,
-            max_nodes_per_owner,
-            self,
-        )
-        .await?
-        .into())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn publish_items(
-        &self,
-        node: &PubSubNode,
-        publisher_jid: &str,
-        items: &[(String, String)],
-        max_storage_bytes_per_owner: i64,
-    ) -> Result<PublishItemsOutcome> {
-        let node_key = node.id.to_string();
-        let _permit = self
-            .admit_mutation(&[publisher_jid, &node_key], true)
-            .await?;
-        let node = db::PubSubNode::from(node);
-        Ok(db::publish_items_with_renderer(
-            &self.pool,
-            &node,
-            publisher_jid,
-            items,
-            false,
-            max_storage_bytes_per_owner,
-            self,
-        )
-        .await?
-        .into())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn set_subscription_limited_with_options(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-        jid: &str,
-        state: &str,
-        expected_node_type: &str,
-        expected_access_model: &str,
-        max_subscriptions: i64,
-        options: Option<&PubSubSubscriptionOptions>,
-        requested_subid: &str,
-    ) -> Result<SubscribeOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self
-            .admit_mutation(&[requester, jid, &node_key], false)
-            .await?;
-        let options = options.map(db::PubSubSubscriptionOptions::from);
-        Ok(db::set_subscription_limited_with_options_and_renderer(
-            &self.pool,
-            node_id,
-            requester,
-            jid,
-            state,
-            expected_node_type,
-            expected_access_model,
-            max_subscriptions,
-            options.as_ref(),
-            requested_subid,
-            self,
-        )
-        .await?
-        .into())
-    }
-
-    pub(crate) async fn unsubscribe_checked(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-        subscriber_jid: &str,
-        expected_subid: &str,
-    ) -> Result<UnsubscribeOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self
-            .admit_mutation(&[requester, subscriber_jid, &node_key], false)
-            .await?;
-        Ok(db::unsubscribe_checked_with_renderer(
-            &self.pool,
-            node_id,
-            requester,
-            subscriber_jid,
-            expected_subid,
-            self,
-        )
-        .await?
-        .into())
-    }
-
-    pub(crate) async fn retract_items(
-        &self,
-        node_id: Uuid,
-        item_ids: &[String],
-        publisher_jid: &str,
-        force_notification: bool,
-    ) -> Result<RetractItemsOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self
-            .admit_mutation(&[publisher_jid, &node_key], true)
-            .await?;
-        Ok(db::retract_items_with_renderer(
-            &self.pool,
-            node_id,
-            item_ids,
-            publisher_jid,
-            force_notification,
-            self,
-        )
-        .await?
-        .into())
-    }
-
-    pub(crate) async fn associate_collection_child(
-        &self,
-        collection: &PubSubNode,
-        child: &PubSubNode,
-        requester: &str,
-    ) -> Result<CollectionUpdateOutcome> {
-        let collection_key = collection.id.to_string();
-        let child_key = child.id.to_string();
-        let _permit = self
-            .admit_mutation(&[requester, &collection_key, &child_key], true)
-            .await?;
-        let collection = db::PubSubNode::from(collection);
-        let child = db::PubSubNode::from(child);
-        Ok(db::associate_collection_child_with_renderer(
-            &self.pool,
-            &collection,
-            &child,
-            requester,
-            self,
-        )
-        .await?
-        .into())
-    }
-
-    pub(crate) async fn dissociate_collection_child(
-        &self,
-        collection: &PubSubNode,
-        child: &PubSubNode,
-        requester: &str,
-    ) -> Result<CollectionUpdateOutcome> {
-        let collection_key = collection.id.to_string();
-        let child_key = child.id.to_string();
-        let _permit = self
-            .admit_mutation(&[requester, &collection_key, &child_key], true)
-            .await?;
-        let collection = db::PubSubNode::from(collection);
-        let child = db::PubSubNode::from(child);
-        Ok(db::dissociate_collection_child_with_renderer(
-            &self.pool,
-            &collection,
-            &child,
-            requester,
-            self,
-        )
-        .await?
-        .into())
-    }
-
-    pub(crate) async fn update_node_config_and_graph_with_outbox(
-        &self,
-        node: &PubSubNode,
-        requester: &str,
-        expected: &PubSubNodeConfig,
-        config: &PubSubNodeConfig,
-    ) -> Result<PubSubConfigOutcome> {
-        let node_key = node.id.to_string();
-        let _permit = self.admit_mutation(&[requester, &node_key], true).await?;
-        let node = db::PubSubNode::from(node);
-        let expected = db::PubSubNodeConfig::from(expected);
-        let config = db::PubSubNodeConfig::from(config);
-        Ok(db::update_node_config_and_graph_with_outbox(
-            &self.pool, &node, requester, &expected, &config, self,
-        )
-        .await?
-        .into())
-    }
-
-    pub(crate) async fn set_subscriptions(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-        changes: &[(String, String, Option<String>)],
-    ) -> Result<SetSubscriptionsOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self.admit_mutation(&[requester, &node_key], false).await?;
-        Ok(
-            db::set_subscriptions_with_renderer(
-                &self.pool, node_id, requester, changes, None, self,
-            )
-            .await?
-            .into(),
-        )
-    }
-
-    pub(crate) async fn set_affiliations(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-        changes: &[(String, String)],
-    ) -> Result<SetAffiliationsOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self.admit_mutation(&[requester, &node_key], false).await?;
-        Ok(db::set_affiliations_with_renderer(
-            &self.pool, node_id, requester, changes, None, None, self,
-        )
-        .await?
-        .into())
-    }
-
-    pub(crate) async fn purge_node_as_owner_with_outbox(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-    ) -> Result<OwnerMutationOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self.admit_mutation(&[requester, &node_key], true).await?;
-        Ok(
-            db::purge_node_as_owner_with_outbox(&self.pool, node_id, requester, self)
-                .await?
-                .into(),
-        )
-    }
-
-    pub(crate) async fn delete_node_as_owner_with_redirect_and_outbox(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-        redirect: Option<&str>,
-    ) -> Result<OwnerMutationOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self.admit_mutation(&[requester, &node_key], true).await?;
-        Ok(db::delete_node_as_owner_with_redirect_and_outbox(
-            &self.pool, node_id, requester, redirect, self,
-        )
-        .await?
-        .into())
-    }
-
-    pub(crate) async fn resolve_pending_subscription(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-        subscriber_jid: &str,
-        expected_subid: &str,
-        allow: bool,
-    ) -> Result<SubscriptionAuthorizationOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self
-            .admit_mutation(&[requester, subscriber_jid, &node_key], false)
-            .await?;
-        Ok(db::resolve_pending_subscription_with_renderer(
-            &self.pool,
-            node_id,
-            requester,
-            subscriber_jid,
-            expected_subid,
-            allow,
-            self,
-        )
-        .await?
-        .into())
-    }
-
-    fn serialized_item_payload_matches_type(item_xml: &str, payload_type: &str) -> bool {
-        roxmltree::Document::parse(item_xml)
-            .ok()
-            .is_some_and(|document| {
-                document
-                    .root_element()
-                    .children()
-                    .find(roxmltree::Node::is_element)
-                    .and_then(|payload| payload.tag_name().namespace())
-                    == Some(payload_type)
-            })
-    }
-
-    fn item_xml_has_payload(item_xml: &str) -> bool {
-        roxmltree::Document::parse(item_xml)
-            .ok()
-            .is_some_and(|document| {
-                document
-                    .root_element()
-                    .children()
-                    .any(|node| node.is_element())
-            })
-    }
-
-    /// Classify a publish payload against the resolved node configuration.
-    ///
-    /// These failures have distinct XEP-0060 meanings.  Keeping them as one
-    /// broad precondition check collapses a malformed payload into
-    /// `precondition-not-met`, which prevents a client from distinguishing a
-    /// bad namespace or oversized payload from a stale publish-options form.
-    fn publish_validation_outcome(
-        config: &PubSubNodeConfig,
-        items: &[(String, String)],
-    ) -> Option<PubSubPublishOutcome> {
-        if config.node_type != "leaf" {
-            return Some(PubSubPublishOutcome::NotLeafNode);
-        }
-        if items.len() > config.max_items as usize {
-            return Some(PubSubPublishOutcome::MaxItemsExceeded);
-        }
-        if config.persist_items && items.is_empty() {
-            return Some(PubSubPublishOutcome::ItemRequired);
-        }
-        if !config.persist_items && !config.deliver_payloads && !items.is_empty() {
-            return Some(PubSubPublishOutcome::ItemForbidden);
-        }
-        if !config.persist_items && config.deliver_payloads && items.is_empty() {
-            return Some(PubSubPublishOutcome::ItemRequired);
-        }
-        if config.deliver_payloads
-            && items
-                .iter()
-                .any(|(_, item_xml)| !Self::item_xml_has_payload(item_xml))
-        {
-            return Some(PubSubPublishOutcome::PayloadRequired);
-        }
-        if items
-            .iter()
-            .any(|(_, item_xml)| item_xml.len() > config.max_payload_size as usize)
-        {
-            return Some(PubSubPublishOutcome::PayloadTooBig);
-        }
-        if config.payload_type.as_deref().is_some_and(|expected| {
-            items.iter().any(|(_, item_xml)| {
-                !Self::serialized_item_payload_matches_type(item_xml, expected)
-            })
-        }) {
-            return Some(PubSubPublishOutcome::InvalidPayload);
-        }
-        None
-    }
-
-    /// Apply the existing-node publish precedence without exposing its policy
-    /// to a requester that cannot publish.  Keeping this pure makes the
-    /// security ordering independently regression-testable from the database
-    /// authorization lookup that supplies `authorized`.
-    fn existing_node_publish_admission_outcome(
-        authorized: bool,
-        config: &PubSubNodeConfig,
-        publish_options: Option<&PubSubNodeConfig>,
-        items: &[(String, String)],
-    ) -> Option<PubSubPublishOutcome> {
-        if !authorized {
-            return Some(PubSubPublishOutcome::Forbidden);
-        }
-        if publish_options.is_some_and(|options| options != config) {
-            return Some(PubSubPublishOutcome::PreconditionNotMet);
-        }
-        Self::publish_validation_outcome(config, items)
-    }
-
     pub(crate) async fn execute_pubsub_publish(
         &self,
         command: PubSubPublishCommand<'_>,
@@ -3238,8 +193,7 @@ impl PubSubService {
             // side effect. Once the node is reloaded (including a create
             // conflict), authorization always precedes policy validation so a
             // racing unauthorized sender cannot probe another owner's node.
-            if let Some(outcome) = Self::publish_validation_outcome(&requested_config, write.items)
-            {
+            if let Some(outcome) = publish_validation_outcome(&requested_config, write.items) {
                 return Ok(PubSubPublishResult { outcome });
             }
             match self
@@ -3278,7 +232,7 @@ impl PubSubService {
         // private until the requester has passed authorization.
         let node_config = node.config();
         let authorized = self.can_publish(&node, write.publisher_jid).await?;
-        if let Some(outcome) = Self::existing_node_publish_admission_outcome(
+        if let Some(outcome) = existing_node_publish_admission_outcome(
             authorized,
             &node_config,
             write.publish_options,
@@ -3307,7 +261,6 @@ impl PubSubService {
             outcome: pubsub_outcome,
         })
     }
-
     pub(crate) async fn execute_pubsub_subscribe(
         &self,
         command: PubSubSubscribeCommand<'_>,
@@ -3399,7 +352,6 @@ impl PubSubService {
             outcome: pubsub_outcome,
         })
     }
-
     pub(crate) async fn execute_pubsub_unsubscribe(
         &self,
         command: PubSubUnsubscribeCommand<'_>,
@@ -3446,7 +398,6 @@ impl PubSubService {
             outcome: pubsub_outcome,
         })
     }
-
     pub(crate) async fn execute_pubsub_retract(
         &self,
         command: PubSubRetractCommand<'_>,
@@ -3490,7 +441,6 @@ impl PubSubService {
             outcome: pubsub_outcome,
         })
     }
-
     pub(crate) async fn execute_pubsub_create_node(
         &self,
         command: PubSubCreateNodeCommand<'_>,
@@ -3507,7 +457,6 @@ impl PubSubService {
             .await?;
         Ok(PubSubCreateNodeResult { outcome })
     }
-
     pub(crate) async fn execute_pubsub_delete_node(
         &self,
         command: PubSubDeleteNodeCommand<'_>,
@@ -3524,7 +473,6 @@ impl PubSubService {
             .await?;
         Ok(PubSubDeleteNodeResult { outcome })
     }
-
     pub(crate) async fn execute_pubsub_purge_node(
         &self,
         command: PubSubPurgeNodeCommand<'_>,
@@ -3546,7 +494,6 @@ impl PubSubService {
             .await?;
         Ok(PubSubPurgeNodeResult { outcome })
     }
-
     pub(crate) async fn execute_pubsub_configure_node(
         &self,
         command: PubSubConfigureNodeCommand<'_>,
@@ -3568,7 +515,6 @@ impl PubSubService {
             .await?;
         Ok(PubSubConfigureNodeResult { outcome })
     }
-
     pub(crate) async fn execute_pubsub_set_subscriptions(
         &self,
         command: PubSubSetSubscriptionsCommand<'_>,
@@ -3585,7 +531,6 @@ impl PubSubService {
             .await?;
         Ok(PubSubSetSubscriptionsResult { outcome })
     }
-
     pub(crate) async fn execute_pubsub_set_affiliations(
         &self,
         command: PubSubSetAffiliationsCommand<'_>,
@@ -3602,7 +547,6 @@ impl PubSubService {
             .await?;
         Ok(PubSubSetAffiliationsResult { outcome })
     }
-
     pub(crate) async fn execute_pep_retract(
         &self,
         command: PepRetractCommand<'_>,
@@ -3623,7 +567,6 @@ impl PubSubService {
             .await?;
         Ok(PepRetractResult { outcome })
     }
-
     pub(crate) async fn execute_pep_delete_node(
         &self,
         command: PepDeleteNodeCommand<'_>,
@@ -3636,7 +579,6 @@ impl PubSubService {
             .await?;
         Ok(PepDeleteNodeResult { outcome })
     }
-
     pub(crate) async fn execute_pep_purge_node(
         &self,
         command: PepPurgeNodeCommand<'_>,
@@ -3649,7 +591,6 @@ impl PubSubService {
             .await?;
         Ok(PepPurgeNodeResult { outcome })
     }
-
     pub(crate) async fn execute_pep_configure_node(
         &self,
         command: PepConfigureNodeCommand<'_>,
@@ -3669,7 +610,6 @@ impl PubSubService {
             .await?;
         Ok(PepConfigureNodeResult { outcome })
     }
-
     pub(crate) async fn execute_pep_set_affiliations(
         &self,
         command: PepSetAffiliationsCommand<'_>,
@@ -3689,18 +629,638 @@ impl PubSubService {
             .await?;
         Ok(PepSetAffiliationsResult { outcome })
     }
+    pub(crate) async fn pep_node(
+        &self,
+        owner_id: Uuid,
+        node: &str,
+    ) -> Result<Option<PepNodeConfig>> {
+        self.repository.pep_node(owner_id, node).await
+    }
+    pub(crate) async fn pep_items(
+        &self,
+        owner_id: Uuid,
+        node: &str,
+        item_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<(String, String)>> {
+        self.repository
+            .pep_items(owner_id, node, item_id, limit)
+            .await
+    }
+    pub(crate) async fn pep_items_by_ids(
+        &self,
+        owner_id: Uuid,
+        node: &str,
+        item_ids: &[&str],
+        limit: i64,
+    ) -> Result<Vec<(String, String)>> {
+        self.repository
+            .pep_items_by_ids(owner_id, node, item_ids, limit)
+            .await
+    }
+    pub(crate) async fn pep_items_with_timestamp(
+        &self,
+        owner_id: Uuid,
+        node: &str,
+        limit: i64,
+    ) -> Result<Vec<PepItem>> {
+        self.repository
+            .pep_items_with_timestamp(owner_id, node, limit)
+            .await
+    }
+    pub(crate) async fn pep_nodes(&self, owner_id: Uuid) -> Result<Vec<String>> {
+        self.repository.pep_nodes(owner_id).await
+    }
+    pub(crate) async fn pep_subscribers(
+        &self,
+        owner_id: Uuid,
+        node: &str,
+    ) -> Result<Vec<PepSubscription>> {
+        self.repository.pep_subscribers(owner_id, node).await
+    }
+    pub(crate) async fn pep_subscriptions_for_available_resource(
+        &self,
+        subscriber_jid: &str,
+    ) -> Result<Vec<PepPresenceSubscription>> {
+        self.repository
+            .pep_subscriptions_for_available_resource(subscriber_jid)
+            .await
+    }
+    pub(crate) async fn pep_owner_usernames_for_presence_subscriber(
+        &self,
+        subscriber_bare: &str,
+    ) -> Result<Vec<String>> {
+        self.repository
+            .pep_owner_usernames_for_presence_subscriber(subscriber_bare)
+            .await
+    }
+    pub(crate) async fn find_enabled_user(&self, username: &str) -> Result<Option<PubSubAccount>> {
+        self.repository.find_enabled_user(username).await
+    }
+    pub(crate) async fn roster(
+        &self,
+        owner_id: Uuid,
+    ) -> Result<Vec<(String, Option<String>, String, Option<String>)>> {
+        self.repository.roster(owner_id).await
+    }
+    pub(crate) async fn roster_item(
+        &self,
+        owner_id: Uuid,
+        jid: &str,
+    ) -> Result<Option<(String, Option<String>, String, Option<String>)>> {
+        self.repository.roster_item(owner_id, jid).await
+    }
+    pub(crate) async fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool> {
+        self.repository.is_blocked(owner_id, candidate).await
+    }
+    pub(crate) async fn roster_group_allowed(
+        &self,
+        owner_id: Uuid,
+        jid: &str,
+        groups: &[String],
+    ) -> Result<bool> {
+        self.repository
+            .roster_group_allowed(owner_id, jid, groups)
+            .await
+    }
+    pub(crate) async fn create_pep_node(
+        &self,
+        owner_id: Uuid,
+        node: &str,
+        config: &PepNodeConfig,
+        max_nodes: i64,
+    ) -> Result<PepCreateOutcome> {
+        let owner_key = owner_id.to_string();
+        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+        self.repository
+            .create_pep_node(owner_id, node, config, max_nodes)
+            .await
+    }
+    pub(crate) async fn subscribe_pep_node(
+        &self,
+        command: PepSubscribeCommand<'_>,
+        factory: &dyn PepSubscribeOutboxFactory,
+    ) -> Result<PepSubscribeResult> {
+        validate_pep_subscribe_command(&command)?;
+        let write = &command.write;
+        let owner_key = write.owner.id.to_string();
+        let _permit = self
+            .admit_mutation(&[&owner_key, write.subscriber_jid, write.node], false)
+            .await?;
+        self.repository.subscribe_pep_node(command, factory).await
+    }
+    pub(crate) async fn unsubscribe_pep_node(
+        &self,
+        command: PepUnsubscribeCommand<'_>,
+    ) -> Result<PepUnsubscribeResult> {
+        validate_pep_unsubscribe_command(&command)?;
+        let write = &command.write;
+        let owner_key = write.owner.id.to_string();
+        let _permit = self
+            .admit_mutation(&[&owner_key, write.subscriber_jid, write.node], false)
+            .await?;
+        self.repository.unsubscribe_pep_node(command).await
+    }
+    pub(crate) async fn update_pep_node_config(
+        &self,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        node: &str,
+        expected: &PepNodeConfig,
+        config: &PepNodeConfig,
+        factory: &dyn PepOutboxFactory,
+    ) -> Result<PepOwnerMutationOutcome> {
+        let owner_key = owner.id.to_string();
+        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+        self.repository
+            .update_pep_node_config(owner, sender_connection_id, node, expected, config, factory)
+            .await
+    }
+    pub(crate) async fn update_pep_affiliations(
+        &self,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        node: &str,
+        expected: &PepNodeConfig,
+        changes: &[(String, String)],
+        factory: &dyn PepDirectOutboxFactory,
+    ) -> Result<PepOwnerMutationOutcome> {
+        let owner_key = owner.id.to_string();
+        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+        self.repository
+            .update_pep_affiliations(
+                owner,
+                sender_connection_id,
+                node,
+                expected,
+                changes,
+                factory,
+            )
+            .await
+    }
+    pub(crate) async fn purge_pep_node(
+        &self,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        node: &str,
+        factory: &dyn PepOutboxFactory,
+    ) -> Result<PepOwnerMutationOutcome> {
+        let owner_key = owner.id.to_string();
+        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+        self.repository
+            .purge_pep_node(owner, sender_connection_id, node, factory)
+            .await
+    }
+    pub(crate) async fn delete_pep_node(
+        &self,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        node: &str,
+        factory: &dyn PepOutboxFactory,
+    ) -> Result<PepOwnerMutationOutcome> {
+        let owner_key = owner.id.to_string();
+        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+        self.repository
+            .delete_pep_node(owner, sender_connection_id, node, factory)
+            .await
+    }
+    pub(crate) async fn retract_pep_items(
+        &self,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        node: &str,
+        item_ids: &[&str],
+        notify: bool,
+        factory: &dyn PepOutboxFactory,
+    ) -> Result<PepOwnerMutationOutcome> {
+        let owner_key = owner.id.to_string();
+        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+        self.repository
+            .retract_pep_items(owner, sender_connection_id, node, item_ids, notify, factory)
+            .await
+    }
+    pub(crate) async fn unsubscribe_pep_nodes_batch(
+        &self,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        node: &str,
+        changes: &[(String, Option<String>)],
+        factory: &dyn PepDirectOutboxFactory,
+    ) -> Result<PepOwnerMutationOutcome> {
+        let owner_key = owner.id.to_string();
+        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+        self.repository
+            .unsubscribe_pep_nodes_batch(owner, sender_connection_id, node, changes, factory)
+            .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn commit_legacy_bookmarks(
+        &self,
+        owner: &PubSubAccount,
+        sender_connection_id: Uuid,
+        private_xml: &str,
+        items: &mut [(String, String)],
+        expected_previous_items: &[(String, String)],
+        max_private_bytes: i64,
+        quotas: PepQuotas,
+        factory: &dyn PepOutboxFactory,
+    ) -> Result<PepBookmarkMutationOutcome> {
+        const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
+        let owner_key = owner.id.to_string();
+        let _permit = self
+            .admit_mutation(&[&owner_key, BOOKMARKS2], false)
+            .await?;
+        self.repository
+            .commit_legacy_bookmarks(
+                owner,
+                sender_connection_id,
+                private_xml,
+                items,
+                expected_previous_items,
+                max_private_bytes,
+                quotas,
+                factory,
+            )
+            .await
+    }
+    pub(crate) async fn publish_pep_items(
+        &self,
+        command: PepPublishItemsCommand<'_>,
+        factory: &dyn PepOutboxFactory,
+    ) -> Result<PepPublishItemsResult> {
+        validate_pep_publish_command(&command)?;
+        let write = &command.write;
+        let owner_key = write.user_id.to_string();
+        let _permit = self
+            .admit_mutation(&[&owner_key, write.node], false)
+            .await?;
+        self.repository.publish_pep_items(command, factory).await
+    }
+    pub(crate) async fn get_node(&self, node: &str) -> Result<Option<PubSubNode>> {
+        self.repository.get_node(node).await
+    }
+    pub(crate) async fn get_node_affiliation(
+        &self,
+        node_id: Uuid,
+        jid: &str,
+    ) -> Result<Option<String>> {
+        self.repository.get_node_affiliation(node_id, jid).await
+    }
+    pub(crate) async fn affiliations_for_jid(
+        &self,
+        jid: &str,
+        node: Option<&str>,
+    ) -> Result<Vec<PubSubAffiliation>> {
+        self.repository.affiliations_for_jid(jid, node).await
+    }
+    pub(crate) async fn node_affiliations(&self, node_id: Uuid) -> Result<Vec<PubSubAffiliation>> {
+        self.repository.node_affiliations(node_id).await
+    }
+    pub(crate) async fn is_subscribed(&self, node_id: Uuid, jid: &str) -> Result<bool> {
+        self.repository.is_subscribed(node_id, jid).await
+    }
+    pub(crate) async fn subscriptions_for_jid(
+        &self,
+        jid: &str,
+        node: Option<&str>,
+    ) -> Result<Vec<PubSubSubscription>> {
+        self.repository.subscriptions_for_jid(jid, node).await
+    }
+    pub(crate) async fn subscriptions_addressing_jid_page(
+        &self,
+        jid: &str,
+        after: Option<(&str, &str)>,
+        limit: i64,
+    ) -> Result<Vec<PubSubSubscription>> {
+        self.repository
+            .subscriptions_addressing_jid_page(jid, after, limit)
+            .await
+    }
+    pub(crate) async fn node_subscriptions(
+        &self,
+        node_id: Uuid,
+    ) -> Result<Vec<PubSubSubscription>> {
+        self.repository.node_subscriptions(node_id).await
+    }
+    pub(crate) async fn get_subscription(
+        &self,
+        node_id: Uuid,
+        jid: &str,
+    ) -> Result<Option<PubSubSubscription>> {
+        self.repository.get_subscription(node_id, jid).await
+    }
+    pub(crate) async fn outbox_get_subscription(
+        &self,
+        node_id: Uuid,
+        jid: &str,
+    ) -> Result<Option<PubSubSubscription>> {
+        let _database_turn = self.durable_outbox_database_turn().await;
 
+        self.repository.outbox_get_subscription(node_id, jid).await
+    }
+    pub(crate) async fn get_owner_jids(&self, node_id: Uuid) -> Result<Vec<String>> {
+        self.repository.get_owner_jids(node_id).await
+    }
+    pub(crate) async fn get_publisher_jids(&self, node_id: Uuid) -> Result<Vec<String>> {
+        self.repository.get_publisher_jids(node_id).await
+    }
+    pub(crate) async fn active_subscriber_count(&self, node_id: Uuid) -> Result<i64> {
+        self.repository.active_subscriber_count(node_id).await
+    }
+    pub(crate) async fn get_items(
+        &self,
+        node_id: Uuid,
+        item_ids: &[String],
+        limit: i64,
+    ) -> Result<Vec<PubSubItem>> {
+        self.repository.get_items(node_id, item_ids, limit).await
+    }
+    pub(crate) async fn item_ids_for_disco(&self, node_id: Uuid) -> Result<Vec<String>> {
+        self.repository.item_ids_for_disco(node_id).await
+    }
+    pub(crate) async fn node_redirect(&self, node: &str) -> Result<Option<String>> {
+        self.repository.node_redirect(node).await
+    }
+    pub(crate) async fn collection_parents(&self, child_id: Uuid) -> Result<Vec<PubSubNode>> {
+        self.repository.collection_parents(child_id).await
+    }
+    pub(crate) async fn collection_children(&self, collection_id: Uuid) -> Result<Vec<PubSubNode>> {
+        self.repository.collection_children(collection_id).await
+    }
+    pub(crate) async fn collection_visible_items(
+        &self,
+        collection_id: Uuid,
+        requester: &str,
+        global_item_limit: i64,
+        xml_byte_limit: i64,
+    ) -> Result<Vec<CollectionVisibleItem>> {
+        self.repository
+            .collection_visible_items(collection_id, requester, global_item_limit, xml_byte_limit)
+            .await
+    }
+    pub(crate) async fn visible_root_disco_count(&self, requester: &str) -> Result<i64> {
+        self.repository.visible_root_disco_count(requester).await
+    }
+    pub(crate) async fn visible_root_disco_cursor_exists(
+        &self,
+        requester: &str,
+        cursor: &str,
+    ) -> Result<bool> {
+        self.repository
+            .visible_root_disco_cursor_exists(requester, cursor)
+            .await
+    }
+    pub(crate) async fn visible_root_disco_index(
+        &self,
+        requester: &str,
+        node: &str,
+    ) -> Result<i64> {
+        self.repository
+            .visible_root_disco_index(requester, node)
+            .await
+    }
+    pub(crate) async fn visible_root_disco_page(
+        &self,
+        requester: &str,
+        cursor: Option<&str>,
+        backwards: bool,
+        limit: i64,
+    ) -> Result<Vec<PubSubDiscoNode>> {
+        self.repository
+            .visible_root_disco_page(requester, cursor, backwards, limit)
+            .await
+    }
+    pub(crate) async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {
+        self.repository.can_publish(node, requester).await
+    }
+    pub(crate) async fn is_owner(&self, node_id: Uuid, requester: &str) -> Result<bool> {
+        self.repository.is_owner(node_id, requester).await
+    }
+    pub(crate) async fn update_subscription_options_checked(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        subscriber_jid: &str,
+        expected_subid: Option<&str>,
+        options: &PubSubSubscriptionOptions,
+    ) -> Result<SubscriptionOptionsOutcome> {
+        let node_key = node_id.to_string();
+        let _permit = self
+            .admit_mutation(&[requester, subscriber_jid, &node_key], false)
+            .await?;
+        self.repository
+            .update_subscription_options_checked(
+                node_id,
+                requester,
+                subscriber_jid,
+                expected_subid,
+                options,
+            )
+            .await
+    }
+    pub(crate) async fn create_node(
+        &self,
+        node: &str,
+        creator_jid: &str,
+        config: &PubSubNodeConfig,
+        max_nodes_per_owner: i64,
+    ) -> Result<CreateNodeOutcome> {
+        let _permit = self.admit_mutation(&[creator_jid, node], true).await?;
+        self.repository
+            .create_node(node, creator_jid, config, max_nodes_per_owner)
+            .await
+    }
+    pub(crate) async fn publish_items(
+        &self,
+        node: &PubSubNode,
+        publisher_jid: &str,
+        items: &[(String, String)],
+        max_storage_bytes_per_owner: i64,
+    ) -> Result<PublishItemsOutcome> {
+        let node_key = node.id.to_string();
+        let _permit = self
+            .admit_mutation(&[publisher_jid, &node_key], true)
+            .await?;
+        self.repository
+            .publish_items(node, publisher_jid, items, max_storage_bytes_per_owner)
+            .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn set_subscription_limited_with_options(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        jid: &str,
+        state: &str,
+        expected_node_type: &str,
+        expected_access_model: &str,
+        max_subscriptions: i64,
+        options: Option<&PubSubSubscriptionOptions>,
+        requested_subid: &str,
+    ) -> Result<SubscribeOutcome> {
+        let node_key = node_id.to_string();
+        let _permit = self
+            .admit_mutation(&[requester, jid, &node_key], false)
+            .await?;
+        self.repository
+            .set_subscription_limited_with_options(
+                node_id,
+                requester,
+                jid,
+                state,
+                expected_node_type,
+                expected_access_model,
+                max_subscriptions,
+                options,
+                requested_subid,
+            )
+            .await
+    }
+    pub(crate) async fn unsubscribe_checked(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        subscriber_jid: &str,
+        expected_subid: &str,
+    ) -> Result<UnsubscribeOutcome> {
+        let node_key = node_id.to_string();
+        let _permit = self
+            .admit_mutation(&[requester, subscriber_jid, &node_key], false)
+            .await?;
+        self.repository
+            .unsubscribe_checked(node_id, requester, subscriber_jid, expected_subid)
+            .await
+    }
+    pub(crate) async fn retract_items(
+        &self,
+        node_id: Uuid,
+        item_ids: &[String],
+        publisher_jid: &str,
+        force_notification: bool,
+    ) -> Result<RetractItemsOutcome> {
+        let node_key = node_id.to_string();
+        let _permit = self
+            .admit_mutation(&[publisher_jid, &node_key], true)
+            .await?;
+        self.repository
+            .retract_items(node_id, item_ids, publisher_jid, force_notification)
+            .await
+    }
+    pub(crate) async fn associate_collection_child(
+        &self,
+        collection: &PubSubNode,
+        child: &PubSubNode,
+        requester: &str,
+    ) -> Result<CollectionUpdateOutcome> {
+        let collection_key = collection.id.to_string();
+        let child_key = child.id.to_string();
+        let _permit = self
+            .admit_mutation(&[requester, &collection_key, &child_key], true)
+            .await?;
+        self.repository
+            .associate_collection_child(collection, child, requester)
+            .await
+    }
+    pub(crate) async fn dissociate_collection_child(
+        &self,
+        collection: &PubSubNode,
+        child: &PubSubNode,
+        requester: &str,
+    ) -> Result<CollectionUpdateOutcome> {
+        let collection_key = collection.id.to_string();
+        let child_key = child.id.to_string();
+        let _permit = self
+            .admit_mutation(&[requester, &collection_key, &child_key], true)
+            .await?;
+        self.repository
+            .dissociate_collection_child(collection, child, requester)
+            .await
+    }
+    pub(crate) async fn update_node_config_and_graph_with_outbox(
+        &self,
+        node: &PubSubNode,
+        requester: &str,
+        expected: &PubSubNodeConfig,
+        config: &PubSubNodeConfig,
+    ) -> Result<PubSubConfigOutcome> {
+        let node_key = node.id.to_string();
+        let _permit = self.admit_mutation(&[requester, &node_key], true).await?;
+        self.repository
+            .update_node_config_and_graph_with_outbox(node, requester, expected, config)
+            .await
+    }
+    pub(crate) async fn set_subscriptions(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        changes: &[(String, String, Option<String>)],
+    ) -> Result<SetSubscriptionsOutcome> {
+        let node_key = node_id.to_string();
+        let _permit = self.admit_mutation(&[requester, &node_key], false).await?;
+        self.repository
+            .set_subscriptions(node_id, requester, changes)
+            .await
+    }
+    pub(crate) async fn set_affiliations(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        changes: &[(String, String)],
+    ) -> Result<SetAffiliationsOutcome> {
+        let node_key = node_id.to_string();
+        let _permit = self.admit_mutation(&[requester, &node_key], false).await?;
+        self.repository
+            .set_affiliations(node_id, requester, changes)
+            .await
+    }
+    pub(crate) async fn purge_node_as_owner_with_outbox(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+    ) -> Result<OwnerMutationOutcome> {
+        let node_key = node_id.to_string();
+        let _permit = self.admit_mutation(&[requester, &node_key], true).await?;
+        self.repository
+            .purge_node_as_owner_with_outbox(node_id, requester)
+            .await
+    }
+    pub(crate) async fn delete_node_as_owner_with_redirect_and_outbox(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        redirect: Option<&str>,
+    ) -> Result<OwnerMutationOutcome> {
+        let node_key = node_id.to_string();
+        let _permit = self.admit_mutation(&[requester, &node_key], true).await?;
+        self.repository
+            .delete_node_as_owner_with_redirect_and_outbox(node_id, requester, redirect)
+            .await
+    }
+    pub(crate) async fn resolve_pending_subscription(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        subscriber_jid: &str,
+        expected_subid: &str,
+        allow: bool,
+    ) -> Result<SubscriptionAuthorizationOutcome> {
+        let node_key = node_id.to_string();
+        let _permit = self
+            .admit_mutation(&[requester, subscriber_jid, &node_key], false)
+            .await?;
+        self.repository
+            .resolve_pending_subscription(node_id, requester, subscriber_jid, expected_subid, allow)
+            .await
+    }
     pub(crate) async fn local_account_blocks_pubsub(
         &self,
         username: &str,
         service: &str,
     ) -> Result<bool> {
-        let Some(user) = db::find_enabled_user(&self.pool, username).await? else {
-            return Ok(false);
-        };
-        db::is_blocked(&self.pool, user.id, service).await
+        self.repository
+            .local_account_blocks_pubsub(username, service)
+            .await
     }
-
     pub(crate) async fn presence_delivery_denied(
         &self,
         recipient_id: Uuid,
@@ -3708,366 +1268,57 @@ impl PubSubService {
         connection_id: Uuid,
         service: &str,
     ) -> Result<bool> {
-        if db::is_blocked(&self.pool, recipient_id, service).await? {
-            return Ok(true);
-        }
-        if active_privacy_list.is_some() {
-            db::refresh_active_privacy_session(&self.pool, recipient_id, connection_id).await?;
-        }
-        db::privacy_denies(
-            &self.pool,
-            recipient_id,
-            active_privacy_list,
-            service,
-            db::PrivacyStanzaKind::Message,
-        )
-        .await
+        self.repository
+            .presence_delivery_denied(recipient_id, active_privacy_list, connection_id, service)
+            .await
     }
-
-    // Durable notification/digest delivery slice ----------------------------------
-
-    /// Re-authorize a durable PEP delivery without consulting its XML payload,
-    /// `from` attribute or ordering-key convention. Explicit denials are
-    /// terminal and ACK-dropped by the worker; database/lock failures escape as
-    /// errors so the immutable row is retried.
     pub(crate) async fn authorize_pep_outbox_delivery(
         &self,
         item: &ClaimedPubSubOutboxDelivery,
     ) -> Result<PepOutboxAuthorizationOutcome> {
-        let drop_unverifiable = || {
-            db::record_unverifiable_pep_drop();
-            PepOutboxAuthorizationOutcome::Drop(PepOutboxDropReason::UnverifiableIdentity)
-        };
-        if item.delivery_kind != PubSubOutboxDeliveryKind::PepStanza
-            || item.source != PubSubOutboxSource::Pep
-            || item.legacy_unverifiable
-        {
-            return Ok(drop_unverifiable());
-        }
-        let Some(subject) = item.pep_subject.as_ref() else {
-            return Ok(drop_unverifiable());
-        };
-        if subject.sender_account_id.is_nil()
-            || subject
-                .sender_connection_id
-                .is_some_and(|connection_id| connection_id.is_nil())
-            || subject
-                .recipient_account_id
-                .is_some_and(|recipient_id| recipient_id.is_nil())
-            || (subject.event_kind.requires_causal_authorization()
-                && subject.authorization_mode != PepOutboxAuthorizationMode::CausalAudience)
-            || item.security_sensitive != db::security_sensitive_pep_node(&item.source_node)
-            || (item.security_sensitive
-                && matches!(
-                    subject.event_kind,
-                    PepOutboxEventKind::Publish | PepOutboxEventKind::LastItem
-                )
-                && subject.authorization_mode != PepOutboxAuthorizationMode::LiveNodeAccess)
-        {
-            return Ok(drop_unverifiable());
-        }
-
-        let Ok(sender) = crate::jid::CanonicalJid::parse_bare(&subject.sender_bare_jid) else {
-            return Ok(drop_unverifiable());
-        };
-        let Ok(recipient) = crate::jid::CanonicalJid::parse(&item.recipient_jid) else {
-            return Ok(drop_unverifiable());
-        };
-        if sender.to_string() != subject.sender_bare_jid
-            || sender.domainpart() != self.domain
-            || sender.localpart().is_none()
-            || recipient.to_string() != item.recipient_jid
-            || recipient.domainpart() != item.target_domain
-        {
-            return Ok(drop_unverifiable());
-        }
-        let recipient_is_local = recipient.domainpart() == self.domain;
-        if recipient_is_local != subject.recipient_is_local
-            || subject.recipient_is_local != subject.recipient_account_id.is_some()
-            || recipient_is_local && recipient.localpart().is_none()
-        {
-            return Ok(drop_unverifiable());
-        }
-
         let _database_turn = self.durable_outbox_database_turn().await;
-        let mut transaction = self.begin_mutation().await?;
-        let mut account_ids = vec![subject.sender_account_id];
-        if let Some(recipient_id) = subject.recipient_account_id {
-            account_ids.push(recipient_id);
-        }
-        account_ids.sort_unstable();
-        account_ids.dedup();
-        let rows = sqlx::query(
-            "SELECT id,username,is_disabled FROM users
-              WHERE id=ANY($1)
-              ORDER BY id
-              FOR SHARE",
-        )
-        .bind(&account_ids)
-        .fetch_all(&mut *transaction)
-        .await?;
-        let accounts = rows
-            .into_iter()
-            .map(|row| {
-                Ok::<_, sqlx::Error>((
-                    row.try_get::<Uuid, _>("id")?,
-                    (
-                        row.try_get::<String, _>("username")?,
-                        row.try_get::<bool, _>("is_disabled")?,
-                    ),
-                ))
-            })
-            .collect::<std::result::Result<HashMap<_, _>, _>>()?;
-        let sender_matches =
-            accounts
-                .get(&subject.sender_account_id)
-                .is_some_and(|(username, disabled)| {
-                    !*disabled
-                        && crate::jid::CanonicalJid::parse_bare(&format!(
-                            "{username}@{}",
-                            self.domain
-                        ))
-                        .is_ok_and(|jid| jid.to_string() == subject.sender_bare_jid)
-                });
-        if !sender_matches {
-            transaction.rollback().await?;
-            return Ok(PepOutboxAuthorizationOutcome::Drop(
-                PepOutboxDropReason::SenderUnavailable,
-            ));
-        }
-        if let Some(recipient_id) = subject.recipient_account_id {
-            let recipient_matches =
-                accounts
-                    .get(&recipient_id)
-                    .is_some_and(|(username, disabled)| {
-                        !*disabled
-                            && recipient.localpart() == Some(username.as_str())
-                            && recipient.domainpart() == self.domain
-                    });
-            if !recipient_matches {
-                transaction.rollback().await?;
-                return Ok(PepOutboxAuthorizationOutcome::Drop(
-                    PepOutboxDropReason::RecipientUnavailable,
-                ));
-            }
-        }
 
-        // A publication holds the per-node audience lock while it derives
-        // the causal delivery set, and subsequently takes the block-policy
-        // locks for that same set.  A live authorization must take those
-        // shared authorities in exactly that order.  Taking block policy
-        // first here creates an advisory-lock cycle with a simultaneous
-        // security-sensitive publication: publish owns audience and waits for
-        // block policy while delivery owns block policy and waits for
-        // audience.  Causal-audience events do not consult a live node policy
-        // and therefore intentionally do not take the audience lock.
-        let lock_plan = pep_outbox_authorization_lock_plan(subject.authorization_mode);
-        if lock_plan == PepOutboxAuthorizationLockPlan::AudienceThenBlockPolicy {
-            lock_pep_audience(
-                &mut transaction,
-                subject.sender_account_id,
-                &item.source_node,
-            )
-            .await?;
-        }
-        for owner_id in &account_ids {
-            lock_pep_block_policy(&mut transaction, *owner_id).await?;
-        }
-        let block_rows = sqlx::query(
-            "SELECT owner_id,blocked_jid FROM blocked_jids
-              WHERE owner_id=ANY($1)
-              ORDER BY owner_id,blocked_jid
-              FOR SHARE",
-        )
-        .bind(&account_ids)
-        .fetch_all(&mut *transaction)
-        .await?;
-        let mut blocks: HashMap<Uuid, Vec<String>> = HashMap::new();
-        for row in block_rows {
-            blocks
-                .entry(row.try_get("owner_id")?)
-                .or_default()
-                .push(row.try_get("blocked_jid")?);
-        }
-        let same_account = subject.recipient_account_id == Some(subject.sender_account_id);
-        let sender_blocks_recipient = !same_account
-            && blocks
-                .get(&subject.sender_account_id)
-                .is_some_and(|patterns| {
-                    patterns.iter().any(|pattern| {
-                        db::roster::blocked_jid_matches(pattern, &item.recipient_jid)
-                    })
-                });
-        let recipient_blocks_sender = !same_account
-            && subject.recipient_account_id.is_some_and(|recipient_id| {
-                blocks.get(&recipient_id).is_some_and(|patterns| {
-                    patterns.iter().any(|pattern| {
-                        db::roster::blocked_jid_matches(pattern, &subject.sender_bare_jid)
-                    })
-                })
-            });
-        if sender_blocks_recipient || recipient_blocks_sender {
-            transaction.rollback().await?;
-            return Ok(PepOutboxAuthorizationOutcome::Drop(
-                PepOutboxDropReason::Blocked,
-            ));
-        }
-
-        if !same_account
-            && db::privacy::privacy_denies_in_transaction(
-                &mut transaction,
-                subject.sender_account_id,
-                subject.sender_connection_id,
-                &item.recipient_jid,
-                db::PrivacyStanzaKind::Message,
-            )
-            .await?
-        {
-            transaction.rollback().await?;
-            return Ok(PepOutboxAuthorizationOutcome::Drop(
-                PepOutboxDropReason::PrivacyDenied,
-            ));
-        }
-        if !same_account {
-            if let Some(recipient_id) = subject.recipient_account_id {
-                if db::privacy::privacy_denies_in_transaction(
-                    &mut transaction,
-                    recipient_id,
-                    None,
-                    &subject.sender_bare_jid,
-                    db::PrivacyStanzaKind::Message,
-                )
-                .await?
-                {
-                    transaction.rollback().await?;
-                    return Ok(PepOutboxAuthorizationOutcome::Drop(
-                        PepOutboxDropReason::PrivacyDenied,
-                    ));
-                }
-            }
-        }
-
-        if lock_plan == PepOutboxAuthorizationLockPlan::AudienceThenBlockPolicy {
-            let policy = sqlx::query(
-                "SELECT access_model,deliver_notifications,roster_groups_allowed,access_whitelist
-                   FROM pep_nodes
-                  WHERE owner_id=$1 AND node=$2
-                  FOR SHARE",
-            )
-            .bind(subject.sender_account_id)
-            .bind(&item.source_node)
-            .fetch_optional(&mut *transaction)
-            .await?;
-            let Some(policy) = policy else {
-                transaction.rollback().await?;
-                return Ok(PepOutboxAuthorizationOutcome::Drop(
-                    PepOutboxDropReason::NodeAccessRevoked,
-                ));
-            };
-            if !policy.try_get::<bool, _>("deliver_notifications")? {
-                transaction.rollback().await?;
-                return Ok(PepOutboxAuthorizationOutcome::Drop(
-                    PepOutboxDropReason::NodeAccessRevoked,
-                ));
-            }
-            let recipient_bare = recipient.bare();
-            if recipient_bare != subject.sender_bare_jid {
-                let roster = sqlx::query(
-                    "SELECT subscription,groups FROM roster_items
-                      WHERE owner_id=$1 AND contact_jid=$2
-                      FOR SHARE",
-                )
-                .bind(subject.sender_account_id)
-                .bind(&recipient_bare)
-                .fetch_optional(&mut *transaction)
-                .await?;
-                let automatic = roster
-                    .as_ref()
-                    .map(|row| row.try_get::<String, _>("subscription"))
-                    .transpose()?
-                    .is_some_and(|subscription| matches!(subscription.as_str(), "from" | "both"));
-                let access_model: String = policy.try_get("access_model")?;
-                let access_allowed = match access_model.as_str() {
-                    // The causal audience was already captured while the
-                    // publication transaction held the node locks. `open`
-                    // therefore remains open at delivery time; the live check
-                    // detects a later restrictive policy without inventing a
-                    // subscription requirement XEP-0060 does not impose.
-                    "open" => true,
-                    "whitelist" => policy
-                        .try_get::<Vec<String>, _>("access_whitelist")?
-                        .iter()
-                        .any(|jid| {
-                            crate::jid::canonical_bare_key(jid)
-                                .is_ok_and(|jid| jid == recipient_bare)
-                        }),
-                    "presence" => automatic,
-                    "roster" => match roster.as_ref() {
-                        Some(row) => {
-                            let groups = serde_json::from_value::<Vec<String>>(
-                                row.try_get::<serde_json::Value, _>("groups")?,
-                            )
-                            .context("stored PEP roster groups are not a string array")?;
-                            let allowed: Vec<String> = policy.try_get("roster_groups_allowed")?;
-                            automatic && groups.iter().any(|group| allowed.contains(group))
-                        }
-                        None => false,
-                    },
-                    _ => false,
-                };
-                if !access_allowed {
-                    transaction.rollback().await?;
-                    return Ok(PepOutboxAuthorizationOutcome::Drop(
-                        PepOutboxDropReason::NodeAccessRevoked,
-                    ));
-                }
-            }
-        }
-        transaction.commit().await?;
-        Ok(PepOutboxAuthorizationOutcome::Deliver)
+        self.repository.authorize_pep_outbox_delivery(item).await
     }
-
     pub(crate) async fn claim_pubsub_outbox(
         &self,
         limit: i64,
     ) -> Result<Vec<ClaimedPubSubOutboxDelivery>> {
         let _database_turn = self.durable_outbox_database_turn().await;
-        Ok(db::claim_pubsub_outbox(&self.pool, limit)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    }
 
+        self.repository.claim_pubsub_outbox(limit).await
+    }
     pub(crate) async fn acknowledge_pubsub_outbox(
         &self,
         delivery_id: Uuid,
         lease_token: Uuid,
     ) -> Result<bool> {
         let _database_turn = self.durable_outbox_database_turn().await;
-        db::acknowledge_pubsub_outbox(&self.pool, delivery_id, lease_token).await
-    }
 
+        self.repository
+            .acknowledge_pubsub_outbox(delivery_id, lease_token)
+            .await
+    }
     pub(crate) async fn renew_pubsub_outbox_lease(
         &self,
         delivery_id: Uuid,
         lease_token: Uuid,
     ) -> Result<bool> {
         let _database_turn = self.durable_outbox_database_turn().await;
-        db::renew_pubsub_outbox_lease(&self.pool, delivery_id, lease_token).await
-    }
 
+        self.repository
+            .renew_pubsub_outbox_lease(delivery_id, lease_token)
+            .await
+    }
     pub(crate) async fn retry_pubsub_outbox(
         &self,
         item: &ClaimedPubSubOutboxDelivery,
         error: &str,
     ) -> Result<PubSubOutboxFailureDisposition> {
         let _database_turn = self.durable_outbox_database_turn().await;
-        Ok(db::retry_pubsub_outbox(&self.pool, &item.inner, error)
-            .await?
-            .into())
-    }
 
+        self.repository.retry_pubsub_outbox(item, error).await
+    }
     pub(crate) async fn dead_letter_pubsub_outbox(
         &self,
         delivery_id: Uuid,
@@ -4076,33 +1327,33 @@ impl PubSubService {
         error: &str,
     ) -> Result<PubSubOutboxFailureDisposition> {
         let _database_turn = self.durable_outbox_database_turn().await;
-        Ok(
-            db::dead_letter_pubsub_outbox(&self.pool, delivery_id, lease_token, reason, error)
-                .await?
-                .into(),
-        )
-    }
 
+        self.repository
+            .dead_letter_pubsub_outbox(delivery_id, lease_token, reason, error)
+            .await
+    }
     pub(crate) async fn expire_pubsub_outbox(&self, limit: i64) -> Result<u64> {
         let _database_turn = self.durable_outbox_database_turn().await;
-        db::expire_pubsub_outbox(&self.pool, limit).await
-    }
 
+        self.repository.expire_pubsub_outbox(limit).await
+    }
     pub(crate) async fn cleanup_pubsub_dead_letters(&self, limit: i64) -> Result<u64> {
         let _database_turn = self.durable_outbox_database_turn().await;
-        db::cleanup_pubsub_dead_letters(&self.pool, limit).await
-    }
 
+        self.repository.cleanup_pubsub_dead_letters(limit).await
+    }
     pub(crate) async fn cleanup_idle_pubsub_event_streams(&self, limit: i64) -> Result<u64> {
         let _database_turn = self.durable_outbox_database_turn().await;
-        db::cleanup_idle_pubsub_event_streams(&self.pool, limit).await
-    }
 
+        self.repository
+            .cleanup_idle_pubsub_event_streams(limit)
+            .await
+    }
     pub(crate) async fn pubsub_outbox_snapshot(&self) -> Result<PubSubOutboxSnapshot> {
         let _database_turn = self.durable_outbox_database_turn().await;
-        Ok(db::pubsub_outbox_snapshot(&self.pool).await?.into())
-    }
 
+        self.repository.pubsub_outbox_snapshot().await
+    }
     pub(crate) async fn enqueue_pubsub_digest_snapshot(
         &self,
         source_delivery_id: Uuid,
@@ -4112,22 +1363,19 @@ impl PubSubService {
         frequency_ms: i32,
         show_values: &[String],
     ) -> Result<()> {
-        // This is a projection of an already-committed outbox row, not a
-        // client mutation. It must not occupy the foreground PubSub mutation
-        // admission while delivery workers recover under a small pool.
         let _database_turn = self.durable_outbox_database_turn().await;
-        db::enqueue_pubsub_digest_snapshot(
-            &self.pool,
-            source_delivery_id,
-            node_id,
-            subscriber_jid,
-            event_xml,
-            frequency_ms,
-            show_values,
-        )
-        .await
-    }
 
+        self.repository
+            .enqueue_pubsub_digest_snapshot(
+                source_delivery_id,
+                node_id,
+                subscriber_jid,
+                event_xml,
+                frequency_ms,
+                show_values,
+            )
+            .await
+    }
     pub(crate) async fn enqueue_pubsub_digest(
         &self,
         node_id: Uuid,
@@ -4139,33 +1387,117 @@ impl PubSubService {
         let _permit = self
             .admit_mutation(&[subscriber_jid, &node_key], false)
             .await?;
-        db::enqueue_pubsub_digest(&self.pool, node_id, subscriber_jid, event_xml, frequency_ms)
+        self.repository
+            .enqueue_pubsub_digest(node_id, subscriber_jid, event_xml, frequency_ms)
             .await
     }
-
     pub(crate) async fn claim_due_pubsub_digests(
         &self,
         limit: i64,
     ) -> Result<Vec<DuePubSubDigest>> {
         let _database_turn = self.durable_outbox_database_turn().await;
-        Ok(db::claim_due_pubsub_digests(&self.pool, limit)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    }
 
+        self.repository.claim_due_pubsub_digests(limit).await
+    }
     pub(crate) async fn release_pubsub_digests(&self, ids: &[Uuid]) -> Result<()> {
         let _database_turn = self.durable_outbox_database_turn().await;
-        db::release_pubsub_digests(&self.pool, ids).await
-    }
 
+        self.repository.release_pubsub_digests(ids).await
+    }
     pub(crate) async fn acknowledge_pubsub_digests(&self, ids: &[Uuid]) -> Result<()> {
         let _database_turn = self.durable_outbox_database_turn().await;
-        db::acknowledge_pubsub_digests(&self.pool, ids).await
+
+        self.repository.acknowledge_pubsub_digests(ids).await
     }
 }
-
+fn serialized_item_payload_matches_type(item_xml: &str, payload_type: &str) -> bool {
+    roxmltree::Document::parse(item_xml)
+        .ok()
+        .is_some_and(|document| {
+            document
+                .root_element()
+                .children()
+                .find(roxmltree::Node::is_element)
+                .and_then(|payload| payload.tag_name().namespace())
+                == Some(payload_type)
+        })
+}
+fn item_xml_has_payload(item_xml: &str) -> bool {
+    roxmltree::Document::parse(item_xml)
+        .ok()
+        .is_some_and(|document| {
+            document
+                .root_element()
+                .children()
+                .any(|node| node.is_element())
+        })
+}
+fn publish_validation_outcome(
+    config: &PubSubNodeConfig,
+    items: &[(String, String)],
+) -> Option<PubSubPublishOutcome> {
+    if config.node_type != "leaf" {
+        return Some(PubSubPublishOutcome::NotLeafNode);
+    }
+    if items.len() > config.max_items as usize {
+        return Some(PubSubPublishOutcome::MaxItemsExceeded);
+    }
+    if config.persist_items && items.is_empty() {
+        return Some(PubSubPublishOutcome::ItemRequired);
+    }
+    if !config.persist_items && !config.deliver_payloads && !items.is_empty() {
+        return Some(PubSubPublishOutcome::ItemForbidden);
+    }
+    if !config.persist_items && config.deliver_payloads && items.is_empty() {
+        return Some(PubSubPublishOutcome::ItemRequired);
+    }
+    if config.deliver_payloads
+        && items
+            .iter()
+            .any(|(_, item_xml)| !item_xml_has_payload(item_xml))
+    {
+        return Some(PubSubPublishOutcome::PayloadRequired);
+    }
+    if items
+        .iter()
+        .any(|(_, item_xml)| item_xml.len() > config.max_payload_size as usize)
+    {
+        return Some(PubSubPublishOutcome::PayloadTooBig);
+    }
+    if config.payload_type.as_deref().is_some_and(|expected| {
+        items
+            .iter()
+            .any(|(_, item_xml)| !serialized_item_payload_matches_type(item_xml, expected))
+    }) {
+        return Some(PubSubPublishOutcome::InvalidPayload);
+    }
+    None
+}
+fn existing_node_publish_admission_outcome(
+    authorized: bool,
+    config: &PubSubNodeConfig,
+    publish_options: Option<&PubSubNodeConfig>,
+    items: &[(String, String)],
+) -> Option<PubSubPublishOutcome> {
+    if !authorized {
+        return Some(PubSubPublishOutcome::Forbidden);
+    }
+    if publish_options.is_some_and(|options| options != config) {
+        return Some(PubSubPublishOutcome::PreconditionNotMet);
+    }
+    publish_validation_outcome(config, items)
+}
+#[derive(Clone)]
+pub(crate) struct PubSubEventRenderer {
+    service_jid: String,
+}
+impl PubSubEventRenderer {
+    pub(crate) fn new(domain: &str) -> Self {
+        Self {
+            service_jid: format!("pubsub.{domain}"),
+        }
+    }
+}
 const NS_PUBSUB_EVENT: &str = "http://jabber.org/protocol/pubsub#event";
 const NS_DATA: &str = "jabber:x:data";
 const NODE_CONFIG_FORM: &str = "http://jabber.org/protocol/pubsub#node_config";
@@ -4320,16 +1652,16 @@ pub(crate) fn pubsub_node_config_form(config: &PubSubNodeConfig, form_type: &str
 }
 const SUBSCRIBE_AUTH_FORM: &str = "http://jabber.org/protocol/pubsub#subscribe_authorization";
 
-impl PubSubService {
-    fn render_transactional_node_event(
+impl PubSubEventRenderer {
+    pub(crate) fn render_transactional_node_event(
         &self,
-        node: &db::PubSubNode,
-        audience: &[db::PubSubNotificationDelivery],
+        node: &PubSubNode,
+        audience: &[PubSubNotificationDelivery],
         direct_recipients: &[String],
         event: &str,
         event_id: Uuid,
         created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
+    ) -> Result<Vec<PubSubOutboxInsert>> {
         let ordering_key = format!("pubsub:{}", node.id);
         let mut outbox = Vec::with_capacity(audience.len() + direct_recipients.len());
         for delivery in audience {
@@ -4341,19 +1673,19 @@ impl PubSubService {
             )?;
             let (kind, digest) = if delivery.subscription.digest {
                 (
-                    db::PubSubOutboxDeliveryKind::PubSubDigest,
+                    PubSubOutboxDeliveryKind::PubSubDigest,
                     Some((
                         delivery.subscription_node_id,
                         delivery.subscription.digest_frequency,
                     )),
                 )
             } else {
-                (db::PubSubOutboxDeliveryKind::PubSubChildren, None)
+                (PubSubOutboxDeliveryKind::PubSubChildren, None)
             };
-            outbox.push(db::PubSubOutboxInsert::new(
+            outbox.push(PubSubOutboxInsert::new(
                 event_id,
                 ordering_key.clone(),
-                db::PubSubOutboxSource::PubSub,
+                PubSubOutboxSource::PubSub,
                 kind,
                 delivery.subscription.jid.clone(),
                 children,
@@ -4374,11 +1706,11 @@ impl PubSubService {
                 .attr("to", recipient)
                 .child(wrapper)
                 .finish();
-            outbox.push(db::PubSubOutboxInsert::new(
+            outbox.push(PubSubOutboxInsert::new(
                 event_id,
                 ordering_key.clone(),
-                db::PubSubOutboxSource::PubSub,
-                db::PubSubOutboxDeliveryKind::PubSubDirect,
+                PubSubOutboxSource::PubSub,
+                PubSubOutboxDeliveryKind::PubSubDirect,
                 recipient.clone(),
                 message,
                 None,
@@ -4392,26 +1724,26 @@ impl PubSubService {
     }
 }
 
-impl db::PubSubMutationOutboxRenderer for PubSubService {
-    fn render_create(
+impl PubSubEventRenderer {
+    pub(crate) fn render_create(
         &self,
-        node: &db::PubSubNode,
-        audience: &[db::PubSubNotificationDelivery],
+        node: &PubSubNode,
+        audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
         created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
+    ) -> Result<Vec<PubSubOutboxInsert>> {
         let event = XmlElement::new("create").attr("node", &node.node).finish();
         self.render_transactional_node_event(node, audience, &[], &event, event_id, created_at)
     }
 
-    fn render_items(
+    pub(crate) fn render_items(
         &self,
-        node: &db::PubSubNode,
+        node: &PubSubNode,
         items: &[(String, String)],
-        audience: &[db::PubSubNotificationDelivery],
+        audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
         created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
+    ) -> Result<Vec<PubSubOutboxInsert>> {
         let mut event = XmlElement::new("items").attr("node", &node.node);
         for (item_id, payload) in items {
             if node.deliver_payloads {
@@ -4430,25 +1762,25 @@ impl db::PubSubMutationOutboxRenderer for PubSubService {
         )
     }
 
-    fn render_purge(
+    pub(crate) fn render_purge(
         &self,
-        node: &db::PubSubNode,
-        audience: &[db::PubSubNotificationDelivery],
+        node: &PubSubNode,
+        audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
         created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
+    ) -> Result<Vec<PubSubOutboxInsert>> {
         let event = XmlElement::new("purge").attr("node", &node.node).finish();
         self.render_transactional_node_event(node, audience, &[], &event, event_id, created_at)
     }
 
-    fn render_retract(
+    pub(crate) fn render_retract(
         &self,
-        node: &db::PubSubNode,
+        node: &PubSubNode,
         item_ids: &[String],
-        audience: &[db::PubSubNotificationDelivery],
+        audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
         created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
+    ) -> Result<Vec<PubSubOutboxInsert>> {
         let mut items = XmlElement::new("items").attr("node", &node.node);
         for item_id in item_ids {
             items.push_child(XmlElement::new("retract").attr("id", item_id));
@@ -4463,15 +1795,15 @@ impl db::PubSubMutationOutboxRenderer for PubSubService {
         )
     }
 
-    fn render_delete(
+    pub(crate) fn render_delete(
         &self,
-        node: &db::PubSubNode,
+        node: &PubSubNode,
         redirect: Option<&str>,
-        audience: &[db::PubSubNotificationDelivery],
+        audience: &[PubSubNotificationDelivery],
         nonactive_recipients: &[String],
         event_id: Uuid,
         created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
+    ) -> Result<Vec<PubSubOutboxInsert>> {
         if !node.notify_delete {
             return Ok(Vec::new());
         }
@@ -4489,16 +1821,15 @@ impl db::PubSubMutationOutboxRenderer for PubSubService {
         )
     }
 
-    fn render_configuration(
+    pub(crate) fn render_configuration(
         &self,
-        node: &db::PubSubNode,
-        config: &db::PubSubNodeConfig,
-        audience: &[db::PubSubNotificationDelivery],
+        node: &PubSubNode,
+        config: &PubSubNodeConfig,
+        audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
         created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
-        let config = PubSubNodeConfig::from(config.clone());
-        let form = pubsub_node_config_form(&config, "result");
+    ) -> Result<Vec<PubSubOutboxInsert>> {
+        let form = pubsub_node_config_form(config, "result");
         let mut event = XmlElement::new("configuration").attr("node", &node.node);
         event.push_validated_fragment(&form)?;
         self.render_transactional_node_event(
@@ -4511,15 +1842,15 @@ impl db::PubSubMutationOutboxRenderer for PubSubService {
         )
     }
 
-    fn render_collection_edge(
+    pub(crate) fn render_collection_edge(
         &self,
-        source: &db::PubSubNode,
+        source: &PubSubNode,
         action: &str,
         target_node: &str,
-        audience: &[db::PubSubNotificationDelivery],
+        audience: &[PubSubNotificationDelivery],
         event_id: Uuid,
         created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
+    ) -> Result<Vec<PubSubOutboxInsert>> {
         anyhow::ensure!(matches!(action, "associate" | "dissociate"));
         let action = XmlElement::dynamic(action)
             .map_err(|error| anyhow::anyhow!("invalid collection action QName: {error}"))?
@@ -4531,16 +1862,17 @@ impl db::PubSubMutationOutboxRenderer for PubSubService {
         self.render_transactional_node_event(source, audience, &[], &event, event_id, created_at)
     }
 
-    fn render_subscription_transition(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_subscription_transition(
         &self,
-        node: &db::PubSubNode,
-        subscription: &db::PubSubSubscription,
+        node: &PubSubNode,
+        subscription: &PubSubSubscription,
         notify_recipients: &[String],
         authorization_recipients: &[String],
-        last_item: Option<&db::PubSubItem>,
+        last_item: Option<&PubSubItem>,
         event_id: Uuid,
         created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
+    ) -> Result<Vec<PubSubOutboxInsert>> {
         let transition = XmlElement::new("subscription")
             .attr("node", &node.node)
             .attr("jid", &subscription.jid)
@@ -4580,11 +1912,11 @@ impl db::PubSubMutationOutboxRenderer for PubSubService {
                     .attr("from", &self.service_jid)
                     .attr("to", recipient);
                 message.push_validated_fragment(&form)?;
-                outbox.push(db::PubSubOutboxInsert::new(
+                outbox.push(PubSubOutboxInsert::new(
                     authorization_event_id,
                     format!("pubsub:{}", node.id),
-                    db::PubSubOutboxSource::PubSub,
-                    db::PubSubOutboxDeliveryKind::PubSubDirect,
+                    PubSubOutboxSource::PubSub,
+                    PubSubOutboxDeliveryKind::PubSubDirect,
                     recipient.clone(),
                     message.finish(),
                     None,
@@ -4612,16 +1944,16 @@ impl db::PubSubMutationOutboxRenderer for PubSubService {
             )?;
             let (kind, digest) = if subscription.digest {
                 (
-                    db::PubSubOutboxDeliveryKind::PubSubDigest,
+                    PubSubOutboxDeliveryKind::PubSubDigest,
                     Some((node.id, subscription.digest_frequency)),
                 )
             } else {
-                (db::PubSubOutboxDeliveryKind::PubSubChildren, None)
+                (PubSubOutboxDeliveryKind::PubSubChildren, None)
             };
-            outbox.push(db::PubSubOutboxInsert::new(
+            outbox.push(PubSubOutboxInsert::new(
                 last_item_event_id,
                 format!("pubsub:{}", node.id),
-                db::PubSubOutboxSource::PubSub,
+                PubSubOutboxSource::PubSub,
                 kind,
                 subscription.jid.clone(),
                 children,
@@ -4635,14 +1967,14 @@ impl db::PubSubMutationOutboxRenderer for PubSubService {
         Ok(outbox)
     }
 
-    fn render_affiliation_transition(
+    pub(crate) fn render_affiliation_transition(
         &self,
-        node: &db::PubSubNode,
+        node: &PubSubNode,
         jid: &str,
         affiliation: &str,
         event_id: Uuid,
         created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<db::PubSubOutboxInsert>> {
+    ) -> Result<Vec<PubSubOutboxInsert>> {
         let event = XmlElement::new("affiliation")
             .attr("node", &node.node)
             .attr("jid", jid)
@@ -4668,7 +2000,7 @@ fn data_form_field(var: &str, field_type: Option<&str>, value: &str) -> XmlEleme
 }
 
 fn subscription_event_children(
-    subscription: &db::PubSubSubscription,
+    subscription: &PubSubSubscription,
     event: &str,
     collection: Option<&str>,
     delay: Option<chrono::DateTime<chrono::Utc>>,
@@ -4711,6 +2043,10 @@ fn pubsub_event_body(event: &str) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db;
+    use crate::db::pubsub_repository::{
+        db_outbox, pep_outbox_authorization_lock_plan, PepOutboxAuthorizationLockPlan,
+    };
     use chrono::{TimeZone, Utc};
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::Duration;
@@ -4724,8 +2060,8 @@ mod tests {
         let durable =
             crate::services::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2);
         let service = PubSubService::new_with_durable_outbox_database_admission(
-            pool,
-            "example.test",
+            db::pubsub_repository::PostgresPubSubRepository::new(pool, "example.test"),
+            2,
             durable.clone(),
         );
 
@@ -4774,21 +2110,21 @@ mod tests {
         };
 
         assert_eq!(
-            PubSubService::publish_validation_outcome(&config, &items),
+            publish_validation_outcome(&config, &items),
             Some(PubSubPublishOutcome::InvalidPayload),
         );
 
         config.payload_type = None;
         config.max_payload_size = 1;
         assert_eq!(
-            PubSubService::publish_validation_outcome(&config, &items),
+            publish_validation_outcome(&config, &items),
             Some(PubSubPublishOutcome::PayloadTooBig),
         );
 
         config.max_payload_size = 1_048_576;
         let missing_payload = vec![("two".to_owned(), "<item id='two'/>".to_owned())];
         assert_eq!(
-            PubSubService::publish_validation_outcome(&config, &missing_payload),
+            publish_validation_outcome(&config, &missing_payload),
             Some(PubSubPublishOutcome::PayloadRequired),
         );
     }
@@ -4811,7 +2147,7 @@ mod tests {
         // The same request has both policy-sensitive failures, but a caller
         // without publish authorization must learn neither one.
         assert_eq!(
-            PubSubService::existing_node_publish_admission_outcome(
+            existing_node_publish_admission_outcome(
                 false,
                 &node_config,
                 Some(&stale_options),
@@ -4820,7 +2156,7 @@ mod tests {
             Some(PubSubPublishOutcome::Forbidden),
         );
         assert_eq!(
-            PubSubService::existing_node_publish_admission_outcome(
+            existing_node_publish_admission_outcome(
                 true,
                 &node_config,
                 Some(&stale_options),
@@ -4829,12 +2165,7 @@ mod tests {
             Some(PubSubPublishOutcome::PreconditionNotMet),
         );
         assert_eq!(
-            PubSubService::existing_node_publish_admission_outcome(
-                true,
-                &node_config,
-                None,
-                &items,
-            ),
+            existing_node_publish_admission_outcome(true, &node_config, None, &items,),
             Some(PubSubPublishOutcome::InvalidPayload),
         );
     }
@@ -4974,7 +2305,7 @@ mod tests {
             let service = Arc::clone(&service);
             requests.push(tokio::spawn(async move {
                 let node = format!("urn:test:pool-admission:{owner_id}:{index}");
-                let config = PubSubService::default_pep_node_config(&node);
+                let config = default_pep_node_config(&node);
                 service.create_pep_node(owner_id, &node, &config, 100).await
             }));
         }
@@ -5210,22 +2541,20 @@ mod tests {
     fn outbox_request_mapping_preserves_recipient_order_and_kind() {
         let event_id = Uuid::from_u128(1);
         let now = Utc.with_ymd_and_hms(2030, 4, 5, 6, 7, 8).unwrap();
-        let first = PubSubOutboxInsert {
-            inner: db::PubSubOutboxInsert::new(
-                event_id,
-                "node:one",
-                db::PubSubOutboxSource::PubSub,
-                db::PubSubOutboxDeliveryKind::PubSubDirect,
-                "alice@example.test/phone",
-                "<message xmlns='jabber:client'/>",
-                None,
-                None,
-                "urn:example:node",
-                None,
-                now,
-            )
-            .unwrap(),
-        };
+        let first = db::PubSubOutboxInsert::new(
+            event_id,
+            "node:one",
+            db::PubSubOutboxSource::PubSub,
+            db::PubSubOutboxDeliveryKind::PubSubDirect,
+            "alice@example.test/phone",
+            "<message xmlns='jabber:client'/>",
+            None,
+            None,
+            "urn:example:node",
+            None,
+            now,
+        )
+        .unwrap();
         let sender_id = Uuid::from_u128(2);
         let second = PubSubOutboxInsert::new_pep_stanza(
             event_id,

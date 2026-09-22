@@ -1682,7 +1682,8 @@ pub struct AppState {
     passkey_service: PasskeyService,
     /// Narrow persistence/orchestration capability for XEP-0060 and PEP.
     /// Protocol handlers receive this service rather than database authority.
-    pubsub_service: crate::services::pubsub::PubSubService,
+    pubsub_service:
+        crate::services::pubsub::PubSubService<db::pubsub_repository::PostgresPubSubRepository>,
     /// Account-scoped vCard/vCard4/avatar mutation and public-profile read
     /// boundary. Profile transactions and authorization never cross into the
     /// XMPP protocol layer.
@@ -2700,8 +2701,8 @@ impl AppState {
             );
         let pubsub_service =
             crate::services::pubsub::PubSubService::new_with_durable_outbox_database_admission(
-                pool.clone(),
-                &config.domain,
+                db::pubsub_repository::PostgresPubSubRepository::new(pool.clone(), &config.domain),
+                pool.options().get_max_connections(),
                 durable_outbox_database_admission.clone(),
             );
         let profile_service = crate::services::profile::ProfileService::with_mutation_admission(
@@ -3165,7 +3166,10 @@ impl AppState {
             .expect("upload slot admission requires UploadMode::Enabled")
     }
 
-    pub(crate) fn pubsub_service(&self) -> &crate::services::pubsub::PubSubService {
+    pub(crate) fn pubsub_service(
+        &self,
+    ) -> &crate::services::pubsub::PubSubService<db::pubsub_repository::PostgresPubSubRepository>
+    {
         &self.pubsub_service
     }
 

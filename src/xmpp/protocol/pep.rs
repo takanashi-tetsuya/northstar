@@ -218,7 +218,7 @@ impl ProtocolSession {
                 Some("item-required"),
             )));
         }
-        if items.len() > PubSubService::PEP_MAX_ITEMS as usize {
+        if items.len() > crate::services::pubsub::PEP_MAX_ITEMS as usize {
             return Ok(Action::Send(pep_error(
                 id,
                 None,
@@ -266,18 +266,19 @@ impl ProtocolSession {
                 .attribute("id")
                 .map(str::to_owned)
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            let item_id = match PubSubService::canonical_profile_item_id(node, &wire_item_id) {
-                Ok(item_id) => item_id,
-                Err(_) => {
-                    return Ok(Action::Send(pep_error(
-                        id,
-                        None,
-                        "modify",
-                        "bad-request",
-                        Some("invalid-payload"),
-                    )));
-                }
-            };
+            let item_id =
+                match crate::services::pubsub::canonical_profile_item_id(node, &wire_item_id) {
+                    Ok(item_id) => item_id,
+                    Err(_) => {
+                        return Ok(Action::Send(pep_error(
+                            id,
+                            None,
+                            "modify",
+                            "bad-request",
+                            Some("invalid-payload"),
+                        )));
+                    }
+                };
             if item_id.is_empty()
                 || item_id.len() > 1024
                 || !unique_ids.insert(item_id.clone())
@@ -331,7 +332,7 @@ impl ProtocolSession {
                     user.id,
                     BOOKMARKS2,
                     None,
-                    PubSubService::PEP_MAX_ITEMS as i64,
+                    crate::services::pubsub::PEP_MAX_ITEMS as i64,
                 )
                 .await?
                 .into_iter()
@@ -559,7 +560,7 @@ impl ProtocolSession {
             .create_pep_node(
                 user.id,
                 node,
-                &PubSubService::default_pep_node_config(node),
+                &crate::services::pubsub::default_pep_node_config(node),
                 self.state.config.pep_max_nodes_per_account,
             )
             .await?
@@ -850,7 +851,7 @@ impl ProtocolSession {
         }
         let Some(item_ids) = item_ids.filter(|ids| {
             !ids.is_empty()
-                && ids.len() <= PubSubService::PEP_MAX_ITEMS as usize
+                && ids.len() <= crate::services::pubsub::PEP_MAX_ITEMS as usize
                 && ids
                     .iter()
                     .all(|item_id| !item_id.is_empty() && item_id.len() <= 1024)
@@ -866,7 +867,8 @@ impl ProtocolSession {
         let mut canonical_ids = Vec::with_capacity(item_ids.len());
         let mut unique_ids = HashSet::new();
         for item_id in item_ids {
-            let Ok(item_id) = PubSubService::canonical_profile_item_id(node, item_id) else {
+            let Ok(item_id) = crate::services::pubsub::canonical_profile_item_id(node, item_id)
+            else {
                 return Ok(Action::Send(pep_error(
                     id,
                     None,
@@ -1199,7 +1201,7 @@ impl ProtocolSession {
             })
             .collect::<Option<Vec<_>>>();
         let Some(requested) =
-            requested.filter(|ids| ids.len() <= PubSubService::PEP_MAX_ITEMS as usize)
+            requested.filter(|ids| ids.len() <= crate::services::pubsub::PEP_MAX_ITEMS as usize)
         else {
             return Ok(Action::Send(iq_error_from_optional(
                 id,
@@ -1210,7 +1212,8 @@ impl ProtocolSession {
         let mut canonical_requested = Vec::with_capacity(requested.len());
         let mut unique_requested = HashSet::new();
         for item_id in requested {
-            let Ok(item_id) = PubSubService::canonical_profile_item_id(node, item_id) else {
+            let Ok(item_id) = crate::services::pubsub::canonical_profile_item_id(node, item_id)
+            else {
                 return Ok(Action::Send(iq_error_from_optional(
                     id,
                     from,
@@ -1232,7 +1235,7 @@ impl ProtocolSession {
             .collect::<Vec<_>>();
         let max_items = match items.attribute("max_items") {
             Some(value) => match value.parse::<i64>() {
-                Ok(value) if value > 0 => value.min(PubSubService::PEP_MAX_ITEMS as i64),
+                Ok(value) if value > 0 => value.min(crate::services::pubsub::PEP_MAX_ITEMS as i64),
                 _ => {
                     return Ok(Action::Send(iq_error_from_optional(
                         id,
@@ -1241,7 +1244,7 @@ impl ProtocolSession {
                     )));
                 }
             },
-            None => PubSubService::PEP_MAX_ITEMS as i64,
+            None => crate::services::pubsub::PEP_MAX_ITEMS as i64,
         };
         let stored = if requested.is_empty() {
             self.state
@@ -2225,11 +2228,11 @@ fn parse_owner_config(
             "pubsub#max_items" => {
                 let value = child_text(field, "value").ok_or(())?;
                 config.max_items = if value == "max" {
-                    PubSubService::PEP_MAX_ITEMS
+                    crate::services::pubsub::PEP_MAX_ITEMS
                 } else {
                     value.parse().map_err(|_| ())?
                 };
-                if !(1..=PubSubService::PEP_MAX_ITEMS).contains(&config.max_items) {
+                if !(1..=crate::services::pubsub::PEP_MAX_ITEMS).contains(&config.max_items) {
                     return Err(());
                 }
             }
@@ -2274,7 +2277,7 @@ fn parse_owner_config(
         && (config.access_model != "open"
             || !config.persist_items
             || node == OMEMO_DEVICES && config.max_items != 1
-            || node == OMEMO_BUNDLES && config.max_items != PubSubService::PEP_MAX_ITEMS)
+            || node == OMEMO_BUNDLES && config.max_items != crate::services::pubsub::PEP_MAX_ITEMS)
     {
         return Err(());
     }
@@ -2335,7 +2338,7 @@ fn pep_config_form(config: &PepNodeConfig, kind: &str) -> String {
 }
 
 pub(crate) async fn pep_access_allowed(
-    service: &PubSubService,
+    service: &PubSubService<impl crate::services::pubsub::PubSubRepository>,
     owner: &crate::services::pubsub::PubSubAccount,
     domain: &str,
     node: &str,
@@ -2353,7 +2356,7 @@ pub(crate) async fn pep_access_allowed(
 }
 
 async fn pep_access_allowed_for_owner(
-    service: &PubSubService,
+    service: &PubSubService<impl crate::services::pubsub::PubSubRepository>,
     owner_id: uuid::Uuid,
     owner_username: &str,
     domain: &str,
@@ -2383,7 +2386,7 @@ async fn pep_access_allowed_for_owner(
 }
 
 async fn pep_access_allowed_with_config(
-    service: &PubSubService,
+    service: &PubSubService<impl crate::services::pubsub::PubSubRepository>,
     owner_id: uuid::Uuid,
     owner_username: &str,
     domain: &str,
@@ -2579,7 +2582,7 @@ struct PublishOptions {
 }
 
 fn publish_options(pubsub: Node<'_, '_>, node: &str) -> std::result::Result<PublishOptions, ()> {
-    let mut config = PubSubService::default_pep_node_config(node);
+    let mut config = crate::services::pubsub::default_pep_node_config(node);
     let Some(options) = pubsub.children().find(|child| {
         child.is_element()
             && child.tag_name().namespace() == Some(NS_PUBSUB)
@@ -2624,11 +2627,11 @@ fn publish_options(pubsub: Node<'_, '_>, node: &str) -> std::result::Result<Publ
             "pubsub#max_items" => {
                 let value = child_text(field, "value").ok_or(())?;
                 config.max_items = if value == "max" {
-                    PubSubService::PEP_MAX_ITEMS
+                    crate::services::pubsub::PEP_MAX_ITEMS
                 } else {
                     value.parse().map_err(|_| ())?
                 };
-                if !(1..=PubSubService::PEP_MAX_ITEMS).contains(&config.max_items) {
+                if !(1..=crate::services::pubsub::PEP_MAX_ITEMS).contains(&config.max_items) {
                     return Err(());
                 }
             }
@@ -2673,7 +2676,7 @@ fn publish_options(pubsub: Node<'_, '_>, node: &str) -> std::result::Result<Publ
         && (config.access_model != "open"
             || !config.persist_items
             || node == OMEMO_DEVICES && config.max_items != 1
-            || node == OMEMO_BUNDLES && config.max_items != PubSubService::PEP_MAX_ITEMS)
+            || node == OMEMO_BUNDLES && config.max_items != crate::services::pubsub::PEP_MAX_ITEMS)
     {
         return Err(());
     }
@@ -3475,9 +3478,11 @@ mod tests {
 
     #[test]
     fn contact_notifications_preserve_the_rfc7622_ulabel_identity() {
-        let canonical =
-            PubSubService::canonical_profile_item_id(CONTACTS, "TEMP@xn--bcher-kva.example")
-                .unwrap();
+        let canonical = crate::services::pubsub::canonical_profile_item_id(
+            CONTACTS,
+            "TEMP@xn--bcher-kva.example",
+        )
+        .unwrap();
         assert_eq!(canonical, "temp@bücher.example");
 
         let stored = normalized_pep_item(
@@ -3647,7 +3652,10 @@ mod tests {
         let options = publish_options(document.root_element(), OMEMO_BUNDLES).unwrap();
         assert!(options.explicit);
         assert_eq!(options.config.access_model, "open");
-        assert_eq!(options.config.max_items, PubSubService::PEP_MAX_ITEMS);
+        assert_eq!(
+            options.config.max_items,
+            crate::services::pubsub::PEP_MAX_ITEMS
+        );
 
         let invalid = xml.replace("pubsub#max_items", "pubsub#unknown");
         let document = Document::parse(&invalid).unwrap();
@@ -3661,7 +3669,10 @@ mod tests {
         let options = publish_options(document.root_element(), BOOKMARKS2).unwrap();
         assert!(options.explicit);
         assert_eq!(options.config.access_model, "whitelist");
-        assert_eq!(options.config.max_items, PubSubService::PEP_MAX_ITEMS);
+        assert_eq!(
+            options.config.max_items,
+            crate::services::pubsub::PEP_MAX_ITEMS
+        );
         assert!(options.config.persist_items);
         assert_eq!(options.config.send_last_published_item, "never");
 

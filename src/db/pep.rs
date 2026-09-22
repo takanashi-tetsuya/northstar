@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
-pub const PEP_MAX_ITEMS: i32 = 100;
+pub use northstar_pubsub_core::PEP_MAX_ITEMS;
 pub const PEP_MAX_SUBSCRIBERS_PER_NODE: i64 = 10_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -864,30 +864,7 @@ pub async fn pep_nodes(pool: &PgPool, owner_id: Uuid) -> Result<Vec<String>> {
 }
 
 pub fn default_pep_node_config(node: &str) -> PepNodeConfig {
-    let (access_model, max_items, send_last) = match node {
-        "urn:xmpp:omemo:2:devices" | "eu.siacs.conversations.axolotl.devicelist" => {
-            ("open", 1, "on_sub_and_presence")
-        }
-        "urn:xmpp:omemo:2:bundles" => ("open", PEP_MAX_ITEMS, "on_sub_and_presence"),
-        node if node.starts_with("eu.siacs.conversations.axolotl.bundles") => {
-            ("open", PEP_MAX_ITEMS, "on_sub_and_presence")
-        }
-        "urn:xmpp:avatar:data" => ("open", PEP_MAX_ITEMS, "never"),
-        "urn:xmpp:avatar:metadata" | "urn:xmpp:vcard4" => ("open", 1, "on_sub_and_presence"),
-        "urn:xmpp:contacts" | "urn:xmpp:bookmarks:1" | "storage:bookmarks" => {
-            ("whitelist", PEP_MAX_ITEMS, "never")
-        }
-        _ => ("presence", 100, "on_sub_and_presence"),
-    };
-    PepNodeConfig {
-        access_model: access_model.to_owned(),
-        max_items,
-        persist_items: true,
-        send_last_published_item: send_last.to_owned(),
-        deliver_notifications: true,
-        roster_groups_allowed: Vec::new(),
-        access_whitelist: Vec::new(),
-    }
+    (&northstar_pubsub_core::default_pep_node_config(node)).into()
 }
 
 pub async fn pep_items(

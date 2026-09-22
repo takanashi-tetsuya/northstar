@@ -180,7 +180,7 @@ impl Default for PubSubNodeConfig {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct PubSubItem {
     pub item_id: String,
     pub publisher_jid: String,
@@ -4512,7 +4512,9 @@ mod integration_tests {
     }
 
     struct RaceMutationRenderer {
-        inner: crate::services::pubsub::PubSubService,
+        inner: crate::services::pubsub::PubSubService<
+            crate::db::pubsub_repository::PostgresPubSubRepository,
+        >,
         observations: tokio::sync::mpsc::UnboundedSender<MutationObservation>,
         gate: Option<Arc<RenderGate>>,
     }

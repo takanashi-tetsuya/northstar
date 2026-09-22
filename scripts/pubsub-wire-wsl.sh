@@ -83,7 +83,7 @@ chmod 0600 "$runtime_dir/fast-token.secret" "$runtime_dir/dummy-scram.secret"
 cargo_args=(--locked)
 if [[ "${XMPP_TEST_OFFLINE:-true}" != "false" ]]; then cargo_args+=(--offline); fi
 cargo build "${cargo_args[@]}"
-pubsub_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema"
+pubsub_database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$schema"
 
 # Runtime startup is verification-only. This suite owns a random schema, so
 # apply migrations explicitly with the disposable test role first.

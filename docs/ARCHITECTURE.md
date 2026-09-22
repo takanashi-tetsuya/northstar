@@ -119,6 +119,12 @@ Key ownership:
 - Profile publication uses one repository operation for vCard, avatar/PEP
   changes and their notification audience. The application service keeps the
   shared PubSub mutation permit until that operation finishes or is cancelled.
+- PubSub and PEP use the repository traits in `northstar-pubsub-application`.
+  Validation and admission stay in the service; PostgreSQL operations own
+  policy locks, item/subscription changes and the immutable outbox audience.
+  XML rendering uses domain snapshots while those locks are held. Notification
+  claims carry their payload digest and lease token without a hidden database
+  row or a second copy of the payload.
 - Embedded and standalone retention workers share the same narrow context.
   Retention and subscription cleanup receive repository operations, policy and
   metrics, with no raw pool or global application state.

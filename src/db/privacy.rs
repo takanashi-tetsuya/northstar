@@ -940,6 +940,10 @@ mod application_repository {
         }
     }
     impl PrivacyRepository for PostgresPrivacyRepository {
+        async fn clear_active_session(&self, owner_id: Uuid, connection_id: Uuid) -> Result<()> {
+            db::clear_active_privacy_session(&self.pool, owner_id, connection_id).await
+        }
+
         async fn overview(&self, owner_id: Uuid) -> Result<PrivacyOverview> {
             let overview = db::privacy_overview(&self.pool, owner_id).await?;
             Ok(PrivacyOverview {

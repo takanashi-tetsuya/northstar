@@ -2062,6 +2062,8 @@ for (const [name, source] of [
   ['SubscriptionCleanupContext', read('src/subscription_cleanup.rs')],
   ['UploadMaintenanceContext', read('src/upload_worker.rs')],
   ['UploadMaintenanceRepository', read('src/services/upload_maintenance.rs')],
+  ['SmSuspensionContext', read('src/state/suspension.rs')],
+  ['SmSuspensionRepository', read('src/services/sm_suspension.rs')],
 ]) {
   const production = productionWithoutCfgTestModules(source, name);
   for (const [label, pattern] of [
@@ -2072,6 +2074,17 @@ for (const [name, source] of [
   ]) {
     if (pattern.test(production)) throw new Error(`${name} regained ${label} authority`);
   }
+}
+const cleanupServiceSource = productionWithoutCfgTestModules(read('src/services/session_cleanup.rs'), 'Session cleanup');
+for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\bstate\s*\.\s*pool\b/]) {
+  if (forbidden.test(cleanupServiceSource)) throw new Error('Session cleanup regained direct persistence authority');
+}
+const suspensionRecoverySource = cleanupServiceSource.slice(
+  cleanupServiceSource.indexOf('async fn run_sm_suspension_recovery'),
+  cleanupServiceSource.indexOf('impl SessionCleanupService'),
+);
+if (!suspensionRecoverySource.includes('SmSuspensionContext<R>') || /\bAppState\b/.test(suspensionRecoverySource)) {
+  throw new Error('SM suspension recovery must retain its narrow context');
 }
 const passkeyApiSource = productionWithoutCfgTestModules(read('src/api/passkeys.rs'), 'Passkeys HTTP');
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bstate\s*\.\s*pool\b/, /\.begin_authorized_read\s*\(/]) {

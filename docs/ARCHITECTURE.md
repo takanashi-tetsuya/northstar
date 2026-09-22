@@ -144,6 +144,10 @@ Key ownership:
   subscriptions in its service. The repository commits binding, FAST, privacy
   and transport ownership together. A database adapter runs the shared authority
   listener on its existing reserved connection.
+  Suspension recovery receives only its persistence port, shared MUC suspension
+  maps, cluster projection capability and queue limits. Recreated contexts share
+  the same endpoint identities and capacity leases. Session cleanup accesses
+  SM revocation, privacy cleanup, temporary rooms and presence through services.
 - Administrator commands validate claim identity and page bounds before the
   repository. Sensitive reads retain their generation lock and snapshot;
   command mutations retain their dedicated database authority.

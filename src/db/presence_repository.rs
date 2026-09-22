@@ -15,6 +15,14 @@ impl PostgresPresenceRepository {
     }
 }
 impl PresenceRepository for PostgresPresenceRepository {
+    async fn roster_subscriptions(&self, owner_id: Uuid) -> Result<Vec<(String, String)>> {
+        Ok(db::roster(&self.pool, owner_id)
+            .await?
+            .into_iter()
+            .map(|(jid, _, subscription, _)| (jid, subscription))
+            .collect())
+    }
+
     async fn is_blocked_for_account(
         &self,
         owner_id: Uuid,

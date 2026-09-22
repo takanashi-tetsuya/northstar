@@ -20,6 +20,10 @@ impl PostgresSmRepository {
     }
 }
 impl SmRepository for PostgresSmRepository {
+    async fn revoke_session(&self, session_id: Uuid) -> Result<()> {
+        db::revoke_sm_session(&self.pool, session_id).await
+    }
+
     async fn create_session(
         &self,
         request: SmSessionCreationRequest<'_>,

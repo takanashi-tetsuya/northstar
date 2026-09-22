@@ -1234,7 +1234,7 @@ impl<R: MucRepository> MucService<R> {
     }
 }
 
-async fn notify_committed_operation(
+pub(crate) async fn notify_committed_operation(
     descriptor: impl std::future::Future<Output = Result<Option<ClusterMucWakeDescriptor>>>,
     wake: &impl MucWakePort,
     operation_id: Uuid,

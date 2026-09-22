@@ -25,3 +25,5 @@ pub(crate) mod upload;
 pub(crate) mod upload_safety;
 
 pub(crate) mod upload_maintenance;
+
+pub(crate) mod sm_suspension;

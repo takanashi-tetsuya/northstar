@@ -368,6 +368,10 @@ and personal-message retractions. Their PostgreSQL adapters live in
 `src/db`; retention and subscription cleanup use narrow repository-backed
 contexts. Upload reconciliation also has a dedicated context and repository
 with the same storage fences and one-use startup audit handoff.
+SM suspension recovery has a separate context sharing the existing MUC endpoint
+maps and capacity leases. Its port exposes only suspension, suffix append and
+exact MUC suspension transitions. Session cleanup no longer calls the database
+directly, but still needs a narrower runtime context for delivery and teardown.
 Existing cross-table transactions, admission permits, account
 fences and post-commit recovery behavior remain intact.
 

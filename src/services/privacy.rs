@@ -33,6 +33,12 @@ pub(crate) enum PrivacyListMutationOutcome {
 }
 
 pub(crate) trait PrivacyRepository: Send + Sync {
+    fn clear_active_session(
+        &self,
+        owner_id: Uuid,
+        connection_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+
     fn overview(
         &self,
         owner_id: Uuid,
@@ -76,6 +82,16 @@ pub(crate) struct PrivacyService<R> {
     repository: R,
 }
 impl<R: PrivacyRepository> PrivacyService<R> {
+    pub(crate) async fn clear_active_session(
+        &self,
+        owner_id: Uuid,
+        connection_id: Uuid,
+    ) -> Result<()> {
+        self.repository
+            .clear_active_session(owner_id, connection_id)
+            .await
+    }
+
     pub(crate) fn new(repository: R) -> Self {
         Self { repository }
     }
@@ -157,6 +173,10 @@ mod tests {
     struct UnavailableRepository(std::sync::atomic::AtomicUsize);
 
     impl PrivacyRepository for UnavailableRepository {
+        async fn clear_active_session(&self, _: Uuid, _: Uuid) -> Result<()> {
+            unreachable!()
+        }
+
         async fn overview(&self, _: Uuid) -> Result<PrivacyOverview> {
             unreachable!()
         }

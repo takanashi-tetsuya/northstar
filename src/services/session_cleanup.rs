@@ -7,7 +7,7 @@
 //! exact connection/SM/MUC epoch captured by the protocol actor; a late
 //! cleanup can therefore never remove a replacement session.
 
-use crate::{db, state::AppState};
+use crate::state::AppState;
 use anyhow::Result;
 use dashmap::DashMap;
 use std::{
@@ -525,8 +525,8 @@ pub(crate) struct SessionCleanupService {
     state: Arc<AppState>,
 }
 
-async fn run_sm_suspension_recovery(
-    state: Arc<AppState>,
+async fn run_sm_suspension_recovery<R: super::sm_suspension::SmSuspensionRepository>(
+    context: Arc<crate::state::suspension::SmSuspensionContext<R>>,
     queue: Arc<SmSuspensionRecoveryQueue>,
     cancel: tokio_util::sync::CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
@@ -544,16 +544,14 @@ async fn run_sm_suspension_recovery(
             let outcome = match &job.work {
                 SuspensionRecoveryWork::Suspend(payload) => tokio::time::timeout(
                     CLEANUP_STEP_BUDGET,
-                    state.sm_service().suspend_exact_session(
-                        job.session_id,
-                        job.connection_id,
-                        payload.account.user_id,
-                        payload.account.auth_generation,
-                        &payload.snapshot,
-                        payload.ttl_seconds,
-                        state.config.sm_max_unacked_stanzas,
-                        state.config.sm_max_unacked_bytes,
-                    ),
+                    context.suspend_exact_session(super::sm_suspension::SmSuspensionRequest {
+                        session_id: job.session_id,
+                        connection_id: job.connection_id,
+                        user_id: payload.account.user_id,
+                        auth_generation: payload.account.auth_generation,
+                        snapshot: &payload.snapshot,
+                        ttl_seconds: payload.ttl_seconds,
+                    }),
                 )
                 .await
                 .map_err(|_| anyhow::anyhow!("exact SM suspension retry timed out"))
@@ -566,12 +564,12 @@ async fn run_sm_suspension_recovery(
                     job.work = SuspensionRecoveryWork::Promote;
                     match tokio::time::timeout(
                         CLEANUP_STEP_BUDGET,
-                        state.mark_suspended_muc_durable(job.endpoints.clone()),
+                        context.mark_suspended_muc_durable(job.endpoints.clone()),
                     )
                     .await
                     {
                         Ok(true) => {
-                            state
+                            context
                                 .retain_suspended_sm_capacity(&job.endpoints, job.capacity.clone());
                             job.complete();
                             heartbeat.ok();
@@ -588,12 +586,12 @@ async fn run_sm_suspension_recovery(
                     // winner may already be using the same session-global Arc,
                     // so never remove it here; sealing lets that winner's
                     // Waiting->Resuming transition reconcile it exactly.
-                    state.seal_suspended_muc_endpoints(&job.endpoints).await;
+                    context.seal_suspended_muc_endpoints(&job.endpoints).await;
                     job.complete();
                     heartbeat.ok();
                 }
                 Err(error) => {
-                    state.seal_suspended_muc_endpoints(&job.endpoints).await;
+                    context.seal_suspended_muc_endpoints(&job.endpoints).await;
                     heartbeat.error(&error);
                     job.retry_later();
                     break;
@@ -603,12 +601,14 @@ async fn run_sm_suspension_recovery(
     }
 }
 
-pub(crate) fn start_sm_suspension_recovery(
-    state: Arc<AppState>,
+pub(crate) fn start_sm_suspension_recovery<
+    R: super::sm_suspension::SmSuspensionRepository + 'static,
+>(
+    context: Arc<crate::state::suspension::SmSuspensionContext<R>>,
+    registry: Arc<crate::workers::WorkerRegistry>,
     queue: Arc<SmSuspensionRecoveryQueue>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
-    let registry = Arc::clone(state.worker_registry());
     registry.supervise_draining(
         "sm-suspension-recovery",
         crate::workers::WorkerCriticality::Restartable,
@@ -617,10 +617,10 @@ pub(crate) fn start_sm_suspension_recovery(
         Duration::from_secs(5),
         cancel.clone(),
         move |heartbeat| {
-            let state = Arc::clone(&state);
+            let context = Arc::clone(&context);
             let queue = Arc::clone(&queue);
             let cancel = cancel.clone();
-            async move { run_sm_suspension_recovery(state, queue, cancel, heartbeat).await }
+            async move { run_sm_suspension_recovery(context, queue, cancel, heartbeat).await }
         },
     );
 }
@@ -932,7 +932,7 @@ impl SessionCleanupService {
                     deadline,
                     "revoke-sm",
                     CleanupRecovery::LeaseOrEpoch,
-                    db::revoke_sm_session(&self.state.pool, session_id),
+                    self.state.sm_service().revoke_session(session_id),
                     &mut report,
                 )
                 .await;
@@ -944,11 +944,9 @@ impl SessionCleanupService {
                     deadline,
                     "clear-active-privacy",
                     CleanupRecovery::LeaseOrEpoch,
-                    db::clear_active_privacy_session(
-                        &self.state.pool,
-                        account.user_id,
-                        work.connection_id,
-                    ),
+                    self.state
+                        .privacy_service()
+                        .clear_active_session(account.user_id, work.connection_id),
                     &mut report,
                 )
                 .await;
@@ -1039,11 +1037,9 @@ impl SessionCleanupService {
                     deadline,
                     "clear-transferred-privacy",
                     CleanupRecovery::LeaseOrEpoch,
-                    db::clear_active_privacy_session(
-                        &self.state.pool,
-                        account.user_id,
-                        connection_id,
-                    ),
+                    self.state
+                        .privacy_service()
+                        .clear_active_session(account.user_id, connection_id),
                     &mut report,
                 )
                 .await;
@@ -1144,18 +1140,14 @@ impl SessionCleanupService {
 
             if departure.remaining.is_empty() {
                 let localpart = crate::state::localpart(&departure.room_jid).to_owned();
-                let pool = self.state.pool.clone();
+                let muc = self.state.muc_service().clone();
                 let delete_temporary = async move {
-                    let Some(room) = db::muc_room(&pool, &localpart).await? else {
+                    let Some(room) = muc.room(&localpart).await? else {
                         return Ok(());
                     };
-                    let _ = db::delete_temporary_muc_room(
-                        &pool,
-                        room.id,
-                        room.room_epoch,
-                        room.config_version,
-                    )
-                    .await?;
+                    let _ = muc
+                        .delete_temporary_room(room.id, room.room_epoch, room.config_version)
+                        .await?;
                     Ok(())
                 };
                 let _ = self
@@ -1182,18 +1174,21 @@ impl SessionCleanupService {
             .attr("from", full_jid)
             .attr("type", "unavailable")
             .finish();
-        for (jid, _, subscription, _) in db::roster(&self.state.pool, account.user_id).await? {
-            if matches!(subscription.as_str(), "from" | "both") {
-                self.state
-                    .route_unavailable_with_policy(
-                        account.user_id,
-                        active_privacy_list,
-                        full_jid,
-                        &presence,
-                        &jid,
-                    )
-                    .await?;
-            }
+        for jid in self
+            .state
+            .presence_service()
+            .unavailable_recipients(account.user_id)
+            .await?
+        {
+            self.state
+                .route_unavailable_with_policy(
+                    account.user_id,
+                    active_privacy_list,
+                    full_jid,
+                    &presence,
+                    &jid,
+                )
+                .await?;
         }
         let actor_bare = format!("{}@{}", account.username, self.state.config.domain);
         for (jid, target) in self

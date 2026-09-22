@@ -1,3 +1,5 @@
+pub(crate) mod suspension;
+
 use crate::{
     abuse::{AbuseConfig, AbuseGuard},
     config::{
@@ -1737,11 +1739,11 @@ pub struct AppState {
     pub cluster: crate::cluster::ClusterManager,
     bosh: Option<crate::bosh::BoshManager>,
     pub sessions: DashMap<String, OnlineSession>,
-    pub muc_occupants: DashMap<String, MucOccupant>,
+    pub muc_occupants: Arc<DashMap<String, MucOccupant>>,
     /// Exactly one process-local suspension/resume FIFO per durable SM
     /// session.  Every room occupancy for the same client points at this Arc,
     /// preserving cross-room arrival order and enforcing one shared budget.
-    suspended_muc_sessions: DashMap<uuid::Uuid, Arc<SuspendedMucEndpoint>>,
+    suspended_muc_sessions: Arc<DashMap<uuid::Uuid, Arc<SuspendedMucEndpoint>>>,
     /// Supervised retry ownership for an exact SM suspension whose database
     /// outcome was an error or timeout. The corresponding MUC FIFO remains
     /// sealed until this queue proves a durable handoff.
@@ -2896,8 +2898,8 @@ impl AppState {
             cluster,
             bosh,
             sessions: DashMap::new(),
-            muc_occupants: DashMap::new(),
-            suspended_muc_sessions: DashMap::new(),
+            muc_occupants: Arc::new(DashMap::new()),
+            suspended_muc_sessions: Arc::new(DashMap::new()),
             sm_suspension_recovery:
                 crate::services::session_cleanup::SmSuspensionRecoveryQueue::new(
                     sm_recovery_max_jobs,
@@ -2981,7 +2983,8 @@ impl AppState {
             );
         }
         crate::services::session_cleanup::start_sm_suspension_recovery(
-            Arc::clone(&state),
+            Arc::new(state.sm_suspension_context()),
+            Arc::clone(state.worker_registry()),
             Arc::clone(&state.sm_suspension_recovery),
             worker_cancel.clone(),
         );
@@ -3023,6 +3026,21 @@ impl AppState {
 
     pub(crate) fn worker_registry(&self) -> &Arc<crate::workers::WorkerRegistry> {
         &self.workers
+    }
+
+    pub(crate) fn sm_suspension_context(
+        &self,
+    ) -> suspension::SmSuspensionContext<db::sm_suspension::PostgresSmSuspensionRepository> {
+        suspension::SmSuspensionContext::new(
+            db::sm_suspension::PostgresSmSuspensionRepository::new(self.pool.clone()),
+            crate::services::sm_suspension::SmSuspensionLimits {
+                max_stanzas: self.config.sm_max_unacked_stanzas,
+                max_bytes: self.config.sm_max_unacked_bytes,
+            },
+            Arc::clone(&self.muc_occupants),
+            Arc::clone(&self.suspended_muc_sessions),
+            self.cluster.clone(),
+        )
     }
 
     pub(crate) fn sm_suspension_recovery_queue(
@@ -5117,45 +5135,14 @@ impl AppState {
         base_stanzas: usize,
         base_bytes: usize,
     ) -> Vec<Arc<SuspendedMucEndpoint>> {
-        // Publish the session fence before walking independent room entries.
-        // Delivery consults this registry ahead of each endpoint, so no room
-        // can continue accepting into the disappearing transport while a
-        // later room has already switched to the suspension FIFO.
-        let proposed = Arc::new(SuspendedMucEndpoint::new_collecting(
+        self.sm_suspension_context().suspend_local_muc_occupants(
+            full_jid,
+            connection_id,
             sm_session_id,
+            memberships,
             base_stanzas,
             base_bytes,
-        ));
-        let endpoint =
-            canonical_suspended_muc_endpoint(&self.suspended_muc_sessions, sm_session_id, proposed);
-        begin_suspended_muc_route_transition(&endpoint, base_stanzas, base_bytes);
-        for membership in memberships {
-            let room_jid = membership.key();
-            let membership = membership.value();
-            let key = crate::xmpp::xml_util::muc_occupant_key(room_jid, &membership.nick);
-            let Some(mut occupant) = self.muc_occupants.get_mut(&key) else {
-                continue;
-            };
-            if !muc_actor_epoch_matches(&occupant, full_jid, connection_id, room_jid, membership)
-                || occupant.sm_session_id != Some(sm_session_id)
-            {
-                continue;
-            }
-            match &occupant.endpoint {
-                MucOccupantEndpoint::Local(_) => {
-                    occupant.endpoint = MucOccupantEndpoint::Suspended(Arc::clone(&endpoint));
-                }
-                MucOccupantEndpoint::Suspended(current)
-                    if Arc::ptr_eq(current, &endpoint)
-                        && current.sm_session_id == sm_session_id => {}
-                MucOccupantEndpoint::Suspended(_) | MucOccupantEndpoint::Federated { .. } => {}
-            }
-        }
-        // Even a stale membership plan returns the published fence: an
-        // in-flight delivery may already hold its Arc and must be promoted (or
-        // remain visibly sealed) instead of being acknowledged into a dropped
-        // buffer.
-        vec![endpoint]
+        )
     }
 
     /// Associate MUC occupants which were joined before SM enable with the
@@ -5254,155 +5241,9 @@ impl AppState {
         &self,
         endpoints: Vec<Arc<SuspendedMucEndpoint>>,
     ) -> bool {
-        let mut complete = true;
-        let mut seen = HashSet::new();
-        for endpoint in endpoints {
-            if !seen.insert(Arc::as_ptr(&endpoint) as usize) {
-                continue;
-            }
-            let route_is_live = {
-                let route = endpoint
-                    .route
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                matches!(&*route, SuspendedMucRoute::Live(_))
-            };
-            if route_is_live {
-                continue;
-            }
-            let mut buffer = endpoint.buffer.lock().await;
-            let sm_session_id = endpoint.sm_session_id;
-            let pool = &self.pool;
-            let max_stanzas = self.config.sm_max_unacked_stanzas;
-            let max_bytes = self.config.sm_max_unacked_bytes;
-            let promoted = match buffer.phase.clone() {
-                SuspendedMucPhase::Durable => true,
-                // The caller invokes this method only after the exact SM
-                // suspension CAS succeeded. Snapshot ownership is orthogonal
-                // to Sealed/Waiting/CheckpointOwned so a lost COMMIT response
-                // followed by an immediate claim cannot erase the fact that
-                // PostgreSQL already contains this suffix.
-                _ if buffer.snapshot_owned => complete_snapshot_owned_handoff(&mut buffer),
-                SuspendedMucPhase::Dormant => {
-                    buffer.phase = SuspendedMucPhase::Sealed;
-                    false
-                }
-                _ => {
-                    promote_suspended_muc_buffer(&mut buffer, |source_id, stanza| async move {
-                        match db::append_suspended_sm_stanza(
-                            pool,
-                            sm_session_id,
-                            source_id,
-                            &stanza,
-                            max_stanzas,
-                            max_bytes,
-                        )
-                        .await
-                        {
-                            Ok(stored) => stored,
-                            Err(error) => {
-                                tracing::warn!(
-                                    ?error,
-                                    %sm_session_id,
-                                    "could not append the suspended MUC queue to durable SM storage"
-                                );
-                                false
-                            }
-                        }
-                    })
-                    .await
-                }
-            };
-            if promoted {
-                endpoint.changed.notify_waiters();
-            }
-            drop(buffer);
-            if !promoted {
-                complete = false;
-                tracing::warn!(
-                    sm_session_id = %endpoint.sm_session_id,
-                    "retained bounded MUC traffic because durable SM storage is unavailable"
-                );
-            }
-            // Replace the Redis occupant value with the exact suspended SM
-            // epoch. Any node that later wins PostgreSQL expiry can now
-            // remove the cluster record immediately without risking a newly
-            // resumed/rejoined occupant which reused the same nick.
-            let occupants = self
-                .muc_occupants
-                .iter()
-                .filter_map(|occupant| match &occupant.endpoint {
-                    MucOccupantEndpoint::Suspended(current) if Arc::ptr_eq(current, &endpoint) => {
-                        Some(SerializableMucOccupant::from(&*occupant))
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            for occupant in occupants {
-                let encoded = serde_json::to_string(&occupant).unwrap_or_default();
-                if self.cluster.is_enabled() {
-                    let suspend = async {
-                        let room = db::muc_room(&self.pool, localpart(&occupant.room_jid))
-                            .await?
-                            .context("SM suspension references a missing MUC room")?;
-                        let target = db::cluster_muc_occupancy_target(
-                            &self.pool,
-                            room.id,
-                            occupant.cluster_epoch,
-                            occupant.connection_id,
-                        )
-                        .await?
-                        .context("SM suspension lost its exact MUC occupancy")?;
-                        let operation_id = uuid::Uuid::new_v4();
-                        let outcome = db::transition_cluster_muc_occupancy(
-                            &self.pool,
-                            operation_id,
-                            &target,
-                            "suspend",
-                            &self.cluster.node_id,
-                            None,
-                            None,
-                            Some(endpoint.sm_session_id),
-                            Duration::from_secs(90),
-                        )
-                        .await?;
-                        anyhow::ensure!(
-                            matches!(
-                                outcome,
-                                db::ClusterMucTransitionOutcome::Applied
-                                    | db::ClusterMucTransitionOutcome::Replay
-                            ),
-                            "PG MUC suspension rejected stale occupancy: {outcome:?}"
-                        );
-                        self.muc_service()
-                            .wake_committed_operation(&self.cluster, operation_id)
-                            .await?;
-                        Ok::<_, anyhow::Error>(())
-                    }
-                    .await;
-                    if let Err(error) = suspend {
-                        complete = false;
-                        tracing::warn!(?error, room=%occupant.room_jid, nick=%occupant.nick,
-                            "could not commit PG-authoritative MUC suspension");
-                        continue;
-                    }
-                }
-                if let Err(error) = self
-                    .cluster
-                    .register_suspended_muc_occupant(
-                        &occupant.room_jid,
-                        &occupant.nick,
-                        endpoint.sm_session_id,
-                        &encoded,
-                    )
-                    .await
-                {
-                    complete = false;
-                    tracing::warn!(?error, room = %occupant.room_jid, nick = %occupant.nick, "failed to mark clustered MUC occupant as SM-suspended");
-                }
-            }
-        }
-        complete
+        self.sm_suspension_context()
+            .mark_suspended_muc_durable(endpoints)
+            .await
     }
 
     pub async fn pause_suspended_muc_delivery(
@@ -5509,12 +5350,9 @@ impl AppState {
     }
 
     pub async fn seal_suspended_muc_endpoints(&self, endpoints: &[Arc<SuspendedMucEndpoint>]) {
-        let mut seen = HashSet::new();
-        for endpoint in endpoints {
-            if seen.insert(Arc::as_ptr(endpoint) as usize) {
-                seal_suspended_muc_buffer(endpoint).await;
-            }
-        }
+        self.sm_suspension_context()
+            .seal_suspended_muc_endpoints(endpoints)
+            .await
     }
 
     pub(crate) fn retain_suspended_sm_capacity(
@@ -5522,12 +5360,8 @@ impl AppState {
         endpoints: &[Arc<SuspendedMucEndpoint>],
         capacity: crate::services::sm_capacity::SmCapacityLease,
     ) {
-        for endpoint in endpoints {
-            *endpoint
-                .sm_capacity
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(capacity.clone());
-        }
+        self.sm_suspension_context()
+            .retain_suspended_sm_capacity(endpoints, capacity)
     }
 
     pub(crate) fn clear_suspended_sm_capacity(&self, endpoints: &[Arc<SuspendedMucEndpoint>]) {
@@ -5550,51 +5384,9 @@ impl AppState {
         endpoints: &[Arc<SuspendedMucEndpoint>],
         snapshot: &mut crate::services::sm::SmSessionSnapshot,
     ) -> anyhow::Result<()> {
-        let mut unique = Vec::new();
-        let mut seen = HashSet::new();
-        for endpoint in endpoints {
-            if seen.insert(Arc::as_ptr(endpoint) as usize) {
-                unique.push(endpoint);
-            }
-        }
-        anyhow::ensure!(
-            unique.len() <= 1,
-            "one SM epoch exposed multiple process-local MUC FIFOs"
-        );
-        let Some(endpoint) = unique.into_iter().next() else {
-            return Ok(());
-        };
-        let mut buffer = endpoint.buffer.lock().await;
-        match buffer.phase.clone() {
-            SuspendedMucPhase::Collecting
-            | SuspendedMucPhase::Waiting
-            | SuspendedMucPhase::Resuming
-            | SuspendedMucPhase::Reserved
-            | SuspendedMucPhase::Sealed => {
-                if !buffer.snapshot_owned {
-                    append_suspended_muc_suffix_to_snapshot(
-                        snapshot,
-                        &buffer.stanzas,
-                        self.config.sm_max_unacked_stanzas,
-                        self.config.sm_max_unacked_bytes,
-                    )?;
-                }
-            }
-            // These phases already correspond to the current ProtocolSession
-            // snapshot. Re-appending their backup would duplicate replay.
-            SuspendedMucPhase::Committing
-            | SuspendedMucPhase::CheckpointOwned
-            | SuspendedMucPhase::Durable => {}
-            SuspendedMucPhase::Dormant => {
-                anyhow::bail!("live MUC route was not fenced before SM suspension")
-            }
-        }
-        buffer.snapshot_owned = true;
-        buffer.phase = SuspendedMucPhase::Sealed;
-        drop(buffer);
-        finalize_suspended_muc_route_transition(endpoint);
-        endpoint.changed.notify_waiters();
-        Ok(())
+        self.sm_suspension_context()
+            .snapshot_suspended_muc_for_disconnect(endpoints, snapshot)
+            .await
     }
 
     /// Reattach only memberships that can still be proven valid. Existing

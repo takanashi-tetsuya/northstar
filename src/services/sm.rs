@@ -614,6 +614,10 @@ pub(crate) struct SmService<R> {
 }
 
 pub(crate) trait SmRepository: Send + Sync {
+    fn revoke_session(
+        &self,
+        session_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
     fn create_session(
         &self,
         request: SmSessionCreationRequest<'_>,
@@ -703,6 +707,10 @@ pub(crate) trait SmRepository: Send + Sync {
 }
 
 impl<R: SmRepository> SmService<R> {
+    pub(crate) async fn revoke_session(&self, session_id: Uuid) -> Result<()> {
+        self.repository.revoke_session(session_id).await
+    }
+
     pub(crate) fn new(repository: R, schema: String) -> Result<Self> {
         Ok(Self {
             repository,
@@ -1080,6 +1088,10 @@ mod tests {
     }
 
     impl super::SmRepository for ResumeRepository {
+        async fn revoke_session(&self, _: Uuid) -> anyhow::Result<()> {
+            unreachable!()
+        }
+
         async fn claim_resume(
             &self,
             _request: super::SmResumeClaimRequest<'_>,

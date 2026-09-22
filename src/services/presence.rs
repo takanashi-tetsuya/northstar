@@ -103,6 +103,11 @@ pub struct ServiceMessageDeliveryClaim {
 }
 
 pub(crate) trait PresenceRepository: Send + Sync {
+    fn roster_subscriptions(
+        &self,
+        owner_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Vec<(String, String)>>> + Send;
+
     fn is_blocked_for_account(
         &self,
         owner_id: Uuid,
@@ -192,6 +197,20 @@ pub(crate) struct PresenceService<R> {
     repository: R,
 }
 impl<R: PresenceRepository> PresenceService<R> {
+    /// Cleanup must notify existing subscribers even after credentials expire.
+    /// Delivery still applies the recipient's current blocking/privacy policy.
+    pub(crate) async fn unavailable_recipients(&self, owner_id: Uuid) -> Result<Vec<String>> {
+        Ok(self
+            .repository
+            .roster_subscriptions(owner_id)
+            .await?
+            .into_iter()
+            .filter_map(|(jid, subscription)| {
+                matches!(subscription.as_str(), "from" | "both").then_some(jid)
+            })
+            .collect())
+    }
+
     pub(crate) fn new(repository: R) -> Self {
         Self { repository }
     }

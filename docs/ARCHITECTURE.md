@@ -116,6 +116,9 @@ Key ownership:
   Room and occupant fences stay inside the PostgreSQL adapter. A separate wake
   port sends committed operation notifications; notification failure records
   degraded health and leaves the durable outbox available for polling.
+- Profile publication uses one repository operation for vCard, avatar/PEP
+  changes and their notification audience. The application service keeps the
+  shared PubSub mutation permit until that operation finishes or is cancelled.
 - Embedded and standalone retention workers share the same narrow context.
   Retention and subscription cleanup receive repository operations, policy and
   metrics, with no raw pool or global application state.

@@ -366,8 +366,10 @@ Passkeys to injected repository ports. Their SQL adapters reside in `src/db`.
 Embedded and standalone maintenance also share repository-backed retention and
 subscription cleanup contexts. MUC now uses a room repository and a separate
 committed-operation wake port; its existing locks, generations and outbox
-transactions remain intact. Remaining packets cover PubSub/PEP and profile
-publication, the other authentication/REST paths and live-session/upload workers.
+transactions remain intact. Profile publication also uses an injected port,
+with its shared mutation admission held by the service and complete publication
+transactions held by the adapter. Remaining packets cover PubSub/PEP, the other
+authentication/REST paths and live-session/upload workers.
 The public AppState budget is still nine; this stage remains open. Updating a field's visibility
 alone is not evidence of reduced authority.
 

@@ -2052,6 +2052,7 @@ for (const [name, source] of [
   ['MessageService', read('src/services/messaging.rs')],
   ['MamService', mamServiceSource],
   ['MucService', read('src/services/muc.rs')],
+  ['ProfileService', read('src/services/profile.rs')],
   ['RetentionContext', read('src/retention.rs')],
   ['SubscriptionCleanupContext', read('src/subscription_cleanup.rs')],
 ]) {

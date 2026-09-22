@@ -36,7 +36,7 @@ pub async fn get_vcard(pool: &PgPool, user_id: Uuid) -> Result<VCardRecord> {
         .await?;
     if let Some(row) = row {
         Ok(VCardRecord {
-            payload_vcard_temp: row.try_get("payload")?,
+            payload_vcard_temp: Some(row.try_get("payload")?),
             avatar_hash: row.try_get("avatar_hash")?,
         })
     } else {

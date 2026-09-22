@@ -179,7 +179,7 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
 
-export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$test_schema"
+export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema"
 
 run_exact_ignored() {
   local test_name="$1"
@@ -241,3 +241,12 @@ run_exact_ignored \
   db::vcard::tests::avatar_conversion_is_atomic_across_pep_and_vcard
 run_exact_ignored \
   db::vcard::tests::converted_avatar_uses_the_exact_locked_pep_subscription_snapshot
+
+run_exact_ignored \
+  db::profile::tests::profile_publish_uses_exact_subscribe_and_block_snapshot
+run_exact_ignored \
+  db::profile::tests::first_profile_publish_snapshots_roster_privacy_and_rolls_back_atomically
+run_exact_ignored \
+  db::profile::tests::legacy_and_metadata_race_never_restores_a_stale_vcard_baseline
+run_exact_ignored \
+  db::profile::tests::deleted_account_incarnation_and_corrupt_vcard_fail_closed

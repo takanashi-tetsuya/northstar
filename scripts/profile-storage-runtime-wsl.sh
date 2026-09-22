@@ -78,7 +78,7 @@ cargo_args=(--locked)
 if [[ "${XMPP_TEST_OFFLINE:-true}" != "false" ]]; then cargo_args+=(--offline); fi
 cargo build "${cargo_args[@]}"
 binary="$target_dir/debug/rust-xmpp-server"
-database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema"
+database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$schema"
 env \
   NORTHSTAR_DISABLE_DOTENV=true \
   XMPP_DOMAIN=localhost \

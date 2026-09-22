@@ -35,6 +35,7 @@ pub mod omemo_recovery;
 pub mod pep;
 pub mod privacy;
 pub mod private;
+pub mod profile;
 pub mod profile_identity;
 pub mod push;
 pub mod push_identity;

@@ -7,7 +7,7 @@
 
 use crate::db;
 use crate::services::profile::{
-    ProfileOutboxFactory, ProfilePepWrite, ProfilePublishResult, ProfileService,
+    ProfileOutboxFactory, ProfilePepWrite, ProfilePublishResult, ProfileRepository, ProfileService,
 };
 use anyhow::{Context, Result};
 pub(crate) use northstar_pubsub_application::{
@@ -2524,12 +2524,11 @@ impl PubSubService {
 
     pub(crate) async fn publish_profile_items(
         &self,
-        profile_service: &ProfileService,
+        profile_service: &ProfileService<impl ProfileRepository>,
         write: PepProfileWrite<'_>,
         explicit_factory: &dyn ProfileOutboxFactory,
         require_content_change: bool,
     ) -> Result<ProfilePublishResult> {
-        let requested = db::PepNodeConfig::from(write.requested);
         profile_service
             .publish_profile_items(
                 ProfilePepWrite {
@@ -2537,7 +2536,7 @@ impl PubSubService {
                     auth_generation: write.auth_generation,
                     connection_id: write.connection_id,
                     node: write.node,
-                    requested: &requested,
+                    requested: write.requested,
                     enforce_preconditions: write.enforce_preconditions,
                     items: write.items,
                     max_nodes: write.max_nodes,
@@ -2551,11 +2550,10 @@ impl PubSubService {
 
     pub(crate) async fn publish_avatar_metadata(
         &self,
-        profile_service: &ProfileService,
+        profile_service: &ProfileService<impl ProfileRepository>,
         write: PepProfileWrite<'_>,
         explicit_factory: &dyn ProfileOutboxFactory,
     ) -> Result<ProfilePublishResult> {
-        let requested = db::PepNodeConfig::from(write.requested);
         profile_service
             .publish_avatar_metadata(
                 ProfilePepWrite {
@@ -2563,7 +2561,7 @@ impl PubSubService {
                     auth_generation: write.auth_generation,
                     connection_id: write.connection_id,
                     node: write.node,
-                    requested: &requested,
+                    requested: write.requested,
                     enforce_preconditions: write.enforce_preconditions,
                     items: write.items,
                     max_nodes: write.max_nodes,

@@ -1686,7 +1686,8 @@ pub struct AppState {
     /// Account-scoped vCard/vCard4/avatar mutation and public-profile read
     /// boundary. Profile transactions and authorization never cross into the
     /// XMPP protocol layer.
-    profile_service: crate::services::profile::ProfileService,
+    profile_service:
+        crate::services::profile::ProfileService<db::profile::PostgresProfileRepository>,
     /// XEP-0215 TURN credential authority. Long-lived key material and its
     /// bounded rate windows never cross into protocol or public state.
     extdisco_service: crate::services::extdisco::ExtDiscoService,
@@ -2704,8 +2705,7 @@ impl AppState {
                 durable_outbox_database_admission.clone(),
             );
         let profile_service = crate::services::profile::ProfileService::with_mutation_admission(
-            pool.clone(),
-            config.domain.clone(),
+            db::profile::PostgresProfileRepository::new(pool.clone(), config.domain.clone()),
             pubsub_service.mutation_admission(),
         );
         let mam_service = crate::services::mam::MamService::new(
@@ -3169,7 +3169,9 @@ impl AppState {
         &self.pubsub_service
     }
 
-    pub(crate) fn profile_service(&self) -> &crate::services::profile::ProfileService {
+    pub(crate) fn profile_service(
+        &self,
+    ) -> &crate::services::profile::ProfileService<db::profile::PostgresProfileRepository> {
         &self.profile_service
     }
 

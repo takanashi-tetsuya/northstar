@@ -33,3 +33,7 @@ pub(crate) mod api_queries;
 pub(crate) mod omemo_recovery;
 
 pub(crate) mod operations;
+
+pub(crate) mod api_mutations;
+
+pub(crate) mod reports;

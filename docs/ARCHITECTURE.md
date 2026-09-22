@@ -158,6 +158,12 @@ Key ownership:
   global application state. Operation-journal reads use the same context and
   preserve separate bearer/role errors and parent-scoped targets. Their writes
   and data-lifecycle endpoints still need persistence boundaries.
+- Report and appeal services validate content before requesting a complete
+  repository operation. Authorization, proof admission, semantic rejection or
+  business mutation, and encrypted response replay share one transaction.
+  First responses and retries use the same status, headers and body bytes;
+  submission counters advance only after a new commit. Their HTTP context
+  provides identity lookup, submissions and those counters without global state.
 - OMEMO recovery uses lifecycle repository operations. Transfer and authority
   reads hold the exact bearer and account-generation locks through the snapshot.
   Public completion polling has its own context, bounded IP/concurrency

@@ -193,7 +193,7 @@ pub async fn change_password(
                 }
             }
             crate::abuse::TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
-                let response = crate::api::reports::complete_guard_denial(
+                let response = crate::api::idempotency::complete_guard_denial(
                     &state,
                     &mut reserve_tx,
                     &lease,

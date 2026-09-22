@@ -1,3 +1,6 @@
+pub use crate::services::api_mutations::{
+    ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
@@ -190,47 +193,6 @@ fn derive_subkey(secret: &[u8], label: &[u8]) -> Result<[u8; 32]> {
     Ok(mac.finalize().into_bytes().into())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ApiPrincipalKind {
-    Anonymous,
-    User,
-    #[allow(dead_code)]
-    Admin,
-    #[allow(dead_code)]
-    Upload,
-}
-
-impl ApiPrincipalKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Anonymous => "anonymous",
-            Self::User => "user",
-            Self::Admin => "admin",
-            Self::Upload => "upload",
-        }
-    }
-}
-
-pub struct IdempotencyRequest<'a> {
-    pub request_id: Uuid,
-    pub actor_id: Option<Uuid>,
-    /// Canonical request-scoped identity. It is HMACed and never persisted.
-    pub principal_scope: &'a [u8],
-    /// Coarser abuse boundary used only to cap unfinished reservations.
-    pub capacity_scope: &'a [u8],
-    /// Canonical path/object identity. Raw identifiers are never persisted;
-    /// a keyed digest is compared under the idempotency scope instead.
-    pub target_scope: &'a [u8],
-    pub principal_kind: ApiPrincipalKind,
-    pub method: &'a str,
-    /// Canonical route template, never a raw URI or query string.
-    pub route: &'a str,
-    pub idempotency_key: &'a str,
-    pub request_fingerprint: [u8; 32],
-    pub ttl_seconds: i64,
-    pub lease_seconds: i64,
-}
-
 #[derive(Debug)]
 pub struct IdempotencyLease {
     pub record_id: Uuid,
@@ -250,14 +212,6 @@ impl IdempotencyLease {
     pub(crate) fn lease_token(&self) -> Uuid {
         self.lease_token
     }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub struct IdempotentResponse {
-    pub request_id: Uuid,
-    pub status: u16,
-    pub headers: BTreeMap<String, String>,
-    pub body: Vec<u8>,
 }
 
 #[derive(Debug)]

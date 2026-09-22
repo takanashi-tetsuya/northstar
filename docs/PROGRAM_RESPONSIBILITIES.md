@@ -429,6 +429,7 @@ copy that coupling.
 | Capability/accessor | Decision responsibility | Persistence/side-effect responsibility today | Explicitly outside the capability |
 | --- | --- | --- | --- |
 | `api_query_service()` | bearer identity, authorized REST collections and operation-journal reads | complete authorized transactions, PostgreSQL cursor time and synchronous live projections | exposing a pool or an open transaction to HTTP handlers |
+| `report_service()` | report and appeal validation | bearer authorization, one-use proof, evidence/appeal mutation and encrypted replay in one repository transaction | returning transactions or counting an exact retry as a new submission |
 | `omemo_recovery_service()` | one-time device-state transfer lifecycle and authorized recovery reads | complete preparation, sealing, consumption and revocation transactions | HTTP database access; public completion polling uses a separate service and admission context |
 | `authentication_service()` | SCRAM/SASL2/FAST credential-family selection, account status and authentication-generation checks | authentication repository calls and token lifecycle | stream framing, TLS establishment and resource binding |
 | `passkey_service()` | WebAuthn ceremonies, credential generations and session-bound registration/removal | injected repository; credential revision acceptance, FAST issuance and API-session creation share one commit | HTTP headers, raw pools, SQLx transactions and global application state |

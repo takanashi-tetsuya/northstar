@@ -1,3 +1,4 @@
+pub use crate::services::api_mutations::json_replay_headers;
 use axum::{
     body::{to_bytes, Body},
     extract::{ConnectInfo, FromRequest, FromRequestParts, Request, State},
@@ -9,7 +10,6 @@ use axum::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::json;
-use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{atomic::Ordering, Arc};
 
@@ -240,13 +240,6 @@ impl ApiEmpty {
             lease_seconds: API_IDEMPOTENCY_LEASE_SECONDS,
         }
     }
-}
-
-pub fn json_replay_headers() -> BTreeMap<String, String> {
-    BTreeMap::from([
-        ("cache-control".to_owned(), "no-store, max-age=0".to_owned()),
-        ("content-type".to_owned(), "application/json".to_owned()),
-    ])
 }
 
 pub fn idempotency_replay_response(replay: db::IdempotentResponse) -> Result<Response, AppError> {

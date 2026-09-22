@@ -724,6 +724,8 @@ def solve_pow(
     token: str | None,
     action: str,
     intent: dict[str, object],
+    *,
+    keepalive: tuple[XmppWebSocket, ...] = (),
 ) -> dict[str, str]:
     status, challenge = api(
         "POST",
@@ -738,7 +740,12 @@ def solve_pow(
         int(requirement.get("retry_after_seconds", 0)),
     )
     if wait_seconds:
-        time.sleep(wait_seconds + 0.05)
+        deadline = time.monotonic() + wait_seconds + 0.05
+        while (remaining := deadline - time.monotonic()) > 0:
+            # HTTP cooldowns do not count as traffic on the fixture's XMPP streams.
+            for peer in keepalive:
+                peer.send("", opcode=9)
+            time.sleep(min(30, remaining))
     factor = max(1, int(requirement["work_factor"]))
     target = ((1 << 64) - 1) // factor
     prefix = challenge["prefix"].encode()
@@ -5718,24 +5725,35 @@ def run() -> None:
             alice_token,
             "report",
             pow_intent("POST", "/api/v1/reports", report_intent_payload),
+            keepalive=(alice, bob),
         ),
     }
     report_body = json.dumps(report_payload, separators=(",", ":")).encode()
+    report_headers = {
+        "Authorization": f"Bearer {alice_token}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": f"integration-report-{time.time_ns()}",
+    }
     report_status, _, report_raw = raw_http(
-        "POST",
-        "/api/v1/reports",
-        report_body,
-        {
-            "Authorization": f"Bearer {alice_token}",
-            "Content-Type": "application/json",
-            "Idempotency-Key": f"integration-report-{time.time_ns()}",
-        },
+        "POST", "/api/v1/reports", report_body, report_headers,
     )
     report_result = json.loads(report_raw)
     check(
         report_status == 201 and report_result.get("status") == "submitted",
         f"authoritative archived evidence report failed: {report_status} {report_result}",
     )
+
+    def assert_mutation_replay(path, body, headers, expected_status, expected_body):
+        replay_status, replay_headers, replay_body = raw_http("POST", path, body, headers)
+        check(
+            replay_status == expected_status and replay_body == expected_body
+            and replay_headers.get("idempotency-replayed") == "true"
+            and replay_headers.get("idempotency-original-request-id")
+            and replay_headers.get("cache-control") == "no-store, max-age=0",
+            f"mutation replay changed status, bytes or cache policy: {path}",
+        )
+
+    assert_mutation_replay("/api/v1/reports", report_body, report_headers, 201, report_raw)
 
     foreign_report_intent_payload = {
         "reported_jid": f"{ALICE}@{DOMAIN}",
@@ -5749,18 +5767,17 @@ def run() -> None:
             bob_token,
             "report",
             pow_intent("POST", "/api/v1/reports", foreign_report_intent_payload),
+            keepalive=(alice, bob),
         ),
     }
     foreign_body = json.dumps(foreign_report_payload, separators=(",", ":")).encode()
+    foreign_headers = {
+        "Authorization": f"Bearer {bob_token}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": f"integration-foreign-report-{time.time_ns()}",
+    }
     foreign_status, _, foreign_raw = raw_http(
-        "POST",
-        "/api/v1/reports",
-        foreign_body,
-        {
-            "Authorization": f"Bearer {bob_token}",
-            "Content-Type": "application/json",
-            "Idempotency-Key": f"integration-foreign-report-{time.time_ns()}",
-        },
+        "POST", "/api/v1/reports", foreign_body, foreign_headers,
     )
     foreign_result = json.loads(foreign_raw)
     check(
@@ -5768,6 +5785,28 @@ def run() -> None:
         and foreign_result.get("error", {}).get("code") == "bad_request",
         f"foreign archive evidence was accepted: {foreign_status} {foreign_result}",
     )
+
+    assert_mutation_replay("/api/v1/reports", foreign_body, foreign_headers, 400, foreign_raw)
+
+    moderation_status, _, _ = raw_admin_http(
+        "PATCH", f"/api/v1/admin/reports/{report_result['id']}",
+        json.dumps({"status": "rejected", "resolution": "integration appeal eligibility"}).encode(),
+        {"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json",
+         "Idempotency-Key": f"integration-report-resolution-{time.time_ns()}"},
+    )
+    check(moderation_status == 200, "report could not be resolved before appeal")
+    appeal_path = f"/api/v1/reports/{report_result['id']}/appeals"
+    appeal_intent = {"reason": "Please review the attached archived evidence again."}
+    appeal_payload = {**appeal_intent, "pow": solve_pow(
+        alice_token, "appeal", pow_intent("POST", appeal_path, appeal_intent),
+        keepalive=(alice, bob),
+    )}
+    appeal_body = json.dumps(appeal_payload, separators=(",", ":")).encode()
+    appeal_headers = {**report_headers, "Idempotency-Key": f"integration-appeal-{time.time_ns()}"}
+    appeal_status, _, appeal_raw = raw_http("POST", appeal_path, appeal_body, appeal_headers)
+    check(appeal_status == 201, "eligible appeal was not committed")
+    assert_mutation_replay(appeal_path, appeal_body, appeal_headers, 201, appeal_raw)
+    print("REST reports/appeals: atomic proof admission, terminal validation and exact replay passed")
 
     status, stats = admin_api("GET", "/api/v1/admin/stats", token=admin_token)
     # The self-target is one deduplicated owner row retained as a tombstone, its

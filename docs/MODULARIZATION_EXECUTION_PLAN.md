@@ -383,6 +383,11 @@ OMEMO transfer lifecycle operations and authorized recovery reads also use
 repository ports. Public completion polling has a separate service/context
 with shared bounded admission and its dedicated connection pool. Authenticated
 recovery handlers still need a narrower runtime context for account teardown.
+Report and appeal writes now use complete repository transactions, including
+one-use proof admission and idempotent responses. Their HTTP context exposes
+only identity lookup, submissions, trusted proxies and commit counters. Shared
+mutation values let subsequent write
+ports retain the same initial and replayed responses.
 Remaining work covers the other REST reads and mutations, their HTTP contexts,
 and live-session/account-recovery workers.
 AppState still has nine public fields, so stage 1 remains open. Changing field

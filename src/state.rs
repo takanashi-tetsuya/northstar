@@ -1,3 +1,18 @@
+pub(crate) mod reports;
+pub(crate) type ReportContext = reports::ReportContext<
+    db::report_repository::PostgresReportRepository,
+    db::api_queries::PostgresApiQueryRepository,
+>;
+impl axum::extract::FromRef<Arc<AppState>> for ReportContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        reports::ReportContext::new(
+            state.report_service().clone(),
+            state.api_query_service().clone(),
+            Arc::clone(&state.metrics),
+            state.config.trusted_proxy_ips.clone(),
+        )
+    }
+}
 pub(crate) mod omemo_poll;
 pub(crate) type OmemoRecoveryPollContext = omemo_poll::OmemoRecoveryPollContext<
     db::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository,
@@ -1787,7 +1802,9 @@ pub struct AppState {
     /// reserve without giving protocol handlers raw pool access.
     durable_outbox_database_admission:
         crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
-    api_control: db::ApiControlKeyring,
+    api_control: Arc<db::ApiControlKeyring>,
+    report_service:
+        crate::services::reports::ReportService<db::report_repository::PostgresReportRepository>,
     /// Opaque REST pagination cursors use purpose-separated subkeys derived
     /// from the same current/previous process secrets as API idempotency.
     /// Keeping both keyrings on the state makes rotation atomic at startup:
@@ -2916,6 +2933,14 @@ impl AppState {
             config.trusted_proxy_ips.clone(),
             Arc::clone(&metrics),
         );
+        let api_control = Arc::new(api_control);
+        let report_service = crate::services::reports::ReportService::new(
+            db::report_repository::PostgresReportRepository::new(
+                pool.clone(),
+                Arc::clone(&api_control),
+                Arc::clone(&abuse),
+            ),
+        );
         let state = Arc::new(Self {
             config,
             api_query_context,
@@ -2973,6 +2998,7 @@ impl AppState {
             omemo_recovery_poll_context,
             durable_outbox_database_admission,
             api_control,
+            report_service,
             api_cursor,
             upload_service,
             upload_store,
@@ -3274,6 +3300,13 @@ impl AppState {
         self.upload_service
             .as_ref()
             .expect("upload slot admission requires UploadMode::Enabled")
+    }
+
+    pub(crate) fn report_service(
+        &self,
+    ) -> &crate::services::reports::ReportService<db::report_repository::PostgresReportRepository>
+    {
+        &self.report_service
     }
 
     pub(crate) fn api_query_service(

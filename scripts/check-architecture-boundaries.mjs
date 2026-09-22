@@ -2066,6 +2066,9 @@ for (const [name, source] of [
   ['SmSuspensionRepository', read('src/services/sm_suspension.rs')],
   ['ApiQueryService', read('src/services/api_queries.rs')],
   ['ApiQueryContext', read('src/state/api_queries.rs')],
+  ['API mutation values', read('src/services/api_mutations.rs')],
+  ['ReportService', read('src/services/reports.rs')],
+  ['ReportContext', read('src/state/reports.rs')],
   ['Operation projections', read('src/services/operations.rs')],
   ['OmemoRecoveryService', read('src/services/omemo_recovery.rs')],
   ['OmemoRecoveryPollContext', read('src/state/omemo_poll.rs')],
@@ -2112,6 +2115,13 @@ const suspensionRecoverySource = cleanupServiceSource.slice(
 );
 if (!suspensionRecoverySource.includes('SmSuspensionContext<R>') || /\bAppState\b/.test(suspensionRecoverySource)) {
   throw new Error('SM suspension recovery must retain its narrow context');
+}
+const reportApiSource = productionWithoutCfgTestModules(read('src/api/reports.rs'), 'Reports HTTP');
+for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\.pool\b/]) {
+  if (forbidden.test(reportApiSource)) throw new Error('Reports HTTP regained direct persistence authority');
+}
+if (!reportApiSource.includes('.report_service()') || /\bAppState\b/.test(reportApiSource)) {
+  throw new Error('Reports HTTP must use its service and narrow context');
 }
 const recoveryApiSource = productionWithoutCfgTestModules(read('src/api/omemo_recovery.rs'), 'OMEMO recovery HTTP');
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\.pool\b/]) {
@@ -3082,6 +3092,7 @@ for (const task of serviceTaskNames) {
 }
 const stateServiceAccessors = [
   'api_query_service',
+  'report_service',
   'omemo_recovery_service',
   'authentication_service',
   'passkey_service',

@@ -1,4 +1,5 @@
 use crate::auth;
+pub use crate::services::reports::ReportEvidenceInput;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
@@ -137,13 +138,6 @@ pub async fn purge_resolved_moderation_batch(
     .fetch_all(pool)
     .await?;
     Ok(deleted.len() as u64)
-}
-
-#[derive(Debug)]
-pub struct ReportEvidenceInput {
-    pub archive_id: Uuid,
-    pub client_message_id: Option<String>,
-    pub body_text: String,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1271,19 +1265,18 @@ mod tests {
         let invalid_key = "report-invalid-key-0003".to_owned();
         let invalid_request =
             report_idempotency_request(&reporter, &invalid_key, b"", b"report-body-invalid");
-        let invalid_payload = crate::api::ReportRequest {
-            reported_jid: "peer@example.test".into(),
-            category: "spam".into(),
-            evidence: vec![crate::api::EvidenceItem {
+        let invalid_payload = crate::services::reports::ReportInput {
+            reported_jid: "peer@example.test",
+            category: "spam",
+            evidence: vec![ReportEvidenceInput {
                 archive_id,
                 client_message_id: Some("atomic-message".into()),
                 body_text: "invalid\0evidence".into(),
             }],
-            description: Some("description".into()),
-            pow: None,
+            description: Some("description"),
         };
         assert_eq!(
-            crate::api::reports::report_validation_error(&invalid_payload),
+            crate::services::reports::report_validation_error(&invalid_payload),
             Some("report evidence is invalid")
         );
         let step_before_invalid = guard

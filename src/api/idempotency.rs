@@ -1,99 +1,82 @@
-use axum::body::Body;
-use axum::http::StatusCode;
-use axum::response::Response;
+use crate::{db, error::AppError, services::api_mutations::StoredApiResponse};
+use axum::{body::Body, http::StatusCode, response::Response};
 use serde_json::Value;
-use std::collections::BTreeMap;
 use uuid::Uuid;
 
-use crate::api::json_replay_headers;
-use crate::db;
-use crate::error::AppError;
-
-/// The canonical HTTP representation stored for an idempotent mutation and
-/// returned for its first execution. Keeping both paths on the same envelope
-/// prevents status, cache policy, content type, body, and resource metadata
-/// from drifting between an initial response and a replay.
+// Compatibility adapter for mutation handlers still owning legacy transactions.
+// New repository ports exchange StoredApiResponse directly.
 pub(crate) struct StoredHttpResponse {
-    status: StatusCode,
-    headers: BTreeMap<String, String>,
-    body: Vec<u8>,
-    replay_resource_id: Option<Uuid>,
+    inner: StoredApiResponse,
 }
-
 impl StoredHttpResponse {
     pub(crate) fn json(status: StatusCode, body: Value) -> Result<Self, AppError> {
         Ok(Self {
-            status,
-            headers: json_replay_headers(),
-            body: serde_json::to_vec(&body).map_err(|error| AppError::Internal(error.into()))?,
-            replay_resource_id: None,
+            inner: StoredApiResponse::json(status.as_u16(), body)?,
         })
     }
-
     pub(crate) fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.headers.insert(name.into(), value.into());
+        self.inner = self.inner.with_header(name, value);
         self
     }
-
-    pub(crate) fn with_optional_replay_resource_id(
-        mut self,
-        replay_resource_id: Option<Uuid>,
-    ) -> Self {
-        self.replay_resource_id = replay_resource_id;
+    pub(crate) fn with_optional_replay_resource_id(mut self, id: Option<Uuid>) -> Self {
+        self.inner = self.inner.with_optional_replay_resource_id(id);
         self
     }
-
     pub(crate) async fn persist_in_tx(
         &self,
         keyring: &db::ApiControlKeyring,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         lease: &db::IdempotencyLease,
     ) -> Result<bool, AppError> {
-        match self.replay_resource_id {
-            Some(resource_id) => {
-                self.persist_with_resource_in_tx(keyring, tx, lease, resource_id)
-                    .await
-            }
-            None => Ok(db::complete_idempotency_in_tx(
-                keyring,
-                tx,
-                lease,
-                self.status.as_u16(),
-                &self.headers,
-                &self.body,
-            )
-            .await?),
-        }
+        Ok(db::api_mutations::persist_response_in_tx(keyring, tx, lease, &self.inner).await?)
     }
-
-    async fn persist_with_resource_in_tx(
-        &self,
-        keyring: &db::ApiControlKeyring,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        lease: &db::IdempotencyLease,
-        replay_resource_id: Uuid,
-    ) -> Result<bool, AppError> {
-        Ok(db::complete_idempotency_with_resource_in_tx(
-            keyring,
-            tx,
-            lease,
-            self.status.as_u16(),
-            &self.headers,
-            &self.body,
-            Some(replay_resource_id),
-        )
-        .await?)
-    }
-
     pub(crate) fn build_response(self) -> Result<Response, AppError> {
-        let mut response = Response::builder().status(self.status);
-        for (name, value) in self.headers {
-            response = response.header(name, value);
-        }
-        response
-            .body(Body::from(self.body))
-            .map_err(|error| AppError::Internal(error.into()))
+        stored_api_response(self.inner)
     }
+}
+
+pub(crate) fn stored_api_response(stored: StoredApiResponse) -> Result<Response, AppError> {
+    let mut response = Response::builder().status(stored.status);
+    for (name, value) in stored.headers {
+        response = response.header(name, value);
+    }
+    response
+        .body(Body::from(stored.body))
+        .map_err(|error| AppError::Internal(error.into()))
+}
+
+pub(crate) fn mutation_rejection(
+    rejection: crate::services::api_mutations::ApiMutationRejection,
+) -> AppError {
+    use crate::services::api_mutations::ApiMutationRejection;
+    match rejection {
+        ApiMutationRejection::Unauthorized => AppError::Unauthorized,
+        ApiMutationRejection::IdempotencyConflict => AppError::IdempotencyConflict,
+        ApiMutationRejection::ReplayInvalidated => AppError::IdempotencyReplayInvalidated,
+        ApiMutationRejection::Busy { retry_after } => AppError::IdempotencyBusy { retry_after },
+        ApiMutationRejection::InProgress { retry_after } => {
+            AppError::IdempotencyInProgress { retry_after }
+        }
+        ApiMutationRejection::CapacityLimited { retry_after } => AppError::TooManyRequests {
+            message: "too many retained requests; try again later".into(),
+            retry_after,
+        },
+    }
+}
+pub(crate) async fn complete_guard_denial(
+    state: &crate::state::AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    lease: &db::IdempotencyLease,
+    error: crate::abuse::GuardError,
+) -> Result<Response, AppError> {
+    let response = crate::services::api_mutations::guard_denial_response(error)?;
+    if !db::api_mutations::persist_response_in_tx(state.api_control(), tx, lease, &response).await?
+    {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "idempotency lease changed while recording a rate-limit denial"
+        )));
+    }
+    stored_api_response(response)
 }
 
 #[cfg(test)]
@@ -111,14 +94,18 @@ mod tests {
         .with_header("location", "/api/v1/admin/operations/example")
         .with_optional_replay_resource_id(Some(resource_id));
 
-        assert_eq!(stored.status, StatusCode::ACCEPTED);
-        assert_eq!(stored.replay_resource_id, Some(resource_id));
+        assert_eq!(stored.inner.status, StatusCode::ACCEPTED.as_u16());
+        assert_eq!(stored.inner.replay_resource_id, Some(resource_id));
         assert_eq!(
-            stored.headers.get("cache-control").map(String::as_str),
+            stored
+                .inner
+                .headers
+                .get("cache-control")
+                .map(String::as_str),
             Some("no-store, max-age=0")
         );
         assert_eq!(
-            stored.headers.get("content-type").map(String::as_str),
+            stored.inner.headers.get("content-type").map(String::as_str),
             Some("application/json")
         );
 

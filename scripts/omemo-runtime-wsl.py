@@ -11,11 +11,14 @@ and never needs plaintext or private key material.
 from __future__ import annotations
 
 import importlib.util
+import base64
+import hashlib
 import os
 import pathlib
 import socket
 import sys
 import time
+import uuid
 
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -59,6 +62,53 @@ def token(username: str) -> str:
     )
     fixture.check(status == 200, f"REST login failed for {username}: {status} {result}")
     return result["token"]
+
+
+def recovery_transfer() -> None:
+    username = "omemo_recovery_owner"
+    register(username)
+    bearer = token(username)
+    transfer_id = str(uuid.uuid4())
+    poll_secret = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
+    consumer_secret = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
+    digest = hashlib.sha256(b"opaque recovery package").hexdigest()
+    collection = "/api/v1/me/omemo-recovery-transfers"
+    resource = f"{collection}/{transfer_id}"
+    authority = "/api/v1/me/omemo-recovery-authority"
+    poll = f"/api/v1/omemo-recovery-transfers/{transfer_id}/poll"
+
+    def request(method, path, expected, payload=None, auth=bearer):
+        status, result = fixture.api(method, path, payload, token=auth)
+        fixture.check(status == expected, f"recovery {method} {path}: expected {expected}, got {status}")
+        return result
+
+    prepared = request("POST", collection, 201, {
+        "transfer_id": transfer_id, "source_device_id": 7, "poll_secret": poll_secret,
+    })
+    fixture.check(prepared["state"] == "preparing", "recovery preparation state changed")
+    request("PUT", resource, 200, {"package_sha256": digest})
+    fixture.check(request("GET", resource, 200)["state"] == "prepared", "sealed transfer is unavailable")
+    request("GET", resource, 404, auth=token(BOB))
+    consume = {"consumer_secret": consumer_secret, "package_sha256": digest}
+    committed = request("POST", f"{resource}/consume", 200, consume)
+    fixture.check(committed["state"] == "consumed", "recovery consumption did not commit")
+    request("GET", resource, 401)
+    request("GET", authority, 401)
+    completion = request("POST", poll, 200, {"poll_secret": poll_secret}, auth=None)
+    fixture.check(completion == {"generation": prepared["generation"], "state": "consumed"},
+                  "public recovery completion exposed additional fields or lost its result")
+    wrong = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
+    request("POST", poll, 404, {"poll_secret": wrong}, auth=None)
+    renewed = token(username)
+    observed = request("GET", authority, 200, auth=renewed)
+    fixture.check(observed["latest_consumed_transfer_id"] == transfer_id, "recovery authority lost its transfer")
+    replay = request("POST", f"{resource}/consume", 200, consume, auth=renewed)
+    fixture.check(replay == committed, "an exact recovery retry changed its durable result")
+    request("GET", resource, 200, auth=renewed)
+    request("POST", f"{resource}/consume", 409,
+            {"consumer_secret": wrong, "package_sha256": digest}, auth=renewed)
+    request("DELETE", resource, 409, auth=renewed)
+    print("omemo recovery: owner isolation, generation revocation, capability polling and exact retry passed")
 
 
 def iq(session, request_id: str, kind: str, payload: str, to: str | None = None) -> str:
@@ -474,6 +524,7 @@ def finish() -> None:
     assert_marker(muc_mam, MUC_MARKER, "MUC MAM after restart")
     alice.close()
     bob.close()
+    recovery_transfer()
     print("omemo runtime finish: restart replay/MAM/PEP revocation/MUC persistence passed")
 
 

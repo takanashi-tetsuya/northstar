@@ -2066,6 +2066,8 @@ for (const [name, source] of [
   ['SmSuspensionRepository', read('src/services/sm_suspension.rs')],
   ['ApiQueryService', read('src/services/api_queries.rs')],
   ['ApiQueryContext', read('src/state/api_queries.rs')],
+  ['OmemoRecoveryService', read('src/services/omemo_recovery.rs')],
+  ['OmemoRecoveryPollContext', read('src/state/omemo_poll.rs')],
 ]) {
   const production = productionWithoutCfgTestModules(source, name);
   for (const [label, pattern] of [
@@ -2107,6 +2109,14 @@ const suspensionRecoverySource = cleanupServiceSource.slice(
 );
 if (!suspensionRecoverySource.includes('SmSuspensionContext<R>') || /\bAppState\b/.test(suspensionRecoverySource)) {
   throw new Error('SM suspension recovery must retain its narrow context');
+}
+const recoveryApiSource = productionWithoutCfgTestModules(read('src/api/omemo_recovery.rs'), 'OMEMO recovery HTTP');
+for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\.pool\b/]) {
+  if (forbidden.test(recoveryApiSource)) throw new Error('OMEMO recovery HTTP regained direct persistence authority');
+}
+const recoveryPollBody = structBody(recoveryApiSource, 'pub async fn poll_omemo_recovery(');
+if (/\b(?:AppState|current_user)\b/.test(recoveryPollBody) || !recoveryPollBody.includes('.poll(')) {
+  throw new Error('OMEMO polling must use its isolated completion capability');
 }
 const passkeyApiSource = productionWithoutCfgTestModules(read('src/api/passkeys.rs'), 'Passkeys HTTP');
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bstate\s*\.\s*pool\b/, /\.begin_authorized_read\s*\(/]) {
@@ -3069,6 +3079,7 @@ for (const task of serviceTaskNames) {
 }
 const stateServiceAccessors = [
   'api_query_service',
+  'omemo_recovery_service',
   'authentication_service',
   'passkey_service',
   'account_service',

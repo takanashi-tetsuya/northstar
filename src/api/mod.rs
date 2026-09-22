@@ -860,10 +860,18 @@ pub fn ip_actor(ip: IpAddr) -> String {
 }
 
 pub fn client_ip(peer_ip: IpAddr, headers: &HeaderMap, state: &AppState) -> IpAddr {
-    if !state.config.trusted_proxy_ips.contains(&peer_ip) {
+    client_ip_with_trusted_proxies(peer_ip, headers, &state.config.trusted_proxy_ips)
+}
+
+fn client_ip_with_trusted_proxies(
+    peer_ip: IpAddr,
+    headers: &HeaderMap,
+    trusted: &[IpAddr],
+) -> IpAddr {
+    if !trusted.contains(&peer_ip) {
         return peer_ip;
     }
-    forwarded_client_ip_from_headers(peer_ip, headers, &state.config.trusted_proxy_ips)
+    forwarded_client_ip_from_headers(peer_ip, headers, trusted)
 }
 
 fn forwarded_client_ip_from_headers(

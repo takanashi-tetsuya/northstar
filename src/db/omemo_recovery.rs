@@ -1,41 +1,15 @@
+pub use crate::services::omemo_recovery::{
+    ConsumeOmemoRecovery, ConsumeOmemoRecoveryRequest, OmemoRecoveryAuthority,
+    OmemoRecoveryPollStatus, OmemoRecoveryTransfer, PrepareOmemoRecovery,
+    PrepareOmemoRecoveryRequest, RevokeOmemoRecovery, SealOmemoRecovery,
+};
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OmemoRecoveryTransfer {
-    pub id: Uuid,
-    pub user_id: Uuid,
-    pub generation: i64,
-    pub source_device_id: i64,
-    pub package_sha256: Option<[u8; 32]>,
-    pub state: String,
-    pub consumer_commitment: Option<[u8; 32]>,
-    pub consumed_auth_generation: Option<i64>,
-    pub created_at: DateTime<Utc>,
-    pub prepared_at: Option<DateTime<Utc>>,
-    pub consumed_at: Option<DateTime<Utc>>,
-    pub revoked_at: Option<DateTime<Utc>>,
-    pub expires_at: DateTime<Utc>,
-    pub expired: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OmemoRecoveryAuthority {
-    pub next_generation: i64,
-    pub latest_consumed_generation: i64,
-    pub latest_consumed_transfer_id: Option<Uuid>,
-    pub latest_consumer_commitment: Option<[u8; 32]>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OmemoRecoveryPollStatus {
-    pub generation: i64,
-    pub state: String,
-}
 
 const CONSUMER_COMMITMENT_DOMAIN: &[u8] = b"Northstar OMEMO recovery consumer v1\0";
 const SOURCE_POLL_DOMAIN: &[u8] = b"Northstar OMEMO recovery source poll v1\0";
@@ -83,43 +57,6 @@ fn omemo_recovery_poll_secret_hash(
 
 fn secret_digest_matches(stored: &[u8], expected: &[u8; 32]) -> bool {
     stored.len() == 32 && bool::from(stored.ct_eq(expected.as_slice()))
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PrepareOmemoRecovery {
-    Prepared(OmemoRecoveryTransfer),
-    Replay(OmemoRecoveryTransfer),
-    Conflict,
-    Unauthorized,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SealOmemoRecovery {
-    Sealed(OmemoRecoveryTransfer),
-    Replay(OmemoRecoveryTransfer),
-    Missing,
-    Expired,
-    Conflict,
-    Unauthorized,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ConsumeOmemoRecovery {
-    Consumed(OmemoRecoveryTransfer),
-    Replay(OmemoRecoveryTransfer),
-    Missing,
-    Expired,
-    Conflict,
-    Unauthorized,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RevokeOmemoRecovery {
-    Revoked,
-    Replay,
-    Missing,
-    Conflict,
-    Unauthorized,
 }
 
 fn transfer_from_row(row: &sqlx::postgres::PgRow) -> Result<OmemoRecoveryTransfer> {
@@ -232,16 +169,6 @@ async fn audit_transfer_in_tx(
         .execute(&mut **tx)
         .await?;
     Ok(())
-}
-
-pub struct PrepareOmemoRecoveryRequest<'a> {
-    pub user_id: Uuid,
-    pub canonical_account: &'a str,
-    pub expected_auth_generation: i64,
-    pub presented_session: &'a str,
-    pub transfer_id: Uuid,
-    pub source_device_id: i64,
-    pub poll_secret: &'a [u8; 32],
 }
 
 pub async fn prepare_omemo_recovery_transfer(
@@ -513,16 +440,6 @@ pub async fn seal_omemo_recovery_transfer(
     Ok(SealOmemoRecovery::Sealed(transfer))
 }
 
-pub struct ConsumeOmemoRecoveryRequest<'a> {
-    pub user_id: Uuid,
-    pub canonical_account: &'a str,
-    pub expected_auth_generation: i64,
-    pub presented_session: &'a str,
-    pub transfer_id: Uuid,
-    pub consumer_secret: &'a [u8; 32],
-    pub package_sha256: &'a [u8; 32],
-}
-
 pub async fn consume_omemo_recovery_transfer(
     pool: &PgPool,
     request: ConsumeOmemoRecoveryRequest<'_>,
@@ -695,8 +612,19 @@ pub async fn consume_omemo_recovery_transfer(
     Ok(ConsumeOmemoRecovery::Consumed(transfer))
 }
 
+#[cfg(test)]
 pub async fn omemo_recovery_authority(
     pool: &PgPool,
+    user_id: Uuid,
+) -> Result<OmemoRecoveryAuthority> {
+    let mut tx = pool.begin().await?;
+    let value = omemo_recovery_authority_in_tx(&mut tx, user_id).await?;
+    tx.commit().await?;
+    Ok(value)
+}
+
+pub(crate) async fn omemo_recovery_authority_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
 ) -> Result<OmemoRecoveryAuthority> {
     let row = sqlx::query(
@@ -705,7 +633,7 @@ pub async fn omemo_recovery_authority(
          FROM omemo_recovery_counters WHERE user_id=$1",
     )
     .bind(user_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut **tx)
     .await?;
     let Some(row) = row else {
         return Ok(OmemoRecoveryAuthority {
@@ -780,8 +708,8 @@ pub async fn poll_omemo_recovery_transfer(
     Ok(Some(result))
 }
 
-pub async fn omemo_recovery_transfer(
-    pool: &PgPool,
+pub(crate) async fn omemo_recovery_transfer_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     transfer_id: Uuid,
 ) -> Result<Option<OmemoRecoveryTransfer>> {
@@ -791,7 +719,7 @@ pub async fn omemo_recovery_transfer(
     ))
     .bind(transfer_id)
     .bind(user_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut **tx)
     .await?;
     row.map(|row| transfer_from_row(&row)).transpose()
 }

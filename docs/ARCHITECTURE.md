@@ -157,6 +157,12 @@ Key ownership:
   projections. It shares live policy flags and session maps without retaining
   global application state. Operation-journal and data-lifecycle endpoints
   still need their own persistence boundaries.
+- OMEMO recovery uses lifecycle repository operations. Transfer and authority
+  reads hold the exact bearer and account-generation locks through the snapshot.
+  Public completion polling has its own context, bounded IP/concurrency
+  admission and dedicated pool; it accepts only the transfer capability and
+  cannot invoke account mutations. The authenticated consume handler still
+  needs global state for post-commit session teardown.
 - Administrator commands validate claim identity and page bounds before the
   repository. Sensitive reads retain their generation lock and snapshot;
   command mutations retain their dedicated database authority.

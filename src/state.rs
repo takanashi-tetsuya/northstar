@@ -1,3 +1,12 @@
+pub(crate) mod omemo_poll;
+pub(crate) type OmemoRecoveryPollContext = omemo_poll::OmemoRecoveryPollContext<
+    db::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository,
+>;
+impl axum::extract::FromRef<Arc<AppState>> for OmemoRecoveryPollContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        state.omemo_recovery_poll_context()
+    }
+}
 pub(crate) mod api_queries;
 pub(crate) mod suspension;
 pub(crate) type ApiQueryContext =
@@ -1769,7 +1778,10 @@ pub struct AppState {
     /// A fail-closed, read-only-sized pool for the unauthenticated poll
     /// capability. It cannot consume the primary 32-connection application
     /// pool during a capability flood.
-    omemo_recovery_poll_pool: PgPool,
+    omemo_recovery_poll_context: OmemoRecoveryPollContext,
+    omemo_recovery_service: crate::services::omemo_recovery::OmemoRecoveryService<
+        db::omemo_recovery_repository::PostgresOmemoRecoveryRepository,
+    >,
     /// Clone-shared permission for short MIX, PubSub and clustered-MUC
     /// durable-outbox database turns. It preserves a primary-pool foreground
     /// reserve without giving protocol handlers raw pool access.
@@ -1829,10 +1841,6 @@ pub struct AppState {
     /// The unauthenticated OMEMO source completion capability is bounded
     /// independently from the general API and database pool. Keys are trusted-
     /// proxy-resolved IP addresses and expire from the one-minute window.
-    omemo_recovery_poll_requests: Arc<Semaphore>,
-    omemo_recovery_poll_requests_by_ip: DashMap<std::net::IpAddr, VecDeque<Instant>>,
-    omemo_recovery_poll_ip_admission: std::sync::Mutex<()>,
-    omemo_recovery_poll_request_checks: AtomicU64,
     s2s_connections: Arc<Semaphore>,
     s2s_connection_attempts: Arc<Semaphore>,
     component_connections: Arc<Semaphore>,
@@ -2898,9 +2906,22 @@ impl AppState {
                 started_at,
             },
         );
+        let omemo_recovery_poll_context = omemo_poll::OmemoRecoveryPollContext::new(
+            crate::services::omemo_recovery::OmemoRecoveryPollService::new(
+                db::omemo_recovery_repository::PostgresOmemoRecoveryPollRepository::new(
+                    omemo_recovery_poll_pool,
+                ),
+            ),
+            config.domain.clone(),
+            config.trusted_proxy_ips.clone(),
+            Arc::clone(&metrics),
+        );
         let state = Arc::new(Self {
             config,
             api_query_context,
+            omemo_recovery_service: crate::services::omemo_recovery::OmemoRecoveryService::new(
+                db::omemo_recovery_repository::PostgresOmemoRecoveryRepository::new(pool.clone()),
+            ),
             pubsub_service,
             profile_service,
             extdisco_service,
@@ -2949,7 +2970,7 @@ impl AppState {
             metrics,
             metrics_bearer_token,
             web_admin_gateway_token,
-            omemo_recovery_poll_pool,
+            omemo_recovery_poll_context,
             durable_outbox_database_admission,
             api_control,
             api_cursor,
@@ -2976,10 +2997,6 @@ impl AppState {
             client_connections,
             client_connections_by_ip: DashMap::new(),
             upload_runtime,
-            omemo_recovery_poll_requests: Arc::new(Semaphore::new(OMEMO_POLL_CONCURRENCY)),
-            omemo_recovery_poll_requests_by_ip: DashMap::new(),
-            omemo_recovery_poll_ip_admission: std::sync::Mutex::new(()),
-            omemo_recovery_poll_request_checks: AtomicU64::new(0),
             s2s_connections,
             s2s_connection_attempts,
             component_connections,
@@ -4503,40 +4520,15 @@ impl AppState {
         })
     }
 
-    pub fn acquire_omemo_recovery_poll(
+    pub(crate) fn omemo_recovery_service(
         &self,
-        ip: std::net::IpAddr,
-    ) -> Option<OwnedSemaphorePermit> {
-        let now = Instant::now();
-        let check = self
-            .omemo_recovery_poll_request_checks
-            .fetch_add(1, Ordering::Relaxed);
-        if !admit_bounded_omemo_poll_ip(
-            &self.omemo_recovery_poll_requests_by_ip,
-            &self.omemo_recovery_poll_ip_admission,
-            ip,
-            now,
-            check.is_multiple_of(256),
-            OMEMO_POLL_MAX_ACTIVE_IPS,
-        ) {
-            self.metrics
-                .omemo_recovery_poll_rate_limited_total
-                .fetch_add(1, Ordering::Relaxed);
-            return None;
-        }
-        match Arc::clone(&self.omemo_recovery_poll_requests).try_acquire_owned() {
-            Ok(permit) => Some(permit),
-            Err(_) => {
-                self.metrics
-                    .omemo_recovery_poll_concurrency_rejected_total
-                    .fetch_add(1, Ordering::Relaxed);
-                None
-            }
-        }
+    ) -> &crate::services::omemo_recovery::OmemoRecoveryService<
+        db::omemo_recovery_repository::PostgresOmemoRecoveryRepository,
+    > {
+        &self.omemo_recovery_service
     }
-
-    pub fn omemo_recovery_poll_pool(&self) -> &PgPool {
-        &self.omemo_recovery_poll_pool
+    pub(crate) fn omemo_recovery_poll_context(&self) -> OmemoRecoveryPollContext {
+        self.omemo_recovery_poll_context.clone()
     }
 
     /// Revoke local account routes and request durable SM revocation.

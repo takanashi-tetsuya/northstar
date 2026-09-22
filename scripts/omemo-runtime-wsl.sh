@@ -79,12 +79,19 @@ cargo_args=(--locked)
 if [[ "${XMPP_TEST_OFFLINE:-true}" != "false" ]]; then cargo_args+=(--offline); fi
 cargo build "${cargo_args[@]}"
 binary="$target_dir/debug/rust-xmpp-server"
-database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:5432/xmpp_test?options=-csearch_path%3D$schema"
+database_url="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$schema"
 env \
   NORTHSTAR_DISABLE_DOTENV=true \
   XMPP_DOMAIN=localhost \
   MIGRATOR_DATABASE_URL="$database_url" \
   "$binary" migrate
+
+TEST_DATABASE_URL="$database_url" cargo test --bin rust-xmpp-server "${cargo_args[@]}" \
+  omemo_recovery -- --ignored --test-threads=1 | tee "$runtime_dir/recovery-db-tests.log"
+if ! rg -q '^test result: ok\. 2 passed;' "$runtime_dir/recovery-db-tests.log"; then
+  echo "expected both OMEMO recovery database tests to run" >&2
+  exit 1
+fi
 
 # Preserve one fixture-owned public authority across the restart.  The relay
 # never guesses a server port; it forwards only after this child generation

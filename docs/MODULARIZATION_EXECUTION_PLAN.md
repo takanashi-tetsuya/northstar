@@ -379,6 +379,10 @@ REST identity, history, user/report/invitation/dead-letter collections and
 server statistics use complete query transactions. Those handlers receive
 shared projections and a query context with live policy flags, without an
 open transaction or AppState.
+OMEMO transfer lifecycle operations and authorized recovery reads also use
+repository ports. Public completion polling has a separate service/context
+with shared bounded admission and its dedicated connection pool. Authenticated
+recovery handlers still need a narrower runtime context for account teardown.
 Remaining work covers the other REST reads and mutations, their HTTP contexts,
 and live-session/account-recovery workers.
 AppState still has nine public fields, so stage 1 remains open. Changing field

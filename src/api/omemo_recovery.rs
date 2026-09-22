@@ -1,7 +1,4 @@
-use std::{
-    net::SocketAddr,
-    sync::{atomic::Ordering, Arc},
-};
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     body::Body,
@@ -20,10 +17,18 @@ use crate::{
         current_user, ApiJson, ApiPath, OmemoRecoveryConsumeRequest, OmemoRecoveryPollRequest,
         OmemoRecoveryPrepareRequest, OmemoRecoverySealRequest,
     },
-    db,
     error::AppError,
+    services::omemo_recovery::*,
     state::AppState,
 };
+
+fn recovery_actor(user: &crate::api::ApiUser) -> OmemoRecoveryActor<'_> {
+    OmemoRecoveryActor {
+        user_id: user.id,
+        auth_generation: user.auth_generation,
+        session_token: user.session_token(),
+    }
+}
 
 fn parse_sha256(value: &str) -> Result<[u8; 32], AppError> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -63,7 +68,7 @@ fn parse_transfer_secret(value: &str, field: &str) -> Result<[u8; 32], AppError>
     Ok(secret)
 }
 
-fn transfer_view(transfer: &db::OmemoRecoveryTransfer) -> Value {
+fn transfer_view(transfer: &OmemoRecoveryTransfer) -> Value {
     json!({
         "id": transfer.id,
         "generation": transfer.generation,
@@ -85,7 +90,7 @@ fn transfer_view(transfer: &db::OmemoRecoveryTransfer) -> Value {
 
 fn transfer_response(
     status: StatusCode,
-    transfer: &db::OmemoRecoveryTransfer,
+    transfer: &OmemoRecoveryTransfer,
     replayed: bool,
 ) -> Result<Response, AppError> {
     let body = serde_json::to_vec(&transfer_view(transfer))
@@ -122,9 +127,9 @@ pub async fn prepare_omemo_recovery(
     let poll_secret = Zeroizing::new(parse_transfer_secret(&request.poll_secret, "poll_secret")?);
     request.value.poll_secret.zeroize();
     let canonical_account = format!("{}@{}", user.username, state.config.domain);
-    match db::prepare_omemo_recovery_transfer(
-        &state.pool,
-        db::PrepareOmemoRecoveryRequest {
+    match state
+        .omemo_recovery_service()
+        .prepare(PrepareOmemoRecoveryRequest {
             user_id: user.id,
             canonical_account: &canonical_account,
             expected_auth_generation: user.auth_generation,
@@ -132,20 +137,19 @@ pub async fn prepare_omemo_recovery(
             transfer_id: request.transfer_id,
             source_device_id,
             poll_secret: &poll_secret,
-        },
-    )
-    .await?
+        })
+        .await?
     {
-        db::PrepareOmemoRecovery::Prepared(transfer) => {
+        PrepareOmemoRecovery::Prepared(transfer) => {
             transfer_response(StatusCode::CREATED, &transfer, false)
         }
-        db::PrepareOmemoRecovery::Replay(transfer) => {
+        PrepareOmemoRecovery::Replay(transfer) => {
             transfer_response(StatusCode::OK, &transfer, true)
         }
-        db::PrepareOmemoRecovery::Conflict => Err(AppError::Conflict(
+        PrepareOmemoRecovery::Conflict => Err(AppError::Conflict(
             "the OMEMO recovery transfer identifier is already bound differently".into(),
         )),
-        db::PrepareOmemoRecovery::Unauthorized => Err(AppError::Unauthorized),
+        PrepareOmemoRecovery::Unauthorized => Err(AppError::Unauthorized),
     }
 }
 
@@ -157,32 +161,23 @@ pub async fn seal_omemo_recovery(
 ) -> Result<Response, AppError> {
     let user = current_user(&state, &headers).await?;
     let digest = parse_sha256(&request.package_sha256)?;
-    match db::seal_omemo_recovery_transfer(
-        &state.pool,
-        user.id,
-        user.auth_generation,
-        user.session_token(),
-        transfer_id,
-        &digest,
-    )
-    .await?
+    match state
+        .omemo_recovery_service()
+        .seal(recovery_actor(&user), transfer_id, &digest)
+        .await?
     {
-        db::SealOmemoRecovery::Sealed(transfer) => {
-            transfer_response(StatusCode::OK, &transfer, false)
-        }
-        db::SealOmemoRecovery::Replay(transfer) => {
-            transfer_response(StatusCode::OK, &transfer, true)
-        }
-        db::SealOmemoRecovery::Missing => Err(AppError::NotFound(
+        SealOmemoRecovery::Sealed(transfer) => transfer_response(StatusCode::OK, &transfer, false),
+        SealOmemoRecovery::Replay(transfer) => transfer_response(StatusCode::OK, &transfer, true),
+        SealOmemoRecovery::Missing => Err(AppError::NotFound(
             "OMEMO recovery transfer does not exist".into(),
         )),
-        db::SealOmemoRecovery::Expired => Err(AppError::Conflict(
+        SealOmemoRecovery::Expired => Err(AppError::Conflict(
             "OMEMO recovery transfer has expired".into(),
         )),
-        db::SealOmemoRecovery::Conflict => Err(AppError::Conflict(
+        SealOmemoRecovery::Conflict => Err(AppError::Conflict(
             "OMEMO recovery transfer cannot be sealed in its current state".into(),
         )),
-        db::SealOmemoRecovery::Unauthorized => Err(AppError::Unauthorized),
+        SealOmemoRecovery::Unauthorized => Err(AppError::Unauthorized),
     }
 }
 
@@ -192,9 +187,15 @@ pub async fn get_omemo_recovery(
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
     let user = current_user(&state, &headers).await?;
-    let transfer = db::omemo_recovery_transfer(&state.pool, user.id, transfer_id)
+    let transfer = match state
+        .omemo_recovery_service()
+        .transfer(recovery_actor(&user), transfer_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("OMEMO recovery transfer does not exist".into()))?;
+    {
+        OmemoRecoveryRead::Authorized(value) => value
+            .ok_or_else(|| AppError::NotFound("OMEMO recovery transfer does not exist".into()))?,
+        OmemoRecoveryRead::Unauthorized => return Err(AppError::Unauthorized),
+    };
     Ok(Json(transfer_view(&transfer)))
 }
 
@@ -203,7 +204,14 @@ pub async fn get_omemo_recovery_authority(
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let user = current_user(&state, &headers).await?;
-    let authority = db::omemo_recovery_authority(&state.pool, user.id).await?;
+    let authority = match state
+        .omemo_recovery_service()
+        .authority(recovery_actor(&user))
+        .await?
+    {
+        OmemoRecoveryRead::Authorized(value) => value,
+        OmemoRecoveryRead::Unauthorized => return Err(AppError::Unauthorized),
+    };
     let body = serde_json::to_vec(&json!({
         "next_generation": authority.next_generation,
         "latest_consumed_generation": authority.latest_consumed_generation,
@@ -233,9 +241,9 @@ pub async fn consume_omemo_recovery(
     )?);
     request.value.consumer_secret.zeroize();
     let canonical_account = format!("{}@{}", user.username, state.config.domain);
-    let result = db::consume_omemo_recovery_transfer(
-        &state.pool,
-        db::ConsumeOmemoRecoveryRequest {
+    let result = state
+        .omemo_recovery_service()
+        .consume(ConsumeOmemoRecoveryRequest {
             user_id: user.id,
             canonical_account: &canonical_account,
             expected_auth_generation: user.auth_generation,
@@ -243,28 +251,27 @@ pub async fn consume_omemo_recovery(
             transfer_id,
             consumer_secret: &consumer_secret,
             package_sha256: &digest,
-        },
-    )
-    .await?;
+        })
+        .await?;
     let (transfer, replayed) = match result {
-        db::ConsumeOmemoRecovery::Consumed(transfer) => (transfer, false),
-        db::ConsumeOmemoRecovery::Replay(transfer) => (transfer, true),
-        db::ConsumeOmemoRecovery::Missing => {
+        ConsumeOmemoRecovery::Consumed(transfer) => (transfer, false),
+        ConsumeOmemoRecovery::Replay(transfer) => (transfer, true),
+        ConsumeOmemoRecovery::Missing => {
             return Err(AppError::NotFound(
                 "OMEMO recovery transfer does not exist".into(),
             ));
         }
-        db::ConsumeOmemoRecovery::Expired => {
+        ConsumeOmemoRecovery::Expired => {
             return Err(AppError::Conflict(
                 "OMEMO recovery transfer has expired".into(),
             ));
         }
-        db::ConsumeOmemoRecovery::Conflict => {
+        ConsumeOmemoRecovery::Conflict => {
             return Err(AppError::Conflict(
                 "OMEMO recovery package is stale, changed, or already consumed elsewhere".into(),
             ));
         }
-        db::ConsumeOmemoRecovery::Unauthorized => return Err(AppError::Unauthorized),
+        ConsumeOmemoRecovery::Unauthorized => return Err(AppError::Unauthorized),
     };
     let response = transfer_response(StatusCode::OK, &transfer, replayed)?;
 
@@ -289,25 +296,21 @@ pub async fn consume_omemo_recovery(
 }
 
 pub async fn poll_omemo_recovery(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::OmemoRecoveryPollContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     ApiPath(transfer_id): ApiPath<Uuid>,
     headers: HeaderMap,
     mut request: ApiJson<OmemoRecoveryPollRequest>,
 ) -> Result<Response, AppError> {
-    state
-        .metrics
-        .omemo_recovery_poll_requests_total
-        .fetch_add(1, Ordering::Relaxed);
-    let source_ip = crate::api::client_ip(peer.ip(), &headers, &state);
-    let _poll_permit = state
-        .acquire_omemo_recovery_poll(source_ip)
-        .ok_or_else(|| {
-            AppError::RateLimited(json!({
-                "message": "OMEMO recovery polling is temporarily limited",
-                "retry_after_seconds": 2
-            }))
-        })?;
+    state.record_request();
+    let source_ip =
+        crate::api::client_ip_with_trusted_proxies(peer.ip(), &headers, state.trusted_proxies());
+    let _poll_permit = state.acquire(source_ip).ok_or_else(|| {
+        AppError::RateLimited(json!({
+            "message": "OMEMO recovery polling is temporarily limited",
+            "retry_after_seconds": 2
+        }))
+    })?;
     let poll_secret = Zeroizing::new(parse_transfer_secret(&request.poll_secret, "poll_secret")?);
     request.value.poll_secret.zeroize();
     // Deliberately do not consult or accept an API bearer here. The first
@@ -315,20 +318,13 @@ pub async fn poll_omemo_recovery(
     // is a narrowly scoped, read-only capability for resolving that uncertain
     // commit and returns the same not-found result for an unknown ID, a wrong
     // secret, or an expired capability.
-    let status = db::poll_omemo_recovery_transfer(
-        state.omemo_recovery_poll_pool(),
-        &state.config.domain,
-        transfer_id,
-        &poll_secret,
-    )
-    .await?
-    .ok_or_else(|| {
-        state
-            .metrics
-            .omemo_recovery_poll_not_found_total
-            .fetch_add(1, Ordering::Relaxed);
-        AppError::NotFound("OMEMO recovery poll capability is unavailable".into())
-    })?;
+    let status = state
+        .poll(transfer_id, &poll_secret)
+        .await?
+        .ok_or_else(|| {
+            state.record_not_found();
+            AppError::NotFound("OMEMO recovery poll capability is unavailable".into())
+        })?;
     let body = serde_json::to_vec(&json!({
         "generation": status.generation,
         "state": status.state,
@@ -348,25 +344,19 @@ pub async fn revoke_omemo_recovery(
     headers: HeaderMap,
 ) -> Result<StatusCode, AppError> {
     let user = current_user(&state, &headers).await?;
-    match db::revoke_omemo_recovery_transfer(
-        &state.pool,
-        user.id,
-        user.auth_generation,
-        user.session_token(),
-        transfer_id,
-    )
-    .await?
+    match state
+        .omemo_recovery_service()
+        .revoke(recovery_actor(&user), transfer_id)
+        .await?
     {
-        db::RevokeOmemoRecovery::Revoked | db::RevokeOmemoRecovery::Replay => {
-            Ok(StatusCode::NO_CONTENT)
-        }
-        db::RevokeOmemoRecovery::Missing => Err(AppError::NotFound(
+        RevokeOmemoRecovery::Revoked | RevokeOmemoRecovery::Replay => Ok(StatusCode::NO_CONTENT),
+        RevokeOmemoRecovery::Missing => Err(AppError::NotFound(
             "OMEMO recovery transfer does not exist".into(),
         )),
-        db::RevokeOmemoRecovery::Conflict => Err(AppError::Conflict(
+        RevokeOmemoRecovery::Conflict => Err(AppError::Conflict(
             "a consumed OMEMO recovery transfer cannot be revoked".into(),
         )),
-        db::RevokeOmemoRecovery::Unauthorized => Err(AppError::Unauthorized),
+        RevokeOmemoRecovery::Unauthorized => Err(AppError::Unauthorized),
     }
 }
 

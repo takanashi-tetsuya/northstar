@@ -8,6 +8,9 @@ const recoveryWorker = fs.readFileSync(new URL('../web/omemo-recovery-worker.mjs
 const recoveryWorkerClient = fs.readFileSync(new URL('../web/omemo-recovery-worker-client.mjs', import.meta.url), 'utf8');
 const recoveryApi = fs.readFileSync(new URL('../src/api/omemo_recovery.rs', import.meta.url), 'utf8');
 const recoveryDb = fs.readFileSync(new URL('../src/db/omemo_recovery.rs', import.meta.url), 'utf8');
+const recoveryRepository = fs.readFileSync(new URL('../src/db/omemo_recovery_repository.rs', import.meta.url), 'utf8');
+const recoveryPoll = fs.readFileSync(new URL('../src/state/omemo_poll.rs', import.meta.url), 'utf8');
+const api = fs.readFileSync(new URL('../src/api/mod.rs', import.meta.url), 'utf8');
 const serverState = fs.readFileSync(new URL('../src/state.rs', import.meta.url), 'utf8');
 const metrics = fs.readFileSync(new URL('../src/metrics.rs', import.meta.url), 'utf8');
 
@@ -82,8 +85,12 @@ requirePattern(recoveryWorkerClient, /signal\?\.removeEventListener\('abort', ab
 requirePattern(recoveryWorkerClient, /deadline = setTimeout[\s\S]+deadlineMs/, 'OMEMO transfer worker has no hard deadline');
 requirePattern(recoveryWorkerClient, /clearTimeout\(deadline\)[\s\S]+worker\.terminate\(\)/, 'OMEMO transfer worker is not terminated on every settled path');
 requirePattern(recoveryWorkerClient, /requiredBytes <= budgetBytes[\s\S]+navigator\.deviceMemory/, 'OMEMO transfer worker lacks a device-memory budget');
-requirePattern(serverState, /OMEMO_POLL_CONCURRENCY: usize = 4[\s\S]+OMEMO_POLL_IP_REQUESTS_PER_MINUTE: usize = 30[\s\S]+omemo_recovery_poll_pool: PgPool/, 'public OMEMO recovery polling lacks independent bounded admission and database isolation');
-requirePattern(recoveryApi, /client_ip\(peer\.ip\(\), &headers, &state\)[\s\S]+acquire_omemo_recovery_poll[\s\S]+db::poll_omemo_recovery_transfer/, 'poll admission must use the trusted-proxy client IP and precede every database lookup');
+requirePattern(serverState, /OMEMO_POLL_CONCURRENCY: usize = 4[\s\S]+OMEMO_POLL_IP_REQUESTS_PER_MINUTE: usize = 30/, 'public OMEMO recovery polling lost its admission limits');
+requirePattern(serverState, /let omemo_recovery_poll_pool = startup_database_connect\([\s\S]+PostgresOmemoRecoveryPollRepository::new\(\s*omemo_recovery_poll_pool/, 'public recovery polling must retain its dedicated database pool');
+requirePattern(recoveryRepository, /struct PostgresOmemoRecoveryPollRepository\s*\{\s*pool: PgPool,[\s\S]+impl OmemoRecoveryPollRepository[\s\S]+db::poll_omemo_recovery_transfer\(&self.pool,/, 'public recovery polling must use the isolated repository');
+requirePattern(recoveryPoll, /Semaphore::new\(OMEMO_POLL_CONCURRENCY\)[\s\S]+admit_bounded_omemo_poll_ip\([\s\S]+try_acquire_owned\(\)/, 'public recovery polling must enforce both IP and global admission');
+requirePattern(recoveryApi, /State<crate::state::OmemoRecoveryPollContext>[\s\S]+client_ip_with_trusted_proxies\(peer.ip\(\), &headers, state.trusted_proxies\(\)\)[\s\S]+state.acquire\(source_ip\)[\s\S]+\.poll\(transfer_id, &poll_secret\)/, 'poll admission must use the trusted-proxy client IP and precede every database lookup');
+requirePattern(api, /fn client_ip_with_trusted_proxies\([\s\S]+if !trusted.contains\(&peer_ip\)\s*\{\s*return peer_ip;\s*\}[\s\S]+forwarded_client_ip_from_headers\(peer_ip, headers, trusted\)/, 'recovery polling must ignore forwarded addresses from untrusted peers');
 requirePattern(recoveryDb, /pool\.begin\(\)[\s\S]+SET LOCAL statement_timeout = '1500ms'[\s\S]+fetch_optional\(&mut \*tx\)/, 'public recovery polling has no transaction-local bounded database execution time');
 if (/admit_omemo_poll_ip_window\(&mut window, now\)[\s\S]{0,300}window\.push_back\(now\)/.test(serverState)) {
   throw new Error('public recovery poll admission counts one request twice');

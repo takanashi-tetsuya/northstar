@@ -179,3 +179,5 @@ pub(crate) mod upload_maintenance;
 pub(crate) mod sm_suspension;
 
 pub(crate) mod api_queries;
+
+pub(crate) mod omemo_recovery_repository;

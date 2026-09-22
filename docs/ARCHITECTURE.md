@@ -136,6 +136,10 @@ Key ownership:
 - Offline replay separates resource validation and policy from durable lease,
   page and transport-fence operations. Cursor and lease values belong to the
   service boundary; the adapter retains PostgreSQL clock and ownership checks.
+- Stream management retains device policy, memory accounting and local wake
+  subscriptions in its service. The repository commits binding, FAST, privacy
+  and transport ownership together. A database adapter runs the shared authority
+  listener on its existing reserved connection.
 - Administrator commands validate claim identity and page bounds before the
   repository. Sensitive reads retain their generation lock and snapshot;
   command mutations retain their dedicated database authority.

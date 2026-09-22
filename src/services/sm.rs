@@ -1,47 +1,20 @@
 //! Application boundary for durable resource binding and XEP-0198 ownership.
 
-use crate::{
-    config::SM_AUTHORITY_LISTENER_MAX_CONNECTIONS,
-    db,
-    services::mix::{MixDeliveryWakeBroker, MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL},
-};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use dashmap::mapref::entry::Entry;
-use sqlx::{
-    postgres::{PgConnectOptions, PgListener, PgPoolOptions},
-    PgPool,
-};
 use std::{
     net::IpAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Weak,
     },
-    time::Duration,
 };
 use tokio::sync::watch;
 use uuid::Uuid;
 
-const SM_AUTHORITY_NOTIFICATION_CHANNEL: &str = "northstar_sm_authority_v1";
-
 /// Application-layer proof that one already-authorized C2S lifecycle may
 /// claim a cluster route. Protocol code never receives a database DTO.
 pub(crate) use northstar_session_core::{SessionRouteClaimProof, SmMucMembership};
-
-impl From<SessionRouteClaimProof> for db::ClusterSessionRouteClaimProof {
-    fn from(value: SessionRouteClaimProof) -> Self {
-        match value {
-            SessionRouteClaimProof::Binding => Self::Binding,
-            SessionRouteClaimProof::SmResume {
-                session_id,
-                claim_token,
-            } => Self::SmResume {
-                session_id,
-                claim_token,
-            },
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub(crate) struct SmSessionSnapshot {
@@ -102,52 +75,6 @@ impl SmSessionSnapshot {
             add(stanza.stanza.len())?;
         }
         Some(bytes)
-    }
-}
-
-impl From<&db::SmSessionSnapshot> for SmSessionSnapshot {
-    fn from(value: &db::SmSessionSnapshot) -> Self {
-        Self {
-            inbound_h: value.inbound_h,
-            outbound_h: value.outbound_h,
-            acked_h: value.acked_h,
-            available: value.available,
-            carbons: value.carbons,
-            priority: value.priority,
-            blocklist_requested: value.blocklist_requested,
-            roster_requested: value.roster_requested,
-            active_privacy_list: value.active_privacy_list.clone(),
-            privacy_requested: value.privacy_requested,
-            peer_ip: value.peer_ip,
-            user_agent_id: value.user_agent_id,
-            joined_rooms: value.joined_rooms.clone(),
-            directed_presence: value.directed_presence.clone(),
-            last_presence: value.last_presence.clone(),
-            unacked: value.unacked.clone(),
-        }
-    }
-}
-
-impl From<&SmSessionSnapshot> for db::SmSessionSnapshot {
-    fn from(value: &SmSessionSnapshot) -> Self {
-        Self {
-            inbound_h: value.inbound_h,
-            outbound_h: value.outbound_h,
-            acked_h: value.acked_h,
-            available: value.available,
-            carbons: value.carbons,
-            priority: value.priority,
-            blocklist_requested: value.blocklist_requested,
-            roster_requested: value.roster_requested,
-            active_privacy_list: value.active_privacy_list.clone(),
-            privacy_requested: value.privacy_requested,
-            peer_ip: value.peer_ip,
-            user_agent_id: value.user_agent_id,
-            joined_rooms: value.joined_rooms.clone(),
-            directed_presence: value.directed_presence.clone(),
-            last_presence: value.last_presence.clone(),
-            unacked: value.unacked.clone(),
-        }
     }
 }
 
@@ -219,46 +146,10 @@ impl SmResumeClaim {
     }
 }
 
-impl From<db::SmResumeClaim> for SmResumeClaim {
-    fn from(value: db::SmResumeClaim) -> Self {
-        Self {
-            session_id: value.session_id,
-            claim_token: value.claim_token,
-            claim_deadline: value.claim_deadline,
-            full_jid: value.full_jid,
-            resource: value.resource,
-            resume_timeout_seconds: value.resume_timeout_seconds,
-            inbound_h: value.inbound_h,
-            acked_h: value.acked_h,
-            available: value.available,
-            carbons: value.carbons,
-            priority: value.priority,
-            blocklist_requested: value.blocklist_requested,
-            roster_requested: value.roster_requested,
-            active_privacy_list: value.active_privacy_list,
-            privacy_requested: value.privacy_requested,
-            user_agent_id: value.user_agent_id,
-            joined_rooms: value.joined_rooms,
-            directed_presence: value.directed_presence,
-            last_presence: value.last_presence,
-            unacked: value.unacked,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct ActivatedSmSession {
     pub(crate) outbound_h: u32,
     pub(crate) unacked: Vec<crate::outbound::SmUnackedStanza>,
-}
-
-impl From<db::ActivatedSmSession> for ActivatedSmSession {
-    fn from(value: db::ActivatedSmSession) -> Self {
-        Self {
-            outbound_h: value.outbound_h,
-            unacked: value.unacked,
-        }
-    }
 }
 
 pub(crate) struct SmSessionCreationRequest<'a> {
@@ -309,21 +200,6 @@ impl SmQueueOwnershipResolution {
     }
 }
 
-impl From<db::SmQueueOwnershipResolution> for SmQueueOwnershipResolution {
-    fn from(value: db::SmQueueOwnershipResolution) -> Self {
-        Self {
-            mix_rotations: value
-                .mix_rotations
-                .into_iter()
-                .map(|rotation| SmMixLeaseRotation {
-                    previous: rotation.previous,
-                    current: rotation.current,
-                })
-                .collect(),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) enum SmSessionCreationOutcome {
     Created {
@@ -339,11 +215,20 @@ pub(crate) struct SmCheckpointOutcome {
     pub(crate) ownership: SmQueueOwnershipResolution,
 }
 
-impl From<db::SmCheckpointOutcome> for SmCheckpointOutcome {
-    fn from(value: db::SmCheckpointOutcome) -> Self {
-        Self {
-            updated: value.updated,
-            ownership: value.ownership.into(),
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SmIpPolicy {
+    None,
+    Exact,
+    Subnet,
+}
+
+impl SmIpPolicy {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "exact" => Some(Self::Exact),
+            "subnet" => Some(Self::Subnet),
+            _ => None,
         }
     }
 }
@@ -372,16 +257,6 @@ pub(crate) enum SmPendingReason {
     LiveAndClaim,
 }
 
-impl From<db::SmPendingReason> for SmPendingReason {
-    fn from(value: db::SmPendingReason) -> Self {
-        match value {
-            db::SmPendingReason::Live => Self::Live,
-            db::SmPendingReason::Claim => Self::Claim,
-            db::SmPendingReason::LiveAndClaim => Self::LiveAndClaim,
-        }
-    }
-}
-
 /// Authoritative reason and wake boundary for a valid, but not yet claimable,
 /// XEP-0198 resume epoch. These values are produced under the same row lock as
 /// the claim decision; protocol code never guesses a retry interval.
@@ -393,19 +268,6 @@ pub(crate) struct SmResumePending {
     pub(crate) state_version: i64,
     pub(crate) reason: SmPendingReason,
     pub(crate) retry_at: std::time::Instant,
-}
-
-impl From<db::SmResumePending> for SmResumePending {
-    fn from(value: db::SmResumePending) -> Self {
-        Self {
-            session_id: value.session_id,
-            old_connection_id: value.old_connection_id,
-            full_jid: value.full_jid,
-            state_version: value.state_version,
-            reason: value.reason.into(),
-            retry_at: value.retry_at,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -532,7 +394,7 @@ struct SmAuthoritySlot {
 }
 
 #[derive(Debug)]
-struct SmAuthorityBroker {
+pub(crate) struct SmAuthorityBroker {
     schema: String,
     listener_generation: AtomicU64,
     notification_sequence: AtomicU64,
@@ -540,6 +402,23 @@ struct SmAuthorityBroker {
 }
 
 impl SmAuthorityBroker {
+    pub(crate) fn schema(&self) -> &str {
+        &self.schema
+    }
+    pub(crate) fn accept_notification(&self, payload: &str) -> bool {
+        if payload.len() > 256 {
+            return false;
+        }
+        let Ok(event) = serde_json::from_str::<SmAuthorityNotification>(payload) else {
+            return false;
+        };
+        if event.schema != self.schema || event.state_version <= 0 {
+            return false;
+        }
+        self.publish_state(event.session_id, event.state_version);
+        true
+    }
+
     fn new(schema: String) -> Result<Arc<Self>> {
         anyhow::ensure!(
             !schema.is_empty() && schema.len() <= 63 && !schema.contains('\0'),
@@ -635,7 +514,7 @@ impl SmAuthorityBroker {
     /// A listener start, transparent reconnect, or terminal receive error may
     /// have lost notifications. Advance a process-global generation and wake
     /// every actual waiter; the waiter immediately re-reads PostgreSQL.
-    fn publish_listener_transition(&self) {
+    pub(crate) fn publish_listener_transition(&self) {
         let generation = self
             .listener_generation
             .fetch_add(1, Ordering::AcqRel)
@@ -729,102 +608,142 @@ pub(crate) enum SmResumeFinalizationOutcome {
 }
 
 #[derive(Clone)]
-pub(crate) struct SmService {
-    pool: PgPool,
+pub(crate) struct SmService<R> {
+    repository: R,
     authority: Arc<SmAuthorityBroker>,
 }
 
-impl SmService {
-    pub(crate) fn new(pool: PgPool, schema: String) -> Result<Self> {
+pub(crate) trait SmRepository: Send + Sync {
+    fn create_session(
+        &self,
+        request: SmSessionCreationRequest<'_>,
+    ) -> impl std::future::Future<Output = Result<SmSessionCreationOutcome>> + Send;
+    fn claim_resume(
+        &self,
+        request: SmResumeClaimRequest<'_>,
+        ip_policy: SmIpPolicy,
+    ) -> impl std::future::Future<Output = Result<SmResumeClaimOutcome>> + Send;
+    #[allow(clippy::too_many_arguments)]
+    fn checkpoint_session(
+        &self,
+        session_id: Uuid,
+        connection_id: Uuid,
+        snapshot: &SmSessionSnapshot,
+        ttl_seconds: u64,
+        live_lease_seconds: u64,
+        max_stanzas: usize,
+        max_bytes: usize,
+    ) -> impl std::future::Future<Output = Result<SmCheckpointOutcome>> + Send;
+    fn remove_live_muc_memberships(
+        &self,
+        session_id: Uuid,
+        connection_id: Uuid,
+        memberships: &[SmMucMembership],
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    #[allow(clippy::too_many_arguments)]
+    fn checkpoint_and_acknowledge(
+        &self,
+        session_id: Uuid,
+        connection_id: Uuid,
+        snapshot: &SmSessionSnapshot,
+        acknowledged: &[crate::outbound::SmUnackedStanza],
+        ttl_seconds: u64,
+        live_lease_seconds: u64,
+        max_stanzas: usize,
+        max_bytes: usize,
+    ) -> impl std::future::Future<Output = Result<SmCheckpointOutcome>> + Send;
+    fn acknowledge_delivery_batch(
+        &self,
+        sources: &[crate::outbound::TransportOwnershipSource],
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn reserve_binding(
+        &self,
+        connection_id: Uuid,
+        user_id: Uuid,
+        expected_auth_generation: i64,
+        full_jid: &str,
+        lease_seconds: u64,
+    ) -> impl std::future::Future<Output = Result<BindingReservationOutcome>> + Send;
+    #[allow(clippy::too_many_arguments)]
+    fn finalize_binding(
+        &self,
+        connection_id: Uuid,
+        user_id: Uuid,
+        expected_auth_generation: i64,
+        full_jid: &str,
+        lease_seconds: u64,
+        device_id: Option<Uuid>,
+        fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+    ) -> impl std::future::Future<Output = Result<BindingFinalizationOutcome>> + Send;
+    fn finalize_resume(
+        &self,
+        request: SmResumeFinalizationRequest<'_>,
+    ) -> impl std::future::Future<Output = Result<SmResumeFinalizationOutcome>> + Send;
+    fn release_claim(
+        &self,
+        session_id: Uuid,
+        claim_token: Uuid,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn release_live_session(
+        &self,
+        connection_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    #[allow(clippy::too_many_arguments)]
+    fn suspend_exact_session(
+        &self,
+        session_id: Uuid,
+        connection_id: Uuid,
+        user_id: Uuid,
+        expected_auth_generation: i64,
+        snapshot: &SmSessionSnapshot,
+        ttl_seconds: u64,
+        max_stanzas: usize,
+        max_bytes: usize,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+}
+
+impl<R: SmRepository> SmService<R> {
+    pub(crate) fn new(repository: R, schema: String) -> Result<Self> {
         Ok(Self {
-            pool,
+            repository,
             authority: SmAuthorityBroker::new(schema)?,
         })
     }
-
+    pub(crate) fn authority_broker(&self) -> Arc<SmAuthorityBroker> {
+        Arc::clone(&self.authority)
+    }
     pub(crate) fn subscribe_authority(&self, session_id: Uuid) -> SmAuthoritySubscription {
         self.authority.subscribe(session_id)
     }
-
     pub(crate) async fn create_session(
         &self,
         request: SmSessionCreationRequest<'_>,
     ) -> Result<SmSessionCreationOutcome> {
-        let snapshot = db::SmSessionSnapshot::from(request.snapshot);
-        match db::create_sm_session_with_ownership_resolution(
-            &self.pool,
-            request.token_hash,
-            request.user_id,
-            request.auth_generation,
-            request.full_jid,
-            request.resource,
-            request.server_domain,
-            request.connection_id,
-            &snapshot,
-            request.ttl_seconds,
-            request.live_lease_seconds,
-            request.max_per_account,
-            request.max_global,
-        )
-        .await
-        {
-            Ok(created) => Ok(SmSessionCreationOutcome::Created {
-                id: created.id,
-                ownership: created.ownership.into(),
-            }),
-            Err(error) if db::is_capacity_exhausted(&error) => {
-                Ok(SmSessionCreationOutcome::CapacityExhausted)
-            }
-            Err(error) => Err(error),
-        }
+        self.repository.create_session(request).await
     }
-
     pub(crate) async fn claim_resume(
         &self,
         request: SmResumeClaimRequest<'_>,
     ) -> Result<SmResumeClaimOutcome> {
-        let ip_policy = db::SmIpPolicy::parse(request.ip_binding)
+        let ip_policy = SmIpPolicy::parse(request.ip_binding)
             .ok_or_else(|| anyhow::anyhow!("invalid configured SM IP binding"))?;
-        Ok(
-            match db::claim_sm_session_status(
-                &self.pool,
-                request.token_hash,
-                request.user_id,
-                request.peer_ip,
-                request.user_agent_id,
-                ip_policy,
-                request.require_same_device,
-                request.claim_lease_seconds,
-            )
-            .await?
-            {
-                db::SmClaimStatus::Claimed(claim) => {
-                    // Defense in depth against a stale or incorrectly
-                    // installed SECURITY DEFINER capability: strict mode must
-                    // fail closed for either NULL identifier as well as a
-                    // mismatch. Release the exact claim before rejecting so a
-                    // bad projection cannot strand the valid session for the
-                    // claim lease.
-                    if !same_device_binding_matches(
-                        claim.user_agent_id,
-                        request.user_agent_id,
-                        request.require_same_device,
-                    ) {
-                        db::release_sm_claim(&self.pool, claim.session_id, claim.claim_token)
-                            .await?;
-                        SmResumeClaimOutcome::Rejected
-                    } else {
-                        SmResumeClaimOutcome::Claimed(Box::new((*claim).into()))
-                    }
-                }
-                db::SmClaimStatus::Pending(pending) => {
-                    SmResumeClaimOutcome::Pending(pending.into())
-                }
-                db::SmClaimStatus::Rejected => SmResumeClaimOutcome::Rejected,
-            },
-        )
+        let requested_device = request.user_agent_id;
+        let require_same_device = request.require_same_device;
+        let outcome = self.repository.claim_resume(request, ip_policy).await?;
+        if let SmResumeClaimOutcome::Claimed(claim) = &outcome {
+            if !same_device_binding_matches(
+                claim.user_agent_id,
+                requested_device,
+                require_same_device,
+            ) {
+                self.repository
+                    .release_claim(claim.session_id, claim.claim_token)
+                    .await?;
+                return Ok(SmResumeClaimOutcome::Rejected);
+            }
+        }
+        Ok(outcome)
     }
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn checkpoint_session(
         &self,
@@ -836,30 +755,28 @@ impl SmService {
         max_stanzas: usize,
         max_bytes: usize,
     ) -> Result<SmCheckpointOutcome> {
-        let snapshot = db::SmSessionSnapshot::from(snapshot);
-        Ok(db::checkpoint_sm_session_with_ownership_resolution(
-            &self.pool,
-            session_id,
-            connection_id,
-            &snapshot,
-            ttl_seconds,
-            live_lease_seconds,
-            max_stanzas,
-            max_bytes,
-        )
-        .await?
-        .into())
+        self.repository
+            .checkpoint_session(
+                session_id,
+                connection_id,
+                snapshot,
+                ttl_seconds,
+                live_lease_seconds,
+                max_stanzas,
+                max_bytes,
+            )
+            .await
     }
-
     pub(crate) async fn remove_live_muc_memberships(
         &self,
         session_id: Uuid,
         connection_id: Uuid,
         memberships: &[SmMucMembership],
     ) -> Result<bool> {
-        db::remove_live_sm_muc_memberships(&self.pool, session_id, connection_id, memberships).await
+        self.repository
+            .remove_live_muc_memberships(session_id, connection_id, memberships)
+            .await
     }
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn checkpoint_and_acknowledge(
         &self,
@@ -872,34 +789,25 @@ impl SmService {
         max_stanzas: usize,
         max_bytes: usize,
     ) -> Result<SmCheckpointOutcome> {
-        let snapshot = db::SmSessionSnapshot::from(snapshot);
-        Ok(
-            db::checkpoint_sm_session_and_acknowledge_with_ownership_resolution(
-                &self.pool,
+        self.repository
+            .checkpoint_and_acknowledge(
                 session_id,
                 connection_id,
-                &snapshot,
+                snapshot,
                 acknowledged,
                 ttl_seconds,
                 live_lease_seconds,
                 max_stanzas,
                 max_bytes,
             )
-            .await?
-            .into(),
-        )
+            .await
     }
-
     pub(crate) async fn acknowledge_delivery_batch(
         &self,
         sources: &[crate::outbound::TransportOwnershipSource],
     ) -> Result<()> {
-        db::acknowledge_transport_sources(&self.pool, sources).await
+        self.repository.acknowledge_delivery_batch(sources).await
     }
-
-    /// Phase one of resource publication. Only durable capacity and the exact
-    /// `(connection,user,full-JID)` claim are committed here; no caller holds
-    /// this transaction while registering Redis/in-memory routes.
     pub(crate) async fn reserve_binding(
         &self,
         connection_id: Uuid,
@@ -908,46 +816,19 @@ impl SmService {
         full_jid: &str,
         lease_seconds: u64,
     ) -> Result<BindingReservationOutcome> {
-        let Some(mut tx) =
-            db::lock_auth_generation(&self.pool, user_id, expected_auth_generation).await?
-        else {
-            return Ok(BindingReservationOutcome::CredentialsExpired);
-        };
-        let reserved = db::reserve_live_session_in_transaction(
-            &mut tx,
-            connection_id,
-            user_id,
-            full_jid,
-            lease_seconds,
-            true,
-        )
-        .await?;
-        match reserved {
-            db::LiveSessionReservation::Reserved
-            | db::LiveSessionReservation::ReplacedResumable => {
-                tx.commit().await?;
-                Ok(BindingReservationOutcome::Reserved)
-            }
-            db::LiveSessionReservation::Conflict => {
-                tx.rollback().await?;
-                Ok(BindingReservationOutcome::Conflict)
-            }
-            db::LiveSessionReservation::CapacityExhausted => {
-                tx.rollback().await?;
-                Ok(BindingReservationOutcome::CapacityExhausted)
-            }
-        }
+        self.repository
+            .reserve_binding(
+                connection_id,
+                user_id,
+                expected_auth_generation,
+                full_jid,
+                lease_seconds,
+            )
+            .await
     }
-
-    /// Phase two of resource publication. Re-checks authentication and the
-    /// exact durable reservation, then commits FAST state together with a
-    /// still-invisible login-epoch stage in one short PostgreSQL transaction.
-    /// The transport-success continuation publishes that epoch and any
-    /// replacement lease atomically.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn finalize_binding(
         &self,
-        fast_master_key: &[u8],
         connection_id: Uuid,
         user_id: Uuid,
         expected_auth_generation: i64,
@@ -956,178 +837,30 @@ impl SmService {
         device_id: Option<Uuid>,
         fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
     ) -> Result<BindingFinalizationOutcome> {
-        let Some(mut tx) =
-            db::lock_auth_generation(&self.pool, user_id, expected_auth_generation).await?
-        else {
-            return Ok(BindingFinalizationOutcome::CredentialsExpired);
-        };
-        if !db::finalize_binding_live_session_in_transaction(
-            &mut tx,
-            connection_id,
-            user_id,
-            full_jid,
-            lease_seconds,
-        )
-        .await?
-        {
-            tx.rollback().await?;
-            return Ok(BindingFinalizationOutcome::ReservationLost);
-        }
-        let staged_login_epoch = crate::db::authentication::stage_login_epoch_in_transaction(
-            &mut tx,
-            user_id,
-            device_id,
-            expected_auth_generation,
-            connection_id,
-        )
-        .await?;
-        if device_id.is_some() && staged_login_epoch.is_none() {
-            tx.rollback().await?;
-            return Ok(BindingFinalizationOutcome::CredentialsExpired);
-        }
-        let issued_fast = if let Some(plan) = fast_plan {
-            let db_plan = db::FastCommitPlan::from(plan);
-            match db::commit_fast_state_in_transaction(
-                &mut tx,
-                fast_master_key,
+        self.repository
+            .finalize_binding(
+                connection_id,
                 user_id,
                 expected_auth_generation,
-                &db_plan,
+                full_jid,
+                lease_seconds,
+                device_id,
+                fast_plan,
             )
-            .await?
-            {
-                db::FastCommitOutcome::Committed(issued) => {
-                    issued.map(crate::services::authentication::IssuedFastToken::from)
-                }
-                db::FastCommitOutcome::CredentialsExpired => {
-                    tx.rollback().await?;
-                    return Ok(BindingFinalizationOutcome::CredentialsExpired);
-                }
-            }
-        } else {
-            None
-        };
-        tx.commit().await?;
-        Ok(BindingFinalizationOutcome::Committed {
-            receipt: crate::services::authentication::CredentialCommitReceipt::new(
-                issued_fast,
-                staged_login_epoch,
-                Some(crate::services::authentication::BindingPublication {
-                    connection_id,
-                    user_id,
-                    full_jid: full_jid.to_owned(),
-                    lease_seconds,
-                }),
-            ),
-        })
+            .await
     }
-
-    /// Finalize a claimed SM resume after the non-routable local/cluster route
-    /// has been staged. All durable authority changes, including the restored
-    /// privacy-list selection, commit together; no database failure remains
-    /// after the caller is told that resume succeeded.
     pub(crate) async fn finalize_resume(
         &self,
-        fast_master_key: &[u8],
         request: SmResumeFinalizationRequest<'_>,
     ) -> Result<SmResumeFinalizationOutcome> {
-        let Some(mut tx) = db::lock_auth_generation(
-            &self.pool,
-            request.user_id,
-            request.expected_auth_generation,
-        )
-        .await?
-        else {
-            return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
-        };
-        let staged_login_epoch = crate::db::authentication::stage_login_epoch_in_transaction(
-            &mut tx,
-            request.user_id,
-            request.user_agent_id,
-            request.expected_auth_generation,
-            request.connection_id,
-        )
-        .await?;
-        if request.user_agent_id.is_some() && staged_login_epoch.is_none() {
-            tx.rollback().await?;
-            return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
-        }
-        let Some(activated) = db::activate_claimed_sm_session_in_transaction(
-            &mut tx,
-            request.session_id,
-            request.claim_token,
-            request.connection_id,
-            request.client_h,
-            request.acknowledged_count,
-            request.peer_ip,
-            request.user_agent_id,
-            request.ttl_seconds,
-            request.live_lease_seconds,
-            request.max_stanzas,
-            request.max_bytes,
-        )
-        .await?
-        else {
-            tx.rollback().await?;
-            return Ok(SmResumeFinalizationOutcome::ClaimLost);
-        };
-        let issued_fast = if let Some(plan) = request.fast_plan {
-            let db_plan = db::FastCommitPlan::from(plan);
-            match db::commit_fast_state_in_transaction(
-                &mut tx,
-                fast_master_key,
-                request.user_id,
-                request.expected_auth_generation,
-                &db_plan,
-            )
-            .await?
-            {
-                db::FastCommitOutcome::Committed(issued) => {
-                    issued.map(crate::services::authentication::IssuedFastToken::from)
-                }
-                db::FastCommitOutcome::CredentialsExpired => {
-                    tx.rollback().await?;
-                    return Ok(SmResumeFinalizationOutcome::CredentialsExpired);
-                }
-            }
-        } else {
-            None
-        };
-        if !db::set_active_privacy_list_in_transaction(
-            &mut tx,
-            request.user_id,
-            request.connection_id,
-            request.active_privacy_list,
-        )
-        .await?
-        {
-            tx.rollback().await?;
-            return Ok(SmResumeFinalizationOutcome::PrivacySelectionMissing);
-        }
-        tx.commit().await?;
-        Ok(SmResumeFinalizationOutcome::Committed(Box::new(
-            SmResumeFinalizationCommit {
-                activated: activated.into(),
-                receipt: crate::services::authentication::CredentialCommitReceipt::new(
-                    issued_fast,
-                    staged_login_epoch,
-                    None,
-                ),
-            },
-        )))
+        self.repository.finalize_resume(request).await
     }
-
-    /// Release only the exact PostgreSQL claim. Keeping this operation behind
-    /// one capability prevents protocol error branches from acquiring broader
-    /// session-table authority.
     pub(crate) async fn release_claim(&self, session_id: Uuid, claim_token: Uuid) -> Result<()> {
-        crate::db::release_sm_claim(&self.pool, session_id, claim_token).await
+        self.repository.release_claim(session_id, claim_token).await
     }
-
     pub(crate) async fn release_live_session(&self, connection_id: Uuid) -> Result<bool> {
-        db::release_live_session(&self.pool, connection_id).await
+        self.repository.release_live_session(connection_id).await
     }
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn suspend_exact_session(
         &self,
@@ -1140,201 +873,19 @@ impl SmService {
         max_stanzas: usize,
         max_bytes: usize,
     ) -> Result<bool> {
-        let snapshot = db::SmSessionSnapshot::from(snapshot);
-        db::suspend_activated_sm_resume_exact(
-            &self.pool,
-            session_id,
-            connection_id,
-            user_id,
-            expected_auth_generation,
-            &snapshot,
-            ttl_seconds,
-            max_stanzas,
-            max_bytes,
-        )
-        .await
+        self.repository
+            .suspend_exact_session(
+                session_id,
+                connection_id,
+                user_id,
+                expected_auth_generation,
+                snapshot,
+                ttl_seconds,
+                max_stanzas,
+                max_bytes,
+            )
+            .await
     }
-}
-
-/// Run the one reserved PostgreSQL notification connection shared by the
-/// XEP-0198, MIX delivery and account revocation workers.
-///
-/// AppState composes these independent services here; neither protocol layer
-/// reaches into the other's broker.  This deliberately reuses the existing
-/// reserved listener connection instead of consuming a primary-pool slot or
-/// adding a new runtime-role connection.
-async fn run_database_authority_listener(
-    connect_options: PgConnectOptions,
-    authority: Arc<SmAuthorityBroker>,
-    mix_delivery_wake: Arc<MixDeliveryWakeBroker>,
-    account_revocations: Arc<tokio::sync::Notify>,
-    cancel: tokio_util::sync::CancellationToken,
-    heartbeat: crate::workers::WorkerHeartbeat,
-) -> Result<()> {
-    // PgListener internally retains this one-connection pool solely to rebuild
-    // its socket after a PostgreSQL failover. It is deliberately unrelated to
-    // the application PgPool, so a blocked LISTEN cannot consume one of the
-    // request/transaction connections.
-    let listener_pool = PgPoolOptions::new()
-        .min_connections(0)
-        .max_connections(SM_AUTHORITY_LISTENER_MAX_CONNECTIONS)
-        .max_lifetime(None)
-        .idle_timeout(None)
-        .connect_with(connect_options)
-        .await
-        .context("could not establish the dedicated SM authority listener connection")?;
-    let actual_schema: String = sqlx::query_scalar("SELECT current_schema()")
-        .fetch_one(&listener_pool)
-        .await
-        .context("could not attest the SM authority listener schema")?;
-    anyhow::ensure!(
-        actual_schema == authority.schema,
-        "SM authority listener connected to an unexpected PostgreSQL schema"
-    );
-    let mut listener = PgListener::connect_with(&listener_pool)
-        .await
-        .context("could not acquire the dedicated SM authority LISTEN connection")?;
-    listener
-        .listen_all([
-            SM_AUTHORITY_NOTIFICATION_CHANNEL,
-            MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL,
-            "northstar_account_revocations",
-        ])
-        .await
-        .context("could not subscribe to PostgreSQL authority notifications")?;
-    // Publish only after all channels are installed. A reconnect or startup
-    // can have a gap before LISTEN becomes active; each broker's retained
-    // generation makes its workers run an authoritative database probe.
-    authority.publish_listener_transition();
-    mix_delivery_wake.publish_listener_transition();
-    account_revocations.notify_one();
-    heartbeat.ok();
-    let mut liveness = tokio::time::interval(Duration::from_secs(5));
-    liveness.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-    loop {
-        tokio::select! {
-                biased;
-                _ = cancel.cancelled() => {
-                    authority.publish_listener_transition();
-                    mix_delivery_wake.publish_listener_transition();
-        account_revocations.notify_one();
-                    return Ok(());
-                }
-                _ = liveness.tick() => {
-                    // LISTEN is legitimately quiet when no SM authority changes
-                    // occur. A periodic supervisor heartbeat proves that this
-                    // task is still schedulable without turning notification
-                    // silence into a false failure.
-                    heartbeat.ok();
-                }
-                notification = listener.try_recv() => {
-                    match notification {
-                        Ok(Some(notification)) => {
-                            match notification.channel() {
-                                SM_AUTHORITY_NOTIFICATION_CHANNEL => {
-                                    if notification.payload().len() > 256 {
-                                        continue;
-                                    }
-                                    let Ok(event) = serde_json::from_str::<SmAuthorityNotification>(
-                                        notification.payload(),
-                                    ) else {
-                                        tracing::warn!(
-                                            channel = notification.channel(),
-                                            "discarded malformed SM authority notification"
-                                        );
-                                        continue;
-                                    };
-                                    if event.schema == authority.schema && event.state_version > 0 {
-                                        authority.publish_state(event.session_id, event.state_version);
-                                    }
-                                }
-                                MIX_DELIVERY_WAKE_NOTIFICATION_CHANNEL => {
-                                    // Migration 0133 emits only TG_TABLE_SCHEMA
-                                    // (max 63 bytes). The payload is a wake hint,
-                                    // never a delivery capability: MIX workers
-                                    // still claim the exact fenced recipient row.
-                                    if notification.payload().len() > 63
-                                        || !mix_delivery_wake
-                                            .accept_committed_notification(notification.payload())
-                                    {
-                                        tracing::warn!(
-                                            channel = notification.channel(),
-                                            "discarded mismatched MIX delivery wake notification"
-                                        );
-                                        continue;
-                                    }
-                                }
-                                "northstar_account_revocations" => {
-                                    if notification.payload() != authority.schema {
-                                        continue;
-                                    }
-                                    account_revocations.notify_one();
-                                }
-                                _ => continue,
-                            }
-                            heartbeat.ok();
-                        }
-                        Ok(None) => {
-                            // PgListener has already re-established LISTEN before
-                            // returning None. Notifications in the disconnect gap
-                            // are unknowable, so generation is the loss marker and
-                            // every current waiter performs a fresh authority read.
-                            authority.publish_listener_transition();
-                            mix_delivery_wake.publish_listener_transition();
-        account_revocations.notify_one();
-                            heartbeat.ok();
-                        }
-                        Err(error) => {
-                            authority.publish_listener_transition();
-                            mix_delivery_wake.publish_listener_transition();
-        account_revocations.notify_one();
-                            return Err(error).context("SM authority notification listener failed");
-                        }
-                    }
-                }
-            }
-    }
-}
-
-/// Start the one database authority listener after AppState has composed the
-/// independent SM and MIX service brokers.  The listener is a wake transport,
-/// not a source of protocol authority; each recipient/session path still
-/// reads its fenced PostgreSQL record before acting.
-pub(crate) fn start_database_authority_listener(
-    service: SmService,
-    mix_delivery_wake: Arc<MixDeliveryWakeBroker>,
-    account_revocations: Arc<tokio::sync::Notify>,
-    connect_options: PgConnectOptions,
-    registry: Arc<crate::workers::WorkerRegistry>,
-    cancel: tokio_util::sync::CancellationToken,
-) {
-    let authority = Arc::clone(&service.authority);
-    registry.supervise(
-        "sm-authority-listener",
-        crate::workers::WorkerCriticality::Restartable,
-        crate::workers::WorkerMode::Continuous,
-        Some(Duration::from_secs(15)),
-        cancel.clone(),
-        move |heartbeat| {
-            let authority = Arc::clone(&authority);
-            let mix_delivery_wake = Arc::clone(&mix_delivery_wake);
-            let account_revocations = Arc::clone(&account_revocations);
-            let connect_options = connect_options.clone();
-            let cancel = cancel.clone();
-            async move {
-                run_database_authority_listener(
-                    connect_options,
-                    authority,
-                    mix_delivery_wake,
-                    account_revocations,
-                    cancel,
-                    heartbeat,
-                )
-                .await
-            }
-        },
-    );
 }
 
 #[cfg(test)]
@@ -1345,6 +896,7 @@ mod tests {
         SmResumeFinalizationRequest, SmService,
     };
     use crate::db::{self, DeploymentCapacityConfiguration, SmClaimStatus, SmSessionSnapshot};
+    use anyhow::Result;
     use sqlx::postgres::PgPoolOptions;
     use std::{
         net::IpAddr,
@@ -1476,6 +1028,22 @@ mod tests {
         assert_eq!(event.schema, "tenant_a");
         assert_eq!(event.session_id, session_id);
         assert_eq!(event.state_version, 8);
+        let broker = SmAuthorityBroker::new("tenant_a".to_owned()).unwrap();
+        let mut subscription = broker.subscribe(session_id);
+        for invalid in [
+            accepted.replace("tenant_a", "tenant_b"),
+            accepted.replace(":8", ":0"),
+            accepted.replace(":8", ":-1"),
+            accepted.replace('}', ",\"extra\":true}"),
+            "x".repeat(257),
+            "not JSON".to_owned(),
+        ] {
+            assert!(!broker.accept_notification(&invalid));
+            assert!(!subscription.acknowledge_probe(7, Default::default()));
+        }
+        let before = subscription.probe_stamp();
+        assert!(broker.accept_notification(&accepted));
+        assert!(subscription.acknowledge_probe(7, before));
         assert!(serde_json::from_str::<SmAuthorityNotification>(&format!(
             r#"{{"schema":"tenant_a","session_id":"{session_id}","state_version":8,"full_jid":"secret@example.test/resource"}}"#
         ))
@@ -1501,6 +1069,208 @@ mod tests {
         // exception inside strict mode.
         assert!(same_device_binding_matches(None, None, false));
         assert!(same_device_binding_matches(None, Some(device), false));
+    }
+
+    struct ResumeRepository {
+        device: Uuid,
+        session: Uuid,
+        token: Uuid,
+        fail_release: bool,
+        calls: std::sync::Mutex<Vec<&'static str>>,
+    }
+
+    impl super::SmRepository for ResumeRepository {
+        async fn claim_resume(
+            &self,
+            _request: super::SmResumeClaimRequest<'_>,
+            policy: super::SmIpPolicy,
+        ) -> anyhow::Result<super::SmResumeClaimOutcome> {
+            assert_eq!(policy, super::SmIpPolicy::Exact);
+            self.calls.lock().unwrap().push("claim");
+            Ok(super::SmResumeClaimOutcome::Claimed(Box::new(
+                super::SmResumeClaim {
+                    session_id: self.session,
+                    claim_token: self.token,
+                    claim_deadline: std::time::Instant::now() + Duration::from_secs(10),
+                    full_jid: "alice@example.test/phone".into(),
+                    resource: "phone".into(),
+                    resume_timeout_seconds: 30,
+                    inbound_h: 0,
+                    acked_h: 0,
+                    available: false,
+                    carbons: false,
+                    priority: 0,
+                    blocklist_requested: false,
+                    roster_requested: false,
+                    active_privacy_list: None,
+                    privacy_requested: false,
+                    user_agent_id: Some(self.device),
+                    joined_rooms: vec![],
+                    directed_presence: vec![],
+                    last_presence: None,
+                    unacked: vec![],
+                },
+            )))
+        }
+        async fn release_claim(&self, session: Uuid, token: Uuid) -> anyhow::Result<()> {
+            assert_eq!((session, token), (self.session, self.token));
+            self.calls.lock().unwrap().push("release");
+            anyhow::ensure!(!self.fail_release, "release failed");
+            Ok(())
+        }
+        async fn create_session(
+            &self,
+            _request: super::SmSessionCreationRequest<'_>,
+        ) -> Result<super::SmSessionCreationOutcome> {
+            panic!("unexpected persistence operation")
+        }
+        #[allow(clippy::too_many_arguments)]
+        async fn checkpoint_session(
+            &self,
+            _session_id: Uuid,
+            _connection_id: Uuid,
+            _snapshot: &super::SmSessionSnapshot,
+            _ttl_seconds: u64,
+            _live_lease_seconds: u64,
+            _max_stanzas: usize,
+            _max_bytes: usize,
+        ) -> Result<super::SmCheckpointOutcome> {
+            panic!("unexpected persistence operation")
+        }
+        async fn remove_live_muc_memberships(
+            &self,
+            _session_id: Uuid,
+            _connection_id: Uuid,
+            _memberships: &[super::SmMucMembership],
+        ) -> Result<bool> {
+            panic!("unexpected persistence operation")
+        }
+        #[allow(clippy::too_many_arguments)]
+        async fn checkpoint_and_acknowledge(
+            &self,
+            _session_id: Uuid,
+            _connection_id: Uuid,
+            _snapshot: &super::SmSessionSnapshot,
+            _acknowledged: &[crate::outbound::SmUnackedStanza],
+            _ttl_seconds: u64,
+            _live_lease_seconds: u64,
+            _max_stanzas: usize,
+            _max_bytes: usize,
+        ) -> Result<super::SmCheckpointOutcome> {
+            panic!("unexpected persistence operation")
+        }
+        async fn acknowledge_delivery_batch(
+            &self,
+            _sources: &[crate::outbound::TransportOwnershipSource],
+        ) -> Result<()> {
+            panic!("unexpected persistence operation")
+        }
+        async fn reserve_binding(
+            &self,
+            _connection_id: Uuid,
+            _user_id: Uuid,
+            _expected_auth_generation: i64,
+            _full_jid: &str,
+            _lease_seconds: u64,
+        ) -> Result<BindingReservationOutcome> {
+            panic!("unexpected persistence operation")
+        }
+        #[allow(clippy::too_many_arguments)]
+        async fn finalize_binding(
+            &self,
+            _connection_id: Uuid,
+            _user_id: Uuid,
+            _expected_auth_generation: i64,
+            _full_jid: &str,
+            _lease_seconds: u64,
+            _device_id: Option<Uuid>,
+            _fast_plan: Option<&crate::services::authentication::FastCommitPlan>,
+        ) -> Result<BindingFinalizationOutcome> {
+            panic!("unexpected persistence operation")
+        }
+        async fn finalize_resume(
+            &self,
+            _request: SmResumeFinalizationRequest<'_>,
+        ) -> Result<SmResumeFinalizationOutcome> {
+            panic!("unexpected persistence operation")
+        }
+        async fn release_live_session(&self, _connection_id: Uuid) -> Result<bool> {
+            panic!("unexpected persistence operation")
+        }
+        #[allow(clippy::too_many_arguments)]
+        async fn suspend_exact_session(
+            &self,
+            _session_id: Uuid,
+            _connection_id: Uuid,
+            _user_id: Uuid,
+            _expected_auth_generation: i64,
+            _snapshot: &super::SmSessionSnapshot,
+            _ttl_seconds: u64,
+            _max_stanzas: usize,
+            _max_bytes: usize,
+        ) -> Result<bool> {
+            panic!("unexpected persistence operation")
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_policy_releases_only_the_exact_mismatched_claim() {
+        let device = Uuid::new_v4();
+        let requested_device = Uuid::new_v4();
+        for fail_release in [false, true] {
+            let service = SmService::new(
+                ResumeRepository {
+                    device,
+                    session: Uuid::new_v4(),
+                    token: Uuid::new_v4(),
+                    fail_release,
+                    calls: std::sync::Mutex::new(Vec::new()),
+                },
+                "public".into(),
+            )
+            .unwrap();
+            let request = |user_agent_id, ip_binding| super::SmResumeClaimRequest {
+                token_hash: &[7; 32],
+                user_id: Uuid::new_v4(),
+                peer_ip: "127.0.0.1".parse().unwrap(),
+                user_agent_id,
+                ip_binding,
+                require_same_device: true,
+                claim_lease_seconds: 10,
+            };
+            assert!(service
+                .claim_resume(request(Some(device), "invalid"))
+                .await
+                .is_err());
+            assert!(service.repository.calls.lock().unwrap().is_empty());
+            assert!(matches!(
+                service
+                    .claim_resume(request(Some(device), "exact"))
+                    .await
+                    .unwrap(),
+                super::SmResumeClaimOutcome::Claimed(_)
+            ));
+            assert_eq!(*service.repository.calls.lock().unwrap(), ["claim"]);
+            service.repository.calls.lock().unwrap().clear();
+            let result = service
+                .claim_resume(request(Some(requested_device), "exact"))
+                .await;
+            if fail_release {
+                assert!(
+                    result.is_err(),
+                    "failed release must not be reported as a clean rejection"
+                );
+            } else {
+                assert!(matches!(
+                    result.unwrap(),
+                    super::SmResumeClaimOutcome::Rejected
+                ));
+            }
+            assert_eq!(
+                *service.repository.calls.lock().unwrap(),
+                ["claim", "release"]
+            );
+        }
     }
 
     async fn migrated_pool(max_connections: u32) -> sqlx::PgPool {
@@ -1547,7 +1317,14 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        let service = SmService::new(pool.clone(), schema).unwrap();
+        let service = SmService::new(
+            crate::db::sm_repository::PostgresSmRepository::new(
+                pool.clone(),
+                Arc::new(zeroize::Zeroizing::new(vec![7_u8; 32])),
+            ),
+            schema,
+        )
+        .unwrap();
         let first_connection = Uuid::new_v4();
         let first_jid = format!("{username}@example.test/first");
         assert_eq!(
@@ -1602,16 +1379,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             service
-                .finalize_binding(
-                    &[7_u8; 32],
-                    first_connection,
-                    user_id,
-                    0,
-                    &first_jid,
-                    30,
-                    None,
-                    None,
-                )
+                .finalize_binding(first_connection, user_id, 0, &first_jid, 30, None, None,)
                 .await
                 .unwrap(),
             BindingFinalizationOutcome::CredentialsExpired
@@ -1743,7 +1511,14 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        let service = SmService::new(pool.clone(), schema).unwrap();
+        let service = SmService::new(
+            crate::db::sm_repository::PostgresSmRepository::new(
+                pool.clone(),
+                Arc::new(zeroize::Zeroizing::new(vec![9_u8; 32])),
+            ),
+            schema,
+        )
+        .unwrap();
         let request = || SmResumeFinalizationRequest {
             session_id,
             claim_token: claim.claim_token,
@@ -1761,10 +1536,7 @@ mod tests {
             max_bytes: 65_536,
             fast_plan: None,
         };
-        assert!(service
-            .finalize_resume(&[9_u8; 32], request())
-            .await
-            .is_err());
+        assert!(service.finalize_resume(request()).await.is_err());
         let rolled_back: (Uuid, Option<Uuid>, bool) = sqlx::query_as(
             "SELECT connection_id,claim_token,resumable FROM sm_resume_sessions WHERE id=$1",
         )
@@ -1793,10 +1565,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            service
-                .finalize_resume(&[9_u8; 32], request())
-                .await
-                .unwrap(),
+            service.finalize_resume(request()).await.unwrap(),
             SmResumeFinalizationOutcome::Committed(_)
         ));
         let committed: (Uuid, Option<Uuid>, Option<String>) = sqlx::query_as(
@@ -2036,7 +1805,14 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        let sm = SmService::new(pool.clone(), schema).unwrap();
+        let sm = SmService::new(
+            crate::db::sm_repository::PostgresSmRepository::new(
+                pool.clone(),
+                Arc::new(zeroize::Zeroizing::new(vec![0x56; 32])),
+            ),
+            schema,
+        )
+        .unwrap();
         let device_id = Uuid::new_v4();
 
         // A completed phase two whose response never reaches the transport
@@ -2051,7 +1827,6 @@ mod tests {
         );
         let abandoned_receipt = match sm
             .finalize_binding(
-                &[0x56; 32],
                 abandoned_connection,
                 user_id,
                 0,
@@ -2098,7 +1873,6 @@ mod tests {
         );
         let receipt = match sm
             .finalize_binding(
-                &[0x56; 32],
                 published_connection,
                 user_id,
                 0,

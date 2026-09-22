@@ -910,7 +910,7 @@ for required_broker_fragment in \
     'Arc::ptr_eq(entry.get(), slot)' \
     'WorkerCriticality::Restartable'
 do
-    if ! grep -Fq "$required_broker_fragment" src/services/sm.rs; then
+    if ! grep -Fq "$required_broker_fragment" src/services/sm.rs src/db/authority_listener.rs; then
         echo "SM authority broker/listener is missing lifecycle invariant: $required_broker_fragment" >&2
         exit 1
     fi

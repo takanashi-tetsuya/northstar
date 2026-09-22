@@ -360,8 +360,12 @@ for (const field of [
 if (!/^\s*dialback_secret\s*:\s*Zeroizing<Vec<u8>>\s*,/m.test(appState)) {
   throw new Error('AppState dialback_secret must remain private and Zeroizing');
 }
-if (!/^\s*fast_token_secret\s*:\s*Arc<Zeroizing<Vec<u8>>>\s*,/m.test(appState)) {
-  throw new Error('AppState fast_token_secret must remain private Arc<Zeroizing<Vec<u8>>>');
+if (/^\s*(?:pub(?:\(crate\))?\s+)?fast_token_secret\s*:/m.test(appState)) {
+  throw new Error('AppState must not retain the FAST derivation key after adapter construction');
+}
+const smAdapterBody = structBody(read('src/db/sm_repository.rs'), 'pub(crate) struct PostgresSmRepository');
+if (!/^\s*fast_token_secret\s*:\s*Arc<Zeroizing<Vec<u8>>>\s*,/m.test(smAdapterBody)) {
+  throw new Error('SM repository FAST key must remain private Arc<Zeroizing<Vec<u8>>>');
 }
 const runtimeControlPoolConstruction = structBody(state, 'fn runtime_control_pool_options(');
 for (const invariant of [
@@ -2073,6 +2077,7 @@ for (const [name, source] of [
   ['AdminCommandService', read('src/services/admin_commands.rs')],
   ['AuthenticationService', authenticationServiceSource],
   ['RetractionService', read('src/services/retractions.rs')],
+  ['SmService', read('src/services/sm.rs')],
   ['PushService', read('src/services/push.rs')],
   ['PrivateStorageService', read('src/services/private_storage.rs')],
   ['RetentionContext', read('src/retention.rs')],
@@ -2864,7 +2869,7 @@ const workerResponsibilityEvidence = {
   'cluster-muc-outbox': ['src/cluster.rs', 'unconditionally registered', '30 s'],
   'locked-muc-expiry': ['src/state.rs', '`AppState` MUC startup', '20 s'],
   'runtime-control-refresh': ['src/state.rs', 'process startup reserves the connection', '5 s'],
-  'sm-authority-listener': ['src/services/sm.rs', '`SmService` startup', '15 s'],
+  'sm-authority-listener': ['src/db/authority_listener.rs', 'AppState database listener startup', '15 s'],
   'sm-suspension-recovery': ['src/services/session_cleanup.rs', 'session-cleanup service startup', '30 s'],
   'caps-side-effects': ['src/xmpp/protocol/caps.rs', 'Caps subsystem startup', '60 s'],
   'mix-iq-relay-expiry': ['src/xmpp/protocol/mix.rs', 'MIX protocol capability startup', '10 s'],

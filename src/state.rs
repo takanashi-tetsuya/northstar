@@ -1706,7 +1706,7 @@ pub struct AppState {
     >,
     mam_service: crate::services::mam::MamService<db::mam::PostgresMamRepository>,
     mix_service: crate::services::mix::MixService,
-    sm_service: crate::services::sm::SmService,
+    sm_service: crate::services::sm::SmService<db::sm_repository::PostgresSmRepository>,
     blocking_service:
         crate::services::blocking::BlockingService<db::roster::PostgresBlockingRepository>,
     presence_service: crate::services::presence::PresenceService<
@@ -1808,9 +1808,6 @@ pub struct AppState {
     /// PEP last-item delivery and verified MIX presence publication.
     caps_effect_dispatcher: Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>,
     dialback_secret: Zeroizing<Vec<u8>>,
-    /// XEP-0484 token derivation key. PostgreSQL contains only derived token
-    /// hashes and public diversification data.
-    fast_token_secret: Arc<Zeroizing<Vec<u8>>>,
     dialback_verifications: Arc<Semaphore>,
     client_connections: Arc<Semaphore>,
     client_connections_by_ip: DashMap<std::net::IpAddr, usize>,
@@ -2836,8 +2833,13 @@ impl AppState {
             sm_authority_connect_options =
                 sm_authority_connect_options.options([("search_path", "public")]);
         }
-        let sm_service =
-            crate::services::sm::SmService::new(pool.clone(), sm_authority_schema.clone())?;
+        let sm_service = crate::services::sm::SmService::new(
+            db::sm_repository::PostgresSmRepository::new(
+                pool.clone(),
+                Arc::clone(&fast_token_secret),
+            ),
+            sm_authority_schema.clone(),
+        )?;
         // The MIX wake broker validates the same schema identity that the
         // dedicated PostgreSQL listener attests below.  It never trusts a
         // notification as delivery authority; schema matching only prevents
@@ -2930,7 +2932,6 @@ impl AppState {
             federated_caps_gates: northstar_protocol_runtime::caps::FederatedCapsGateIndex::new(),
             caps_effect_dispatcher: northstar_protocol_runtime::caps::CapsEffectDispatcher::new(),
             dialback_secret,
-            fast_token_secret,
             dialback_verifications: Arc::new(Semaphore::new(64)),
             client_connections,
             client_connections_by_ip: DashMap::new(),
@@ -2961,8 +2962,8 @@ impl AppState {
             "session-cleanup",
             crate::workers::WorkerCriticality::Restartable,
         );
-        crate::services::sm::start_database_authority_listener(
-            state.sm_service().clone(),
+        db::authority_listener::start_database_authority_listener(
+            state.sm_service().authority_broker(),
             state.mix_service().delivery_wake_broker(),
             state.cluster.account_revocation_notify(),
             sm_authority_connect_options,
@@ -3243,7 +3244,9 @@ impl AppState {
         &self.mam_service
     }
 
-    pub(crate) fn sm_service(&self) -> &crate::services::sm::SmService {
+    pub(crate) fn sm_service(
+        &self,
+    ) -> &crate::services::sm::SmService<db::sm_repository::PostgresSmRepository> {
         &self.sm_service
     }
 
@@ -3345,7 +3348,6 @@ impl AppState {
     ) -> anyhow::Result<crate::services::sm::BindingFinalizationOutcome> {
         self.sm_service
             .finalize_binding(
-                self.fast_token_secret.as_slice(),
                 connection_id,
                 user_id,
                 expected_auth_generation,
@@ -3361,9 +3363,7 @@ impl AppState {
         &self,
         request: crate::services::sm::SmResumeFinalizationRequest<'_>,
     ) -> anyhow::Result<crate::services::sm::SmResumeFinalizationOutcome> {
-        self.sm_service
-            .finalize_resume(self.fast_token_secret.as_slice(), request)
-            .await
+        self.sm_service.finalize_resume(request).await
     }
 
     fn start_locked_muc_expiry(state: Arc<Self>, cancel: CancellationToken) {

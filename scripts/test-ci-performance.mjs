@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
-import { ALWAYS_REQUIRED, verifyWorkflowCoverage } from './ci-required-policy.mjs';
+import { ALWAYS_REQUIRED, expectedJobResults, verifyWorkflowCoverage } from './ci-required-policy.mjs';
 
 const workflow = fs.readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const cache = fs.readFileSync(new URL('../.github/actions/rust-build-cache/action.yml', import.meta.url), 'utf8');
@@ -126,15 +126,16 @@ test('diagnostic preflight is required for every event and both pressure matrice
   assert.doesNotMatch(job(workflow, 'listener-readiness-stress-smoke'), /^    needs:/m);
 });
 
-test('scheduled repetition is bounded and 100 rounds requires explicit manual selection', () => {
+test('manual CI defaults to regular checks and endurance requires explicit selection', () => {
   const triggers = workflow.split('\non:\n')[1].split('\npermissions:')[0];
   assert.match(triggers, /extended_stress:\n\s+description: [^\n]+\n\s+type: boolean\n\s+default: false/);
+  assert.match(triggers, /scheduled_stress:\n\s+description: [^\n]+\n\s+type: boolean\n\s+default: false/);
   const regular = job(workflow, 'listener-readiness-stress-regular');
   const scheduled = job(workflow, 'listener-readiness-stress-scheduled');
   // Actions permits hyphens in dotted property names; JS needs bracket access.
-  const expression = (value, event, extended, ready = true) => vm.runInNewContext(
+  const expression = (value, event, extended, ready = true, endurance = false) => vm.runInNewContext(
     value.replace(/needs\.([a-z-]+)\.result/g, 'needs["$1"].result'), {
-    github: { event_name: event }, inputs: { extended_stress: extended },
+    github: { event_name: event }, inputs: { extended_stress: extended, scheduled_stress: endurance },
     needs: Object.fromEntries(['listener-readiness-stress-smoke', 'listener-diagnostics']
       .map(name => [name, { result: ready ? 'success' : 'failure' }])),
   }, { timeout: 100 });
@@ -142,11 +143,17 @@ test('scheduled repetition is bounded and 100 rounds requires explicit manual se
   const rounds = scheduled.match(/LISTENER_STRESS_ROUNDS: \$\{\{(.*?)\}\}/)[1];
   const deadline = scheduled.match(/timeout-minutes: \$\{\{(.*?)\}\}/)[1];
   for (const event of ['push', 'pull_request', 'schedule', 'workflow_dispatch']) {
-    const isScheduled = ['schedule', 'workflow_dispatch'].includes(event);
-    assert.equal(expression(condition(regular), event, false), !isScheduled);
-    assert.equal(expression(condition(scheduled), event, false), isScheduled);
-    assert.equal(expression(condition(regular), event, false, false), false);
-    assert.equal(expression(condition(scheduled), event, false, false), false);
+    for (const endurance of [false, true]) {
+      for (const extended of [false, true]) {
+        const policy = expectedJobResults(event, endurance || extended);
+        assert.equal(expression(condition(regular), event, extended, true, endurance),
+          policy['listener-readiness-stress-regular'] === 'success');
+        assert.equal(expression(condition(scheduled), event, extended, true, endurance),
+          policy['listener-readiness-stress-scheduled'] === 'success');
+        assert.equal(expression(condition(regular), event, extended, false, endurance), false);
+        assert.equal(expression(condition(scheduled), event, extended, false, endurance), false);
+      }
+    }
     assert.equal(expression(rounds, event, false), 20);
     assert.equal(expression(deadline, event, false), 120);
     assert.equal(expression(rounds, event, true), event === 'workflow_dispatch' ? 100 : 20);

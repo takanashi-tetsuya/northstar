@@ -72,7 +72,7 @@ def main() -> None:
                 )
             return result.stdout.decode().strip() if capture else ""
 
-        passwords = {role: secrets.token_hex(24) for role in ("bootstrap", "migrator", "runtime", "command", "backup")}
+        passwords = {role: secrets.token_hex(24) for role in ("bootstrap", "migrator", "runtime", "storage", "command", "backup")}
         files = {role: secret_file(f"{role}-password", password) for role, password in passwords.items()}
         try:
             run([str(pg_bin / "initdb"), "-D", str(data), "-U", "northstar_bootstrap", "--pwfile", str(files["bootstrap"]), "--auth-local=scram-sha-256", "--auth-host=reject", "--encoding=UTF8", "--no-locale"])
@@ -85,12 +85,13 @@ def main() -> None:
                 "--bootstrap-password-file", str(files["bootstrap"]),
                 "--migrator-password-file", str(files["migrator"]),
                 "--runtime-password-file", str(files["runtime"]),
+                "--storage-password-file", str(files["storage"]),
                 "--command-password-file", str(files["command"]),
                 "--backup-password-file", str(files["backup"]),
             ])
             urls = {
                 role: secret_file(f"{role}-url", f"postgresql://northstar_{role}:{passwords[role]}@localhost/xmpp?host={quote(str(socket_dir), safe='')}")
-                for role in ("migrator", "runtime")
+                for role in ("migrator", "runtime", "storage")
             }
             urls["command"] = secret_file("command-url", f"postgresql://northstar_commands:{passwords['command']}@localhost/xmpp?host={quote(str(socket_dir), safe='')}")
             run([str(binary), "migrate"], extra={"MIGRATOR_DATABASE_URL_FILE": str(urls["migrator"]), "XMPP_DOMAIN": "maintenance.test"})
@@ -180,10 +181,11 @@ WHERE id='20000000-0000-4000-8000-000000000004';
                 "-subj", "/CN=maintenance.test", "-addext", "subjectAltName=DNS:maintenance.test,IP:127.0.0.1",
                 "-addext", "basicConstraints=critical,CA:FALSE", "-addext", "keyUsage=critical,digitalSignature,keyEncipherment", "-addext", "extendedKeyUsage=serverAuth",
                 "-keyout", str(private_key), "-out", str(certificate)])
+            certificate.chmod(0o644)
             private_key.chmod(0o600)
             (fixture / "logs").mkdir(mode=0o700)
             core_environment = environment | {
-                "NORTHSTAR_DISABLE_DOTENV": "true", "DATABASE_URL_FILE": str(urls["runtime"]), "ADMIN_COMMAND_DATABASE_URL_FILE": str(urls["command"]),
+                "NORTHSTAR_DISABLE_DOTENV": "true", "DATABASE_URL_FILE": str(urls["runtime"]), "STORAGE_DATABASE_URL_FILE": str(urls["storage"]), "ADMIN_COMMAND_DATABASE_URL_FILE": str(urls["command"]),
                 "XMPP_DOMAIN": "maintenance.test", "TLS_CERT_PATH": str(certificate), "TLS_KEY_PATH": str(private_key),
                 "PUBLIC_URL": "http://127.0.0.1:1", "UPLOAD_DIR": str(fixture / "core-uploads"),
                 "FEDERATION_ENABLED": "false", "DATABASE_MAX_CONNECTIONS": "8", "DATABASE_MIN_CONNECTIONS": "0",

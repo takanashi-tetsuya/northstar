@@ -22,6 +22,7 @@ for variable in \
   NORTHSTAR_PRIVATE_PG_BOOTSTRAP_DATABASE_URL_FILE \
   NORTHSTAR_PRIVATE_PG_MIGRATOR_DATABASE_URL_FILE \
   NORTHSTAR_PRIVATE_PG_RUNTIME_DATABASE_URL_FILE \
+  NORTHSTAR_PRIVATE_PG_STORAGE_DATABASE_URL_FILE \
   NORTHSTAR_PRIVATE_PG_COMMAND_DATABASE_URL_FILE; do
   [[ -n "${!variable:-}" ]] || fail "private fixture did not supply $variable"
 done
@@ -36,6 +37,7 @@ for secret_file in \
   "$NORTHSTAR_PRIVATE_PG_BOOTSTRAP_DATABASE_URL_FILE" \
   "$NORTHSTAR_PRIVATE_PG_MIGRATOR_DATABASE_URL_FILE" \
   "$NORTHSTAR_PRIVATE_PG_RUNTIME_DATABASE_URL_FILE" \
+  "$NORTHSTAR_PRIVATE_PG_STORAGE_DATABASE_URL_FILE" \
   "$NORTHSTAR_PRIVATE_PG_COMMAND_DATABASE_URL_FILE"; do
   [[ -f "$secret_file" && ! -L "$secret_file" && -r "$secret_file" ]] \
     || fail 'private fixture supplied an unsafe secret file'
@@ -277,7 +279,7 @@ runtime_forbidden_ddl() {
 }
 
 start_runtime() {
-  local label="$1" domain="$2" runtime_url="$3" command_url="$4"
+  local label="$1" domain="$2" runtime_url="$3" storage_url="$4" command_url="$5"
   local cert="$cert_dir/$label.crt" key="$cert_dir/$label.key"
   local readiness="$runtime_root/$label.ready.json" nonce log upload_dir
   local fast="$runtime_root/$label.fast.secret" dummy="$runtime_root/$label.dummy-scram.secret"
@@ -301,6 +303,7 @@ start_runtime() {
   env NORTHSTAR_DISABLE_DOTENV=true \
     XMPP_DOMAIN="$domain" \
     DATABASE_URL_FILE="$runtime_url" \
+    STORAGE_DATABASE_URL_FILE="$storage_url" \
     ADMIN_COMMAND_DATABASE_URL_FILE="$command_url" \
     XMPP_BIND=127.0.0.1:0 XMPPS_BIND=127.0.0.1:0 HTTP_BIND=127.0.0.1:0 \
     S2S_BIND=127.0.0.1:0 S2S_TLS_BIND=127.0.0.1:0 COMPONENT_BIND=127.0.0.1:0 \
@@ -358,6 +361,8 @@ clone_database "$template_b" "$clone_b"
 
 runtime_clone_a="$(template_url_file runtime "$clone_a")"
 runtime_clone_b="$(template_url_file runtime "$clone_b")"
+storage_clone_a="$(template_url_file storage "$clone_a")"
+storage_clone_b="$(template_url_file storage "$clone_b")"
 command_clone_a="$(template_url_file command "$clone_a")"
 command_clone_b="$(template_url_file command "$clone_b")"
 migrator_clone_a="$(template_url_file migrator "$clone_a")"
@@ -365,6 +370,8 @@ migrator_clone_b="$(template_url_file migrator "$clone_b")"
 for item in \
   "$NORTHSTAR_PRIVATE_PG_RUNTIME_DATABASE_URL_FILE|$clone_a|$runtime_clone_a" \
   "$NORTHSTAR_PRIVATE_PG_RUNTIME_DATABASE_URL_FILE|$clone_b|$runtime_clone_b" \
+  "$NORTHSTAR_PRIVATE_PG_STORAGE_DATABASE_URL_FILE|$clone_a|$storage_clone_a" \
+  "$NORTHSTAR_PRIVATE_PG_STORAGE_DATABASE_URL_FILE|$clone_b|$storage_clone_b" \
   "$NORTHSTAR_PRIVATE_PG_COMMAND_DATABASE_URL_FILE|$clone_a|$command_clone_a" \
   "$NORTHSTAR_PRIVATE_PG_COMMAND_DATABASE_URL_FILE|$clone_b|$command_clone_b" \
   "$NORTHSTAR_PRIVATE_PG_MIGRATOR_DATABASE_URL_FILE|$clone_a|$migrator_clone_a" \
@@ -410,9 +417,9 @@ runtime_forbidden_ddl "$runtime_clone_a" "$clone_a" \
 runtime_forbidden_ddl "$runtime_clone_b" "$clone_b" \
   || fail 'runtime clone B did not reject forbidden DDL'
 
-start_runtime a localhost "$runtime_clone_a" "$command_clone_a" \
+start_runtime a localhost "$runtime_clone_a" "$storage_clone_a" "$command_clone_a" \
   || fail 'strict runtime did not become ready from clone A'
-start_runtime b remote.localhost "$runtime_clone_b" "$command_clone_b" \
+start_runtime b remote.localhost "$runtime_clone_b" "$storage_clone_b" "$command_clone_b" \
   || fail 'strict runtime did not become ready from clone B'
 
 {

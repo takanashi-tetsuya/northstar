@@ -392,7 +392,10 @@ management and upload retry now use complete command ports and service-only
 HTTP contexts. Their shared database admission receives live cluster health
 without Redis publication authority. User/MUC retention policy endpoints use
 a dedicated policy context; policy reads now hold exact bearer/account locks
-through the snapshot. Deployment capacity lease renewal and expiry cleanup now
+through the snapshot. TLS reload, panic disconnect, island mode, room
+destruction and broadcast use an administrative dispatch service and a single
+repository transaction for their operation and side records. Deployment
+capacity lease renewal and expiry cleanup now
 use a typed maintenance service and PostgreSQL repository. The renewal context
 keeps only the shared route map needed to snapshot exact cancellation tokens;
 the reaper has no session-map authority. Legal holds, exports and the remaining

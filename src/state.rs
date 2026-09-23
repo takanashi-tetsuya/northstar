@@ -1,5 +1,13 @@
 pub(crate) mod http_policy;
 pub(crate) use http_policy::{AdminGatewayVerifier, HttpTransportPolicy, PublicDiscoveryContext};
+pub(crate) type AdminDispatchContext = crate::services::admin_dispatch::AdminDispatchService<
+    db::admin_dispatch_repository::PostgresAdminDispatchRepository,
+>;
+impl axum::extract::FromRef<Arc<AppState>> for AdminDispatchContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        state.admin_dispatch_service.clone()
+    }
+}
 impl axum::extract::FromRef<Arc<AppState>> for PublicDiscoveryContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         state.public_discovery_context.clone()
@@ -1868,6 +1876,7 @@ pub struct AppState {
         crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
     api_control: Arc<db::ApiControlKeyring>,
     operation_admin_service: OperationAdminContext,
+    admin_dispatch_service: AdminDispatchContext,
     upload_admin_service: UploadAdminContext,
     report_moderation_service: ReportModerationContext,
     invitation_admin_service: InvitationAdminContext,
@@ -3070,6 +3079,12 @@ impl AppState {
                 admin_mutations.clone(),
             ),
         );
+        let admin_dispatch_service = crate::services::admin_dispatch::AdminDispatchService::new(
+            db::admin_dispatch_repository::PostgresAdminDispatchRepository::new(
+                admin_mutations.clone(),
+            ),
+            config.domain.clone(),
+        );
         let upload_admin_service = crate::services::upload_admin::UploadAdminService::new(
             db::upload_admin_repository::PostgresUploadAdminRepository::new(
                 admin_mutations.clone(),
@@ -3169,6 +3184,7 @@ impl AppState {
             api_control,
             report_service,
             operation_admin_service,
+            admin_dispatch_service,
             upload_admin_service,
             report_moderation_service,
             invitation_admin_service,

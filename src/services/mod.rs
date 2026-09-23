@@ -1,5 +1,6 @@
 pub(crate) mod account;
 pub(crate) mod admin_commands;
+pub(crate) mod admin_dispatch;
 pub(crate) mod authentication;
 pub(crate) mod blocking;
 pub(crate) mod capacity_maintenance;

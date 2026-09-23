@@ -163,6 +163,10 @@ Key ownership:
   admission: acquire the connection, check live cluster health, lock the exact
   administrator bearer/generation, and commit business changes with replay.
   Invitation replay also checks that its secret-bearing resource remains valid.
+- TLS reload, panic disconnect, island-mode changes, room destruction and
+  broadcast requests now enter a separate administrative dispatch service.
+  Its repository commits the operation, audit, replay response and any room
+  intent or runtime setting together before a worker performs the effect.
 - User and room retention policies have a separate context containing the
   service, policy ceilings and read timers. Reads hold bearer/account locks
   through the policy snapshot; writes preserve policy, audit and replay in one

@@ -400,48 +400,24 @@ fn admin_mutation_response(
 }
 
 pub async fn admin_tls_reload(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::AdminDispatchContext>,
     actor: ApiAdmin,
     request: ApiEmpty,
 ) -> Result<Response, AppError> {
     let idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        crate::services::api_mutations::ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/tls/reload",
     );
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    let (response, _operation_id) = enqueue_admin_operation(
-        &state,
-        &mut tx,
-        &actor,
-        &lease,
-        AdminOperationRequest {
-            kind: "admin.tls_reload",
-            target: None,
-            policy: db::AuthorizationPolicy::ReauthorizeUntilEffect,
-            payload: &json!({}),
-        },
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(response)
+    let outcome = state
+        .reload_tls(crate::services::api_mutations::AdminMutationAdmission {
+            authority: actor.read_authority(),
+            idempotency,
+        })
+        .await?;
+    admin_mutation_response(outcome)
 }
 
 pub async fn admin_invitations(
@@ -534,103 +510,49 @@ pub async fn admin_nuke(
 }
 
 pub async fn admin_panic_disconnect(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::AdminDispatchContext>,
     actor: ApiAdmin,
     request: ApiEmpty,
 ) -> Result<Response, AppError> {
     let idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        crate::services::api_mutations::ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/panic_disconnect",
     );
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    let (response, _operation_id) = enqueue_admin_operation(
-        &state,
-        &mut tx,
-        &actor,
-        &lease,
-        AdminOperationRequest {
-            kind: "admin.panic_disconnect",
-            target: None,
-            policy: db::AuthorizationPolicy::ReauthorizeUntilEffect,
-            payload: &json!({"reason":"administrator request"}),
-        },
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(response)
+    let outcome = state
+        .panic_disconnect(crate::services::api_mutations::AdminMutationAdmission {
+            authority: actor.read_authority(),
+            idempotency,
+        })
+        .await?;
+    admin_mutation_response(outcome)
 }
 
 pub async fn admin_toggle_island_mode(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::AdminDispatchContext>,
     actor: ApiAdmin,
     request: ApiJson<BooleanToggle>,
 ) -> Result<Response, AppError> {
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        crate::services::api_mutations::ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/island_mode",
     );
     idempotency.target_scope = b"island_mode";
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    db::set_admin_runtime_setting_in_tx(
-        &mut tx,
-        actor.id,
-        "island_mode",
-        request.enabled,
-        Some(lease.request_id),
-    )
-    .await?;
-    let payload = json!({"mode":if request.enabled {"enabled"} else {"disabled"},"epoch":lease.request_id.as_u128().min(i64::MAX as u128) as i64});
-    let (response, _operation_id) = enqueue_admin_operation(
-        &state,
-        &mut tx,
-        &actor,
-        &lease,
-        AdminOperationRequest {
-            kind: "admin.island_converge",
-            target: Some("island_mode"),
-            policy: db::AuthorizationPolicy::CommittedConsequence,
-            payload: &payload,
-        },
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(response)
+    let outcome = state
+        .set_island_mode(
+            crate::services::api_mutations::AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+            request.enabled,
+        )
+        .await?;
+    admin_mutation_response(outcome)
 }
 
 pub async fn admin_toggle_registration(
@@ -921,133 +843,56 @@ pub async fn admin_muc_rooms(
 }
 
 pub async fn admin_destroy_muc_room(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::AdminDispatchContext>,
     actor: ApiAdmin,
     ApiPath(localpart): ApiPath<String>,
     request: ApiEmpty,
 ) -> Result<Response, AppError> {
-    let room_jid = format!("{}@conference.{}", localpart, state.config.domain);
-    let canonical = crate::jid::CanonicalJid::parse(&room_jid)
-        .map_err(|_| AppError::BadRequest("room localpart is invalid".into()))?;
-    if canonical.resourcepart().is_some()
-        || canonical.localpart().is_none()
-        || canonical.to_string() != room_jid
-    {
-        return Err(AppError::BadRequest("room JID is not canonical".into()));
-    }
+    let room = state
+        .room_target(localpart)
+        .map_err(idempotency::mutation_rejection)?;
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        crate::services::api_mutations::ApiPrincipalKind::Admin,
         "DELETE",
         "/api/v1/admin/muc_rooms/{localpart}",
     );
-    idempotency.target_scope = room_jid.as_bytes();
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
-        .bind(format!("northstar:muc-room:{localpart}"))
-        .execute(&mut *tx)
+    idempotency.target_scope = room.room_jid().as_bytes();
+    let outcome = state
+        .destroy_room(
+            crate::services::api_mutations::AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+            &room,
+        )
         .await?;
-    let room_exists = sqlx::query_scalar::<_, String>(
-        "SELECT localpart FROM muc_rooms
-          WHERE localpart=$1 AND destroyed_at IS NULL FOR UPDATE",
-    )
-    .bind(&localpart)
-    .fetch_optional(&mut *tx)
-    .await?
-    .is_some();
-    if !room_exists {
-        return Err(AppError::BadRequest("room does not exist".into()));
-    }
-    let (response, operation_id) = enqueue_admin_operation(
-        &state,
-        &mut tx,
-        &actor,
-        &lease,
-        AdminOperationRequest {
-            kind: "admin.muc_destroy",
-            target: Some(&room_jid),
-            policy: db::AuthorizationPolicy::CommittedConsequence,
-            payload: &json!({"room_jid":room_jid}),
-        },
-    )
-    .await?;
-    sqlx::query(
-        "INSERT INTO api_muc_destroy_intents(room_jid,localpart,operation_id) VALUES($1,$2,$3)",
-    )
-    .bind(&room_jid)
-    .bind(&localpart)
-    .bind(operation_id)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(response)
+    admin_mutation_response(outcome)
 }
 
 pub async fn admin_broadcast(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::AdminDispatchContext>,
     actor: ApiAdmin,
     request: ApiJson<BroadcastRequest>,
 ) -> Result<Response, AppError> {
-    let body_text = request.message.trim();
-    if body_text.is_empty() || body_text.len() > 32_768 {
-        return Err(AppError::BadRequest(
-            "broadcast message must contain 1 to 32768 bytes".into(),
-        ));
-    }
     let idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        crate::services::api_mutations::ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/broadcast",
     );
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    let (response, _operation_id) = enqueue_admin_operation(
-        &state,
-        &mut tx,
-        &actor,
-        &lease,
-        AdminOperationRequest {
-            kind: "admin.broadcast",
-            target: None,
-            policy: db::AuthorizationPolicy::ReauthorizeUntilEffect,
-            payload: &json!({"message":body_text}),
-        },
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(response)
+    let outcome = state
+        .broadcast(
+            crate::services::api_mutations::AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+            &request.message,
+        )
+        .await?;
+    admin_mutation_response(outcome)
 }
 
 #[cfg(test)]

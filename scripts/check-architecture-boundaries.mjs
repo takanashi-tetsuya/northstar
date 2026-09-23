@@ -2074,6 +2074,7 @@ for (const [name, source] of [
   ['ReportService', read('src/services/reports.rs')],
   ['ReportContext', read('src/state/reports.rs')],
   ['OperationAdminService', read('src/services/operations.rs')],
+  ['AdminDispatchService', read('src/services/admin_dispatch.rs')],
   ['UploadAdminService', read('src/services/upload_admin.rs')],
   ['ReportModerationService', read('src/services/report_moderation.rs')],
   ['InvitationAdminService', read('src/services/invitation_admin.rs')],
@@ -2130,6 +2131,7 @@ for (const [path, names, context] of [
   ['src/api/admin.rs', ['admin_update_report', 'admin_update_appeal'], 'ReportModerationContext'],
   ['src/api/upload_admin.rs', ['admin_retry_upload_dead_letter'], 'UploadAdminContext'],
   ['src/api/admin.rs', ['admin_create_invitation', 'admin_revoke_invitation'], 'InvitationAdminContext'],
+  ['src/api/admin.rs', ['admin_tls_reload', 'admin_panic_disconnect', 'admin_toggle_island_mode', 'admin_destroy_muc_room', 'admin_broadcast'], 'AdminDispatchContext'],
   ['src/api/data_lifecycle.rs', ['get_my_retention', 'update_my_retention', 'get_muc_retention', 'update_muc_retention'], 'RetentionPolicyContext'],
 ]) {
   const source = read(path);

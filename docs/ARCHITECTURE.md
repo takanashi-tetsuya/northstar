@@ -156,8 +156,17 @@ Key ownership:
   query context containing the service, cursor signer and read-only runtime
   projections. It shares live policy flags and session maps without retaining
   global application state. Operation-journal reads use the same context and
-  preserve separate bearer/role errors and parent-scoped targets. Their writes
-  and data-lifecycle endpoints still need persistence boundaries.
+  preserve separate bearer/role errors and parent-scoped targets.
+- Operation cancellation/reconciliation, report moderation, invitations and
+  upload retry commands use dedicated services. Their HTTP contexts hold only
+  the relevant command service. Repository adapters share administrative
+  admission: acquire the connection, check live cluster health, lock the exact
+  administrator bearer/generation, and commit business changes with replay.
+  Invitation replay also checks that its secret-bearing resource remains valid.
+- User and room retention policies have a separate context containing the
+  service, policy ceilings and read timers. Reads hold bearer/account locks
+  through the policy snapshot; writes preserve policy, audit and replay in one
+  transaction. Legal-hold/export endpoints still need persistence boundaries.
 - Report and appeal services validate content before requesting a complete
   repository operation. Authorization, proof admission, semantic rejection or
   business mutation, and encrypted response replay share one transaction.

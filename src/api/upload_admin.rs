@@ -1,23 +1,25 @@
 //! Narrow administrator API for inspecting and requeuing upload dead letters.
 
-use crate::api::admin::{
-    acquire_admin_mutation_in_tx, complete_admin_response, AdminMutationAcquire,
-};
 use crate::api::cursor::{
     CanonicalScope, CursorBinding, CursorDirection, CursorPosition, CursorValue,
 };
+use crate::api::idempotency::{mutation_rejection, stored_api_response};
 use crate::api::{idempotency_replay_response, pagination, ApiAdmin, ApiEmpty, ApiPath, ApiQuery};
-use crate::db;
 use crate::error::AppError;
-use crate::state::AppState;
+pub(crate) use crate::services::upload_admin::admin_generation_bound_request_fingerprint;
+use crate::services::{
+    api_mutations::{AdminMutationAdmission, ApiMutationOutcome, ApiPrincipalKind},
+    api_queries::{
+        UploadDeadLetterBoundary, UploadDeadLetterId, UploadDeadLetterKind, UploadDeadLetterRecord,
+    },
+};
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -46,8 +48,8 @@ struct UploadDeadLetterView {
     error_summary: Option<String>,
 }
 
-fn checked_kind(value: &str) -> Result<db::UploadDeadLetterKind, AppError> {
-    db::UploadDeadLetterKind::parse(value)
+fn checked_kind(value: &str) -> Result<UploadDeadLetterKind, AppError> {
+    UploadDeadLetterKind::parse(value)
         .ok_or_else(|| AppError::BadRequest("kind must be exactly storage_job or cleanup".into()))
 }
 
@@ -75,7 +77,7 @@ fn require_explicit_idempotency_key(headers: &HeaderMap) -> Result<(), AppError>
     Ok(())
 }
 
-fn dead_letter_filter(kind: db::UploadDeadLetterKind) -> Result<CanonicalScope, AppError> {
+fn dead_letter_filter(kind: UploadDeadLetterKind) -> Result<CanonicalScope, AppError> {
     CanonicalScope::new()
         .field("kind", Some(kind.as_str().as_bytes()))
         .map_err(|error| AppError::Internal(error.into()))
@@ -93,15 +95,15 @@ fn dead_letter_binding<'a>(actor_id: &'a Uuid, filter: &'a CanonicalScope) -> Cu
 }
 
 fn boundary_from_position(
-    kind: db::UploadDeadLetterKind,
+    kind: UploadDeadLetterKind,
     position: CursorPosition,
-) -> Result<db::UploadDeadLetterBoundary, AppError> {
+) -> Result<UploadDeadLetterBoundary, AppError> {
     match (kind, position.last.as_slice()) {
-        (db::UploadDeadLetterKind::StorageJob, [CursorValue::I64(id)]) if *id > 0 => {
-            Ok(db::UploadDeadLetterBoundary::StorageJob(*id))
+        (UploadDeadLetterKind::StorageJob, [CursorValue::I64(id)]) if *id > 0 => {
+            Ok(UploadDeadLetterBoundary::StorageJob(*id))
         }
-        (db::UploadDeadLetterKind::Cleanup, [CursorValue::Uuid(id)]) if !id.is_nil() => {
-            Ok(db::UploadDeadLetterBoundary::Cleanup(*id))
+        (UploadDeadLetterKind::Cleanup, [CursorValue::Uuid(id)]) if !id.is_nil() => {
+            Ok(UploadDeadLetterBoundary::Cleanup(*id))
         }
         _ => Err(AppError::InvalidCursor),
     }
@@ -111,8 +113,8 @@ async fn dead_letter_boundary(
     state: &crate::state::ApiQueryContext,
     token: Option<&str>,
     binding: &CursorBinding<'_>,
-    kind: db::UploadDeadLetterKind,
-) -> Result<Option<db::UploadDeadLetterBoundary>, AppError> {
+    kind: UploadDeadLetterKind,
+) -> Result<Option<UploadDeadLetterBoundary>, AppError> {
     let Some(token) = token else {
         return Ok(None);
     };
@@ -127,13 +129,13 @@ async fn dead_letter_boundary(
 fn issue_dead_letter_cursor(
     state: &crate::state::ApiQueryContext,
     binding: &CursorBinding<'_>,
-    next: Option<db::UploadDeadLetterBoundary>,
+    next: Option<UploadDeadLetterBoundary>,
     database_now: DateTime<Utc>,
 ) -> Result<Option<String>, AppError> {
     next.map(|boundary| {
         let last = match boundary {
-            db::UploadDeadLetterBoundary::StorageJob(id) => vec![CursorValue::I64(id)],
-            db::UploadDeadLetterBoundary::Cleanup(id) => vec![CursorValue::Uuid(id)],
+            UploadDeadLetterBoundary::StorageJob(id) => vec![CursorValue::I64(id)],
+            UploadDeadLetterBoundary::Cleanup(id) => vec![CursorValue::Uuid(id)],
         };
         state
             .api_cursor()
@@ -263,27 +265,8 @@ fn safe_error_summary(value: &str) -> String {
     )
 }
 
-/// Bind an otherwise bodyless administrator retry to the credential
-/// generation which authorized it. The outer API-control HMAC keeps this
-/// digest opaque in storage. Keeping the actor UUID as principal/capacity
-/// scope means reuse of one key after a credential rotation finds the same
-/// record and fails with a fingerprint conflict instead of opening a second
-/// idempotency namespace.
-pub(crate) fn admin_generation_bound_request_fingerprint(
-    base: [u8; 32],
-    auth_generation: i64,
-) -> [u8; 32] {
-    let mut material = [0_u8; 40];
-    material[..32].copy_from_slice(&base);
-    material[32..].copy_from_slice(&auth_generation.to_be_bytes());
-    db::api_request_fingerprint(
-        "application/vnd.northstar.admin-auth-generation-v1",
-        &material,
-    )
-}
-
-fn view(kind: db::UploadDeadLetterKind, row: db::UploadDeadLetterRecord) -> UploadDeadLetterView {
-    let db::UploadDeadLetterRecord {
+fn view(kind: UploadDeadLetterKind, row: UploadDeadLetterRecord) -> UploadDeadLetterView {
+    let UploadDeadLetterRecord {
         id,
         operation,
         attempts,
@@ -336,7 +319,7 @@ pub async fn admin_upload_dead_letters(
 }
 
 pub async fn admin_retry_upload_dead_letter(
-    State(state): State<Arc<AppState>>,
+    State(service): State<crate::state::UploadAdminContext>,
     actor: ApiAdmin,
     ApiPath((kind, id)): ApiPath<(String, String)>,
     headers: HeaderMap,
@@ -344,13 +327,13 @@ pub async fn admin_retry_upload_dead_letter(
 ) -> Result<Response, AppError> {
     require_explicit_idempotency_key(&headers)?;
     let kind = checked_kind(&kind)?;
-    let id = db::UploadDeadLetterId::parse(kind, &id)
+    let id = UploadDeadLetterId::parse(kind, &id)
         .ok_or_else(|| AppError::BadRequest("dead-letter identifier is invalid".into()))?;
     let target_scope = format!("{}\0{}", kind.as_str(), id.as_api_string());
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/upload-dead-letters/{kind}/{id}/retry",
     );
@@ -363,46 +346,20 @@ pub async fn admin_retry_upload_dead_letter(
     idempotency.capacity_scope = actor.id.as_bytes();
     idempotency.target_scope = target_scope.as_bytes();
 
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-
-    let outcome = db::retry_upload_dead_letter_in_tx(
-        &mut tx,
-        actor.id,
-        actor.auth_generation,
-        actor.session_token(),
-        id,
-        lease.request_id,
-    )
-    .await?;
-    let (status, body) = match outcome {
-        db::RetryUploadDeadLetter::Retried => (
-            StatusCode::ACCEPTED,
-            json!({"kind":kind.as_str(),"id":id.as_api_string(),"state":"queued"}),
-        ),
-        db::RetryUploadDeadLetter::Unavailable => (
-            StatusCode::NOT_FOUND,
-            json!({"error":{"code":"not_found","message":"upload dead-letter entry is unavailable"}}),
-        ),
-        db::RetryUploadDeadLetter::Unauthorized => return Err(AppError::Forbidden),
-    };
-    let response = complete_admin_response(&state, &mut tx, &lease, status, body, None).await?;
-    tx.commit().await?;
-    Ok(response)
+    match service
+        .retry_dead_letter(
+            AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+            id,
+        )
+        .await?
+    {
+        ApiMutationOutcome::Committed(response) => stored_api_response(response),
+        ApiMutationOutcome::Replay(replay) => idempotency_replay_response(replay),
+        ApiMutationOutcome::Rejected(rejection) => Err(mutation_rejection(rejection)),
+    }
 }
 
 #[cfg(test)]
@@ -436,9 +393,9 @@ mod tests {
         let raw = "access denied for s3://private-bucket/objects/secret";
         let now = Utc::now();
         let item = view(
-            db::UploadDeadLetterKind::StorageJob,
-            db::UploadDeadLetterRecord {
-                id: db::UploadDeadLetterId::StorageJob(17),
+            UploadDeadLetterKind::StorageJob,
+            UploadDeadLetterRecord {
+                id: UploadDeadLetterId::StorageJob(17),
                 operation: "delete_object".into(),
                 attempts: 12,
                 dead_lettered_at: now,
@@ -460,7 +417,7 @@ mod tests {
 
     #[test]
     fn administrator_generation_changes_the_keyed_request_identity() {
-        let base = db::api_request_fingerprint("", b"");
+        let base = crate::services::api_mutations::api_request_fingerprint("", b"");
         assert_eq!(
             admin_generation_bound_request_fingerprint(base, 7),
             admin_generation_bound_request_fingerprint(base, 7)
@@ -490,25 +447,22 @@ mod tests {
     #[test]
     fn cursor_position_is_kind_typed_and_fail_closed() {
         let storage = boundary_from_position(
-            db::UploadDeadLetterKind::StorageJob,
+            UploadDeadLetterKind::StorageJob,
             CursorPosition {
                 last: vec![CursorValue::I64(7)],
             },
         )
         .unwrap();
-        assert!(matches!(
-            storage,
-            db::UploadDeadLetterBoundary::StorageJob(7)
-        ));
+        assert!(matches!(storage, UploadDeadLetterBoundary::StorageJob(7)));
         assert!(boundary_from_position(
-            db::UploadDeadLetterKind::Cleanup,
+            UploadDeadLetterKind::Cleanup,
             CursorPosition {
                 last: vec![CursorValue::I64(7)],
             },
         )
         .is_err());
         assert!(boundary_from_position(
-            db::UploadDeadLetterKind::StorageJob,
+            UploadDeadLetterKind::StorageJob,
             CursorPosition {
                 last: vec![CursorValue::I64(0)],
             },

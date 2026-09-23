@@ -1019,6 +1019,32 @@ fn delivery_carbon_muc_scope(json: &serde_json::Value) -> Result<Option<(String,
     }
 }
 
+/// Admission decisions share the live health state without Redis or publication authority.
+#[derive(Clone)]
+pub(crate) struct ClusterAdmission {
+    health: Arc<ClusterHealth>,
+}
+impl ClusterAdmission {
+    pub(crate) fn admit(&self, operation: ClusterOperation) -> Result<()> {
+        admit_health(&self.health, operation)
+    }
+}
+fn admit_health(health: &ClusterHealth, operation: ClusterOperation) -> Result<()> {
+    let state = health.state.load(Ordering::Acquire);
+    if operation_allowed(state, operation) {
+        return Ok(());
+    }
+    match state {
+            CLUSTER_RECONCILING => anyhow::bail!("cluster control plane is reconciling"),
+            CLUSTER_DURABLE_DIRECT_ONLY => anyhow::bail!(
+                "cluster control plane is degraded; only PostgreSQL-spooled direct messages are accepted"
+            ),
+            CLUSTER_FAIL_CLOSED => anyhow::bail!("cluster control plane is unavailable"),
+            CLUSTER_SHUTDOWN_REQUIRED => anyhow::bail!("cluster safety lease expired"),
+            _ => anyhow::bail!("cluster control plane is in an invalid state"),
+        }
+}
+
 #[derive(Clone)]
 pub struct ClusterManager {
     pub node_id: String,
@@ -1731,20 +1757,14 @@ impl ClusterManager {
             .map(|security| security.failure_policy)
     }
 
+    pub(crate) fn admission(&self) -> ClusterAdmission {
+        ClusterAdmission {
+            health: Arc::clone(&self.health),
+        }
+    }
+
     pub fn admit(&self, operation: ClusterOperation) -> Result<()> {
-        let state = self.health.state.load(Ordering::Acquire);
-        if operation_allowed(state, operation) {
-            return Ok(());
-        }
-        match state {
-            CLUSTER_RECONCILING => anyhow::bail!("cluster control plane is reconciling"),
-            CLUSTER_DURABLE_DIRECT_ONLY => anyhow::bail!(
-                "cluster control plane is degraded; only PostgreSQL-spooled direct messages are accepted"
-            ),
-            CLUSTER_FAIL_CLOSED => anyhow::bail!("cluster control plane is unavailable"),
-            CLUSTER_SHUTDOWN_REQUIRED => anyhow::bail!("cluster safety lease expired"),
-            _ => anyhow::bail!("cluster control plane is in an invalid state"),
-        }
+        admit_health(&self.health, operation)
     }
 
     pub fn readiness_error(&self) -> Option<String> {
@@ -8742,6 +8762,35 @@ mod tests {
         };
         assert!(!retired.accepts("old", 4, now));
         assert!(!retired.accepts("next", 5, retired.refresh_until));
+    }
+
+    #[test]
+    fn admission_capability_observes_shared_health_transitions() {
+        let namespace = "admission-capability.test";
+        let (_, security) = crate::cluster_security::test_configuration_pair(namespace);
+        let manager = verification_manager(namespace, security);
+        let admission = manager.admission();
+        for state in [
+            CLUSTER_DISABLED,
+            CLUSTER_HEALTHY,
+            CLUSTER_RECONCILING,
+            CLUSTER_DURABLE_DIRECT_ONLY,
+            CLUSTER_FAIL_CLOSED,
+            CLUSTER_SHUTDOWN_REQUIRED,
+        ] {
+            manager.health.state.store(state, Ordering::Release);
+            for operation in [
+                ClusterOperation::AdminMutation,
+                ClusterOperation::DurableDirect,
+            ] {
+                assert_eq!(
+                    admission
+                        .admit(operation)
+                        .map_err(|error| error.to_string()),
+                    manager.admit(operation).map_err(|error| error.to_string()),
+                );
+            }
+        }
     }
 
     #[test]

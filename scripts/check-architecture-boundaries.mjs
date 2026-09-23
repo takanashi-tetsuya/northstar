@@ -2069,7 +2069,12 @@ for (const [name, source] of [
   ['API mutation values', read('src/services/api_mutations.rs')],
   ['ReportService', read('src/services/reports.rs')],
   ['ReportContext', read('src/state/reports.rs')],
-  ['Operation projections', read('src/services/operations.rs')],
+  ['OperationAdminService', read('src/services/operations.rs')],
+  ['UploadAdminService', read('src/services/upload_admin.rs')],
+  ['ReportModerationService', read('src/services/report_moderation.rs')],
+  ['InvitationAdminService', read('src/services/invitation_admin.rs')],
+  ['RetentionPolicyService', read('src/services/retention_policy.rs')],
+  ['RetentionPolicyContext', read('src/state/retention_policy.rs')],
   ['OmemoRecoveryService', read('src/services/omemo_recovery.rs')],
   ['OmemoRecoveryPollContext', read('src/state/omemo_poll.rs')],
 ]) {
@@ -2115,6 +2120,22 @@ const suspensionRecoverySource = cleanupServiceSource.slice(
 );
 if (!suspensionRecoverySource.includes('SmSuspensionContext<R>') || /\bAppState\b/.test(suspensionRecoverySource)) {
   throw new Error('SM suspension recovery must retain its narrow context');
+}
+for (const [path, names, context] of [
+  ['src/api/operations.rs', ['cancel_operation', 'reconcile_operation', 'reconcile_target'], 'OperationAdminContext'],
+  ['src/api/admin.rs', ['admin_update_report', 'admin_update_appeal'], 'ReportModerationContext'],
+  ['src/api/upload_admin.rs', ['admin_retry_upload_dead_letter'], 'UploadAdminContext'],
+  ['src/api/admin.rs', ['admin_create_invitation', 'admin_revoke_invitation'], 'InvitationAdminContext'],
+  ['src/api/data_lifecycle.rs', ['get_my_retention', 'update_my_retention', 'get_muc_retention', 'update_muc_retention'], 'RetentionPolicyContext'],
+]) {
+  const source = read(path);
+  for (const name of names) {
+    const body = structBody(source, `pub async fn ${name}(`);
+    const signature = source.slice(source.indexOf(`pub async fn ${name}(`)).split(') ->')[0];
+    if (!signature.includes(`State<crate::state::${context}>`) || /\b(?:sqlx|db|AppState)\b|\.pool\b/.test(body)) {
+      throw new Error(`${name} must retain its command service and narrow context`);
+    }
+  }
 }
 const reportApiSource = productionWithoutCfgTestModules(read('src/api/reports.rs'), 'Reports HTTP');
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bPgPool\b/, /\.pool\b/]) {

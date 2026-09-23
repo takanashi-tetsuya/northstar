@@ -1,3 +1,50 @@
+pub(crate) type InvitationAdminContext = crate::services::invitation_admin::InvitationAdminService<
+    db::invitation_admin_repository::PostgresInvitationAdminRepository,
+>;
+impl axum::extract::FromRef<Arc<AppState>> for InvitationAdminContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        state.invitation_admin_service.clone()
+    }
+}
+
+pub(crate) mod retention_policy;
+pub(crate) type RetentionPolicyContext = retention_policy::RetentionPolicyContext<
+    db::retention_policy_repository::PostgresRetentionPolicyRepository,
+>;
+impl axum::extract::FromRef<Arc<AppState>> for RetentionPolicyContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        state.retention_policy_context.clone()
+    }
+}
+
+pub(crate) type ReportModerationContext =
+    crate::services::report_moderation::ReportModerationService<
+        db::report_moderation_repository::PostgresReportModerationRepository,
+    >;
+impl axum::extract::FromRef<Arc<AppState>> for ReportModerationContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        state.report_moderation_service.clone()
+    }
+}
+
+pub(crate) type UploadAdminContext = crate::services::upload_admin::UploadAdminService<
+    db::upload_admin_repository::PostgresUploadAdminRepository,
+>;
+impl axum::extract::FromRef<Arc<AppState>> for UploadAdminContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        state.upload_admin_service.clone()
+    }
+}
+
+pub(crate) type OperationAdminContext = crate::services::operations::OperationAdminService<
+    db::operation_admin_repository::PostgresOperationAdminRepository,
+>;
+impl axum::extract::FromRef<Arc<AppState>> for OperationAdminContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        state.operation_admin_service.clone()
+    }
+}
+
 pub(crate) mod reports;
 pub(crate) type ReportContext = reports::ReportContext<
     db::report_repository::PostgresReportRepository,
@@ -1803,6 +1850,11 @@ pub struct AppState {
     durable_outbox_database_admission:
         crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
     api_control: Arc<db::ApiControlKeyring>,
+    operation_admin_service: OperationAdminContext,
+    upload_admin_service: UploadAdminContext,
+    report_moderation_service: ReportModerationContext,
+    invitation_admin_service: InvitationAdminContext,
+    retention_policy_context: RetentionPolicyContext,
     report_service:
         crate::services::reports::ReportService<db::report_repository::PostgresReportRepository>,
     /// Opaque REST pagination cursors use purpose-separated subkeys derived
@@ -2934,6 +2986,48 @@ impl AppState {
             Arc::clone(&metrics),
         );
         let api_control = Arc::new(api_control);
+        let admin_mutations = db::admin_mutations::AdminMutationStore::new(
+            pool.clone(),
+            Arc::clone(&api_control),
+            cluster.admission(),
+        );
+        let operation_admin_service = crate::services::operations::OperationAdminService::new(
+            db::operation_admin_repository::PostgresOperationAdminRepository::new(
+                admin_mutations.clone(),
+            ),
+        );
+        let upload_admin_service = crate::services::upload_admin::UploadAdminService::new(
+            db::upload_admin_repository::PostgresUploadAdminRepository::new(
+                admin_mutations.clone(),
+            ),
+        );
+        let report_moderation_service =
+            crate::services::report_moderation::ReportModerationService::new(
+                db::report_moderation_repository::PostgresReportModerationRepository::new(
+                    admin_mutations.clone(),
+                ),
+            );
+        let retention_policy_context = retention_policy::RetentionPolicyContext::new(
+            crate::services::retention_policy::RetentionPolicyService::new(
+                db::retention_policy_repository::PostgresRetentionPolicyRepository::new(
+                    pool.clone(),
+                    Arc::clone(&api_control),
+                ),
+                crate::services::retention_policy::RetentionPolicyLimits {
+                    personal_mam_days: config.mam_retention_days,
+                    offline_message_days: config.offline_message_ttl_days,
+                    moderation_evidence_days: config.moderation_retention_days,
+                },
+                config.muc_mam_retention_days,
+            ),
+            Arc::clone(&metrics),
+        );
+        let invitation_admin_service =
+            crate::services::invitation_admin::InvitationAdminService::new(
+                db::invitation_admin_repository::PostgresInvitationAdminRepository::new(
+                    admin_mutations,
+                ),
+            );
         let report_service = crate::services::reports::ReportService::new(
             db::report_repository::PostgresReportRepository::new(
                 pool.clone(),
@@ -2999,6 +3093,11 @@ impl AppState {
             durable_outbox_database_admission,
             api_control,
             report_service,
+            operation_admin_service,
+            upload_admin_service,
+            report_moderation_service,
+            invitation_admin_service,
+            retention_policy_context,
             api_cursor,
             upload_service,
             upload_store,

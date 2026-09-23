@@ -12,61 +12,12 @@ pub const GOVERNANCE_EXPORT_LEASE_SECONDS: i64 = 15 * 60;
 pub const GOVERNANCE_SNAPSHOT_ISOLATION_SQL: &str =
     "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ";
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
-pub struct UserRetentionPolicy {
-    pub personal_mam_days: Option<i32>,
-    pub offline_message_days: Option<i32>,
-    pub moderation_evidence_days: Option<i32>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RetentionPolicyLimits {
-    pub personal_mam_days: i64,
-    pub offline_message_days: i64,
-    pub moderation_evidence_days: i64,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum RetentionPolicyError {
-    #[error(
-        "retention policy is outside the operator limit or would extend user-controlled retention"
-    )]
-    Forbidden,
-    #[error("retention policy subject does not exist")]
-    NotFound,
-    #[error("retention policy backend failed")]
-    Internal(#[source] anyhow::Error),
-}
-
-fn effective_days(value: Option<i32>, global: i64) -> i64 {
-    value
-        .map(i64::from)
-        .unwrap_or_else(|| if global == 0 { i64::MAX } else { global })
-}
-
-fn valid_requested_days(value: Option<i32>, global: i64, minimum: i32) -> bool {
-    value.is_none_or(|days| {
-        days >= minimum && days <= 36_500 && (global == 0 || i64::from(days) <= global)
-    })
-}
-
-fn policy_does_not_extend(
-    old: UserRetentionPolicy,
-    new: UserRetentionPolicy,
-    limits: RetentionPolicyLimits,
-) -> bool {
-    effective_days(new.personal_mam_days, limits.personal_mam_days)
-        <= effective_days(old.personal_mam_days, limits.personal_mam_days)
-        && effective_days(new.offline_message_days, limits.offline_message_days)
-            <= effective_days(old.offline_message_days, limits.offline_message_days)
-        && effective_days(
-            new.moderation_evidence_days,
-            limits.moderation_evidence_days,
-        ) <= effective_days(
-            old.moderation_evidence_days,
-            limits.moderation_evidence_days,
-        )
-}
+use crate::services::retention_policy::{
+    effective_days, policy_does_not_extend, valid_requested_days,
+};
+pub use crate::services::retention_policy::{
+    RetentionPolicyError, RetentionPolicyLimits, UserRetentionPolicy,
+};
 
 /// Set the three account-owned retention policies in the caller's existing
 /// authorization/idempotency transaction.  A normal user can only move an
@@ -172,13 +123,16 @@ pub async fn set_user_retention_policy_in_tx(
     Ok(())
 }
 
-pub async fn user_retention_policy(pool: &PgPool, user_id: Uuid) -> Result<UserRetentionPolicy> {
+pub async fn user_retention_policy_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+) -> Result<UserRetentionPolicy> {
     Ok(sqlx::query(
         "SELECT personal_mam_days,offline_message_days,moderation_evidence_days
            FROM user_retention_policies WHERE user_id=$1",
     )
     .bind(user_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut **tx)
     .await?
     .map(|row| UserRetentionPolicy {
         personal_mam_days: row.get("personal_mam_days"),
@@ -188,8 +142,8 @@ pub async fn user_retention_policy(pool: &PgPool, user_id: Uuid) -> Result<UserR
     .unwrap_or_default())
 }
 
-pub async fn muc_retention_policy_authorized(
-    pool: &PgPool,
+pub async fn muc_retention_policy_authorized_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
     room_id: Uuid,
 ) -> std::result::Result<Option<i32>, RetentionPolicyError> {
@@ -207,7 +161,7 @@ pub async fn muc_retention_policy_authorized(
     )
     .bind(actor_id)
     .bind(room_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut **tx)
     .await
     .map_err(|error| RetentionPolicyError::Internal(error.into()))?
     .ok_or(RetentionPolicyError::NotFound)?;

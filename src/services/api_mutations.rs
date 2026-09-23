@@ -1,5 +1,6 @@
 //! Request identities and canonical results for idempotent API commands.
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
@@ -88,6 +89,9 @@ impl StoredApiResponse {
 
 pub(crate) enum ApiMutationRejection {
     Unauthorized,
+    Forbidden,
+    BadRequest(&'static str),
+    Unavailable(String),
     IdempotencyConflict,
     ReplayInvalidated,
     Busy { retry_after: u64 },
@@ -136,4 +140,21 @@ pub(crate) fn guard_denial_response(
         response = response.with_header("retry-after", retry_after.to_string());
     }
     Ok(response)
+}
+
+pub(crate) struct AdminMutationAdmission<'a> {
+    pub(crate) authority: crate::services::api_queries::ApiReadAuthority<'a>,
+    pub(crate) idempotency: IdempotencyRequest<'a>,
+}
+
+/// Hash the exact media type and bytes consumed by a mutation handler. HTTP
+/// code must call this before deserializing so semantically different JSON
+/// encodings cannot be silently substituted under one idempotency key.
+pub fn api_request_fingerprint(content_type: &str, body: &[u8]) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update((content_type.len() as u64).to_be_bytes());
+    hash.update(content_type.as_bytes());
+    hash.update((body.len() as u64).to_be_bytes());
+    hash.update(body);
+    hash.finalize().into()
 }

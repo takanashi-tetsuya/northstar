@@ -1,9 +1,14 @@
 use crate::api::cursor::{
     CanonicalScope, CursorBinding, CursorDirection, CursorPosition, CursorValue,
 };
+use crate::api::idempotency::{mutation_rejection, stored_api_response};
 use crate::api::*;
 use crate::db;
 use crate::error::AppError;
+use crate::services::{
+    api_mutations::{ApiMutationOutcome, ApiPrincipalKind, StoredApiResponse},
+    retention_policy::{RetentionMutationAdmission, RetentionPolicyError, UserRetentionPolicy},
+};
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::State;
@@ -55,11 +60,12 @@ fn access_key_sha256(key: &str) -> String {
     output
 }
 
-fn retention_error(error: db::RetentionPolicyError) -> AppError {
+fn retention_error(error: RetentionPolicyError) -> AppError {
     match error {
-        db::RetentionPolicyError::Forbidden => AppError::Forbidden,
-        db::RetentionPolicyError::NotFound => AppError::NotFound(error.to_string()),
-        db::RetentionPolicyError::Internal(error) => AppError::Internal(error),
+        RetentionPolicyError::Unauthorized => AppError::Unauthorized,
+        RetentionPolicyError::Forbidden => AppError::Forbidden,
+        RetentionPolicyError::NotFound => AppError::NotFound(error.to_string()),
+        RetentionPolicyError::Internal(error) => AppError::Internal(error),
     }
 }
 
@@ -266,52 +272,14 @@ fn with_next_cursor<T: Serialize>(
     Ok(value)
 }
 
-fn user_limits(state: &AppState) -> db::RetentionPolicyLimits {
-    db::RetentionPolicyLimits {
-        personal_mam_days: state.config.mam_retention_days,
-        offline_message_days: state.config.offline_message_ttl_days,
-        moderation_evidence_days: state.config.moderation_retention_days,
-    }
-}
-
-async fn acquire_user_mutation(
-    state: &AppState,
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    request: &db::IdempotencyRequest<'_>,
-) -> Result<db::IdempotencyAcquire, AppError> {
-    Ok(db::acquire_idempotency_in_tx(state.api_control(), tx, request).await?)
-}
-
-async fn complete_user_response(
-    state: &AppState,
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    lease: &db::IdempotencyLease,
-    status: StatusCode,
-    body: Value,
+fn retention_response(
+    outcome: ApiMutationOutcome<StoredApiResponse>,
 ) -> Result<Response, AppError> {
-    let headers = json_replay_headers();
-    let bytes = serde_json::to_vec(&body).map_err(|error| AppError::Internal(error.into()))?;
-    if !db::complete_idempotency_in_tx(
-        state.api_control(),
-        tx,
-        lease,
-        status.as_u16(),
-        &headers,
-        &bytes,
-    )
-    .await?
-    {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "data-policy idempotency lease changed"
-        )));
+    match outcome {
+        ApiMutationOutcome::Committed(response) => stored_api_response(response),
+        ApiMutationOutcome::Replay(response) => idempotency_replay_response(response),
+        ApiMutationOutcome::Rejected(rejection) => Err(mutation_rejection(rejection)),
     }
-    let mut response = Response::builder().status(status);
-    for (name, value) in headers {
-        response = response.header(name, value);
-    }
-    response
-        .body(Body::from(bytes))
-        .map_err(|error| AppError::Internal(error.into()))
 }
 
 fn ensure_governance_export_size(bytes: &[u8]) -> Result<(), AppError> {
@@ -370,24 +338,22 @@ async fn complete_governance_export<T: Serialize>(
 }
 
 pub async fn get_my_retention(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::RetentionPolicyContext>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
-    let user = current_user(&state, &headers).await?;
-    let policy = db::user_retention_policy(&state.pool, user.id).await?;
+    let policy = state
+        .user_policy(bearer_token(&headers)?)
+        .await
+        .map_err(retention_error)?;
     Ok(Json(json!({
         "policy":policy,
-        "operator_limits":{
-            "personal_mam_days":state.config.mam_retention_days,
-            "offline_message_days":state.config.offline_message_ttl_days,
-            "moderation_evidence_days":state.config.moderation_retention_days
-        },
+        "operator_limits":state.retention_policy_service().limits(),
         "zero_operator_limit_means":"inherited_cleanup_disabled; an explicit shorter user policy remains effective"
     })))
 }
 
 pub async fn update_my_retention(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::RetentionPolicyContext>,
     headers: HeaderMap,
     request: ApiJson<UserRetentionPolicyRequest>,
 ) -> Result<Response, AppError> {
@@ -396,95 +362,45 @@ pub async fn update_my_retention(
     let idempotency = request.idempotency(
         None,
         token.as_bytes(),
-        db::ApiPrincipalKind::User,
+        ApiPrincipalKind::User,
         "PUT",
         "/api/v1/me/retention",
     );
-    let mut tx = state.pool.begin().await?;
-    let user = db::user_for_token_in_tx(&mut tx, &token)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-    let lease = match acquire_user_mutation(&state, &mut tx, &idempotency).await? {
-        db::IdempotencyAcquire::Acquired(lease) => lease,
-        db::IdempotencyAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        db::IdempotencyAcquire::FingerprintConflict | db::IdempotencyAcquire::RotationConflict => {
-            return Err(AppError::IdempotencyConflict);
-        }
-        db::IdempotencyAcquire::ReplayInvalidated => {
-            return Err(AppError::IdempotencyReplayInvalidated);
-        }
-        db::IdempotencyAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-        db::IdempotencyAcquire::CapacityLimited {
-            retry_after_seconds,
-        } => {
-            return Err(AppError::TooManyRequests {
-                message: "too many retained requests; try again later".into(),
-                retry_after: retry_after_seconds,
-            });
-        }
-        db::IdempotencyAcquire::InProgress {
-            retry_after_seconds,
-        } => {
-            return Err(AppError::IdempotencyInProgress {
-                retry_after: retry_after_seconds,
-            });
-        }
+    let admission = RetentionMutationAdmission {
+        session_token: &token,
+        idempotency,
     };
-    let policy = db::UserRetentionPolicy {
+    let policy = UserRetentionPolicy {
         personal_mam_days: request.personal_mam_days,
         offline_message_days: request.offline_message_days,
         moderation_evidence_days: request.moderation_evidence_days,
     };
-    db::set_user_retention_policy_in_tx(
-        &mut tx,
-        user.id,
-        user.id,
-        policy,
-        user_limits(&state),
-        lease.request_id,
-    )
-    .await
-    .map_err(retention_error)?;
-    let response = complete_user_response(
-        &state,
-        &mut tx,
-        &lease,
-        StatusCode::OK,
-        json!({"policy":policy}),
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(response)
+    let outcome = state
+        .retention_policy_service()
+        .set_user_policy(admission, policy)
+        .await
+        .map_err(retention_error)?;
+    retention_response(outcome)
 }
 
 pub async fn get_muc_retention(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::RetentionPolicyContext>,
     headers: HeaderMap,
     ApiPath(room_id): ApiPath<Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    let user = current_user(&state, &headers).await?;
-    let policy = db::muc_retention_policy_authorized(&state.pool, user.id, room_id)
+    let policy = state
+        .muc_policy(bearer_token(&headers)?, room_id)
         .await
         .map_err(retention_error)?;
     Ok(Json(json!({
         "room_id":room_id,
         "retention_days":policy,
-        "operator_limit_days":state.config.muc_mam_retention_days
+        "operator_limit_days":state.retention_policy_service().muc_limit_days()
     })))
 }
 
 pub async fn update_muc_retention(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::RetentionPolicyContext>,
     headers: HeaderMap,
     ApiPath(room_id): ApiPath<Uuid>,
     request: ApiJson<MucRetentionPolicyRequest>,
@@ -494,71 +410,21 @@ pub async fn update_muc_retention(
     let mut idempotency = request.idempotency(
         None,
         token.as_bytes(),
-        db::ApiPrincipalKind::User,
+        ApiPrincipalKind::User,
         "PUT",
         "/api/v1/muc_rooms/{id}/retention",
     );
     idempotency.target_scope = room_id.as_bytes();
-    let mut tx = state.pool.begin().await?;
-    let user = db::user_for_token_in_tx(&mut tx, &token)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-    let lease = match acquire_user_mutation(&state, &mut tx, &idempotency).await? {
-        db::IdempotencyAcquire::Acquired(lease) => lease,
-        db::IdempotencyAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        db::IdempotencyAcquire::FingerprintConflict | db::IdempotencyAcquire::RotationConflict => {
-            return Err(AppError::IdempotencyConflict);
-        }
-        db::IdempotencyAcquire::ReplayInvalidated => {
-            return Err(AppError::IdempotencyReplayInvalidated);
-        }
-        db::IdempotencyAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-        db::IdempotencyAcquire::CapacityLimited {
-            retry_after_seconds,
-        } => {
-            return Err(AppError::TooManyRequests {
-                message: "too many retained requests; try again later".into(),
-                retry_after: retry_after_seconds,
-            });
-        }
-        db::IdempotencyAcquire::InProgress {
-            retry_after_seconds,
-        } => {
-            return Err(AppError::IdempotencyInProgress {
-                retry_after: retry_after_seconds,
-            });
-        }
+    let admission = RetentionMutationAdmission {
+        session_token: &token,
+        idempotency,
     };
-    db::set_muc_retention_policy_in_tx(
-        &mut tx,
-        user.id,
-        room_id,
-        request.retention_days,
-        state.config.muc_mam_retention_days,
-        lease.request_id,
-    )
-    .await
-    .map_err(retention_error)?;
-    let response = complete_user_response(
-        &state,
-        &mut tx,
-        &lease,
-        StatusCode::OK,
-        json!({"room_id":room_id,"retention_days":request.retention_days}),
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(response)
+    let outcome = state
+        .retention_policy_service()
+        .set_muc_policy(admission, room_id, request.retention_days)
+        .await
+        .map_err(retention_error)?;
+    retention_response(outcome)
 }
 
 fn parse_hold_targets(

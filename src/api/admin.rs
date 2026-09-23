@@ -158,18 +158,6 @@ async fn refresh_registration_cache_best_effort(state: &AppState, committed_acti
     }
 }
 
-fn valid_admin_text(value: &str, max_chars: usize, max_bytes: usize, multiline: bool) -> bool {
-    !value.is_empty()
-        && value.len() <= max_bytes
-        && value.chars().count() <= max_chars
-        && value.chars().all(|character| {
-            let code = character as u32;
-            let allowed_space = multiline && matches!(character, '\t' | '\n' | '\r');
-            (allowed_space || !(code <= 0x1f || (0x7f..=0x9f).contains(&code)))
-                && !(0x202a..=0x202e).contains(&code)
-        })
-}
-
 pub async fn admin_stats(
     State(state): State<crate::state::ApiQueryContext>,
     actor: ApiAdmin,
@@ -343,148 +331,72 @@ pub async fn admin_reports(
 }
 
 pub async fn admin_update_report(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ReportModerationContext>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiJson<ModerationPatch>,
 ) -> Result<Response, AppError> {
-    if !matches!(
-        request.status.as_str(),
-        "submitted" | "reviewing" | "actioned" | "rejected" | "closed"
-    ) {
-        return Err(AppError::BadRequest("invalid report status".into()));
-    }
-    let resolution = request.resolution.as_deref().unwrap_or_default().trim();
-    if (!resolution.is_empty() && !valid_admin_text(resolution, 8000, 32_000, true))
-        || (matches!(request.status.as_str(), "actioned" | "rejected" | "closed")
-            && resolution.trim().is_empty())
-    {
-        return Err(AppError::BadRequest(
-            "a resolution is required when resolving a report".into(),
-        ));
-    }
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        crate::services::api_mutations::ApiPrincipalKind::Admin,
         "PATCH",
         "/api/v1/admin/reports/{id}",
     );
     idempotency.target_scope = id.as_bytes();
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    let (status, response_body) = match db::admin_update_report_in_tx(
-        &mut tx,
-        id,
-        actor.id,
-        &request.status,
-        resolution,
-        lease.request_id,
-    )
-    .await
-    {
-        Ok(()) => (StatusCode::OK, json!({"updated":true})),
-        Err(db::ModerationUpdateError::NotFound) => (
-            StatusCode::NOT_FOUND,
-            json!({"error":{"code":"not_found","message":"moderation record does not exist"}}),
-        ),
-        Err(db::ModerationUpdateError::InvalidTransition) => (
-            StatusCode::CONFLICT,
-            json!({"error":{"code":"conflict","message":"invalid moderation state transition"}}),
-        ),
-        Err(db::ModerationUpdateError::Unauthorized) => return Err(AppError::Forbidden),
-        Err(db::ModerationUpdateError::Internal(error)) => return Err(AppError::Internal(error)),
-    };
-    let response =
-        complete_admin_response(&state, &mut tx, &lease, status, response_body, None).await?;
-    tx.commit().await?;
-    Ok(response)
+    let outcome = state
+        .update_report(
+            crate::services::api_mutations::AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+            id,
+            &request.status,
+            request.resolution.as_deref(),
+        )
+        .await?;
+    admin_mutation_response(outcome)
 }
 
 pub async fn admin_update_appeal(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::ReportModerationContext>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiJson<ModerationPatch>,
 ) -> Result<Response, AppError> {
-    if !matches!(
-        request.status.as_str(),
-        "submitted" | "reviewing" | "upheld" | "denied"
-    ) {
-        return Err(AppError::BadRequest("invalid appeal status".into()));
-    }
-    let resolution = request.resolution.as_deref().unwrap_or_default().trim();
-    if (!resolution.is_empty() && !valid_admin_text(resolution, 8000, 32_000, true))
-        || (matches!(request.status.as_str(), "upheld" | "denied") && resolution.trim().is_empty())
-    {
-        return Err(AppError::BadRequest(
-            "a resolution is required when resolving an appeal".into(),
-        ));
-    }
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        crate::services::api_mutations::ApiPrincipalKind::Admin,
         "PATCH",
         "/api/v1/admin/appeals/{id}",
     );
     idempotency.target_scope = id.as_bytes();
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    let (status, response_body) = match db::admin_update_appeal_in_tx(
-        &mut tx,
-        id,
-        actor.id,
-        &request.status,
-        resolution,
-        lease.request_id,
-    )
-    .await
-    {
-        Ok(()) => (StatusCode::OK, json!({"updated":true})),
-        Err(db::ModerationUpdateError::NotFound) => (
-            StatusCode::NOT_FOUND,
-            json!({"error":{"code":"not_found","message":"moderation record does not exist"}}),
-        ),
-        Err(db::ModerationUpdateError::InvalidTransition) => (
-            StatusCode::CONFLICT,
-            json!({"error":{"code":"conflict","message":"invalid moderation state transition"}}),
-        ),
-        Err(db::ModerationUpdateError::Unauthorized) => return Err(AppError::Forbidden),
-        Err(db::ModerationUpdateError::Internal(error)) => return Err(AppError::Internal(error)),
-    };
-    let response =
-        complete_admin_response(&state, &mut tx, &lease, status, response_body, None).await?;
-    tx.commit().await?;
-    Ok(response)
+    let outcome = state
+        .update_appeal(
+            crate::services::api_mutations::AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+            id,
+            &request.status,
+            request.resolution.as_deref(),
+        )
+        .await?;
+    admin_mutation_response(outcome)
+}
+
+fn admin_mutation_response(
+    outcome: crate::services::api_mutations::ApiMutationOutcome<
+        crate::services::api_mutations::StoredApiResponse,
+    >,
+) -> Result<Response, AppError> {
+    use crate::services::api_mutations::ApiMutationOutcome;
+    match outcome {
+        ApiMutationOutcome::Committed(response) => idempotency::stored_api_response(response),
+        ApiMutationOutcome::Replay(response) => idempotency_replay_response(response),
+        ApiMutationOutcome::Rejected(rejection) => Err(idempotency::mutation_rejection(rejection)),
+    }
 }
 
 pub async fn admin_tls_reload(
@@ -556,78 +468,36 @@ pub async fn admin_invitations(
 }
 
 pub async fn admin_create_invitation(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::InvitationAdminContext>,
     actor: ApiAdmin,
     request: ApiJson<InvitationRequest>,
 ) -> Result<Response, AppError> {
-    let label = request.label.trim();
-    if !valid_admin_text(label, 128, 512, false) {
-        return Err(AppError::BadRequest("invitation label is invalid".into()));
-    }
-    let max_uses = request.max_uses.unwrap_or(1);
-    if !(1..=100_000).contains(&max_uses) {
-        return Err(AppError::BadRequest(
-            "invitation max uses is invalid".into(),
-        ));
-    }
-    if request
-        .expires_in_hours
-        .is_some_and(|hours| !(1..=8760).contains(&hours))
-    {
-        return Err(AppError::BadRequest("invitation expiry is invalid".into()));
-    }
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        crate::services::api_mutations::ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/invitations",
     );
     idempotency.target_scope = b"invitation:create";
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    let id = Uuid::new_v4();
-    let token = crate::auth::new_session_token();
-    db::create_invitation_in_tx(
-        &mut tx,
-        actor.id,
-        id,
-        &token,
-        label,
-        max_uses,
-        request.expires_in_hours,
-        Some(lease.request_id),
-    )
-    .await?;
-    let response = complete_admin_response(
-        &state,
-        &mut tx,
-        &lease,
-        StatusCode::CREATED,
-        json!({"id":id,"token":token,"shown_once":true}),
-        Some(id),
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(response)
+    let outcome = state
+        .create(
+            crate::services::api_mutations::AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+            crate::services::invitation_admin::InvitationInput {
+                label: &request.label,
+                max_uses: request.max_uses,
+                expires_in_hours: request.expires_in_hours,
+            },
+        )
+        .await?;
+    admin_mutation_response(outcome)
 }
 
 pub async fn admin_revoke_invitation(
-    State(state): State<Arc<AppState>>,
+    State(state): State<crate::state::InvitationAdminContext>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiEmpty,
@@ -635,53 +505,21 @@ pub async fn admin_revoke_invitation(
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        crate::services::api_mutations::ApiPrincipalKind::Admin,
         "DELETE",
         "/api/v1/admin/invitations/{id}",
     );
     idempotency.target_scope = id.as_bytes();
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    let revoked =
-        db::revoke_invitation_in_tx(&mut tx, actor.id, id, Some(lease.request_id)).await?;
-    if revoked == db::InvitationRevokeOutcome::NotFound {
-        let response = complete_admin_response(
-            &state,
-            &mut tx,
-            &lease,
-            StatusCode::NOT_FOUND,
-            json!({"error":{"code":"not_found","message":"invitation does not exist"}}),
-            None,
+    let outcome = state
+        .revoke(
+            crate::services::api_mutations::AdminMutationAdmission {
+                authority: actor.read_authority(),
+                idempotency,
+            },
+            id,
         )
         .await?;
-        tx.commit().await?;
-        return Ok(response);
-    }
-    let response = complete_admin_response(
-        &state,
-        &mut tx,
-        &lease,
-        StatusCode::OK,
-        json!({"revoked":true,"already_revoked":revoked == db::InvitationRevokeOutcome::AlreadyRevoked}),
-        None,
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(response)
+    admin_mutation_response(outcome)
 }
 
 pub async fn admin_nuke(
@@ -1214,7 +1052,8 @@ pub async fn admin_broadcast(
 
 #[cfg(test)]
 mod tests {
-    use super::{finish_session_page, valid_admin_text};
+    use super::finish_session_page;
+    use crate::services::report_moderation::valid_administrative_text as valid_admin_text;
     use axum::body::Body;
     use axum::extract::FromRequest;
     use axum::http::{HeaderValue, Request};

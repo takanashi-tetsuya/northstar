@@ -6049,7 +6049,7 @@ def run() -> None:
         "Content-Type": "application/json",
         "Idempotency-Key": f"reconcile-terminal-{time.time_ns()}",
     }
-    status, _, reconcile_raw = raw_admin_http(
+    status, first_reconcile_headers, reconcile_raw = raw_admin_http(
         "POST", reconcile_path, reconcile_body, reconcile_headers
     )
     reconcile_result = json.loads(reconcile_raw)
@@ -6057,27 +6057,47 @@ def run() -> None:
         status == 409 and reconcile_result.get("error", {}).get("code") == "conflict",
         f"parent reconciliation endpoint was not reachable: {reconcile_result}",
     )
-    status, _, target_reconcile_raw = raw_admin_http(
-        "POST",
-        f"/api/v1/admin/operations/{kick_operation_id}/targets/{target_id}/reconcile",
-        json.dumps(
-            {
-                "succeeded": True,
-                "evidence_note": "integration terminal target reachability check",
-            },
-            separators=(",", ":"),
-        ).encode(),
-        {
-            "Authorization": f"Bearer {admin_token}",
-            "Content-Type": "application/json",
-            "Idempotency-Key": f"reconcile-target-terminal-{time.time_ns()}",
-        },
+    def assert_admin_replay(path, body, headers, first_status, first_headers, first_body):
+        replay_status, replay_headers, replay_body = raw_admin_http("POST", path, body, headers)
+        check(
+            replay_status == first_status and replay_body == first_body
+            and replay_headers.get("idempotency-replayed") == "true"
+            and replay_headers.get("idempotency-original-request-id") == first_headers.get("x-request-id")
+            and replay_headers.get("cache-control") == "no-store, max-age=0",
+            f"administrator command did not preserve its committed response: {path}",
+        )
+
+    assert_admin_replay(reconcile_path, reconcile_body, reconcile_headers,
+                        status, first_reconcile_headers, reconcile_raw)
+    target_reconcile_path = f"/api/v1/admin/operations/{kick_operation_id}/targets/{target_id}/reconcile"
+    target_reconcile_body = json.dumps(
+        {"succeeded": True, "evidence_note": "integration terminal target reachability check"},
+        separators=(",", ":"),
+    ).encode()
+    target_reconcile_headers = {
+        "Authorization": f"Bearer {admin_token}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": f"reconcile-target-terminal-{time.time_ns()}",
+    }
+    status, first_target_headers, target_reconcile_raw = raw_admin_http(
+        "POST", target_reconcile_path, target_reconcile_body, target_reconcile_headers,
     )
     target_reconcile = json.loads(target_reconcile_raw)
     check(
         status == 409 and target_reconcile.get("error", {}).get("code") == "conflict",
         f"target reconciliation endpoint was not reachable: {target_reconcile}",
     )
+    assert_admin_replay(target_reconcile_path, target_reconcile_body, target_reconcile_headers,
+                        status, first_target_headers, target_reconcile_raw)
+    absent_parent = "00000000-0000-4000-8000-000000000001"
+    wrong_parent_path = f"/api/v1/admin/operations/{absent_parent}/targets/{target_id}/reconcile"
+    wrong_parent_headers = {**target_reconcile_headers, "Idempotency-Key": f"reconcile-wrong-parent-{time.time_ns()}"}
+    status, wrong_parent_response_headers, wrong_parent_raw = raw_admin_http(
+        "POST", wrong_parent_path, target_reconcile_body, wrong_parent_headers,
+    )
+    check(status == 404, "target reconciliation crossed its parent operation boundary")
+    assert_admin_replay(wrong_parent_path, target_reconcile_body, wrong_parent_headers,
+                        status, wrong_parent_response_headers, wrong_parent_raw)
     for invalid_query in (
         "unknown=1",
         "limit=1&limit=2",

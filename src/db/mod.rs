@@ -1,4 +1,12 @@
+pub(crate) mod admin_mutations;
+pub(crate) mod invitation_admin_repository;
+pub(crate) mod operation_admin_repository;
 pub(crate) mod passkeys;
+pub(crate) mod report_moderation_repository;
+pub(crate) mod retention_policy_repository;
+#[cfg(test)]
+pub(crate) mod test_support;
+pub(crate) mod upload_admin_repository;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 

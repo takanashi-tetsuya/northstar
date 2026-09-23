@@ -1,3 +1,7 @@
+use crate::services::operations::{
+    contains_secret_key, validate_error_code, validate_json,
+    validate_manual_reconciliation_content, MAX_RESULT_BYTES,
+};
 pub use crate::services::operations::{
     AuthorizationPolicy, OperationPage, OperationPageBoundary, OperationRecord, OperationStatus,
     OperationTargetPage, OperationTargetRecord,
@@ -12,8 +16,6 @@ use uuid::Uuid;
 
 const MAX_OPERATION_PAYLOAD_BYTES: usize = 256 * 1024;
 const MAX_TARGET_PAYLOAD_BYTES: usize = 64 * 1024;
-const MAX_RESULT_BYTES: usize = 1024 * 1024;
-const MAX_ERROR_CODE_BYTES: usize = 128;
 const MAX_TARGET_BYTES: usize = 4096;
 
 /// Bounded operational view used by the Prometheus collector.  Keep this a
@@ -135,126 +137,6 @@ pub struct ManualReconciliation<'a> {
     pub result: Option<&'a Value>,
     pub error_code: Option<&'a str>,
     pub evidence_note: &'a str,
-}
-
-fn validate_json(value: &Value, maximum: usize, label: &str) -> Result<()> {
-    anyhow::ensure!(
-        serde_json::to_vec(value)?.len() <= maximum,
-        "{label} exceeds its encoded size limit"
-    );
-    Ok(())
-}
-
-fn contains_secret_key(value: &Value) -> bool {
-    match value {
-        Value::Object(object) => object.iter().any(|(key, value)| {
-            let key = key.to_ascii_lowercase().replace('-', "_");
-            key.contains("password")
-                || key.contains("passwd")
-                || key.contains("passphrase")
-                || key.contains("secret")
-                || key.contains("private_key")
-                || key.contains("api_key")
-                || key.contains("apikey")
-                || key.contains("access_token")
-                || key.contains("refresh_token")
-                || key.contains("session_token")
-                || key.contains("client_secret")
-                || key.contains("bearer")
-                || key == "token"
-                || key == "authorization"
-                || key == "cookie"
-                || key == "set_cookie"
-                || contains_secret_key(value)
-        }),
-        Value::Array(values) => values.iter().any(contains_secret_key),
-        _ => false,
-    }
-}
-
-fn contains_sensitive_text(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    [
-        "password",
-        "passwd",
-        "passphrase",
-        "secret",
-        "private_key",
-        "private-key",
-        "private key",
-        "api_key",
-        "api-key",
-        "apikey",
-        "access_token",
-        "access-token",
-        "refresh_token",
-        "refresh-token",
-        "session_token",
-        "session-token",
-        "client_secret",
-        "client-secret",
-        "authorization:",
-        "bearer ",
-        "cookie:",
-        "set-cookie:",
-        "-----begin private key-----",
-        "-----begin encrypted private key-----",
-        "-----begin rsa private key-----",
-        "-----begin ec private key-----",
-        "-----begin openssh private key-----",
-    ]
-    .iter()
-    .any(|indicator| lower.contains(indicator))
-}
-
-/// Validate operator-supplied reconciliation data before it is persisted.
-/// Successful reconciliation may carry a bounded, non-secret result and must
-/// not carry an error code. Failed reconciliation must carry a valid error
-/// code and cannot carry a result, avoiding ambiguous terminal records.
-pub fn validate_manual_reconciliation_content(
-    succeeded: bool,
-    result: Option<&Value>,
-    error_code: Option<&str>,
-    evidence_note: &str,
-) -> Result<()> {
-    anyhow::ensure!(
-        !evidence_note.is_empty() && evidence_note.len() <= 4096,
-        "reconciliation evidence note is invalid"
-    );
-    anyhow::ensure!(
-        evidence_note.chars().all(|character| {
-            let code = character as u32;
-            matches!(character, '\t' | '\n' | '\r')
-                || (!(code <= 0x1f || (0x7f..=0x9f).contains(&code))
-                    && !(0x202a..=0x202e).contains(&code)
-                    && !(0x2066..=0x2069).contains(&code))
-        }),
-        "reconciliation evidence note contains unsafe control characters"
-    );
-    anyhow::ensure!(
-        !contains_sensitive_text(evidence_note),
-        "evidence note must not contain credentials"
-    );
-    if let Some(result) = result {
-        validate_json(result, MAX_RESULT_BYTES, "reconciliation result")?;
-        anyhow::ensure!(
-            !contains_secret_key(result),
-            "reconciliation result contains credentials"
-        );
-    }
-    if succeeded {
-        anyhow::ensure!(
-            error_code.is_none(),
-            "successful reconciliation must not include an error code"
-        );
-    } else {
-        anyhow::ensure!(
-            result.is_none(),
-            "failed reconciliation must not include a result"
-        );
-        validate_error_code(error_code.context("failed reconciliation requires an error code")?)?;
-    }
-    Ok(())
 }
 
 fn validate_allowed_object_keys(value: &Value, allowed: &[&str]) -> Result<()> {
@@ -388,19 +270,6 @@ fn required_authorization_policy(kind: &str) -> Result<AuthorizationPolicy> {
         | "admin.broadcast" => Ok(AuthorizationPolicy::ReauthorizeUntilEffect),
         _ => anyhow::bail!("unsupported operation kind"),
     }
-}
-
-fn validate_error_code(error_code: &str) -> Result<()> {
-    anyhow::ensure!(
-        !error_code.is_empty()
-            && error_code.len() <= MAX_ERROR_CODE_BYTES
-            && error_code.bytes().all(|byte| byte.is_ascii_lowercase()
-                || byte.is_ascii_digit()
-                || byte == b'_'
-                || byte == b'-'),
-        "operation error code is invalid"
-    );
-    Ok(())
 }
 
 fn operation_from_row(row: &sqlx::postgres::PgRow) -> Result<OperationRecord> {
@@ -2284,70 +2153,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn manual_reconciliation_combinations_and_secret_detection_are_strict() {
-        assert!(validate_manual_reconciliation_content(
-            true,
-            Some(&json!({"delivery_count": 1})),
-            None,
-            "Verified the external delivery ledger entry.",
-        )
-        .is_ok());
-        assert!(validate_manual_reconciliation_content(
-            false,
-            None,
-            Some("operator_confirmed_not_applied"),
-            "Verified that no external effect was applied.",
-        )
-        .is_ok());
-
-        assert!(validate_manual_reconciliation_content(
-            true,
-            None,
-            Some("must_not_coexist"),
-            "Verified the external result.",
-        )
-        .is_err());
-        assert!(validate_manual_reconciliation_content(
-            false,
-            Some(&json!({"ambiguous": true})),
-            Some("failed"),
-            "Verified the external result.",
-        )
-        .is_err());
-        assert!(validate_manual_reconciliation_content(
-            false,
-            None,
-            None,
-            "Verified the external result.",
-        )
-        .is_err());
-        assert!(validate_manual_reconciliation_content(
-            false,
-            None,
-            Some("INVALID CODE"),
-            "Verified the external result.",
-        )
-        .is_err());
-
-        for evidence in [
-            "Authorization: Basic Zm9vOmJhcg==",
-            "Bearer abcdef",
-            "-----BEGIN OPENSSH PRIVATE KEY-----",
-            "client_secret was copied here",
-            "Cookie: sid=value",
-        ] {
-            assert!(validate_manual_reconciliation_content(true, None, None, evidence).is_err());
-        }
-        assert!(validate_manual_reconciliation_content(
-            true,
-            Some(&json!({"nested": {"refresh-token": "credential"}})),
-            None,
-            "Verified the external result.",
-        )
-        .is_err());
-    }
-
     fn test_pool_options() -> sqlx::postgres::PgPoolOptions {
         let role = std::env::var("TEST_DATABASE_ROLE").ok();
         let expected_schema = std::env::var("TEST_DATABASE_SCHEMA")
@@ -2474,6 +2279,161 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
         operation
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a random isolated TEST_DATABASE_URL PostgreSQL schema"]
+    async fn command_port_rolls_back_without_response_and_reauthorizes_replays() {
+        use crate::services::{
+            api_mutations::{
+                AdminMutationAdmission, ApiMutationOutcome, ApiMutationRejection, ApiPrincipalKind,
+                IdempotencyRequest,
+            },
+            api_queries::ApiReadAuthority,
+            operations::OperationAdminService,
+        };
+        use std::sync::Arc;
+
+        let pool = test_pool().await;
+        let operation = enqueue_broadcast(&pool, 4).await;
+        let token = crate::db::create_api_session(&pool, operation.actor_subject_id, 1)
+            .await
+            .unwrap();
+        let request_id = Uuid::new_v4();
+        let key = Uuid::new_v4().to_string();
+        let admission = || AdminMutationAdmission {
+            authority: ApiReadAuthority {
+                user_id: operation.actor_subject_id,
+                auth_generation: operation.actor_auth_generation,
+                session_token: &token,
+            },
+            idempotency: IdempotencyRequest {
+                request_id,
+                actor_id: Some(operation.actor_subject_id),
+                principal_scope: operation.actor_subject_id.as_bytes(),
+                capacity_scope: operation.actor_subject_id.as_bytes(),
+                target_scope: operation.id.as_bytes(),
+                principal_kind: ApiPrincipalKind::Admin,
+                method: "POST",
+                route: "/api/v1/admin/operations/{id}/cancel",
+                idempotency_key: &key,
+                request_fingerprint: crate::db::api_request_fingerprint("", b""),
+                ttl_seconds: 3600,
+                lease_seconds: 30,
+            },
+        };
+        let cluster = crate::cluster::ClusterManager::new(
+            None,
+            "operation-ports.test",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let key_material = Uuid::new_v4().simple().to_string();
+        let service = OperationAdminService::new(
+            crate::db::operation_admin_repository::PostgresOperationAdminRepository::new(
+                crate::db::admin_mutations::AdminMutationStore::new(
+                    pool.clone(),
+                    Arc::new(
+                        crate::db::ApiControlKeyring::new(key_material.as_bytes(), None).unwrap(),
+                    ),
+                    cluster.admission(),
+                ),
+            ),
+        );
+        // A response-storage failure must roll back both cancellation and its audit entry.
+        sqlx::raw_sql("CREATE FUNCTION reject_operation_test_response() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF NEW.route='/api/v1/admin/operations/{id}/cancel' AND NEW.state='completed' THEN
+                    RAISE EXCEPTION 'injected operation response failure';
+                END IF;
+                RETURN NEW;
+            END $$;
+            CREATE TRIGGER reject_operation_test_response BEFORE UPDATE ON api_idempotency_records
+            FOR EACH ROW EXECUTE FUNCTION reject_operation_test_response();")
+            .execute(&pool).await.unwrap();
+        assert!(service.cancel(admission(), operation.id).await.is_err());
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT status FROM api_operation_journal WHERE id=$1")
+                .bind(operation.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            "pending"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM audit_log WHERE request_id=$1")
+                .bind(request_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM api_idempotency_records WHERE request_id=$1"
+            )
+            .bind(request_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0
+        );
+        sqlx::raw_sql(
+            "DROP TRIGGER reject_operation_test_response ON api_idempotency_records;
+            DROP FUNCTION reject_operation_test_response();",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let ApiMutationOutcome::Committed(first) =
+            service.cancel(admission(), operation.id).await.unwrap()
+        else {
+            panic!("cancellation did not commit after response storage recovered");
+        };
+        assert_eq!(first.status, 200);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&first.body).unwrap(),
+            json!({"outcome":"canceled"})
+        );
+        let ApiMutationOutcome::Replay(replay) =
+            service.cancel(admission(), operation.id).await.unwrap()
+        else {
+            panic!("cancellation did not replay");
+        };
+        assert_eq!(replay.request_id, request_id);
+        assert_eq!(replay.status, first.status);
+        assert_eq!(replay.headers, first.headers);
+        assert_eq!(replay.body, first.body);
+
+        sqlx::query("UPDATE users SET is_admin=FALSE WHERE id=$1")
+            .bind(operation.actor_subject_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            service.cancel(admission(), operation.id).await.unwrap(),
+            ApiMutationOutcome::Rejected(ApiMutationRejection::Forbidden)
+        ));
+        sqlx::query("UPDATE users SET is_admin=TRUE WHERE id=$1")
+            .bind(operation.actor_subject_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM api_sessions WHERE user_id=$1")
+            .bind(operation.actor_subject_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            service.cancel(admission(), operation.id).await.unwrap(),
+            ApiMutationOutcome::Rejected(ApiMutationRejection::Forbidden)
+        ));
+        pool.close().await;
     }
 
     #[tokio::test]

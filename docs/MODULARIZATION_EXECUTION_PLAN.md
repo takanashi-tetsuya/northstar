@@ -386,8 +386,14 @@ recovery handlers still need a narrower runtime context for account teardown.
 Report and appeal writes now use complete repository transactions, including
 one-use proof admission and idempotent responses. Their HTTP context exposes
 only identity lookup, submissions, trusted proxies and commit counters. Shared
-mutation values let subsequent write
-ports retain the same initial and replayed responses.
+mutation values preserve the same initial and replayed responses.
+Operation cancellation/reconciliation, moderation decisions, invitation
+management and upload retry now use complete command ports and service-only
+HTTP contexts. Their shared database admission receives live cluster health
+without Redis publication authority. User/MUC retention policy endpoints use
+a dedicated policy context; policy reads now hold exact bearer/account locks
+through the snapshot. Legal holds, exports and the remaining runtime commands
+still need their own boundaries.
 Remaining work covers the other REST reads and mutations, their HTTP contexts,
 and live-session/account-recovery workers.
 AppState still has nine public fields, so stage 1 remains open. Changing field

@@ -1,23 +1,23 @@
-use std::sync::Arc;
+use super::idempotency::{mutation_rejection, stored_api_response};
+use crate::services::api_mutations::{
+    AdminMutationAdmission, ApiMutationOutcome, ApiPrincipalKind, StoredApiResponse,
+};
 
-use axum::{extract::State, http::StatusCode, response::Response, Json};
+use axum::{extract::State, response::Response, Json};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    db,
     error::AppError,
     services::{
         api_queries::{ApiReadDenial, AuthorizedRead, PageBoundary},
         operations::{OperationPageBoundary, OperationRecord, OperationTargetRecord},
     },
-    state::AppState,
 };
 
 use super::{
-    admin::{acquire_admin_mutation_in_tx, complete_admin_response, AdminMutationAcquire},
     idempotency_replay_response, pagination, ApiAdmin, ApiEmpty, ApiJson, ApiPath, ApiQuery,
 };
 
@@ -280,6 +280,7 @@ fn operation_filter_scope(
 #[cfg(test)]
 mod read_tests {
     use super::*;
+    use crate::services::operations::{AuthorizationPolicy, OperationStatus};
     use serde_json::json;
 
     fn operation_record() -> OperationRecord {
@@ -291,10 +292,10 @@ mod read_tests {
             actor_id: Some(Uuid::new_v4()),
             actor_subject_id: Uuid::new_v4(),
             actor_auth_generation: 0,
-            authorization_policy: db::AuthorizationPolicy::ReauthorizeUntilEffect,
+            authorization_policy: AuthorizationPolicy::ReauthorizeUntilEffect,
             kind: "admin.broadcast".into(),
             target: Some("x".repeat(4096)),
-            status: db::OperationStatus::Pending,
+            status: OperationStatus::Pending,
             payload_version: 1,
             payload: json!({"message": "sensitive operation input"}),
             result: Some(json!({"large": "sensitive operation result"})),
@@ -317,7 +318,7 @@ mod read_tests {
             operation_id: Uuid::new_v4(),
             target_key: "x".repeat(4096),
             ordinal: 0,
-            status: db::OperationStatus::Pending,
+            status: OperationStatus::Pending,
             payload: json!({"input": "must not appear in a collection"}),
             result: Some(json!({"output": "must not appear in a collection"})),
             error_code: None,
@@ -530,322 +531,108 @@ pub struct ReconcileRequest {
     evidence_note: String,
 }
 
+impl ReconcileRequest {
+    fn input(&self) -> crate::services::operations::ReconciliationInput<'_> {
+        crate::services::operations::ReconciliationInput {
+            succeeded: self.succeeded,
+            result: self.result.as_ref(),
+            error_code: self.error_code.as_deref(),
+            evidence_note: &self.evidence_note,
+        }
+    }
+}
+
+fn mutation_response(result: ApiMutationOutcome<StoredApiResponse>) -> Result<Response, AppError> {
+    match result {
+        ApiMutationOutcome::Committed(response) => stored_api_response(response),
+        ApiMutationOutcome::Replay(response) => idempotency_replay_response(response),
+        ApiMutationOutcome::Rejected(rejection) => Err(mutation_rejection(rejection)),
+    }
+}
+
 pub async fn cancel_operation(
-    State(state): State<Arc<AppState>>,
+    State(service): State<crate::state::OperationAdminContext>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiEmpty,
 ) -> Result<Response, AppError> {
-    if id.is_nil() {
-        return Err(AppError::BadRequest("operation id must not be nil".into()));
-    }
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/operations/{id}/cancel",
     );
     idempotency.target_scope = id.as_bytes();
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    let outcome =
-        db::request_operation_cancel_in_tx(&mut tx, id, actor.id, lease.request_id).await?;
-    if outcome == db::CancelOutcome::NotFound {
-        let response = complete_admin_response(
-            &state,
-            &mut tx,
-            &lease,
-            StatusCode::NOT_FOUND,
-            json!({"error":{"code":"not_found","message":"operation does not exist"}}),
-            None,
-        )
-        .await?;
-        tx.commit().await?;
-        return Ok(response);
-    }
-    if matches!(
-        outcome,
-        db::CancelOutcome::NotCancelable | db::CancelOutcome::PastPointOfNoReturn
-    ) {
-        let message = match outcome {
-            db::CancelOutcome::NotCancelable => "operation does not support cancellation",
-            db::CancelOutcome::PastPointOfNoReturn => "operation has passed its point of no return",
-            _ => unreachable!("matched above"),
-        };
-        let response = complete_admin_response(
-            &state,
-            &mut tx,
-            &lease,
-            StatusCode::CONFLICT,
-            json!({"error":{"code":"conflict","message":message}}),
-            None,
-        )
-        .await?;
-        tx.commit().await?;
-        return Ok(response);
-    }
-    let outcome = match outcome {
-        db::CancelOutcome::Requested => "requested",
-        db::CancelOutcome::Canceled => "canceled",
-        db::CancelOutcome::AlreadyTerminal => "already_terminal",
-        db::CancelOutcome::NotCancelable | db::CancelOutcome::PastPointOfNoReturn => {
-            unreachable!("handled above")
-        }
-        db::CancelOutcome::NotFound => unreachable!("handled above"),
-    };
-    let response = complete_admin_response(
-        &state,
-        &mut tx,
-        &lease,
-        StatusCode::OK,
-        json!({"outcome":outcome}),
-        None,
+    mutation_response(
+        service
+            .cancel(
+                AdminMutationAdmission {
+                    authority: actor.read_authority(),
+                    idempotency,
+                },
+                id,
+            )
+            .await?,
     )
-    .await?;
-    tx.commit().await?;
-    Ok(response)
 }
 
 pub async fn reconcile_operation(
-    State(state): State<Arc<AppState>>,
+    State(service): State<crate::state::OperationAdminContext>,
     actor: ApiAdmin,
     ApiPath(id): ApiPath<Uuid>,
     request: ApiJson<ReconcileRequest>,
 ) -> Result<Response, AppError> {
-    if id.is_nil() {
-        return Err(AppError::BadRequest("operation id must not be nil".into()));
-    }
-    let evidence_note = request.evidence_note.trim();
-    db::validate_manual_reconciliation_content(
-        request.succeeded,
-        request.result.as_ref(),
-        request.error_code.as_deref(),
-        evidence_note,
-    )
-    .map_err(|_| AppError::BadRequest("invalid reconciliation data".into()))?;
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/operations/{id}/reconcile",
     );
     idempotency.target_scope = id.as_bytes();
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    let input = db::ManualReconciliation {
-        reconciled_by: actor.id,
-        reconciler_auth_generation: actor.auth_generation,
-        request_id: lease.request_id,
-        succeeded: request.succeeded,
-        result: request.result.as_ref(),
-        error_code: request.error_code.as_deref(),
-        evidence_note,
-    };
-    let outcome = db::reconcile_indeterminate_operation_in_tx(&mut tx, id, &input).await?;
-    if outcome == db::ManualReconcileOutcome::NotFound {
-        let response = complete_admin_response(
-            &state,
-            &mut tx,
-            &lease,
-            StatusCode::NOT_FOUND,
-            json!({"error":{"code":"not_found","message":"operation does not exist"}}),
-            None,
-        )
-        .await?;
-        tx.commit().await?;
-        return Ok(response);
-    }
-    let reconciliation_conflict = match outcome {
-        db::ManualReconcileOutcome::NotIndeterminate => Some("operation is not indeterminate"),
-        db::ManualReconcileOutcome::IndeterminateTargetsRemain => {
-            Some("indeterminate operation targets must be reconciled first")
-        }
-        db::ManualReconcileOutcome::TargetsPreventSuccess => {
-            Some("operation cannot be marked succeeded because a target did not succeed")
-        }
-        _ => None,
-    };
-    if let Some(message) = reconciliation_conflict {
-        let response = complete_admin_response(
-            &state,
-            &mut tx,
-            &lease,
-            StatusCode::CONFLICT,
-            json!({"error":{"code":"conflict","message":message}}),
-            None,
-        )
-        .await?;
-        tx.commit().await?;
-        return Ok(response);
-    }
-    let outcome = match outcome {
-        db::ManualReconcileOutcome::Succeeded => "succeeded",
-        db::ManualReconcileOutcome::Failed => "failed",
-        db::ManualReconcileOutcome::NotIndeterminate
-        | db::ManualReconcileOutcome::IndeterminateTargetsRemain
-        | db::ManualReconcileOutcome::TargetsPreventSuccess => unreachable!("handled above"),
-        db::ManualReconcileOutcome::NotFound => unreachable!("handled above"),
-    };
-    let response = complete_admin_response(
-        &state,
-        &mut tx,
-        &lease,
-        StatusCode::OK,
-        json!({"outcome":outcome}),
-        None,
+    mutation_response(
+        service
+            .reconcile(
+                AdminMutationAdmission {
+                    authority: actor.read_authority(),
+                    idempotency,
+                },
+                id,
+                request.input(),
+            )
+            .await?,
     )
-    .await?;
-    tx.commit().await?;
-    Ok(response)
 }
 
 pub async fn reconcile_target(
-    State(state): State<Arc<AppState>>,
+    State(service): State<crate::state::OperationAdminContext>,
     actor: ApiAdmin,
     ApiPath((operation_id, target_id)): ApiPath<(Uuid, Uuid)>,
     request: ApiJson<ReconcileRequest>,
 ) -> Result<Response, AppError> {
-    if operation_id.is_nil() || target_id.is_nil() {
-        return Err(AppError::BadRequest(
-            "operation target id must not be nil".into(),
-        ));
-    }
-    let evidence_note = request.evidence_note.trim();
-    db::validate_manual_reconciliation_content(
-        request.succeeded,
-        request.result.as_ref(),
-        request.error_code.as_deref(),
-        evidence_note,
-    )
-    .map_err(|_| AppError::BadRequest("invalid reconciliation data".into()))?;
     let mut target_scope = [0_u8; 32];
     target_scope[..16].copy_from_slice(operation_id.as_bytes());
     target_scope[16..].copy_from_slice(target_id.as_bytes());
     let mut idempotency = request.idempotency(
         Some(actor.id),
         actor.id.as_bytes(),
-        db::ApiPrincipalKind::Admin,
+        ApiPrincipalKind::Admin,
         "POST",
         "/api/v1/admin/operations/{operation_id}/targets/{target_id}/reconcile",
     );
     idempotency.target_scope = &target_scope;
-    let mut tx = state.pool.begin().await?;
-    let lease = match acquire_admin_mutation_in_tx(&state, &mut tx, &actor, &idempotency).await? {
-        AdminMutationAcquire::Acquired(lease) => lease,
-        AdminMutationAcquire::Replay(replay) => {
-            tx.commit().await?;
-            return idempotency_replay_response(replay);
-        }
-        AdminMutationAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    if db::operation_target_by_id(&mut tx, target_id)
-        .await?
-        .is_none_or(|target| target.operation_id != operation_id)
-    {
-        let response = complete_admin_response(
-            &state,
-            &mut tx,
-            &lease,
-            StatusCode::NOT_FOUND,
-            json!({"error":{"code":"not_found","message":"operation target does not exist"}}),
-            None,
-        )
-        .await?;
-        tx.commit().await?;
-        return Ok(response);
-    }
-    let input = db::ManualReconciliation {
-        reconciled_by: actor.id,
-        reconciler_auth_generation: actor.auth_generation,
-        request_id: lease.request_id,
-        succeeded: request.succeeded,
-        result: request.result.as_ref(),
-        error_code: request.error_code.as_deref(),
-        evidence_note,
-    };
-    let outcome = db::reconcile_indeterminate_target_in_tx(&mut tx, target_id, &input).await?;
-    if outcome == db::ManualReconcileOutcome::NotFound {
-        let response = complete_admin_response(
-            &state,
-            &mut tx,
-            &lease,
-            StatusCode::NOT_FOUND,
-            json!({"error":{"code":"not_found","message":"operation target does not exist"}}),
-            None,
-        )
-        .await?;
-        tx.commit().await?;
-        return Ok(response);
-    }
-    if outcome == db::ManualReconcileOutcome::NotIndeterminate {
-        let response = complete_admin_response(
-            &state,
-            &mut tx,
-            &lease,
-            StatusCode::CONFLICT,
-            json!({"error":{"code":"conflict","message":"operation target is not indeterminate"}}),
-            None,
-        )
-        .await?;
-        tx.commit().await?;
-        return Ok(response);
-    }
-    let outcome = match outcome {
-        db::ManualReconcileOutcome::Succeeded => "succeeded",
-        db::ManualReconcileOutcome::Failed => "failed",
-        db::ManualReconcileOutcome::NotIndeterminate
-        | db::ManualReconcileOutcome::IndeterminateTargetsRemain
-        | db::ManualReconcileOutcome::TargetsPreventSuccess => {
-            unreachable!("target reconciliation cannot return a parent-target conflict")
-        }
-        db::ManualReconcileOutcome::NotFound => unreachable!("handled above"),
-    };
-    let response = complete_admin_response(
-        &state,
-        &mut tx,
-        &lease,
-        StatusCode::OK,
-        json!({"outcome":outcome}),
-        None,
+    mutation_response(
+        service
+            .reconcile_target(
+                AdminMutationAdmission {
+                    authority: actor.read_authority(),
+                    idempotency,
+                },
+                operation_id,
+                target_id,
+                request.input(),
+            )
+            .await?,
     )
-    .await?;
-    tx.commit().await?;
-    Ok(response)
 }

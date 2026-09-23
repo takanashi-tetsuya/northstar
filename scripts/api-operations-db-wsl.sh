@@ -88,10 +88,25 @@ test_output="$(cargo test --locked --offline 'db::api_operations::tests::' \
   exit 1
 }
 printf '%s\n' "$test_output"
-if ! grep -Eq 'test result: ok\. 11 passed; 0 failed' <<<"$test_output"; then
-  echo "expected exactly eleven ignored API operation tests to execute" >&2
+if ! grep -Eq 'test result: ok\. 12 passed; 0 failed' <<<"$test_output"; then
+  echo "expected exactly twelve ignored API operation tests to execute" >&2
   exit 1
 fi
+
+for port_test in \
+  db::report_moderation_repository::tests::moderation_ports_commit_decisions_and_replay_terminal_errors_once \
+  db::invitation_admin_repository::tests::invitation_ports_revalidate_secret_replay_and_commit_revoke_outcomes_once \
+  db::retention_policy_repository::tests::policy_ports_preserve_ceilings_room_ownership_and_response_replay; do
+  port_output="$(cargo test --locked --offline "$port_test" -- --ignored --exact --nocapture --test-threads=1 2>&1)" || {
+    printf '%s\n' "$port_output"
+    exit 1
+  }
+  printf '%s\n' "$port_output"
+  if ! grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$port_output"; then
+    echo "expected exactly one repository command test: $port_test" >&2
+    exit 1
+  fi
+done
 
 cleanup
 created=0

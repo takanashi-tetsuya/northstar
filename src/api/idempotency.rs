@@ -51,6 +51,9 @@ pub(crate) fn mutation_rejection(
     use crate::services::api_mutations::ApiMutationRejection;
     match rejection {
         ApiMutationRejection::Unauthorized => AppError::Unauthorized,
+        ApiMutationRejection::Forbidden => AppError::Forbidden,
+        ApiMutationRejection::BadRequest(message) => AppError::BadRequest(message.into()),
+        ApiMutationRejection::Unavailable(message) => AppError::Unavailable(message),
         ApiMutationRejection::IdempotencyConflict => AppError::IdempotencyConflict,
         ApiMutationRejection::ReplayInvalidated => AppError::IdempotencyReplayInvalidated,
         ApiMutationRejection::Busy { retry_after } => AppError::IdempotencyBusy { retry_after },

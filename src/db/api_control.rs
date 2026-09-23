@@ -1,5 +1,5 @@
 pub use crate::services::api_mutations::{
-    ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
+    api_request_fingerprint, ApiPrincipalKind, IdempotencyRequest, IdempotentResponse,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -232,18 +232,6 @@ pub enum IdempotencyReplayLookup {
     Replay(IdempotentResponse),
     FingerprintConflict,
     RotationConflict,
-}
-
-/// Hash the exact media type and bytes consumed by a mutation handler. HTTP
-/// code must call this before deserializing so semantically different JSON
-/// encodings cannot be silently substituted under one idempotency key.
-pub fn api_request_fingerprint(content_type: &str, body: &[u8]) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update((content_type.len() as u64).to_be_bytes());
-    hash.update(content_type.as_bytes());
-    hash.update((body.len() as u64).to_be_bytes());
-    hash.update(body);
-    hash.finalize().into()
 }
 
 /// Read-only fast path for the password-change success response. A completed

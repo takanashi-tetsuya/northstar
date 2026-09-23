@@ -335,13 +335,14 @@ next stage changes runtime behavior. The issue ledger remains
 
 | Stage | Deliverable | Exit evidence |
 | --- | --- | --- |
-| 1 — ARCH-SVC | Inject existing use-case repository ports, move persistence adapters into `src/db`, and replace broad API/worker state with narrow contexts | No raw SQL or transaction handles in application services or transport adapters; no broad state hidden in contexts; AppState public capabilities reach zero; rollback and post-commit failures retain their existing semantics |
+| 1 — ARCH-SVC | Inject existing use-case repository ports, move persistence adapters into `src/db`, and replace broad business HTTP route and background-worker state with narrow contexts | No raw SQL or transaction handles in application services or transport adapters; no broad state hidden in business API/worker contexts; AppState public capabilities reach zero; rollback and post-commit failures retain their existing semantics |
 | 2 — ARCH-DB-ROLE | Separate database identities and pools by transaction responsibility | Per-role negative SQL tests, exact routine/ACL attestation, bounded aggregate connection budgets, and existing-volume upgrade/restore rehearsals |
 | 3 — ARCH-CLU-MUC | Atomic legal batches of role and affiliation operations | Consistent single-node/cluster authorization, exact occupant generations, final-owner protection, stable events/audiences and whole-batch rollback/retry tests |
 | 4 — storage and restore | Resumable offline Local/S3 migration, verifiable S3 backup/restore, and independently restartable restore recovery | Exact object-version manifests, fenced cutover, durable commit evidence, retained rollback data, and interruption tests at every durable transition |
 
-Stage 1 remains open. Application services now keep SQL and transactions in
-database adapters, and startup metadata queries follow the same boundary.
+Stage 1's business HTTP and background-worker boundary is complete.
+Application services keep SQL and transactions in database adapters, and
+startup metadata queries follow the same boundary.
 `AppState` has no public fields, and protocol handlers have no direct database
 authority. Local and federated MUC use scoped operations. HTTP registration,
 login, Passkeys, OMEMO recovery and upload routes use narrow contexts.
@@ -365,9 +366,9 @@ counters. Background maintenance, durable-SM expiry, locked-room expiry,
 runtime-control refresh, CAPS effects, MIX relay/recovery/outbox, and PubSub
 digest/event outbox delivery now use purpose-built worker contexts. They keep
 the existing claim, lease and post-commit ordering. Transport actors still
-share broader state, so
-this is not the Stage 1 exit. Database roles, MUC batch commands and
-storage/restore tooling follow after the Stage 1 boundary checks pass.
+share broader state; their session-kernel and transport-port split belongs to
+Phase D. The Stage 1 architecture checks and all jobs in CI run #318 passed
+for commit `15aa311`.
 
 ### Transaction and authority map
 
@@ -560,14 +561,14 @@ Passkey login completion receives its service without the broader HTTP state;
 it checks the live allowed origin before consuming the challenge.
 Account-deletion recovery reports successful completion, failure and lost
 leases through three borrowed counters.
-Remaining work includes broad internal worker and transport entry points.
+Remaining work includes broad transport entry points.
 TLS now sits behind a private context with immutable handshake snapshots and
 the existing current-CRL registration check. Federation outbox admission now
 uses an application service and a database repository; callers receive a
 copied policy and post-commit wake capability. Metrics updates now pass through
 event-specific state methods while observability rendering retains its private
-registry. The cluster manager is private to `AppState`; stage 1 remains open
-because some runtime paths still receive broad state.
+registry. The cluster manager is private to `AppState`. Transport actors that
+still receive broad state are tracked by Phase D.
 Clustered-MUC delivery now obtains its committed event and audience projections
 through a read port while keeping the cached-recipient fast path and three
 independently admitted database reads in the transport worker.

@@ -1,7 +1,8 @@
 -- Northstar PostgreSQL grant-policy preconditions.
 --
 -- Required psql variables:
---   database_name, migrator_role, runtime_role, command_role, backup_role, allow_bootstrap
+--   database_name, migrator_role, runtime_role, storage_role, command_role,
+--   backup_role, allow_bootstrap
 
 \set ON_ERROR_STOP on
 
@@ -27,9 +28,9 @@ SELECT EXISTS (
   \quit 21
 \endif
 
-SELECT count(*) = 4 AS northstar_target_roles_exist
+SELECT count(*) = 5 AS northstar_target_roles_exist
   FROM pg_catalog.pg_roles
- WHERE rolname IN (:'migrator_role', :'runtime_role', :'command_role', :'backup_role') \gset
+ WHERE rolname IN (:'migrator_role', :'runtime_role', :'storage_role', :'command_role', :'backup_role') \gset
 \if :northstar_target_roles_exist
 \else
   \echo 'one or more Northstar database roles do not exist'
@@ -39,7 +40,7 @@ SELECT count(*) = 4 AS northstar_target_roles_exist
 SELECT NOT EXISTS (
          SELECT 1
            FROM pg_catalog.pg_roles
-          WHERE rolname IN (:'migrator_role', :'runtime_role', :'command_role', :'backup_role')
+          WHERE rolname IN (:'migrator_role', :'runtime_role', :'storage_role', :'command_role', :'backup_role')
             AND (
               NOT rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication
               OR rolbypassrls OR rolinherit
@@ -61,8 +62,8 @@ SELECT NOT EXISTS (
              ON granted.oid = membership.roleid
            JOIN pg_catalog.pg_roles AS member
              ON member.oid = membership.member
-          WHERE granted.rolname IN (:'migrator_role', :'runtime_role', :'command_role', :'backup_role')
-             OR member.rolname IN (:'migrator_role', :'runtime_role', :'command_role', :'backup_role')
+          WHERE granted.rolname IN (:'migrator_role', :'runtime_role', :'storage_role', :'command_role', :'backup_role')
+             OR member.rolname IN (:'migrator_role', :'runtime_role', :'storage_role', :'command_role', :'backup_role')
        ) AS northstar_target_roles_have_no_memberships \gset
 \if :northstar_target_roles_have_no_memberships
 \else
@@ -72,12 +73,13 @@ SELECT NOT EXISTS (
 
 SELECT (SELECT rolconnlimit=4 FROM pg_catalog.pg_roles WHERE rolname=:'migrator_role')
        AND (SELECT rolconnlimit=64 FROM pg_catalog.pg_roles WHERE rolname=:'runtime_role')
+       AND (SELECT rolconnlimit=16 FROM pg_catalog.pg_roles WHERE rolname=:'storage_role')
        AND (SELECT rolconnlimit=8 FROM pg_catalog.pg_roles WHERE rolname=:'command_role')
        AND (SELECT rolconnlimit=2 FROM pg_catalog.pg_roles WHERE rolname=:'backup_role')
        AS northstar_workload_connection_limits_are_bounded \gset
 \if :northstar_workload_connection_limits_are_bounded
 \else
-  \echo 'workload CONNECTION LIMIT policy must be migrator=4, runtime=64, commands=8, backup=2'
+  \echo 'workload CONNECTION LIMIT policy must be migrator=4, runtime=64, storage=16, commands=8, backup=2'
   \quit 29
 \endif
 

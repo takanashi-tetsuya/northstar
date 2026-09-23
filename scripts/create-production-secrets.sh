@@ -194,7 +194,7 @@ cleanup_temporary_material() {
 trap cleanup_temporary_material EXIT
 trap 'exit 1' HUP INT TERM
 
-secret_names="postgres_bootstrap_password northstar_migrator_password northstar_runtime_password northstar_command_password northstar_backup_password migrator_database_url runtime_database_url command_database_url backup_database_url bootstrap_admin_password grafana_admin_password dialback_secret fast_token_secret dummy_scram_secret abuse_state_hmac_key api_control_secret metrics_bearer_token prometheus_metrics_bearer_token backup_signing_ed25519.pem backup_signing_ed25519.pub.pem backup_age_recipients.txt backup_age_identity.txt"
+secret_names="postgres_bootstrap_password northstar_migrator_password northstar_runtime_password northstar_storage_password northstar_command_password northstar_backup_password migrator_database_url runtime_database_url storage_database_url command_database_url backup_database_url bootstrap_admin_password grafana_admin_password dialback_secret fast_token_secret dummy_scram_secret abuse_state_hmac_key api_control_secret metrics_bearer_token prometheus_metrics_bearer_token backup_signing_ed25519.pem backup_signing_ed25519.pub.pem backup_age_recipients.txt backup_age_identity.txt"
 optional_hex_names="api_control_previous_secret abuse_state_hmac_previous_key"
 
 # A previous interrupted version may have left plaintext probes or private-key
@@ -209,7 +209,7 @@ done
 
 expected_owner() {
     case "$1" in
-        postgres_bootstrap_password|northstar_migrator_password|northstar_runtime_password|northstar_command_password|northstar_backup_password)
+        postgres_bootstrap_password|northstar_migrator_password|northstar_runtime_password|northstar_storage_password|northstar_command_password|northstar_backup_password)
             printf '%s' "$postgres_uid:$postgres_gid" ;;
         grafana_admin_password) printf '%s' "$grafana_uid:$grafana_gid" ;;
         prometheus_metrics_bearer_token) printf '%s' "$prometheus_uid:$prometheus_gid" ;;
@@ -312,10 +312,12 @@ publish_pair() {
 create_random_hex postgres_bootstrap_password 32
 create_random_hex northstar_migrator_password 32
 create_random_hex northstar_runtime_password 32
+create_random_hex northstar_storage_password 32
 create_random_hex northstar_command_password 32
 create_random_hex northstar_backup_password 32
 create_database_url migrator_database_url northstar_migrator northstar_migrator_password
 create_database_url runtime_database_url northstar_runtime northstar_runtime_password
+create_database_url storage_database_url northstar_storage northstar_storage_password
 create_database_url command_database_url northstar_commands northstar_command_password
 create_database_url backup_database_url northstar_backup northstar_backup_password
 
@@ -403,7 +405,7 @@ validate_hex_secret() {
 }
 
 for name in postgres_bootstrap_password northstar_migrator_password \
-    northstar_runtime_password northstar_command_password northstar_backup_password dialback_secret \
+    northstar_runtime_password northstar_storage_password northstar_command_password northstar_backup_password dialback_secret \
     fast_token_secret dummy_scram_secret abuse_state_hmac_key api_control_secret \
     metrics_bearer_token prometheus_metrics_bearer_token; do
     validate_hex_secret "$name" 64
@@ -429,6 +431,7 @@ verify_database_url() {
 }
 verify_database_url migrator_database_url northstar_migrator northstar_migrator_password
 verify_database_url runtime_database_url northstar_runtime northstar_runtime_password
+verify_database_url storage_database_url northstar_storage northstar_storage_password
 verify_database_url command_database_url northstar_commands northstar_command_password
 verify_database_url backup_database_url northstar_backup northstar_backup_password
 
@@ -436,7 +439,7 @@ cmp -s "$secret_dir/metrics_bearer_token" "$secret_dir/prometheus_metrics_bearer
     || fail "Northstar and Prometheus metrics bearer-token files must contain the same value"
 
 # Reuse between independent capabilities is rejected even for existing files.
-distinct_names="postgres_bootstrap_password northstar_migrator_password northstar_runtime_password northstar_command_password northstar_backup_password bootstrap_admin_password grafana_admin_password dialback_secret fast_token_secret dummy_scram_secret abuse_state_hmac_key api_control_secret metrics_bearer_token"
+distinct_names="postgres_bootstrap_password northstar_migrator_password northstar_runtime_password northstar_storage_password northstar_command_password northstar_backup_password bootstrap_admin_password grafana_admin_password dialback_secret fast_token_secret dummy_scram_secret abuse_state_hmac_key api_control_secret metrics_bearer_token"
 for name in $optional_hex_names; do
     [ ! -e "$secret_dir/$name" ] || distinct_names="$distinct_names $name"
 done
@@ -521,6 +524,7 @@ chown "$postgres_uid:$postgres_gid" \
     "$secret_dir/postgres_bootstrap_password" \
     "$secret_dir/northstar_migrator_password" \
     "$secret_dir/northstar_runtime_password" \
+    "$secret_dir/northstar_storage_password" \
     "$secret_dir/northstar_command_password" \
     "$secret_dir/northstar_backup_password"
 chown "$grafana_uid:$grafana_gid" "$secret_dir/grafana_admin_password"
@@ -528,6 +532,7 @@ chown "$prometheus_uid:$prometheus_gid" "$secret_dir/prometheus_metrics_bearer_t
 chown "$northstar_uid:$northstar_gid" \
     "$secret_dir/migrator_database_url" \
     "$secret_dir/runtime_database_url" \
+    "$secret_dir/storage_database_url" \
     "$secret_dir/command_database_url" \
     "$secret_dir/backup_database_url" \
     "$secret_dir/bootstrap_admin_password" \

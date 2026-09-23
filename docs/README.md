@@ -6,7 +6,7 @@ Start with the [installation guide](INSTALL.md) for release packages or the
 ## Deployment
 
 - [Production operations](PRODUCTION_OPERATIONS.md): configuration, TLS, migrations and recovery.
-- [Database roles](DATABASE_ROLES.md): migrator, runtime, command and backup permissions.
+- [Database roles](DATABASE_ROLES.md): migrator, runtime, storage, command and backup permissions.
 - [Known limitations](KNOWN_ISSUES.md): current issues and deployment constraints.
 - [Core and maintenance processes](SUBSERVERS.md): separate processes over shared PostgreSQL.
 - [Monitoring](../deploy/monitoring/README.md) and [alert delivery](../deploy/monitoring/ALERTING_RUNBOOK.md).

@@ -757,7 +757,7 @@ for (const invariant of [
     throw new Error(`auxiliary pools must share bounded startup admission: ${invariant}`);
   }
 }
-if (countMatches(commandPoolConstruction, /\.acquire_timeout\(AUXILIARY_POOL_ACQUIRE_TIMEOUT\)/g) !== 2
+if (countMatches(commandPoolConstruction, /\.acquire_timeout\(AUXILIARY_POOL_ACQUIRE_TIMEOUT\)/g) !== 3
     || !/const AUXILIARY_POOL_ACQUIRE_TIMEOUT:\s*Duration\s*=\s*Duration::from_secs\(2\)/.test(state)
     || !/const AUXILIARY_POOL_STARTUP_BUDGET:\s*Duration\s*=\s*Duration::from_secs\(15\)/.test(state)) {
   throw new Error('auxiliary pools retain a 2 s acquisition policy within a shared 15 s startup window');
@@ -828,6 +828,21 @@ for (const invariant of [
   if (!configSource.includes(invariant)) {
     throw new Error(`runtime pool-budget invariant is missing: ${invariant}`);
   }
+}
+for (const invariant of [
+  'pub(crate) const STORAGE_POOL_MAX_CONNECTIONS: u32 = 2;',
+  'pub(crate) const STORAGE_ROLE_CONNECTION_LIMIT: u32 = 16;',
+  'pub(crate) const fn storage_connection_budget_manifest()',
+]) {
+  if (!configSource.includes(invariant)) {
+    throw new Error(`storage pool-budget invariant is missing: ${invariant}`);
+  }
+}
+if (!mainSource.includes('Some("--storage-connection-budget")')
+    || !commandPoolConstruction.includes('StoragePoolMode::Disabled => None')
+    || !commandPoolConstruction.includes('StoragePoolMode::SharedUnsafeDevelopment => Some(pool.clone())')
+    || !commandPoolConstruction.includes('db::attest_storage_role(&storage_pool)')) {
+  throw new Error('storage pool must be absent when disabled and attested in production');
 }
 for (const invariant of [
   'load_runtime_connection_budget()',

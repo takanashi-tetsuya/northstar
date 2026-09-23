@@ -2,7 +2,8 @@
 --
 -- The caller must already be inside a transaction and must have established
 -- the preconditions in verify-northstar-grant-boundary.sql. Required psql
--- variables: database_name, migrator_role, runtime_role, command_role, backup_role.
+-- variables: database_name, migrator_role, runtime_role, storage_role,
+-- command_role, backup_role.
 
 SELECT pg_catalog.pg_advisory_xact_lock(
   pg_catalog.hashtextextended('northstar-database-role-policy-v1', 0)
@@ -342,15 +343,15 @@ REVOKE ALL PRIVILEGES ON ALL ROUTINES IN SCHEMA public FROM PUBLIC CASCADE;
 -- Reconciliation is convergent: erase every legacy direct grant before
 -- rebuilding the exact workload manifests below.
 REVOKE ALL PRIVILEGES ON DATABASE :"database_name"
-   FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+   FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 REVOKE ALL PRIVILEGES ON SCHEMA public
-   FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+   FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public
-   FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+   FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public
-   FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+   FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 REVOKE ALL PRIVILEGES ON ALL ROUTINES IN SCHEMA public
-   FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+   FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 
 -- Retired/custom roles are not part of Northstar's database trust boundary.
 -- Erase every explicit non-owner relation and column ACL before rebuilding
@@ -412,12 +413,13 @@ SELECT pg_catalog.format(
 -- legacy or compromised owner could otherwise leave UPDATE(password_hash) or
 -- SELECT(bearer_hash) behind while the relation-level manifest appears clean.
 SELECT pg_catalog.format(
-         'REVOKE ALL PRIVILEGES (%s) ON TABLE %I.%I FROM PUBLIC, %I, %I, %I CASCADE',
+         'REVOKE ALL PRIVILEGES (%s) ON TABLE %I.%I FROM PUBLIC, %I, %I, %I, %I CASCADE',
          pg_catalog.string_agg(pg_catalog.quote_ident(attribute.attname),','
                                ORDER BY attribute.attnum),
          namespace.nspname,
          relation.relname,
          :'runtime_role',
+         :'storage_role',
          :'command_role',
          :'backup_role'
        )
@@ -435,9 +437,9 @@ SELECT pg_catalog.format(
 \gexec
 
 GRANT CONNECT ON DATABASE :"database_name"
-   TO :"migrator_role", :"runtime_role", :"command_role", :"backup_role";
+   TO :"migrator_role", :"runtime_role", :"storage_role", :"command_role", :"backup_role";
 GRANT USAGE ON SCHEMA public
-   TO :"runtime_role", :"command_role", :"backup_role";
+   TO :"runtime_role", :"storage_role", :"command_role", :"backup_role";
 
 -- Build runtime table privileges only from the complete positive manifest.
 -- There is intentionally no broad grant followed by an exception list: that
@@ -489,7 +491,7 @@ GRANT SELECT (
 -- definer is denied until this manifest is changed.
 -- A future definer routine is therefore denied until explicitly reviewed.
 REVOKE EXECUTE ON ALL ROUTINES IN SCHEMA public
-   FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+   FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 
 -- Remove every stale explicit routine grantee, not only the three known
 -- workload roles. Otherwise a retired login/group role could retain an
@@ -652,15 +654,54 @@ SELECT pg_catalog.format(
        ('northstar_mix_pam_operation_insert(uuid,uuid,text,text,text,text,text,text,bytea,uuid,bool,text,text,text[],int8,text)'),
        ('northstar_mix_pam_operation_prune(int8)'),
        ('northstar_mix_pam_capacity_reconcile()'),
-       ('northstar_upload_bootstrap_authority(text,bytea)'),
-       ('northstar_upload_bind_capacity_policy(int8,int8,int8)'),
        ('northstar_upload_capacity_lock()'),
-       ('northstar_upload_active_slot_count(uuid)'),
        ('northstar_upload_public_slot_count()'),
-       ('northstar_upload_renew_claim(uuid,uuid,int8)'),
-       ('northstar_upload_authority_probe(text,bytea,int8,int8,int8,int8,int8)'),
        ('northstar_upload_dead_letters_page(text,int8,uuid,int4)'),
        ('northstar_upload_retry_dead_letter(uuid,int8,bytea,text,int8,uuid,uuid)'),
+       ('northstar_passkey_challenge(uuid,int8,text,bytea,jsonb)'),
+       ('northstar_passkey_consume(uuid,text,bytea)'),
+       ('northstar_passkey_register(uuid,int8,bytea,bytea,jsonb,text)'),
+       ('northstar_passkey_accept(uuid,int8,uuid,uuid,jsonb,int8)'),
+       ('northstar_passkey_remove(uuid,int8,bytea,uuid)'),
+       ('northstar_pending_account_revocations(text,text,uuid,int8,int4)'),
+       ('northstar_ack_account_revocations(text,text,uuid,int8,uuid[])'),
+       ('northstar_cleanup_account_revocations(int4)'),
+       ('northstar_upload_durable_state_exists()'),
+       ('northstar_admit_cluster_envelope_replay(text,text,uuid,int8,text,int8,text,uuid,int8,text,int8,uuid,bytea,text,timestamptz)'),
+       ('northstar_cleanup_cluster_envelope_replays(int4)'),
+       ('northstar_cluster_replay_capacity_healthy()'),
+       ('northstar_claim_cluster_session_route(text,text,text,text,uuid,int8,uuid,uuid,uuid,int4)'),
+       ('northstar_refresh_cluster_session_route(text,text,text,uuid,int8,uuid,int4)'),
+       ('northstar_release_cluster_session_route(text,text,text,uuid,int8,uuid)'),
+       ('northstar_cluster_session_route(text,text)'),
+       ('northstar_cluster_session_nodes_for_bare(text,text)'),
+       ('northstar_cleanup_cluster_session_routes(int4)'),
+       ('northstar_cluster_session_authority_healthy()')
+      ) AS allowed(signature)
+   ON routine.oid = pg_catalog.to_regprocedure('public.' || allowed.signature)
+ WHERE namespace.nspname = 'public'
+   AND routine.prokind='f'
+   AND routine.prosecdef
+\gexec
+
+-- Upload workers use owner-held storage capabilities. Account deletion and
+-- admin dead-letter operations retain their runtime transaction entry points.
+SELECT pg_catalog.format(
+         'GRANT EXECUTE ON ROUTINE %I.%I(%s) TO %I',
+         namespace.nspname,
+         routine.proname,
+         pg_catalog.pg_get_function_identity_arguments(routine.oid),
+         :'storage_role'
+       )
+  FROM pg_catalog.pg_proc AS routine
+  JOIN pg_catalog.pg_namespace AS namespace
+    ON namespace.oid = routine.pronamespace
+ JOIN (VALUES
+       ('northstar_upload_bootstrap_authority(text,bytea)'),
+       ('northstar_upload_bind_capacity_policy(int8,int8,int8)'),
+       ('northstar_upload_active_slot_count(uuid)'),
+       ('northstar_upload_renew_claim(uuid,uuid,int8)'),
+       ('northstar_upload_authority_probe(text,bytea,int8,int8,int8,int8,int8)'),
        ('northstar_upload_claim_cleanup(uuid)'),
        ('northstar_upload_cleanup_quiescent(uuid,uuid,int8)'),
        ('northstar_upload_defer_cleanup(uuid,uuid)'),
@@ -689,28 +730,10 @@ SELECT pg_catalog.format(
        ('northstar_upload_claim_slot(uuid,bytea,int8,int8,int8)'),
        ('northstar_upload_capacity_reconciliation()'),
        ('northstar_upload_queue_snapshot()'),
-       ('northstar_passkey_challenge(uuid,int8,text,bytea,jsonb)'),
-       ('northstar_passkey_consume(uuid,text,bytea)'),
-       ('northstar_passkey_register(uuid,int8,bytea,bytea,jsonb,text)'),
-       ('northstar_passkey_accept(uuid,int8,uuid,uuid,jsonb,int8)'),
-       ('northstar_passkey_remove(uuid,int8,bytea,uuid)'),
-       ('northstar_pending_account_revocations(text,text,uuid,int8,int4)'),
-       ('northstar_ack_account_revocations(text,text,uuid,int8,uuid[])'),
-       ('northstar_cleanup_account_revocations(int4)'),
        ('northstar_upload_policy_binding_matches(int8,int8,int8)'),
        ('northstar_upload_admit_expired_cleanup()'),
        ('northstar_upload_delete_owned(uuid,int8,bytea,uuid,uuid)'),
-       ('northstar_upload_capability_catalog_healthy(text)'),
-       ('northstar_admit_cluster_envelope_replay(text,text,uuid,int8,text,int8,text,uuid,int8,text,int8,uuid,bytea,text,timestamptz)'),
-       ('northstar_cleanup_cluster_envelope_replays(int4)'),
-       ('northstar_cluster_replay_capacity_healthy()'),
-       ('northstar_claim_cluster_session_route(text,text,text,text,uuid,int8,uuid,uuid,uuid,int4)'),
-       ('northstar_refresh_cluster_session_route(text,text,text,uuid,int8,uuid,int4)'),
-       ('northstar_release_cluster_session_route(text,text,text,uuid,int8,uuid)'),
-       ('northstar_cluster_session_route(text,text)'),
-       ('northstar_cluster_session_nodes_for_bare(text,text)'),
-       ('northstar_cleanup_cluster_session_routes(int4)'),
-       ('northstar_cluster_session_authority_healthy()')
+       ('northstar_upload_capability_catalog_healthy(text)')
       ) AS allowed(signature)
    ON routine.oid = pg_catalog.to_regprocedure('public.' || allowed.signature)
  WHERE namespace.nspname = 'public'
@@ -831,11 +854,12 @@ SELECT pg_catalog.format(
  ORDER BY data_type.oid
 \gexec
 SELECT pg_catalog.format(
-         'REVOKE ALL PRIVILEGES ON %s %I.%I FROM PUBLIC, %I, %I, %I CASCADE',
+         'REVOKE ALL PRIVILEGES ON %s %I.%I FROM PUBLIC, %I, %I, %I, %I CASCADE',
          CASE WHEN data_type.typtype = 'd' THEN 'DOMAIN' ELSE 'TYPE' END,
          namespace.nspname,
          data_type.typname,
          :'runtime_role',
+         :'storage_role',
          :'command_role',
          :'backup_role'
        )
@@ -891,11 +915,12 @@ SELECT pg_catalog.format(
  ORDER BY data_type.oid
 \gexec
 SELECT pg_catalog.format(
-         'GRANT USAGE ON %s %I.%I TO %I, %I',
+         'GRANT USAGE ON %s %I.%I TO %I, %I, %I',
          CASE WHEN data_type.typtype = 'd' THEN 'DOMAIN' ELSE 'TYPE' END,
          namespace.nspname,
          data_type.typname,
          :'runtime_role',
+         :'storage_role',
          :'backup_role'
        )
   FROM pg_catalog.pg_type AS data_type
@@ -965,38 +990,38 @@ SELECT DISTINCT pg_catalog.format(
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
   REVOKE ALL PRIVILEGES ON TABLES FROM PUBLIC CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
-  REVOKE ALL PRIVILEGES ON TABLES FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON TABLES FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
   REVOKE ALL PRIVILEGES ON SEQUENCES FROM PUBLIC CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
-  REVOKE ALL PRIVILEGES ON SEQUENCES FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON SEQUENCES FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
   REVOKE ALL PRIVILEGES ON FUNCTIONS FROM PUBLIC CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
-  REVOKE ALL PRIVILEGES ON FUNCTIONS FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON FUNCTIONS FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
   REVOKE ALL PRIVILEGES ON TYPES FROM PUBLIC CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
-  REVOKE ALL PRIVILEGES ON TYPES FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON TYPES FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
-  REVOKE ALL PRIVILEGES ON SCHEMAS FROM PUBLIC, :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON SCHEMAS FROM PUBLIC, :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
   REVOKE ALL PRIVILEGES ON TABLES FROM PUBLIC CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
-  REVOKE ALL PRIVILEGES ON TABLES FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON TABLES FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
   REVOKE ALL PRIVILEGES ON SEQUENCES FROM PUBLIC CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
-  REVOKE ALL PRIVILEGES ON SEQUENCES FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON SEQUENCES FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
   REVOKE ALL PRIVILEGES ON FUNCTIONS FROM PUBLIC CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
-  REVOKE ALL PRIVILEGES ON FUNCTIONS FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON FUNCTIONS FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
   REVOKE ALL PRIVILEGES ON TYPES FROM PUBLIC CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
-  REVOKE ALL PRIVILEGES ON TYPES FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON TYPES FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 
 -- Schema-scoped defaults are additive to the global defaults.  Canonical
 -- Northstar policy has no additive public-schema row at all, including an
@@ -1590,47 +1615,11 @@ SELECT NOT EXISTS (
                       ('northstar_mix_pam_operation_insert(uuid,uuid,text,text,text,text,text,text,bytea,uuid,bool,text,text,text[],int8,text)'),
                       ('northstar_mix_pam_operation_prune(int8)'),
                       ('northstar_mix_pam_capacity_reconcile()'),
-                      ('northstar_upload_bootstrap_authority(text,bytea)'),
-                      ('northstar_upload_bind_capacity_policy(int8,int8,int8)'),
                       ('northstar_upload_capacity_lock()'),
-                      ('northstar_upload_active_slot_count(uuid)'),
                       ('northstar_upload_public_slot_count()'),
-                      ('northstar_upload_renew_claim(uuid,uuid,int8)'),
-                      ('northstar_upload_authority_probe(text,bytea,int8,int8,int8,int8,int8)'),
                       ('northstar_upload_dead_letters_page(text,int8,uuid,int4)'),
                       ('northstar_upload_retry_dead_letter(uuid,int8,bytea,text,int8,uuid,uuid)'),
-                      ('northstar_upload_claim_cleanup(uuid)'),
-                      ('northstar_upload_cleanup_quiescent(uuid,uuid,int8)'),
-                      ('northstar_upload_defer_cleanup(uuid,uuid)'),
-                      ('northstar_upload_confirm_cleanup_absence(uuid,uuid,bool,int8)'),
-                      ('northstar_upload_fail_cleanup(uuid,uuid,text)'),
-                      ('northstar_upload_complete_cleanup(uuid,uuid)'),
-                      ('northstar_upload_claim_storage_jobs(uuid)'),
-                      ('northstar_upload_complete_storage_job(int8,uuid)'),
-                      ('northstar_upload_confirm_stage_absence(int8,uuid,bool,int8)'),
-                      ('northstar_upload_fail_storage_job(int8,uuid,text)'),
-                      ('northstar_upload_defer_storage_job(int8,uuid)'),
-                      ('northstar_upload_claim_promotion_job(uuid,uuid,int8,uuid)'),
-                      ('northstar_upload_defer_promotion_job(uuid,uuid,int8,uuid)'),
-                      ('northstar_upload_retire_promotion_for_cleanup(uuid,uuid,int8,uuid)'),
-                      ('northstar_upload_record_stage(uuid,uuid,text,text,text,text,bytea,int8,int8)'),
-                      ('northstar_upload_release_claim(uuid,uuid)'),
-                      ('northstar_upload_complete_promotion(uuid,uuid,uuid,text,text,text,bytea,int8,int8,int8)'),
-                      ('northstar_upload_reserve_slot(uuid,uuid,text,text,int8,bytea,int8,int8,text,int8,int8,int8)'),
-                      ('northstar_upload_claim_is_live(uuid,uuid)'),
-                      ('northstar_upload_begin_promotion(uuid,uuid,int8,uuid)'),
-                      ('northstar_upload_attempt_committed(uuid,uuid,text,text,text,bytea,int8,int8)'),
-                      ('northstar_upload_record_replay(uuid,bytea,bytea,int8)'),
-                      ('northstar_upload_public_file(uuid)'),
-                      ('northstar_upload_claim_scrub()'),
-                      ('northstar_upload_finish_scrub(uuid,uuid,text)'),
-                      ('northstar_upload_claim_slot(uuid,bytea,int8,int8,int8)'),
-                      ('northstar_upload_capacity_reconciliation()'),
-                      ('northstar_upload_queue_snapshot()'),
-                      ('northstar_upload_policy_binding_matches(int8,int8,int8)'),
-                      ('northstar_upload_admit_expired_cleanup()'),
-                      ('northstar_upload_delete_owned(uuid,int8,bytea,uuid,uuid)'),
-                      ('northstar_upload_capability_catalog_healthy(text)'),
+                      ('northstar_upload_durable_state_exists()'),
                       ('northstar_admit_cluster_envelope_replay(text,text,uuid,int8,text,int8,text,uuid,int8,text,int8,uuid,bytea,text,timestamptz)'),
                       ('northstar_cleanup_cluster_envelope_replays(int4)'),
                       ('northstar_cluster_replay_capacity_healthy()'),
@@ -1731,47 +1720,11 @@ SELECT NOT EXISTS (
            ('northstar_mix_pam_operation_insert(uuid,uuid,text,text,text,text,text,text,bytea,uuid,bool,text,text,text[],int8,text)'),
            ('northstar_mix_pam_operation_prune(int8)'),
            ('northstar_mix_pam_capacity_reconcile()'),
-           ('northstar_upload_bootstrap_authority(text,bytea)'),
-           ('northstar_upload_bind_capacity_policy(int8,int8,int8)'),
            ('northstar_upload_capacity_lock()'),
-           ('northstar_upload_active_slot_count(uuid)'),
            ('northstar_upload_public_slot_count()'),
-           ('northstar_upload_renew_claim(uuid,uuid,int8)'),
-           ('northstar_upload_authority_probe(text,bytea,int8,int8,int8,int8,int8)'),
            ('northstar_upload_dead_letters_page(text,int8,uuid,int4)'),
            ('northstar_upload_retry_dead_letter(uuid,int8,bytea,text,int8,uuid,uuid)'),
-           ('northstar_upload_claim_cleanup(uuid)'),
-           ('northstar_upload_cleanup_quiescent(uuid,uuid,int8)'),
-           ('northstar_upload_defer_cleanup(uuid,uuid)'),
-           ('northstar_upload_confirm_cleanup_absence(uuid,uuid,bool,int8)'),
-           ('northstar_upload_fail_cleanup(uuid,uuid,text)'),
-           ('northstar_upload_complete_cleanup(uuid,uuid)'),
-           ('northstar_upload_claim_storage_jobs(uuid)'),
-           ('northstar_upload_complete_storage_job(int8,uuid)'),
-           ('northstar_upload_confirm_stage_absence(int8,uuid,bool,int8)'),
-           ('northstar_upload_fail_storage_job(int8,uuid,text)'),
-           ('northstar_upload_defer_storage_job(int8,uuid)'),
-           ('northstar_upload_claim_promotion_job(uuid,uuid,int8,uuid)'),
-           ('northstar_upload_defer_promotion_job(uuid,uuid,int8,uuid)'),
-           ('northstar_upload_retire_promotion_for_cleanup(uuid,uuid,int8,uuid)'),
-           ('northstar_upload_record_stage(uuid,uuid,text,text,text,text,bytea,int8,int8)'),
-           ('northstar_upload_release_claim(uuid,uuid)'),
-           ('northstar_upload_complete_promotion(uuid,uuid,uuid,text,text,text,bytea,int8,int8,int8)'),
-           ('northstar_upload_reserve_slot(uuid,uuid,text,text,int8,bytea,int8,int8,text,int8,int8,int8)'),
-           ('northstar_upload_claim_is_live(uuid,uuid)'),
-           ('northstar_upload_begin_promotion(uuid,uuid,int8,uuid)'),
-           ('northstar_upload_attempt_committed(uuid,uuid,text,text,text,bytea,int8,int8)'),
-           ('northstar_upload_record_replay(uuid,bytea,bytea,int8)'),
-           ('northstar_upload_public_file(uuid)'),
-           ('northstar_upload_claim_scrub()'),
-           ('northstar_upload_finish_scrub(uuid,uuid,text)'),
-           ('northstar_upload_claim_slot(uuid,bytea,int8,int8,int8)'),
-           ('northstar_upload_capacity_reconciliation()'),
-           ('northstar_upload_queue_snapshot()'),
-           ('northstar_upload_policy_binding_matches(int8,int8,int8)'),
-           ('northstar_upload_admit_expired_cleanup()'),
-           ('northstar_upload_delete_owned(uuid,int8,bytea,uuid,uuid)'),
-           ('northstar_upload_capability_catalog_healthy(text)'),
+           ('northstar_upload_durable_state_exists()'),
            ('northstar_admit_cluster_envelope_replay(text,text,uuid,int8,text,int8,text,uuid,int8,text,int8,uuid,bytea,text,timestamptz)'),
            ('northstar_cleanup_cluster_envelope_replays(int4)'),
            ('northstar_cluster_replay_capacity_healthy()'),
@@ -1816,6 +1769,9 @@ SELECT NOT EXISTS (
              OR pg_catalog.has_function_privilege(
                   :'runtime_role',routine.oid,'EXECUTE'
                 ) IS DISTINCT FROM (expected.workload='runtime')
+             OR pg_catalog.has_function_privilege(
+                  :'storage_role',routine.oid,'EXECUTE'
+                ) IS DISTINCT FROM (expected.workload='storage')
              OR pg_catalog.has_function_privilege(
                   :'command_role',routine.oid,'EXECUTE'
                 ) IS DISTINCT FROM (expected.workload='command')
@@ -1930,6 +1886,13 @@ SELECT NOT EXISTS (
                 SELECT oid FROM pg_catalog.pg_roles
                  WHERE rolname=:'runtime_role'
               )) OR
+               (expected.workload='storage' AND NOT privilege.is_grantable
+                AND privilege.grantor=routine.proowner
+                AND privilege.privilege_type='EXECUTE'
+                AND privilege.grantee=(
+                SELECT oid FROM pg_catalog.pg_roles
+                 WHERE rolname=:'storage_role'
+               )) OR
                (expected.workload='command' AND NOT privilege.is_grantable
                 AND privilege.grantor=routine.proowner
                 AND privilege.privilege_type='EXECUTE'
@@ -1941,7 +1904,7 @@ SELECT NOT EXISTS (
        ) AS northstar_canonical_capability_manifest_is_exact \gset
 \if :northstar_canonical_capability_manifest_is_exact
 \else
-  \echo 'catalog/runtime/command capability sets drifted from the canonical manifest'
+  \echo 'catalog/runtime/storage/command capability sets drifted from the canonical manifest'
   \quit 45
 \endif
 
@@ -2105,6 +2068,7 @@ SELECT NOT EXISTS (
                AND privilege.grantee IN (
                  data_type.typowner,
                  (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'runtime_role'),
+                 (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'storage_role'),
                  (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'backup_role')
                ),FALSE
              )
@@ -2134,6 +2098,7 @@ SELECT NOT EXISTS (
                  FROM (VALUES
                    (data_type.typowner),
                    ((SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'runtime_role')),
+                   ((SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'storage_role')),
                    ((SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'backup_role'))
                  ) AS required(grantee)
                 WHERE NOT EXISTS (
@@ -2176,6 +2141,9 @@ SELECT NOT EXISTS (
                     OR expected.workload='runtime'
                   ))
                 OR
+                (privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'storage_role')
+                  AND expected.workload='storage')
+                OR
                 (privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'command_role')
                   AND expected.workload='command')
               ),false
@@ -2183,7 +2151,34 @@ SELECT NOT EXISTS (
        ) AS northstar_routine_grantee_set_is_exact \gset
 \if :northstar_routine_grantee_set_is_exact
 \else
-  \echo 'routine ACL differs from the owner/runtime/command execution manifest'
+  SELECT routine.oid::pg_catalog.regprocedure AS routine,
+         pg_catalog.pg_get_userbyid(privilege.grantee) AS grantee,
+         expected.workload,
+         privilege.privilege_type,
+         privilege.is_grantable
+    FROM pg_catalog.pg_proc routine
+    JOIN pg_catalog.pg_namespace namespace ON namespace.oid=routine.pronamespace
+   CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+     routine.proacl,pg_catalog.acldefault('f',routine.proowner)
+   )) privilege
+    LEFT JOIN pg_temp.northstar_capability_manifest expected
+      ON pg_catalog.to_regprocedure('public.' || expected.signature)=routine.oid
+   WHERE namespace.nspname='public'
+     AND privilege.grantee<>routine.proowner
+     AND NOT COALESCE(
+       privilege.grantor=routine.proowner
+       AND NOT privilege.is_grantable
+       AND privilege.privilege_type='EXECUTE'
+       AND ((pg_catalog.pg_get_userbyid(privilege.grantee)=:'runtime_role'
+             AND ((NOT routine.prosecdef
+                   AND routine.prorettype<>'pg_catalog.trigger'::pg_catalog.regtype)
+                  OR expected.workload='runtime'))
+         OR (pg_catalog.pg_get_userbyid(privilege.grantee)=:'storage_role'
+             AND expected.workload='storage')
+         OR (pg_catalog.pg_get_userbyid(privilege.grantee)=:'command_role'
+             AND expected.workload='command')),FALSE)
+   ORDER BY routine.oid LIMIT 10;
+  \echo 'routine ACL differs from the owner/runtime/storage/command execution manifest'
   \quit 51
 \endif
 
@@ -2201,6 +2196,7 @@ SELECT NOT EXISTS (
               AND privilege.privilege_type='CONNECT'
               AND privilege.grantee IN (
                 (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'runtime_role'),
+                (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'storage_role'),
                 (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'command_role'),
                 (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'backup_role')
               ),false
@@ -2219,6 +2215,7 @@ SELECT NOT EXISTS (
               AND privilege.privilege_type='USAGE'
               AND privilege.grantee IN (
                 (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'runtime_role'),
+                (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'storage_role'),
                 (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'command_role'),
                 (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'backup_role')
               ),false
@@ -2353,19 +2350,19 @@ SELECT DISTINCT pg_catalog.format(
 
 REVOKE ALL PRIVILEGES ON DATABASE :"database_name" FROM PUBLIC CASCADE;
 REVOKE ALL PRIVILEGES ON DATABASE :"database_name"
-  FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 REVOKE ALL PRIVILEGES ON SCHEMA public FROM PUBLIC CASCADE;
 REVOKE ALL PRIVILEGES ON SCHEMA public
-  FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM PUBLIC CASCADE;
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public
-  FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC CASCADE;
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public
-  FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 REVOKE ALL PRIVILEGES ON ALL ROUTINES IN SCHEMA public FROM PUBLIC CASCADE;
 REVOKE ALL PRIVILEGES ON ALL ROUTINES IN SCHEMA public
-  FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 
 SELECT DISTINCT pg_catalog.format(
          'REVOKE ALL PRIVILEGES ON ROUTINE %I.%I(%s) FROM %s CASCADE',
@@ -2487,23 +2484,23 @@ SELECT DISTINCT pg_catalog.format(
 \gexec
 
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
-  REVOKE ALL PRIVILEGES ON TABLES FROM PUBLIC, :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON TABLES FROM PUBLIC, :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
-  REVOKE ALL PRIVILEGES ON SEQUENCES FROM PUBLIC, :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON SEQUENCES FROM PUBLIC, :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
-  REVOKE ALL PRIVILEGES ON FUNCTIONS FROM PUBLIC, :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON FUNCTIONS FROM PUBLIC, :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
-  REVOKE ALL PRIVILEGES ON TYPES FROM PUBLIC, :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON TYPES FROM PUBLIC, :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role"
-  REVOKE ALL PRIVILEGES ON SCHEMAS FROM PUBLIC, :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON SCHEMAS FROM PUBLIC, :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
-  REVOKE ALL PRIVILEGES ON TABLES FROM PUBLIC, :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON TABLES FROM PUBLIC, :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
-  REVOKE ALL PRIVILEGES ON SEQUENCES FROM PUBLIC, :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON SEQUENCES FROM PUBLIC, :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
-  REVOKE ALL PRIVILEGES ON FUNCTIONS FROM PUBLIC, :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON FUNCTIONS FROM PUBLIC, :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
-  REVOKE ALL PRIVILEGES ON TYPES FROM PUBLIC, :"runtime_role", :"command_role", :"backup_role" CASCADE;
+  REVOKE ALL PRIVILEGES ON TYPES FROM PUBLIC, :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public
   REVOKE ALL PRIVILEGES ON TABLES FROM :"migrator_role" CASCADE;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migrator_role" IN SCHEMA public

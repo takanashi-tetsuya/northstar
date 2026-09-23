@@ -15,6 +15,7 @@ readonly migration_ledger_manifest_sql="$project_dir/deploy/postgres-init/lib/no
 readonly bootstrap_role='northstar_bootstrap'
 readonly migrator_role='northstar_migrator'
 readonly runtime_role='northstar_runtime'
+readonly storage_role='northstar_storage'
 readonly command_role='northstar_commands'
 readonly backup_role='northstar_backup'
 readonly database_name='xmpp'
@@ -28,6 +29,7 @@ connection_password_file="${POSTGRES_CONNECTION_PASSWORD_FILE:-}"
 bootstrap_password_file="${POSTGRES_BOOTSTRAP_PASSWORD_FILE:-/run/secrets/postgres_bootstrap_password}"
 migrator_password_file="${NORTHSTAR_MIGRATOR_PASSWORD_FILE:-/run/secrets/northstar_migrator_password}"
 runtime_password_file="${NORTHSTAR_RUNTIME_PASSWORD_FILE:-/run/secrets/northstar_runtime_password}"
+storage_password_file="${NORTHSTAR_STORAGE_PASSWORD_FILE:-/run/secrets/northstar_storage_password}"
 command_password_file="${NORTHSTAR_COMMAND_PASSWORD_FILE:-/run/secrets/northstar_command_password}"
 backup_password_file="${NORTHSTAR_BACKUP_PASSWORD_FILE:-/run/secrets/northstar_backup_password}"
 allowed_external_superusers=()
@@ -37,14 +39,15 @@ connection_password=''
 bootstrap_password=''
 migrator_password=''
 runtime_password=''
+storage_password=''
 command_password=''
 backup_password=''
 
 clear_secrets() {
   unset PGPASSWORD
-  unset connection_password bootstrap_password migrator_password runtime_password command_password backup_password
+  unset connection_password bootstrap_password migrator_password runtime_password storage_password command_password backup_password
   unset NORTHSTAR_BOOTSTRAP_PASSWORD NORTHSTAR_MIGRATOR_PASSWORD
-  unset NORTHSTAR_RUNTIME_PASSWORD NORTHSTAR_BACKUP_PASSWORD
+  unset NORTHSTAR_RUNTIME_PASSWORD NORTHSTAR_STORAGE_PASSWORD NORTHSTAR_BACKUP_PASSWORD
   unset NORTHSTAR_COMMAND_PASSWORD
 }
 trap clear_secrets EXIT
@@ -78,6 +81,7 @@ Connection and secret files:
                              reused as the legacy connection password
   --migrator-password-file FILE
   --runtime-password-file FILE
+  --storage-password-file FILE
   --command-password-file FILE
   --backup-password-file FILE
   --allow-external-superuser ROLE
@@ -126,6 +130,7 @@ while [[ $# -gt 0 ]]; do
     --bootstrap-password-file) bootstrap_password_file=${2:?missing file}; shift 2 ;;
     --migrator-password-file) migrator_password_file=${2:?missing file}; shift 2 ;;
     --runtime-password-file) runtime_password_file=${2:?missing file}; shift 2 ;;
+    --storage-password-file) storage_password_file=${2:?missing file}; shift 2 ;;
     --command-password-file) command_password_file=${2:?missing file}; shift 2 ;;
     --backup-password-file) backup_password_file=${2:?missing file}; shift 2 ;;
     --allow-external-superuser)
@@ -183,6 +188,7 @@ psql_command=(
   --set=bootstrap_role="$bootstrap_role"
   --set=migrator_role="$migrator_role"
   --set=runtime_role="$runtime_role"
+  --set=storage_role="$storage_role"
   --set=command_role="$command_role"
   --set=backup_role="$backup_role"
   --set=allowed_external_superusers="$allowed_external_superusers_csv"
@@ -217,6 +223,7 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
     (:'bootstrap_role'::pg_catalog.text, true, true, -1),
     (:'migrator_role'::pg_catalog.text, false, false, 4),
     (:'runtime_role'::pg_catalog.text, false, false, 64),
+    (:'storage_role'::pg_catalog.text, false, false, 16),
     (:'command_role'::pg_catalog.text, false, false, 8),
     (:'backup_role'::pg_catalog.text, false, false, 2)
 ), actual_migration AS (
@@ -274,11 +281,11 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
     JOIN pg_catalog.pg_roles AS granted ON granted.oid = membership.roleid
     JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
    WHERE granted.rolname IN (
-           :'bootstrap_role', :'migrator_role', :'runtime_role',
+           :'bootstrap_role', :'migrator_role', :'runtime_role', :'storage_role',
            :'command_role', :'backup_role'
          )
       OR member.rolname IN (
-           :'bootstrap_role', :'migrator_role', :'runtime_role',
+           :'bootstrap_role', :'migrator_role', :'runtime_role', :'storage_role',
            :'command_role', :'backup_role'
          )
   UNION ALL
@@ -374,7 +381,7 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
      AND NOT COALESCE(
        privilege.grantor=database.datdba AND NOT privilege.is_grantable
        AND privilege.privilege_type='CONNECT'
-       AND grantee.rolname IN (:'runtime_role',:'command_role',:'backup_role'),false
+       AND grantee.rolname IN (:'runtime_role',:'storage_role',:'command_role',:'backup_role'),false
      )
   UNION ALL
   SELECT 'unexpected public-schema ACL: ' ||
@@ -389,7 +396,7 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
      AND NOT COALESCE(
        privilege.grantor=namespace.nspowner AND NOT privilege.is_grantable
        AND privilege.privilege_type='USAGE'
-       AND grantee.rolname IN (:'runtime_role',:'command_role',:'backup_role'),false
+       AND grantee.rolname IN (:'runtime_role',:'storage_role',:'command_role',:'backup_role'),false
      )
   UNION ALL
   SELECT 'unexpected global/public default ACL: ' || owner.rolname || ':' ||
@@ -547,13 +554,52 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
        OR pg_catalog.has_schema_privilege(runtime_role.oid, namespace.oid, 'CREATE')
      )
   UNION ALL
+  SELECT 'storage role has direct relation, column, or sequence privilege'
+    FROM pg_catalog.pg_roles AS storage_role
+   WHERE storage_role.rolname=:'storage_role'
+     AND EXISTS (
+       SELECT 1 FROM pg_catalog.pg_class relation
+       JOIN pg_catalog.pg_namespace namespace ON namespace.oid=relation.relnamespace
+       WHERE namespace.nspname='public'
+         AND ((relation.relkind IN ('r','p','v','m','f') AND (
+           pg_catalog.has_table_privilege(storage_role.oid,relation.oid,'SELECT')
+           OR pg_catalog.has_table_privilege(storage_role.oid,relation.oid,'INSERT')
+           OR pg_catalog.has_table_privilege(storage_role.oid,relation.oid,'UPDATE')
+           OR pg_catalog.has_table_privilege(storage_role.oid,relation.oid,'DELETE')
+           OR pg_catalog.has_table_privilege(storage_role.oid,relation.oid,'TRUNCATE')
+           OR pg_catalog.has_table_privilege(storage_role.oid,relation.oid,'REFERENCES')
+           OR pg_catalog.has_table_privilege(storage_role.oid,relation.oid,'TRIGGER')
+           OR pg_catalog.has_any_column_privilege(storage_role.oid,relation.oid,'SELECT')
+           OR pg_catalog.has_any_column_privilege(storage_role.oid,relation.oid,'INSERT')
+           OR pg_catalog.has_any_column_privilege(storage_role.oid,relation.oid,'UPDATE')
+           OR pg_catalog.has_any_column_privilege(storage_role.oid,relation.oid,'REFERENCES')
+         )) OR CASE WHEN relation.relkind='S' THEN (
+           pg_catalog.has_sequence_privilege(storage_role.oid,relation.oid,'USAGE')
+           OR pg_catalog.has_sequence_privilege(storage_role.oid,relation.oid,'SELECT')
+           OR pg_catalog.has_sequence_privilege(storage_role.oid,relation.oid,'UPDATE')
+         ) ELSE FALSE END)
+     )
+  UNION ALL
+  SELECT 'storage role routine execution differs from the exact manifest'
+    FROM pg_catalog.pg_roles AS storage_role
+   WHERE storage_role.rolname=:'storage_role'
+     AND EXISTS (
+       SELECT 1 FROM pg_catalog.pg_proc routine
+       JOIN pg_catalog.pg_namespace namespace ON namespace.oid=routine.pronamespace
+       LEFT JOIN pg_temp.northstar_capability_manifest expected
+         ON pg_catalog.to_regprocedure('public.' || expected.signature)=routine.oid
+       WHERE namespace.nspname='public'
+         AND pg_catalog.has_function_privilege(storage_role.oid,routine.oid,'EXECUTE')
+             IS DISTINCT FROM COALESCE(expected.workload='storage',FALSE)
+     )
+  UNION ALL
   SELECT role.rolname || ' is missing CONNECT or schema USAGE'
     FROM pg_catalog.pg_roles AS role
     JOIN pg_catalog.pg_database AS database
       ON database.datname = current_database()
     JOIN pg_catalog.pg_namespace AS namespace
       ON namespace.nspname = 'public'
-   WHERE role.rolname IN (:'runtime_role', :'command_role', :'backup_role')
+   WHERE role.rolname IN (:'runtime_role', :'storage_role', :'command_role', :'backup_role')
      AND (
        NOT pg_catalog.has_database_privilege(role.oid, database.oid, 'CONNECT')
        OR NOT pg_catalog.has_schema_privilege(role.oid, namespace.oid, 'USAGE')
@@ -786,7 +832,7 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
       ON database.datname = current_database()
     JOIN pg_catalog.pg_namespace AS namespace
       ON namespace.nspname = 'public'
-   WHERE role.rolname IN (:'runtime_role', :'command_role', :'backup_role')
+   WHERE role.rolname IN (:'runtime_role', :'storage_role', :'command_role', :'backup_role')
      AND (
        pg_catalog.has_database_privilege(role.oid, database.oid, 'CREATE')
        OR pg_catalog.has_database_privilege(role.oid, database.oid, 'TEMPORARY')
@@ -1061,7 +1107,7 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
        ]::pg_catalog.text[]),FALSE
      )
   UNION ALL
-  SELECT 'routine ACL differs from the owner/runtime/command execution manifest'
+  SELECT 'routine ACL differs from the owner/runtime/storage/command execution manifest'
    WHERE EXISTS (
      SELECT 1
        FROM pg_catalog.pg_proc routine
@@ -1085,13 +1131,16 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
                 OR expected.workload='runtime'
               ))
             OR
+            (privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'storage_role')
+              AND expected.workload='storage')
+            OR
             (privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'command_role')
               AND expected.workload='command')
           ),FALSE
         )
    )
   UNION ALL
-  SELECT 'type/domain ACL differs from the owner/runtime/backup USAGE manifest'
+  SELECT 'type/domain ACL differs from the owner/runtime/storage/backup USAGE manifest'
    WHERE EXISTS (
      SELECT 1
        FROM pg_catalog.pg_type data_type
@@ -1120,6 +1169,7 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
           AND privilege.grantee IN (
             data_type.typowner,
             (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'runtime_role'),
+            (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'storage_role'),
             (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'backup_role')
           ),FALSE
         )
@@ -1146,6 +1196,7 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
             FROM (VALUES
               (data_type.typowner),
               ((SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'runtime_role')),
+              ((SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'storage_role')),
               ((SELECT oid FROM pg_catalog.pg_roles WHERE rolname=:'backup_role'))
             ) required(grantee)
            WHERE NOT EXISTS (
@@ -1173,6 +1224,9 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
          OR pg_catalog.has_function_privilege(
               :'runtime_role',routine.oid,'EXECUTE'
             ) IS DISTINCT FROM (expected.workload='runtime')
+         OR pg_catalog.has_function_privilege(
+              :'storage_role',routine.oid,'EXECUTE'
+            ) IS DISTINCT FROM (expected.workload='storage')
          OR pg_catalog.has_function_privilege(
               :'command_role',routine.oid,'EXECUTE'
             ) IS DISTINCT FROM (expected.workload='command')
@@ -1221,6 +1275,13 @@ WITH expected_roles(role_name, must_be_superuser, must_inherit, connection_limit
            AND NOT privilege.is_grantable
            AND privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles
              WHERE rolname=:'runtime_role'))
+          OR
+          (expected.workload='storage'
+            AND privilege.grantor=routine.proowner
+            AND privilege.privilege_type='EXECUTE'
+            AND NOT privilege.is_grantable
+            AND privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles
+              WHERE rolname=:'storage_role'))
           OR
           (expected.workload='command'
             AND privilege.grantor=routine.proowner
@@ -1297,12 +1358,14 @@ fi
 bootstrap_password=$(read_secret "$bootstrap_password_file" 'postgres_bootstrap_password')
 migrator_password=$(read_secret "$migrator_password_file" 'northstar_migrator_password')
 runtime_password=$(read_secret "$runtime_password_file" 'northstar_runtime_password')
+storage_password=$(read_secret "$storage_password_file" 'northstar_storage_password')
 command_password=$(read_secret "$command_password_file" 'northstar_command_password')
 backup_password=$(read_secret "$backup_password_file" 'northstar_backup_password')
 
 export NORTHSTAR_BOOTSTRAP_PASSWORD="$bootstrap_password"
 export NORTHSTAR_MIGRATOR_PASSWORD="$migrator_password"
 export NORTHSTAR_RUNTIME_PASSWORD="$runtime_password"
+export NORTHSTAR_STORAGE_PASSWORD="$storage_password"
 export NORTHSTAR_COMMAND_PASSWORD="$command_password"
 export NORTHSTAR_BACKUP_PASSWORD="$backup_password"
 
@@ -1310,6 +1373,7 @@ export NORTHSTAR_BACKUP_PASSWORD="$backup_password"
 \getenv bootstrap_password NORTHSTAR_BOOTSTRAP_PASSWORD
 \getenv migrator_password NORTHSTAR_MIGRATOR_PASSWORD
 \getenv runtime_password NORTHSTAR_RUNTIME_PASSWORD
+\getenv storage_password NORTHSTAR_STORAGE_PASSWORD
 \getenv command_password NORTHSTAR_COMMAND_PASSWORD
 \getenv backup_password NORTHSTAR_BACKUP_PASSWORD
 
@@ -1346,6 +1410,13 @@ SELECT pg_catalog.format(
          SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = :'runtime_role'
        ) \gexec
 SELECT pg_catalog.format(
+         'CREATE ROLE %I LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 16 VALID UNTIL ''infinity''',
+         :'storage_role', :'storage_password'
+       )
+ WHERE NOT EXISTS (
+         SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = :'storage_role'
+       ) \gexec
+SELECT pg_catalog.format(
          'CREATE ROLE %I LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 8 VALID UNTIL ''infinity''',
          :'command_role', :'command_password'
        )
@@ -1369,6 +1440,10 @@ SELECT pg_catalog.format(
   :'runtime_role', :'runtime_password'
 ) \gexec
 SELECT pg_catalog.format(
+  'ALTER ROLE %I LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 16 VALID UNTIL ''infinity''',
+  :'storage_role', :'storage_password'
+) \gexec
+SELECT pg_catalog.format(
   'ALTER ROLE %I LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 8 VALID UNTIL ''infinity''',
   :'command_role', :'command_password'
 ) \gexec
@@ -1379,7 +1454,7 @@ SELECT pg_catalog.format(
 
 SELECT pg_catalog.format('ALTER ROLE %I RESET ALL',role_name)
   FROM (VALUES
-    (:'migrator_role'),(:'runtime_role'),(:'command_role'),(:'backup_role')
+    (:'migrator_role'),(:'runtime_role'),(:'storage_role'),(:'command_role'),(:'backup_role')
   ) AS workload(role_name)
  ORDER BY role_name
 \gexec
@@ -1389,11 +1464,11 @@ SELECT pg_catalog.format('REVOKE %I FROM %I CASCADE', granted.rolname, member.ro
   JOIN pg_catalog.pg_roles AS granted ON granted.oid = membership.roleid
   JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
  WHERE granted.rolname IN (
-         :'bootstrap_role', :'migrator_role', :'runtime_role',
+         :'bootstrap_role', :'migrator_role', :'runtime_role', :'storage_role',
          :'command_role', :'backup_role'
        )
     OR member.rolname IN (
-         :'bootstrap_role', :'migrator_role', :'runtime_role',
+         :'bootstrap_role', :'migrator_role', :'runtime_role', :'storage_role',
          :'command_role', :'backup_role'
        )
  ORDER BY granted.rolname, member.rolname

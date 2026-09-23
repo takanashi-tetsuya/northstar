@@ -51,6 +51,8 @@ MIGRATIONS = {
     "0143": ROOT / "migrations/0143_upload_snapshot_plan_cache.sql",
     "0145": ROOT / "migrations/0145_webauthn_passkeys.sql",
     "0144": ROOT / "migrations/0144_account_revocation_outbox.sql",
+    "0146": ROOT / "migrations/0146_upload_durable_state_probe.sql",
+    "0147": ROOT / "migrations/0147_upload_storage_role_catalog_health.sql",
 }
 
 # A later migration may replace an existing routine without changing its
@@ -86,6 +88,8 @@ RESECURED_BY_MIGRATION = {
         "account_upload_cleanup_capacity()",
     },
     "0143": {"northstar_upload_queue_snapshot()"},
+    "0146": {"northstar_upload_capability_catalog_healthy(text)"},
+    "0147": {"northstar_upload_capability_catalog_healthy(text)"},
 }
 
 # A replacement migration may preserve a callable identity while changing its
@@ -100,8 +104,8 @@ REPLACEMENT_HARDENING_SUCCESSORS = {
 }
 
 ROW = re.compile(
-    r"^\s*\('([^']+\([^']*\))','(runtime|command|private)',"
-    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131|0144|0145)'\)[,;]\s*$",
+    r"^\s*\('([^']+\([^']*\))','(runtime|storage|command|private)',"
+    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131|0144|0145|0146)'\)[,;]\s*$",
     re.MULTILINE,
 )
 RELATION_ROW = re.compile(
@@ -837,7 +841,7 @@ if "ON COMMIT DROP" in generator_text:
     fail("migration ledger temp table would disappear in autocommit audit sessions")
 
 manifest_text = read(MANIFEST)
-if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145'" not in manifest_text:
+if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146'" not in manifest_text:
     fail("canonical manifest origin constraint omits a reviewed capability migration")
 rows = ROW.findall(manifest_text)
 if not rows:
@@ -847,11 +851,11 @@ require_exact("canonical manifest", manifest_signatures, set(manifest_signatures
 
 by_workload = {
     workload: {signature for signature, row_workload, _ in rows if row_workload == workload}
-    for workload in ("runtime", "command", "private")
+    for workload in ("runtime", "storage", "command", "private")
 }
 by_origin = {
     origin: {signature for signature, _, row_origin in rows if row_origin == origin}
-    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131", "0144", "0145")
+    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131", "0144", "0145", "0146")
 }
 manifest_origin_by_signature = {
     signature: origin for signature, _, origin in rows
@@ -1370,6 +1374,13 @@ runtime_grant = signatures_between(
 )
 require_exact("runtime grant allowlist", runtime_grant, by_workload["runtime"])
 
+storage_grant = signatures_between(
+    grants_text,
+    "JOIN (VALUES\n       ('northstar_upload_bootstrap_authority",
+    ") AS allowed(signature)\n   ON routine.oid",
+)
+require_exact("storage grant allowlist", storage_grant, by_workload["storage"])
+
 for label, start, end in (
     (
         "runtime unexpected-grant postcondition",
@@ -1402,6 +1413,7 @@ for required in (
     "northstar_canonical_capability_manifest_is_exact",
     "pg_catalog.pg_get_userbyid(routine.proowner)<>:'migrator_role'",
     "expected.workload='runtime'",
+    "expected.workload='storage'",
     "expected.workload='command'",
     "privilege.grantee=0",
     "REVOKE ALL PRIVILEGES ON ROUTINE",
@@ -1453,8 +1465,12 @@ runtime_attestation = signatures_between(
     "), resolved_definer AS (",
 )
 require_exact("runtime startup attestation", runtime_attestation, by_workload["runtime"])
+storage_start = attestation_text.index("pub async fn attest_storage_role(")
+command_start = attestation_text.index("pub async fn attest_admin_command_role(")
+if "workload == \"storage\"" not in attestation_text[storage_start:command_start]:
+    fail("storage startup attestation is not driven by the storage manifest partition")
 command_attestation = signatures_between(
-    attestation_text,
+    attestation_text[command_start:],
     "WITH expected(signature) AS (",
     "), resolved AS (",
 )
@@ -1464,6 +1480,7 @@ for required in (
     "attest_security_definer_capability_acls(pool).await?",
     "routine.workload_role",
     "routine.workload='private'",
+    "WHEN 'storage' THEN (SELECT role.oid",
     "privilege.grantee<>routine.proowner",
     "privilege.is_grantable",
     "expected.oid IS NULL",
@@ -1512,7 +1529,10 @@ if re.search(r"count\s*\([^\n]*\)\s*=\s*(?:52|35|8)\b", database_ci_text, re.IGN
 for required in (
     "\\i deploy/postgres-init/lib/northstar-capability-manifest.sql",
     "expected_capability.workload='runtime'",
+    "expected_capability.workload='storage'",
     "expected_capability.workload='command'",
+    '"storage raw ${upload_relation} read"',
+    "'storage upload capability catalog did not match the role split'",
     "'northstar_runtime','public.sm_resume_sessions','peer_ip','SELECT'",
     "SM ${ip_policy} IP policy accepted a NULL claimant address",
     "SM exact/subnet policy accepted a snapshot with NULL stored peer_ip",

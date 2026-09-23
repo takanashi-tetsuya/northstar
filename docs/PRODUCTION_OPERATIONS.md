@@ -995,6 +995,7 @@ image superuser:
 | `northstar_bootstrap` | PostgreSQL-container trust boundary only; the sole Northstar superuser. It creates/reconciles workload roles and is never mounted into `migrate`, `xmpp`, `backup`, or `restore`. |
 | `northstar_migrator` | One-shot schema owner. It is `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOREPLICATION`, and `NOBYPASSRLS`; only `xmpp-server migrate` and an explicitly stopped restore receive its URL. |
 | `northstar_runtime` | Long-lived, non-owner application identity. It has no database/schema `CREATE`, cannot alter ownership or disable triggers, and has SELECT-only access to `users`; all account-authority writes use the exact migration-0108 command allowlist. It starts only after a read-only migration/checksum, RFC 7622 marker, role and ACL attestation. |
+| `northstar_storage` | Dedicated `CONNECTION LIMIT 16` login for upload lifecycle and reconciliation. It has no direct table or sequence privileges and executes only reviewed owner-held upload routines. Disabled-upload mode opens no storage pool. |
 | `northstar_commands` | Long-lived, non-owner command identity with `CONNECTION LIMIT 8`. It has no relation or sequence privileges and may execute only the canonical owner-held XEP-0133 command-session functions. The server gives it an isolated four-connection pool so command work cannot consume the runtime pool. |
 | `northstar_backup` | Read-only logical-backup identity. It can connect and select tables/sequences, but cannot write, allocate sequences, execute application routines, create objects, change roles, or terminate sessions. |
 
@@ -1004,16 +1005,31 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 142 files from `0001` through
-`0145`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 146 files from `0001` through
+`0147`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0145`, with the exact SQLx description and SHA-384 checksum, before it
+through `0147`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
-`runtime_database_url` and `command_database_url` secrets; neither identity may
-attempt DDL. Pending, failed, unknown, duplicated, missing or checksum-drifted
+`runtime_database_url`, `storage_database_url`, and `command_database_url`
+secrets; none of these identities may attempt DDL. Pending, failed, unknown,
+duplicated, missing or checksum-drifted
 migrations and incomplete identity canonicalization all stop startup before
 listeners open.
+
+Migration `0146` adds the disabled-upload state probe without granting runtime
+access to upload tables. Migration `0147` completes the storage-role cutover.
+On an existing volume, stop every old server process, generate the new storage
+password and URL secrets, reconcile the new role, run migrations and exact
+grants, then start the new binary. The older binary's exact role/ACL audit does
+not accept the new catalog. Enabled and draining upload modes require
+`STORAGE_DATABASE_URL_FILE`; disabled mode uses no storage connection.
+Budget PostgreSQL `max_connections` across every node's primary and reserved
+runtime connections, four command connections and up to two storage
+connections, then include migration, backup and PostgreSQL reserve capacity.
+The role limits (runtime 64, commands 8, storage 16) are cluster-wide. The
+binary reports the storage limit with `--storage-connection-budget`; this
+upgrade is stopped-writer work, not a mixed-version rolling deployment.
 
 Migration `0126` changes the transaction protocol used by MIX outbox writers.
 It is a **stopped-writer migration**, not a rolling-upgrade boundary. Before the
@@ -1077,7 +1093,7 @@ reported as SQLSTATE `55P03` for bounded retry rather than consuming an
 application-pool connection while waiting. It deliberately preserves existing
 `FALSE` and `in_progress` meanings for stale/no-op and claim paths. The
 primitive and its trigger helper remain owner-only: do not grant either to a
-runtime, command, backup, or public role.
+runtime, storage, command, backup, or public role.
 
 Migration `0132` is a forward-only repair for the PubSub collection-edge guard
 introduced by immutable migration `0129`. It pins that existing helper to the
@@ -1176,7 +1192,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0145` manifest
+5. run the one-shot migration job through the complete `0001`-`0147` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;
@@ -1356,7 +1372,7 @@ Unix-socket-only temporary PostgreSQL instance under the plaintext scratch
 root; it never creates or drops a validation database in the target cluster.
 It validates the archive and checks every live `uploaded=true` row
 against a regular UUID-named file with the exact size and, for current rows, the
-database-stored SHA-256 digest. The disposable instance also recreates the four
+database-stored SHA-256 digest. The disposable instance also recreates the five
 bounded workload roles and applies the repository migration, capability and
 relation manifests as the non-superuser migrator. Thus even a same-size upload
 changed together with the archive checksum is rejected when it disagrees with

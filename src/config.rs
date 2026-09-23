@@ -40,6 +40,31 @@ pub(crate) const DATABASE_PRIMARY_POOL_MIN_CONNECTIONS: u32 = 2;
 /// PostgreSQL connection limit on a single process.
 pub(crate) const DATABASE_MAX_CONNECTIONS_LIMIT: u32 =
     RUNTIME_ROLE_CONNECTION_LIMIT - RUNTIME_ROLE_RESERVED_CONNECTIONS;
+/// Upload persistence has a separate PostgreSQL login. A small pool leaves
+/// headroom below its role limit for overlapping process shutdown/startup.
+pub(crate) const STORAGE_POOL_MAX_CONNECTIONS: u32 = 2;
+pub(crate) const STORAGE_ROLE_CONNECTION_LIMIT: u32 = 16;
+pub(crate) const STORAGE_MAX_ENABLED_NODES: u32 =
+    STORAGE_ROLE_CONNECTION_LIMIT / STORAGE_POOL_MAX_CONNECTIONS;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct StorageConnectionBudgetManifest {
+    pub(crate) schema_version: u8,
+    pub(crate) storage_role_connection_limit: u32,
+    pub(crate) enabled_pool_max_connections_per_node: u32,
+    pub(crate) disabled_pool_max_connections_per_node: u32,
+    pub(crate) max_enabled_nodes_at_pool_limit: u32,
+}
+
+pub(crate) const fn storage_connection_budget_manifest() -> StorageConnectionBudgetManifest {
+    StorageConnectionBudgetManifest {
+        schema_version: 1,
+        storage_role_connection_limit: STORAGE_ROLE_CONNECTION_LIMIT,
+        enabled_pool_max_connections_per_node: STORAGE_POOL_MAX_CONNECTIONS,
+        disabled_pool_max_connections_per_node: 0,
+        max_enabled_nodes_at_pool_limit: STORAGE_MAX_ENABLED_NODES,
+    }
+}
 
 /// Stable, machine-readable facts for isolated capacity fixtures.
 ///
@@ -100,6 +125,40 @@ fn resolve_admin_command_pool_mode(
     Ok(AdminCommandPoolMode::DedicatedProductionRole)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StoragePoolMode {
+    Disabled,
+    DedicatedProductionRole,
+    SharedUnsafeDevelopment,
+}
+
+fn resolve_storage_pool_mode(
+    unsafe_development: bool,
+    keeps_storage_runtime: bool,
+    configured_database_url: &str,
+) -> Result<StoragePoolMode> {
+    let configured = !configured_database_url.trim().is_empty();
+    if unsafe_development {
+        anyhow::ensure!(
+            !configured,
+            "DATABASE_ALLOW_UNSAFE_ROLE_FOR_DEVELOPMENT shares the primary pool and must not set STORAGE_DATABASE_URL or STORAGE_DATABASE_URL_FILE"
+        );
+        return Ok(if keeps_storage_runtime {
+            StoragePoolMode::SharedUnsafeDevelopment
+        } else {
+            StoragePoolMode::Disabled
+        });
+    }
+    if !keeps_storage_runtime {
+        return Ok(StoragePoolMode::Disabled);
+    }
+    anyhow::ensure!(
+        configured,
+        "enabled or draining uploads require STORAGE_DATABASE_URL_FILE (preferred) or STORAGE_DATABASE_URL for the bounded northstar_storage role"
+    );
+    Ok(StoragePoolMode::DedicatedProductionRole)
+}
+
 #[derive(Deserialize)]
 pub struct RawConfig {
     #[serde(default = "default_domain")]
@@ -131,6 +190,11 @@ pub struct RawConfig {
     #[serde(default)]
     pub admin_command_database_url: String,
     pub admin_command_database_url_file: Option<PathBuf>,
+
+    /// Dedicated upload persistence credential; disabled mode never opens it.
+    #[serde(default)]
+    pub storage_database_url: String,
+    pub storage_database_url_file: Option<PathBuf>,
 
     /// Optional Redis endpoint for the experimental multi-node routing layer.
     /// A normal single-node deployment does not require Redis.
@@ -1170,6 +1234,7 @@ fn default_admin_idle_seconds() -> u64 {
 pub struct Config {
     pub raw: RawConfig,
     pub(crate) admin_command_pool_mode: AdminCommandPoolMode,
+    pub(crate) storage_pool_mode: StoragePoolMode,
     pub domain: String,
     pub public_url: String,
     pub websocket_allowed_origins: Vec<String>,
@@ -1828,6 +1893,13 @@ impl Config {
             raw.admin_command_database_url =
                 read_secret_file(path, "ADMIN_COMMAND_DATABASE_URL_FILE")?;
         }
+        raw.storage_database_url_file = non_empty_path(raw.storage_database_url_file.take());
+        if let Some(path) = &raw.storage_database_url_file {
+            if !raw.storage_database_url.trim().is_empty() {
+                anyhow::bail!("set only one of STORAGE_DATABASE_URL and STORAGE_DATABASE_URL_FILE");
+            }
+            raw.storage_database_url = read_secret_file(path, "STORAGE_DATABASE_URL_FILE")?;
+        }
         raw.bootstrap_admin_username = raw
             .bootstrap_admin_username
             .take()
@@ -2164,6 +2236,11 @@ impl Config {
         let admin_command_pool_mode = resolve_admin_command_pool_mode(
             raw.database_allow_unsafe_role_for_development,
             &raw.admin_command_database_url,
+        )?;
+        let storage_pool_mode = resolve_storage_pool_mode(
+            raw.database_allow_unsafe_role_for_development,
+            raw.upload_mode.keeps_storage_runtime(),
+            &raw.storage_database_url,
         )?;
         raw.upload_storage_backend = raw.upload_storage_backend.trim().to_ascii_lowercase();
         raw.upload_s3_credential_mode = raw.upload_s3_credential_mode.trim().to_ascii_lowercase();
@@ -2852,6 +2929,7 @@ impl Config {
         Ok(Self {
             raw,
             admin_command_pool_mode,
+            storage_pool_mode,
             domain,
             public_url,
             websocket_allowed_origins,
@@ -3360,14 +3438,15 @@ mod tests {
         ephemeral_development_secret_allowed, listener_addresses_overlap,
         load_component_credentials, parse_external_service, parse_pow_v1_compatibility_until,
         parse_xep_0487_ips, read_secret_file, redis_endpoint_is_local,
-        resolve_admin_command_pool_mode, resolve_web_capability_plan,
-        runtime_connection_budget_manifest, valid_http_bearer_secret,
-        validate_cluster_dialback_secret, validate_cluster_fast_secret,
+        resolve_admin_command_pool_mode, resolve_storage_pool_mode, resolve_web_capability_plan,
+        runtime_connection_budget_manifest, storage_connection_budget_manifest,
+        valid_http_bearer_secret, validate_cluster_dialback_secret, validate_cluster_fast_secret,
         validate_component_capacity, validate_component_transport, validate_redis_transport,
         validate_runtime_pool_budget, validate_shared_runtime_secret, validate_web_admin_exposure,
-        AdminCommandPoolMode, ComponentConnectionMode, ComponentCredential,
+        AdminCommandPoolMode, ComponentConnectionMode, ComponentCredential, StoragePoolMode,
         DATABASE_MAX_CONNECTIONS_LIMIT, DATABASE_PRIMARY_POOL_MIN_CONNECTIONS,
         RUNTIME_ROLE_CONNECTION_LIMIT, RUNTIME_ROLE_RESERVED_CONNECTIONS,
+        STORAGE_MAX_ENABLED_NODES, STORAGE_POOL_MAX_CONNECTIONS, STORAGE_ROLE_CONNECTION_LIMIT,
     };
 
     fn web_dependency_fixture() -> super::RawConfig {
@@ -3576,6 +3655,61 @@ mod tests {
             .unwrap(),
             AdminCommandPoolMode::DedicatedProductionRole
         );
+    }
+
+    #[test]
+    fn storage_pool_is_required_only_for_enabled_or_draining_production_uploads() {
+        assert_eq!(STORAGE_POOL_MAX_CONNECTIONS, 2);
+        let budget = storage_connection_budget_manifest();
+        assert_eq!(budget.schema_version, 1);
+        assert_eq!(
+            budget.storage_role_connection_limit,
+            STORAGE_ROLE_CONNECTION_LIMIT
+        );
+        assert_eq!(budget.enabled_pool_max_connections_per_node, 2);
+        assert_eq!(budget.disabled_pool_max_connections_per_node, 0);
+        assert_eq!(
+            budget.max_enabled_nodes_at_pool_limit,
+            STORAGE_MAX_ENABLED_NODES
+        );
+        assert_eq!(STORAGE_MAX_ENABLED_NODES, 8);
+        assert_eq!(
+            STORAGE_MAX_ENABLED_NODES * STORAGE_POOL_MAX_CONNECTIONS,
+            STORAGE_ROLE_CONNECTION_LIMIT
+        );
+        assert!(
+            (budget.max_enabled_nodes_at_pool_limit + 1)
+                * budget.enabled_pool_max_connections_per_node
+                > budget.storage_role_connection_limit
+        );
+        assert_eq!(
+            serde_json::to_value(budget).unwrap(),
+            serde_json::json!({
+                "schema_version": 1,
+                "storage_role_connection_limit": 16,
+                "enabled_pool_max_connections_per_node": 2,
+                "disabled_pool_max_connections_per_node": 0,
+                "max_enabled_nodes_at_pool_limit": 8
+            })
+        );
+        assert_eq!(
+            resolve_storage_pool_mode(false, false, "").unwrap(),
+            StoragePoolMode::Disabled
+        );
+        assert_eq!(
+            resolve_storage_pool_mode(false, false, "postgres://storage").unwrap(),
+            StoragePoolMode::Disabled
+        );
+        assert!(resolve_storage_pool_mode(false, true, "").is_err());
+        assert_eq!(
+            resolve_storage_pool_mode(false, true, "postgres://storage").unwrap(),
+            StoragePoolMode::DedicatedProductionRole
+        );
+        assert_eq!(
+            resolve_storage_pool_mode(true, true, "").unwrap(),
+            StoragePoolMode::SharedUnsafeDevelopment
+        );
+        assert!(resolve_storage_pool_mode(true, true, "postgres://storage").is_err());
     }
 
     #[test]

@@ -17,12 +17,14 @@ services:
       POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=scram-sha-256
       NORTHSTAR_MIGRATOR_PASSWORD_FILE: /run/secrets/northstar_migrator_password
       NORTHSTAR_RUNTIME_PASSWORD_FILE: /run/secrets/northstar_runtime_password
+      NORTHSTAR_STORAGE_PASSWORD_FILE: /run/secrets/northstar_storage_password
       NORTHSTAR_COMMAND_PASSWORD_FILE: /run/secrets/northstar_command_password
       NORTHSTAR_BACKUP_PASSWORD_FILE: /run/secrets/northstar_backup_password
     secrets:
       - postgres_bootstrap_password
       - northstar_migrator_password
       - northstar_runtime_password
+      - northstar_storage_password
       - northstar_command_password
       - northstar_backup_password
     volumes:
@@ -132,6 +134,7 @@ services:
       SALES_ADDRESSES: ${SALES_ADDRESSES:-}
       SECURITY_ADDRESSES: ${SECURITY_ADDRESSES:-}
       DATABASE_URL_FILE: /run/secrets/runtime_database_url
+      STORAGE_DATABASE_URL_FILE: /run/secrets/storage_database_url
       ADMIN_COMMAND_DATABASE_URL_FILE: /run/secrets/command_database_url
       DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-32}
       DATABASE_MIN_CONNECTIONS: ${DATABASE_MIN_CONNECTIONS:-2}
@@ -307,6 +310,7 @@ services:
       - log-data:/data/logs
     secrets:
       - runtime_database_url
+      - storage_database_url
       - command_database_url
       - dialback_secret
       - fast_token_secret
@@ -536,6 +540,8 @@ secrets:
     file: ${NORTHSTAR_MIGRATOR_PASSWORD_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/northstar_migrator_password}
   northstar_runtime_password:
     file: ${NORTHSTAR_RUNTIME_PASSWORD_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/northstar_runtime_password}
+  northstar_storage_password:
+    file: ${NORTHSTAR_STORAGE_PASSWORD_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/northstar_storage_password}
   northstar_command_password:
     file: ${NORTHSTAR_COMMAND_PASSWORD_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/northstar_command_password}
   northstar_backup_password:
@@ -544,6 +550,8 @@ secrets:
     file: ${MIGRATOR_DATABASE_URL_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/migrator_database_url}
   runtime_database_url:
     file: ${RUNTIME_DATABASE_URL_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/runtime_database_url}
+  storage_database_url:
+    file: ${STORAGE_DATABASE_URL_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/storage_database_url}
   command_database_url:
     file: ${COMMAND_DATABASE_URL_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/command_database_url}
   backup_database_url:

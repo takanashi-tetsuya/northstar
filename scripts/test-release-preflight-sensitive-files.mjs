@@ -49,6 +49,8 @@ try {
     'credentials.json',
     'service-account.json',
     'runtime_database_url',
+    'storage_database_url',
+    'northstar_storage_password',
     'northstar_command_password',
     'command_database_url',
     'dummy_scram_secret',

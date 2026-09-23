@@ -199,6 +199,8 @@ PY
     migrator_password_path=${migrator_password_path:-$secret_root/northstar_migrator_password}
     runtime_password_path=$(sed -n 's/^NORTHSTAR_RUNTIME_PASSWORD_SECRET_FILE=//p' .env | tail -n 1)
     runtime_password_path=${runtime_password_path:-$secret_root/northstar_runtime_password}
+    storage_password_path=$(sed -n 's/^NORTHSTAR_STORAGE_PASSWORD_SECRET_FILE=//p' .env | tail -n 1)
+    storage_password_path=${storage_password_path:-$secret_root/northstar_storage_password}
     command_password_path=$(sed -n 's/^NORTHSTAR_COMMAND_PASSWORD_SECRET_FILE=//p' .env | tail -n 1)
     command_password_path=${command_password_path:-$secret_root/northstar_command_password}
     backup_password_path=$(sed -n 's/^NORTHSTAR_BACKUP_PASSWORD_SECRET_FILE=//p' .env | tail -n 1)
@@ -207,6 +209,8 @@ PY
     migrator_database_url_path=${migrator_database_url_path:-$secret_root/migrator_database_url}
     runtime_database_url_path=$(sed -n 's/^RUNTIME_DATABASE_URL_SECRET_FILE=//p' .env | tail -n 1)
     runtime_database_url_path=${runtime_database_url_path:-$secret_root/runtime_database_url}
+    storage_database_url_path=$(sed -n 's/^STORAGE_DATABASE_URL_SECRET_FILE=//p' .env | tail -n 1)
+    storage_database_url_path=${storage_database_url_path:-$secret_root/storage_database_url}
     command_database_url_path=$(sed -n 's/^COMMAND_DATABASE_URL_SECRET_FILE=//p' .env | tail -n 1)
     command_database_url_path=${command_database_url_path:-$secret_root/command_database_url}
     backup_database_url_path=$(sed -n 's/^BACKUP_DATABASE_URL_SECRET_FILE=//p' .env | tail -n 1)
@@ -259,10 +263,12 @@ PY
     check_secret_file "$postgres_bootstrap_secret_path" postgres_bootstrap_password 70:70
     check_secret_file "$migrator_password_path" northstar_migrator_password 70:70
     check_secret_file "$runtime_password_path" northstar_runtime_password 70:70
+    check_secret_file "$storage_password_path" northstar_storage_password 70:70
     check_secret_file "$command_password_path" northstar_command_password 70:70
     check_secret_file "$backup_password_path" northstar_backup_password 70:70
     check_secret_file "$migrator_database_url_path" migrator_database_url 10001:10001
     check_secret_file "$runtime_database_url_path" runtime_database_url 10001:10001
+    check_secret_file "$storage_database_url_path" storage_database_url 10001:10001
     check_secret_file "$command_database_url_path" command_database_url 10001:10001
     check_secret_file "$backup_database_url_path" backup_database_url 10001:10001
     check_secret_file "$backup_signing_key_path" backup_signing_ed25519.pem 10001:10001
@@ -378,6 +384,7 @@ PY
     }
     verify_role_url "$migrator_database_url_path" "$migrator_password_path" northstar_migrator migrator_database_url
     verify_role_url "$runtime_database_url_path" "$runtime_password_path" northstar_runtime runtime_database_url
+    verify_role_url "$storage_database_url_path" "$storage_password_path" northstar_storage storage_database_url
     verify_role_url "$command_database_url_path" "$command_password_path" northstar_commands command_database_url
     verify_role_url "$backup_database_url_path" "$backup_password_path" northstar_backup backup_database_url
 

@@ -28,6 +28,7 @@ capability_manifest_sql="$project_dir/deploy/postgres-init/lib/northstar-capabil
 migration_ledger_manifest_sql="$project_dir/deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql"
 readonly database_migrator_role='northstar_migrator'
 readonly database_runtime_role='northstar_runtime'
+readonly database_storage_role='northstar_storage'
 readonly database_command_role='northstar_commands'
 readonly database_backup_role='northstar_backup'
 
@@ -1113,6 +1114,7 @@ write_grant_policy_variables() {
     printf '\\set database_name %s\n' "$target_database" &&
     printf '\\set migrator_role %s\n' "$database_migrator_role" &&
     printf '\\set runtime_role %s\n' "$database_runtime_role" &&
+    printf '\\set storage_role %s\n' "$database_storage_role" &&
     printf '\\set command_role %s\n' "$database_command_role" &&
     printf '\\set backup_role %s\n' "$database_backup_role" &&
     printf '%s\n' '\set allow_bootstrap false' &&

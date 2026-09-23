@@ -246,6 +246,7 @@ reconcile_exact_grants() {
     --set=database_name="$database_name" \
     --set=migrator_role=northstar_migrator \
     --set=runtime_role=northstar_runtime \
+    --set=storage_role=northstar_storage \
     --set=command_role=northstar_commands \
     --set=backup_role=northstar_backup \
     --set=allow_bootstrap=false \

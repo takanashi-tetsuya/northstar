@@ -155,6 +155,8 @@ INSERT INTO pg_temp.northstar_migration_ledger_manifest(
   (142,'upload projection capacity rehardening',pg_catalog.decode('946fc50f0415592302ae2f57746f5deb75eb7b367315e4745e7baa18b87c4496b06d91983ee89779945ceaf4896688b2','hex')),
   (143,'upload snapshot plan cache',pg_catalog.decode('9dd7d9ec4cb822b8eceb2116e3d1141cbbbb2d572e2cb55796fd6b188ac23d48d685795904757ee973d88d4bbdbaf02d','hex')),
   (144,'account revocation outbox',pg_catalog.decode('41aa6cd5a2bd37b702028707bc82ab8296e6d105d1bf0b6a7ab3e01745c13272a4df40d348481e886ab5916e31645655','hex')),
-  (145,'webauthn passkeys',pg_catalog.decode('30080389d183df7eed31e411cca3586d0d23283fd7805f6cf0ed35d315960b980fca96e4e5f31e6c982b18f3835abd03','hex'));
+  (145,'webauthn passkeys',pg_catalog.decode('30080389d183df7eed31e411cca3586d0d23283fd7805f6cf0ed35d315960b980fca96e4e5f31e6c982b18f3835abd03','hex')),
+  (146,'upload durable state probe',pg_catalog.decode('588d11ad036de11a9d9c6fedf0277e23caa23117a1161d7ae41983a9709185e79a907c5ea429d0ab9d144f9bff96b956','hex')),
+  (147,'upload storage role catalog health',pg_catalog.decode('6b1fa8ddf17a9f5a092546ed5ea28c566267d98cb86a8e8893536b2bc5c4341daaedf5abfc80b6dd02af70224cb02b4e','hex'));
 
 \set northstar_migration_ledger_manifest_is_loaded true

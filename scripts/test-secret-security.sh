@@ -31,7 +31,7 @@ lock_file="$work_dir/.northstar-secrets.lock"
 [[ "$(stat -c '%a' "$lock_file")" == 600 ]]
 [[ "$(stat -c '%u:%g' "$lock_file")" == 0:0 ]]
 
-secret_names='postgres_bootstrap_password northstar_migrator_password northstar_runtime_password northstar_command_password northstar_backup_password migrator_database_url runtime_database_url command_database_url backup_database_url bootstrap_admin_password grafana_admin_password dialback_secret fast_token_secret dummy_scram_secret abuse_state_hmac_key api_control_secret metrics_bearer_token prometheus_metrics_bearer_token backup_signing_ed25519.pem backup_signing_ed25519.pub.pem backup_age_recipients.txt backup_age_identity.txt'
+secret_names='postgres_bootstrap_password northstar_migrator_password northstar_runtime_password northstar_storage_password northstar_command_password northstar_backup_password migrator_database_url runtime_database_url storage_database_url command_database_url backup_database_url bootstrap_admin_password grafana_admin_password dialback_secret fast_token_secret dummy_scram_secret abuse_state_hmac_key api_control_secret metrics_bearer_token prometheus_metrics_bearer_token backup_signing_ed25519.pem backup_signing_ed25519.pub.pem backup_age_recipients.txt backup_age_identity.txt'
 for name in $secret_names; do
   path="$secret_dir/$name"
   [[ -f "$path" && ! -L "$path" ]]
@@ -39,16 +39,16 @@ for name in $secret_names; do
   fragment=$(tr -d '\r\n' < "$path" | head -c 24)
   [[ -z "$fragment" || "$output" != *"$fragment"* ]]
 done
-for name in postgres_bootstrap_password northstar_migrator_password northstar_runtime_password northstar_command_password northstar_backup_password; do
+for name in postgres_bootstrap_password northstar_migrator_password northstar_runtime_password northstar_storage_password northstar_command_password northstar_backup_password; do
   [[ "$(stat -c '%u:%g' "$secret_dir/$name")" == 70:70 ]]
 done
 [[ "$(stat -c '%u:%g' "$secret_dir/grafana_admin_password")" == 472:0 ]]
-for name in migrator_database_url runtime_database_url command_database_url backup_database_url bootstrap_admin_password dialback_secret fast_token_secret dummy_scram_secret abuse_state_hmac_key api_control_secret metrics_bearer_token backup_signing_ed25519.pem backup_signing_ed25519.pub.pem backup_age_recipients.txt backup_age_identity.txt; do
+for name in migrator_database_url runtime_database_url storage_database_url command_database_url backup_database_url bootstrap_admin_password dialback_secret fast_token_secret dummy_scram_secret abuse_state_hmac_key api_control_secret metrics_bearer_token backup_signing_ed25519.pem backup_signing_ed25519.pub.pem backup_age_recipients.txt backup_age_identity.txt; do
   [[ "$(stat -c '%u:%g' "$secret_dir/$name")" == 10001:10001 ]]
 done
 [[ "$(stat -c '%u:%g' "$secret_dir/prometheus_metrics_bearer_token")" == 65534:65534 ]]
 cmp -s "$secret_dir/metrics_bearer_token" "$secret_dir/prometheus_metrics_bearer_token"
-for name in postgres_bootstrap_password northstar_migrator_password northstar_runtime_password northstar_command_password northstar_backup_password dialback_secret fast_token_secret dummy_scram_secret abuse_state_hmac_key api_control_secret metrics_bearer_token; do
+for name in postgres_bootstrap_password northstar_migrator_password northstar_runtime_password northstar_storage_password northstar_command_password northstar_backup_password dialback_secret fast_token_secret dummy_scram_secret abuse_state_hmac_key api_control_secret metrics_bearer_token; do
   [[ "$(tr -d '\r\n' < "$secret_dir/$name")" =~ ^[0-9a-f]{64}$ ]]
 done
 command_password=$(tr -d '\r\n' < "$secret_dir/northstar_command_password")
@@ -58,7 +58,7 @@ unset command_password
 for other in dialback_secret fast_token_secret dummy_scram_secret abuse_state_hmac_key; do
   ! cmp -s "$secret_dir/api_control_secret" "$secret_dir/$other"
 done
-for role in migrator runtime backup; do
+for role in migrator runtime storage backup; do
   password=$(tr -d '\r\n' < "$secret_dir/northstar_${role}_password")
   [[ "$(tr -d '\r\n' < "$secret_dir/${role}_database_url")" \
       == "postgres://northstar_${role}:${password}@postgres:5432/xmpp" ]]
@@ -102,13 +102,17 @@ grep -Fq 'credentials_file: /run/secrets/prometheus_metrics_bearer_token' "$sour
 grep -Fq 'NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/prometheus_metrics_bearer_token' "$compose"
 grep -Fq 'targets: ["xmpp:9091"]' "$source_project/deploy/monitoring/prometheus.yml"
 grep -Fq 'POSTGRES_USER: northstar_bootstrap' "$compose"
+grep -Fq 'NORTHSTAR_STORAGE_PASSWORD_FILE: /run/secrets/northstar_storage_password' "$compose"
 grep -Fq 'MIGRATOR_DATABASE_URL_FILE: /run/secrets/migrator_database_url' "$compose"
 grep -Fq 'DATABASE_URL_FILE: /run/secrets/runtime_database_url' "$compose"
+grep -Fq 'STORAGE_DATABASE_URL_FILE: /run/secrets/storage_database_url' "$compose"
+grep -Fq 'NORTHSTAR_STORAGE_PASSWORD_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/northstar_storage_password' "$compose"
+grep -Fq 'STORAGE_DATABASE_URL_SECRET_FILE:-${NORTHSTAR_SECRET_DIR:-/etc/northstar/secrets}/storage_database_url' "$compose"
 grep -Fq 'ADMIN_COMMAND_DATABASE_URL_FILE: /run/secrets/command_database_url' "$compose"
 grep -Fq '/run/secrets/backup_database_url' "$compose"
 grep -Fq 'BACKUP_SECURITY_POLICY: production' "$compose"
 if awk '/^  xmpp:/{inside=1} inside && /^  [a-zA-Z0-9_-]+:/{if ($1 != "xmpp:") inside=0} inside{print}' "$compose" \
-    | grep -Eq 'migrator_database_url|postgres_bootstrap_password|northstar_(migrator|runtime|backup)_password'; then
+    | grep -Eq 'migrator_database_url|postgres_bootstrap_password|northstar_(migrator|runtime|storage|command|backup)_password'; then
   echo "the long-lived XMPP service received a bootstrap or migrator capability" >&2
   exit 1
 fi

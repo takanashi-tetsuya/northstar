@@ -11,10 +11,11 @@ PostgreSQL superuser nor the database/schema owner.
 | `northstar_bootstrap` | yes | Creates/reconciles roles and repairs an existing volume | `SUPERUSER`, `CREATEDB`, `CREATEROLE` | PostgreSQL container and explicit break-glass maintenance only |
 | `northstar_migrator` | yes | Owns the application database/schema; migration, grant reconciliation and stopped restore | non-superuser, no role memberships, `CONNECTION LIMIT 4` | One-shot migration/reconciliation/restore jobs |
 | `northstar_runtime` | yes | Application DML except account authority; `users` is SELECT-only and all account writes use an exact reviewed command-capability allowlist | non-owner/non-superuser, no CREATE/TEMP, `CONNECTION LIMIT 64` | Long-lived server |
+| `northstar_storage` | yes | Upload lifecycle through owner-held functions; no direct table or sequence rights | non-owner/non-superuser, no CREATE/TEMP, `CONNECTION LIMIT 16` | Bounded storage pool when uploads are enabled or draining |
 | `northstar_commands` | yes | No relation or sequence access; may only create/claim/finalize bounded XEP-0133 command sessions through eight typed owner-held functions | non-owner/non-superuser, no CREATE/TEMP, `CONNECTION LIMIT 8` | Isolated four-connection command pool in the long-lived server |
 | `northstar_backup` | yes | `SELECT` only, no routine execution or sequence allocation | same non-privileged attributes, `CONNECTION LIMIT 2` | Backup job only |
 
-The four workload roles use `NOINHERIT`. All five protected roles, including
+The five workload roles use `NOINHERIT`. All six protected roles, including
 bootstrap, are forbidden from participating in any direct role membership in
 either direction; reconciliation removes delegated membership chains with
 `CASCADE`. The bootstrap role must never
@@ -29,43 +30,56 @@ process reserves the remaining four of `northstar_runtime`'s 64 connections for
 OMEMO recovery polling (2), the SM authority listener (1), and durable
 service-control observation (1). Every node sharing `northstar_runtime` must
 still keep the sum of **all** these pool maxima below 64 with headroom for
-rolling overlap. Larger/multi-tenant deployments need separately attested
-runtime roles and an explicit capacity plan; raising the role limit to
+same-version process restart overlap. Larger deployments need separately
+attested runtime roles and an explicit capacity plan; raising the role limit to
 unbounded is not a supported scaling mechanism. In the split deployment,
 `serve core` further limits its primary pool to 57, reserving three connections
 for the separate maintenance process. Both processes still use the runtime
 role; see [subserver ownership and budgets](SUBSERVERS.md).
+
+The storage pool has its own role limit of 16 and is capped at two connections
+per enabled or draining node. Disabled-upload mode opens no storage connection.
+`xmpp-server --storage-connection-budget` prints these limits as JSON. Eight
+enabled nodes fill the role's entire connection limit, so reserve
+headroom for operational connections instead of treating eight as a target.
+The PostgreSQL server's `max_connections` must cover the sum across all nodes:
+each primary runtime pool plus four reserved runtime connections, four command
+connections, and two storage connections when uploads run, followed by
+migration, backup, supervision and PostgreSQL reserved capacity. The separate
+role limits still apply even when the server-wide limit is higher.
 
 ## Localhost owner-only development mode
 
 The production role table above does not describe the explicit localhost
 source-development exception. On an all-loopback reserved-domain instance, the
 development flags may reuse one local PostgreSQL owner login for migration,
-runtime and command execution. The long-lived process also shares its already
-attested primary pool for command-session work: a second pool with the same
-unsafe credential would add connection pressure without creating a capability
-boundary. A development command URL is therefore rejected rather than silently
-ignored. Migration and startup still verify an owner-only catalog and ACL shape
-and reject authorization granted to `PUBLIC` or any third-party principal.
+runtime, storage and command execution. The long-lived process shares its
+attested primary pool for command and storage work. Separate URLs using that
+same owner identity add connections without reducing its authority. A
+development command or storage URL is therefore rejected. Migration and
+startup still verify an owner-only catalog and ACL shape and reject
+authorization granted to `PUBLIC` or any third-party principal.
 
 This local workflow does not create the production workload roles and does not
 run production grant reconciliation, which would intentionally install
 workload ACLs instead of preserving the owner-only development shape. It is not
 a deployment shortcut. Production must provision separate migrator, runtime,
-command and backup identities and run the exact post-migration grant
+storage, command and backup identities and run the exact post-migration grant
 reconciliation described below before starting the long-lived server.
 
 ## Secret files
 
-The deployment uses five password files and four URL files:
+The deployment uses six password files and five URL files:
 
 - `postgres_bootstrap_password`
 - `northstar_migrator_password`
 - `northstar_runtime_password`
+- `northstar_storage_password`
 - `northstar_command_password`
 - `northstar_backup_password`
 - `migrator_database_url`
 - `runtime_database_url`
+- `storage_database_url`
 - `command_database_url`
 - `backup_database_url`
 
@@ -75,14 +89,25 @@ for its capability; it never receives all database passwords. Restore is an
 explicitly privileged maintenance action and therefore uses the migrator URL,
 not the read-only backup URL.
 
-`runtime_database_url` is the ordinary application identity. The independent
-`command_database_url` is used only by the XEP-0133 command-session service. It
+`runtime_database_url` is the ordinary application identity.
+
+The independent `storage_database_url` is mounted into the long-lived server
+for the bounded upload pool. Its login can execute only reviewed upload
+functions and has no direct table or sequence rights. The runtime login retains
+the disabled-upload
+state probe and the two dead-letter administrator functions because those
+operations must share the caller's authorization transaction. Production
+requires `STORAGE_DATABASE_URL_FILE` when uploads are enabled or draining.
+Disabled-upload mode does not open the storage pool.
+
+The independent `command_database_url` is used only by the XEP-0133
+command-session service. It
 cannot read or write any table or execute a business mutation capability. The
 runtime role can consume a valid claim only after that isolated pool has minted
 it, but cannot create, inspect, renew, release, or complete a command session.
-The two pools have distinct PostgreSQL credentials but still run in the same
-`xmpp-server` OS process; this is a database capability boundary, not process
-isolation.
+The command, runtime and storage pools use distinct PostgreSQL credentials
+within the same `xmpp-server` process. Their database capabilities are separate;
+their process boundary is shared.
 
 ## Fresh volumes
 
@@ -91,9 +116,9 @@ mounts the complete `deploy/postgres-init` directory read-only at
 `/docker-entrypoint-initdb.d`. On the first initialization only,
 `010-northstar-roles.sh`:
 
-1. validates all five file-backed password secrets without printing them;
+1. validates all six file-backed password secrets without printing them;
 2. verifies that it is connected as the dedicated bootstrap superuser;
-3. creates the migrator, runtime, command, and backup roles with independent
+3. creates the migrator, runtime, storage, command, and backup roles with independent
    SCRAM-SHA-256 passwords;
 4. removes cluster privileges, inheritance, and role memberships;
 5. assigns database and schema ownership to the migrator; and
@@ -183,13 +208,13 @@ This script has no bootstrap secret. It refuses to continue unless:
 - bootstrap has no inbound or outbound role membership;
 - every unknown superuser is rejected even when it is `NOLOGIN`; an external
   dedicated-cluster/isolated-CI controller must be named explicitly;
-- connection limits are migrator=4, runtime=64, command=8 and backup=2;
+- connection limits are migrator=4, runtime=64, storage=16, command=8 and backup=2;
 - the migrator owns the database, schema, application relations, routines, and
   non-extension explicit types/domains; and
 - it is connected to database `xmpp`.
 
 Grant application is ledger-gated. The exact manifest for this release contains
-144 migrations from `0001` through `0145`; `0021` is the sole intentional gap.
+146 migrations from `0001` through `0147`; `0021` is the sole intentional gap.
 Every listed row is identified by version, SQLx description and SHA-384 checksum.
 `bootstrap` accepts only a genuinely empty
 database with no sqlx ledger or application object. `auto` accepts either that
@@ -198,9 +223,9 @@ migrated installation. Both non-empty shapes must match the checked-in manifest
 by exact version, SQLx description and SHA-384 checksum; the intentional `0021`
 gap is part of that set. Missing, unknown, failed, duplicated or modified rows,
 one-sided 0114/0115, and post-0115-without-boundary ledgers fail closed. `exact`
-requires the complete checked-in `0001`-`0145` manifest, not merely the
+requires the complete checked-in `0001`-`0147` manifest, not merely the
 `0114`/`0115` transition boundary. Bootstrap and prepare
-leave runtime, command, and backup with **zero** database, schema, object, type,
+leave runtime, storage, command, and backup with **zero** database, schema, object, type,
 or routine capability. Only post-migration exact reconciliation installs the
 current-object workload grants.
 
@@ -364,8 +389,8 @@ that marker before cleanup. It then:
    and separately proves empty bootstrap plus partial/tampered-ledger rejection;
    demotion;
 4. runs Northstar's real `migrate` command as `northstar_migrator`, comparing
-the successful sqlx ledger with all 144 checked-in migrations from `0001`
-through `0145` (including the intentional numbering gap at `0021`);
+the successful sqlx ledger with all 146 checked-in migrations from `0001`
+through `0147` (including the intentional numbering gap at `0021`);
 5. reapplies the shared `exact` post-migration ACL policy;
 6. removes the function/type override rows and injects missing, unknown, failed,
    and checksum/description-tampered ledger states to prove every audit fails
@@ -461,7 +486,7 @@ role also remains a true superuser by design; isolation depends on keeping its
 secret inside the PostgreSQL/bootstrap trust boundary and using it only for
 explicit maintenance.
 
-The `0001`-`0145` migration SQL and checksums used by both the one-shot migrator
+The `0001`-`0147` migration SQL and checksums used by both the one-shot migrator
 and normal startup verifier are embedded in the release binary. The checked-in
 migration directory remains an auditable source/build input, but replacing
 files beside an installed binary cannot redefine the schema that binary accepts.
@@ -471,3 +496,10 @@ Each cluster process consumes its own queue and acknowledges the revision it rea
 Migration `0145` adds Passkeys and one-use, five-minute WebAuthn challenges. Runtime
 may read public credential metadata; all writes and challenge-state access go
 through generation-checked capabilities. Apply the exact grants after both migrations.
+Migration `0146` adds an owner-held probe for the disabled-upload startup check;
+the runtime role can learn whether durable upload work remains without reading
+the upload tables.
+Migration `0147` moves upload lifecycle execution to the storage role. Existing
+volumes need the new role, secret and exact grant reconciliation before the new
+server starts. Stop older servers before this cutover: their embedded role and
+ACL attestation does not accept the new role catalog.

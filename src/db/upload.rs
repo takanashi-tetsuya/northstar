@@ -306,15 +306,14 @@ pub async fn validate_upload_storage_backend(
 }
 
 /// Refuse to disable uploads while any durable slot or recovery obligation
-/// remains. One statement observes all three tables in the same snapshot.
+/// remains. The owner-held function observes all three tables in one snapshot
+/// without granting the runtime role direct access to upload records.
 pub async fn durable_upload_state_exists(pool: &PgPool) -> Result<bool> {
-    Ok(sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM upload_slots LIMIT 1)
-                OR EXISTS(SELECT 1 FROM upload_storage_jobs LIMIT 1)
-                OR EXISTS(SELECT 1 FROM upload_cleanup_queue LIMIT 1)",
+    Ok(
+        sqlx::query_scalar("SELECT northstar_upload_durable_state_exists()")
+            .fetch_one(pool)
+            .await?,
     )
-    .fetch_one(pool)
-    .await?)
 }
 
 pub async fn validate_upload_capacity_policy(

@@ -367,7 +367,8 @@ fn parse_security_definer_capability_manifest(source: &str) -> Result<(Vec<Strin
             continue;
         };
         let fields = row.split("','").collect::<Vec<_>>();
-        if fields.len() != 3 || !matches!(fields[1], "runtime" | "command" | "private") {
+        if fields.len() != 3 || !matches!(fields[1], "runtime" | "command" | "storage" | "private")
+        {
             continue;
         }
         let signature = fields[0];
@@ -431,6 +432,9 @@ async fn attest_security_definer_capability_acls(pool: &PgPool) -> Result<()> {
                       WHEN 'command' THEN (SELECT role.oid
                         FROM pg_catalog.pg_roles role
                         WHERE role.rolname='northstar_commands')
+                      WHEN 'storage' THEN (SELECT role.oid
+                        FROM pg_catalog.pg_roles role
+                        WHERE role.rolname='northstar_storage')
                       ELSE NULL
                     END AS workload_role
                FROM expected
@@ -663,6 +667,7 @@ async fn attest_database_capability_catalog(pool: &PgPool) -> Result<()> {
                ('northstar_migrator'::pg_catalog.text,4),
                ('northstar_runtime'::pg_catalog.text,64),
                ('northstar_commands'::pg_catalog.text,8),
+               ('northstar_storage'::pg_catalog.text,16),
                ('northstar_backup'::pg_catalog.text,2)
            ), workload_role AS (
              SELECT expected.*,role.oid,role.rolcanlogin,role.rolsuper,
@@ -677,6 +682,8 @@ async fn attest_database_capability_catalog(pool: &PgPool) -> Result<()> {
              SELECT oid FROM workload_role WHERE role_name='northstar_runtime'
            ), command_role AS (
              SELECT oid FROM workload_role WHERE role_name='northstar_commands'
+           ), storage AS (
+             SELECT oid FROM workload_role WHERE role_name='northstar_storage'
            ), backup AS (
              SELECT oid FROM workload_role WHERE role_name='northstar_backup'
            ), namespace AS (
@@ -804,7 +811,7 @@ async fn attest_database_capability_catalog(pool: &PgPool) -> Result<()> {
                    )
               )
            )
-           SELECT (SELECT pg_catalog.count(*)=4 AND pg_catalog.bool_and(
+           SELECT (SELECT pg_catalog.count(*)=5 AND pg_catalog.bool_and(
                     oid IS NOT NULL AND rolcanlogin AND NOT rolsuper
                     AND NOT rolinherit AND NOT rolcreatedb AND NOT rolcreaterole
                     AND NOT rolreplication AND NOT rolbypassrls
@@ -832,7 +839,8 @@ async fn attest_database_capability_catalog(pool: &PgPool) -> Result<()> {
                     AND NOT privilege.is_grantable
                     AND privilege.privilege_type='CONNECT'
                     AND privilege.grantee IN (
-                      (SELECT oid FROM runtime),(SELECT oid FROM command_role),(SELECT oid FROM backup)
+                      (SELECT oid FROM runtime),(SELECT oid FROM command_role),
+                      (SELECT oid FROM storage),(SELECT oid FROM backup)
                     ),FALSE)
              )
              AND NOT EXISTS (
@@ -846,7 +854,8 @@ async fn attest_database_capability_catalog(pool: &PgPool) -> Result<()> {
                     AND NOT privilege.is_grantable
                     AND privilege.privilege_type='USAGE'
                     AND privilege.grantee IN (
-                      (SELECT oid FROM runtime),(SELECT oid FROM command_role),(SELECT oid FROM backup)
+                      (SELECT oid FROM runtime),(SELECT oid FROM command_role),
+                      (SELECT oid FROM storage),(SELECT oid FROM backup)
                     ),FALSE)
              )
              AND NOT EXISTS (
@@ -868,7 +877,8 @@ async fn attest_database_capability_catalog(pool: &PgPool) -> Result<()> {
                     AND NOT privilege.is_grantable
                     AND privilege.privilege_type='EXECUTE'
                     AND privilege.grantee IN (
-                      (SELECT oid FROM runtime),(SELECT oid FROM command_role)
+                      (SELECT oid FROM runtime),(SELECT oid FROM command_role),
+                      (SELECT oid FROM storage)
                     ),FALSE
                   )
              )
@@ -883,6 +893,14 @@ async fn attest_database_capability_catalog(pool: &PgPool) -> Result<()> {
                   AND routine.prorettype='pg_catalog.trigger'::pg_catalog.regtype
                   AND pg_catalog.has_function_privilege(
                         (SELECT oid FROM runtime),routine.oid,'EXECUTE'
+                      )
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM application_routine routine
+                WHERE NOT routine.prosecdef
+                  AND routine.prorettype='pg_catalog.trigger'::pg_catalog.regtype
+                  AND pg_catalog.has_function_privilege(
+                        (SELECT oid FROM storage),routine.oid,'EXECUTE'
                       )
              )
              AND NOT EXISTS (
@@ -955,14 +973,16 @@ async fn attest_database_capability_catalog(pool: &PgPool) -> Result<()> {
                   AND NOT privilege.is_grantable
                   AND privilege.privilege_type='USAGE'
                   AND privilege.grantee IN (
-                    data_type.typowner,(SELECT oid FROM runtime),(SELECT oid FROM backup)
+                    data_type.typowner,(SELECT oid FROM runtime),
+                    (SELECT oid FROM storage),(SELECT oid FROM backup)
                   ),FALSE)
              )
              AND NOT EXISTS (
                SELECT 1 FROM application_type data_type
                 WHERE EXISTS (
                   SELECT required.grantee FROM (VALUES
-                    (data_type.typowner),((SELECT oid FROM runtime)),((SELECT oid FROM backup))
+                    (data_type.typowner),((SELECT oid FROM runtime)),
+                    ((SELECT oid FROM storage)),((SELECT oid FROM backup))
                   ) required(grantee)
                    WHERE NOT EXISTS (
                      SELECT 1 FROM pg_catalog.aclexplode(COALESCE(
@@ -1015,6 +1035,31 @@ async fn attest_database_capability_catalog(pool: &PgPool) -> Result<()> {
                         pg_catalog.has_sequence_privilege((SELECT oid FROM command_role),relation.oid,'SELECT')
                      OR pg_catalog.has_sequence_privilege((SELECT oid FROM command_role),relation.oid,'USAGE')
                      OR pg_catalog.has_sequence_privilege((SELECT oid FROM command_role),relation.oid,'UPDATE'))
+                      ELSE FALSE END
+             )
+             AND pg_catalog.has_database_privilege((SELECT oid FROM storage),pg_catalog.current_database(),'CONNECT')
+             AND NOT pg_catalog.has_database_privilege((SELECT oid FROM storage),pg_catalog.current_database(),'CREATE')
+             AND NOT pg_catalog.has_database_privilege((SELECT oid FROM storage),pg_catalog.current_database(),'TEMP')
+             AND pg_catalog.has_schema_privilege((SELECT oid FROM storage),'public','USAGE')
+             AND NOT pg_catalog.has_schema_privilege((SELECT oid FROM storage),'public','CREATE')
+             AND NOT EXISTS (
+               SELECT 1 FROM application_relation relation
+                WHERE (relation.relkind<>'S' AND (
+                         pg_catalog.has_table_privilege((SELECT oid FROM storage),relation.oid,'SELECT')
+                      OR pg_catalog.has_table_privilege((SELECT oid FROM storage),relation.oid,'INSERT')
+                      OR pg_catalog.has_table_privilege((SELECT oid FROM storage),relation.oid,'UPDATE')
+                      OR pg_catalog.has_table_privilege((SELECT oid FROM storage),relation.oid,'DELETE')
+                      OR pg_catalog.has_table_privilege((SELECT oid FROM storage),relation.oid,'TRUNCATE')
+                      OR pg_catalog.has_table_privilege((SELECT oid FROM storage),relation.oid,'REFERENCES')
+                      OR pg_catalog.has_table_privilege((SELECT oid FROM storage),relation.oid,'TRIGGER')
+                      OR pg_catalog.has_any_column_privilege((SELECT oid FROM storage),relation.oid,'SELECT')
+                      OR pg_catalog.has_any_column_privilege((SELECT oid FROM storage),relation.oid,'INSERT')
+                      OR pg_catalog.has_any_column_privilege((SELECT oid FROM storage),relation.oid,'UPDATE')
+                      OR pg_catalog.has_any_column_privilege((SELECT oid FROM storage),relation.oid,'REFERENCES')))
+                   OR CASE WHEN relation.relkind='S' THEN (
+                        pg_catalog.has_sequence_privilege((SELECT oid FROM storage),relation.oid,'SELECT')
+                     OR pg_catalog.has_sequence_privilege((SELECT oid FROM storage),relation.oid,'USAGE')
+                     OR pg_catalog.has_sequence_privilege((SELECT oid FROM storage),relation.oid,'UPDATE'))
                       ELSE FALSE END
              )
              AND NOT pg_catalog.has_database_privilege((SELECT oid FROM backup),pg_catalog.current_database(),'CREATE')
@@ -1146,43 +1191,11 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
                ('northstar_cluster_session_nodes_for_bare(text,text)'),
                ('northstar_cleanup_cluster_session_routes(int4)'),
                ('northstar_cluster_session_authority_healthy()'),
-               ('northstar_upload_bootstrap_authority(text,bytea)'),
-               ('northstar_upload_bind_capacity_policy(int8,int8,int8)'),
+               ('northstar_upload_durable_state_exists()'),
                ('northstar_upload_capacity_lock()'),
-               ('northstar_upload_active_slot_count(uuid)'),
                ('northstar_upload_public_slot_count()'),
-               ('northstar_upload_renew_claim(uuid,uuid,int8)'),
-               ('northstar_upload_authority_probe(text,bytea,int8,int8,int8,int8,int8)'),
                ('northstar_upload_dead_letters_page(text,int8,uuid,int4)'),
                ('northstar_upload_retry_dead_letter(uuid,int8,bytea,text,int8,uuid,uuid)'),
-               ('northstar_upload_claim_cleanup(uuid)'),
-               ('northstar_upload_cleanup_quiescent(uuid,uuid,int8)'),
-               ('northstar_upload_defer_cleanup(uuid,uuid)'),
-               ('northstar_upload_confirm_cleanup_absence(uuid,uuid,bool,int8)'),
-               ('northstar_upload_fail_cleanup(uuid,uuid,text)'),
-               ('northstar_upload_complete_cleanup(uuid,uuid)'),
-               ('northstar_upload_claim_storage_jobs(uuid)'),
-               ('northstar_upload_complete_storage_job(int8,uuid)'),
-               ('northstar_upload_confirm_stage_absence(int8,uuid,bool,int8)'),
-               ('northstar_upload_fail_storage_job(int8,uuid,text)'),
-               ('northstar_upload_defer_storage_job(int8,uuid)'),
-               ('northstar_upload_claim_promotion_job(uuid,uuid,int8,uuid)'),
-               ('northstar_upload_defer_promotion_job(uuid,uuid,int8,uuid)'),
-               ('northstar_upload_retire_promotion_for_cleanup(uuid,uuid,int8,uuid)'),
-               ('northstar_upload_record_stage(uuid,uuid,text,text,text,text,bytea,int8,int8)'),
-               ('northstar_upload_release_claim(uuid,uuid)'),
-               ('northstar_upload_complete_promotion(uuid,uuid,uuid,text,text,text,bytea,int8,int8,int8)'),
-               ('northstar_upload_reserve_slot(uuid,uuid,text,text,int8,bytea,int8,int8,text,int8,int8,int8)'),
-               ('northstar_upload_claim_is_live(uuid,uuid)'),
-               ('northstar_upload_begin_promotion(uuid,uuid,int8,uuid)'),
-               ('northstar_upload_attempt_committed(uuid,uuid,text,text,text,bytea,int8,int8)'),
-               ('northstar_upload_record_replay(uuid,bytea,bytea,int8)'),
-               ('northstar_upload_public_file(uuid)'),
-               ('northstar_upload_claim_scrub()'),
-               ('northstar_upload_finish_scrub(uuid,uuid,text)'),
-               ('northstar_upload_claim_slot(uuid,bytea,int8,int8,int8)'),
-               ('northstar_upload_capacity_reconciliation()'),
-               ('northstar_upload_queue_snapshot()'),
        ('northstar_passkey_challenge(uuid,int8,text,bytea,jsonb)'),
        ('northstar_passkey_consume(uuid,text,bytea)'),
        ('northstar_passkey_register(uuid,int8,bytea,bytea,jsonb,text)'),
@@ -1191,10 +1204,6 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
                ('northstar_pending_account_revocations(text,text,uuid,int8,int4)'),
                ('northstar_ack_account_revocations(text,text,uuid,int8,uuid[])'),
                ('northstar_cleanup_account_revocations(int4)'),
-               ('northstar_upload_policy_binding_matches(int8,int8,int8)'),
-               ('northstar_upload_admit_expired_cleanup()'),
-               ('northstar_upload_delete_owned(uuid,int8,bytea,uuid,uuid)'),
-               ('northstar_upload_capability_catalog_healthy(text)'),
                ('northstar_session_delete_expired_live_leases()'),
                ('northstar_session_capacity_reconcile_lock()'),
                ('northstar_session_reserve_live(uuid,uuid,text,int8,bool)'),
@@ -1314,6 +1323,90 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
     anyhow::ensure!(
         accepted,
         "PostgreSQL runtime role attestation failed: mount the bounded northstar_runtime URL; owner, superuser, CREATE, TEMP, role-membership and unbounded-login identities are refused"
+    );
+    Ok(())
+}
+
+/// The upload pool can execute only the owner-held upload capabilities. It
+/// has no direct table access, including to its own storage metadata.
+pub async fn attest_storage_role(pool: &PgPool) -> Result<()> {
+    attest_database_capability_catalog(pool).await?;
+    attest_security_definer_capability_acls(pool).await?;
+    let (signatures, workloads) = security_definer_capability_manifest()?;
+    let expected: Vec<_> = signatures
+        .into_iter()
+        .zip(workloads)
+        .filter_map(|(signature, workload)| (workload == "storage").then_some(signature))
+        .collect();
+    anyhow::ensure!(
+        expected.len() == 37
+            && expected
+                .iter()
+                .all(|signature| signature.starts_with("northstar_upload_")),
+        "storage capability manifest must contain only the exact upload function set"
+    );
+    let accepted: bool = sqlx::query_scalar(
+        r#"WITH expected(signature) AS (
+             SELECT pg_catalog.unnest($1::pg_catalog.text[])
+           ), resolved AS (
+             SELECT signature,
+                    pg_catalog.to_regprocedure('public.' || signature) AS oid
+               FROM expected
+           )
+           SELECT role.rolname='northstar_storage'
+             AND session_user=current_user
+             AND session_user='northstar_storage'
+             AND role.rolcanlogin
+             AND NOT role.rolsuper
+             AND NOT role.rolinherit
+             AND NOT role.rolcreatedb
+             AND NOT role.rolcreaterole
+             AND NOT role.rolreplication
+             AND NOT role.rolbypassrls
+             AND role.rolconnlimit=16
+             AND current_schema()='public'
+             AND current_schemas(FALSE)=ARRAY['public'::pg_catalog.name]
+             AND pg_catalog.pg_get_userbyid(database.datdba)='northstar_migrator'
+             AND pg_catalog.pg_get_userbyid(namespace.nspowner)='northstar_migrator'
+             AND NOT pg_catalog.has_database_privilege(current_user,current_database(),'CREATE')
+             AND NOT pg_catalog.has_database_privilege(current_user,current_database(),'TEMP')
+             AND NOT pg_catalog.has_schema_privilege(current_user,namespace.oid,'CREATE')
+             AND NOT EXISTS (
+                 SELECT 1 FROM resolved allowed
+                 LEFT JOIN pg_catalog.pg_proc routine ON routine.oid=allowed.oid
+                 WHERE allowed.oid IS NULL
+                    OR routine.prokind<>'f'
+                    OR NOT routine.prosecdef
+                    OR pg_catalog.pg_get_userbyid(routine.proowner)<>'northstar_migrator'
+                    OR routine.proconfig IS DISTINCT FROM
+                         ARRAY['search_path=pg_catalog, public, pg_temp']::pg_catalog.text[]
+                    OR NOT pg_catalog.has_function_privilege(
+                         current_user,routine.oid,'EXECUTE')
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM pg_catalog.pg_proc routine
+                 WHERE routine.pronamespace=namespace.oid
+                   AND pg_catalog.has_function_privilege(current_user,routine.oid,'EXECUTE')
+                   AND NOT EXISTS (
+                     SELECT 1 FROM resolved allowed WHERE allowed.oid=routine.oid
+                   )
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM pg_catalog.pg_auth_members membership
+                  WHERE membership.member=role.oid OR membership.roleid=role.oid
+             )
+          FROM pg_catalog.pg_roles role
+          JOIN pg_catalog.pg_database database ON database.datname=current_database()
+          JOIN pg_catalog.pg_namespace namespace ON namespace.nspname='public'
+          WHERE role.rolname=current_user"#,
+    )
+    .bind(&expected)
+    .fetch_one(pool)
+    .await
+    .context("could not inspect upload storage PostgreSQL role")?;
+    anyhow::ensure!(
+        accepted,
+        "PostgreSQL storage role attestation failed: mount the bounded northstar_storage URL with only upload capabilities"
     );
     Ok(())
 }
@@ -1476,6 +1569,14 @@ mod tests {
         assert_eq!(signatures.len(), workloads.len());
         assert!(workloads.iter().any(|workload| workload == "runtime"));
         assert!(workloads.iter().any(|workload| workload == "command"));
+        assert!(workloads.iter().any(|workload| workload == "storage"));
+        assert_eq!(
+            workloads
+                .iter()
+                .filter(|workload| workload.as_str() == "storage")
+                .count(),
+            37
+        );
         assert!(workloads.iter().any(|workload| workload == "private"));
         assert!(signatures
             .iter()
@@ -1593,8 +1694,8 @@ mod tests {
         // The ledger has one intentional historical gap (0021).  Keep this
         // assertion exact so adding a migration requires reviewing both the
         // embedded capability manifest and its attestation expectation.
-        assert_eq!(manifest.versions.last(), Some(&145));
-        assert_eq!(manifest.versions.len(), 144);
+        assert_eq!(manifest.versions.last(), Some(&147));
+        assert_eq!(manifest.versions.len(), 146);
         assert!(!manifest.versions.contains(&21));
         assert!(manifest
             .checksum_hex

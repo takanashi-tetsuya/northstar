@@ -254,8 +254,8 @@ impl axum::extract::FromRef<Arc<AppState>> for UploadHttpReadContext {
 use crate::{
     abuse::{AbuseConfig, AbuseGuard},
     config::{
-        AdminCommandPoolMode, Config, OMEMO_RECOVERY_POOL_MAX_CONNECTIONS,
-        SERVICE_CONTROL_POOL_MAX_CONNECTIONS,
+        AdminCommandPoolMode, Config, StoragePoolMode, OMEMO_RECOVERY_POOL_MAX_CONNECTIONS,
+        SERVICE_CONTROL_POOL_MAX_CONNECTIONS, STORAGE_POOL_MAX_CONNECTIONS,
     },
     db,
     metrics::Metrics,
@@ -3122,6 +3122,9 @@ pub(crate) struct UploadSlotLimits {
 pub struct AppState {
     config: Config,
     pool: PgPool,
+    /// Upload persistence alone owns this pool. Disabled mode has no storage
+    /// connection; the loopback development exception reuses `pool`.
+    upload_storage_pool: Option<PgPool>,
     api_query_context: ApiQueryContext,
     metrics_snapshot_service: crate::services::metrics_snapshot::MetricsSnapshotService<
         db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
@@ -4445,15 +4448,44 @@ impl AppState {
         startup_phase.complete();
         let upload_startup_phase =
             crate::logging::StartupPhase::begin("upload_storage_initialization");
+        let upload_storage_pool = match config.storage_pool_mode {
+            StoragePoolMode::Disabled => None,
+            StoragePoolMode::SharedUnsafeDevelopment => Some(pool.clone()),
+            StoragePoolMode::DedicatedProductionRole => {
+                let deadline = tokio::time::Instant::now() + AUXILIARY_POOL_STARTUP_BUDGET;
+                let options = db::pin_public_application_schema(
+                    PgPoolOptions::new()
+                        .max_connections(STORAGE_POOL_MAX_CONNECTIONS)
+                        .min_connections(0)
+                        .acquire_timeout(AUXILIARY_POOL_ACQUIRE_TIMEOUT),
+                );
+                let storage_pool = startup_database_connect(
+                    deadline,
+                    AUXILIARY_POOL_ACQUIRE_TIMEOUT,
+                    "upload storage",
+                    |_| options.clone().connect(&config.storage_database_url),
+                )
+                .await?;
+                tokio::time::timeout_at(deadline, db::attest_storage_role(&storage_pool))
+                    .await
+                    .context(
+                        "storage role attestation exceeded its startup admission deadline",
+                    )??;
+                Some(storage_pool)
+            }
+        };
         let upload_startup_audits;
         let (upload_safety_gate, upload_namespace, upload_authority_generation, upload_store) =
             if config.upload_mode.keeps_storage_runtime() {
+                let upload_db = upload_storage_pool
+                    .as_ref()
+                    .expect("enabled or draining uploads require an attested storage pool");
                 let upload_safety_gate = UploadSafetyGate::new();
                 let upload_namespace = upload_storage_namespace_id(&config)?;
                 let startup_phase =
                     crate::logging::StartupPhase::begin("upload_namespace_and_policy");
                 let namespace_generation = db::validate_upload_storage_backend(
-                    &pool,
+                    upload_db,
                     &config.upload_storage_backend,
                     &upload_namespace,
                 )
@@ -4461,7 +4493,7 @@ impl AppState {
                 .context("upload storage backend does not match durable metadata")?;
                 let (capacity_policy_generation, recovery_draining) =
                     db::validate_upload_capacity_policy(
-                        &pool,
+                        upload_db,
                         config.upload_storage_max_pending_jobs,
                         config.upload_storage_max_retained_files,
                         config.upload_storage_max_retained_bytes,
@@ -4478,7 +4510,7 @@ impl AppState {
                 let startup_phase = crate::logging::StartupPhase::begin("upload_authority_audit");
                 let authority_audit_started_at = tokio::time::Instant::now();
                 let authority_audit = db::audit_upload_capacity_authority(
-                    &pool,
+                    upload_db,
                     config.upload_storage_max_pending_jobs,
                     config.upload_storage_max_retained_files,
                     config.upload_storage_max_retained_bytes,
@@ -4499,7 +4531,7 @@ impl AppState {
                 let startup_phase =
                     crate::logging::StartupPhase::begin("upload_ledger_reconciliation");
                 let ledger_audit_started_at = tokio::time::Instant::now();
-                let capacity_reconciliation = db::reconcile_upload_capacity_ledger(&pool)
+                let capacity_reconciliation = db::reconcile_upload_capacity_ledger(upload_db)
                     .await
                     .context("could not reconcile upload capacity facts before storage startup")?;
                 if capacity_reconciliation.mismatch_count() != 0 {
@@ -4551,7 +4583,7 @@ impl AppState {
                             )?;
                             if tokio::time::timeout(
                             remaining,
-                            db::upload_claim_is_live(&pool, object_id, claim_token),
+                            db::upload_claim_is_live(upload_db, object_id, claim_token),
                         )
                         .await
                         .context(
@@ -5042,7 +5074,12 @@ impl AppState {
         );
         let upload_service = config.upload_mode.keeps_storage_runtime().then(|| {
             crate::services::upload::UploadService::new(
-                db::upload::PostgresUploadRepository::new(pool.clone()),
+                db::upload::PostgresUploadRepository::new(
+                    upload_storage_pool
+                        .as_ref()
+                        .expect("enabled or draining uploads require a storage pool")
+                        .clone(),
+                ),
                 Arc::clone(&upload_safety_gate),
                 config.upload_max_bytes,
             )
@@ -5162,6 +5199,8 @@ impl AppState {
         config.raw.database_url.clear();
         config.raw.admin_command_database_url.zeroize();
         config.raw.admin_command_database_url.clear();
+        config.raw.storage_database_url.zeroize();
+        config.raw.storage_database_url.clear();
         let muc_service = crate::services::muc::MucService::new(
             db::room::PostgresMucRepository::new(pool.clone()),
             config.domain.clone(),
@@ -5478,6 +5517,7 @@ impl AppState {
             retention_policy_context,
             governance_context,
             upload_service,
+            upload_storage_pool,
             upload_store,
             upload_storage_namespace_sha256: upload_namespace,
             upload_authority_generation,
@@ -5775,7 +5815,9 @@ impl AppState {
         >,
     > {
         Some(crate::upload_worker::UploadMaintenanceContext::new(
-            db::upload_maintenance::PostgresUploadMaintenanceRepository::new(self.pool.clone()),
+            db::upload_maintenance::PostgresUploadMaintenanceRepository::new(
+                self.upload_storage_pool.as_ref()?.clone(),
+            ),
             Arc::clone(self.upload_store.as_ref()?),
             crate::upload_worker::UploadMaintenancePolicy {
                 max_pending_jobs: self.config.upload_storage_max_pending_jobs,

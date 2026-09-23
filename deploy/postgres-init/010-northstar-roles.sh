@@ -18,6 +18,7 @@ set +x
 readonly bootstrap_role='northstar_bootstrap'
 readonly migrator_role='northstar_migrator'
 readonly runtime_role='northstar_runtime'
+readonly storage_role='northstar_storage'
 readonly command_role='northstar_commands'
 readonly backup_role='northstar_backup'
 readonly database_name="${POSTGRES_DB:-xmpp}"
@@ -27,14 +28,15 @@ readonly grants_sql="$script_dir/lib/reconcile-northstar-grants.sql"
 bootstrap_password=''
 migrator_password=''
 runtime_password=''
+storage_password=''
 command_password=''
 backup_password=''
 
 clear_secrets() {
   unset PGPASSWORD
-  unset bootstrap_password migrator_password runtime_password command_password backup_password
+  unset bootstrap_password migrator_password runtime_password storage_password command_password backup_password
   unset NORTHSTAR_BOOTSTRAP_PASSWORD NORTHSTAR_MIGRATOR_PASSWORD
-  unset NORTHSTAR_RUNTIME_PASSWORD NORTHSTAR_BACKUP_PASSWORD
+  unset NORTHSTAR_RUNTIME_PASSWORD NORTHSTAR_STORAGE_PASSWORD NORTHSTAR_BACKUP_PASSWORD
   unset NORTHSTAR_COMMAND_PASSWORD
 }
 trap clear_secrets EXIT
@@ -83,6 +85,9 @@ migrator_password=$(read_secret \
 runtime_password=$(read_secret \
   "${NORTHSTAR_RUNTIME_PASSWORD_FILE:-/run/secrets/northstar_runtime_password}" \
   'northstar_runtime_password')
+storage_password=$(read_secret \
+  "${NORTHSTAR_STORAGE_PASSWORD_FILE:-/run/secrets/northstar_storage_password}" \
+  'northstar_storage_password')
 command_password=$(read_secret \
   "${NORTHSTAR_COMMAND_PASSWORD_FILE:-/run/secrets/northstar_command_password}" \
   'northstar_command_password')
@@ -96,6 +101,7 @@ backup_password=$(read_secret \
 export NORTHSTAR_BOOTSTRAP_PASSWORD="$bootstrap_password"
 export NORTHSTAR_MIGRATOR_PASSWORD="$migrator_password"
 export NORTHSTAR_RUNTIME_PASSWORD="$runtime_password"
+export NORTHSTAR_STORAGE_PASSWORD="$storage_password"
 export NORTHSTAR_COMMAND_PASSWORD="$command_password"
 export NORTHSTAR_BACKUP_PASSWORD="$backup_password"
 export PGPASSWORD="$bootstrap_password"
@@ -106,10 +112,12 @@ psql --no-psqlrc --no-password --set=ON_ERROR_STOP=1 \
   --set=bootstrap_role="$bootstrap_role" \
   --set=migrator_role="$migrator_role" \
   --set=runtime_role="$runtime_role" \
+  --set=storage_role="$storage_role" \
   --set=command_role="$command_role" \
   --set=backup_role="$backup_role" <<'PSQL'
 \getenv migrator_password NORTHSTAR_MIGRATOR_PASSWORD
 \getenv runtime_password NORTHSTAR_RUNTIME_PASSWORD
+\getenv storage_password NORTHSTAR_STORAGE_PASSWORD
 \getenv command_password NORTHSTAR_COMMAND_PASSWORD
 \getenv backup_password NORTHSTAR_BACKUP_PASSWORD
 \getenv bootstrap_password NORTHSTAR_BOOTSTRAP_PASSWORD
@@ -152,6 +160,13 @@ SELECT pg_catalog.format(
          SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = :'runtime_role'
        ) \gexec
 SELECT pg_catalog.format(
+         'CREATE ROLE %I LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 16 VALID UNTIL ''infinity''',
+         :'storage_role', :'storage_password'
+       )
+ WHERE NOT EXISTS (
+         SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = :'storage_role'
+       ) \gexec
+SELECT pg_catalog.format(
          'CREATE ROLE %I LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 8 VALID UNTIL ''infinity''',
          :'command_role', :'command_password'
        )
@@ -175,6 +190,10 @@ SELECT pg_catalog.format(
   :'runtime_role', :'runtime_password'
 ) \gexec
 SELECT pg_catalog.format(
+  'ALTER ROLE %I LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 16 VALID UNTIL ''infinity''',
+  :'storage_role', :'storage_password'
+) \gexec
+SELECT pg_catalog.format(
   'ALTER ROLE %I LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 8 VALID UNTIL ''infinity''',
   :'command_role', :'command_password'
 ) \gexec
@@ -188,7 +207,7 @@ SELECT pg_catalog.format(
 -- catalog resolution or disable safety timeouts before pool pinning runs.
 SELECT pg_catalog.format('ALTER ROLE %I RESET ALL',role_name)
   FROM (VALUES
-    (:'migrator_role'),(:'runtime_role'),(:'command_role'),(:'backup_role')
+    (:'migrator_role'),(:'runtime_role'),(:'storage_role'),(:'command_role'),(:'backup_role')
   ) AS workload(role_name)
  ORDER BY role_name
 \gexec
@@ -198,11 +217,11 @@ SELECT pg_catalog.format('REVOKE %I FROM %I CASCADE', granted.rolname, member.ro
   JOIN pg_catalog.pg_roles AS granted ON granted.oid = membership.roleid
   JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
  WHERE granted.rolname IN (
-         :'bootstrap_role', :'migrator_role', :'runtime_role',
+         :'bootstrap_role', :'migrator_role', :'runtime_role', :'storage_role',
          :'command_role', :'backup_role'
        )
     OR member.rolname IN (
-         :'bootstrap_role', :'migrator_role', :'runtime_role',
+         :'bootstrap_role', :'migrator_role', :'runtime_role', :'storage_role',
          :'command_role', :'backup_role'
        )
  ORDER BY granted.rolname, member.rolname
@@ -241,6 +260,7 @@ psql --no-psqlrc --no-password --set=ON_ERROR_STOP=1 \
   --set=database_name="$database_name" \
   --set=migrator_role="$migrator_role" \
   --set=runtime_role="$runtime_role" \
+  --set=storage_role="$storage_role" \
   --set=command_role="$command_role" \
   --set=backup_role="$backup_role" \
   --set=allow_bootstrap=true \

@@ -17,6 +17,7 @@ readonly legacy_role='xmpp'
 readonly bootstrap_role='northstar_bootstrap'
 readonly migrator_role='northstar_migrator'
 readonly runtime_role='northstar_runtime'
+readonly storage_role='northstar_storage'
 readonly command_role='northstar_commands'
 readonly backup_role='northstar_backup'
 readonly stale_grantee_role='northstar_ci_stale_grantee'
@@ -29,6 +30,7 @@ readonly legacy_password='northstar-ci-legacy-password-00000001'
 readonly bootstrap_password='northstar-ci-bootstrap-password-00000001'
 readonly migrator_password='northstar-ci-migrator-password-00000001'
 readonly runtime_password='northstar-ci-runtime-password-00000001'
+readonly storage_password='northstar-ci-storage-password-00000001'
 readonly command_password='northstar-ci-command-password-00000001'
 readonly backup_password='northstar-ci-backup-password-00000001'
 
@@ -320,6 +322,7 @@ SELECT (
 DROP DATABASE IF EXISTS xmpp WITH (FORCE);
 DROP ROLE IF EXISTS northstar_backup;
 DROP ROLE IF EXISTS northstar_runtime;
+DROP ROLE IF EXISTS northstar_storage;
 DROP ROLE IF EXISTS northstar_commands;
 DROP ROLE IF EXISTS northstar_migrator;
 DROP ROLE IF EXISTS northstar_bootstrap;
@@ -528,7 +531,7 @@ SELECT
       FROM pg_catalog.pg_roles
      WHERE rolname IN (
        'xmpp', 'northstar_bootstrap', 'northstar_migrator',
-       'northstar_runtime', 'northstar_commands', 'northstar_backup',
+       'northstar_runtime', 'northstar_storage', 'northstar_commands', 'northstar_backup',
        'northstar_ci_stale_grantee', 'northstar_ci_delegated_grantee'
      )
   );
@@ -665,6 +668,7 @@ readonly legacy_password_file="$runtime_dir/legacy-password"
 readonly bootstrap_password_file="$runtime_dir/bootstrap-password"
 readonly migrator_password_file="$runtime_dir/migrator-password"
 readonly runtime_password_file="$runtime_dir/runtime-password"
+readonly storage_password_file="$runtime_dir/storage-password"
 readonly command_password_file="$runtime_dir/command-password"
 readonly backup_password_file="$runtime_dir/backup-password"
 readonly migrator_url_file="$runtime_dir/migrator-database-url"
@@ -673,6 +677,7 @@ write_secret "$legacy_password_file" "$legacy_password"
 write_secret "$bootstrap_password_file" "$bootstrap_password"
 write_secret "$migrator_password_file" "$migrator_password"
 write_secret "$runtime_password_file" "$runtime_password"
+write_secret "$storage_password_file" "$storage_password"
 write_secret "$command_password_file" "$command_password"
 write_secret "$backup_password_file" "$backup_password"
 if [[ "$database_transport" == 'private-unix-socket' ]]; then
@@ -699,6 +704,7 @@ bash scripts/reconcile-database-roles.sh --apply \
   --bootstrap-password-file "$bootstrap_password_file" \
   --migrator-password-file "$migrator_password_file" \
   --runtime-password-file "$runtime_password_file" \
+  --storage-password-file "$storage_password_file" \
   --command-password-file "$command_password_file" \
   --backup-password-file "$backup_password_file"
 
@@ -709,6 +715,7 @@ bash scripts/reconcile-database-roles.sh --apply --demote-legacy-xmpp \
   --bootstrap-password-file "$bootstrap_password_file" \
   --migrator-password-file "$migrator_password_file" \
   --runtime-password-file "$runtime_password_file" \
+  --storage-password-file "$storage_password_file" \
   --command-password-file "$command_password_file" \
   --backup-password-file "$backup_password_file"
 
@@ -722,7 +729,7 @@ SELECT NOT EXISTS (
     FROM pg_catalog.pg_roles role
     JOIN pg_catalog.pg_database database ON database.datname=current_database()
     JOIN pg_catalog.pg_namespace namespace ON namespace.nspname='public'
-   WHERE role.rolname IN ('northstar_runtime','northstar_commands','northstar_backup')
+   WHERE role.rolname IN ('northstar_runtime','northstar_storage','northstar_commands','northstar_backup')
      AND (pg_catalog.has_database_privilege(role.oid,database.oid,'CONNECT')
        OR pg_catalog.has_schema_privilege(role.oid,namespace.oid,'USAGE'))
 ) AND NOT EXISTS (
@@ -731,7 +738,7 @@ SELECT NOT EXISTS (
     JOIN pg_catalog.pg_namespace namespace ON namespace.oid=relation.relnamespace
     CROSS JOIN pg_catalog.pg_roles role
    WHERE namespace.nspname='public'
-     AND role.rolname IN ('northstar_runtime','northstar_commands','northstar_backup')
+     AND role.rolname IN ('northstar_runtime','northstar_storage','northstar_commands','northstar_backup')
      AND CASE
            WHEN relation.relkind='S' THEN
              pg_catalog.has_sequence_privilege(role.oid,relation.oid,'SELECT')
@@ -746,7 +753,7 @@ SELECT NOT EXISTS (
     JOIN pg_catalog.pg_namespace namespace ON namespace.oid=routine.pronamespace
     CROSS JOIN pg_catalog.pg_roles role
    WHERE namespace.nspname='public'
-     AND role.rolname IN ('northstar_runtime','northstar_commands','northstar_backup')
+     AND role.rolname IN ('northstar_runtime','northstar_storage','northstar_commands','northstar_backup')
      AND pg_catalog.has_function_privilege(role.oid,routine.oid,'EXECUTE')
 );
 PSQL
@@ -771,7 +778,7 @@ PGPASSWORD="$migrator_password" psql --no-psqlrc --no-password --set=ON_ERROR_ST
   --host "$database_host" --port "$database_port" --username "$migrator_role" \
   --dbname="$phase_fixture_database" \
   --set=database_name="$phase_fixture_database" \
-  --set=migrator_role="$migrator_role" --set=runtime_role="$runtime_role" \
+  --set=migrator_role="$migrator_role" --set=runtime_role="$runtime_role" --set=storage_role="$storage_role" \
   --set=command_role="$command_role" --set=backup_role="$backup_role" \
   --set=allow_bootstrap=false --set=grant_phase=bootstrap \
   --file="$project_dir/deploy/postgres-init/lib/reconcile-northstar-grants.sql"
@@ -781,7 +788,7 @@ SELECT NOT EXISTS (
   SELECT 1 FROM pg_catalog.pg_roles role
   JOIN pg_catalog.pg_database database ON database.datname=current_database()
   JOIN pg_catalog.pg_namespace namespace ON namespace.nspname='public'
-  WHERE role.rolname IN ('northstar_runtime','northstar_commands','northstar_backup')
+  WHERE role.rolname IN ('northstar_runtime','northstar_storage','northstar_commands','northstar_backup')
     AND (pg_catalog.has_database_privilege(role.oid,database.oid,'CONNECT')
       OR pg_catalog.has_schema_privilege(role.oid,namespace.oid,'USAGE'))
 );
@@ -805,7 +812,7 @@ PGPASSWORD="$migrator_password" psql --no-psqlrc --no-password --set=ON_ERROR_ST
   --host "$database_host" --port "$database_port" --username "$migrator_role" \
   --dbname="$phase_fixture_database" \
   --set=database_name="$phase_fixture_database" \
-  --set=migrator_role="$migrator_role" --set=runtime_role="$runtime_role" \
+  --set=migrator_role="$migrator_role" --set=runtime_role="$runtime_role" --set=storage_role="$storage_role" \
   --set=command_role="$command_role" --set=backup_role="$backup_role" \
   --set=allow_bootstrap=false --set=grant_phase=auto \
   --file="$project_dir/deploy/postgres-init/lib/reconcile-northstar-grants.sql" \
@@ -823,7 +830,7 @@ PGPASSWORD="$migrator_password" psql --no-psqlrc --no-password --set=ON_ERROR_ST
   --host "$database_host" --port "$database_port" --username "$migrator_role" \
   --dbname="$phase_fixture_database" \
   --set=database_name="$phase_fixture_database" \
-  --set=migrator_role="$migrator_role" --set=runtime_role="$runtime_role" \
+  --set=migrator_role="$migrator_role" --set=runtime_role="$runtime_role" --set=storage_role="$storage_role" \
   --set=command_role="$command_role" --set=backup_role="$backup_role" \
   --set=allow_bootstrap=false --set=grant_phase=auto \
   --file="$project_dir/deploy/postgres-init/lib/reconcile-northstar-grants.sql" \
@@ -1000,6 +1007,7 @@ bash scripts/reconcile-database-roles.sh --apply \
   --bootstrap-password-file "$bootstrap_password_file" \
   --migrator-password-file "$migrator_password_file" \
   --runtime-password-file "$runtime_password_file" \
+  --storage-password-file "$storage_password_file" \
   --command-password-file "$command_password_file" \
   --backup-password-file "$backup_password_file"
 
@@ -1016,10 +1024,10 @@ SELECT NOT EXISTS (
     JOIN pg_catalog.pg_roles AS granted ON granted.oid=membership.roleid
     JOIN pg_catalog.pg_roles AS member ON member.oid=membership.member
    WHERE granted.rolname IN (
-     'northstar_bootstrap','northstar_migrator','northstar_runtime',
+     'northstar_bootstrap','northstar_migrator','northstar_runtime','northstar_storage',
      'northstar_commands','northstar_backup'
    ) OR member.rolname IN (
-     'northstar_bootstrap','northstar_migrator','northstar_runtime',
+     'northstar_bootstrap','northstar_migrator','northstar_runtime','northstar_storage',
      'northstar_commands','northstar_backup'
    )
 );
@@ -1139,43 +1147,51 @@ SELECT (SELECT pg_catalog.count(*)=2 AND pg_catalog.bool_and(
                  AND grantor=proowner
                  AND grantee IN (
                    proowner,
-                   (SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_runtime')
+                   (SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_storage')
                  )
                )
                AND pg_catalog.bool_or(grantee=proowner)
                AND pg_catalog.bool_or(grantee=(
-                 SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_runtime'
+                 SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_storage'
                ))
           FROM snapshot_acl)
-   AND (SELECT pg_catalog.count(*)=3 AND pg_catalog.bool_and(
+   AND (SELECT pg_catalog.count(*)=4 AND pg_catalog.bool_and(
                  privilege_type='USAGE' AND NOT is_grantable
                  AND grantor=typowner
                  AND grantee IN (
                    typowner,
                    (SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_runtime'),
+                   (SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_storage'),
                    (SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_backup')
                  )
                )
                AND pg_catalog.bool_or(grantee=typowner)
                AND pg_catalog.bool_or(grantee=(
                  SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_runtime'
+               ))
+               AND pg_catalog.bool_or(grantee=(
+                 SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_storage'
                ))
                AND pg_catalog.bool_or(grantee=(
                  SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_backup'
                ))
           FROM domain_acl)
-   AND (SELECT pg_catalog.count(*)=3 AND pg_catalog.bool_and(
+   AND (SELECT pg_catalog.count(*)=4 AND pg_catalog.bool_and(
                  privilege_type='USAGE' AND NOT is_grantable
                  AND grantor=typowner
                  AND grantee IN (
                    typowner,
                    (SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_runtime'),
+                   (SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_storage'),
                    (SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_backup')
                  )
                )
                AND pg_catalog.bool_or(grantee=typowner)
                AND pg_catalog.bool_or(grantee=(
                  SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_runtime'
+               ))
+               AND pg_catalog.bool_or(grantee=(
+                 SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_storage'
                ))
                AND pg_catalog.bool_or(grantee=(
                  SELECT oid FROM pg_catalog.pg_roles WHERE rolname='northstar_backup'
@@ -1828,11 +1844,11 @@ role_boundary_ok=$(control_psql --dbname="$database_name" --tuples-only --no-ali
 WITH workload AS (
   SELECT *
     FROM pg_catalog.pg_roles
-   WHERE rolname IN ('northstar_migrator', 'northstar_runtime', 'northstar_commands', 'northstar_backup')
+   WHERE rolname IN ('northstar_migrator', 'northstar_runtime', 'northstar_storage', 'northstar_commands', 'northstar_backup')
 ), protected_role AS (
   SELECT oid,rolname FROM pg_catalog.pg_roles
    WHERE rolname IN (
-     'northstar_bootstrap','northstar_migrator','northstar_runtime',
+     'northstar_bootstrap','northstar_migrator','northstar_runtime','northstar_storage',
      'northstar_commands','northstar_backup'
    )
 ), forbidden_membership AS (
@@ -1844,8 +1860,8 @@ WITH workload AS (
       OR member.oid IN (SELECT oid FROM protected_role)
 )
 SELECT
-  (SELECT pg_catalog.count(*) = 4 FROM workload)
-  AND (SELECT pg_catalog.count(*) = 5 FROM protected_role)
+  (SELECT pg_catalog.count(*) = 5 FROM workload)
+  AND (SELECT pg_catalog.count(*) = 6 FROM protected_role)
   AND NOT EXISTS (
     SELECT 1 FROM workload
      WHERE NOT rolcanlogin OR rolsuper OR rolinherit OR rolcreatedb OR rolcreaterole
@@ -1856,6 +1872,7 @@ SELECT
   AND NOT EXISTS (SELECT 1 FROM forbidden_membership)
   AND (SELECT rolconnlimit = 4 FROM workload WHERE rolname = 'northstar_migrator')
   AND (SELECT rolconnlimit = 64 FROM workload WHERE rolname = 'northstar_runtime')
+  AND (SELECT rolconnlimit = 16 FROM workload WHERE rolname = 'northstar_storage')
   AND (SELECT rolconnlimit = 8 FROM workload WHERE rolname = 'northstar_commands')
   AND (SELECT rolconnlimit = 2 FROM workload WHERE rolname = 'northstar_backup')
   AND (
@@ -1991,6 +2008,9 @@ SELECT (SELECT pg_catalog.count(oid) FROM resolved) =
               'northstar_runtime',resolved.oid,'EXECUTE'
             ) IS DISTINCT FROM (expected_capability.workload='runtime')
          OR pg_catalog.has_function_privilege(
+              'northstar_storage',resolved.oid,'EXECUTE'
+            ) IS DISTINCT FROM (expected_capability.workload='storage')
+         OR pg_catalog.has_function_privilege(
               'northstar_commands',resolved.oid,'EXECUTE'
             ) IS DISTINCT FROM (expected_capability.workload='command')
          OR pg_catalog.has_function_privilege(
@@ -2038,6 +2058,10 @@ SELECT (SELECT pg_catalog.count(oid) FROM resolved) =
           (expected_capability.workload='runtime' AND NOT privilege.is_grantable
            AND privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles
              WHERE rolname='northstar_runtime'))
+          OR
+          (expected_capability.workload='storage' AND NOT privilege.is_grantable
+            AND privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles
+              WHERE rolname='northstar_storage'))
           OR
           (expected_capability.workload='command' AND NOT privilege.is_grantable
             AND privilege.grantee=(SELECT oid FROM pg_catalog.pg_roles
@@ -2115,6 +2139,9 @@ WITH expected AS (
    WHERE pg_catalog.has_function_privilege(
            'northstar_runtime',routine.oid,'EXECUTE'
          ) IS DISTINCT FROM (expected.workload='runtime')
+      OR pg_catalog.has_function_privilege(
+           'northstar_storage',routine.oid,'EXECUTE'
+         ) IS DISTINCT FROM (expected.workload='storage')
       OR pg_catalog.has_function_privilege(
            'northstar_commands',routine.oid,'EXECUTE'
          ) IS DISTINCT FROM (expected.workload='command')
@@ -2349,15 +2376,39 @@ for ip_policy in exact subnet; do
     || fail "SM ${ip_policy} IP policy accepted a NULL claimant address"
 done
 
-# Runtime receives only fixed-cardinality, locator-free facts from typed
-# routines. Raw reads and mutations of all five upload authorities stay denied.
-psql_as "$runtime_role" "$runtime_password" --tuples-only --no-align <<'PSQL' >/dev/null
+# The storage pool gets typed upload facts, while runtime retains only the
+# account/admin transaction entry points and the disabled-upload probe.
+psql_as "$storage_role" "$storage_password" --tuples-only --no-align <<'PSQL' >/dev/null
 SELECT pg_catalog.count(*) FROM public.northstar_upload_capacity_reconciliation();
 SELECT pg_catalog.count(*) FROM public.northstar_upload_queue_snapshot();
 SELECT pg_catalog.count(*) FROM public.northstar_upload_public_file(
   '00000000-0000-0000-0000-000000000000'::pg_catalog.uuid
 );
 PSQL
+storage_catalog_healthy=$(psql_as "$storage_role" "$storage_password" \
+  --tuples-only --no-align \
+  --command="SELECT public.northstar_upload_capability_catalog_healthy('public')")
+[[ "$storage_catalog_healthy" == t ]] \
+  || fail 'storage upload capability catalog did not match the role split'
+expect_insufficient_privilege "$runtime_role" "$runtime_password" \
+  'runtime storage queue snapshot' \
+  'SELECT * FROM public.northstar_upload_queue_snapshot()'
+expect_insufficient_privilege "$storage_role" "$storage_password" \
+  'storage runtime durable-state probe' \
+  'SELECT public.northstar_upload_durable_state_exists()'
+expect_insufficient_privilege "$storage_role" "$storage_password" \
+  'storage runtime capacity lock' \
+  'SELECT public.northstar_upload_capacity_lock()'
+upload_state_expected=$(control_psql --dbname="$database_name" --tuples-only --no-align <<'PSQL'
+SELECT EXISTS(SELECT 1 FROM public.upload_slots LIMIT 1)
+    OR EXISTS(SELECT 1 FROM public.upload_storage_jobs LIMIT 1)
+    OR EXISTS(SELECT 1 FROM public.upload_cleanup_queue LIMIT 1);
+PSQL
+)
+upload_state_observed=$(psql_as "$runtime_role" "$runtime_password" --tuples-only --no-align \
+  --command='SELECT public.northstar_upload_durable_state_exists()')
+[[ "$upload_state_observed" == "$upload_state_expected" ]] \
+  || fail 'runtime upload-state probe disagrees with owner-visible durable state'
 for upload_relation in \
   upload_storage_authority upload_storage_capacity_ledger upload_slots \
   upload_storage_jobs upload_cleanup_queue
@@ -2368,7 +2419,16 @@ do
   expect_insufficient_privilege "$runtime_role" "$runtime_password" \
     "runtime raw ${upload_relation} mutation" \
     "DELETE FROM public.${upload_relation} WHERE false"
+  expect_insufficient_privilege "$storage_role" "$storage_password" \
+    "storage raw ${upload_relation} read" \
+    "SELECT 1 FROM public.${upload_relation} LIMIT 1"
+  expect_insufficient_privilege "$storage_role" "$storage_password" \
+    "storage raw ${upload_relation} mutation" \
+    "DELETE FROM public.${upload_relation} WHERE false"
 done
+expect_insufficient_privilege "$storage_role" "$storage_password" \
+  'storage unrelated users read' \
+  'SELECT id FROM public.users LIMIT 1'
 
 xep0133_state_acl_ok=$(control_psql --dbname="$database_name" --tuples-only --no-align <<'PSQL'
 SELECT NOT EXISTS (

@@ -40,15 +40,16 @@ build_private_child_environment() {
   local fixture_bootstrap_url_file=$4
   local fixture_migrator_url_file=$5
   local fixture_runtime_url_file=$6
-  local fixture_command_url_file=$7
-  local listener_enabled=$8
-  local fixture_max_connections=$9
+  local fixture_storage_url_file=$7
+  local fixture_command_url_file=$8
+  local listener_enabled=$9
+  local fixture_max_connections=${10}
   local forwarded_variable
 
   for value in \
     "$fixture_port" "$fixture_database" "$fixture_bootstrap_password_file" \
     "$fixture_bootstrap_url_file" "$fixture_migrator_url_file" \
-    "$fixture_runtime_url_file" "$fixture_command_url_file"; do
+    "$fixture_runtime_url_file" "$fixture_storage_url_file" "$fixture_command_url_file"; do
     [[ -n "$value" ]] || {
       echo 'private loopback PostgreSQL fixture cannot construct an incomplete child environment' >&2
       return 2
@@ -67,6 +68,7 @@ build_private_child_environment() {
     "NORTHSTAR_PRIVATE_PG_BOOTSTRAP_DATABASE_URL_FILE=$fixture_bootstrap_url_file"
     "NORTHSTAR_PRIVATE_PG_MIGRATOR_DATABASE_URL_FILE=$fixture_migrator_url_file"
     "NORTHSTAR_PRIVATE_PG_RUNTIME_DATABASE_URL_FILE=$fixture_runtime_url_file"
+    "NORTHSTAR_PRIVATE_PG_STORAGE_DATABASE_URL_FILE=$fixture_storage_url_file"
     "NORTHSTAR_PRIVATE_PG_COMMAND_DATABASE_URL_FILE=$fixture_command_url_file"
   )
   # These are the only non-secret caller controls required by the bounded N08
@@ -95,7 +97,7 @@ run_private_child_environment() {
   build_private_child_environment \
     "$postgres_port" "$database_name" "$bootstrap_password_file" \
     "$bootstrap_url_file" "$migrator_url_file" "$runtime_url_file" \
-    "$command_url_file" "$with_listener_stress_role" "$max_connections" \
+    "$storage_url_file" "$command_url_file" "$with_listener_stress_role" "$max_connections" \
     || return $?
   env -i "${child_environment[@]}" "$@"
 }
@@ -117,6 +119,7 @@ run_child_environment_self_test() {
     bootstrap_url_file='/tmp/private-bootstrap-url'
     migrator_url_file='/tmp/private-migrator-url'
     runtime_url_file='/tmp/private-runtime-url'
+    storage_url_file='/tmp/private-storage-url'
     command_url_file='/tmp/private-command-url'
     with_listener_stress_role=true
     max_connections=64
@@ -263,6 +266,7 @@ readonly postgres_log="$runtime_root/postgres.log"
 readonly bootstrap_role='northstar_bootstrap'
 readonly migrator_role='northstar_migrator'
 readonly runtime_role='northstar_runtime'
+readonly storage_role='northstar_storage'
 readonly command_role='northstar_commands'
 readonly backup_role='northstar_backup'
 readonly database_name='xmpp'
@@ -307,20 +311,24 @@ write_secret() {
 readonly bootstrap_password="$(openssl rand -hex 32)"
 readonly migrator_password="$(openssl rand -hex 32)"
 readonly runtime_password="$(openssl rand -hex 32)"
+readonly storage_password="$(openssl rand -hex 32)"
 readonly command_password="$(openssl rand -hex 32)"
 readonly backup_password="$(openssl rand -hex 32)"
 readonly bootstrap_password_file="$secrets_dir/bootstrap-password"
 readonly migrator_password_file="$secrets_dir/migrator-password"
 readonly runtime_password_file="$secrets_dir/runtime-password"
+readonly storage_password_file="$secrets_dir/storage-password"
 readonly command_password_file="$secrets_dir/command-password"
 readonly backup_password_file="$secrets_dir/backup-password"
 readonly bootstrap_url_file="$secrets_dir/bootstrap-database-url"
 readonly migrator_url_file="$secrets_dir/migrator-database-url"
 readonly runtime_url_file="$secrets_dir/runtime-database-url"
+readonly storage_url_file="$secrets_dir/storage-database-url"
 readonly command_url_file="$secrets_dir/command-database-url"
 write_secret "$bootstrap_password_file" "$bootstrap_password"
 write_secret "$migrator_password_file" "$migrator_password"
 write_secret "$runtime_password_file" "$runtime_password"
+write_secret "$storage_password_file" "$storage_password"
 write_secret "$command_password_file" "$command_password"
 write_secret "$backup_password_file" "$backup_password"
 
@@ -370,6 +378,7 @@ POSTGRES_DB="$database_name" \
 POSTGRES_PASSWORD_FILE="$bootstrap_password_file" \
 NORTHSTAR_MIGRATOR_PASSWORD_FILE="$migrator_password_file" \
 NORTHSTAR_RUNTIME_PASSWORD_FILE="$runtime_password_file" \
+NORTHSTAR_STORAGE_PASSWORD_FILE="$storage_password_file" \
 NORTHSTAR_COMMAND_PASSWORD_FILE="$command_password_file" \
 NORTHSTAR_BACKUP_PASSWORD_FILE="$backup_password_file" \
   bash "$project_dir/deploy/postgres-init/010-northstar-roles.sh" >/dev/null
@@ -388,6 +397,7 @@ fi
 write_secret "$bootstrap_url_file" "postgres://$bootstrap_role:$bootstrap_password@127.0.0.1:$postgres_port/$database_name"
 write_secret "$migrator_url_file" "postgres://$migrator_role:$migrator_password@127.0.0.1:$postgres_port/$database_name"
 write_secret "$runtime_url_file" "postgres://$runtime_role:$runtime_password@127.0.0.1:$postgres_port/$database_name"
+write_secret "$storage_url_file" "postgres://$storage_role:$storage_password@127.0.0.1:$postgres_port/$database_name"
 write_secret "$command_url_file" "postgres://$command_role:$command_password@127.0.0.1:$postgres_port/$database_name"
 
 fixture_identity="$(control_psql --dbname=postgres --tuples-only --no-align --command \

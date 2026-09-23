@@ -19,6 +19,7 @@ migration_ledger_manifest_sql="$project_dir/deploy/postgres-init/lib/northstar-m
 readonly validation_database='northstar_backup_verify'
 readonly migrator_role='northstar_migrator'
 readonly runtime_role='northstar_runtime'
+readonly storage_role='northstar_storage'
 readonly command_role='northstar_commands'
 readonly backup_role='northstar_backup'
 
@@ -111,6 +112,9 @@ CREATE ROLE northstar_migrator LOGIN NOINHERIT NOSUPERUSER NOCREATEDB
 CREATE ROLE northstar_runtime LOGIN NOINHERIT NOSUPERUSER NOCREATEDB
   NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 64
   VALID UNTIL 'infinity';
+CREATE ROLE northstar_storage LOGIN NOINHERIT NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 16
+  VALID UNTIL 'infinity';
 CREATE ROLE northstar_commands LOGIN NOINHERIT NOSUPERUSER NOCREATEDB
   NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 8
   VALID UNTIL 'infinity';
@@ -130,6 +134,7 @@ psql -h "$socket_dir" -U "$migrator_role" -d "$validation_database" \
   --set database_name="$validation_database" \
   --set migrator_role="$migrator_role" \
   --set runtime_role="$runtime_role" \
+  --set storage_role="$storage_role" \
   --set command_role="$command_role" \
   --set backup_role="$backup_role" \
   --set allow_bootstrap=false --set grant_phase=exact \

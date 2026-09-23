@@ -197,8 +197,8 @@ require_literal "$compose" \
   'Compose must mount the complete init policy, including its private SQL library'
 
 for secret in postgres_bootstrap_password northstar_migrator_password \
-  northstar_runtime_password northstar_command_password northstar_backup_password migrator_database_url \
-  runtime_database_url command_database_url backup_database_url; do
+  northstar_runtime_password northstar_storage_password northstar_command_password northstar_backup_password migrator_database_url \
+  runtime_database_url storage_database_url command_database_url backup_database_url; do
   require_literal "$compose" "  $secret:" "Compose secret is missing: $secret"
   require_literal "$secret_generator" "$secret" \
     "production secret generator does not manage: $secret"
@@ -211,6 +211,15 @@ for command_preflight_boundary in \
   'verify_role_url "$command_database_url_path" "$command_password_path" northstar_commands command_database_url'; do
   require_literal "$release_preflight" "$command_preflight_boundary" \
     "production preflight is missing command-role boundary: $command_preflight_boundary"
+done
+for storage_preflight_boundary in \
+  'NORTHSTAR_STORAGE_PASSWORD_SECRET_FILE' \
+  'STORAGE_DATABASE_URL_SECRET_FILE' \
+  'check_secret_file "$storage_password_path" northstar_storage_password 70:70' \
+  'check_secret_file "$storage_database_url_path" storage_database_url 10001:10001' \
+  'verify_role_url "$storage_database_url_path" "$storage_password_path" northstar_storage storage_database_url'; do
+  require_literal "$release_preflight" "$storage_preflight_boundary" \
+    "production preflight is missing storage-role boundary: $storage_preflight_boundary"
 done
 require_literal "$release_preflight" \
   'Docker is required for --production because this mode validates the Compose deployment profile' \
@@ -261,7 +270,7 @@ restore_service=$(service_block restore)
 
 [[ "$postgres_service" == *'/run/secrets/postgres_bootstrap_password'* ]] \
   || fail 'PostgreSQL must consume its bootstrap password through a secret file'
-for secret in northstar_migrator_password northstar_runtime_password northstar_command_password northstar_backup_password; do
+for secret in northstar_migrator_password northstar_runtime_password northstar_storage_password northstar_command_password northstar_backup_password; do
   [[ "$postgres_service" == *"/run/secrets/$secret"* ]] \
     || fail "fresh-volume initialization cannot read $secret"
 done
@@ -272,7 +281,7 @@ done
    && "$migrate_service" == *'command: ["migrate"]'* ]] \
   || fail 'migration service must bypass the normal writable-directory entrypoint'
 for forbidden in postgres_bootstrap_password northstar_migrator_password \
-  northstar_runtime_password northstar_command_password northstar_backup_password runtime_database_url \
+  northstar_runtime_password northstar_storage_password northstar_command_password northstar_backup_password runtime_database_url \
   command_database_url backup_database_url; do
   [[ "$migrate_service" != *"$forbidden"* ]] \
     || fail "migration service must not receive $forbidden"
@@ -281,7 +290,7 @@ done
 [[ "$grant_service" == *'/run/secrets/migrator_database_url'* ]] \
   || fail 'post-migration grant service must use migrator_database_url'
 for forbidden in postgres_bootstrap_password northstar_migrator_password \
-  northstar_runtime_password northstar_command_password northstar_backup_password runtime_database_url \
+  northstar_runtime_password northstar_storage_password northstar_command_password northstar_backup_password runtime_database_url \
   command_database_url backup_database_url; do
   [[ "$grant_service" != *"$forbidden"* ]] \
     || fail "post-migration grant service must not receive $forbidden"
@@ -294,6 +303,8 @@ require_literal "$grant_image" \
 
 [[ "$xmpp_service" == *'DATABASE_URL_FILE: /run/secrets/runtime_database_url'* ]] \
   || fail 'long-lived application must use runtime_database_url'
+[[ "$xmpp_service" == *'STORAGE_DATABASE_URL_FILE: /run/secrets/storage_database_url'* ]] \
+  || fail 'long-lived application must isolate upload workers in storage_database_url'
 [[ "$xmpp_service" == *'ADMIN_COMMAND_DATABASE_URL_FILE: /run/secrets/command_database_url'* ]] \
   || fail 'long-lived application must isolate XEP-0133 issuance in command_database_url'
 for forbidden in postgres_bootstrap_password northstar_migrator_password \
@@ -305,8 +316,8 @@ done
 [[ "$backup_service" == *'/run/secrets/backup_database_url'* ]] \
   || fail 'backup service must use the read-only backup_database_url'
 for forbidden in postgres_bootstrap_password northstar_migrator_password \
-  northstar_runtime_password northstar_command_password northstar_backup_password migrator_database_url \
-  runtime_database_url command_database_url; do
+  northstar_runtime_password northstar_storage_password northstar_command_password northstar_backup_password migrator_database_url \
+  runtime_database_url storage_database_url command_database_url; do
   [[ "$backup_service" != *"$forbidden"* ]] \
     || fail "backup service must not receive $forbidden"
 done
@@ -314,7 +325,7 @@ done
 [[ "$restore_service" == *'/run/secrets/migrator_database_url'* ]] \
   || fail 'restore service must use the explicit migrator capability'
 for forbidden in postgres_bootstrap_password northstar_migrator_password \
-  northstar_runtime_password northstar_command_password northstar_backup_password runtime_database_url \
+  northstar_runtime_password northstar_storage_password northstar_command_password northstar_backup_password runtime_database_url \
   command_database_url backup_database_url; do
   [[ "$restore_service" != *"$forbidden"* ]] \
     || fail "restore service must not receive $forbidden"
@@ -322,7 +333,7 @@ done
 
 require_literal "$init_script" "readonly bootstrap_role='northstar_bootstrap'" \
   'fresh init bootstrap role changed unexpectedly'
-for role in northstar_migrator northstar_runtime northstar_commands northstar_backup; do
+for role in northstar_migrator northstar_runtime northstar_storage northstar_commands northstar_backup; do
   require_literal "$init_script" "$role" "fresh init role is missing: $role"
   require_literal "$role_runner" "$role" "existing-volume role policy is missing: $role"
 done
@@ -686,7 +697,7 @@ require_literal "$grant_apply" \
   'cluster_muc_delivery_handoffs' \
   'runtime handoff-history mutation revocation is missing'
 require_literal "$grant_apply" \
-  'REVOKE ALL PRIVILEGES ON FUNCTIONS FROM :"runtime_role", :"command_role", :"backup_role" CASCADE;' \
+  'REVOKE ALL PRIVILEGES ON FUNCTIONS FROM :"runtime_role", :"storage_role", :"command_role", :"backup_role" CASCADE;' \
   'future migrator functions must not default to runtime execution'
 require_literal "$grant_apply" \
   "relation.relname IN ('_sqlx_migrations','jid_identity_migrations')" \
@@ -737,7 +748,7 @@ if grep -Eq '^[[:space:]]*(BEGIN|COMMIT);' "$grant_apply"; then
   fail 'shared grant body must stay transaction-neutral for atomic restore reuse'
 fi
 grant_policy_flat=$(sed '/^[[:space:]]*--/d' "$grant_apply" | tr '\r\n' '  ')
-if grep -Eiq 'ALTER DEFAULT PRIVILEGES[^;]*GRANT([[:space:]]|$)[^;]*(runtime_role|command_role|backup_role)' \
+if grep -Eiq 'ALTER DEFAULT PRIVILEGES[^;]*GRANT([[:space:]]|$)[^;]*(runtime_role|storage_role|command_role|backup_role)' \
   <<<"$grant_policy_flat"; then
   fail 'future migration objects must remain owner-only until exact reconciliation'
 fi

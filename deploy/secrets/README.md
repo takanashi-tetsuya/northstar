@@ -33,13 +33,18 @@ pairs or concurrent replacement, and never prints a value:
 - `postgres_bootstrap_password`: consumed only by PostgreSQL for the dedicated
   `northstar_bootstrap` superuser; it is never mounted into an application job.
 - `northstar_migrator_password`, `northstar_runtime_password`,
-  `northstar_command_password`, and `northstar_backup_password`: read by the
+  `northstar_storage_password`, `northstar_command_password`, and
+  `northstar_backup_password`: read by the
   fresh-volume initializer to create independent `NOSUPERUSER` workload
   identities.
 - `migrator_database_url`: mounted only into the one-shot migration job. Its
   role owns the Northstar schema but cannot create databases or roles.
 - `runtime_database_url`: mounted only into the long-lived XMPP server. Its
   role is a non-owner with no DDL or trigger-management capability.
+- `storage_database_url`: mounted only into the long-lived XMPP server for
+  enabled or draining upload lifecycle work. Its role has no table or sequence
+  rights and executes only reviewed owner-held upload functions. Disabled
+  uploads do not open a storage connection.
 - `command_database_url`: also mounted into the long-lived server, but only for
   its isolated XEP-0133 command-session pool. The named role has no relation or
   sequence access and exactly eight typed session lifecycle capabilities; it

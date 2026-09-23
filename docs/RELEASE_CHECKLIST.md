@@ -159,11 +159,16 @@ and Docker artifacts and their provenance. They do not repeat source CI.
 - [ ] Apply forward hardening migration `0142`; verify both upload-projection
   capacity trigger functions have the exact installation-schema
   `SECURITY DEFINER` path and no `PUBLIC` execute privilege.
-- [ ] Apply migration `0145`; verify the upload queue snapshot reads current
-  data through its pinned schema and retains the existing bounded counters.
+- [ ] Apply migration `0146`; verify the disabled-upload probe reads durable
+  state through its pinned schema while runtime cannot read upload tables.
+- [ ] Apply migration `0147` after all old processes stop; reconcile the
+  `northstar_storage` role and prove it can execute only upload capabilities,
+  while the runtime role retains only the disabled-state probe and two
+  administrator dead-letter routines. Mount its independent URL for enabled
+  and draining uploads; prove disabled mode opens no storage connection.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 144 migrations from `0001` through the current
-  repository maximum `0145`, with `0021` as the sole intentional gap.
+  identity and verify all 146 migrations from `0001` through the current
+  repository maximum `0147`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

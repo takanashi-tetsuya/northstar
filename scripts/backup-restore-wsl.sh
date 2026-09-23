@@ -27,6 +27,8 @@ migrator_role='northstar_migrator'
 migrator_password='NorthstarMigratorFixturePassword123456789'
 runtime_role='northstar_runtime'
 runtime_password='NorthstarRuntimeFixturePassword1234567890'
+storage_role='northstar_storage'
+storage_password='NorthstarStorageFixturePassword1234567890'
 command_role='northstar_commands'
 command_password='NorthstarCommandFixturePassword1234567890'
 backup_role='northstar_backup'
@@ -85,12 +87,14 @@ PGPASSWORD="$bootstrap_password" PGHOST="$socket_dir" PGUSER="$bootstrap_role" \
 
 export NORTHSTAR_FIXTURE_MIGRATOR_PASSWORD="$migrator_password"
 export NORTHSTAR_FIXTURE_RUNTIME_PASSWORD="$runtime_password"
+export NORTHSTAR_FIXTURE_STORAGE_PASSWORD="$storage_password"
 export NORTHSTAR_FIXTURE_COMMAND_PASSWORD="$command_password"
 export NORTHSTAR_FIXTURE_BACKUP_PASSWORD="$backup_password"
 PGPASSWORD="$bootstrap_password" PGHOST="$socket_dir" PGUSER="$bootstrap_role" \
   PGDATABASE=postgres "$postgres_bin/psql" --no-psqlrc --set ON_ERROR_STOP=1 <<'PSQL'
 \getenv migrator_password NORTHSTAR_FIXTURE_MIGRATOR_PASSWORD
 \getenv runtime_password NORTHSTAR_FIXTURE_RUNTIME_PASSWORD
+\getenv storage_password NORTHSTAR_FIXTURE_STORAGE_PASSWORD
 \getenv command_password NORTHSTAR_FIXTURE_COMMAND_PASSWORD
 \getenv backup_password NORTHSTAR_FIXTURE_BACKUP_PASSWORD
 SELECT format(
@@ -100,6 +104,10 @@ SELECT format(
 SELECT format(
   'CREATE ROLE northstar_runtime LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 64 VALID UNTIL ''infinity''',
   :'runtime_password'
+) \gexec
+SELECT format(
+  'CREATE ROLE northstar_storage LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 16 VALID UNTIL ''infinity''',
+  :'storage_password'
 ) \gexec
 SELECT format(
   'CREATE ROLE northstar_commands LOGIN PASSWORD %L NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 8 VALID UNTIL ''infinity''',
@@ -113,6 +121,7 @@ CREATE ROLE northstar_fixture_outsider NOLOGIN NOINHERIT NOSUPERUSER
   NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 PSQL
 unset NORTHSTAR_FIXTURE_MIGRATOR_PASSWORD NORTHSTAR_FIXTURE_RUNTIME_PASSWORD \
+  NORTHSTAR_FIXTURE_STORAGE_PASSWORD \
   NORTHSTAR_FIXTURE_COMMAND_PASSWORD \
   NORTHSTAR_FIXTURE_BACKUP_PASSWORD
 
@@ -219,6 +228,7 @@ reconcile_repository_grants() {
     --set database_name="$database_name" \
     --set migrator_role="$migrator_role" \
     --set runtime_role="$runtime_role" \
+    --set storage_role="$storage_role" \
     --set command_role="$command_role" \
     --set backup_role="$backup_role" \
     --set allow_bootstrap=false \

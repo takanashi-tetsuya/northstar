@@ -17,7 +17,7 @@ usage() {
   cat >&2 <<'EOF'
 usage: scripts/reconcile-database-grants.sh [--database-url-file FILE]
 
-Re-apply Northstar's runtime and read-only backup ACLs after migrations.
+Re-apply Northstar's workload and read-only backup ACLs after migrations.
 The URL file must authenticate as northstar_migrator to database xmpp.
 EOF
 }
@@ -55,6 +55,7 @@ python3 "$pg_runner" --database-url-file "$database_url_file" -- \
     --set=database_name=xmpp \
     --set=migrator_role=northstar_migrator \
     --set=runtime_role=northstar_runtime \
+    --set=storage_role=northstar_storage \
     --set=command_role=northstar_commands \
     --set=backup_role=northstar_backup \
     --set=allow_bootstrap=false \

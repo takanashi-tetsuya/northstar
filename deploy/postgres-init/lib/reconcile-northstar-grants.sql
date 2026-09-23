@@ -6,7 +6,7 @@
 -- or scripts/reconcile-database-grants.sh after every migration.
 --
 -- Required psql variables:
---   database_name, migrator_role, runtime_role, command_role, backup_role,
+--   database_name, migrator_role, runtime_role, storage_role, command_role, backup_role,
 --   allow_bootstrap, grant_phase (bootstrap, auto, or exact)
 --
 -- Keep the assertions and grants in the sibling files. Restore embeds the same

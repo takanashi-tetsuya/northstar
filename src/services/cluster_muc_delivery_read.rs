@@ -21,6 +21,11 @@ pub(crate) trait ClusterMucDeliveryReadRepository: Send + Sync {
         delivery: &Self::Delivery,
     ) -> impl Future<Output = Result<Option<Self::AudienceSnapshot>>> + Send;
 
+    fn original_audience_snapshot(
+        &self,
+        delivery: &Self::Delivery,
+    ) -> impl Future<Output = Result<Option<Self::AudienceSnapshot>>> + Send;
+
     fn audience_is_current(
         &self,
         delivery: &Self::Delivery,
@@ -48,6 +53,13 @@ impl<R: ClusterMucDeliveryReadRepository> ClusterMucDeliveryReadService<R> {
         delivery: &R::Delivery,
     ) -> Result<Option<R::AudienceSnapshot>> {
         self.repository.recipient_snapshot(delivery).await
+    }
+
+    pub(crate) async fn original_audience_snapshot(
+        &self,
+        delivery: &R::Delivery,
+    ) -> Result<Option<R::AudienceSnapshot>> {
+        self.repository.original_audience_snapshot(delivery).await
     }
 
     pub(crate) async fn audience_is_current(&self, delivery: &R::Delivery) -> Result<bool> {
@@ -85,6 +97,14 @@ mod tests {
             Ok(None)
         }
 
+        async fn original_audience_snapshot(&self, delivery: &u32) -> Result<Option<u32>> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("original:{delivery}"));
+            Ok(Some(17))
+        }
+
         async fn audience_is_current(&self, delivery: &u32) -> Result<bool> {
             self.calls
                 .lock()
@@ -103,12 +123,17 @@ mod tests {
         let operation_id = Uuid::from_u128(17);
         assert_eq!(service.event_context(operation_id).await.unwrap(), Some(3));
         assert_eq!(service.recipient_snapshot(&29).await.unwrap(), None);
+        assert_eq!(
+            service.original_audience_snapshot(&29).await.unwrap(),
+            Some(17)
+        );
         assert!(!service.audience_is_current(&29).await.unwrap());
         assert_eq!(
             *repository.calls.lock().unwrap(),
             [
                 format!("context:{operation_id}"),
                 "snapshot:29".to_owned(),
+                "original:29".to_owned(),
                 "current:29".to_owned(),
             ]
         );

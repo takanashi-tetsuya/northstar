@@ -7132,17 +7132,12 @@ struct ClusterMucPolicyRender<'a> {
     stanzas: &'a mut Vec<String>,
 }
 
-fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<'_>) -> Result<()> {
-    let ClusterMucPolicyRender {
-        endpoints,
-        context,
-        room_jid,
-        recipient,
-        event_id,
-        change,
-        configuration_change,
-        stanzas,
-    } = render;
+fn cluster_muc_policy_result(
+    change: &serde_json::Value,
+) -> Result<(
+    crate::db::ClusterMucOccupancyTarget,
+    crate::db::ClusterMucPolicySnapshot,
+)> {
     let target: crate::db::ClusterMucOccupancyTarget =
         serde_json::from_value(change["target"].clone())
             .context("cluster MUC policy target tuple is invalid")?;
@@ -7160,6 +7155,111 @@ fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<'_>) -> Res
             && snapshot.connection_epoch == target.connection_epoch,
         "cluster MUC policy snapshot is not exactly bound"
     );
+    Ok((target, snapshot))
+}
+
+fn validate_cluster_muc_admin_batch_details(
+    details: &serde_json::Value,
+    room_id: uuid::Uuid,
+    room_epoch: uuid::Uuid,
+) -> Result<&[serde_json::Value]> {
+    let room_non_anonymous = details["non_anonymous"]
+        .as_bool()
+        .context("cluster MUC batch has no committed anonymity policy")?;
+    let changes = details["changes"]
+        .as_array()
+        .context("cluster MUC batch has no ordered result snapshots")?;
+    let request_change_count = details["request_change_count"]
+        .as_u64()
+        .context("cluster MUC batch has no committed request item count")?;
+    anyhow::ensure!(
+        (1..=63).contains(&request_change_count) && changes.len() <= 63,
+        "cluster MUC batch exceeds the receipt ordinal limit"
+    );
+    for change in changes {
+        match change["kind"].as_str() {
+            Some("presence") => {
+                let (target, snapshot) = cluster_muc_policy_result(change)?;
+                anyhow::ensure!(
+                    target.room_id == room_id && target.room_epoch == room_epoch,
+                    "cluster MUC batch target belongs to another room incarnation"
+                );
+                anyhow::ensure!(
+                    matches!(snapshot.state.as_str(), "active" | "suspended" | "revoked"),
+                    "cluster MUC batch presence has an invalid result state"
+                );
+                let status = change["status"].as_u64();
+                if matches!(snapshot.state.as_str(), "active" | "suspended") {
+                    anyhow::ensure!(
+                        change["status"].is_null(),
+                        "cluster MUC batch active presence has a removal status"
+                    );
+                } else {
+                    anyhow::ensure!(
+                        matches!(status, Some(301 | 307 | 321)),
+                        "cluster MUC batch removal has no valid status"
+                    );
+                }
+            }
+            Some("offline_affiliation") => {
+                anyhow::ensure!(
+                    room_non_anonymous,
+                    "cluster MUC batch anonymous room has an offline JID notice"
+                );
+                let bare_jid = change["bare_jid"]
+                    .as_str()
+                    .context("cluster MUC batch offline target has no bare JID")?;
+                anyhow::ensure!(
+                    crate::jid::canonicalize_bare(bare_jid)? == bare_jid,
+                    "cluster MUC batch offline target is not canonical"
+                );
+                let affiliation = change["affiliation"]
+                    .as_str()
+                    .context("cluster MUC batch offline target has no affiliation")?;
+                anyhow::ensure!(
+                    matches!(
+                        affiliation,
+                        "owner" | "admin" | "member" | "outcast" | "none"
+                    ),
+                    "cluster MUC batch offline affiliation is invalid"
+                );
+                anyhow::ensure!(
+                    change["nick"].is_null() || change["nick"].is_string(),
+                    "cluster MUC batch offline nickname is invalid"
+                );
+                anyhow::ensure!(
+                    change["nick"].as_str().is_none_or(|nick| nick.len() <= 128),
+                    "cluster MUC batch offline nickname is oversized"
+                );
+            }
+            _ => anyhow::bail!("cluster MUC batch result kind is invalid"),
+        }
+        anyhow::ensure!(
+            change["reason"].is_null() || change["reason"].is_string(),
+            "cluster MUC batch reason is invalid"
+        );
+        anyhow::ensure!(
+            change["reason"]
+                .as_str()
+                .is_none_or(|reason| reason.len() <= 4096),
+            "cluster MUC batch reason is oversized"
+        );
+    }
+    Ok(changes.as_slice())
+}
+
+fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<'_>) -> Result<()> {
+    let ClusterMucPolicyRender {
+        endpoints,
+        context,
+        room_jid,
+        recipient,
+        event_id,
+        change,
+        configuration_change,
+        stanzas,
+    } = render;
+    let (_target, snapshot) = cluster_muc_policy_result(change)?;
     let room_non_anonymous = context.details["non_anonymous"]
         .as_bool()
         .unwrap_or(context.room_non_anonymous);
@@ -7203,7 +7303,7 @@ fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<'_>) -> Res
             snapshot.full_jid == recipient.full_jid,
             false,
             Some(event_id),
-            room_non_anonymous || recipient.role == "moderator",
+            room_non_anonymous || subject_is_recipient || recipient.role == "moderator",
             status,
             None,
             change["reason"].as_str(),
@@ -7289,7 +7389,7 @@ async fn deliver_cluster_muc_event(
             && delivery.recipient_connection_uuid == Some(recipient.connection_id)
             && recipient.nick == recipient_nick
     });
-    let recipient = if exact_cached {
+    let mut recipient = if exact_cached {
         cached_recipient.expect("exact cached MUC recipient was checked")
     } else {
         // A terminal transition revokes the PG lease before its notification
@@ -7325,6 +7425,40 @@ async fn deliver_cluster_muc_event(
             )
             .context("immutable MUC audience has no exact live, SM or federated endpoint")?
     };
+    if context.operation_kind == "admin_batch" {
+        // A later role change or SM handoff may alter the live endpoint, but
+        // neither may change the visibility rules of this committed event.
+        let original = if let Some(snapshot) = payload.get("original_audience") {
+            serde_json::from_value::<crate::db::ClusterMucAudienceSnapshot>(snapshot.clone())
+                .context("cluster MUC batch payload original audience is malformed")?
+        } else {
+            let _database_turn = worker.database_turn().await;
+            worker
+                .delivery_read
+                .original_audience_snapshot(delivery)
+                .await?
+                .context("cluster MUC batch original audience is missing")?
+        };
+        anyhow::ensure!(
+            original.room_id == delivery.room_id
+                && original.room_epoch == delivery.room_epoch
+                && original.full_jid == recipient.full_jid
+                && original.nick == recipient.nick
+                && original.occupant_incarnation == recipient.cluster_epoch
+                && Some(original.occupancy_epoch) == delivery.recipient_occupancy_epoch
+                && matches!(
+                    original.role.as_str(),
+                    "moderator" | "participant" | "visitor" | "none"
+                )
+                && matches!(
+                    original.affiliation.as_str(),
+                    "owner" | "admin" | "member" | "outcast" | "none"
+                ),
+            "cluster MUC batch original audience is not exactly bound"
+        );
+        recipient.role = original.role;
+        recipient.affiliation = original.affiliation;
+    }
     let recipient_serializable = crate::state::SerializableMucOccupant::from(&recipient);
     let event_id = delivery.event_id.to_string();
     let target = context
@@ -7538,12 +7672,64 @@ async fn deliver_cluster_muc_event(
                 );
             }
         }
+        "admin_batch" => {
+            anyhow::ensure!(target.is_none(), "cluster MUC batch has a singular target");
+            // Validate every projection before the first cache mutation or
+            // transport write. A corrupt later item cannot partially apply
+            // an earlier item and then fail the whole delivery.
+            let changes = validate_cluster_muc_admin_batch_details(
+                &context.details,
+                delivery.room_id,
+                delivery.room_epoch,
+            )?;
+            for change in changes {
+                match change["kind"].as_str() {
+                    Some("presence") => {
+                        append_cluster_muc_policy_snapshot(ClusterMucPolicyRender {
+                            endpoints,
+                            context: &context,
+                            room_jid: &room_jid,
+                            recipient: &recipient,
+                            event_id: &event_id,
+                            change,
+                            configuration_change: false,
+                            stanzas: &mut stanzas,
+                        })?;
+                    }
+                    Some("offline_affiliation") => {
+                        let bare_jid = change["bare_jid"].as_str().expect("batch was validated");
+                        let affiliation =
+                            change["affiliation"].as_str().expect("batch was validated");
+                        let nick = change["nick"].as_str();
+                        let reason = change["reason"].as_str();
+                        let notice =
+                            crate::xmpp::protocol::muc::muc_offline_affiliation_change_notice(
+                                &room_jid,
+                                bare_jid,
+                                affiliation,
+                                nick,
+                                reason,
+                            );
+                        let notice = crate::xmpp::xml_util::set_to(&notice, &recipient.full_jid);
+                        stanzas.push(crate::xmpp::xml_util::set_root_attribute(
+                            &notice, "id", &event_id,
+                        ));
+                    }
+                    _ => unreachable!("batch was validated"),
+                }
+            }
+        }
         other => anyhow::bail!("unsupported cluster MUC event kind {other}"),
     }
     for (ordinal, stanza) in stanzas.into_iter().enumerate() {
         let ordinal =
             i32::try_from(ordinal).context("MUC event has too many stanza projections")?;
         let stable_item_id = format!("{}:{ordinal}", delivery.event_id);
+        let stanza = if context.operation_kind == "admin_batch" {
+            crate::xmpp::xml_util::set_root_attribute(&stanza, "id", &stable_item_id)
+        } else {
+            stanza
+        };
         let completed = {
             let _database_turn = worker.database_turn().await;
             worker
@@ -9222,6 +9408,71 @@ mod muc_routing_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn muc_admin_batch_preflights_every_projection_before_delivery() {
+        let room_id = uuid::Uuid::from_u128(1);
+        let room_epoch = uuid::Uuid::from_u128(2);
+        let target = crate::db::ClusterMucOccupancyTarget {
+            room_id,
+            room_epoch,
+            occupant_incarnation: uuid::Uuid::from_u128(3),
+            occupancy_epoch: 1,
+            full_jid: "user@example.test/client".into(),
+            nick: "visitor".into(),
+            connection_uuid: uuid::Uuid::from_u128(4),
+            connection_epoch: 1,
+        };
+        let snapshot = crate::db::ClusterMucPolicySnapshot {
+            room_id,
+            room_epoch,
+            occupant_incarnation: target.occupant_incarnation,
+            occupancy_epoch: target.occupancy_epoch,
+            full_jid: target.full_jid.clone(),
+            bare_jid: "user@example.test".into(),
+            nick: target.nick.clone(),
+            connection_uuid: target.connection_uuid,
+            connection_epoch: target.connection_epoch,
+            sm_session_id: None,
+            role: "none".into(),
+            affiliation: "none".into(),
+            state: "revoked".into(),
+        };
+        let mut details = serde_json::json!({
+            "non_anonymous": true,
+            "request_change_count":2,
+            "changes": [
+                {"kind":"presence","target":target,"snapshot":snapshot,
+                 "status":307,"reason":"removed"},
+                {"kind":"offline_affiliation","bare_jid":"other@example.test",
+                 "affiliation":"member","nick":null,"reason":null}
+            ]
+        });
+        assert!(validate_cluster_muc_admin_batch_details(&details, room_id, room_epoch).is_ok());
+        details["changes"][1]["bare_jid"] = serde_json::json!("other@example.test/resource");
+        assert!(validate_cluster_muc_admin_batch_details(&details, room_id, room_epoch).is_err());
+        details["changes"][1]["bare_jid"] = serde_json::json!("other@example.test");
+        details["non_anonymous"] = serde_json::json!(false);
+        assert!(validate_cluster_muc_admin_batch_details(&details, room_id, room_epoch).is_err());
+    }
+
+    #[test]
+    fn muc_admin_batch_projection_count_fits_durable_receipts() {
+        let room_id = uuid::Uuid::from_u128(1);
+        let room_epoch = uuid::Uuid::from_u128(2);
+        let notice = serde_json::json!({
+            "kind":"offline_affiliation","bare_jid":"user@example.test",
+            "affiliation":"member","nick":null,"reason":null
+        });
+        let details = serde_json::json!({
+            "non_anonymous":true,"request_change_count":1,"changes":vec![notice; 64]
+        });
+        assert!(validate_cluster_muc_admin_batch_details(&details, room_id, room_epoch).is_err());
+        let empty = serde_json::json!({
+            "non_anonymous":false,"request_change_count":1,"changes":[]
+        });
+        assert!(validate_cluster_muc_admin_batch_details(&empty, room_id, room_epoch).is_ok());
+    }
 
     #[test]
     fn metrics_probe_reads_live_health_without_cluster_control_authority() {

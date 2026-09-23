@@ -370,6 +370,13 @@ share broader state; their session-kernel and transport-port split belongs to
 Phase D. The Stage 1 architecture checks and all jobs in CI run #318 passed
 for commit `15aa311`.
 
+Stage 2 assigns upload lifecycle SQL to a separate `northstar_storage` role and
+two-connection pool. The runtime role retains only its upload-disabled probe
+and administrator dead-letter commands. Fresh and existing PostgreSQL volumes,
+negative privilege probes, and backup/restore rehearsal passed locally. All 30
+jobs in [CI run #320](https://github.com/takanashi-tetsuya/northstar/actions/runs/35906755288)
+passed for the storage-role fixture fix at `a49b846`.
+
 ### Transaction and authority map
 
 A repository operation represents a complete use case rather than one table.

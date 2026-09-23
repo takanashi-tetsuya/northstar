@@ -157,6 +157,7 @@ INSERT INTO pg_temp.northstar_migration_ledger_manifest(
   (144,'account revocation outbox',pg_catalog.decode('41aa6cd5a2bd37b702028707bc82ab8296e6d105d1bf0b6a7ab3e01745c13272a4df40d348481e886ab5916e31645655','hex')),
   (145,'webauthn passkeys',pg_catalog.decode('30080389d183df7eed31e411cca3586d0d23283fd7805f6cf0ed35d315960b980fca96e4e5f31e6c982b18f3835abd03','hex')),
   (146,'upload durable state probe',pg_catalog.decode('588d11ad036de11a9d9c6fedf0277e23caa23117a1161d7ae41983a9709185e79a907c5ea429d0ab9d144f9bff96b956','hex')),
-  (147,'upload storage role catalog health',pg_catalog.decode('6b1fa8ddf17a9f5a092546ed5ea28c566267d98cb86a8e8893536b2bc5c4341daaedf5abfc80b6dd02af70224cb02b4e','hex'));
+  (147,'upload storage role catalog health',pg_catalog.decode('6b1fa8ddf17a9f5a092546ed5ea28c566267d98cb86a8e8893536b2bc5c4341daaedf5abfc80b6dd02af70224cb02b4e','hex')),
+  (148,'cluster muc admin batch kind',pg_catalog.decode('10e068e897842f13a1c6e89ce4e49eed5ee68933694f3e5dcf7fcff24ee54cd026a0e544e3748375e6d1dc00dc33601d','hex'));
 
 \set northstar_migration_ledger_manifest_is_loaded true

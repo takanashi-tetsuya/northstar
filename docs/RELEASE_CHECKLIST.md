@@ -166,9 +166,13 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   while the runtime role retains only the disabled-state probe and two
   administrator dead-letter routines. Mount its independent URL for enabled
   and draining uploads; prove disabled mode opens no storage connection.
+- [ ] Apply migration `0148` before deploying MUC batch writers. Verify older
+  subject events and the new administrative batch kind both pass the ledger
+  constraint, then deploy nodes that can render batch events before enabling
+  batch writes.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 146 migrations from `0001` through the current
-  repository maximum `0147`, with `0021` as the sole intentional gap.
+  identity and verify all 147 migrations from `0001` through the current
+  repository maximum `0148`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

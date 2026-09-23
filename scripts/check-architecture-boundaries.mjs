@@ -3355,17 +3355,20 @@ const clusterMucOutboxSettlementService = read('src/services/cluster_muc_outbox_
 const clusterMucDelivery = structBody(read('src/cluster.rs'), 'async fn deliver_cluster_muc_event(');
 const mucContextTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;');
 const mucContextRead = clusterMucDelivery.indexOf('.event_context(delivery.operation_id)', mucContextTurn);
-const mucCacheBranch = clusterMucDelivery.indexOf('let recipient = if exact_cached', mucContextRead);
+const mucCacheBranch = clusterMucDelivery.search(/let (?:mut )?recipient = if exact_cached/);
 const mucSnapshotTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', mucCacheBranch);
 const mucSnapshotRead = clusterMucDelivery.indexOf('.recipient_snapshot(delivery)', mucSnapshotTurn);
 const mucCurrentTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', mucSnapshotRead);
 const mucCurrentRead = clusterMucDelivery.indexOf('.audience_is_current(delivery)', mucCurrentTurn);
 const mucAbsentCheck = clusterMucDelivery.indexOf('let Some(snapshot) = snapshot else', mucSnapshotRead);
+const mucOriginalTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', mucCurrentRead);
+const mucOriginalRead = clusterMucDelivery.indexOf('.original_audience_snapshot(delivery)', mucOriginalTurn);
 if ([mucContextTurn, mucContextRead, mucCacheBranch, mucSnapshotTurn, mucSnapshotRead,
-     mucCurrentTurn, mucCurrentRead, mucAbsentCheck].some((offset) => offset < 0)
+     mucCurrentTurn, mucCurrentRead, mucAbsentCheck, mucOriginalTurn, mucOriginalRead].some((offset) => offset < 0)
     || mucContextRead >= mucCacheBranch
     || mucSnapshotRead >= mucAbsentCheck
     || mucAbsentCheck >= mucCurrentRead
+    || mucCurrentRead >= mucOriginalTurn
     || /crate::db::(?:cluster_muc_event_context|cluster_muc_delivery_recipient_snapshot|cluster_muc_delivery_audience_is_current)\s*\(/.test(clusterMucDelivery)) {
   throw new Error('cluster MUC event and audience reads must keep independent database turns and the cached-recipient fast path');
 }

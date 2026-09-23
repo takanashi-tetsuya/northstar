@@ -3168,6 +3168,11 @@ if (!operationRuntimeOwnershipSource.includes('.generation_cleanup_routes()')
     || !operationRuntimeOwnershipSource.includes('session.user_id == user_id && session.auth_generation == auth_generation')) {
   throw new Error('administrator account cleanup must cancel only the exact account generation');
 }
+const panicDisconnect = structBody(operationRuntimeOwnershipSource, 'async fn panic_disconnect_with<');
+if (!operationRuntimeOwnershipSource.includes('panic_disconnect_with(&state.panic_disconnect_routes()')
+    || !/let disconnected = routes\.cancel_all\(\);\s*teardown\(\)\.await\?;/.test(panicDisconnect)) {
+  throw new Error('emergency disconnect must cancel all local routes before durable SM teardown');
+}
 const loginEndpointSource = read('src/api/auth_routes.rs');
 const loginEndpoint = structBody(loginEndpointSource, 'pub async fn login(');
 const loginContext = structBody(read('src/state/http_login_endpoint.rs'), 'pub(crate) struct HttpLoginEndpointContext');
@@ -3175,6 +3180,16 @@ if (!loginEndpointSource.includes('State(context): State<HttpLoginEndpointContex
     || /\bstate\.(?:metrics|pool|config)\b/.test(loginEndpoint)
     || /\bAppState\b|\bMetrics\b|PgPool/.test(loginContext)) {
   throw new Error('REST login must receive only its service, proxy policy and outcome counters');
+}
+const uploadSource = read('src/api/upload.rs');
+const uploadGet = structBody(uploadSource, 'pub async fn upload_get(');
+const uploadReadContext = structBody(read('src/state/upload_http_read.rs'), 'pub(crate) struct UploadHttpReadContext');
+if (!uploadSource.includes('State(state): State<UploadHttpReadContext>')
+    || !uploadGet.includes('let download_guard = state.acquire_download(client_ip)')
+    || !uploadGet.includes('let _download_guard = download_guard;')
+    || /\b(?:AppState|Metrics|PgPool)\b/.test(uploadReadContext)
+    || !read('src/state/upload_http_read.rs').includes('admission: state.upload_runtime.download_admission().cloned()')) {
+  throw new Error('public upload GET must retain shared download admission and guarded read authority');
 }
 const capsEffectSource = read('src/xmpp/protocol/caps.rs');
 if (/\bstate\.metrics\b|\bself\.state\.metrics\b|&(?:crate::metrics::)?Metrics\b/.test(capsEffectSource)
@@ -3193,6 +3208,11 @@ const presenceProtocol = read('src/xmpp/protocol/presence.rs');
 if (/\bself\.state\s*\.metrics\b/.test(presenceProtocol)
     || countMatches(presenceProtocol, /presence_probe_telemetry\(\)\.failed\(\)/g) !== 2) {
   throw new Error('cross-node presence replay failures must use their one-counter telemetry port');
+}
+const mucProtocol = read('src/xmpp/protocol/muc.rs');
+if (/\b(?:self\.)?state\s*\.metrics\b/.test(mucProtocol)
+    || !mucProtocol.includes('state.muc_telemetry().post_commit_failure()')) {
+  throw new Error('MUC authority and post-commit reporting must use its narrow telemetry port');
 }
 const readinessEndpointSource = read('src/api/system.rs');
 const metricsEndpoint = structBody(readinessEndpointSource, 'pub struct MetricsEndpointState');
@@ -3376,6 +3396,7 @@ for (const task of serviceTaskNames) {
 const stateServiceAccessors = [
   'api_query_service',
   'api_session_service',
+  'cluster_authority_service',
   'challenge_issue_service',
   'challenge_cleanup_service',
   'sasl_login_abuse_service',

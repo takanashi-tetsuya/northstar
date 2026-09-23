@@ -103,7 +103,7 @@ pub struct Metrics {
     pub routing_duration_seconds: DurationHistogram,
     pub outbox_delivery_duration_seconds: DurationHistogram,
     pub redis_operation_duration_seconds: DurationHistogram,
-    pub upload_operation_duration_seconds: DurationHistogram,
+    pub upload_operation_duration_seconds: Arc<DurationHistogram>,
     pub upload_storage_reconciliation_failures_total: AtomicU64,
     pub upload_storage_capacity_ledger_mismatches: AtomicU64,
     pub upload_storage_capacity_authority_violations: AtomicU64,

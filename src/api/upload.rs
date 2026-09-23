@@ -23,7 +23,7 @@ use crate::services::upload::{
     UserUploadDeleteOutcome,
 };
 use crate::services::upload_safety::UploadIoClass;
-use crate::state::AppState;
+use crate::state::{AppState, UploadHttpReadContext};
 
 const UPLOAD_LEASE_SECONDS: i64 = 90;
 const UPLOAD_RENEW_SECONDS: u64 = 30;
@@ -507,26 +507,24 @@ fn upload_in_progress(retry_after_seconds: u64) -> Result<Response, AppError> {
 }
 
 pub async fn upload_get(
-    State(state): State<Arc<AppState>>,
+    State(state): State<UploadHttpReadContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     crate::api::ApiPath(id): crate::api::ApiPath<Uuid>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let _operation_timer = state
-        .metrics
-        .upload_operation_duration_seconds
-        .start_timer();
-    let client_ip = crate::api::client_ip(peer.ip(), &headers, &state);
-    let download_guard = state.acquire_upload_download(client_ip).ok_or_else(|| {
+    let _operation_timer = state.operation_timer();
+    let client_ip =
+        super::client_ip_with_trusted_proxies(peer.ip(), &headers, state.trusted_proxies());
+    let download_guard = state.acquire_download(client_ip).ok_or_else(|| {
         AppError::RateLimited(serde_json::json!({
             "message":"too many concurrent upload downloads",
             "retry_after_seconds":1
         }))
     })?;
-    let Some(slot) = state.upload_service().public_file(id).await? else {
+    let Some(slot) = state.public_file(id).await? else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
-    if state.upload_store().backend() != slot.storage_backend {
+    if state.backend() != slot.storage_backend {
         return Err(AppError::Internal(anyhow::anyhow!(
             "committed upload belongs to a different storage backend"
         )));
@@ -535,10 +533,8 @@ pub async fn upload_get(
         AppError::Internal(anyhow::anyhow!("committed upload has no object locator"))
     })?;
     let Some(stored) = tokio::time::timeout(
-        Duration::from_secs(state.config.upload_download_read_timeout_seconds),
-        state
-            .upload_store()
-            .get(object_key, slot.storage_object_version.as_deref()),
+        state.read_timeout(),
+        state.get(object_key, slot.storage_object_version.as_deref()),
     )
     .await
     .map_err(|_| AppError::Internal(anyhow::anyhow!("upload object lookup timed out")))?
@@ -586,9 +582,8 @@ pub async fn upload_get(
         HeaderValue::from_static("default-src 'none'; sandbox"),
     );
 
-    let read_timeout = Duration::from_secs(state.config.upload_download_read_timeout_seconds);
-    let download_deadline =
-        tokio::time::Instant::now() + Duration::from_secs(state.config.upload_download_max_seconds);
+    let read_timeout = state.read_timeout();
+    let download_deadline = tokio::time::Instant::now() + state.max_duration();
     // Keep the independent global/IP permit for the entire body lifetime, not
     // merely until this handler returns. Each storage read also has a bounded
     // idle timeout so a stalled origin cannot retain a slot indefinitely.

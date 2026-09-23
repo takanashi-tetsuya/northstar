@@ -43,6 +43,7 @@ pub(crate) mod background_housekeeping_repository;
 pub mod capacity;
 pub(crate) mod capacity_maintenance_repository;
 pub(crate) mod challenge_issuance_repository;
+pub(crate) mod cluster_authority_repository;
 pub mod cluster_keys;
 pub mod cluster_muc;
 pub(crate) mod cluster_muc_outbox_claim_repository;

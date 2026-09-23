@@ -9,6 +9,7 @@ pub(crate) mod background_housekeeping;
 pub(crate) mod blocking;
 pub(crate) mod capacity_maintenance;
 pub(crate) mod challenge_issuance;
+pub(crate) mod cluster_authority;
 pub(crate) mod cluster_muc_outbox_claim;
 pub(crate) mod cluster_muc_outbox_preclaim;
 pub(crate) mod cluster_muc_outbox_settlement;

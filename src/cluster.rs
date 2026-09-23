@@ -1,3 +1,4 @@
+use crate::services::cluster_authority::{ClusterAuthorityRepository, ClusterAuthorityService};
 use crate::services::cluster_muc_outbox_settlement::AckOutcome;
 use crate::state::AppState;
 use anyhow::{Context, Result};
@@ -1835,113 +1836,79 @@ impl ClusterManager {
     }
 
     pub async fn refresh_instance_authority(&self, pool: &sqlx::PgPool) -> Result<()> {
+        // Bootstrap still owns its local pool before AppState is constructed.
+        // Runtime workers use the AppState-owned typed authority service.
+        let service = ClusterAuthorityService::new(
+            crate::db::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
+                pool.clone(),
+            ),
+        );
+        self.refresh_instance_authority_with(&service).await
+    }
+
+    pub(crate) async fn refresh_instance_authority_with<R: ClusterAuthorityRepository>(
+        &self,
+        service: &ClusterAuthorityService<R>,
+    ) -> Result<()> {
         let Some(security) = self.security.as_ref() else {
             return Ok(());
         };
         let nodes = security.peer_node_ids();
-        crate::db::validate_cluster_peer_key_deployments(
-            pool,
-            &self.namespace,
-            &security.peer_key_authorities(),
-        )
-        .await?;
-        let key_authorities =
-            crate::db::cluster_peer_key_authorities(pool, &self.namespace, &nodes).await?;
-        let key_replacements = key_authorities
-            .into_iter()
-            .map(|authority| {
-                (
-                    authority.node_id,
-                    AuthorizedPeerKeys {
-                        epoch: authority.epoch,
-                        current_key_id: authority.current_key_id,
-                        previous_key_id: authority.previous_key_id,
-                        refresh_until: Instant::now() + Duration::from_secs(10),
-                    },
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        self.authorized_peer_keys
-            .retain(|node, _| key_replacements.contains_key(node));
-        for (node, authority) in key_replacements {
-            self.authorized_peer_keys.insert(node, authority);
-        }
-        let active =
-            crate::db::active_cluster_node_instances(pool, &self.namespace, &nodes).await?;
-        let replacements = active
-            .into_iter()
-            .map(|instance| {
-                (
-                    instance.node_id,
-                    AuthorizedClusterInstance {
-                        instance_uuid: instance.instance_uuid,
-                        instance_epoch: instance.instance_epoch,
-                        signing_key_id: instance.signing_key_id,
-                        signing_key_epoch: instance.signing_key_epoch,
-                        valid_until: Instant::now()
-                            + instance
-                                .lease_remaining
-                                .saturating_sub(Duration::from_secs(1)),
-                        refresh_until: Instant::now() + Duration::from_secs(10),
-                    },
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        self.authorized_instances
-            .retain(|node, _| replacements.contains_key(node));
-        for (node, instance) in replacements {
-            self.authorized_instances.insert(node, instance);
-        }
-        Ok(())
-    }
-
-    pub async fn heartbeat_instance_authority(&self, pool: &sqlx::PgPool) -> Result<()> {
-        if !self.is_enabled() {
-            return Ok(());
-        }
-        let epoch = self.instance_epoch.load(Ordering::Acquire);
-        let security = self
-            .security
-            .as_ref()
-            .context("cluster signing identity is missing")?;
-        crate::db::heartbeat_cluster_node_instance(
-            pool,
-            crate::db::ClusterNodeHeartbeat {
-                xmpp_domain: &self.namespace,
-                node_id: &self.node_id,
-                instance_uuid: self.connection_uuid,
-                instance_epoch: epoch,
-                signing_key_id: &security.current_key_id,
-                signing_key_epoch: security.key_epoch,
-                lease: Duration::from_secs(NODE_TTL_SECONDS),
-            },
-        )
-        .await?;
-        Ok(())
-    }
-
-    pub async fn validate_instance_authority(&self, pool: &sqlx::PgPool) -> Result<()> {
-        let Some(security) = self.security.as_ref() else {
-            return Ok(());
-        };
-        let rows = crate::db::active_cluster_node_instances(
-            pool,
-            &self.namespace,
-            std::slice::from_ref(&self.node_id),
-        )
-        .await?;
-        let epoch = self.instance_epoch.load(Ordering::Acquire);
-        anyhow::ensure!(
-            rows.iter().any(|instance| {
-                instance.instance_uuid == self.connection_uuid
-                    && instance.instance_epoch == epoch
-                    && instance.signing_key_id == security.current_key_id
-                    && instance.signing_key_epoch == security.key_epoch
-                    && !instance.lease_remaining.is_zero()
-            }),
-            "this process no longer owns the authoritative cluster node-instance lease"
-        );
-        Ok(())
+        let expected = security.peer_key_authorities();
+        service
+            .refresh_peers(
+                &self.namespace,
+                &expected,
+                &nodes,
+                |key_authorities| {
+                    let key_replacements = key_authorities
+                        .into_iter()
+                        .map(|authority| {
+                            (
+                                authority.node_id,
+                                AuthorizedPeerKeys {
+                                    epoch: authority.epoch,
+                                    current_key_id: authority.current_key_id,
+                                    previous_key_id: authority.previous_key_id,
+                                    refresh_until: Instant::now() + Duration::from_secs(10),
+                                },
+                            )
+                        })
+                        .collect::<HashMap<_, _>>();
+                    self.authorized_peer_keys
+                        .retain(|node, _| key_replacements.contains_key(node));
+                    for (node, authority) in key_replacements {
+                        self.authorized_peer_keys.insert(node, authority);
+                    }
+                },
+                |active| {
+                    let replacements = active
+                        .into_iter()
+                        .map(|instance| {
+                            (
+                                instance.node_id,
+                                AuthorizedClusterInstance {
+                                    instance_uuid: instance.instance_uuid,
+                                    instance_epoch: instance.instance_epoch,
+                                    signing_key_id: instance.signing_key_id,
+                                    signing_key_epoch: instance.signing_key_epoch,
+                                    valid_until: Instant::now()
+                                        + instance
+                                            .lease_remaining
+                                            .saturating_sub(Duration::from_secs(1)),
+                                    refresh_until: Instant::now() + Duration::from_secs(10),
+                                },
+                            )
+                        })
+                        .collect::<HashMap<_, _>>();
+                    self.authorized_instances
+                        .retain(|node, _| replacements.contains_key(node));
+                    for (node, instance) in replacements {
+                        self.authorized_instances.insert(node, instance);
+                    }
+                },
+            )
+            .await
     }
 
     pub async fn release_instance_authority(&self, pool: &sqlx::PgPool) -> Result<bool> {
@@ -5670,7 +5637,7 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
     // process epochs is stale.
     state
         .cluster
-        .refresh_instance_authority(&state.pool)
+        .refresh_instance_authority_with(&state.cluster_authority_service())
         .await?;
     let _redis_timer = state.metrics.redis_operation_duration_seconds.start_timer();
     state.cluster.touch_node().await?;
@@ -5870,6 +5837,7 @@ pub async fn run_failure_supervisor(
         .cluster
         .key_authority_identity()
         .context("cluster signing-key authority is missing")?;
+    let authority_service = state.cluster_authority_service();
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut heartbeat_tick = 0_u8;
@@ -5879,10 +5847,17 @@ pub async fn run_failure_supervisor(
             _ = interval.tick() => {
                 heartbeat_tick = heartbeat_tick.wrapping_add(1);
                 let validation = async {
-                    crate::db::validate_cluster_key_deployment(&state.pool, &identity).await?;
-                    state.cluster.validate_instance_authority(&state.pool).await?;
+                    authority_service.validate_cluster_key(&identity).await?;
+                    let instance = state.cluster.readiness_authority_snapshot()
+                        .context("cluster signing identity is missing")?;
+                    authority_service.validate_local_instance(&instance).await?;
                     if heartbeat_tick % 6 == 1 {
-                        state.cluster.heartbeat_instance_authority(&state.pool).await?;
+                        let instance = state.cluster.readiness_authority_snapshot()
+                            .context("cluster signing identity is missing")?;
+                        authority_service.heartbeat_local_instance(
+                            &instance,
+                            Duration::from_secs(NODE_TTL_SECONDS),
+                        ).await?;
                         state.cluster_replay_maintenance_service()
                             .cleanup_and_validate(4096)
                             .await?;
@@ -5890,7 +5865,7 @@ pub async fn run_failure_supervisor(
                             .cleanup_and_validate(4096)
                             .await?;
                     }
-                    state.cluster.refresh_instance_authority(&state.pool).await?;
+                    state.cluster.refresh_instance_authority_with(&authority_service).await?;
                     Ok::<_, anyhow::Error>(())
                 }.await;
                 match validation {

@@ -433,7 +433,9 @@ outcome counters it can update, without the application-wide state.
 Logout has its own audited session command. Upload claim, staged promotion,
 replay, public read and deletion now pass through the upload lifecycle port;
 the service is available in drain-read-only mode for historical reads and
-deletion, while new reservations remain disabled by the route policy.
+deletion, while new reservations remain disabled by the route policy. Public
+GET has a read-only HTTP context sharing the existing download admission and
+guarded object store; the body task retains its permit until streaming ends.
 REST password changes now use a dedicated command service and PostgreSQL
 repository for replay lookup, bearer and generation locks, proof admission,
 password preparation and conditional credential publication. The HTTP adapter
@@ -470,6 +472,9 @@ the live-session snapshot is taken only after a successful claim.
 The signed cluster session-termination listener reads durable route authority
 through a dedicated service and repository. It checks the live local instance
 after that read, then retains connection fencing and acknowledgement ownership.
+Peer-key and node-instance refresh use a separate cluster authority service;
+the PostgreSQL validation and cache reads finish before the Redis maintenance
+touch, and the failure supervisor retains its existing short-circuit order.
 The failure supervisor runs bounded session-route cleanup and authority
 validation through one ordered maintenance port. Replay cleanup and capacity
 validation use a separate ordered port before the route check. C2S post-action supervision
@@ -490,8 +495,9 @@ authorization, bounded database snapshots and live gauges. Administrator
 broadcast target capture and exact delivery use LocalBroadcastRoutes; the
 session-kick effect has a separate exact-incarnation cancellation handle. The
 user-session-cleanup effect can cancel only matching account and credential
-generation routes. The operation worker still needs broader state for its
-other effects.
+generation routes. Emergency disconnect cancels all local routes before its
+separate durable SM teardown. The operation worker still needs broader state
+for its other effects.
 Background housekeeping receives only its two shared counters. Archive
 retention holds ten shared counter cells rather than the metrics registry.
 S2S ingress/egress, C2S stream/authentication and SM resume,
@@ -499,7 +505,8 @@ roster/privacy/blocking side-effect reporting, registration/account abuse,
 Push, component transport, and PEP/PubSub delivery use borrowed counters and
 timers instead of the complete registry. Caps effect admission and completion
 also receive only their four counters/timer; cross-node presence replay failures
-receive one counter.
+receive one counter. MUC authority and post-commit delivery reporting use a
+MUC-specific set of counters.
 Passkey login completion receives its service without the broader HTTP state;
 it checks the live allowed origin before consuming the challenge.
 Remaining work includes live-session and account-recovery workers and the six

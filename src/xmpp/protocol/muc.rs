@@ -215,14 +215,7 @@ fn record_muc_post_commit_failure(
     recipient: &str,
     stage: &str,
 ) {
-    state
-        .metrics
-        .muc_post_commit_delivery_failures_total
-        .fetch_add(1, Ordering::Relaxed);
-    state
-        .metrics
-        .post_accept_side_effect_failures_total
-        .fetch_add(1, Ordering::Relaxed);
+    state.muc_telemetry().post_commit_failure();
     tracing::warn!(room, recipient, stage, "post-commit MUC side effect failed");
 }
 
@@ -527,14 +520,7 @@ pub(super) async fn deliver_muc_offline_affiliation_change_notice(
         }
     }
     if let Err(error) = state.cluster.send_to_muc(room_jid, &notice).await {
-        state
-            .metrics
-            .muc_post_commit_delivery_failures_total
-            .fetch_add(1, Ordering::Relaxed);
-        state
-            .metrics
-            .post_accept_side_effect_failures_total
-            .fetch_add(1, Ordering::Relaxed);
+        state.muc_telemetry().post_commit_failure();
         tracing::warn!(
             room = %room_jid,
             target = %target_bare_jid,
@@ -1112,10 +1098,7 @@ impl ProtocolSession {
             .local_cluster_occupancy_target(room.id, occupant.cluster_epoch, occupant.connection_id)
             .await?
         else {
-            self.state
-                .metrics
-                .cluster_muc_authority_rejections_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.state.muc_telemetry().authority_rejected();
             return Ok(None);
         };
         if target.room_epoch != room.room_epoch
@@ -1131,10 +1114,7 @@ impl ProtocolSession {
                 )
                 .await?
         {
-            self.state
-                .metrics
-                .cluster_muc_authority_rejections_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.state.muc_telemetry().authority_rejected();
             return Ok(None);
         }
         Ok(Some(occupant))
@@ -2645,18 +2625,9 @@ impl ProtocolSession {
                                         target.sender.try_send(forwarded.clone()).is_ok()
                                     };
                                     if accepted {
-                                        let counter = if live_delivery.is_some() {
-                                            &self
-                                                .state
-                                                .metrics
-                                                .online_queue_durable_acceptances_total
-                                        } else {
-                                            &self
-                                                .state
-                                                .metrics
-                                                .online_queue_volatile_acceptances_total
-                                        };
-                                        counter.fetch_add(1, Ordering::Relaxed);
+                                        self.state
+                                            .muc_telemetry()
+                                            .online_queue_accepted(live_delivery.is_some());
                                         delivered = true;
                                         delivered_full_jid = Some(full_jid);
                                         break;
@@ -3368,10 +3339,7 @@ impl ProtocolSession {
         // The single-node authority gate is intentionally released only after
         // the accepted incarnation's complete live fan-out has been queued.
         drop(local_authority_guard);
-        self.state
-            .metrics
-            .messages_routed_total
-            .fetch_add(1, Ordering::Relaxed);
+        self.state.muc_telemetry().message_routed();
         Ok(Action::None)
     }
 
@@ -5443,10 +5411,7 @@ impl ProtocolSession {
         {
             Ok(result) => result,
             Err(error) if crate::services::muc::is_capacity_exhausted(&error) => {
-                self.state
-                    .metrics
-                    .capacity_reservations_rejected_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.muc_telemetry().capacity_rejected();
                 return Ok(Action::Send(muc_stanza_error(
                     root,
                     &full_jid,

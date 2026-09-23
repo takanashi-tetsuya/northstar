@@ -483,6 +483,42 @@ impl LocalGenerationCleanupRoutes {
     }
 }
 
+/// Process-wide emergency cancellation. This handle only signals local
+/// transports; durable SM teardown remains a separate, ordered effect.
+pub(crate) struct LocalPanicDisconnectRoutes {
+    sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+}
+
+impl LocalPanicDisconnectRoutes {
+    pub(crate) fn new(
+        sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+    ) -> Self {
+        Self { sessions }
+    }
+
+    pub(crate) fn cancel_all(&self) -> u64 {
+        let mut disconnected = 0_u64;
+        for session in self.sessions.iter() {
+            session.disconnect.cancel();
+            disconnected += 1;
+        }
+        disconnected
+    }
+}
+
+async fn panic_disconnect_with<Teardown, TeardownFuture>(
+    routes: &LocalPanicDisconnectRoutes,
+    teardown: Teardown,
+) -> Result<Value>
+where
+    Teardown: FnOnce() -> TeardownFuture,
+    TeardownFuture: Future<Output = Result<usize>>,
+{
+    let disconnected = routes.cancel_all();
+    teardown().await?;
+    Ok(json!({"sessions_disconnected":disconnected}))
+}
+
 struct BroadcastRoute {
     session_key: String,
     user_id: Uuid,
@@ -619,13 +655,10 @@ async fn execute_effect(
             }))
         }
         "admin.panic_disconnect" => {
-            let mut disconnected = 0_u64;
-            for session in state.sessions.iter() {
-                session.disconnect.cancel();
-                disconnected += 1;
-            }
-            state.revoke_all_sm_sessions_with_teardown().await?;
-            Ok(json!({"sessions_disconnected":disconnected}))
+            panic_disconnect_with(&state.panic_disconnect_routes(), || {
+                state.revoke_all_sm_sessions_with_teardown()
+            })
+            .await
         }
         "admin.session_kick" => {
             let (user_id, connection_id, generation) = session_kick_identity(payload)?;
@@ -760,6 +793,53 @@ mod tests {
             last_activity: Arc::new(std::sync::RwLock::new(Instant::now())),
             disconnect: CancellationToken::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn panic_disconnect_cancels_every_local_route_before_sm_teardown() {
+        let sessions = Arc::new(dashmap::DashMap::new());
+        let routes = LocalPanicDisconnectRoutes::new(Arc::clone(&sessions));
+        let add = |key: &str, routable: bool| {
+            let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+            let session = session(Uuid::new_v4(), 3, Uuid::new_v4(), sender);
+            session.routable.store(routable, Ordering::Release);
+            let cancelled = session.disconnect.clone();
+            sessions.insert(key.to_owned(), session);
+            cancelled
+        };
+        let active = add("alice@example.test/phone", true);
+        let pending = add("alice@example.test/pending", false);
+        let previously_cancelled = add("bob@example.test/device", true);
+        previously_cancelled.cancel();
+
+        let result = panic_disconnect_with(&routes, || {
+            assert!(active.is_cancelled());
+            assert!(pending.is_cancelled());
+            assert!(previously_cancelled.is_cancelled());
+            async { Ok(12) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, json!({"sessions_disconnected":3}));
+        assert!(sessions
+            .get("alice@example.test/phone")
+            .unwrap()
+            .routable
+            .load(Ordering::Acquire));
+        assert!(!sessions
+            .get("alice@example.test/pending")
+            .unwrap()
+            .routable
+            .load(Ordering::Acquire));
+
+        let error = panic_disconnect_with(&routes, || {
+            assert!(active.is_cancelled());
+            async { anyhow::bail!("durable SM teardown failed") }
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "durable SM teardown failed");
+        assert_eq!(routes.cancel_all(), 3);
     }
 
     #[test]

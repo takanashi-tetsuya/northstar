@@ -138,6 +138,8 @@ mod http_login_endpoint;
 pub(crate) use http_login_endpoint::HttpLoginEndpointContext;
 mod passkey_login_finish;
 pub(crate) use passkey_login_finish::PasskeyLoginFinishContext;
+mod upload_http_read;
+pub(crate) use upload_http_read::UploadHttpReadContext;
 mod metrics_context;
 pub(crate) use metrics_context::MetricsContext;
 pub(crate) mod suspension;
@@ -159,6 +161,12 @@ impl axum::extract::FromRef<Arc<AppState>> for HttpLoginEndpointContext {
 impl axum::extract::FromRef<Arc<AppState>> for PasskeyLoginFinishContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         Self::new(Arc::clone(&state.passkey_service))
+    }
+}
+
+impl axum::extract::FromRef<Arc<AppState>> for UploadHttpReadContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        Self::from_state(state)
     }
 }
 
@@ -1779,10 +1787,33 @@ impl FederationWritePolicy {
     }
 }
 
+#[derive(Clone)]
 struct UploadAdmission {
     semaphore: Arc<Semaphore>,
     by_ip: Arc<DashMap<std::net::IpAddr, usize>>,
     max_per_ip: usize,
+}
+
+impl UploadAdmission {
+    fn try_acquire_download(&self, ip: std::net::IpAddr) -> Option<UploadDownloadGuard> {
+        let permit = Arc::clone(&self.semaphore).try_acquire_owned().ok()?;
+        let mut count = self.by_ip.entry(ip).or_insert(0);
+        if *count >= self.max_per_ip {
+            let remove_zero = *count == 0;
+            drop(count);
+            if remove_zero {
+                self.by_ip.remove(&ip);
+            }
+            return None;
+        }
+        *count += 1;
+        drop(count);
+        Some(UploadDownloadGuard {
+            counts: Arc::clone(&self.by_ip),
+            ip,
+            _permit: permit,
+        })
+    }
 }
 
 enum UploadRuntime {
@@ -2372,6 +2403,18 @@ impl AppState {
         &self.federation_outbox
     }
 
+    pub(crate) fn cluster_authority_service(
+        &self,
+    ) -> crate::services::cluster_authority::ClusterAuthorityService<
+        db::cluster_authority_repository::PostgresClusterAuthorityRepository,
+    > {
+        crate::services::cluster_authority::ClusterAuthorityService::new(
+            db::cluster_authority_repository::PostgresClusterAuthorityRepository::new(
+                self.pool.clone(),
+            ),
+        )
+    }
+
     pub(crate) fn tls_context(&self) -> &crate::tls::TlsContext {
         &self.tls_context
     }
@@ -2396,6 +2439,24 @@ impl AppState {
         &self,
     ) -> crate::operation_runtime::LocalGenerationCleanupRoutes {
         crate::operation_runtime::LocalGenerationCleanupRoutes::new(Arc::clone(&self.sessions))
+    }
+
+    pub(crate) fn panic_disconnect_routes(
+        &self,
+    ) -> crate::operation_runtime::LocalPanicDisconnectRoutes {
+        crate::operation_runtime::LocalPanicDisconnectRoutes::new(Arc::clone(&self.sessions))
+    }
+
+    pub(crate) fn muc_telemetry(&self) -> crate::xmpp::capabilities::MucTelemetry<'_> {
+        crate::xmpp::capabilities::MucTelemetry::new(
+            &self.metrics.muc_post_commit_delivery_failures_total,
+            &self.metrics.post_accept_side_effect_failures_total,
+            &self.metrics.cluster_muc_authority_rejections_total,
+            &self.metrics.online_queue_durable_acceptances_total,
+            &self.metrics.online_queue_volatile_acceptances_total,
+            &self.metrics.messages_routed_total,
+            &self.metrics.capacity_reservations_rejected_total,
+        )
     }
 
     pub(crate) fn caps_effect_telemetry(
@@ -5723,30 +5784,6 @@ impl AppState {
             *count += 1;
         }
         Some(UploadRequestGuard {
-            counts: Arc::clone(&admission.by_ip),
-            ip,
-            _permit: permit,
-        })
-    }
-
-    pub fn acquire_upload_download(
-        self: &Arc<Self>,
-        ip: std::net::IpAddr,
-    ) -> Option<UploadDownloadGuard> {
-        let admission = self.upload_runtime.download_admission()?;
-        let permit = Arc::clone(&admission.semaphore).try_acquire_owned().ok()?;
-        let mut count = admission.by_ip.entry(ip).or_insert(0);
-        if *count >= admission.max_per_ip {
-            let remove_zero = *count == 0;
-            drop(count);
-            if remove_zero {
-                admission.by_ip.remove(&ip);
-            }
-            return None;
-        }
-        *count += 1;
-        drop(count);
-        Some(UploadDownloadGuard {
             counts: Arc::clone(&admission.by_ip),
             ip,
             _permit: permit,

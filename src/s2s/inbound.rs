@@ -1097,6 +1097,17 @@ fn publish_inbound_route(
     registered
 }
 
+fn initial_bidi_route_admissible(
+    sm_enabled: bool,
+    application_stanza_seen: bool,
+    negotiation_deadline_elapsed: bool,
+    suspended_owner_exists: bool,
+) -> bool {
+    sm_enabled
+        || application_stanza_seen
+        || (negotiation_deadline_elapsed && !suspended_owner_exists)
+}
+
 async fn reject_resume(
     mut request: super::resume::Request,
     condition: &'static str,
@@ -1220,7 +1231,17 @@ async fn drive_authenticated_inbound_inner(
         }
         let current = transport.as_mut().expect("active S2S transport");
         if current.disconnect.is_cancelled() { anyhow::bail!("inbound S2S certificate was explicitly revoked"); }
-        let registered = publish_inbound_route(&state, &scope, connection_id, &sender, &current.disconnect);
+        // A newly authenticated stream may still send <resume/>. Publishing
+        // its BIDI route now could deliver an outbox stanza before <resumed/>,
+        // which makes the peer reject an otherwise valid resumption. Wait for
+        // the first SM command or application stanza before routing on it.
+        let mut registered = if initial_bidi_route_admissible(sm.is_enabled(), used, false, false) {
+            publish_inbound_route(&state, &scope, connection_id, &sender, &current.disconnect)
+        } else {
+            false
+        };
+        let mut initial_negotiation_complete = sm.is_enabled() || used;
+        let mut initial_negotiation_deadline = tokio::time::Instant::now() + super::IO_TIMEOUT;
         let peer_limits = current.limits;
         let mut incoming_idle_deadline = tokio::time::Instant::now() + S2S_AUTHENTICATED_IDLE_TIMEOUT;
         let keepalive_period = keepalive_interval_for_peer(peer_limits);
@@ -1236,6 +1257,22 @@ async fn drive_authenticated_inbound_inner(
                 _ = current.disconnect.cancelled() => {
                     let _ = send_stream_error(&mut current.stream, "not-authorized").await;
                     anyhow::bail!("inbound S2S certificate was explicitly revoked");
+                }
+                _ = tokio::time::sleep_until(initial_negotiation_deadline), if !initial_negotiation_complete => {
+                    // A peer may use BIDI without SM or sending a stanza of
+                    // its own. Admit its route after the negotiation window,
+                    // but preserve a suspended owner's full resume window.
+                    if initial_bidi_route_admissible(
+                        sm.is_enabled(),
+                        used,
+                        true,
+                        state.s2s_connection_registry().resumption.has_suspended_scope(&scope),
+                    ) {
+                        initial_negotiation_complete = true;
+                        registered = publish_inbound_route(&state, &scope, connection_id, &sender, &current.disconnect);
+                    } else {
+                        initial_negotiation_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+                    }
                 }
                 _ = tokio::time::sleep_until(sm.deadline()), if sm.is_enabled() => anyhow::bail!("S2S acknowledgement timed out"),
                 request = resumes.recv(), if registration.is_some() => return Ok(request),
@@ -1283,12 +1320,18 @@ async fn drive_authenticated_inbound_inner(
                                 }
                             }
                             write_xml(&mut current.stream, &enabled.finish()).await?;
+                            initial_negotiation_complete = true;
+                            registered = publish_inbound_route(&state, &scope, connection_id, &sender, &current.disconnect);
                             continue;
                         }
                         _ => {}
                     }
                     if sm.control(&state, &mut current.stream, &frame, false).await? { continue; }
                     used = true;
+                    if !initial_negotiation_complete {
+                        initial_negotiation_complete = true;
+                        registered = publish_inbound_route(&state, &scope, connection_id, &sender, &current.disconnect);
+                    }
                     let routed = route_inbound_for_connection_owned(Arc::clone(&state), scope.remote.clone(), scope.local.clone(), connection_id, frame.clone()).await?;
                     sm.handled(&frame);
                     match routed {
@@ -3659,6 +3702,21 @@ fn is_remote_muc_private_message(
 mod tests {
     use super::*;
     use crate::services::retractions::RetractionService;
+
+    #[test]
+    fn bidi_route_waits_for_resume_preface_but_admits_non_sm_peers() {
+        // A new authenticated transport has not established its SM mode yet.
+        // In particular it must not receive an outbox stanza before <resume/>.
+        assert!(!initial_bidi_route_admissible(false, false, false, false));
+        // A peer that does not use SM still obtains a BIDI route after the
+        // bounded negotiation wait, unless an older resumable owner exists.
+        assert!(initial_bidi_route_admissible(false, false, true, false));
+        assert!(!initial_bidi_route_admissible(false, false, true, true));
+        // Once the peer enables SM or sends an application stanza, the route
+        // can carry reverse traffic without waiting for the timer.
+        assert!(initial_bidi_route_admissible(true, false, false, true));
+        assert!(initial_bidi_route_admissible(false, true, false, true));
+    }
 
     #[test]
     fn local_service_domains_cannot_be_asserted_by_an_inbound_federation_stream() {

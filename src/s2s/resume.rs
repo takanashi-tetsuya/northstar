@@ -103,6 +103,15 @@ impl Drop for Registration {
 }
 
 impl Registry {
+    pub(crate) fn has_suspended_scope(&self, scope: &Scope) -> bool {
+        let now = Instant::now();
+        self.entries.iter().any(|entry| {
+            entry.scope == *scope
+                && entry.expires_at.is_some_and(|deadline| deadline > now)
+                && !entry.sender.is_closed()
+        })
+    }
+
     pub(crate) fn register(
         &self,
         scope: Scope,
@@ -157,6 +166,7 @@ mod tests {
         let mut registration = registry.register(scope.clone(), sender).unwrap();
         let id = registration.id.clone();
         let (old, _) = registry.lookup(&id, &scope).unwrap();
+        assert!(!registry.has_suspended_scope(&scope));
         for foreign in [
             Scope {
                 local: "conference.local.example".into(),
@@ -179,9 +189,16 @@ mod tests {
         }
         registration.advance();
         assert_ne!(old, registry.lookup(&id, &scope).unwrap().0);
+        registration.suspend(Instant::now() + Duration::from_secs(30));
+        assert!(registry.has_suspended_scope(&scope));
+        assert!(!registry.has_suspended_scope(&Scope {
+            local: "conference.local.example".into(),
+            ..scope.clone()
+        }));
         // Expiry must not depend on the owning actor getting CPU time to clean up.
         registration.suspend(Instant::now());
         assert!(registration.expired());
+        assert!(!registry.has_suspended_scope(&scope));
         assert!(registry.lookup(&id, &scope).is_none());
         registration.advance();
         assert!(!registration.expired());

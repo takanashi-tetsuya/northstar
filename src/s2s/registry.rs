@@ -458,6 +458,25 @@ mod recovery_tests {
     }
 
     #[test]
+    fn newly_authenticated_bidi_stream_cannot_displace_an_active_scope() {
+        let registry = S2sConnectionRegistry::default();
+        let (incumbent, _receiver) = publish(&registry, "local.example", "remote.example");
+        let (sender, _new_receiver) = mpsc::channel(1);
+        assert!(registry
+            .register_bidirectional_if_vacant(
+                incumbent.key.clone(),
+                BidiS2sSession::new(
+                    Uuid::new_v4(),
+                    "local.example".into(),
+                    sender,
+                    CancellationToken::new(),
+                ),
+            )
+            .is_err());
+        assert!(registry.bidi_recovery_is_current(&incumbent));
+    }
+
+    #[test]
     fn leased_head_retains_hint_until_same_attempt_fails_then_retries_once() {
         let registry = S2sConnectionRegistry::default();
         let (snapshot, _receiver) = publish(&registry, "local.example", "remote.example");

@@ -14,6 +14,7 @@ import ssl
 import subprocess
 import sys
 import time
+from collections import deque
 
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -1465,11 +1466,31 @@ def run(server_pids: tuple[int, ...] = ()) -> None:
         "<field var='muc#request_allow'><value>1</value></field>"
         "</x></message>"
     )
-    voiced_local, _ = alice.receive_until(f"from='{remote_created_room}/LocalAfterUnlock'", timeout=20)
-    fixture.check(
-        "role='participant'" in voiced_local,
-        "remote moderator approval did not grant the local visitor voice",
-    )
+    # The PostgreSQL outbox assigns its own event ID, and an earlier visitor
+    # presence may still be queued. Wait for the exact role transition.
+    voice_deadline = time.monotonic() + 20
+    voice_frames = deque(maxlen=6)
+    while True:
+        remaining = voice_deadline - time.monotonic()
+        fixture.check(
+            remaining > 0,
+            "remote moderator approval did not grant the local visitor voice: "
+            + repr(list(voice_frames))[:4096],
+        )
+        try:
+            voiced_local = alice.receive(max(0.1, remaining))
+        except TimeoutError as error:
+            raise AssertionError(
+                "remote moderator approval timed out waiting for local voice: "
+                + repr(list(voice_frames))[:4096]
+            ) from error
+        voice_frames.append(voiced_local[:1024])
+        if (
+            "<presence " in voiced_local
+            and f"from='{remote_created_room}/LocalAfterUnlock'" in voiced_local
+            and "role='participant'" in voiced_local
+        ):
+            break
     bob.send(
         f"<iq xmlns='jabber:client' type='set' id='remote-owner-destroy' to='{remote_created_room}'>"
         "<query xmlns='http://jabber.org/protocol/muc#owner'>"

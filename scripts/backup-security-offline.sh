@@ -22,7 +22,8 @@ mkdir -m 0700 "$fixture_root/bin" "$fixture_root/source"
 cat > "$fixture_root/bin/pg_restore" <<'EOF'
 #!/bin/sh
 if test "$1" = "--list"; then
-  grep -q '^NORTHSTAR_OFFLINE_DATABASE_FIXTURE$' "$2"
+  grep -q '^NORTHSTAR_OFFLINE_DATABASE_FIXTURE$' "$2" || exit 1
+  printf '%s\n' NORTHSTAR_OFFLINE_CONTENTS_FIXTURE
 else
   exit 0
 fi

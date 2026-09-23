@@ -437,7 +437,10 @@ class TargetSession:
         self.counter += 1
         marker = f"__NORTHSTAR_RECOVERY_DONE_{os.getpid()}_{self.counter}__"
         assert self.process.stdin is not None and self.process.stdout is not None
-        self.process.stdin.write((sql + "\n\\echo " + marker + "\n").encode("ascii"))
+        statement = sql.rstrip()
+        if not statement.endswith(";"):
+            statement += ";"
+        self.process.stdin.write((statement + "\n\\echo " + marker + "\n").encode("ascii"))
         self.process.stdin.flush()
         deadline = time.monotonic() + 300
         rows = []
@@ -676,7 +679,7 @@ def main() -> None:
             current_parts = current.split(":")
             require(len(current_parts) == 4 and current_parts[:3] ==
                     [target, "northstar_migrator", evidence.database_oid],
-                    "maintenance target session has a different identity")
+                    f"maintenance target session has a different identity: {current!r}")
             run_pg(args, "postgres", f"ALTER DATABASE {quote} WITH ALLOW_CONNECTIONS false")
             append(evidence.journal, evidence.cutover, "recovery-maintenance-closed",
                    evidence.restore_id)

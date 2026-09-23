@@ -6,7 +6,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = { main: 'src/main.rs', subservers: 'src/subservers.rs', maintenanceOwnership: 'src/db/maintenance_ownership.rs', retention: 'src/retention.rs',
   subscriptionCleanup: 'src/subscription_cleanup.rs',
   pubsubProtocol: 'src/xmpp/protocol/pubsub.rs', pubsubService: 'src/services/pubsub.rs',
-  state: 'src/state.rs',
+  state: 'src/state.rs', runtimeControl: 'src/state/runtime_control_refresh.rs',
   cluster: 'scripts/cluster-wsl.sh', responsibility: 'docs/PROGRAM_RESPONSIBILITIES.md' };
 
 function requireBoundary(condition, message) {
@@ -42,13 +42,12 @@ export function readSubserverSources() {
   return Object.fromEntries(Object.entries(files).map(([name, file]) => [name, fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
-export function verifySubserverBoundaries({ main, subservers, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubService, state, cluster, responsibility }) {
+export function verifySubserverBoundaries({ main, subservers, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubService, state, runtimeControl, cluster, responsibility }) {
   // Alternate control ticks can legitimately perform no SQL. They must not
   // reset a lost advisory-lock session's consecutive database error count.
   const report = codeOnly(body(state, 'fn report_runtime_control_health(')).replace(/\s+/g, '');
   requireBoundary(report === 'ifletSome(error)=error{heartbeat.error(error);}elseifobserved_database{heartbeat.ok();}else{heartbeat.pulse();}',
     'control health must preserve errors on idle ticks and clear them only after successful database observation');
-  const runtimeControl = fs.readFileSync(path.join(root, 'src/state/runtime_control_refresh.rs'), 'utf8');
   const coordinator = body(runtimeControl, 'pub(super) async fn run(');
   requireBoundary(coordinator.includes('let mut observed_database = false;') &&
     coordinator.includes('report_runtime_control_health(&heartbeat, observed_database, first_error);') &&

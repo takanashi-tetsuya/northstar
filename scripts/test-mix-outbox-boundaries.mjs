@@ -87,8 +87,8 @@ test('two wrappers in delivery cannot conceal an unguarded PAM claim', () => {
     'MixOutboxQueue::PamResult => Ok(drainable_mix_outbox_claim(\n            stop_claiming,\n            cancel,',
     'MixOutboxQueue::PamResult => Ok(cancellable_mix_outbox_turn(\n            cancel,');
   const nested = replaceIn(directPam, 'async fn claim_mix_outbox_work(',
-    '                state\n                    .mix_service()\n                    .claim_mix_deliveries(claim_limit, 8 * 1024 * 1024),',
-    '                drainable_mix_outbox_claim(stop_claiming, cancel, state.mix_service().claim_mix_deliveries(claim_limit, 8 * 1024 * 1024)),');
+    '                context\n                    .service()\n                    .claim_mix_deliveries(claim_limit, 8 * 1024 * 1024),',
+    '                drainable_mix_outbox_claim(stop_claiming, cancel, context.service().claim_mix_deliveries(claim_limit, 8 * 1024 * 1024)),');
   assert.throws(() => verifyMixOutboxLifecycle(nested), /independently bounded/);
 });
 rejects('parent stop must close lane admission', lane,
@@ -120,8 +120,8 @@ rejects('hard token cannot be a parent child token', start,
   'let lane_cancel = tokio_util::sync::CancellationToken::new();',
   'let lane_cancel = cancel.child_token();', freshToken);
 for (const [name, before] of [
-  ['delivery', 'Arc::clone(&state),\n                    cancel.clone(),\n                    lane_cancel.clone(),'],
-  ['PAM', 'state,\n                    cancel.clone(),\n                    lane_cancel.clone(),'],
+  ['delivery', 'Arc::clone(&context),\n                    cancel.clone(),\n                    lane_cancel.clone(),'],
+  ['PAM', 'context,\n                    cancel.clone(),\n                    lane_cancel.clone(),'],
 ]) {
   rejects(`${name} lane must receive distinct correctly ordered stop and hard tokens`, start,
     before, before.replace('cancel.clone(),\n                    lane_cancel.clone()',
@@ -130,10 +130,10 @@ for (const [name, before] of [
 test('supervisor retries cannot reuse a cancelled hard token', () => {
   const moved = replaceIn(baseline, start,
     'let lane_cancel = tokio_util::sync::CancellationToken::new();', '');
-  const cloned = replaceIn(moved, start, 'let cancel = cancel.clone();',
+  const outside = replaceIn(moved, start, '    registry.supervise_draining(',
+    '    let lane_cancel = tokio_util::sync::CancellationToken::new();\n    registry.supervise_draining(');
+  const changed = replaceIn(outside, start, 'let cancel = cancel.clone();',
     'let cancel = cancel.clone();\n            let lane_cancel = lane_cancel.clone();');
-  const changed = replaceIn(cloned, start, 'let registry = Arc::clone(state.worker_registry());',
-    'let lane_cancel = tokio_util::sync::CancellationToken::new();\n    let registry = Arc::clone(state.worker_registry());');
   assert.throws(() => verifyMixOutboxLifecycle(changed), /every supervised attempt/);
 });
 rejects('supervisor must enforce its registered drain grace', start,

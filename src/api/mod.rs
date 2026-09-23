@@ -16,7 +16,7 @@ use crate::abuse::AbuseAction;
 use crate::auth;
 use crate::db;
 use crate::error::{AppError, Result};
-use crate::state::{AdminGatewayVerifier, AppState, HttpTransportPolicy};
+use crate::state::{AdminGatewayVerifier, AppState, HttpTransportPolicy, MetricsContext};
 
 use crate::abuse::GuardError;
 use axum::extract::DefaultBodyLimit;
@@ -1116,12 +1116,12 @@ pub async fn serve_administration(
 }
 
 pub async fn serve_metrics(
-    state: Arc<AppState>,
+    context: MetricsContext,
     cancel: tokio_util::sync::CancellationToken,
     listener: tokio::net::TcpListener,
 ) -> anyhow::Result<()> {
-    let endpoint = MetricsEndpointState::new(Arc::clone(&state));
-    let address = listener.local_addr().unwrap_or(state.config.metrics_bind);
+    let address = listener.local_addr().unwrap_or(context.bind_fallback());
+    let endpoint = MetricsEndpointState::new(context);
     tracing::info!(address = %address, "private metrics listener ready");
     let router = Router::new()
         .route("/metrics", get(metrics))

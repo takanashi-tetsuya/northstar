@@ -3152,7 +3152,25 @@ if ([mucOutcome, mucAckTurn, mucAck, mucAckFence, mucDeliveryMetric,
   throw new Error('cluster MUC outbox settlement lost exact ACK, retry, database-turn or metric ordering');
 }
 const operationRuntimeOwnershipSource = read('src/operation_runtime.rs');
+if (!operationRuntimeOwnershipSource.includes('state.broadcast_routes().target_seeds(operation)')
+    || !operationRuntimeOwnershipSource.includes('"admin.broadcast" => state.broadcast_routes().send_exact(payload)')
+    || /fn local_target_seeds\(\s*state:\s*&AppState/.test(operationRuntimeOwnershipSource)) {
+  throw new Error('administrator broadcast must snapshot and deliver through its exact local-route capability');
+}
 const readinessEndpointSource = read('src/api/system.rs');
+const metricsEndpoint = structBody(readinessEndpointSource, 'pub struct MetricsEndpointState');
+const metricsContext = structBody(read('src/state/metrics_context.rs'), 'pub(crate) struct MetricsContext');
+const metricsServe = structBody(read('src/api/mod.rs'), 'pub async fn serve_metrics(');
+if (!metricsEndpoint.includes('context: MetricsContext')
+    || /Arc<AppState>/.test(metricsEndpoint)
+    || /\b(?:AppState|ClusterManager|TlsContext)\b|Arc<dyn Fn/.test(metricsContext)
+    || !metricsContext.includes('cluster: ClusterMetricsProbe')
+    || !metricsContext.includes('tls: TlsMetricsProbe')
+    || !metricsContext.includes('muc_occupant_count: MucOccupancyCountProbe')
+    || !metricsServe.includes('MetricsEndpointState::new(context)')
+    || !readinessEndpointSource.includes('context.authorized(peer, metrics_bearer_candidate(headers))')) {
+  throw new Error('private metrics endpoint must use a narrow live, read-only observability context');
+}
 const readinessEndpoint = structBody(readinessEndpointSource, 'pub struct ReadyEndpointState');
 const readinessContext = structBody(state, 'pub(crate) struct ReadinessContext');
 if (!readinessEndpoint.includes('context: ReadinessContext')
@@ -3235,6 +3253,11 @@ if (!c2sTelemetry.includes('struct PostActionTelemetry')
     || !c2sTelemetry.includes('struct RegistrationTelemetry')
     || !c2sTelemetry.includes('struct AccountAbuseTelemetry')
     || !c2sTelemetry.includes('struct SessionBindTelemetry')
+    || !c2sTelemetry.includes('struct SmSessionTelemetry')
+    || !c2sTelemetry.includes('struct Sasl2AuthenticationTelemetry')
+    || !c2sTelemetry.includes('struct C2sAuthenticationTelemetry')
+    || !c2sTelemetry.includes('struct OutboundStanzaTelemetry')
+    || !c2sTelemetry.includes('struct SessionDropFallbackTelemetry')
     || !c2sTelemetry.includes('struct PersonalMessageTelemetry')
     || !c2sTelemetry.includes('struct FederatedMucTelemetry')
     || /\b(?:AppState|Metrics|PgPool|C2sRuntimePorts)\b/.test(c2sTelemetry)
@@ -3246,14 +3269,19 @@ if (!c2sTelemetry.includes('struct PostActionTelemetry')
       /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read(`src/xmpp/protocol/${name}`)))
     || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/ibr.rs'))
     || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/misc.rs'))
+    || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/sm.rs'))
+    || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(read('src/xmpp/protocol/sasl2.rs'))
+    || /\b(?:self\.)?state\s*\.\s*metrics\b/.test(c2sProtocol)
     || /(?:self\.)?state\.metrics\b/.test(read('src/xmpp/protocol/messaging.rs'))
     || /(?:self\.)?state\.metrics\b/.test(read('src/xmpp/protocol/federated_muc.rs'))) {
   throw new Error('C2S post-action supervision must use narrow telemetry without broad state or registry authority');
 }
 const componentTransport = read('src/components.rs');
 if (!componentTransport.includes('struct ComponentTelemetry')
-    || /state\.metrics\.(?:component_connections_active|outbox_delivery_duration_seconds)/.test(componentTransport)) {
-  throw new Error('component transport must use its two-cell telemetry capability');
+    || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(componentTransport)
+    || !componentTransport.includes('component_telemetry().connection_failed()')
+    || !componentTransport.includes('component_telemetry().outbox_written()')) {
+  throw new Error('component transport must use only its typed connection and delivery telemetry');
 }
 const s2sTelemetry = read('src/s2s/telemetry.rs');
 if (!s2sTelemetry.includes('struct OnlineQueueAcceptanceTelemetry')
@@ -3310,7 +3338,6 @@ for (const task of serviceTaskNames) {
 }
 const stateServiceAccessors = [
   'api_query_service',
-  'metrics_snapshot_service',
   'api_session_service',
   'challenge_issue_service',
   'challenge_cleanup_service',

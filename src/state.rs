@@ -134,6 +134,8 @@ impl axum::extract::FromRef<Arc<AppState>> for OmemoRecoveryPollContext {
     }
 }
 pub(crate) mod api_queries;
+mod metrics_context;
+pub(crate) use metrics_context::MetricsContext;
 pub(crate) mod suspension;
 pub(crate) type ApiQueryContext =
     api_queries::ApiQueryContext<db::api_queries::PostgresApiQueryRepository>;
@@ -178,7 +180,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use subtle::ConstantTimeEq;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
@@ -2359,18 +2360,16 @@ impl AppState {
         &self.tls_context
     }
 
-    pub(crate) fn metrics_snapshot_service(
-        &self,
-    ) -> &crate::services::metrics_snapshot::MetricsSnapshotService<
-        db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
-    > {
-        &self.metrics_snapshot_service
+    pub(crate) fn metrics_context(&self) -> MetricsContext {
+        MetricsContext::from_state(self)
     }
 
-    pub(crate) fn record_database_metrics_ping(&self, duration: Duration) {
-        self.metrics
-            .database_operation_duration_seconds
-            .observe(duration);
+    pub(crate) fn broadcast_routes(&self) -> crate::operation_runtime::LocalBroadcastRoutes {
+        crate::operation_runtime::LocalBroadcastRoutes::new(
+            Arc::clone(&self.sessions),
+            self.config.domain.clone(),
+            self.cluster.node_id.clone(),
+        )
     }
 
     pub(crate) fn inbound_stanza_telemetry(
@@ -2432,6 +2431,48 @@ impl AppState {
         crate::xmpp::capabilities::SessionBindTelemetry::new(
             &self.metrics.capacity_reservations_rejected_total,
             &self.metrics.active_sessions,
+        )
+    }
+
+    pub(crate) fn sm_session_telemetry(&self) -> crate::xmpp::capabilities::SmSessionTelemetry<'_> {
+        crate::xmpp::capabilities::SmSessionTelemetry::new(
+            &self.metrics.capacity_reservations_rejected_total,
+            &self.metrics.active_sessions,
+        )
+    }
+
+    pub(crate) fn sasl2_authentication_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::Sasl2AuthenticationTelemetry<'_> {
+        crate::xmpp::capabilities::Sasl2AuthenticationTelemetry::new(
+            &self.metrics.authentication_duration_seconds,
+            &self.metrics.fast_credential_integrity_failures_total,
+            &self.metrics.authentication_backend_failures_total,
+        )
+    }
+
+    pub(crate) fn c2s_authentication_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::C2sAuthenticationTelemetry<'_> {
+        crate::xmpp::capabilities::C2sAuthenticationTelemetry::new(
+            &self.metrics.authentication_backend_failures_total,
+            &self.metrics.fast_credential_integrity_failures_total,
+            &self.metrics.authentication_failures_total,
+            &self.metrics.rate_limited_total,
+        )
+    }
+
+    pub(crate) fn outbound_stanza_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::OutboundStanzaTelemetry<'_> {
+        crate::xmpp::capabilities::OutboundStanzaTelemetry::new(&self.metrics.stanzas_out_total)
+    }
+
+    pub(crate) fn session_drop_fallback_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::SessionDropFallbackTelemetry<'_> {
+        crate::xmpp::capabilities::SessionDropFallbackTelemetry::new(
+            &self.metrics.session_drop_fallbacks_total,
         )
     }
 
@@ -2502,6 +2543,9 @@ impl AppState {
         crate::components::ComponentTelemetry::new(
             &self.metrics.component_connections_active,
             &self.metrics.outbox_delivery_duration_seconds,
+            &self.metrics.component_failures_total,
+            &self.metrics.component_deliveries_total,
+            &self.metrics.s2s_outbox_lease_lost_total,
         )
     }
 
@@ -2568,52 +2612,6 @@ impl AppState {
             Arc::clone(&self.metrics.retention_moderation_cases_deleted_total),
             Arc::clone(&self.metrics.background_maintenance_failures_total),
         )
-    }
-
-    pub(crate) fn process_gauge_snapshot(
-        &self,
-    ) -> crate::services::metrics_snapshot::ProcessGaugeSnapshot {
-        let (tls_not_after, tls_generation) = self.tls_context.leaf_status();
-        let certificate_sessions = self.tls_context.certificate_session_metrics();
-        let now_unix = chrono::Utc::now().timestamp();
-        let tls_seconds_remaining = tls_not_after.saturating_sub(now_unix).max(0);
-        let cluster = self.cluster.metrics_snapshot();
-        let base_metrics = self.metrics.render();
-        crate::services::metrics_snapshot::ProcessGaugeSnapshot {
-            base_metrics,
-            database_max_connections: self.config.database_max_connections,
-            s2s_outbox_max_rows: self.config.s2s_outbox_max_rows,
-            s2s_outbox_max_bytes: self.config.s2s_outbox_max_bytes,
-            s2s_outbox_max_per_domain: self.config.s2s_outbox_max_per_domain,
-            muc_occupants: self.muc_occupants.len(),
-            federation_outbound_workers: self.s2s_connection_registry.outbound_count(),
-            uptime_seconds: self.uptime().as_secs(),
-            tls_not_after,
-            tls_seconds_remaining,
-            tls_generation,
-            certificate_sessions,
-            cluster,
-        }
-    }
-
-    pub(crate) fn sm_recovery_gauge_snapshot(
-        &self,
-    ) -> crate::services::metrics_snapshot::SmRecoveryGaugeSnapshot {
-        let governor = &self.sm_memory_governor;
-        let metrics = governor.metrics();
-        let recovery = self.sm_suspension_recovery.snapshot();
-        crate::services::metrics_snapshot::SmRecoveryGaugeSnapshot {
-            reserved_bytes: metrics.reserved_bytes.load(Ordering::Relaxed),
-            limit_bytes: governor.max_bytes(),
-            peak_reserved_bytes: metrics.peak_reserved_bytes.load(Ordering::Relaxed),
-            admission_rejections_total: metrics.admission_rejections_total.load(Ordering::Relaxed),
-            invariant_failures_total: metrics.invariant_failures_total.load(Ordering::Relaxed),
-            recovery_jobs: recovery.jobs,
-            recovery_job_limit: governor.max_recovery_jobs(),
-            recovery_bytes: recovery.bytes,
-            recovery_byte_limit: governor.max_recovery_bytes(),
-            recovery_oldest_age_seconds: recovery.oldest_age_seconds,
-        }
     }
 
     pub(crate) fn readiness_context(&self) -> ReadinessContext {
@@ -2722,12 +2720,6 @@ impl AppState {
         Arc::clone(&self.component_connections)
             .acquire_owned()
             .await
-    }
-
-    /// Monotonic process uptime. Callers cannot observe or replace the raw
-    /// start instant, which keeps wall-clock and lifecycle concerns separate.
-    pub(crate) fn uptime(&self) -> Duration {
-        self.started_at.elapsed()
     }
 
     /// Read the federation kill switch with acquire ordering so a caller that
@@ -4184,20 +4176,6 @@ impl AppState {
         self.upload_store
             .as_deref()
             .expect("upload routes and workers require an enabled or draining runtime")
-    }
-
-    pub(crate) fn metrics_request_authorized(
-        &self,
-        peer: std::net::IpAddr,
-        candidate: Option<&str>,
-    ) -> bool {
-        let Some(expected) = self.metrics_bearer_token.as_deref() else {
-            return peer.is_loopback();
-        };
-        candidate.is_some_and(|candidate| {
-            candidate.len() == expected.len()
-                && bool::from(candidate.as_bytes().ct_eq(expected.as_bytes()))
-        })
     }
 
     pub(crate) fn admin_gateway_authentication_enabled(&self) -> bool {

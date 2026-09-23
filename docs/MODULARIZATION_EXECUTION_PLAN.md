@@ -483,11 +483,16 @@ Component transports receive only active-connection and outbox-duration metric
 cells. Session presence and binding paths release map guards before awaiting
 privacy checks or lease cleanup, then recheck the exact connection before
 delivery.
+The private metrics endpoint now receives a read-only MetricsContext for
+authorization, bounded database snapshots and live gauges. Administrator
+broadcast target capture and exact delivery use LocalBroadcastRoutes; the
+operation worker still needs broader state for its other effects.
 Background housekeeping receives only its two shared counters. Archive
 retention holds ten shared counter cells rather than the metrics registry.
-S2S ingress/egress, C2S stanza ingress, roster/privacy/blocking side-effect
-reporting, registration/account abuse, Push, and PEP/PubSub delivery use
-borrowed counters and timers instead of the complete registry.
+S2S ingress/egress, C2S stream/authentication and SM resume,
+roster/privacy/blocking side-effect reporting, registration/account abuse,
+Push, component transport, and PEP/PubSub delivery use borrowed counters and
+timers instead of the complete registry.
 Remaining work includes live-session and account-recovery workers and the six
 broad AppState capabilities.
 TLS now sits behind a private context with immutable handshake snapshots and

@@ -1069,6 +1069,24 @@ pub(crate) struct TlsContext {
     reloadable: Arc<ReloadableTlsConfig>,
 }
 
+/// Metrics-only TLS view; no handshake material, private key, session
+/// registration, or reload capability is available to the HTTP endpoint.
+#[derive(Clone)]
+pub(crate) struct TlsMetricsProbe {
+    reloadable: Arc<ReloadableTlsConfig>,
+}
+
+impl TlsMetricsProbe {
+    pub(crate) fn leaf_status(&self) -> (i64, u64) {
+        let material = self.reloadable.current();
+        (material.leaf_not_after_unix, material.generation)
+    }
+
+    pub(crate) fn certificate_session_metrics(&self) -> CertificateSessionMetrics {
+        self.reloadable.certificate_session_metrics()
+    }
+}
+
 pub(crate) struct C2sTlsSnapshot {
     pub server_config: Arc<ServerConfig>,
     pub tls_server_end_point: Option<Vec<u8>>,
@@ -1088,6 +1106,12 @@ pub(crate) struct FederationTlsSnapshot {
 impl TlsContext {
     pub(crate) fn new(reloadable: Arc<ReloadableTlsConfig>) -> Self {
         Self { reloadable }
+    }
+
+    pub(crate) fn metrics_probe(&self) -> TlsMetricsProbe {
+        TlsMetricsProbe {
+            reloadable: Arc::clone(&self.reloadable),
+        }
     }
 
     pub(crate) fn c2s_snapshot(&self, direct_tls: bool) -> C2sTlsSnapshot {
@@ -1114,15 +1138,6 @@ impl TlsContext {
             crls: material.federation_crls.clone(),
             generation: material.generation,
         }
-    }
-
-    pub(crate) fn leaf_status(&self) -> (i64, u64) {
-        let material = self.reloadable.current();
-        (material.leaf_not_after_unix, material.generation)
-    }
-
-    pub(crate) fn certificate_session_metrics(&self) -> CertificateSessionMetrics {
-        self.reloadable.certificate_session_metrics()
     }
 
     pub(crate) fn register_certificate_session(
@@ -1721,7 +1736,7 @@ mod tests {
             &initial.federation_roots
         ));
         assert_eq!(
-            context.leaf_status(),
+            context.metrics_probe().leaf_status(),
             (initial.leaf_not_after_unix, initial.generation)
         );
         for config in [

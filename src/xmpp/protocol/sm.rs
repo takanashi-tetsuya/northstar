@@ -236,10 +236,7 @@ impl ProtocolSession {
         {
             Ok(capacity) => capacity,
             Err(_) => {
-                self.state
-                    .metrics
-                    .capacity_reservations_rejected_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.sm_session_telemetry().capacity_rejected();
                 self.reset_sm();
                 return Err("resource-constraint");
             }
@@ -298,10 +295,7 @@ impl ProtocolSession {
                 }
             }
             Ok(SmSessionCreationOutcome::CapacityExhausted) => {
-                self.state
-                    .metrics
-                    .capacity_reservations_rejected_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.sm_session_telemetry().capacity_rejected();
                 self.reset_sm();
                 Err("resource-constraint")
             }
@@ -429,10 +423,7 @@ impl ProtocolSession {
             let claim_capacity = match self.state.sm_memory_governor().try_reserve_claim() {
                 Ok(capacity) => capacity,
                 Err(_) => {
-                    self.state
-                        .metrics
-                        .capacity_reservations_rejected_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.state.sm_session_telemetry().capacity_rejected();
                     return Ok((Action::Send(sm_failed("resource-constraint")), None));
                 }
             };
@@ -556,10 +547,7 @@ impl ProtocolSession {
         if claimed_bytes > self.state.config.sm_max_snapshot_bytes
             || claim_capacity.shrink_to(claimed_bytes).is_err()
         {
-            self.state
-                .metrics
-                .capacity_reservations_rejected_total
-                .fetch_add(1, Ordering::Relaxed);
+            self.state.sm_session_telemetry().capacity_rejected();
             self.state
                 .revoke_sm_session_with_teardown(claim.session_id)
                 .await?;
@@ -708,10 +696,7 @@ impl ProtocolSession {
                         last_activity: Arc::clone(&self.last_activity),
                         disconnect: self.disconnect.clone(),
                     });
-                    self.state
-                        .metrics
-                        .active_sessions
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.state.sm_session_telemetry().staged_route_installed();
                     break;
                 }
                 Entry::Occupied(entry) => {

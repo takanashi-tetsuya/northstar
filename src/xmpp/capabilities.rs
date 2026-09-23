@@ -180,6 +180,133 @@ impl<'a> SessionBindTelemetry<'a> {
     }
 }
 
+/// SM capacity denials and exact staged resume-route installation. The route
+/// count is decremented by the existing exact compare-remove once fence.
+pub(crate) struct SmSessionTelemetry<'a> {
+    capacity_rejected: &'a AtomicU64,
+    active_sessions: &'a AtomicU64,
+}
+
+impl<'a> SmSessionTelemetry<'a> {
+    pub(crate) fn new(capacity_rejected: &'a AtomicU64, active_sessions: &'a AtomicU64) -> Self {
+        Self {
+            capacity_rejected,
+            active_sessions,
+        }
+    }
+
+    pub(crate) fn capacity_rejected(&self) {
+        self.capacity_rejected.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn staged_route_installed(&self) {
+        self.active_sessions.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// SASL2 authentication timing and verifier/backend failure counters.
+pub(crate) struct Sasl2AuthenticationTelemetry<'a> {
+    duration: &'a DurationHistogram,
+    integrity_failures: &'a AtomicU64,
+    backend_failures: &'a AtomicU64,
+}
+
+impl<'a> Sasl2AuthenticationTelemetry<'a> {
+    pub(crate) fn new(
+        duration: &'a DurationHistogram,
+        integrity_failures: &'a AtomicU64,
+        backend_failures: &'a AtomicU64,
+    ) -> Self {
+        Self {
+            duration,
+            integrity_failures,
+            backend_failures,
+        }
+    }
+
+    pub(crate) fn start_timer(&self) -> DurationTimer<'_> {
+        self.duration.start_timer()
+    }
+
+    pub(crate) fn integrity_failed(&self) {
+        self.integrity_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn backend_failed(&self) {
+        self.backend_failures.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Transport-confirmed publication and SASL exchange outcome counters.
+pub(crate) struct C2sAuthenticationTelemetry<'a> {
+    backend_failures: &'a AtomicU64,
+    integrity_failures: &'a AtomicU64,
+    authentication_failures: &'a AtomicU64,
+    rate_limited: &'a AtomicU64,
+}
+
+impl<'a> C2sAuthenticationTelemetry<'a> {
+    pub(crate) fn new(
+        backend_failures: &'a AtomicU64,
+        integrity_failures: &'a AtomicU64,
+        authentication_failures: &'a AtomicU64,
+        rate_limited: &'a AtomicU64,
+    ) -> Self {
+        Self {
+            backend_failures,
+            integrity_failures,
+            authentication_failures,
+            rate_limited,
+        }
+    }
+
+    pub(crate) fn backend_failed(&self) {
+        self.backend_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn integrity_failed(&self) {
+        self.integrity_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn authentication_failed(&self) {
+        self.authentication_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn rate_limited(&self) {
+        self.rate_limited.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Counts outbound stanza recording and replay before any SM checkpoint.
+pub(crate) struct OutboundStanzaTelemetry<'a> {
+    recorded: &'a AtomicU64,
+}
+
+impl<'a> OutboundStanzaTelemetry<'a> {
+    pub(crate) fn new(recorded: &'a AtomicU64) -> Self {
+        Self { recorded }
+    }
+
+    pub(crate) fn recorded(&self) {
+        self.recorded.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Synchronous Drop fallback marker, separate from session gauge authority.
+pub(crate) struct SessionDropFallbackTelemetry<'a> {
+    started: &'a AtomicU64,
+}
+
+impl<'a> SessionDropFallbackTelemetry<'a> {
+    pub(crate) fn new(started: &'a AtomicU64) -> Self {
+        Self { started }
+    }
+
+    pub(crate) fn started(&self) {
+        self.started.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 pub(crate) struct PostActionTelemetry<'a> {
     started: &'a AtomicU64,
     completed: &'a AtomicU64,

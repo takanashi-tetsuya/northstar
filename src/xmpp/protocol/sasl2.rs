@@ -736,10 +736,8 @@ impl ProtocolSession {
 
     pub(crate) async fn authenticate2(&mut self, root: Node<'_, '_>) -> Result<Action> {
         let metrics_state = self.state.clone();
-        let _authentication_timer = metrics_state
-            .metrics
-            .authentication_duration_seconds
-            .start_timer();
+        let telemetry = metrics_state.sasl2_authentication_telemetry();
+        let _authentication_timer = telemetry.start_timer();
         if !self.secure_transport {
             return Ok(Action::Send(failure_xml("encryption-required", None)));
         }
@@ -982,9 +980,8 @@ impl ProtocolSession {
             }
             crate::services::authentication::AuthenticationResult::IntegrityFailure => {
                 self.state
-                    .metrics
-                    .fast_credential_integrity_failures_total
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    .sasl2_authentication_telemetry()
+                    .integrity_failed();
                 tracing::error!(
                     device_id = %user_agent_id,
                     mechanism = %request.mechanism,
@@ -1009,10 +1006,8 @@ impl ProtocolSession {
 
     pub(crate) async fn sasl2_response(&mut self, root: Node<'_, '_>) -> Result<Action> {
         let metrics_state = self.state.clone();
-        let _authentication_timer = metrics_state
-            .metrics
-            .authentication_duration_seconds
-            .start_timer();
+        let telemetry = metrics_state.sasl2_authentication_telemetry();
+        let _authentication_timer = telemetry.start_timer();
         if root.tag_name().namespace() != Some(SASL2_NS)
             || root.tag_name().name() != "response"
             || !attr_is(root, &[])
@@ -1049,10 +1044,8 @@ impl ProtocolSession {
 
     pub(crate) fn sasl2_abort(&mut self, root: Node<'_, '_>) -> Action {
         let metrics_state = self.state.clone();
-        let _authentication_timer = metrics_state
-            .metrics
-            .authentication_duration_seconds
-            .start_timer();
+        let telemetry = metrics_state.sasl2_authentication_telemetry();
+        let _authentication_timer = telemetry.start_timer();
         if root.tag_name().namespace() != Some(SASL2_NS)
             || !attr_is(root, &[])
             || !structural_text_is_empty(root)
@@ -1122,18 +1115,14 @@ impl ProtocolSession {
             }
             crate::services::authentication::AuthenticationResult::IntegrityFailure => {
                 self.state
-                    .metrics
-                    .fast_credential_integrity_failures_total
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    .sasl2_authentication_telemetry()
+                    .integrity_failed();
                 tracing::error!(user_id = %user.id, "credential integrity failure during SASL2 revalidation");
                 self.sasl_state = None;
                 return Ok(Action::Send(failure_xml("temporary-auth-failure", None)));
             }
             crate::services::authentication::AuthenticationResult::BackendFailure(error) => {
-                self.state
-                    .metrics
-                    .authentication_backend_failures_total
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.state.sasl2_authentication_telemetry().backend_failed();
                 tracing::error!(?error, user_id = %user.id, "could not revalidate SASL2 credentials");
                 self.sasl_state = None;
                 return Ok(Action::Send(failure_xml("temporary-auth-failure", None)));
@@ -1188,19 +1177,15 @@ impl ProtocolSession {
                 }
                 crate::services::authentication::AuthenticationResult::IntegrityFailure => {
                     self.state
-                        .metrics
-                        .fast_credential_integrity_failures_total
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        .sasl2_authentication_telemetry()
+                        .integrity_failed();
                     tracing::error!(user_id = %user.id, "credential integrity failure during Bind2 preflight");
                     self.sasl_state = None;
                     self.user_agent_id = None;
                     return Ok(Action::Send(failure_xml("temporary-auth-failure", None)));
                 }
                 crate::services::authentication::AuthenticationResult::BackendFailure(error) => {
-                    self.state
-                        .metrics
-                        .authentication_backend_failures_total
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.state.sasl2_authentication_telemetry().backend_failed();
                     tracing::error!(?error, "could not preflight Bind 2 MAM metadata");
                     self.sasl_state = None;
                     self.user_agent_id = None;
@@ -1584,9 +1569,8 @@ impl ProtocolSession {
             }
             crate::services::authentication::AuthenticationResult::IntegrityFailure => {
                 self.state
-                    .metrics
-                    .fast_credential_integrity_failures_total
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    .sasl2_authentication_telemetry()
+                    .integrity_failed();
                 tracing::error!(
                     user_id = %user.id,
                     "SASL2 credential commit integrity failure"
@@ -1594,10 +1578,7 @@ impl ProtocolSession {
                 Ok(Err("temporary-auth-failure"))
             }
             crate::services::authentication::AuthenticationResult::BackendFailure(error) => {
-                self.state
-                    .metrics
-                    .authentication_backend_failures_total
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.state.sasl2_authentication_telemetry().backend_failed();
                 tracing::error!(?error, "atomic SASL2 credential/session commit failed");
                 Ok(Err("temporary-auth-failure"))
             }

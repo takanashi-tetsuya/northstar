@@ -2,7 +2,7 @@ use super::{BidiS2sSession, FederationEnvelope, OutboundS2sSession};
 use dashmap::{mapref::entry::Entry, DashMap};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -13,6 +13,18 @@ use uuid::Uuid;
 pub(crate) enum OutboundRegistration {
     Inserted,
     Existing(mpsc::Sender<FederationEnvelope>),
+}
+
+/// A count-only view; metrics never receives a route or registry handle.
+#[derive(Clone)]
+pub(crate) struct S2sOutboundCountProbe {
+    count: Arc<AtomicUsize>,
+}
+
+impl S2sOutboundCountProbe {
+    pub(crate) fn count(&self) -> usize {
+        self.count.load(Ordering::Relaxed)
+    }
 }
 
 /// Guard-free snapshot of one bidirectional route. No DashMap guard crosses
@@ -139,6 +151,8 @@ impl RegisteredBidi {
 pub(crate) struct S2sConnectionRegistry {
     pub(crate) resumption: super::resume::Registry,
     outbound: DashMap<String, OutboundS2sSession>,
+    outbound_count: Arc<AtomicUsize>,
+    outbound_count_gate: Mutex<()>,
     bidirectional: DashMap<String, RegisteredBidi>,
     bidi_recovery_cursor: AtomicUsize,
 }
@@ -158,6 +172,10 @@ impl S2sConnectionRegistry {
         key: String,
         session: OutboundS2sSession,
     ) -> OutboundRegistration {
+        let _count_gate = self
+            .outbound_count_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         match self.outbound.entry(key) {
             Entry::Occupied(entry) if !entry.get().sender.is_closed() => {
                 OutboundRegistration::Existing(entry.get().sender.clone())
@@ -168,6 +186,7 @@ impl S2sConnectionRegistry {
             }
             Entry::Vacant(entry) => {
                 entry.insert(session);
+                self.outbound_count.fetch_add(1, Ordering::Relaxed);
                 OutboundRegistration::Inserted
             }
         }
@@ -178,9 +197,18 @@ impl S2sConnectionRegistry {
         key: &str,
         owner: &mpsc::Sender<FederationEnvelope>,
     ) -> bool {
-        self.outbound
+        let _count_gate = self
+            .outbound_count_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let removed = self
+            .outbound
             .remove_if(key, |_, session| session.sender.same_channel(owner))
-            .is_some()
+            .is_some();
+        if removed {
+            self.outbound_count.fetch_sub(1, Ordering::Relaxed);
+        }
+        removed
     }
 
     pub(crate) fn authenticated_outbound_sender(
@@ -318,17 +346,61 @@ impl S2sConnectionRegistry {
     /// workers, matching the previous behavior. Established inbound streams
     /// remain registered but routing policy rejects their federation traffic.
     pub(crate) fn clear_outbound_for_island_mode(&self) {
+        let _count_gate = self
+            .outbound_count_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.outbound.clear();
+        self.outbound_count.store(0, Ordering::Relaxed);
     }
 
-    pub(crate) fn outbound_count(&self) -> usize {
-        self.outbound.len()
+    pub(crate) fn outbound_count_probe(&self) -> S2sOutboundCountProbe {
+        S2sOutboundCountProbe {
+            count: Arc::clone(&self.outbound_count),
+        }
     }
 }
 
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+
+    #[test]
+    fn metrics_count_tracks_exact_outbound_ownership_without_exposing_routes() {
+        let registry = S2sConnectionRegistry::default();
+        let count = registry.outbound_count_probe();
+        assert_eq!(count.count(), 0);
+
+        let (first, first_receiver) = mpsc::channel(1);
+        assert!(matches!(
+            registry.register_outbound("a".into(), OutboundS2sSession::new(first.clone())),
+            OutboundRegistration::Inserted
+        ));
+        assert_eq!(count.count(), 1);
+        let (second, _second_receiver) = mpsc::channel(1);
+        assert!(matches!(
+            registry.register_outbound("a".into(), OutboundS2sSession::new(second.clone())),
+            OutboundRegistration::Existing(_)
+        ));
+        assert_eq!(count.count(), 1);
+
+        drop(first_receiver);
+        assert!(matches!(
+            registry.register_outbound("a".into(), OutboundS2sSession::new(second.clone())),
+            OutboundRegistration::Inserted
+        ));
+        assert_eq!(count.count(), 1);
+        assert!(!registry.remove_outbound_if_sender("a", &first));
+        assert_eq!(count.count(), 1);
+        assert!(registry.remove_outbound_if_sender("a", &second));
+        assert_eq!(count.count(), 0);
+
+        registry.register_outbound("b".into(), OutboundS2sSession::new(second));
+        assert_eq!(count.count(), 1);
+        registry.clear_outbound_for_island_mode();
+        assert_eq!(count.count(), 0);
+        assert_eq!(registry.outbound.len(), 0);
+    }
 
     fn publish(
         registry: &S2sConnectionRegistry,

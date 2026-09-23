@@ -18,7 +18,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::error::{AppError, Result};
-use crate::state::{AppState, ReadinessContext};
+use crate::state::{MetricsContext, ReadinessContext};
 use crate::xmpp;
 
 use crate::services::metrics_snapshot::DatabaseMetricsSnapshot;
@@ -29,9 +29,8 @@ use crate::services::readiness::{
 };
 
 /// Cache and single-flight gate for the private observability listener.
-/// The remaining `AppState` dependency is tracked by the Stage 1 service split.
 pub struct MetricsEndpointState {
-    app: Arc<AppState>,
+    context: MetricsContext,
     gate: Semaphore,
     cache: Mutex<Option<(Instant, String)>>,
 }
@@ -75,9 +74,9 @@ impl ReadyEndpointState {
 }
 
 impl MetricsEndpointState {
-    pub fn new(app: Arc<AppState>) -> Arc<Self> {
+    pub fn new(context: MetricsContext) -> Arc<Self> {
         Arc::new(Self {
-            app,
+            context,
             gate: Semaphore::new(1),
             cache: Mutex::new(None),
         })
@@ -270,7 +269,7 @@ pub async fn metrics(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    if !metrics_request_authorized(&endpoint.app, peer.ip(), &headers) {
+    if !metrics_request_authorized(&endpoint.context, peer.ip(), &headers) {
         let mut response = (StatusCode::UNAUTHORIZED, "unauthorized\n").into_response();
         response.headers_mut().insert(
             header::WWW_AUTHENTICATE,
@@ -290,14 +289,14 @@ pub async fn metrics(
         drop(permit);
         return metrics_response(body);
     }
-    let body = collect_metrics(&endpoint.app).await;
+    let body = collect_metrics(&endpoint.context).await;
     *endpoint.cache.lock().await = Some((Instant::now(), body.clone()));
     drop(permit);
     metrics_response(body)
 }
 
-fn metrics_request_authorized(state: &AppState, peer: IpAddr, headers: &HeaderMap) -> bool {
-    state.metrics_request_authorized(peer, metrics_bearer_candidate(headers))
+fn metrics_request_authorized(context: &MetricsContext, peer: IpAddr, headers: &HeaderMap) -> bool {
+    context.authorized(peer, metrics_bearer_candidate(headers))
 }
 
 fn metrics_bearer_candidate(headers: &HeaderMap) -> Option<&str> {
@@ -347,24 +346,17 @@ fn metrics_response(body: String) -> Response {
         .into_response()
 }
 
-async fn collect_metrics(state: &AppState) -> String {
+async fn collect_metrics(context: &MetricsContext) -> String {
     let ping_started = std::time::Instant::now();
-    let database_up = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        state.metrics_snapshot_service().ping(),
-    )
-    .await
-    .is_ok_and(|result| result.is_ok());
+    let database_up = tokio::time::timeout(std::time::Duration::from_secs(2), context.ping())
+        .await
+        .is_ok_and(|result| result.is_ok());
     let database_ping_duration = ping_started.elapsed();
-    state.record_database_metrics_ping(database_ping_duration);
+    context.record_database_ping(database_ping_duration);
     let database_ping_seconds = database_ping_duration.as_secs_f64();
-    let pool_status = state.metrics_snapshot_service().pool_status();
-    let component_domains = state.configured_component_domains();
-    let collector = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        state.metrics_snapshot_service().collect(&component_domains),
-    )
-    .await;
+    let pool_status = context.pool_status();
+    let collector =
+        tokio::time::timeout(std::time::Duration::from_secs(2), context.collect()).await;
     let collector = match collector {
         Ok(Ok(snapshot)) => Some(snapshot),
         Ok(Err(error)) => {
@@ -376,7 +368,7 @@ async fn collect_metrics(state: &AppState) -> String {
             None
         }
     };
-    let process = state.process_gauge_snapshot();
+    let process = context.process_snapshot();
     let mut body = crate::services::metrics_snapshot::render_process_gauges(
         database_up,
         database_ping_seconds,
@@ -388,7 +380,7 @@ async fn collect_metrics(state: &AppState) -> String {
     ));
     body.push_str(&crate::logging::render_metrics());
     body.push_str(&render_database_collector(collector.as_ref()));
-    let sm = state.sm_recovery_gauge_snapshot();
+    let sm = context.sm_snapshot();
     body.push_str(&crate::services::metrics_snapshot::render_sm_recovery_gauges(&sm));
     body
 }
@@ -1054,6 +1046,25 @@ mod tests {
         assert!(!collector.contains("tokio::try_join!"));
         assert!(collector.contains("transaction.commit().await?"));
         assert!(collector.matches("&mut *transaction").count() >= 8);
+    }
+
+    #[test]
+    fn metrics_authorization_precedes_cache_and_collection() {
+        let source = include_str!("system.rs");
+        let handler = source
+            .split("pub async fn metrics(")
+            .nth(1)
+            .unwrap()
+            .split("fn metrics_request_authorized")
+            .next()
+            .unwrap();
+        let authorize = handler.find("metrics_request_authorized(").unwrap();
+        let cached = handler.find("endpoint.cached().await").unwrap();
+        let collect = handler
+            .find("collect_metrics(&endpoint.context).await")
+            .unwrap();
+        assert!(authorize < cached && cached < collect);
+        assert_eq!(handler.matches("endpoint.cached().await").count(), 2);
     }
 
     #[test]

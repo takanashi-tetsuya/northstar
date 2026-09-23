@@ -1420,6 +1420,29 @@ pub struct ClusterMetricsSnapshot {
     pub incompatible_peer_versions: u64,
 }
 
+/// Read-only process gauges without Redis, signing, or authority mutation.
+#[derive(Clone)]
+pub(crate) struct ClusterMetricsProbe {
+    health: Arc<ClusterHealth>,
+}
+
+impl ClusterMetricsProbe {
+    pub(crate) fn snapshot(&self) -> ClusterMetricsSnapshot {
+        cluster_metrics_snapshot(&self.health)
+    }
+}
+
+fn cluster_metrics_snapshot(health: &ClusterHealth) -> ClusterMetricsSnapshot {
+    ClusterMetricsSnapshot {
+        state: health.state.load(Ordering::Relaxed),
+        listener_generation: health.listener_generation.load(Ordering::Relaxed),
+        authentication_failures: health.authentication_failures.load(Ordering::Relaxed),
+        replay_rejections: health.replay_rejections.load(Ordering::Relaxed),
+        degraded_transitions: health.degraded_transitions.load(Ordering::Relaxed),
+        incompatible_peer_versions: health.incompatible_peer_versions.load(Ordering::Relaxed),
+    }
+}
+
 fn operation_allowed(state: u8, operation: ClusterOperation) -> bool {
     matches!(state, CLUSTER_DISABLED | CLUSTER_HEALTHY)
         || (state == CLUSTER_DURABLE_DIRECT_ONLY && operation == ClusterOperation::DurableDirect)
@@ -1972,17 +1995,9 @@ impl ClusterManager {
         cluster_readiness_error(&self.health)
     }
 
-    pub fn metrics_snapshot(&self) -> ClusterMetricsSnapshot {
-        ClusterMetricsSnapshot {
-            state: self.health.state.load(Ordering::Relaxed),
-            listener_generation: self.health.listener_generation.load(Ordering::Relaxed),
-            authentication_failures: self.health.authentication_failures.load(Ordering::Relaxed),
-            replay_rejections: self.health.replay_rejections.load(Ordering::Relaxed),
-            degraded_transitions: self.health.degraded_transitions.load(Ordering::Relaxed),
-            incompatible_peer_versions: self
-                .health
-                .incompatible_peer_versions
-                .load(Ordering::Relaxed),
+    pub(crate) fn metrics_probe(&self) -> ClusterMetricsProbe {
+        ClusterMetricsProbe {
+            health: Arc::clone(&self.health),
         }
     }
 
@@ -8261,6 +8276,20 @@ mod muc_routing_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metrics_probe_reads_live_health_without_cluster_control_authority() {
+        let health = Arc::new(ClusterHealth::disabled());
+        let probe = ClusterMetricsProbe {
+            health: Arc::clone(&health),
+        };
+        assert_eq!(probe.snapshot().listener_generation, 0);
+        health.listener_generation.store(7, Ordering::Relaxed);
+        health.authentication_failures.store(3, Ordering::Relaxed);
+        let snapshot = probe.snapshot();
+        assert_eq!(snapshot.listener_generation, 7);
+        assert_eq!(snapshot.authentication_failures, 3);
+    }
 
     #[tokio::test]
     async fn readiness_authority_is_absent_without_cluster_security() {

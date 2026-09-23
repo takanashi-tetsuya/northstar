@@ -660,10 +660,7 @@ impl ProtocolSession {
                     epoch
                 }
                 crate::services::authentication::AuthenticationResult::BackendFailure(error) => {
-                    self.state
-                        .metrics
-                        .authentication_backend_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.state.c2s_authentication_telemetry().backend_failed();
                     tracing::error!(
                         ?error,
                         connection_id = %self.connection_id,
@@ -673,10 +670,7 @@ impl ProtocolSession {
                     return false;
                 }
                 crate::services::authentication::AuthenticationResult::IntegrityFailure => {
-                    self.state
-                        .metrics
-                        .fast_credential_integrity_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.state.c2s_authentication_telemetry().integrity_failed();
                     tracing::error!(
                         connection_id = %self.connection_id,
                         "authentication publication integrity failure"
@@ -844,10 +838,7 @@ impl ProtocolSession {
         stanza: &str,
         durable_source: Option<crate::outbound::TransportOwnershipSource>,
     ) -> Result<()> {
-        self.state
-            .metrics
-            .stanzas_out_total
-            .fetch_add(1, Ordering::Relaxed);
+        self.state.outbound_stanza_telemetry().recorded();
         if self.sm_enabled && is_counted_stanza(stanza) {
             let next_bytes = self
                 .sm_unacked
@@ -896,10 +887,7 @@ impl ProtocolSession {
     }
 
     pub fn record_replayed(&self) {
-        self.state
-            .metrics
-            .stanzas_out_total
-            .fetch_add(1, Ordering::Relaxed);
+        self.state.outbound_stanza_telemetry().recorded();
     }
 
     pub(crate) fn sm_snapshot(&self) -> crate::services::sm::SmSessionSnapshot {
@@ -1406,10 +1394,7 @@ impl ProtocolSession {
                     step = sasl_mech.provide_credentials(salt, iterations, stored_key, server_key);
                 }
                 crate::services::authentication::AuthenticationResult::IntegrityFailure => {
-                    self.state
-                        .metrics
-                        .fast_credential_integrity_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.state.c2s_authentication_telemetry().integrity_failed();
                     tracing::error!("credential integrity failure while loading SCRAM verifier");
                     return Ok(Action::Send(failure(
                         "urn:ietf:params:xml:ns:xmpp-sasl",
@@ -1508,10 +1493,7 @@ impl ProtocolSession {
                         None
                     }
                     crate::services::authentication::AuthenticationResult::IntegrityFailure => {
-                        self.state
-                            .metrics
-                            .fast_credential_integrity_failures_total
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.state.c2s_authentication_telemetry().integrity_failed();
                         tracing::error!(
                             "credential integrity failure while completing authentication"
                         );
@@ -1585,9 +1567,8 @@ impl ProtocolSession {
                             ));
                         }
                         self.state
-                            .metrics
-                            .authentication_failures_total
-                            .fetch_add(1, Ordering::Relaxed);
+                            .c2s_authentication_telemetry()
+                            .authentication_failed();
                         self.sasl_state = None;
                         self.legacy_sasl_awaiting_initial_response = false;
                         if self.sasl2_state.take().is_some() {
@@ -1636,9 +1617,8 @@ impl ProtocolSession {
                 self.sasl_scram_fence = None;
                 self.legacy_sasl_awaiting_initial_response = false;
                 self.state
-                    .metrics
-                    .authentication_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                    .c2s_authentication_telemetry()
+                    .authentication_failed();
                 if self.sasl2_state.take().is_some() {
                     Ok(Action::Send(sasl2::failure_xml(condition, None)))
                 } else {
@@ -1680,10 +1660,7 @@ impl ProtocolSession {
     fn sasl_rate_limit_failure(&mut self) -> Action {
         self.legacy_sasl_awaiting_initial_response = false;
         self.sasl_scram_fence = None;
-        self.state
-            .metrics
-            .rate_limited_total
-            .fetch_add(1, Ordering::Relaxed);
+        self.state.c2s_authentication_telemetry().rate_limited();
         if self.sasl2_state.take().is_some() {
             Action::Send(sasl2::failure_xml(
                 "temporary-auth-failure",
@@ -1707,10 +1684,7 @@ impl ProtocolSession {
         self.legacy_sasl_awaiting_initial_response = false;
         self.sasl_state = None;
         self.sasl_scram_fence = None;
-        self.state
-            .metrics
-            .authentication_backend_failures_total
-            .fetch_add(1, Ordering::Relaxed);
+        self.state.c2s_authentication_telemetry().backend_failed();
         tracing::error!(
             %mechanism,
             %username,
@@ -1953,10 +1927,7 @@ impl ProtocolSession {
     /// call or detached task is legal from Drop.
     fn synchronous_drop_fallback(&mut self) {
         self.local_quiesced = true;
-        self.state
-            .metrics
-            .session_drop_fallbacks_total
-            .fetch_add(1, Ordering::Relaxed);
+        self.state.session_drop_fallback_telemetry().started();
         self.state.worker_registry().observer_error(
             "session-cleanup",
             "ProtocolSession dropped before awaited cleanup",

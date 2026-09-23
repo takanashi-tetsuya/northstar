@@ -49,20 +49,29 @@ const COMPONENT_OUTBOX_CLAIM_BATCH: i64 = 1;
 // by the component. Claims remain just-in-time within this drain budget.
 const COMPONENT_OUTBOX_DRAIN_LIMIT: usize = 32;
 
-/// The two metric cells needed by component transport tasks.
+/// The five metric cells needed by component transport tasks.
 pub(crate) struct ComponentTelemetry<'a> {
     connections_active: &'a AtomicU64,
     delivery_duration: &'a DurationHistogram,
+    failures: &'a AtomicU64,
+    deliveries: &'a AtomicU64,
+    outbox_lease_lost: &'a AtomicU64,
 }
 
 impl<'a> ComponentTelemetry<'a> {
     pub(crate) fn new(
         connections_active: &'a AtomicU64,
         delivery_duration: &'a DurationHistogram,
+        failures: &'a AtomicU64,
+        deliveries: &'a AtomicU64,
+        outbox_lease_lost: &'a AtomicU64,
     ) -> Self {
         Self {
             connections_active,
             delivery_duration,
+            failures,
+            deliveries,
+            outbox_lease_lost,
         }
     }
 
@@ -72,6 +81,18 @@ impl<'a> ComponentTelemetry<'a> {
 
     fn outbox_delivery_timer(&self) -> DurationTimer<'a> {
         self.delivery_duration.start_timer()
+    }
+
+    fn connection_failed(&self) {
+        self.failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn outbox_written(&self) {
+        self.deliveries.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn outbox_lease_lost(&self) {
+        self.outbox_lease_lost.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -286,10 +307,7 @@ pub async fn serve(
             accepted = listener.accept() => accepted?,
         };
         let Ok(connection_permit) = state.try_acquire_component_connection() else {
-            state
-                .metrics
-                .component_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.component_telemetry().connection_failed();
             tracing::debug!(%peer, "rejected component connection at the configured capacity limit");
             continue;
         };
@@ -379,10 +397,7 @@ async fn outbound_component_supervisor(
             }
             Err(error) => {
                 consecutive_failures = consecutive_failures.saturating_add(1);
-                state
-                    .metrics
-                    .component_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                state.component_telemetry().connection_failed();
                 tracing::warn!(
                     %domain,
                     attempt = consecutive_failures,
@@ -417,10 +432,7 @@ async fn component_accept_actor(
     )
     .await
     {
-        state
-            .metrics
-            .component_failures_total
-            .fetch_add(1, Ordering::Relaxed);
+        state.component_telemetry().connection_failed();
         tracing::debug!(%peer, ?error, "external component connection closed");
     }
 }
@@ -1126,10 +1138,7 @@ async fn deliver_component_outbox<S: AsyncWrite + Unpin + Send>(
             }
         }
 
-        state
-            .metrics
-            .component_deliveries_total
-            .fetch_add(1, Ordering::Relaxed);
+        state.component_telemetry().outbox_written();
         let completion_budget =
             component_lease_renewal_period(state.s2s_outbox_dispatch_service().lease_seconds());
         let completed = tokio::time::timeout(
@@ -1141,10 +1150,7 @@ async fn deliver_component_outbox<S: AsyncWrite + Unpin + Send>(
         .await
         .context("component outbox completion timed out before the renewed lease boundary")??;
         if !completed {
-            state
-                .metrics
-                .s2s_outbox_lease_lost_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.component_telemetry().outbox_lease_lost();
             tracing::warn!(
                 outbox_id = %envelope.outbox_id,
                 domain = %envelope.target_domain,
@@ -1196,10 +1202,7 @@ async fn write_component_outbox_with_lease<S: AsyncWrite + Unpin + Send>(
     .await;
     match result {
         Err(ComponentOutboxWriteError::Lease(error)) => {
-            state
-                .metrics
-                .s2s_outbox_lease_lost_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.component_telemetry().outbox_lease_lost();
             Err(ComponentOutboxWriteError::Lease(error.context(format!(
                 "component outbox lease became unsafe while writing {}",
                 outbox_id

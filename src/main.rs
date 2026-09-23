@@ -803,7 +803,7 @@ async fn run() -> Result<()> {
     spawn_service_task(
         &mut service_tasks,
         "metrics",
-        api::serve_metrics(state.clone(), cancel.clone(), metrics_listener),
+        api::serve_metrics(state.metrics_context(), cancel.clone(), metrics_listener),
     );
     spawn_service_task(
         &mut service_tasks,

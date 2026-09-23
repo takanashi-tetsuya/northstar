@@ -271,7 +271,7 @@ async fn run_one(state: &Arc<AppState>, worker_id: Uuid) -> Result<bool> {
     let Some(lease) = state
         .operation_journal_worker_service()
         .claim_parent_with_targets(worker_id, LEASE_SECONDS, |operation| {
-            local_target_seeds(state, operation)
+            state.broadcast_routes().target_seeds(operation)
         })
         .await?
     else {
@@ -354,30 +354,81 @@ async fn lease_heartbeat(
     }
 }
 
+/// Only the local route snapshot and exact best-effort delivery authority
+/// needed by the administrator broadcast operation. Its methods never expose
+/// the underlying session map to callers.
+#[derive(Clone)]
+pub(crate) struct LocalBroadcastRoutes {
+    sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+    domain: String,
+    node_id: String,
+}
+
+impl LocalBroadcastRoutes {
+    pub(crate) fn new(
+        sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+        domain: String,
+        node_id: String,
+    ) -> Self {
+        Self {
+            sessions,
+            domain,
+            node_id,
+        }
+    }
+
+    pub(crate) fn target_seeds(&self, operation: ClaimedOperation<'_>) -> Result<Vec<TargetSeed>> {
+        let routes = self.sessions.iter().filter_map(|entry| {
+            let session = entry.value();
+            session
+                .routable
+                .load(Ordering::Acquire)
+                .then(|| BroadcastRoute {
+                    session_key: entry.key().clone(),
+                    user_id: session.user_id,
+                    auth_generation: session.auth_generation,
+                    connection_id: session.connection_id,
+                })
+        });
+        target_seeds_for_operation(operation, &self.node_id, routes)
+    }
+
+    pub(crate) fn send_exact(&self, payload: &Value) -> Result<Value> {
+        let Some(key) = payload.get("session_key").and_then(Value::as_str) else {
+            return Ok(json!({"sent":false,"reason":"empty_snapshot"}));
+        };
+        let user_id = uuid_field(payload, "user_id")?;
+        let connection_id = uuid_field(payload, "connection_id")?;
+        let generation = payload
+            .get("auth_generation")
+            .and_then(Value::as_i64)
+            .context("auth generation is missing")?;
+        let text = payload
+            .get("message")
+            .and_then(Value::as_str)
+            .context("message is missing")?;
+        let stanza = format!(
+            "<message from='{}' type='headline' id='{}'><body>{}</body></message>",
+            crate::state::attr_escape(&self.domain),
+            Uuid::new_v4(),
+            crate::state::attr_escape(text)
+        );
+        let sent = self.sessions.get(key).is_some_and(|session| {
+            session.user_id == user_id
+                && session.auth_generation == generation
+                && session.connection_id == connection_id
+                && session.routable.load(Ordering::Acquire)
+                && session.sender.try_send(stanza).is_ok()
+        });
+        Ok(json!({"sent":sent,"connection_id":connection_id}))
+    }
+}
+
 struct BroadcastRoute {
     session_key: String,
     user_id: Uuid,
     auth_generation: i64,
     connection_id: Uuid,
-}
-
-fn local_target_seeds(
-    state: &AppState,
-    operation: ClaimedOperation<'_>,
-) -> Result<Vec<TargetSeed>> {
-    let routes = state.sessions.iter().filter_map(|entry| {
-        let session = entry.value();
-        session
-            .routable
-            .load(Ordering::Acquire)
-            .then(|| BroadcastRoute {
-                session_key: entry.key().clone(),
-                user_id: session.user_id,
-                auth_generation: session.auth_generation,
-                connection_id: session.connection_id,
-            })
-    });
-    target_seeds_for_operation(operation, &state.cluster.node_id, routes)
 }
 
 fn target_seeds_for_operation(
@@ -539,35 +590,7 @@ async fn execute_effect(
                 });
             Ok(json!({"kicked":kicked,"connection_id":connection_id}))
         }
-        "admin.broadcast" => {
-            let Some(key) = payload.get("session_key").and_then(Value::as_str) else {
-                return Ok(json!({"sent":false,"reason":"empty_snapshot"}));
-            };
-            let user_id = uuid_field(payload, "user_id")?;
-            let connection_id = uuid_field(payload, "connection_id")?;
-            let generation = payload
-                .get("auth_generation")
-                .and_then(Value::as_i64)
-                .context("auth generation is missing")?;
-            let text = payload
-                .get("message")
-                .and_then(Value::as_str)
-                .context("message is missing")?;
-            let stanza = format!(
-                "<message from='{}' type='headline' id='{}'><body>{}</body></message>",
-                crate::state::attr_escape(&state.config.domain),
-                Uuid::new_v4(),
-                crate::state::attr_escape(text)
-            );
-            let sent = state.sessions.get(key).is_some_and(|session| {
-                session.user_id == user_id
-                    && session.auth_generation == generation
-                    && session.connection_id == connection_id
-                    && session.routable.load(Ordering::Acquire)
-                    && session.sender.try_send(stanza).is_ok()
-            });
-            Ok(json!({"sent":sent,"connection_id":connection_id}))
-        }
+        "admin.broadcast" => state.broadcast_routes().send_exact(payload),
         "admin.island_converge" => {
             let enabled = match payload.get("mode").and_then(Value::as_str) {
                 Some("enabled") => true,
@@ -639,7 +662,173 @@ fn uuid_field(payload: &Value, name: &str) -> Result<Uuid> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
     use tokio::sync::Notify;
+
+    fn session(
+        user_id: Uuid,
+        generation: i64,
+        connection_id: Uuid,
+        sender: tokio::sync::mpsc::Sender<crate::outbound::OutboundItem>,
+    ) -> crate::state::OnlineSession {
+        crate::state::OnlineSession {
+            user_id,
+            auth_generation: generation,
+            user_agent_epoch: None,
+            connection_id,
+            route_incarnation: crate::state::RouteIncarnationSignal::new(connection_id),
+            lifecycle: Arc::default(),
+            metrics_counted: Arc::default(),
+            routable: Arc::new(AtomicBool::new(true)),
+            sender: crate::outbound::OutboundSender::new(sender),
+            available: Arc::default(),
+            mix_presence_gate: Arc::default(),
+            mix_presence_fallback_suppressed: Arc::default(),
+            caps_observation_generation: Arc::default(),
+            carbons: Arc::default(),
+            priority: Arc::default(),
+            show: Arc::default(),
+            blocklist_requested: Arc::default(),
+            roster_requested: Arc::default(),
+            roster_sync: Arc::default(),
+            mix_roster_annotations: Arc::default(),
+            privacy_active: Arc::default(),
+            privacy_requested: Arc::default(),
+            directed_presence: Arc::default(),
+            last_presence: Arc::default(),
+            ip: None,
+            resource: "fixture".into(),
+            user_agent_id: None,
+            sm_session_id: Arc::default(),
+            muc_memberships: Arc::default(),
+            connected_at: Instant::now(),
+            last_activity: Arc::new(std::sync::RwLock::new(Instant::now())),
+            disconnect: CancellationToken::new(),
+        }
+    }
+
+    #[test]
+    fn broadcast_effect_rechecks_snapshot_identity_and_does_not_send_to_replacement() {
+        let sessions = Arc::new(dashmap::DashMap::new());
+        let routes = LocalBroadcastRoutes::new(
+            Arc::clone(&sessions),
+            "example.test".into(),
+            "node-1".into(),
+        );
+        let key = "alice@example.test/phone";
+        let user_id = Uuid::new_v4();
+        let old_connection = Uuid::new_v4();
+        let (old_sender, mut old_receiver) = tokio::sync::mpsc::channel(1);
+        sessions.insert(key.into(), session(user_id, 3, old_connection, old_sender));
+        let operation_payload = json!({"message":"<&>'\""});
+        let old_seed = routes
+            .target_seeds(ClaimedOperation {
+                kind: "admin.broadcast",
+                payload: &operation_payload,
+            })
+            .unwrap()
+            .pop()
+            .unwrap();
+
+        let new_connection = Uuid::new_v4();
+        let (new_sender, mut new_receiver) = tokio::sync::mpsc::channel(1);
+        sessions.insert(key.into(), session(user_id, 4, new_connection, new_sender));
+        assert_eq!(
+            routes.send_exact(&old_seed.payload).unwrap(),
+            json!({"sent":false,"connection_id":old_connection})
+        );
+        assert!(old_receiver.try_recv().is_err());
+        assert!(new_receiver.try_recv().is_err());
+
+        let new_seed = routes
+            .target_seeds(ClaimedOperation {
+                kind: "admin.broadcast",
+                payload: &operation_payload,
+            })
+            .unwrap()
+            .pop()
+            .unwrap();
+        for (field, replacement) in [
+            ("user_id", json!(Uuid::new_v4())),
+            ("auth_generation", json!(3)),
+            ("connection_id", json!(old_connection)),
+        ] {
+            let mut stale = new_seed.payload.clone();
+            stale[field] = replacement;
+            assert_eq!(
+                stale.get("session_key"),
+                new_seed.payload.get("session_key")
+            );
+            assert_eq!(routes.send_exact(&stale).unwrap()["sent"], false);
+        }
+        assert!(new_receiver.try_recv().is_err());
+        sessions
+            .get(key)
+            .unwrap()
+            .routable
+            .store(false, Ordering::Release);
+        assert_eq!(routes.send_exact(&new_seed.payload).unwrap()["sent"], false);
+        sessions
+            .get(key)
+            .unwrap()
+            .routable
+            .store(true, Ordering::Release);
+
+        assert_eq!(
+            routes.send_exact(&new_seed.payload).unwrap(),
+            json!({"sent":true,"connection_id":new_connection})
+        );
+        let stanza = new_receiver.try_recv().unwrap().stanza;
+        assert!(stanza.contains("from='example.test' type='headline' id='"));
+        assert!(stanza.contains("<body>&lt;&amp;&gt;&apos;&quot;</body>"));
+    }
+
+    #[test]
+    fn broadcast_effect_reports_full_queue_and_empty_snapshot_without_delivery() {
+        let sessions = Arc::new(dashmap::DashMap::new());
+        let routes = LocalBroadcastRoutes::new(
+            Arc::clone(&sessions),
+            "example.test".into(),
+            "node-1".into(),
+        );
+        let operation_payload = json!({"message":"maintenance"});
+        let empty = routes
+            .target_seeds(ClaimedOperation {
+                kind: "admin.broadcast",
+                payload: &operation_payload,
+            })
+            .unwrap();
+        assert_eq!(empty[0].target_key, "node:node-1");
+        assert_eq!(empty[0].ordinal, 0);
+        assert_eq!(
+            routes.send_exact(&empty[0].payload).unwrap(),
+            json!({"sent":false,"reason":"empty_snapshot"})
+        );
+
+        let key = "alice@example.test/phone";
+        let connection_id = Uuid::new_v4();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        sessions.insert(
+            key.into(),
+            session(Uuid::new_v4(), 3, connection_id, sender),
+        );
+        let seed = routes
+            .target_seeds(ClaimedOperation {
+                kind: "admin.broadcast",
+                payload: &operation_payload,
+            })
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(routes.send_exact(&seed.payload).unwrap()["sent"], true);
+        assert_eq!(routes.send_exact(&seed.payload).unwrap()["sent"], false);
+        assert!(receiver
+            .try_recv()
+            .unwrap()
+            .stanza
+            .contains("<body>maintenance</body>"));
+        assert!(receiver.try_recv().is_err());
+    }
 
     #[test]
     fn broadcast_target_snapshot_preserves_connection_order_and_payload() {

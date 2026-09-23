@@ -1097,7 +1097,14 @@ fn publish_inbound_route(
     registered
 }
 
-async fn reject_resume(mut request: super::resume::Request, condition: &'static str) {
+async fn reject_resume(
+    mut request: super::resume::Request,
+    condition: &'static str,
+    reason: &'static str,
+) {
+    // Keep this diagnostic independent of the resume ID, peer counter and
+    // stanza contents: fixture logs are retained after a failed stress run.
+    tracing::debug!(condition, reason, "rejected inbound S2S resumption");
     let _ = super::sm::failed(&mut request.transport.stream, condition).await;
     let _ = request.result.send(Err(Box::new(request.transport)));
 }
@@ -1113,18 +1120,26 @@ async fn accept_resume(
         return Ok(None);
     }
     if registration.expired() {
-        reject_resume(request, "item-not-found").await;
+        reject_resume(request, "item-not-found", "resume-window-expired").await;
         return Ok(None);
     }
     if request.epoch != registration.epoch || request.transport.disconnect.is_cancelled() {
-        reject_resume(request, "unexpected-request").await;
+        reject_resume(
+            request,
+            "unexpected-request",
+            "owner-generation-or-certificate-changed",
+        )
+        .await;
         return Ok(None);
     }
-    if sm
-        .validate_resume(request.h, request.transport.limits.max_bytes)
-        .is_err()
-    {
-        reject_resume(request, "policy-violation").await;
+    if let Err(error) = sm.validate_resume(request.h, request.transport.limits.max_bytes) {
+        let reason = match error.to_string().as_str() {
+            "S2S peer acknowledged unsent stanzas" => "invalid-handled-count",
+            "S2S replay is unavailable" => "unreplayable-pending-stanza",
+            "S2S replay exceeds peer limit" => "replay-exceeds-peer-limit",
+            _ => "unknown-validation-error",
+        };
+        reject_resume(request, "policy-violation", reason).await;
         return Ok(None);
     }
     anyhow::ensure!(
@@ -1133,7 +1148,12 @@ async fn accept_resume(
     );
     sm.renew(state).await?;
     if registration.expired() {
-        reject_resume(request, "item-not-found").await;
+        reject_resume(
+            request,
+            "item-not-found",
+            "resume-window-expired-after-renewal",
+        )
+        .await;
         return Ok(None);
     }
     sm.acknowledge(state, request.h).await?;
@@ -1236,6 +1256,7 @@ async fn drive_authenticated_inbound_inner(
                     match super::sm::parse_control(&frame)? {
                         Some(super::sm::Control::Resume { id, h }) if !sm.is_enabled() && !used => {
                             let Some((epoch, owner)) = state.s2s_connection_registry().resumption.lookup(&id, &scope) else {
+                                tracing::debug!(condition = "item-not-found", reason = "no-matching-resume-owner", "rejected inbound S2S resumption");
                                 super::sm::failed(&mut current.stream, "item-not-found").await?;
                                 continue;
                             };

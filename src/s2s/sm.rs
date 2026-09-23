@@ -79,11 +79,18 @@ impl StreamManagement {
     pub(crate) fn validate_resume(&self, h: u32, max_bytes: Option<usize>) -> Result<()> {
         let count = self.ack_count(h)?;
         ensure!(
+            self.pending
+                .iter()
+                .skip(count)
+                .all(|item| item.replay.is_some()),
+            "S2S replay is unavailable"
+        );
+        ensure!(
             self.pending.iter().skip(count).all(|item| item
                 .replay
                 .as_ref()
                 .is_some_and(|xml| max_bytes.is_none_or(|limit| xml.len() <= limit))),
-            "S2S replay is unavailable or exceeds peer limit"
+            "S2S replay exceeds peer limit"
         );
         Ok(())
     }
@@ -513,7 +520,10 @@ mod tests {
         sm.enable();
         sm.track(None, "<iq id='one'/>").unwrap();
         assert!(sm.can_resume());
-        assert!(sm.validate_resume(0, Some(2)).is_err());
+        assert_eq!(
+            sm.validate_resume(0, Some(2)).unwrap_err().to_string(),
+            "S2S replay exceeds peer limit"
+        );
         assert!(sm.validate_resume(1, Some(2)).is_ok());
         assert!(sm.track(None, &"x".repeat(32)).is_err());
         assert_eq!(sm.pending.len(), 1);
@@ -525,7 +535,10 @@ mod tests {
         sm.track(Some(&volatile), "<presence/>").unwrap();
         assert!(!sm.can_resume());
         assert!(sm.pending.back().unwrap().replay.is_none());
-        assert!(sm.validate_resume(1, None).is_err());
+        assert_eq!(
+            sm.validate_resume(1, None).unwrap_err().to_string(),
+            "S2S replay is unavailable"
+        );
         assert!(sm.validate_resume(2, None).is_ok());
         drop(sm);
         assert_eq!(budget.available_permits(), 32);

@@ -69,11 +69,7 @@ pub(super) async fn compensate_unpublished_cluster_muc_join(
                 .await
             {
                 Ok(ClusterMucTransitionOutcome::Applied | ClusterMucTransitionOutcome::Replay) => {
-                    if let Err(error) = state
-                        .muc_service()
-                        .wake_committed_operation(&state.cluster, operation_id)
-                        .await
-                    {
+                    if let Err(error) = state.wake_committed_muc_operation(operation_id).await {
                         tracing::warn!(?error, %operation_id, room=%occupant.room_jid,
                             "unpublished MUC join was compensated; event wake will be recovered by polling");
                     }
@@ -94,16 +90,7 @@ pub(super) async fn compensate_unpublished_cluster_muc_join(
     }
     // This join never became a local occupant. Remove only its exact Redis
     // projection, even if PG already expired it or compensation is retried.
-    if let Err(error) = state
-        .cluster
-        .unregister_muc_occupant_epoch(
-            &occupant.room_jid,
-            &occupant.nick,
-            occupant.cluster_epoch,
-            occupant.connection_id,
-        )
-        .await
-    {
+    if let Err(error) = state.remove_exact_muc_soft_state(occupant).await {
         tracing::warn!(?error, room=%occupant.room_jid, nick=%occupant.nick,
             epoch=%occupant.cluster_epoch, connection=%occupant.connection_id,
             "could not remove Redis projection of unpublished MUC join");
@@ -4564,8 +4551,7 @@ impl ProtocolSession {
                         }
                         if let Err(error) = self
                             .state
-                            .muc_service()
-                            .wake_committed_operation(&self.state.cluster, cluster_operation_id)
+                            .wake_committed_muc_operation(cluster_operation_id)
                             .await
                         {
                             tracing::warn!(?error, %room_jid, operation_id=%cluster_operation_id,
@@ -4604,13 +4590,7 @@ impl ProtocolSession {
             drop(local_departure_guard);
             let removed_globally = self
                 .state
-                .cluster
-                .unregister_muc_occupant_epoch(
-                    &room_jid,
-                    &departed.nick,
-                    departed.cluster_epoch,
-                    departed.connection_id,
-                )
+                .remove_exact_muc_soft_state(&departed)
                 .await
                 .unwrap_or(false);
             if locally_empty {
@@ -5807,8 +5787,7 @@ impl ProtocolSession {
             cluster_event_id = Some(cluster_operation_id.to_string());
             if let Err(error) = self
                 .state
-                .muc_service()
-                .wake_committed_operation(&self.state.cluster, cluster_operation_id)
+                .wake_committed_muc_operation(cluster_operation_id)
                 .await
             {
                 tracing::warn!(?error, %room_jid, operation_id=%cluster_operation_id,
@@ -5816,21 +5795,15 @@ impl ProtocolSession {
             }
             // Lazily remove occupants whose node lease has expired before the
             // atomic nickname/capacity reservation.
-            if let Err(error) = self.state.cluster.get_muc_occupants(&room_jid).await {
+            let cache = self
+                .state
+                .cache_committed_muc_join(&serializable, effective_capacity)
+                .await?;
+            if let Err(error) = cache.refresh {
                 tracing::warn!(?error, %room_jid,
                     "PostgreSQL committed MUC join; Redis occupancy cache refresh failed");
             }
-            match self
-                .state
-                .cluster
-                .try_register_muc_occupant(
-                    &room_jid,
-                    nick,
-                    &serde_json::to_string(&serializable)?,
-                    effective_capacity,
-                )
-                .await
-            {
+            match cache.registration {
                 Ok(crate::cluster::MucRegistration::Joined) => {}
                 Ok(crate::cluster::MucRegistration::Conflict)
                 | Ok(crate::cluster::MucRegistration::Full) => {

@@ -143,12 +143,15 @@ pub(crate) use upload_http_read::UploadHttpReadContext;
 mod metrics_context;
 pub(crate) use metrics_context::MetricsContext;
 mod admin_cluster_queries;
-mod binding_cluster_route;
 pub(crate) mod cluster_muc_projection;
 pub(crate) mod cluster_routing;
 mod message_cluster_routing;
+pub(crate) mod mix_cluster_routing;
+pub(crate) mod muc_cluster_routing;
 mod notification_routing;
+mod presence_cluster_routing;
 mod s2s_cluster_routing;
+mod session_cluster_route;
 pub(crate) mod suspension;
 pub(crate) type ApiQueryContext =
     api_queries::ApiQueryContext<db::api_queries::PostgresApiQueryRepository>;

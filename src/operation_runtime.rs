@@ -224,8 +224,7 @@ async fn execute_admin_session_cleanup(
                 Some(lease.auth_generation),
             );
             state
-                .cluster
-                .send_account_generation_teardown(
+                .notify_remote_account_generation_teardown(
                     &bare_jid.to_string(),
                     lease.user_id,
                     lease.auth_generation,
@@ -257,8 +256,7 @@ async fn execute_admin_session_cleanup(
                 connection_id,
             );
             state
-                .cluster
-                .send_session_instance_termination(&full_jid, connection_id)
+                .notify_remote_session_instance_termination(&full_jid, connection_id)
                 .await?;
             Ok(!state
                 .admin_session_cleanup_worker_service()

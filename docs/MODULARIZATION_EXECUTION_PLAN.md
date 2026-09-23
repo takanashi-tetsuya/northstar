@@ -564,6 +564,12 @@ The abuse guard's persistent operations now use a typed PostgreSQL port that
 owns its pool. BOSH, component transport, upload HTTP, session cleanup and
 additional protocol adapters read subsystem policy snapshots rather than the
 application configuration directly.
+Presence, personal-message and MIX transport adapters now use purpose-specific
+cluster routes. Resource binding, SM resume and administrator teardown use
+exact session-route commands; MUC join and leave use exact Redis projection
+operations. The cluster worker, MUC command adapters and shutdown path still
+need narrower ownership before the final public `AppState.cluster` field can
+be removed.
 
 Role names follow this map after the transaction boundaries are stable. Each
 cross-domain operation must either have one narrowly authorized transaction

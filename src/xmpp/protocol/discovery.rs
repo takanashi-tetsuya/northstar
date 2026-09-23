@@ -815,23 +815,7 @@ impl ProtocolSession {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
             let room_jid = target.bare();
-            let mut occupant_map = self
-                .state
-                .cluster
-                .get_muc_occupants(&room_jid)
-                .await?
-                .into_values()
-                .filter_map(|json| {
-                    serde_json::from_str::<crate::state::SerializableMucOccupant>(&json).ok()
-                })
-                .map(|occupant| (occupant.nick.clone(), occupant))
-                .collect::<std::collections::HashMap<_, _>>();
-            for (_, occupant) in self.state.muc_occupants_for(&room_jid) {
-                let occupant = crate::state::SerializableMucOccupant::from(&occupant);
-                occupant_map.insert(occupant.nick.clone(), occupant);
-            }
-            let mut occupants = occupant_map.into_values().collect::<Vec<_>>();
-            occupants.sort_by(|left, right| left.nick.cmp(&right.nick));
+            let occupants = self.state.discovery_room_occupants(&room_jid).await?;
             let cursor = disco_request.after.as_deref().or_else(|| {
                 disco_request
                     .before

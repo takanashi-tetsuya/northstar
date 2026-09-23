@@ -733,8 +733,7 @@ impl ProtocolSession {
             }
             if let Err(error) = self
                 .state
-                .cluster
-                .send_user_agent_replacement(&account, user.id, device_id, epoch)
+                .notify_remote_user_agent_replacement(&account, user.id, device_id, epoch)
                 .await
             {
                 tracing::warn!(

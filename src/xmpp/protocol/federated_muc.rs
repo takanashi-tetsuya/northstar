@@ -633,11 +633,7 @@ async fn unregister_remote_occupant(
             other => anyhow::bail!("federated MUC leave was rejected by PG authority: {other:?}"),
         }
         clustered_leave = true;
-        if let Err(error) = state
-            .muc_service()
-            .wake_committed_operation(&state.cluster, operation_id)
-            .await
-        {
+        if let Err(error) = state.wake_committed_muc_operation(operation_id).await {
             tracing::warn!(?error, %operation_id, room=%room_jid,
                 "federated MUC leave committed; signed wake will be recovered by polling");
         }
@@ -666,13 +662,7 @@ async fn unregister_remote_occupant(
     drop(local_departure_guard);
     let removed_globally = if clustered_leave {
         state
-            .cluster
-            .unregister_muc_occupant_epoch(
-                &room_jid,
-                &departed.nick,
-                departed.cluster_epoch,
-                departed.connection_id,
-            )
+            .remove_exact_muc_soft_state(&departed)
             .await
             .unwrap_or(false)
     } else {
@@ -1681,27 +1671,20 @@ async fn federated_muc_presence_owned(
         }
         cluster_event_id = Some(cluster_operation_id.to_string());
         if let Err(error) = state
-            .muc_service()
-            .wake_committed_operation(&state.cluster, cluster_operation_id)
+            .wake_committed_muc_operation(cluster_operation_id)
             .await
         {
             tracing::warn!(?error, %room_jid, operation_id=%cluster_operation_id,
                 "federated MUC join committed; signed wake failed and PostgreSQL polling will catch up");
         }
-        if let Err(error) = state.cluster.get_muc_occupants(&room_jid).await {
+        let cache = state
+            .cache_committed_muc_join(&serializable, effective_capacity)
+            .await?;
+        if let Err(error) = cache.refresh {
             tracing::warn!(?error, %room_jid,
                 "PostgreSQL committed federated MUC join; Redis cache refresh failed");
         }
-        match state
-            .cluster
-            .try_register_muc_occupant(
-                &room_jid,
-                nick,
-                &serde_json::to_string(&serializable)?,
-                effective_capacity,
-            )
-            .await
-        {
+        match cache.registration {
             Ok(crate::cluster::MucRegistration::Joined) => {}
             Ok(crate::cluster::MucRegistration::Conflict)
             | Ok(crate::cluster::MucRegistration::Full) => {

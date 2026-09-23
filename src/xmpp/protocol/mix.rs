@@ -2651,12 +2651,15 @@ async fn deliver_channel_stanza(
         }
         let nodes = match database_lane {
             ChannelStanzaDatabaseLane::LiveIngress => {
-                state.cluster.lookup_nodes(&recipient.jid).await
+                state
+                    .mix_cluster_routing()
+                    .lookup_nodes(&recipient.jid)
+                    .await
             }
             ChannelStanzaDatabaseLane::DurableOutbox => {
                 state
-                    .mix_service()
-                    .outbox_lookup_cluster_nodes(&state.cluster, &recipient.jid)
+                    .mix_cluster_routing()
+                    .outbox_lookup_cluster_nodes(&recipient.jid)
                     .await
             }
         };
@@ -2677,42 +2680,40 @@ async fn deliver_channel_stanza(
             }
         };
         for node_id in nodes {
-            if node_id != state.cluster.node_id {
-                had_route_target = true;
-                match state
-                    .cluster
-                    .send_to_node_mix(&node_id, &recipient.jid, &stanza, durable_source)
-                    .await
-                {
-                    Ok(receipt) => {
-                        if receipt.acknowledged {
-                            // A v13 peer returns a typed hand-off only after
-                            // the source moved to its socket/SM/BOSH owner.
-                            // The original worker must then stop using its
-                            // old lease instead of deleting it or retrying it.
-                            if durable && receipt.mix_handoff.is_some() {
-                                accepted = true;
-                                transferred_to_recoverable_transport = true;
-                                break;
-                            } else {
-                                accepted |= receipt.delivered;
-                            }
-                            had_deliverable_target |= receipt.mix_supported > 0;
-                            had_unknown_target |= receipt.mix_unknown > 0;
+            had_route_target = true;
+            match state
+                .mix_cluster_routing()
+                .send_to_node_mix(&node_id, &recipient.jid, &stanza, durable_source)
+                .await
+            {
+                Ok(receipt) => {
+                    if receipt.acknowledged {
+                        // A v13 peer returns a typed hand-off only after
+                        // the source moved to its socket/SM/BOSH owner.
+                        // The original worker must then stop using its
+                        // old lease instead of deleting it or retrying it.
+                        if durable && receipt.mix_handoff.is_some() {
+                            accepted = true;
+                            transferred_to_recoverable_transport = true;
+                            break;
                         } else {
-                            cluster_delivery_failed = true;
+                            accepted |= receipt.delivered;
                         }
-                    }
-                    Err(error) => {
+                        had_deliverable_target |= receipt.mix_supported > 0;
+                        had_unknown_target |= receipt.mix_unknown > 0;
+                    } else {
                         cluster_delivery_failed = true;
-                        record_mix_post_commit_failure(
-                            state,
-                            channel_jid,
-                            &recipient.jid,
-                            "cluster queue",
-                            &error,
-                        );
                     }
+                }
+                Err(error) => {
+                    cluster_delivery_failed = true;
+                    record_mix_post_commit_failure(
+                        state,
+                        channel_jid,
+                        &recipient.jid,
+                        "cluster queue",
+                        &error,
+                    );
                 }
             }
         }
@@ -3016,15 +3017,12 @@ async fn deliver_claimed_pam_result(
         }
     }
     let nodes = state
-        .mix_service()
-        .outbox_lookup_cluster_nodes(&state.cluster, &result.requester_full_jid)
+        .mix_cluster_routing()
+        .outbox_lookup_cluster_nodes(&result.requester_full_jid)
         .await?;
     for node in nodes {
-        if node == state.cluster.node_id {
-            continue;
-        }
         if state
-            .cluster
+            .mix_cluster_routing()
             .send_to_node_exact_account(
                 &node,
                 &result.requester_full_jid,

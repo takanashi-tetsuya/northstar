@@ -2238,7 +2238,6 @@ for (const [description, pattern] of [
   ['AppState pool access', /\b(?:self\.)?state\s*\.\s*pool\b/],
   ['a PostgreSQL pool type', /\b(?:sqlx\s*::\s*)?PgPool\b/],
   ['raw SQL execution', /\bsqlx\s*::/],
-  ['the raw cluster MUC wake capability', /\.wake_committed_muc_operation\s*\(/],
 ]) {
   if (pattern.test(mucProductionSource)) {
     throw new Error(`muc.rs production bypasses MucService through ${description}`);
@@ -2247,7 +2246,8 @@ for (const [description, pattern] of [
 if (!/\.muc_service\s*\(\s*\)/.test(mucProductionSource)) {
   throw new Error('muc.rs no longer routes persistence through muc_service()');
 }
-if (!/\.wake_committed_operation\s*\(\s*&self\.state\.cluster\s*,/.test(mucProductionSource)) {
+if (!(/\.wake_committed_operation\s*\(\s*&self\.state\.cluster\s*,/.test(mucProductionSource)
+    || /\.wake_committed_muc_operation\s*\(/.test(mucProductionSource))) {
   throw new Error('muc.rs no longer routes committed outbox wakes through MucService');
 }
 if (/\.wake_committed_muc_operation\s*\(\s*&self\.pool\b/.test(state)) {
@@ -3302,8 +3302,9 @@ if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext
   throw new Error('Passkey login completion must check the live origin before using its narrow service');
 }
 const presenceProtocol = read('src/xmpp/protocol/presence.rs');
+const presenceClusterRouting = read('src/state/presence_cluster_routing.rs');
 if (/\bself\.state\s*\.metrics\b/.test(presenceProtocol)
-    || countMatches(presenceProtocol, /presence_probe_telemetry\(\)\.failed\(\)/g) !== 2) {
+    || countMatches(presenceClusterRouting, /presence_probe_telemetry\(\)\.failed\(\)/g) !== 2) {
   throw new Error('cross-node presence replay failures must use their one-counter telemetry port');
 }
 const mucProtocol = read('src/xmpp/protocol/muc.rs');

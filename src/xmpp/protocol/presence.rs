@@ -298,11 +298,8 @@ impl ProtocolSession {
                                 .any(|(_, session)| session.available.load(Ordering::Acquire));
                             let delegated = self
                                 .state
-                                .cluster
-                                .lookup_nodes(&target_bare)
-                                .await?
-                                .iter()
-                                .any(|node_id| node_id != &self.state.cluster.node_id);
+                                .presence_probe_has_remote_owner(&target_bare)
+                                .await?;
                             self.send_current_availability(&target_bare, &from).await;
                             if !local_available && !delegated {
                                 let _ = self.outbound.try_send(presence_probe_status_response(
@@ -357,12 +354,10 @@ impl ProtocolSession {
                 if target_jid.resourcepart().is_some()
                     && kind != "subscribe"
                     && self.state.sessions_for(&canonical_to).is_empty()
-                    && self
+                    && !self
                         .state
-                        .cluster
-                        .lookup_nodes(&canonical_to)
+                        .subscription_full_target_has_route(&canonical_to)
                         .await
-                        .map_or(true, |nodes| nodes.is_empty())
                 {
                     return Ok(Action::None);
                 }
@@ -427,31 +422,14 @@ impl ProtocolSession {
                         delivered = true;
                     }
                 }
-                if let Ok(nodes) = self.state.cluster.lookup_nodes(&canonical_to).await {
-                    for node_id in nodes {
-                        if node_id == self.state.cluster.node_id {
-                            continue;
-                        }
-                        let accepted = if target_jid.resourcepart().is_none() {
-                            self.state
-                                .cluster
-                                .send_to_node_available_presence(
-                                    &node_id,
-                                    &canonical_to,
-                                    &rewritten,
-                                )
-                                .await
-                                .unwrap_or(false)
-                        } else {
-                            self.state
-                                .cluster
-                                .send_to_node(&node_id, &canonical_to, &rewritten, false, None)
-                                .await
-                                .unwrap_or(false)
-                        };
-                        delivered |= accepted;
-                    }
-                }
+                delivered |= self
+                    .state
+                    .route_directed_presence_remote(
+                        &canonical_to,
+                        &rewritten,
+                        target_jid.resourcepart().is_none(),
+                    )
+                    .await;
                 if delivered || kind == "unavailable" {
                     self.commit_directed_presence(directed_presence_plan);
                 }
@@ -632,29 +610,18 @@ impl ProtocolSession {
                                     let _ = target.sender.try_send(set_to(&request, &target_full));
                                 }
                             }
-                            if let Ok(nodes) = self.state.cluster.lookup_nodes(&jid).await {
-                                for node_id in nodes {
-                                    if node_id != self.state.cluster.node_id {
-                                        let _ = self
-                                            .state
-                                            .cluster
-                                            .send_to_node_presence_subscription(
-                                                &node_id,
-                                                &jid,
-                                                &request,
-                                                false,
-                                                crate::cluster::ClusterPresenceAuthority {
-                                                    owner_id: user.id,
-                                                    owner_auth_generation: user.auth_generation,
-                                                    recipient_id: local_contact.id,
-                                                    recipient_auth_generation: local_contact
-                                                        .auth_generation,
-                                                },
-                                            )
-                                            .await;
-                                    }
-                                }
-                            }
+                            self.state
+                                .route_presence_subscription_remote(
+                                    &jid,
+                                    &request,
+                                    crate::cluster::ClusterPresenceAuthority {
+                                        owner_id: user.id,
+                                        owner_auth_generation: user.auth_generation,
+                                        recipient_id: local_contact.id,
+                                        recipient_auth_generation: local_contact.auth_generation,
+                                    },
+                                )
+                                .await;
                         } else if self
                             .state
                             .xmpp_external_route_domain_allowed(contact.domainpart())
@@ -690,19 +657,9 @@ impl ProtocolSession {
                                     let _ = target.sender.try_send(delivery.clone());
                                 }
                             }
-                            if let Ok(nodes) = self.state.cluster.lookup_nodes(&jid).await {
-                                for node_id in nodes {
-                                    if node_id != self.state.cluster.node_id {
-                                        let _ = self
-                                            .state
-                                            .cluster
-                                            .send_to_node_available_presence(
-                                                &node_id, &jid, &delivery,
-                                            )
-                                            .await;
-                                    }
-                                }
-                            }
+                            self.state
+                                .broadcast_available_presence_remote(&jid, &delivery)
+                                .await;
                         } else if self
                             .state
                             .xmpp_external_route_domain_allowed(contact.domainpart())
@@ -729,17 +686,9 @@ impl ProtocolSession {
                 }
             }
             let account_delivery = set_to(&rewritten, &account);
-            if let Ok(nodes) = self.state.cluster.lookup_nodes(&account).await {
-                for node_id in nodes {
-                    if node_id != self.state.cluster.node_id {
-                        let _ = self
-                            .state
-                            .cluster
-                            .send_to_node_available_presence(&node_id, &account, &account_delivery)
-                            .await;
-                    }
-                }
-            }
+            self.state
+                .broadcast_available_presence_remote(&account, &account_delivery)
+                .await;
 
             if kind == "unavailable" {
                 self.broadcast_directed_unavailable(&rewritten, &from).await;
@@ -1073,28 +1022,18 @@ impl ProtocolSession {
                         let _ = session.sender.try_send(approved.clone());
                     }
                 }
-                if let Ok(nodes) = self.state.cluster.lookup_nodes(&actor_jid).await {
-                    for node_id in nodes {
-                        if node_id != self.state.cluster.node_id {
-                            let _ = self
-                                .state
-                                .cluster
-                                .send_to_node_presence_subscription(
-                                    &node_id,
-                                    &actor_jid,
-                                    &approved,
-                                    false,
-                                    crate::cluster::ClusterPresenceAuthority {
-                                        owner_id: target.id,
-                                        owner_auth_generation: target.auth_generation,
-                                        recipient_id: actor.id,
-                                        recipient_auth_generation: actor.auth_generation,
-                                    },
-                                )
-                                .await;
-                        }
-                    }
-                }
+                self.state
+                    .route_presence_subscription_remote(
+                        &actor_jid,
+                        &approved,
+                        crate::cluster::ClusterPresenceAuthority {
+                            owner_id: target.id,
+                            owner_auth_generation: target.auth_generation,
+                            recipient_id: actor.id,
+                            recipient_auth_generation: actor.auth_generation,
+                        },
+                    )
+                    .await;
             }
             LocalPresenceEffect::Forward => {
                 let mut targets = self.state.session_entries_for(&target_jid);
@@ -1119,28 +1058,18 @@ impl ProtocolSession {
                             .try_send(set_to(&stamped_stanza, &target_full));
                     }
                 }
-                if let Ok(nodes) = self.state.cluster.lookup_nodes(&target_jid).await {
-                    for node_id in nodes {
-                        if node_id != self.state.cluster.node_id {
-                            let _ = self
-                                .state
-                                .cluster
-                                .send_to_node_presence_subscription(
-                                    &node_id,
-                                    &target_jid,
-                                    &stamped_stanza,
-                                    false,
-                                    crate::cluster::ClusterPresenceAuthority {
-                                        owner_id: actor.id,
-                                        owner_auth_generation: actor.auth_generation,
-                                        recipient_id: target.id,
-                                        recipient_auth_generation: target.auth_generation,
-                                    },
-                                )
-                                .await;
-                        }
-                    }
-                }
+                self.state
+                    .route_presence_subscription_remote(
+                        &target_jid,
+                        &stamped_stanza,
+                        crate::cluster::ClusterPresenceAuthority {
+                            owner_id: actor.id,
+                            owner_auth_generation: actor.auth_generation,
+                            recipient_id: target.id,
+                            recipient_auth_generation: target.auth_generation,
+                        },
+                    )
+                    .await;
             }
             LocalPresenceEffect::Suppressed => {}
         }
@@ -1381,20 +1310,10 @@ impl ProtocolSession {
                 ),
             _ => None,
         };
-        let mut delegated = false;
-        for node_id in self.state.cluster.lookup_nodes(owner_full).await? {
-            if node_id != self.state.cluster.node_id {
-                if let Some(authority) = authority {
-                    self.state
-                        .cluster
-                        .request_presence_probe_from_node(
-                            &node_id, owner_full, requester, true, authority,
-                        )
-                        .await?;
-                    delegated = true;
-                }
-            }
-        }
+        let delegated = self
+            .state
+            .delegate_authorized_full_presence_probe_remote(owner_full, requester, authority)
+            .await?;
         if !delegated {
             let _ = self.outbound.try_send(presence_probe_status_response(
                 owner_bare,
@@ -1648,34 +1567,14 @@ impl ProtocolSession {
             recipient_id: expected_recipient_id,
             recipient_auth_generation: expected_recipient_auth_generation,
         };
-        match self.state.cluster.lookup_nodes(owner_lookup).await {
-            Ok(nodes) => {
-                for node_id in nodes {
-                    if node_id == self.state.cluster.node_id {
-                        continue;
-                    }
-                    if let Err(error) = self
-                        .state
-                        .cluster
-                        .request_presence_probe_from_node(
-                            &node_id,
-                            owner_lookup,
-                            &recipient,
-                            owner_full.is_some(),
-                            authority,
-                        )
-                        .await
-                    {
-                        self.state.presence_probe_telemetry().failed();
-                        tracing::warn!(?error, owner = %owner_lookup, %recipient, %node_id, "cross-node current-presence replay failed");
-                    }
-                }
-            }
-            Err(error) => {
-                self.state.presence_probe_telemetry().failed();
-                tracing::warn!(?error, owner = %owner_lookup, %recipient, "could not resolve current-presence owner nodes");
-            }
-        }
+        self.state
+            .replay_current_presence_from_remote_owners(
+                owner_lookup,
+                &recipient,
+                owner_full.is_some(),
+                authority,
+            )
+            .await;
     }
 
     async fn probe_contact_presence(&self, contact: &str, requester_bare: &str) {

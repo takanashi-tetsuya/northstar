@@ -71,6 +71,9 @@ fi
 export TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema"
 
 cargo test --locked --offline \
+  abuse::tests::postgres_v2_intent_mismatch_consumes_but_rollback_restores_proof \
+  -- --ignored --nocapture
+cargo test --locked --offline \
   abuse::tests::postgres_parallel_message_challenges_are_independent_bounded_and_one_use \
   -- --ignored --nocapture
 cargo test --locked --offline \

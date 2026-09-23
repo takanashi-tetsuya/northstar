@@ -1,4 +1,4 @@
-use crate::db::abuse_actor_state_repository::{lock_db_states, persist_db_states, DbActorState};
+use crate::db::abuse_actor_state_repository::DbActorState;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use dashmap::DashMap;
 use hmac::{Hmac, Mac};
@@ -8,7 +8,7 @@ pub use northstar_abuse_policy::{
 };
 use rand::RngCore;
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use std::{
     collections::{HashSet, VecDeque},
     sync::{Arc, Mutex},
@@ -180,13 +180,14 @@ const MAX_CHALLENGE_ISSUES_PER_IP_WINDOW: usize =
 #[cfg(test)]
 const MESSAGE_ADMISSION_CAPACITY_SHARDS: u8 =
     northstar_abuse_policy::MESSAGE_ADMISSION_CAPACITY_SHARDS;
+#[cfg(test)]
 const MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_SHARD: i32 =
     northstar_abuse_policy::MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_SHARD;
+#[cfg(test)]
 const MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_USER: i64 =
     northstar_abuse_policy::MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_USER;
+#[cfg(test)]
 const MESSAGE_ADMISSION_LEASE: Duration = northstar_abuse_policy::MESSAGE_ADMISSION_LEASE;
-const MESSAGE_ADMISSION_PENDING_TTL: Duration =
-    northstar_abuse_policy::MESSAGE_ADMISSION_PENDING_TTL;
 const MESSAGE_ADMISSION_ACCEPTED_TTL: Duration =
     northstar_abuse_policy::MESSAGE_ADMISSION_ACCEPTED_TTL;
 #[cfg(test)]
@@ -697,10 +698,7 @@ fn message_admission_material(
     (admission_key.to_vec(), payload_mac.to_vec())
 }
 
-fn message_admission_lock_id(admission_key: &[u8]) -> i64 {
-    northstar_abuse_policy::message_admission_lock_id(admission_key)
-}
-
+#[cfg(test)]
 fn message_admission_capacity_shard(admission_key: &[u8]) -> i16 {
     northstar_abuse_policy::message_admission_capacity_shard(admission_key)
 }
@@ -742,6 +740,12 @@ pub(crate) struct MessageDedupeCandidate {
     pub(crate) payload_mac: Vec<u8>,
 }
 
+pub(crate) struct MessageAdmissionCandidate {
+    pub(crate) key_id: String,
+    pub(crate) admission_key: Vec<u8>,
+    pub(crate) payload_mac: Vec<u8>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct MessageDedupeIdentity {
     pub(crate) identity_digest: Vec<u8>,
@@ -765,6 +769,20 @@ pub(crate) struct MessageAdmissionAcceptance<'a> {
 }
 
 impl MessageAdmissionLease {
+    pub(crate) fn new(
+        admission_key: Vec<u8>,
+        payload_mac: Vec<u8>,
+        lease_token: Uuid,
+        offline_dedupe: MessageDedupeIdentity,
+    ) -> Self {
+        Self {
+            admission_key,
+            payload_mac,
+            lease_token,
+            offline_dedupe,
+        }
+    }
+
     pub(crate) fn acceptance(&self) -> MessageAdmissionAcceptance<'_> {
         MessageAdmissionAcceptance {
             admission_key: &self.admission_key,
@@ -808,8 +826,16 @@ pub enum MessageAdmissionStart {
 /// is returned. Database/internal errors remain ordinary `Err` values and the
 /// caller must roll the transaction back.
 pub enum TransactionalGuardOutcome {
-    Allowed(WorkRequirement),
+    Allowed,
     DeniedNeedsCommit(GuardError),
+}
+
+pub(crate) struct PersistentVerificationInput<'a> {
+    pub(crate) action: AbuseAction,
+    pub(crate) subject: &'a str,
+    pub(crate) actors: &'a [String],
+    pub(crate) proof: Option<&'a PowProof>,
+    pub(crate) intent: Option<&'a PowIntent>,
 }
 
 struct ActorState {
@@ -1081,7 +1107,11 @@ impl AbuseGuard {
         }
     }
 
-    fn persistent_actor_state_keys(&self, action: AbuseAction, actors: &[String]) -> Vec<String> {
+    pub(crate) fn persistent_actor_state_keys(
+        &self,
+        action: AbuseAction,
+        actors: &[String],
+    ) -> Vec<String> {
         let mut keys = actor_state_keys(action, actors, &self.actor_key_secret);
         if let Some(previous) = self.previous_actor_key_secret.as_deref() {
             keys.extend(actor_state_keys(action, actors, previous));
@@ -1627,7 +1657,11 @@ impl AbuseGuard {
             .map(|(key_id, secret)| {
                 let (admission_key, payload_mac) =
                     message_admission_material(request, secret, identity_kind, &identity_value);
-                ((*key_id).to_owned(), admission_key, payload_mac)
+                MessageAdmissionCandidate {
+                    key_id: (*key_id).to_owned(),
+                    admission_key,
+                    payload_mac,
+                }
             })
             .collect::<Vec<_>>();
         let offline_dedupe = MessageDedupeIdentity {
@@ -1638,217 +1672,20 @@ impl AbuseGuard {
             ),
             candidates: candidate_material
                 .iter()
-                .map(|(key_id, _, payload_mac)| MessageDedupeCandidate {
-                    key_id: key_id.clone(),
-                    payload_mac: payload_mac.clone(),
+                .map(|candidate| MessageDedupeCandidate {
+                    key_id: candidate.key_id.clone(),
+                    payload_mac: candidate.payload_mac.clone(),
                 })
                 .collect(),
         };
-        let candidate_keys = candidate_material
-            .iter()
-            .map(|(_, key, _)| key.clone())
-            .collect::<Vec<_>>();
-        let mut lock_ids = candidate_keys
-            .iter()
-            .map(|key| message_admission_lock_id(key))
-            .collect::<Vec<_>>();
-        lock_ids.sort_unstable();
-        lock_ids.dedup();
-
-        let mut tx = pool.begin().await?;
-        for lock_id in lock_ids {
-            sqlx::query("SELECT pg_advisory_xact_lock($1)")
-                .bind(lock_id)
-                .execute(&mut *tx)
-                .await?;
-        }
-        let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-            .fetch_one(&mut *tx)
-            .await?;
-        sqlx::query(
-            "DELETE FROM abuse_message_admissions
-             WHERE admission_key=ANY($1::bytea[]) AND expires_at <= $2",
+        crate::db::message_admission_repository::begin_message_admission(
+            pool,
+            self,
+            request,
+            &candidate_material,
+            offline_dedupe,
         )
-        .bind(&candidate_keys)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-        let rows = sqlx::query(
-            "SELECT admission_key,key_id,actor_id,payload_mac,state,
-                    lease_token,lease_expires_at
-             FROM abuse_message_admissions
-             WHERE admission_key=ANY($1::bytea[])
-             ORDER BY admission_key FOR UPDATE",
-        )
-        .bind(&candidate_keys)
-        .fetch_all(&mut *tx)
-        .await?;
-        anyhow::ensure!(
-            rows.len() <= 1,
-            "message admission exists under multiple rotation keys"
-        );
-        if let Some(row) = rows.first() {
-            let stored_key: Vec<u8> = row.get("admission_key");
-            let stored_key_id: String = row.get("key_id");
-            let stored_payload_mac: Vec<u8> = row.get("payload_mac");
-            let exact = candidate_material.iter().any(|(key_id, key, payload_mac)| {
-                *key_id == stored_key_id
-                    && bool::from(stored_key.as_slice().ct_eq(key.as_slice()))
-                    && bool::from(stored_payload_mac.as_slice().ct_eq(payload_mac.as_slice()))
-            }) && row.get::<Uuid, _>("actor_id") == request.actor_id;
-            if !exact {
-                tx.rollback().await?;
-                return Ok(MessageAdmissionStart::Conflict);
-            }
-            if row.get::<String, _>("state") == "accepted" {
-                tx.commit().await?;
-                return Ok(MessageAdmissionStart::ReplayAccepted);
-            }
-            let lease_expires_at: chrono::DateTime<chrono::Utc> = row.get("lease_expires_at");
-            if lease_expires_at > now {
-                let retry_after_seconds = u64::try_from(
-                    lease_expires_at
-                        .signed_duration_since(now)
-                        .num_milliseconds()
-                        .saturating_add(999)
-                        / 1_000,
-                )
-                .unwrap_or(u64::MAX)
-                .max(1);
-                let mut requirement = self
-                    .current_requirement_in_tx(&mut tx, AbuseAction::Message, request.actors)
-                    .await?;
-                requirement.retry_after_seconds =
-                    requirement.retry_after_seconds.max(retry_after_seconds);
-                tx.commit().await?;
-                return Ok(MessageAdmissionStart::InProgress { requirement });
-            }
-            let lease_token = Uuid::new_v4();
-            sqlx::query(
-                "UPDATE abuse_message_admissions
-                 SET lease_token=$2,lease_expires_at=$3,updated_at=$4
-                 WHERE admission_key=$1",
-            )
-            .bind(&stored_key)
-            .bind(lease_token)
-            .bind(now + chrono_duration(MESSAGE_ADMISSION_LEASE))
-            .bind(now)
-            .execute(&mut *tx)
-            .await?;
-            let requirement = self
-                .current_requirement_in_tx(&mut tx, AbuseAction::Message, request.actors)
-                .await?;
-            tx.commit().await?;
-            return Ok(MessageAdmissionStart::Proceed {
-                lease: Some(MessageAdmissionLease {
-                    admission_key: stored_key,
-                    payload_mac: stored_payload_mac,
-                    lease_token,
-                    offline_dedupe,
-                }),
-                requirement,
-            });
-        }
-
-        let intent = PowIntent::xmpp(
-            AbuseAction::Message,
-            "/xmpp/message",
-            request.pow_intent_payload.as_bytes(),
-        );
-        let guard_outcome = self
-            .verify_or_allow_in_tx_v2(
-                &mut tx,
-                AbuseAction::Message,
-                request.subject,
-                request.actors,
-                request.proof,
-                &intent,
-            )
-            .await?;
-        let requirement = match guard_outcome {
-            TransactionalGuardOutcome::Allowed(requirement) => requirement,
-            TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
-                tx.commit().await?;
-                return Ok(MessageAdmissionStart::Denied(error));
-            }
-        };
-
-        let (primary_key_id, admission_key, payload_mac) = candidate_material
-            .first()
-            .expect("primary message-admission key is always present");
-        let capacity_shard = message_admission_capacity_shard(admission_key);
-        // Expired rows cannot be allowed to pin a shard indefinitely if the
-        // periodic maintenance task is delayed. Keep the foreground work
-        // strictly bounded and let the ordinary cleanup finish the remainder.
-        sqlx::query(
-            "WITH doomed AS (
-                 SELECT admission_key FROM abuse_message_admissions
-                  WHERE capacity_shard=$1 AND expires_at <= $2
-                  ORDER BY expires_at,admission_key
-                  LIMIT 128 FOR UPDATE SKIP LOCKED
-             )
-             DELETE FROM abuse_message_admissions AS target
-              USING doomed WHERE target.admission_key=doomed.admission_key",
-        )
-        .bind(capacity_shard)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-        let active_for_user: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM abuse_message_admissions
-             WHERE actor_id=$1 AND expires_at > $2",
-        )
-        .bind(request.actor_id)
-        .bind(now)
-        .fetch_one(&mut *tx)
-        .await?;
-        if active_for_user >= MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_USER {
-            tx.rollback().await?;
-            return Ok(MessageAdmissionStart::CapacityLimited);
-        }
-        let capacity_reserved = sqlx::query_scalar::<_, i32>(
-            "UPDATE abuse_message_admission_capacity
-             SET active_records=active_records+1
-             WHERE shard=$1 AND active_records < $2
-             RETURNING active_records",
-        )
-        .bind(capacity_shard)
-        .bind(MAX_ACTIVE_MESSAGE_ADMISSIONS_PER_SHARD)
-        .fetch_optional(&mut *tx)
-        .await?
-        .is_some();
-        if !capacity_reserved {
-            tx.rollback().await?;
-            return Ok(MessageAdmissionStart::CapacityLimited);
-        }
-        let lease_token = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO abuse_message_admissions
-             (admission_key,key_id,actor_id,capacity_shard,payload_mac,
-              proof_challenge_id,state,lease_token,lease_expires_at,expires_at)
-             VALUES($1,$2,$3,$4,$5,$6,'pending',$7,$8,$9)",
-        )
-        .bind(admission_key)
-        .bind(primary_key_id)
-        .bind(request.actor_id)
-        .bind(capacity_shard)
-        .bind(payload_mac)
-        .bind(request.proof.map(|proof| proof.challenge_id))
-        .bind(lease_token)
-        .bind(now + chrono_duration(MESSAGE_ADMISSION_LEASE))
-        .bind(now + chrono_duration(MESSAGE_ADMISSION_PENDING_TTL))
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(MessageAdmissionStart::Proceed {
-            lease: Some(MessageAdmissionLease {
-                admission_key: admission_key.clone(),
-                payload_mac: payload_mac.clone(),
-                lease_token,
-                offline_dedupe,
-            }),
-            requirement,
-        })
+        .await
     }
 
     /// Verify and advance a persistent anti-abuse step inside the caller's
@@ -1898,7 +1735,7 @@ impl AbuseGuard {
             Ok(self.verify_memory_bound(action, subject, actors, proof, intent))
         }?;
         Ok(match result {
-            Ok(requirement) => TransactionalGuardOutcome::Allowed(requirement),
+            Ok(_) => TransactionalGuardOutcome::Allowed,
             Err(error) => TransactionalGuardOutcome::DeniedNeedsCommit(error),
         })
     }
@@ -2069,13 +1906,23 @@ impl AbuseGuard {
             "transactional abuse decisions require persistent storage"
         );
         let keys = self.persistent_actor_state_keys(action, actors);
-        let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
         crate::db::abuse_actor_state_repository::apply_in_tx(tx, &keys, |states, now| {
-            decay_db_states(states, now, &self.config);
-            self.merge_previous_actor_states(action, actors, states);
-            requirement_from_db(action, states, &shared_ip_keys, now, &self.config)
+            self.current_requirement_decision(action, actors, states, now)
         })
         .await
+    }
+
+    pub(crate) fn current_requirement_decision(
+        &self,
+        action: AbuseAction,
+        actors: &[String],
+        states: &mut [DbActorState],
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> WorkRequirement {
+        let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
+        decay_db_states(states, now, &self.config);
+        self.merge_previous_actor_states(action, actors, states);
+        requirement_from_db(action, states, &shared_ip_keys, now, &self.config)
     }
 
     pub async fn record_failure(
@@ -2355,15 +2202,27 @@ impl AbuseGuard {
     ) -> anyhow::Result<std::result::Result<WorkRequirement, GuardError>> {
         let pool = self.pool.as_ref().expect("persistent abuse pool");
         let _db_state_gates = self.acquire_db_state_gates(action, actors).await;
-        let mut tx = pool.begin().await?;
-        let outcome = self
-            .verify_or_allow_in_tx_bound(&mut tx, action, subject, actors, proof, intent)
-            .await?;
-        tx.commit().await?;
-        Ok(match outcome {
-            TransactionalGuardOutcome::Allowed(requirement) => Ok(requirement),
-            TransactionalGuardOutcome::DeniedNeedsCommit(error) => Err(error),
-        })
+        let keys = self.persistent_actor_state_keys(action, actors);
+        crate::db::abuse_verification_repository::verify(
+            pool,
+            &keys,
+            proof.map(|proof| proof.challenge_id),
+            |states, now, challenge| {
+                self.decide_persistent_verification(
+                    PersistentVerificationInput {
+                        action,
+                        subject,
+                        actors,
+                        proof,
+                        intent,
+                    },
+                    states,
+                    now,
+                    challenge,
+                )
+            },
+        )
+        .await
     }
 
     async fn verify_persistent_in_tx_bound(
@@ -2375,73 +2234,93 @@ impl AbuseGuard {
         proof: Option<&PowProof>,
         intent: Option<&PowIntent>,
     ) -> anyhow::Result<std::result::Result<WorkRequirement, GuardError>> {
-        let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-            .fetch_one(&mut **tx)
-            .await?;
         let keys = self.persistent_actor_state_keys(action, actors);
+        crate::db::abuse_verification_repository::verify_in_tx(
+            tx,
+            &keys,
+            proof.map(|proof| proof.challenge_id),
+            |states, now, challenge| {
+                self.decide_persistent_verification(
+                    PersistentVerificationInput {
+                        action,
+                        subject,
+                        actors,
+                        proof,
+                        intent,
+                    },
+                    states,
+                    now,
+                    challenge,
+                )
+            },
+        )
+        .await
+    }
+
+    pub(crate) fn decide_persistent_verification(
+        &self,
+        input: PersistentVerificationInput<'_>,
+        states: &mut [DbActorState],
+        now: chrono::DateTime<chrono::Utc>,
+        challenge: Option<crate::db::abuse_verification_repository::ConsumedChallenge>,
+    ) -> anyhow::Result<crate::db::abuse_verification_repository::VerificationDecision> {
+        use crate::db::abuse_verification_repository::VerificationDecision;
+        let PersistentVerificationInput {
+            action,
+            subject,
+            actors,
+            proof,
+            intent,
+        } = input;
+
         let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
-        let mut states = lock_db_states(tx, &keys, now).await?;
-        decay_db_states(&mut states, now, &self.config);
-        self.merge_previous_actor_states(action, actors, &mut states);
-        let current = requirement_from_db(action, &states, &shared_ip_keys, now, &self.config);
+        decay_db_states(states, now, &self.config);
+        self.merge_previous_actor_states(action, actors, states);
+        let current = requirement_from_db(action, states, &shared_ip_keys, now, &self.config);
 
         let Some(proof) = proof else {
             if current.work_factor <= 1 && current.retry_after_seconds == 0 {
-                record_db_states(&mut states, &shared_ip_keys, now, &current);
-                persist_db_states(tx, &states).await?;
-                return Ok(Ok(current));
+                record_db_states(states, &shared_ip_keys, now, &current);
+                return Ok(VerificationDecision {
+                    outcome: Ok(current),
+                    persist_states: true,
+                });
             }
-            punish_db_states(&mut states, &shared_ip_keys, now, &self.config);
-            persist_db_states(tx, &states).await?;
-            return Ok(Err(GuardError::Required(current)));
+            punish_db_states(states, &shared_ip_keys, now, &self.config);
+            return Ok(VerificationDecision {
+                outcome: Err(GuardError::Required(current)),
+                persist_states: true,
+            });
         };
-
-        let challenge = sqlx::query(
-            "DELETE FROM abuse_pow_challenges WHERE id=$1
-             RETURNING action,subject_hash,key_id,prefix,work_factor,not_before,
-                       expires_at,actor_sequences,requirement,protocol_version,
-                       intent_method,intent_path,body_sha256,server_nonce,issued_at",
-        )
-        .bind(proof.challenge_id)
-        .fetch_optional(&mut **tx)
-        .await?;
         let Some(challenge) = challenge else {
-            punish_db_states(&mut states, &shared_ip_keys, now, &self.config);
-            persist_db_states(tx, &states).await?;
-            return Ok(Err(GuardError::Invalid(
-                "proof-of-work challenge is missing or already used",
-                current,
-            )));
+            punish_db_states(states, &shared_ip_keys, now, &self.config);
+            return Ok(VerificationDecision {
+                outcome: Err(GuardError::Invalid(
+                    "proof-of-work challenge is missing or already used",
+                    current,
+                )),
+                persist_states: true,
+            });
         };
         let challenge_requirement: WorkRequirement =
-            serde_json::from_value(challenge.get("requirement"))?;
-        let challenge_key_id: String = challenge.get("key_id");
-        let protocol_version =
-            u16::try_from(challenge.get::<i16, _>("protocol_version")).unwrap_or(u16::MAX);
+            serde_json::from_value(challenge.requirement.clone())?;
+        let protocol_version = u16::try_from(challenge.protocol_version).unwrap_or(u16::MAX);
         let intent_matches = if protocol_version == 1 {
             self.legacy_v1_allowed()
         } else if protocol_version == POW_INTENT_VERSION {
             intent.is_some_and(|expected| {
-                challenge
-                    .get::<Option<String>, _>("intent_method")
-                    .as_deref()
-                    == Some(expected.method.as_str())
-                    && challenge.get::<Option<String>, _>("intent_path").as_deref()
-                        == Some(expected.path.as_str())
-                    && challenge
-                        .get::<Option<Vec<u8>>, _>("body_sha256")
-                        .as_deref()
-                        == Some(expected.body_sha256.as_slice())
+                challenge.intent_method.as_deref() == Some(expected.method.as_str())
+                    && challenge.intent_path.as_deref() == Some(expected.path.as_str())
+                    && challenge.body_sha256.as_deref() == Some(expected.body_sha256.as_slice())
             })
         } else {
             false
         };
         let valid_identity = self
-            .actor_secret_for_id(&challenge_key_id)
+            .actor_secret_for_id(&challenge.key_id)
             .is_some_and(|secret| {
-                if challenge.get::<String, _>("action") != action.as_str()
-                    || challenge.get::<Vec<u8>, _>("subject_hash")
-                        != subject_hash(action, subject, secret)
+                if challenge.action != action.as_str()
+                    || challenge.subject_hash != subject_hash(action, subject, secret)
                 {
                     return false;
                 }
@@ -2451,33 +2330,30 @@ impl AbuseGuard {
                 let Some(expected) = intent else {
                     return false;
                 };
-                let Some(issued_at) =
-                    challenge.get::<Option<chrono::DateTime<chrono::Utc>>, _>("issued_at")
-                else {
+                let Some(issued_at) = challenge.issued_at else {
                     return false;
                 };
-                let Some(server_nonce) = challenge.get::<Option<String>, _>("server_nonce") else {
+                let Some(server_nonce) = challenge.server_nonce.as_deref() else {
                     return false;
                 };
-                let work_factor =
-                    u64::try_from(challenge.get::<i64, _>("work_factor")).unwrap_or(u64::MAX);
+                let work_factor = u64::try_from(challenge.work_factor).unwrap_or(u64::MAX);
                 let expected_prefix = pow_prefix(
                     secret,
                     protocol_version,
                     proof.challenge_id,
                     action,
-                    &challenge_key_id,
+                    &challenge.key_id,
                     subject,
                     actors,
                     work_factor,
                     issued_at,
-                    challenge.get("expires_at"),
-                    &server_nonce,
+                    challenge.expires_at,
+                    server_nonce,
                     Some(expected),
                 );
                 bool::from(
                     challenge
-                        .get::<String, _>("prefix")
+                        .prefix
                         .as_bytes()
                         .ct_eq(expected_prefix.as_bytes()),
                 )
@@ -2489,33 +2365,40 @@ impl AbuseGuard {
                 intent_matches,
                 "rejected a PoW v2 challenge whose operation binding changed"
             );
-            punish_db_states(&mut states, &shared_ip_keys, now, &self.config);
-            persist_db_states(tx, &states).await?;
-            return Ok(Err(GuardError::Invalid(
-                "proof-of-work challenge does not match this operation",
-                current,
-            )));
+            punish_db_states(states, &shared_ip_keys, now, &self.config);
+            return Ok(VerificationDecision {
+                outcome: Err(GuardError::Invalid(
+                    "proof-of-work challenge does not match this operation",
+                    current,
+                )),
+                persist_states: true,
+            });
         }
-        if now > challenge.get::<chrono::DateTime<chrono::Utc>, _>("expires_at") {
-            return Ok(Err(GuardError::Invalid(
-                "proof-of-work challenge expired",
-                current,
-            )));
+        if now > challenge.expires_at {
+            return Ok(VerificationDecision {
+                outcome: Err(GuardError::Invalid(
+                    "proof-of-work challenge expired",
+                    current,
+                )),
+                persist_states: false,
+            });
         }
-        if now < challenge.get::<chrono::DateTime<chrono::Utc>, _>("not_before") {
-            return Ok(Err(GuardError::Invalid(
-                "hard cooldown has not finished",
-                challenge_requirement,
-            )));
+        if now < challenge.not_before {
+            return Ok(VerificationDecision {
+                outcome: Err(GuardError::Invalid(
+                    "hard cooldown has not finished",
+                    challenge_requirement,
+                )),
+                persist_states: false,
+            });
         }
         let expected: serde_json::Map<String, serde_json::Value> = challenge
-            .get::<serde_json::Value, _>("actor_sequences")
+            .actor_sequences
             .as_object()
             .cloned()
             .unwrap_or_default();
-        // Rotation may add current-key state rows after an old-key challenge
-        // was issued. Validate exactly the signed key set; extra rows are not
-        // evidence that the old challenge was replayed.
+        // An old-key challenge signs only its own key set. Newly mirrored
+        // state rows do not by themselves indicate replay.
         let sequences_match = expected.iter().all(|(key, sequence)| {
             states
                 .iter()
@@ -2532,40 +2415,48 @@ impl AbuseGuard {
                 &current,
             )
         {
-            return Ok(Err(GuardError::Invalid(
-                "another operation already advanced this rate-limit step",
-                current,
-            )));
+            return Ok(VerificationDecision {
+                outcome: Err(GuardError::Invalid(
+                    "another operation already advanced this rate-limit step",
+                    current,
+                )),
+                persist_states: false,
+            });
         }
         if proof.nonce.is_empty()
             || proof.nonce.len() > 64
             || !proof.nonce.bytes().all(|byte| byte.is_ascii_digit())
         {
-            punish_db_states(&mut states, &shared_ip_keys, now, &self.config);
-            persist_db_states(tx, &states).await?;
-            return Ok(Err(GuardError::Invalid(
-                "proof-of-work nonce is invalid",
-                current,
-            )));
+            punish_db_states(states, &shared_ip_keys, now, &self.config);
+            return Ok(VerificationDecision {
+                outcome: Err(GuardError::Invalid(
+                    "proof-of-work nonce is invalid",
+                    current,
+                )),
+                persist_states: true,
+            });
         }
-        let prefix: String = challenge.get("prefix");
         let mut hasher = Sha256::new();
-        hasher.update(prefix.as_bytes());
+        hasher.update(challenge.prefix.as_bytes());
         hasher.update(proof.nonce.as_bytes());
         let digest = hasher.finalize();
         let value = u64::from_be_bytes(digest[..8].try_into().expect("SHA-256 prefix"));
-        let work_factor = u64::try_from(challenge.get::<i64, _>("work_factor")).unwrap_or(u64::MAX);
+        let work_factor = u64::try_from(challenge.work_factor).unwrap_or(u64::MAX);
         if value > u64::MAX / work_factor.max(1) {
-            punish_db_states(&mut states, &shared_ip_keys, now, &self.config);
-            persist_db_states(tx, &states).await?;
-            return Ok(Err(GuardError::Invalid(
-                "proof of work is insufficient",
-                current,
-            )));
+            punish_db_states(states, &shared_ip_keys, now, &self.config);
+            return Ok(VerificationDecision {
+                outcome: Err(GuardError::Invalid(
+                    "proof of work is insufficient",
+                    current,
+                )),
+                persist_states: true,
+            });
         }
-        record_db_states(&mut states, &shared_ip_keys, now, &challenge_requirement);
-        persist_db_states(tx, &states).await?;
-        Ok(Ok(challenge_requirement))
+        record_db_states(states, &shared_ip_keys, now, &challenge_requirement);
+        Ok(VerificationDecision {
+            outcome: Ok(challenge_requirement),
+            persist_states: true,
+        })
     }
 
     pub(crate) async fn cleanup_challenges(&self) -> anyhow::Result<()> {
@@ -3859,7 +3750,7 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            TransactionalGuardOutcome::Allowed(_)
+            TransactionalGuardOutcome::Allowed
         ));
         rollback_tx.rollback().await.unwrap();
         let restored: i64 =
@@ -3883,7 +3774,7 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            TransactionalGuardOutcome::Allowed(_)
+            TransactionalGuardOutcome::Allowed
         ));
         commit_tx.commit().await.unwrap();
         let consumed: i64 =
@@ -5153,6 +5044,64 @@ mod tests {
                 .unwrap(),
             MessageAdmissionStart::Denied(_)
         ));
+
+        // A proof for a missing challenge is denied and penalized in one
+        // transaction; it must never leave a pending admission behind.
+        let denied_origin = format!("denied-{marker}");
+        let denied_payload = format!(
+            "<message to='{target}'><body>denied</body><origin-id xmlns='urn:xmpp:sid:0' id='{denied_origin}'/></message>"
+        );
+        let denied_actors = vec![format!("user:denied:{marker}")];
+        let denied_subject = format!("message:denied:{marker}");
+        let missing_proof = PowProof {
+            challenge_id: Uuid::new_v4(),
+            nonce: "0".to_owned(),
+        };
+        let denied_request = MessageAdmissionRequest {
+            actor_id: user.id,
+            account_bare: &account,
+            normalized_target: &target,
+            origin_id: Some(&denied_origin),
+            normalized_payload: &denied_payload,
+            pow_intent_payload: &denied_payload,
+            subject: &denied_subject,
+            actors: &denied_actors,
+            proof: Some(&missing_proof),
+        };
+        assert!(matches!(
+            over_rotated
+                .begin_message_admission(&denied_request)
+                .await
+                .unwrap(),
+            MessageAdmissionStart::Denied(GuardError::Invalid(_, _))
+        ));
+        let (identity_kind, identity_value) = message_admission_identity(&denied_request).unwrap();
+        let (denied_key, _) = message_admission_material(
+            &denied_request,
+            &over_rotated.actor_key_secret,
+            identity_kind,
+            &identity_value,
+        );
+        let denied_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM abuse_message_admissions WHERE admission_key=$1",
+        )
+        .bind(&denied_key)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(denied_rows, 0);
+        let denied_state_key = actor_state_keys(
+            AbuseAction::Message,
+            &denied_actors,
+            &over_rotated.actor_key_secret,
+        );
+        let denied_sequence: i64 =
+            sqlx::query_scalar("SELECT sequence FROM abuse_actor_states WHERE state_key=$1")
+                .bind(&denied_state_key[0])
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(denied_sequence, 1);
 
         sqlx::query("DELETE FROM users WHERE id=$1")
             .bind(user.id)

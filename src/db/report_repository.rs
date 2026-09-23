@@ -67,7 +67,7 @@ impl PostgresReportRepository {
                         )
                         .await?
                     {
-                        TransactionalGuardOutcome::Allowed(_) => {
+                        TransactionalGuardOutcome::Allowed => {
                             anyhow::ensure!(
                                 db::mark_idempotency_guard_verified_in_tx(&mut tx, &lease).await?,
                                 "report/appeal idempotency guard lease changed"

@@ -83,10 +83,10 @@ pub(crate) async fn maybe_link_local_mirror(
     let outcome = state
         .mix_service()
         .link_local_muc_mirror(
-            &format!("mix.{}", state.config.domain),
+            &format!("mix.{}", state.local_domain()),
             localpart,
             actor_bare_jid,
-            &state.config.domain,
+            state.local_domain(),
         )
         .await?;
     if matches!(outcome, MixMucLinkOutcome::Linked) {

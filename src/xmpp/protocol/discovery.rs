@@ -134,7 +134,7 @@ impl ProtocolSession {
         to: Option<&str>,
         request: roxmltree::Node<'_, '_>,
     ) -> Result<Action> {
-        let requested_from = to.unwrap_or(&self.state.config.domain);
+        let requested_from = to.unwrap_or(self.state.local_domain());
         let Ok(target) = crate::jid::CanonicalJid::parse(requested_from) else {
             return Ok(Action::Send(iq_error(id, "jid-malformed")));
         };
@@ -208,7 +208,7 @@ impl ProtocolSession {
             let Some(user) = self.authenticated.as_ref() else {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             };
-            let requester = format!("{}@{}", user.username, self.state.config.domain);
+            let requester = format!("{}@{}", user.username, self.state.local_domain());
             if !self
                 .state
                 .mix_service()
@@ -483,10 +483,10 @@ impl ProtocolSession {
         }
         let is_server = target.localpart().is_none()
             && target.resourcepart().is_none()
-            && target.domainpart() == self.state.config.domain;
+            && target.domainpart() == self.state.local_domain();
         let is_account = target.localpart().is_some()
             && target.resourcepart().is_none()
-            && target.domainpart() == self.state.config.domain;
+            && target.domainpart() == self.state.local_domain();
         let owner = if is_account {
             let Some(owner) = self
                 .state
@@ -526,12 +526,12 @@ impl ProtocolSession {
             let requester = self
                 .authenticated
                 .as_ref()
-                .map(|requester| format!("{}@{}", requester.username, self.state.config.domain));
+                .map(|requester| format!("{}@{}", requester.username, self.state.local_domain()));
             let allowed = if let Some(requester) = requester.as_deref() {
                 super::pep::pep_access_allowed(
                     self.state.pubsub_service(),
                     owner,
-                    &self.state.config.domain,
+                    self.state.local_domain(),
                     node,
                     requester,
                 )
@@ -671,7 +671,7 @@ impl ProtocolSession {
         to: Option<&str>,
         request: roxmltree::Node<'_, '_>,
     ) -> Result<Action> {
-        let requested_from = to.unwrap_or(&self.state.config.domain);
+        let requested_from = to.unwrap_or(self.state.local_domain());
         let Ok(target) = crate::jid::CanonicalJid::parse(requested_from) else {
             return Ok(Action::Send(iq_error(id, "jid-malformed")));
         };
@@ -698,7 +698,7 @@ impl ProtocolSession {
         let mut query = disco_items_query(requested_node);
         if target.localpart().is_none()
             && target.resourcepart().is_none()
-            && target.domainpart() == self.state.config.domain
+            && target.domainpart() == self.state.local_domain()
         {
             if let Some(node) = requested_node {
                 if node == "http://jabber.org/protocol/commands" {
@@ -715,7 +715,7 @@ impl ProtocolSession {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
             if let Some(user) = self.authenticated.as_ref() {
-                let requester = format!("{}@{}", user.username, self.state.config.domain);
+                let requester = format!("{}@{}", user.username, self.state.local_domain());
                 let Some(page) = self
                     .state
                     .mix_service()
@@ -765,7 +765,7 @@ impl ProtocolSession {
             let requester = self
                 .authenticated
                 .as_ref()
-                .map(|user| format!("{}@{}", user.username, self.state.config.domain));
+                .map(|user| format!("{}@{}", user.username, self.state.local_domain()));
             let Some(requester_jid) = requester.as_deref() else {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             };
@@ -931,7 +931,7 @@ impl ProtocolSession {
             }));
         } else if target.localpart().is_none()
             && target.resourcepart().is_none()
-            && target.domainpart() == self.state.config.domain
+            && target.domainpart() == self.state.local_domain()
         {
             if requested_node.is_some() {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
@@ -962,7 +962,7 @@ impl ProtocolSession {
             }
         } else if target.localpart().is_some()
             && target.resourcepart().is_none()
-            && target.domainpart() == self.state.config.domain
+            && target.domainpart() == self.state.local_domain()
         {
             let Some(owner) = self
                 .state
@@ -978,13 +978,13 @@ impl ProtocolSession {
                     return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
                 };
                 let requester = self.authenticated.as_ref().map(|requester| {
-                    format!("{}@{}", requester.username, self.state.config.domain)
+                    format!("{}@{}", requester.username, self.state.local_domain())
                 });
                 let allowed = if let Some(requester) = requester.as_deref() {
                     super::pep::pep_access_allowed(
                         self.state.pubsub_service(),
                         &owner,
-                        &self.state.config.domain,
+                        self.state.local_domain(),
                         node,
                         requester,
                     )
@@ -997,14 +997,14 @@ impl ProtocolSession {
                 }
             } else {
                 let requester = self.authenticated.as_ref().map(|requester| {
-                    format!("{}@{}", requester.username, self.state.config.domain)
+                    format!("{}@{}", requester.username, self.state.local_domain())
                 });
                 for node in self.state.pubsub_service().pep_nodes(owner.id).await? {
                     let allowed = if let Some(requester) = requester.as_deref() {
                         super::pep::pep_access_allowed(
                             self.state.pubsub_service(),
                             &owner,
-                            &self.state.config.domain,
+                            self.state.local_domain(),
                             &node,
                             requester,
                         )

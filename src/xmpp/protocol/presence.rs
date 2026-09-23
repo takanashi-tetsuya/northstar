@@ -121,7 +121,7 @@ impl ProtocolSession {
                 return self.muc_presence(root, raw).await;
             }
             let target_domain = target_jid.domainpart();
-            let remote_domain = (target_domain != self.state.config.domain
+            let remote_domain = (target_domain != self.state.local_domain()
                 && target_domain != self.muc_domain()
                 && target_domain != self.upload_domain()
                 && target_domain != self.pubsub_domain())
@@ -253,7 +253,7 @@ impl ProtocolSession {
             };
             if !subscription_kind {
                 if let Some(target) = &target_user {
-                    let target_bare = format!("{}@{}", target.username, self.state.config.domain);
+                    let target_bare = format!("{}@{}", target.username, self.state.local_domain());
                     if self
                         .state
                         .presence_service()
@@ -551,7 +551,7 @@ impl ProtocolSession {
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) =
                 (kind == "available").then(|| rewritten.clone());
-            let account = format!("{}@{}", user.username, self.state.config.domain);
+            let account = format!("{}@{}", user.username, self.state.local_domain());
             let active_privacy = self
                 .privacy_active
                 .read()
@@ -571,7 +571,7 @@ impl ProtocolSession {
                     Some(username)
                         if contact_jid
                             .as_ref()
-                            .is_some_and(|jid| jid.domainpart() == self.state.config.domain) =>
+                            .is_some_and(|jid| jid.domainpart() == self.state.local_domain()) =>
                     {
                         self.state
                             .presence_service()
@@ -581,7 +581,8 @@ impl ProtocolSession {
                     _ => None,
                 };
                 if let Some(contact) = local_contact.as_ref() {
-                    let contact_bare = format!("{}@{}", contact.username, self.state.config.domain);
+                    let contact_bare =
+                        format!("{}@{}", contact.username, self.state.local_domain());
                     if self
                         .state
                         .presence_service()
@@ -605,7 +606,7 @@ impl ProtocolSession {
                         .attr("type", "subscribe")
                         .finish();
                     if let Some(contact) = contact_jid.as_ref() {
-                        if contact.domainpart() == self.state.config.domain {
+                        if contact.domainpart() == self.state.local_domain() {
                             let Some(local_contact) = local_contact.as_ref() else {
                                 continue;
                             };
@@ -671,7 +672,7 @@ impl ProtocolSession {
                     self.remove_directed_presence_for_bare(&jid);
                     let delivery = set_to(&rewritten, &jid);
                     if let Ok(contact) = crate::jid::CanonicalJid::parse_bare(&jid) {
-                        if contact.domainpart() == self.state.config.domain {
+                        if contact.domainpart() == self.state.local_domain() {
                             for (_, target) in self
                                 .state
                                 .session_entries_for(&jid)
@@ -759,7 +760,7 @@ impl ProtocolSession {
                         "Welcome"
                     };
                     let notice = XmlElement::namespaced("message", "jabber:client")
-                        .attr("from", &self.state.config.domain)
+                        .attr("from", self.state.local_domain())
                         .attr("to", &from)
                         .attr("type", "headline")
                         .attr("id", uuid::Uuid::new_v4())
@@ -882,7 +883,7 @@ impl ProtocolSession {
                 actor_id,
                 expected_auth_generation,
                 self.connection_id,
-                &self.state.config.domain,
+                self.state.local_domain(),
                 &contact,
                 kind,
                 target_domain,
@@ -924,7 +925,7 @@ impl ProtocolSession {
                 actor_id,
                 expected_auth_generation,
                 self.connection_id,
-                &self.state.config.domain,
+                self.state.local_domain(),
                 &contact,
                 kind,
             )
@@ -983,14 +984,14 @@ impl ProtocolSession {
         raw: &str,
     ) -> Result<SubscriptionMutationDisposition> {
         let target_jid = crate::jid::CanonicalJid::parse_bare(target_jid)?;
-        if target_jid.domainpart() != self.state.config.domain {
+        if target_jid.domainpart() != self.state.local_domain() {
             return Ok(SubscriptionMutationDisposition::Missing);
         }
         let Some(target_name) = target_jid.localpart() else {
             return Ok(SubscriptionMutationDisposition::Missing);
         };
-        let actor_jid = format!("{}@{}", actor_username, self.state.config.domain);
-        let target_jid = format!("{}@{}", target_name, self.state.config.domain);
+        let actor_jid = format!("{}@{}", actor_username, self.state.local_domain());
+        let target_jid = format!("{}@{}", target_name, self.state.local_domain());
         let stamped_stanza = set_to(&set_from(raw, &actor_jid), &target_jid);
         let outcome = self
             .state
@@ -999,7 +1000,7 @@ impl ProtocolSession {
                 actor_id,
                 expected_auth_generation,
                 connection_id: self.connection_id,
-                local_domain: &self.state.config.domain,
+                local_domain: self.state.local_domain(),
                 target_username: target_name,
                 kind,
                 stanza: &stamped_stanza,
@@ -1017,8 +1018,8 @@ impl ProtocolSession {
         };
         let actor = transition.actor.clone();
         let target = transition.target.clone();
-        let actor_jid = format!("{}@{}", actor.username, self.state.config.domain);
-        let target_jid = format!("{}@{}", target.username, self.state.config.domain);
+        let actor_jid = format!("{}@{}", actor.username, self.state.local_domain());
+        let target_jid = format!("{}@{}", target.username, self.state.local_domain());
         let stamped_stanza = set_to(&set_from(raw, &actor_jid), &target_jid);
 
         // RFC 6121 requires the subscription notification to be delivered
@@ -1419,7 +1420,7 @@ impl ProtocolSession {
             let Ok(jid) = crate::jid::CanonicalJid::parse(&target) else {
                 continue;
             };
-            if jid.domainpart() == self.state.config.domain {
+            if jid.domainpart() == self.state.local_domain() {
                 let mut recipients = self.state.session_entries_for(&target);
                 if jid.resourcepart().is_none() {
                     recipients.retain(|(_, session)| session.available.load(Ordering::Relaxed));
@@ -1488,7 +1489,7 @@ impl ProtocolSession {
             .then(|| owner_jid.to_string());
         let resolved_owner = if expected_owner_id.is_none() {
             match owner_jid.localpart() {
-                Some(localpart) if owner_jid.domainpart() == self.state.config.domain => self
+                Some(localpart) if owner_jid.domainpart() == self.state.local_domain() => self
                     .state
                     .presence_service()
                     .find_enabled_user(localpart)
@@ -1508,7 +1509,7 @@ impl ProtocolSession {
         };
         let resolved_recipient = if expected_recipient_id.is_none() {
             match recipient_jid.localpart() {
-                Some(localpart) if recipient_jid.domainpart() == self.state.config.domain => self
+                Some(localpart) if recipient_jid.domainpart() == self.state.local_domain() => self
                     .state
                     .presence_service()
                     .find_enabled_user(localpart)
@@ -1683,7 +1684,7 @@ impl ProtocolSession {
         let Ok(contact_jid) = crate::jid::CanonicalJid::parse_bare(contact) else {
             return;
         };
-        if contact_jid.domainpart() == self.state.config.domain {
+        if contact_jid.domainpart() == self.state.local_domain() {
             self.send_current_availability(contact, requester_bare)
                 .await;
             return;

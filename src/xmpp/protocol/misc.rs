@@ -414,7 +414,7 @@ impl ProtocolSession {
         // Revoke other local and resumable sessions before acknowledging the
         // credential change. The terminal action then delivers this IQ result
         // and closes the initiating stream without a detached crash window.
-        let account = format!("{}@{}", user.username, self.state.config.domain);
+        let account = format!("{}@{}", user.username, self.state.local_domain());
         self.state.disconnect_account(user.id, &account).await;
         Ok(Action::SendManyAndClose(vec![iq_result(id, "")]))
     }
@@ -582,7 +582,9 @@ impl ProtocolSession {
         }
         let jid = format!(
             "{}@{}/{}",
-            user.username, self.state.config.domain, resource
+            user.username,
+            self.state.local_domain(),
+            resource
         );
         let key = match crate::jid::canonical_session_key(&jid) {
             Ok(key) => key,
@@ -849,7 +851,7 @@ impl ProtocolSession {
             crate::jid::canonicalize(to).is_ok_and(|to| {
                 to.as_str() == full_jid
                     || to.as_str() == own_bare
-                    || to.as_str() == self.state.config.domain.as_str()
+                    || to.as_str() == self.state.local_domain()
             })
         });
         if !valid_from || !valid_to {
@@ -889,7 +891,7 @@ impl ProtocolSession {
         let Some(user) = &self.authenticated else {
             return Ok(Action::Send(stanza_error(iq, "auth", "not-authorized")));
         };
-        let own_bare = format!("{}@{}", user.username, self.state.config.domain);
+        let own_bare = format!("{}@{}", user.username, self.state.local_domain());
         if !northstar_xep_0357::iq_targets_own_account(iq, &own_bare) {
             return Ok(Action::Send(stanza_error(iq, "cancel", "not-allowed")));
         }
@@ -938,7 +940,7 @@ impl ProtocolSession {
         let Some(user) = &self.authenticated else {
             return Ok(Action::Send(stanza_error(iq, "auth", "not-authorized")));
         };
-        let own_bare = format!("{}@{}", user.username, self.state.config.domain);
+        let own_bare = format!("{}@{}", user.username, self.state.local_domain());
         if !northstar_xep_0357::iq_targets_own_account(iq, &own_bare) {
             return Ok(Action::Send(stanza_error(iq, "cancel", "not-allowed")));
         }
@@ -1005,7 +1007,7 @@ pub(crate) async fn send_push_notification(
             .with_message_count(batch.message_count as u64)
             .with_pending_subscription_count(batch.pending_subscription_count as u64);
         let notification = northstar_xep_0357::build_notification_iq(
-            &state.config.domain,
+            state.local_domain(),
             &subscription.service_jid,
             &request_id,
             (!subscription.node.is_empty()).then_some(subscription.node.as_str()),
@@ -1016,7 +1018,7 @@ pub(crate) async fn send_push_notification(
         let service = crate::jid::CanonicalJid::parse_bare(&subscription.service_jid).ok();
         if service
             .as_ref()
-            .is_some_and(|jid| jid.domainpart() == state.config.domain)
+            .is_some_and(|jid| jid.domainpart() == state.local_domain())
         {
             let mut local_targets = state.session_entries_for(&subscription.service_jid);
             // A local bare push-service JID follows the same RFC 6121 routing
@@ -1218,7 +1220,7 @@ pub(crate) async fn handle_push_disable(
         return Ok(false);
     }
     let target_jid = crate::jid::CanonicalJid::parse_bare(&target)?;
-    if target_jid.domainpart() != state.config.domain {
+    if target_jid.domainpart() != state.local_domain() {
         return Ok(false);
     }
     let Some(target_username) = target_jid.localpart() else {

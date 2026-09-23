@@ -3735,7 +3735,7 @@ pub async fn admin_destroy_cluster_muc_room_in_tx(
     actor_label: &str,
     alternate_jid: Option<&str>,
     reason: Option<&str>,
-) -> Result<bool> {
+) -> Result<Option<Vec<ClusterMucAudienceSnapshot>>> {
     anyhow::ensure!(
         reason.is_none_or(|value| value.len() <= 4096),
         "destroy reason is oversized"
@@ -3748,13 +3748,13 @@ pub async fn admin_destroy_cluster_muc_room_in_tx(
         .await?
         .is_some()
     {
-        return Ok(false);
+        return Ok(None);
     }
     let Some(room) = lock_room(tx, room_id).await? else {
-        return Ok(false);
+        return Ok(None);
     };
     if room.destroyed {
-        return Ok(false);
+        return Ok(None);
     }
     let audience = active_audience(tx, room_id).await?;
     let (_unused, event_sequence) = allocate_room_epochs(tx, room_id, false).await?;
@@ -3814,7 +3814,7 @@ pub async fn admin_destroy_cluster_muc_room_in_tx(
     .rows_affected()
         == 1;
     anyhow::ensure!(updated, "MUC room tombstone fence changed concurrently");
-    Ok(true)
+    Ok(Some(audience))
 }
 
 /// Internal lifecycle tombstone used for temporary-room cleanup and locked

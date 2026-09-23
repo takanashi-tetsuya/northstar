@@ -168,7 +168,7 @@ impl ProtocolSession {
         }
         if matches!(primary.tag_name().name(), "publish" | "retract" | "create")
             && iq.attribute("to").is_some_and(|to| {
-                !canonical_account_jid(&user.username, &self.state.config.domain).is_ok_and(
+                !canonical_account_jid(&user.username, self.state.local_domain()).is_ok_and(
                     |owner| crate::jid::canonicalize_bare(to).is_ok_and(|target| target == owner),
                 )
             })
@@ -513,7 +513,7 @@ impl ProtocolSession {
         }
         if let AvatarPresenceUpdate::Changed(hash) = avatar_presence {
             self.refresh_local_avatar_presence(
-                &canonical_account_jid(&user.username, &self.state.config.domain)?,
+                &canonical_account_jid(&user.username, self.state.local_domain())?,
                 hash.as_deref(),
             );
         }
@@ -627,7 +627,7 @@ impl ProtocolSession {
             auth_generation: requester.auth_generation,
         };
         let actor_jid = self.full_jid.clone().unwrap_or_else(|| {
-            canonical_account_jid(&requester.username, &self.state.config.domain)
+            canonical_account_jid(&requester.username, self.state.local_domain())
                 .expect("authenticated account must form a canonical JID")
         });
         let requested_subid = uuid::Uuid::new_v4().to_string();
@@ -741,7 +741,7 @@ impl ProtocolSession {
             auth_generation: requester.auth_generation,
         };
         let actor_jid = self.full_jid.clone().unwrap_or_else(|| {
-            canonical_account_jid(&requester.username, &self.state.config.domain)
+            canonical_account_jid(&requester.username, self.state.local_domain())
                 .expect("authenticated account must form a canonical JID")
         });
         let outcome = self
@@ -807,7 +807,7 @@ impl ProtocolSession {
                 return Ok(None);
             };
             if to.resourcepart().is_some()
-                || to.domainpart() != self.state.config.domain
+                || to.domainpart() != self.state.local_domain()
                 || to.localpart().is_none()
             {
                 return Ok(None);
@@ -967,7 +967,7 @@ impl ProtocolSession {
         for contact in &audience.roster_jids {
             let contact_jid = crate::jid::CanonicalJid::parse_bare(contact)?;
             let contact_bare = contact_jid.to_string();
-            if contact_jid.domainpart() == state.config.domain {
+            if contact_jid.domainpart() == state.local_domain() {
                 for (full_jid, target) in state.session_entries_for(&contact_bare) {
                     if target.available.load(std::sync::atomic::Ordering::Relaxed)
                         && super::caps::wants_pep_node(state, &full_jid, node)
@@ -1051,7 +1051,7 @@ impl ProtocolSession {
         for contact in &audience.roster_jids {
             let contact_jid = crate::jid::CanonicalJid::parse_bare(contact)?;
             let contact_bare = contact_jid.to_string();
-            if contact_jid.domainpart() == state.config.domain {
+            if contact_jid.domainpart() == state.local_domain() {
                 for (full_jid, target) in state.session_entries_for(&contact_bare) {
                     if target.available.load(std::sync::atomic::Ordering::Relaxed)
                         && super::caps::wants_pep_node(state, &full_jid, node)
@@ -1137,7 +1137,7 @@ impl ProtocolSession {
         let owner_name = match iq.attribute("to") {
             Some(to) => match crate::jid::CanonicalJid::parse_bare(to) {
                 Ok(target)
-                    if target.domainpart() == self.state.config.domain
+                    if target.domainpart() == self.state.local_domain()
                         && target.localpart().is_some() =>
                 {
                     target.localpart().unwrap_or_default().to_owned()
@@ -1164,11 +1164,11 @@ impl ProtocolSession {
                 iq_error(id, "item-not-found")
             }));
         };
-        let requester_jid = canonical_account_jid(&requester.username, &self.state.config.domain)?;
+        let requester_jid = canonical_account_jid(&requester.username, self.state.local_domain())?;
         if !pep_access_allowed(
             self.state.pubsub_service(),
             &owner,
-            &self.state.config.domain,
+            self.state.local_domain(),
             node,
             &requester_jid,
         )
@@ -1314,7 +1314,7 @@ impl ProtocolSession {
                 "item-not-found",
             )));
         };
-        let owner_jid = canonical_account_jid(&user.username, &self.state.config.domain)?;
+        let owner_jid = canonical_account_jid(&user.username, self.state.local_domain())?;
         let inner = match operation.tag_name().name() {
             "configure" => {
                 let mut configure = XmlElement::new("configure").attr("node", node);
@@ -1522,7 +1522,7 @@ impl ProtocolSession {
                 }
             }
             "affiliations" => {
-                let owner_jid = canonical_account_jid(&user.username, &self.state.config.domain)?;
+                let owner_jid = canonical_account_jid(&user.username, self.state.local_domain())?;
                 let changes = operation
                     .children()
                     .filter(Node::is_element)
@@ -1710,7 +1710,7 @@ fn pep_owner_target_allowed(
     user: &crate::services::authentication::AuthenticatedAccount,
 ) -> bool {
     iq.attribute("to").is_none_or(|to| {
-        canonical_account_jid(&user.username, &session.state.config.domain).is_ok_and(|owner| {
+        canonical_account_jid(&user.username, session.state.local_domain()).is_ok_and(|owner| {
             crate::jid::canonicalize_bare(to).is_ok_and(|target| target == owner)
         })
     })
@@ -1756,7 +1756,7 @@ async fn route_pep_message(
     let sender_bare_jid = crate::jid::canonicalize_bare(sender_bare_jid)?;
     let recipient_jid = crate::jid::CanonicalJid::parse(recipient)?;
     let domain = recipient_jid.domainpart();
-    if domain == state.config.domain {
+    if domain == state.local_domain() {
         let mut delivered = false;
         let recipient_key = recipient_jid.to_string();
         let targets = state.session_entries_for(&recipient_key);
@@ -1941,7 +1941,7 @@ async fn send_pep_last_item_for_owner(
     else {
         return Ok(());
     };
-    let owner_jid = canonical_account_jid(owner_username, &state.config.domain)?;
+    let owner_jid = canonical_account_jid(owner_username, state.local_domain())?;
     let payload = published_event_item(node, &item.item_id, &item.payload)?;
     let mut items = XmlElement::new("items").attr("node", node);
     items.push_validated_fragment(&payload)?;
@@ -1977,7 +1977,7 @@ pub(crate) async fn deliver_explicit_pep_last_items_for_resource(
             state.pubsub_service(),
             subscription.owner_id,
             &subscription.owner_username,
-            &state.config.domain,
+            state.local_domain(),
             &subscription.node,
             &full_jid,
         )
@@ -2048,7 +2048,7 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
         let Ok(contact_jid) = crate::jid::CanonicalJid::parse_bare(&contact) else {
             continue;
         };
-        if contact_jid.domainpart() != state.config.domain {
+        if contact_jid.domainpart() != state.local_domain() {
             continue;
         }
         let Some(contact_name) = contact_jid.localpart() else {
@@ -2069,7 +2069,7 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
                 && pep_access_allowed(
                     state.pubsub_service(),
                     &owner,
-                    &state.config.domain,
+                    state.local_domain(),
                     node,
                     &bare,
                 )
@@ -2099,7 +2099,7 @@ pub(crate) async fn deliver_pep_last_items_for_federated_resource(
         return Ok(());
     }
     let remote = crate::jid::CanonicalJid::parse(full_jid)?;
-    if remote.resourcepart().is_none() || remote.domainpart() == state.config.domain {
+    if remote.resourcepart().is_none() || remote.domainpart() == state.local_domain() {
         return Ok(());
     }
     let bare = remote.bare();
@@ -2126,7 +2126,7 @@ pub(crate) async fn deliver_pep_last_items_for_federated_resource(
                 && pep_access_allowed(
                     state.pubsub_service(),
                     &owner,
-                    &state.config.domain,
+                    state.local_domain(),
                     node,
                     full_jid,
                 )
@@ -2420,7 +2420,7 @@ pub(crate) async fn federated_pep_disco_info(
         if !pep_access_allowed(
             state.pubsub_service(),
             owner,
-            &state.config.domain,
+            state.local_domain(),
             node,
             requester,
         )
@@ -2522,7 +2522,7 @@ pub(crate) async fn federated_pep_disco_items(
             || !pep_access_allowed(
                 state.pubsub_service(),
                 owner,
-                &state.config.domain,
+                state.local_domain(),
                 node,
                 requester,
             )
@@ -2536,13 +2536,13 @@ pub(crate) async fn federated_pep_disco_items(
                 .finish(),
         ));
     }
-    let owner_jid = canonical_account_jid(&owner.username, &state.config.domain)?;
+    let owner_jid = canonical_account_jid(&owner.username, state.local_domain())?;
     let mut query = XmlElement::namespaced("query", "http://jabber.org/protocol/disco#items");
     for node in state.pubsub_service().pep_nodes(owner.id).await? {
         if pep_access_allowed(
             state.pubsub_service(),
             owner,
-            &state.config.domain,
+            state.local_domain(),
             &node,
             requester,
         )

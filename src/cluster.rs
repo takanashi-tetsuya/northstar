@@ -5588,12 +5588,7 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
         };
         if !renewed {
             state.remove_live_muc_membership(&serializable);
-            let key = crate::xmpp::xml_util::muc_occupant_key(&occupant.room_jid, &occupant.nick);
-            state.muc_occupants.remove_if(&key, |_, current| {
-                current.full_jid == occupant.full_jid
-                    && current.connection_id == occupant.connection_id
-                    && current.cluster_epoch == occupant.cluster_epoch
-            });
+            state.remove_local_muc_occupant_exact((&occupant).into());
             state.cancel_local_session_if_connection(&occupant.full_jid, occupant.connection_id);
             tracing::warn!(
                 room = %occupant.room_jid,
@@ -6091,11 +6086,7 @@ async fn deliver_cluster_muc_event(
         // authoritative PostgreSQL pull by reaching this point.
         return Ok(());
     };
-    let recipient_key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, recipient_nick);
-    let cached_recipient = state
-        .muc_occupants
-        .get(&recipient_key)
-        .map(|entry| entry.value().clone());
+    let cached_recipient = state.local_muc_occupant_by_nick(&room_jid, recipient_nick);
     let exact_cached = cached_recipient.as_ref().is_some_and(|recipient| {
         delivery.recipient_full_jid.as_deref() == Some(&recipient.full_jid)
             && delivery.recipient_occupant_incarnation == Some(recipient.cluster_epoch)
@@ -6244,13 +6235,8 @@ async fn deliver_cluster_muc_event(
                 context.room_non_anonymous || recipient.role == "moderator",
             ));
             if self_presence {
-                let target_key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &target.nick);
                 state.remove_live_muc_membership(&target);
-                state.muc_occupants.remove_if(&target_key, |_, current| {
-                    current.full_jid == target.full_jid
-                        && current.cluster_epoch == target.cluster_epoch
-                        && current.connection_id == target.connection_id
-                });
+                state.remove_local_muc_occupant_exact((&target).into());
             }
         }
         "suspend" => {
@@ -6288,13 +6274,8 @@ async fn deliver_cluster_muc_event(
                 reason,
             ));
             if self_presence {
-                let target_key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &target.nick);
                 state.remove_live_muc_membership(&target);
-                state.muc_occupants.remove_if(&target_key, |_, current| {
-                    current.full_jid == target.full_jid
-                        && current.cluster_epoch == target.cluster_epoch
-                        && current.connection_id == target.connection_id
-                });
+                state.remove_local_muc_occupant_exact((&target).into());
             }
         }
         "destroy" | "locked_expiry" => {
@@ -7176,13 +7157,9 @@ async fn listen_once(
                     && !occupant.cluster_epoch.is_nil()
                     && !occupant.connection_id.is_nil()
                 {
-                    let key = crate::xmpp::xml_util::muc_occupant_key(target, &occupant.nick);
                     state.remove_live_muc_membership(&occupant);
-                    if let Some((_, removed)) = state.muc_occupants.remove_if(&key, |_, current| {
-                        current.full_jid == occupant.full_jid
-                            && current.connection_id == occupant.connection_id
-                            && current.cluster_epoch == occupant.cluster_epoch
-                    }) {
+                    if let Some(removed) = state.remove_local_muc_occupant_exact((&occupant).into())
+                    {
                         let self_presence = crate::xmpp::xml_util::muc_presence_stanza_with_status(
                             &occupant,
                             &removed.full_jid,
@@ -7223,13 +7200,16 @@ async fn listen_once(
                         if identity.cluster_epoch.is_nil() || identity.connection_id.is_nil() {
                             continue;
                         }
-                        let key = crate::xmpp::xml_util::muc_occupant_key(&room, &identity.nick);
-                        let removed = state.muc_occupants.remove_if(&key, |_, current| {
-                            current.full_jid == identity.full_jid
-                                && current.connection_id == identity.connection_id
-                                && current.cluster_epoch == identity.cluster_epoch
-                        });
-                        if let Some((_, occupant)) = removed {
+                        let removed = state.remove_local_muc_occupant_exact(
+                            crate::state::LocalMucOccupantIdentity {
+                                room_jid: &room,
+                                nick: &identity.nick,
+                                full_jid: &identity.full_jid,
+                                connection_id: identity.connection_id,
+                                cluster_epoch: identity.cluster_epoch,
+                            },
+                        );
+                        if let Some(occupant) = removed {
                             let serializable =
                                 crate::state::SerializableMucOccupant::from(&occupant);
                             state.remove_live_muc_membership(&serializable);
@@ -7517,12 +7497,7 @@ async fn listen_once(
             }
             if is_muc_private {
                 if let Some(nick) = json["target_nick"].as_str() {
-                    let key = crate::xmpp::xml_util::muc_occupant_key(target, nick);
-                    if let Some(session) = state
-                        .muc_occupants
-                        .get(&key)
-                        .map(|entry| entry.value().clone())
-                    {
+                    if let Some(session) = state.local_muc_occupant_by_nick(target, nick) {
                         let delivery = crate::xmpp::xml_util::set_to(stanza, &session.full_jid);
                         let blocked = state
                             .blocked_muc_recipient_accounts(

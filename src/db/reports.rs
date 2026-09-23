@@ -1103,7 +1103,7 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            TransactionalGuardOutcome::Allowed(_)
+            TransactionalGuardOutcome::Allowed
         ));
         assert!(
             crate::db::mark_idempotency_guard_verified_in_tx(&mut tx, &first_lease)
@@ -1191,7 +1191,7 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            TransactionalGuardOutcome::Allowed(_)
+            TransactionalGuardOutcome::Allowed
         ));
         assert!(
             crate::db::mark_idempotency_guard_verified_in_tx(&mut crashed_tx, &crashed_lease)
@@ -1229,7 +1229,7 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            TransactionalGuardOutcome::Allowed(_)
+            TransactionalGuardOutcome::Allowed
         ));
         assert!(
             crate::db::mark_idempotency_guard_verified_in_tx(&mut retry_tx, &retry_lease)
@@ -1306,7 +1306,7 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            TransactionalGuardOutcome::Allowed(_)
+            TransactionalGuardOutcome::Allowed
         ));
         assert!(
             crate::db::mark_idempotency_guard_verified_in_tx(&mut invalid_tx, &invalid_lease)

@@ -76,7 +76,7 @@ fn canonical_authenticated_domain(domain: &str) -> String {
 }
 
 fn muc_domain(state: &AppState) -> String {
-    crate::jid::prepare_domainpart(&format!("conference.{}", state.config.domain))
+    crate::jid::prepare_domainpart(&format!("conference.{}", state.local_domain()))
         .expect("configured XMPP domain must form a valid MUC service domain")
 }
 
@@ -2036,7 +2036,7 @@ async fn federated_muc_message_owned(
             )
             .validated_fragment(&request.hints)?
             .finish();
-        if target.domainpart() == state.config.domain {
+        if target.domainpart() == state.local_domain() {
             let Some(recipient) = state
                 .muc_service()
                 .enabled_local_account(target_localpart)
@@ -2594,7 +2594,7 @@ async fn federated_muc_message_owned(
             let invitee_jid = invitee.to_string();
             let invitee_bare = invitee.bare();
             let invitee_domain = invitee.domainpart();
-            if invitee_domain == state.config.domain {
+            if invitee_domain == state.local_domain() {
                 if let Some(local_user) = state
                     .muc_service()
                     .enabled_local_account(invitee_localpart)
@@ -2620,7 +2620,7 @@ async fn federated_muc_message_owned(
                 invite_out.push_child(XmlElement::new("reason").text(reason.to_owned()));
             }
             let local_durable_invite_id =
-                if room.members_only && invitee_domain == state.config.domain {
+                if room.members_only && invitee_domain == state.local_domain() {
                     Some(crate::services::muc::operation_id(&serde_json::json!({
                         "kind":"muc_invitation","stream":connection_id,
                         "stanza_id":request.stanza.id,"room":room_jid,
@@ -2649,7 +2649,7 @@ async fn federated_muc_message_owned(
             let invitation = local_durable_invite_id.map_or(invitation.clone(), |id| {
                 add_stanza_id(&invitation, &invitee_bare, id)
             });
-            if invitee_domain == state.config.domain {
+            if invitee_domain == state.local_domain() {
                 let Some(local_user) = state
                     .muc_service()
                     .enabled_local_account(invitee_localpart)
@@ -5318,7 +5318,7 @@ async fn federated_muc_admin_get(
         payload.push_child(
             XmlElement::new("item")
                 .attr("affiliation", &requested)
-                .attr("jid", format!("{}@{}", username, state.config.domain)),
+                .attr("jid", format!("{}@{}", username, state.local_domain())),
         );
     }
     for jid in state
@@ -5619,7 +5619,7 @@ async fn federated_muc_admin_set(
             if affiliation == "outcast" && same_bare_jid(&requester.full_jid, &target_bare) {
                 return Ok(federated_error(stanza, &stanza.from, "cancel", "conflict"));
             }
-            let (target, current) = if target.domainpart() == state.config.domain {
+            let (target, current) = if target.domainpart() == state.local_domain() {
                 let Some(target_user) = state
                     .muc_service()
                     .enabled_local_account(target_localpart)
@@ -5960,7 +5960,7 @@ async fn federated_muc_admin_set(
             if affiliation == "outcast" && same_bare_jid(&requester.full_jid, &target_bare) {
                 return Ok(federated_error(stanza, &stanza.from, "cancel", "conflict"));
             }
-            let target_affiliation = if target.domainpart() == state.config.domain {
+            let target_affiliation = if target.domainpart() == state.local_domain() {
                 let target_user = state
                     .muc_service()
                     .enabled_local_account(target_localpart)

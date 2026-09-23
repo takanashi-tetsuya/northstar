@@ -17,7 +17,11 @@ use crate::services::operation_effect_fence::FencedEffect;
 use crate::services::operation_journal_worker::{
     ClaimedOperation, LeaseRenewal, NextTarget, TargetSeed, TargetSettlement,
 };
-use crate::{db, state::AppState};
+use crate::{
+    db,
+    services::operation_muc_destroy::MucDestroyCommit,
+    state::{AppState, MucOccupant},
+};
 
 const LEASE_SECONDS: i64 = 60;
 
@@ -675,13 +679,42 @@ async fn execute_effect(
                 tracing::warn!(?error, operation_id=%operation.id,
                     "admin MUC destroy committed; signed wake failed and PostgreSQL polling will catch up");
             }
-            state
-                .muc_occupants
-                .retain(|_, occupant| occupant.room_jid != committed.room_jid);
+            remove_committed_muc_audience(&state.muc_occupants, &committed);
             Ok(json!({"destroyed":committed.destroyed,"room_jid":committed.room_jid}))
         }
         kind => anyhow::bail!("operation executor is unavailable for {kind}"),
     }
+}
+
+/// The room JID may already belong to a new room when a delayed operation
+/// worker reaches this cleanup. Only the occupancies captured by the committed
+/// tombstone may be removed from the local projection.
+fn remove_committed_muc_audience(
+    occupants: &dashmap::DashMap<String, MucOccupant>,
+    committed: &MucDestroyCommit,
+) -> usize {
+    if !committed.destroyed {
+        return 0;
+    }
+    committed
+        .audience
+        .iter()
+        .filter(|expected| {
+            if expected.occupant_incarnation.is_nil() || expected.connection_id.is_nil() {
+                return false;
+            }
+            let key = crate::xmpp::xml_util::muc_occupant_key(&committed.room_jid, &expected.nick);
+            occupants
+                .remove_if(&key, |_, current| {
+                    current.room_jid == committed.room_jid
+                        && current.full_jid == expected.full_jid
+                        && current.nick == expected.nick
+                        && current.cluster_epoch == expected.occupant_incarnation
+                        && current.connection_id == expected.connection_id
+                })
+                .is_some()
+        })
+        .count()
 }
 
 fn uuid_field(payload: &Value, name: &str) -> Result<Uuid> {
@@ -716,6 +749,8 @@ fn generation_cleanup_identity(payload: &Value) -> Result<(Uuid, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::operation_muc_destroy::MucDestroyAudience;
+    use crate::state::MucOccupantEndpoint;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Instant;
     use tokio::sync::Notify;
@@ -760,6 +795,111 @@ mod tests {
             last_activity: Arc::new(std::sync::RwLock::new(Instant::now())),
             disconnect: CancellationToken::new(),
         }
+    }
+
+    fn muc_occupant(
+        room_jid: &str,
+        full_jid: &str,
+        nick: &str,
+        incarnation: Uuid,
+        connection_id: Uuid,
+    ) -> MucOccupant {
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        MucOccupant {
+            full_jid: full_jid.into(),
+            room_jid: room_jid.into(),
+            nick: nick.into(),
+            endpoint: MucOccupantEndpoint::Local(crate::outbound::OutboundSender::new(sender)),
+            affiliation: "member".into(),
+            role: "participant".into(),
+            room_non_anonymous: false,
+            occupant_id: "fixture".into(),
+            cluster_epoch: incarnation,
+            connection_id,
+            sm_session_id: None,
+            payload: String::new(),
+        }
+    }
+
+    #[test]
+    fn committed_muc_destroy_only_removes_the_captured_occupant_generation() {
+        let room_jid = "room@conference.example.test";
+        let full_jid = "alice@example.test/phone";
+        let nick = "Alice";
+        let key = crate::xmpp::xml_util::muc_occupant_key(room_jid, nick);
+        let old_incarnation = Uuid::new_v4();
+        let old_connection = Uuid::new_v4();
+        let committed = MucDestroyCommit {
+            room_jid: room_jid.into(),
+            destroyed: true,
+            audience: vec![MucDestroyAudience {
+                full_jid: full_jid.into(),
+                nick: nick.into(),
+                occupant_incarnation: old_incarnation,
+                connection_id: old_connection,
+            }],
+        };
+        let occupants = dashmap::DashMap::new();
+
+        // After the tombstone commits, the same connection may join a newly
+        // created room with the same JID and nick. Its new occupancy survives.
+        let recreated_incarnation = Uuid::new_v4();
+        occupants.insert(
+            key.clone(),
+            muc_occupant(
+                room_jid,
+                full_jid,
+                nick,
+                recreated_incarnation,
+                old_connection,
+            ),
+        );
+        assert_eq!(remove_committed_muc_audience(&occupants, &committed), 0);
+        assert_eq!(
+            occupants.get(&key).unwrap().cluster_epoch,
+            recreated_incarnation
+        );
+
+        // A resumed transport that replaced the old connection must also
+        // survive this stale cleanup, even if its occupant incarnation matches.
+        let resumed_connection = Uuid::new_v4();
+        occupants.insert(
+            key.clone(),
+            muc_occupant(
+                room_jid,
+                full_jid,
+                nick,
+                old_incarnation,
+                resumed_connection,
+            ),
+        );
+        assert_eq!(remove_committed_muc_audience(&occupants, &committed), 0);
+        assert_eq!(
+            occupants.get(&key).unwrap().connection_id,
+            resumed_connection
+        );
+
+        occupants.insert(
+            key.clone(),
+            muc_occupant(room_jid, full_jid, nick, old_incarnation, old_connection),
+        );
+        assert_eq!(remove_committed_muc_audience(&occupants, &committed), 1);
+        assert!(!occupants.contains_key(&key));
+
+        let unrelated_room = "other@conference.example.test";
+        let unrelated_key = crate::xmpp::xml_util::muc_occupant_key(unrelated_room, nick);
+        occupants.insert(
+            unrelated_key.clone(),
+            muc_occupant(
+                unrelated_room,
+                full_jid,
+                nick,
+                old_incarnation,
+                old_connection,
+            ),
+        );
+        assert_eq!(remove_committed_muc_audience(&occupants, &committed), 0);
+        assert!(occupants.contains_key(&unrelated_key));
     }
 
     #[tokio::test]

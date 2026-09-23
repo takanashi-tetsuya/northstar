@@ -885,10 +885,22 @@ for required_source_fragment in \
     'subscription.acknowledge_probe(' \
     'wait_for_pending_authority(' \
     'pending.retry_at.min(ownership_horizon)' \
-    'session.disconnect.cancel();'
+    '.sm_pending_route_removal_signal('
 do
     if ! printf '%s\n' "$sm_resume_source" | grep -Fq "$required_source_fragment"; then
         echo "SM resume Pending path is missing event-driven ownership invariant: $required_source_fragment" >&2
+        exit 1
+    fi
+done
+sm_route_removal_source=$(sed -n '/pub(crate) fn sm_pending_route_removal_signal(/,/^    }/p' src/state.rs)
+for required_route_fragment in \
+    'session.connection_id != old_connection_id || session.user_id != user_id || !exact_sm' \
+    'if cancel_live_route {' \
+    'session.disconnect.cancel();' \
+    'Some(session.route_incarnation.subscribe())'
+do
+    if ! printf '%s\n' "$sm_route_removal_source" | grep -Fq "$required_route_fragment"; then
+        echo "SM resume Pending route boundary is missing exact ownership or cancellation: $required_route_fragment" >&2
         exit 1
     fi
 done

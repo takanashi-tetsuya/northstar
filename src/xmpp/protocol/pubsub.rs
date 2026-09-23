@@ -771,7 +771,7 @@ async fn handle_entity_get(
                     }
                 }
                 let serverinfo = XmlElement::namespaced("serverinfo", "urn:xmpp:serverinfo:0")
-                    .child(XmlElement::new("domain").attr("name", &state.config.domain));
+                    .child(XmlElement::new("domain").attr("name", state.local_domain()));
                 return Ok(PubSubReply::Result(
                     XmlElement::namespaced("pubsub", NS_PUBSUB)
                         .child(
@@ -1089,7 +1089,8 @@ async fn handle_entity_set(
                 Ok(options) => options,
                 Err(error) => return Ok(error),
             };
-            if crate::jid::CanonicalJid::parse_bare(&requester)?.domainpart() != state.config.domain
+            if crate::jid::CanonicalJid::parse_bare(&requester)?.domainpart()
+                != state.local_domain()
                 && !all_show_values(&options.show_values)
             {
                 return Ok(invalid_subscription_options());
@@ -1405,7 +1406,7 @@ async fn handle_entity_set(
                     Err(error) => return Ok(error),
                 };
                 if crate::jid::CanonicalJid::parse_bare(&requester)?.domainpart()
-                    != state.config.domain
+                    != state.local_domain()
                     && !all_show_values(&parsed.show_values)
                 {
                     return Ok(invalid_subscription_options());
@@ -2424,7 +2425,7 @@ async fn route_pubsub_message_children_with_id(
     let service = pubsub_domain(state);
     let target = crate::jid::CanonicalJid::parse(recipient)?;
     let target_domain = target.domainpart();
-    if target_domain == state.config.domain {
+    if target_domain == state.local_domain() {
         if local_account_blocks_pubsub(state, &target, &service).await? {
             return Ok(());
         }
@@ -2806,7 +2807,7 @@ async fn route_service_message(
 ) -> Result<()> {
     let target = crate::jid::CanonicalJid::parse(recipient)?;
     let target_domain = target.domainpart();
-    if target_domain == state.config.domain {
+    if target_domain == state.local_domain() {
         if local_account_blocks_pubsub(state, &target, service).await? {
             return Ok(());
         }
@@ -3554,7 +3555,7 @@ fn config_equivalent(left: &PubSubNodeConfig, right: &PubSubNodeConfig) -> bool 
 }
 
 fn pubsub_domain(state: &AppState) -> String {
-    format!("pubsub.{}", state.config.domain)
+    format!("pubsub.{}", state.local_domain())
 }
 
 fn normalized_bare(jid: &str) -> Result<String> {

@@ -1948,15 +1948,14 @@ impl ProtocolSession {
         for (room_jid, membership) in memberships {
             self.joined_rooms
                 .remove_if(&room_jid, |_, current| current == &membership);
-            let key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &membership.nick);
-            self.state.muc_occupants.remove_if(&key, |_, current| {
-                crate::state::muc_departure_identity_matches(
-                    current,
-                    &full_jid,
-                    self.connection_id,
-                    membership.cluster_epoch,
-                )
-            });
+            self.state
+                .remove_local_muc_occupant_exact(crate::state::LocalMucOccupantIdentity {
+                    room_jid: &room_jid,
+                    nick: &membership.nick,
+                    full_jid: &full_jid,
+                    connection_id: self.connection_id,
+                    cluster_epoch: membership.cluster_epoch,
+                });
         }
         self.directed_presence.clear();
         *self

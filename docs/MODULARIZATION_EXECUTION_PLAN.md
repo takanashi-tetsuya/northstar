@@ -501,8 +501,9 @@ repository port; volatile and identity-free legacy messages avoid database
 reads. The shared PostgreSQL pool is private to `AppState`.
 Message admission finalization now passes only the issued lease's acceptance
 fence to its repository. The repository owns the advisory lock, row lock,
-constant-time payload check and commit after delivery; the anti-abuse guard
-still owns the larger admission and challenge transactions.
+constant-time payload check and commit after delivery. The initial admission,
+one-use challenge consumption, capacity reservation and challenge issuance
+also commit through database adapters; the guard retains policy and signing.
 S2S ingress now reads the validated local domain through a narrow state method
 rather than the application configuration.
 Component transports receive only active-connection and outbox-duration metric
@@ -549,6 +550,8 @@ Changing field visibility alone does not demonstrate reduced authority.
 Clustered-MUC delivery now obtains its committed event and audience projections
 through a read port while keeping the cached-recipient fast path and three
 independently admitted database reads in the transport worker.
+Administrator room destruction now clears only the committed audience's exact
+local occupant incarnations, so delayed cleanup cannot erase a recreated room.
 
 Role names follow this map after the transaction boundaries are stable. Each
 cross-domain operation must either have one narrowly authorized transaction

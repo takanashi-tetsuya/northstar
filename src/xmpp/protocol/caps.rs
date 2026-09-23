@@ -180,7 +180,7 @@ async fn send_caps_disco_query(state: &AppState, job: &CapsEffectJob) -> anyhow:
         anyhow::bail!("caps IQ correlation ID or semantic key is already in flight");
     }
     let query = caps_disco_request(
-        &state.config.domain,
+        state.local_domain(),
         &job.full_jid,
         &id,
         &key.node,
@@ -210,7 +210,7 @@ async fn send_caps_disco_query(state: &AppState, job: &CapsEffectJob) -> anyhow:
                 .to_owned();
             state
                 .federation_outbox()
-                .send(&domain, query, Some(state.config.domain.clone()))
+                .send(&domain, query, Some(state.local_domain().to_owned()))
                 .await
         }
     };

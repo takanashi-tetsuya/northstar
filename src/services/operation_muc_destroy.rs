@@ -24,6 +24,17 @@ pub(crate) struct ValidatedMucDestroy<'a> {
 pub(crate) struct MucDestroyCommit {
     pub(crate) room_jid: String,
     pub(crate) destroyed: bool,
+    /// Occupancies captured by the committed room incarnation before it was
+    /// tombstoned. A later room with the same JID has different identities.
+    pub(crate) audience: Vec<MucDestroyAudience>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MucDestroyAudience {
+    pub(crate) full_jid: String,
+    pub(crate) nick: String,
+    pub(crate) occupant_incarnation: Uuid,
+    pub(crate) connection_id: Uuid,
 }
 
 pub(crate) trait MucDestroyRepository: Send + Sync {
@@ -91,6 +102,7 @@ mod tests {
             Ok(MucDestroyCommit {
                 room_jid: command.room_jid.to_owned(),
                 destroyed: true,
+                audience: Vec::new(),
             })
         }
     }

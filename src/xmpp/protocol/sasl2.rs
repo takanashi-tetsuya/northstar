@@ -722,7 +722,7 @@ impl ProtocolSession {
         &mut self,
         xml: &str,
     ) -> std::result::Result<(), StreamOpenError> {
-        let parsed = parse_stream_open(xml, self.websocket, &self.state.config.domain)?;
+        let parsed = parse_stream_open(xml, self.websocket, self.state.local_domain())?;
         if let (Some(authenticated), Some(stream_from)) =
             (self.authenticated.as_ref(), parsed.from.as_deref())
         {
@@ -806,17 +806,19 @@ impl ProtocolSession {
             "EXTERNAL" if !self.client_certificate_identities.is_empty() => Box::new(
                 auth::ExternalMechanism::new(self.client_certificate_identities.clone()),
             ),
-            "PLAIN" => Box::new(auth::PlainMechanism::new(self.state.config.domain.clone())),
+            "PLAIN" => Box::new(auth::PlainMechanism::new(
+                self.state.local_domain().to_owned(),
+            )),
             "SCRAM-SHA-256" => {
                 if self.channel_bindings.is_some() {
                     Box::new(
                         auth::ScramSha256Mechanism::new_with_channel_binding_support(
-                            self.state.config.domain.clone(),
+                            self.state.local_domain().to_owned(),
                         ),
                     )
                 } else {
                     Box::new(auth::ScramSha256Mechanism::new(
-                        self.state.config.domain.clone(),
+                        self.state.local_domain().to_owned(),
                     ))
                 }
             }
@@ -825,7 +827,7 @@ impl ProtocolSession {
                     return Ok(Action::Send(failure_xml("invalid-mechanism", None)));
                 };
                 Box::new(auth::ScramSha256Mechanism::new_plus(
-                    self.state.config.domain.clone(),
+                    self.state.local_domain().to_owned(),
                     bindings,
                 ))
             }
@@ -833,12 +835,12 @@ impl ProtocolSession {
                 if self.channel_bindings.is_some() {
                     Box::new(
                         auth::ScramSha256Mechanism::new_sha1_with_channel_binding_support(
-                            self.state.config.domain.clone(),
+                            self.state.local_domain().to_owned(),
                         ),
                     )
                 } else {
                     Box::new(auth::ScramSha256Mechanism::new_sha1(
-                        self.state.config.domain.clone(),
+                        self.state.local_domain().to_owned(),
                     ))
                 }
             }
@@ -847,7 +849,7 @@ impl ProtocolSession {
                     return Ok(Action::Send(failure_xml("invalid-mechanism", None)));
                 };
                 Box::new(auth::ScramSha256Mechanism::new_sha1_plus(
-                    self.state.config.domain.clone(),
+                    self.state.local_domain().to_owned(),
                     bindings,
                 ))
             }
@@ -1456,7 +1458,7 @@ impl ProtocolSession {
                 .finish();
             jid
         } else {
-            format!("{}@{}", user.username, self.state.config.domain)
+            format!("{}@{}", user.username, self.state.local_domain())
         };
 
         let success = sasl2_success_xml(

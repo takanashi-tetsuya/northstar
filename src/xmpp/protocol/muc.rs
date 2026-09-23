@@ -1238,7 +1238,7 @@ impl ProtocolSession {
         if !room.allow_registration {
             return Ok(Action::Send(iq_error_from(id, &room_jid, "not-allowed")));
         }
-        let requester_bare = format!("{}@{}", user.username, self.state.config.domain);
+        let requester_bare = format!("{}@{}", user.username, self.state.local_domain());
         let elements = query
             .children()
             .filter(|node| node.is_element())
@@ -1655,7 +1655,7 @@ impl ProtocolSession {
                     .await?;
                 return Ok(Action::None);
             }
-            if target.domainpart() == self.state.config.domain {
+            if target.domainpart() == self.state.local_domain() {
                 let Some(username) = target.localpart() else {
                     return Ok(Action::Send(muc_stanza_error(
                         root,
@@ -2271,7 +2271,7 @@ impl ProtocolSession {
                             let invitee_jid = invitee.to_string();
                             let invitee_bare = invitee.bare();
                             let invitee_domain = invitee.domainpart();
-                            if invitee_domain == self.state.config.domain {
+                            if invitee_domain == self.state.local_domain() {
                                 if let Some(invitee_user) = self
                                     .state
                                     .muc_service()
@@ -2324,7 +2324,7 @@ impl ProtocolSession {
                             let temporary_storage = offline_storage_permitted(root);
 
                             let local_durable_invite_id = if room.members_only
-                                && invitee_domain == self.state.config.domain
+                                && invitee_domain == self.state.local_domain()
                             {
                                 Some(crate::services::muc::operation_id(&serde_json::json!({
                                     "kind":"muc_invitation","stream":self.connection_id,
@@ -2364,7 +2364,7 @@ impl ProtocolSession {
                                     add_stanza_id(&forwarded, &invitee_bare, id)
                                 });
 
-                            if invitee_domain == self.state.config.domain {
+                            if invitee_domain == self.state.local_domain() {
                                 let Some(recipient) = self
                                     .state
                                     .muc_service()
@@ -3035,7 +3035,7 @@ impl ProtocolSession {
             expected_room_epoch: room.room_epoch,
             principal: MucActorPrincipal::Local {
                 user_id: user.id,
-                local_domain: self.state.config.domain.clone(),
+                local_domain: self.state.local_domain().to_owned(),
             },
             actor_scope: actor_scope.clone(),
             full_jid: from.to_owned(),
@@ -3546,7 +3546,7 @@ impl ProtocolSession {
                         expected_room_epoch: room.room_epoch,
                         principal: MucActorPrincipal::Local {
                             user_id: user.id,
-                            local_domain: self.state.config.domain.clone(),
+                            local_domain: self.state.local_domain().to_owned(),
                         },
                         actor_scope: actor_scope.clone(),
                         full_jid: full_jid.to_owned(),
@@ -4333,7 +4333,7 @@ impl ProtocolSession {
     }
 
     pub(crate) fn muc_domain(&self) -> String {
-        prepare_domainpart(&format!("conference.{}", self.state.config.domain))
+        prepare_domainpart(&format!("conference.{}", self.state.local_domain()))
             .expect("configured XMPP domain must form a valid MUC service domain")
     }
 
@@ -5446,7 +5446,7 @@ impl ProtocolSession {
             )));
         }
         if created {
-            let actor_bare = format!("{}@{}", user.username, self.state.config.domain);
+            let actor_bare = format!("{}@{}", user.username, self.state.local_domain());
             let _ =
                 super::mix_muc::maybe_link_local_mirror(&self.state, &room.localpart, &actor_bare)
                     .await?;
@@ -6290,7 +6290,7 @@ impl ProtocolSession {
                 {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "conflict")));
                 }
-                let (target, current) = if target.domainpart() == self.state.config.domain {
+                let (target, current) = if target.domainpart() == self.state.local_domain() {
                     let Some(target_user) = self
                         .state
                         .muc_service()
@@ -6620,7 +6620,7 @@ impl ProtocolSession {
                 {
                     return Ok(Action::Send(iq_error_from(id, room_jid, "conflict")));
                 }
-                let target_is_local = target.domainpart() == self.state.config.domain;
+                let target_is_local = target.domainpart() == self.state.local_domain();
                 if target_is_local
                     && self
                         .state

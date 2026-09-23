@@ -184,7 +184,7 @@ async fn xmpps_tcp_connection(
             result.context("Direct TLS handshake timed out")?.context("Direct TLS handshake failed")?
         }
     };
-    if !crate::tls::direct_tls_sni_matches(secure.get_ref().1.server_name(), &state.config.domain) {
+    if !crate::tls::direct_tls_sni_matches(secure.get_ref().1.server_name(), state.local_domain()) {
         anyhow::bail!("client Direct TLS SNI does not match the XMPP domain");
     }
     if secure
@@ -210,7 +210,7 @@ async fn xmpps_tcp_connection(
         .1
         .peer_certificates()
         .map(|certificates| {
-            crate::tls::c2s_client_xmpp_identities(certificates, &state.config.domain)
+            crate::tls::c2s_client_xmpp_identities(certificates, state.local_domain())
         })
         .transpose()?
         .unwrap_or_default();
@@ -274,7 +274,7 @@ async fn tcp_connection(
             .1
             .peer_certificates()
             .map(|certificates| {
-                crate::tls::c2s_client_xmpp_identities(certificates, &state.config.domain)
+                crate::tls::c2s_client_xmpp_identities(certificates, state.local_domain())
             })
             .transpose()?
             .unwrap_or_default();
@@ -404,7 +404,7 @@ where
                 session.sm_resume_allowed = false;
                 tracing::debug!(peer_ip = %session.peer_ip, authenticated = session.authenticated.is_some(), "closed byte-idle XMPP connection at the advertised XEP-0478 limit");
                 let opening = !session.negotiation.is_open();
-                let domain = session.state.config.domain.clone();
+                let domain = session.state.local_domain().to_owned();
                 let _ = tcp_fatal_error(
                     &mut io,
                     &domain,
@@ -435,7 +435,7 @@ where
             }
             _ = tokio::time::sleep_until(resource_bind_deadline.into()), if session.resource_bind_deadline().is_some() => {
                 session.sm_resume_allowed = false;
-                let domain = session.state.config.domain.clone();
+                let domain = session.state.local_domain().to_owned();
                 let _ = tcp_fatal_error(
                     &mut io,
                     &domain,
@@ -461,7 +461,7 @@ where
                     let opening = !session.negotiation.is_open();
                     tcp_fatal_error(
                         &mut io,
-                        &session.state.config.domain,
+                        session.state.local_domain(),
                         opening,
                         &crate::xmpp::xml_util::stream_error("unsupported-encoding"),
                     )
@@ -486,7 +486,7 @@ where
                                 let opening = !session.negotiation.is_open();
                                 tcp_fatal_error(
                                     &mut io,
-                                    &session.state.config.domain,
+                                    session.state.local_domain(),
                                     opening,
                                     &crate::xmpp::xml_util::stream_error("policy-violation"),
                                 )
@@ -505,7 +505,7 @@ where
                                 let opening = !session.negotiation.is_open();
                                 tcp_fatal_error(
                                     &mut io,
-                                    &session.state.config.domain,
+                                    session.state.local_domain(),
                                     opening,
                                     &crate::xmpp::xml_util::stream_error("policy-violation"),
                                 )
@@ -521,7 +521,7 @@ where
                             let opening = !session.negotiation.is_open();
                             tcp_fatal_error(
                                 &mut io,
-                                &session.state.config.domain,
+                                session.state.local_domain(),
                                 opening,
                                 &crate::xmpp::xml_util::stream_error(condition),
                             )
@@ -541,7 +541,7 @@ where
                             session.sm_resume_allowed = false;
                             tcp_fatal_error(
                                 &mut io,
-                                &session.state.config.domain,
+                                session.state.local_domain(),
                                 opening,
                                 &crate::xmpp::xml_util::stream_error("internal-server-error"),
                             )
@@ -640,7 +640,7 @@ where
                             session.sm_resume_allowed = false;
                             tcp_fatal_error(
                                 &mut io,
-                                &session.state.config.domain,
+                                session.state.local_domain(),
                                 opening,
                                 &reply,
                             )
@@ -1049,7 +1049,7 @@ async fn tcp_internal_backend_error<S: AsyncWrite + Unpin>(
 ) {
     tracing::error!(?error, operation, peer_ip = %session.peer_ip, "XMPP transport/backend failure");
     session.sm_resume_allowed = false;
-    let domain = session.state.config.domain.clone();
+    let domain = session.state.local_domain().to_owned();
     // The original backend error is authoritative; a broken or stalled peer
     // must not keep the task alive while the terminal response is attempted.
     let _ = tcp_fatal_error(
@@ -1129,7 +1129,7 @@ pub async fn websocket_connection(
                 session.sm_resume_allowed = false;
                 tracing::debug!(%peer_ip, authenticated = session.authenticated.is_some(), "closed byte-idle WebSocket XMPP connection at the advertised XEP-0478 limit");
                 let opening = !session.negotiation.is_open();
-                let domain = session.state.config.domain.clone();
+                let domain = session.state.local_domain().to_owned();
                 websocket_fatal_error(
                     &mut socket,
                     &domain,
@@ -1146,7 +1146,7 @@ pub async fn websocket_connection(
                     tracing::debug!(%peer_ip, "closed unauthenticated WebSocket after deadline");
                     session.sm_resume_allowed = false;
                     let opening = !session.negotiation.is_open();
-                    let domain = session.state.config.domain.clone();
+                    let domain = session.state.local_domain().to_owned();
                     websocket_fatal_error(
                         &mut socket,
                         &domain,
@@ -1161,7 +1161,7 @@ pub async fn websocket_connection(
                 if session.checkpoint_sm().await.is_err() {
                     session.sm_resume_allowed = false;
                     let opening = !session.negotiation.is_open();
-                    let domain = session.state.config.domain.clone();
+                    let domain = session.state.local_domain().to_owned();
                     websocket_fatal_error(
                         &mut socket,
                         &domain,
@@ -1175,7 +1175,7 @@ pub async fn websocket_connection(
             _ = tokio::time::sleep_until(resource_bind_deadline.into()), if session.resource_bind_deadline().is_some() => {
                 session.sm_resume_allowed = false;
                 let opening = !session.negotiation.is_open();
-                let domain = session.state.config.domain.clone();
+                let domain = session.state.local_domain().to_owned();
                 websocket_fatal_error(
                     &mut socket,
                     &domain,
@@ -1205,7 +1205,7 @@ pub async fn websocket_connection(
                                 session.sm_resume_allowed = false;
                                 let condition = framing::stream_error_condition(&error);
                                 let opening = !session.negotiation.is_open();
-                                let domain = session.state.config.domain.clone();
+                                let domain = session.state.local_domain().to_owned();
                                 websocket_fatal_error(
                                     &mut socket,
                                     &domain,
@@ -1219,7 +1219,7 @@ pub async fn websocket_connection(
                         if websocket_has_invalid_stream_header_namespace(&frame) {
                             session.sm_resume_allowed = false;
                             let opening = !session.negotiation.is_open();
-                            let domain = session.state.config.domain.clone();
+                            let domain = session.state.local_domain().to_owned();
                             websocket_fatal_error(
                                 &mut socket,
                                 &domain,
@@ -1232,7 +1232,7 @@ pub async fn websocket_connection(
                         if websocket_close_has_content(&frame) {
                             session.sm_resume_allowed = false;
                             let opening = !session.negotiation.is_open();
-                            let domain = session.state.config.domain.clone();
+                            let domain = session.state.local_domain().to_owned();
                             websocket_fatal_error(
                                 &mut socket,
                                 &domain,
@@ -1259,7 +1259,7 @@ pub async fn websocket_connection(
                             Ok(Action::Send(reply)) => {
                                 if session.record_outbound(&reply).await.is_err() {
                                     session.sm_resume_allowed = false;
-                                    let domain = session.state.config.domain.clone();
+                                    let domain = session.state.local_domain().to_owned();
                                     websocket_fatal_error(
                                         &mut socket,
                                         &domain,
@@ -1285,7 +1285,7 @@ pub async fn websocket_connection(
                                 for reply in replies {
                                     if session.record_outbound(&reply).await.is_err() {
                                         session.sm_resume_allowed = false;
-                                        let domain = session.state.config.domain.clone();
+                                        let domain = session.state.local_domain().to_owned();
                                         websocket_fatal_error(
                                             &mut socket,
                                             &domain,
@@ -1384,7 +1384,7 @@ pub async fn websocket_connection(
                                 } = payload.into_transport_parts();
                                 if session.record_outbound(&control).await.is_err() {
                                     session.sm_resume_allowed = false;
-                                    let domain = session.state.config.domain.clone();
+                                    let domain = session.state.local_domain().to_owned();
                                     websocket_fatal_error(
                                         &mut socket,
                                         &domain,
@@ -1459,7 +1459,7 @@ pub async fn websocket_connection(
                             }
                             Ok(Action::CloseWith(reply)) => {
                                 session.sm_resume_allowed = false;
-                                let domain = session.state.config.domain.clone();
+                                let domain = session.state.local_domain().to_owned();
                                 websocket_fatal_error(
                                     &mut socket,
                                     &domain,
@@ -1482,7 +1482,7 @@ pub async fn websocket_connection(
                             Err(error) => {
                                 tracing::debug!(?error, "invalid WebSocket XMPP stanza");
                                 session.sm_resume_allowed = false;
-                                let domain = session.state.config.domain.clone();
+                                let domain = session.state.local_domain().to_owned();
                                 websocket_fatal_error(
                                     &mut socket,
                                     &domain,
@@ -1524,7 +1524,7 @@ pub async fn websocket_connection(
                         );
                         session.sm_resume_allowed = false;
                         let opening = !session.negotiation.is_open();
-                        let domain = session.state.config.domain.clone();
+                        let domain = session.state.local_domain().to_owned();
                         websocket_fatal_error(
                             &mut socket,
                             &domain,
@@ -1590,7 +1590,7 @@ async fn websocket_record_and_send_item(
         Ok(managed) => managed,
         Err(_) => {
             session.sm_resume_allowed = false;
-            let domain = session.state.config.domain.clone();
+            let domain = session.state.local_domain().to_owned();
             websocket_fatal_error(
                 socket,
                 &domain,
@@ -1613,7 +1613,7 @@ async fn websocket_record_and_send_item(
             Ok(Err(error)) => {
                 tracing::error!(?error, message_id = %delivery.message_id, "failed to fence durable WebSocket write");
                 session.sm_resume_allowed = false;
-                let domain = session.state.config.domain.clone();
+                let domain = session.state.local_domain().to_owned();
                 websocket_fatal_error(
                     socket,
                     &domain,
@@ -1627,7 +1627,7 @@ async fn websocket_record_and_send_item(
             Err(_) => {
                 tracing::error!(message_id = %delivery.message_id, "timed out fencing durable WebSocket write");
                 session.sm_resume_allowed = false;
-                let domain = session.state.config.domain.clone();
+                let domain = session.state.local_domain().to_owned();
                 websocket_fatal_error(
                     socket,
                     &domain,
@@ -1647,7 +1647,7 @@ async fn websocket_record_and_send_item(
         Err(error) => {
             tracing::error!(?error, "failed to fence durable MIX WebSocket write");
             session.sm_resume_allowed = false;
-            let domain = session.state.config.domain.clone();
+            let domain = session.state.local_domain().to_owned();
             websocket_fatal_error(
                 socket,
                 &domain,

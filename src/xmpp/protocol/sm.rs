@@ -246,7 +246,7 @@ impl ProtocolSession {
                         auth_generation: user.auth_generation,
                         full_jid: &full_jid,
                         resource,
-                        server_domain: &self.state.config.domain,
+                        server_domain: self.state.local_domain(),
                         connection_id: self.connection_id,
                         snapshot: &snapshot,
                         ttl_seconds: negotiated_max,
@@ -536,7 +536,7 @@ impl ProtocolSession {
                 .await?;
             return Ok((Action::Send(sm_failed("undefined-condition")), None));
         };
-        let account = format!("{}@{}", current_user.username, self.state.config.domain);
+        let account = format!("{}@{}", current_user.username, self.state.local_domain());
         let key = match validated_sm_session_key(&claim.full_jid, &claim.resource, &account) {
             Some(key) => key,
             _ => {

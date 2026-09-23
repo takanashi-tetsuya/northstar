@@ -235,7 +235,7 @@ pub(crate) async fn handle(
     root: Node<'_, '_>,
     command: Node<'_, '_>,
 ) -> Result<Action> {
-    let responder = &session.state.config.domain;
+    let responder = session.state.local_domain();
     let node = command.attribute("node").unwrap_or_default();
     let Some(actor) = current_admin(session).await? else {
         return Ok(Action::Send(command_error(
@@ -384,7 +384,7 @@ pub(crate) async fn handle(
                 let Some(session_id) = session
                     .state
                     .admin_command_service()
-                    .create_session(&actor, owner, &session.state.config.domain, node, "form")
+                    .create_session(&actor, owner, session.state.local_domain(), node, "form")
                     .await?
                 else {
                     return Ok(Action::Send(command_error(
@@ -411,7 +411,7 @@ pub(crate) async fn handle(
                     .create_session(
                         &actor,
                         owner,
-                        &session.state.config.domain,
+                        session.state.local_domain(),
                         node,
                         "executing",
                     )
@@ -717,7 +717,7 @@ async fn execute_list_command(
                 .await?
                 .unwrap_or_default()
                 .into_iter()
-                .map(|username| local_account_jid(&username, &session.state.config.domain))
+                .map(|username| local_account_jid(&username, session.state.local_domain()))
                 .collect::<Result<Vec<_>>>()?,
         ),
         DISABLED_LIST => {
@@ -730,7 +730,7 @@ async fn execute_list_command(
             (
                 "disableduserjids",
                 rows.into_iter()
-                    .map(|username| local_account_jid(&username, &session.state.config.domain))
+                    .map(|username| local_account_jid(&username, session.state.local_domain()))
                     .collect::<Result<Vec<_>>>()?,
             )
         }
@@ -794,7 +794,7 @@ async fn execute_form_command(
         ADD_USER => {
             let Some(username) = local_account_username(
                 submission.one("accountjid").ok(),
-                &session.state.config.domain,
+                session.state.local_domain(),
             ) else {
                 return Ok(None);
             };
@@ -847,7 +847,7 @@ async fn execute_form_command(
                     let Ok(jid) = crate::jid::CanonicalJid::parse(value.trim()) else {
                         return Ok(None);
                     };
-                    if jid.domainpart() != session.state.config.domain || jid.localpart().is_none()
+                    if jid.domainpart() != session.state.local_domain() || jid.localpart().is_none()
                     {
                         return Ok(None);
                     }
@@ -859,7 +859,7 @@ async fn execute_form_command(
                     (username, jid.resourcepart().is_some().then_some(jid))
                 } else {
                     let Some(username) =
-                        local_account_username(Some(value), &session.state.config.domain)
+                        local_account_username(Some(value), session.state.local_domain())
                     else {
                         return Ok(None);
                     };
@@ -887,7 +887,7 @@ async fn execute_form_command(
                     node,
                     &targets,
                     action,
-                    &session.state.config.domain,
+                    session.state.local_domain(),
                     &payload,
                 )
                 .await?;
@@ -904,7 +904,7 @@ async fn execute_form_command(
         CHANGE_USER_PASSWORD => {
             let Some(username) = local_account_username(
                 submission.one("accountjid").ok(),
-                &session.state.config.domain,
+                session.state.local_domain(),
             ) else {
                 return Ok(None);
             };
@@ -931,7 +931,7 @@ async fn execute_form_command(
                     password,
                     session.state.config.scram_iterations,
                     session.state.config.scram_sha1_enabled,
-                    &session.state.config.domain,
+                    session.state.local_domain(),
                     &payload,
                 )
                 .await?;
@@ -950,7 +950,7 @@ async fn execute_form_command(
             };
             let Some(username) = local_account_username(
                 values.first().map(String::as_str),
-                &session.state.config.domain,
+                session.state.local_domain(),
             ) else {
                 return Ok(None);
             };
@@ -963,7 +963,7 @@ async fn execute_form_command(
                 else {
                     return Ok(None);
                 };
-                let account = local_account_jid(&target.username, &session.state.config.domain)?;
+                let account = local_account_jid(&target.username, session.state.local_domain())?;
                 let value = target
                     .last_login_at
                     .map(|timestamp| timestamp.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
@@ -986,7 +986,7 @@ async fn execute_form_command(
                 return Ok(None);
             };
             let account =
-                local_account_jid(&roster.account.username, &session.state.config.domain)?;
+                local_account_jid(&roster.account.username, session.state.local_domain())?;
             let mut query = XmlElement::namespaced("query", "jabber:iq:roster");
             for (jid, name, subscription, ask) in roster.items {
                 query.push_child(
@@ -1009,7 +1009,7 @@ async fn execute_form_command(
         USER_STATS => {
             let Some(username) = local_account_username(
                 submission.one("accountjid").ok(),
-                &session.state.config.domain,
+                session.state.local_domain(),
             ) else {
                 return Ok(None);
             };
@@ -1027,7 +1027,7 @@ async fn execute_form_command(
                     .child(form_type_field())
                     .child(result_field(
                         "accountjid",
-                        local_account_jid(&stats.account.username, &session.state.config.domain)?,
+                        local_account_jid(&stats.account.username, session.state.local_domain())?,
                     ))
                     .child(result_field("rostersize", stats.roster_size.to_string()))
                     .child(result_field(
@@ -1049,7 +1049,7 @@ async fn execute_form_command(
             let mut usernames = Vec::with_capacity(values.len());
             for value in values {
                 let Some(username) =
-                    local_account_username(Some(value), &session.state.config.domain)
+                    local_account_username(Some(value), session.state.local_domain())
                 else {
                     return Ok(None);
                 };
@@ -1196,7 +1196,7 @@ async fn execute_form_command(
                 } else {
                     "SHUTDOWN"
                 },
-                session.state.config.domain,
+                session.state.local_domain(),
             );
             if confirm != expected {
                 return Ok(None);
@@ -1279,7 +1279,7 @@ async fn send_announcement(
     body: &str,
 ) -> Result<usize> {
     let stanza = XmlElement::namespaced("message", "jabber:client")
-        .attr("from", &session.state.config.domain)
+        .attr("from", session.state.local_domain())
         .attr("type", "headline")
         .attr("id", uuid::Uuid::new_v4())
         .child(XmlElement::new("body").text(body.to_owned()))
@@ -1300,7 +1300,7 @@ async fn send_announcement(
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("administrator authorization changed"))?;
             for username in page.usernames {
-                let bare = local_account_jid(&username, &session.state.config.domain)?;
+                let bare = local_account_jid(&username, session.state.local_domain())?;
                 let mut delivered_remotely = false;
                 for node_id in session.state.cluster.lookup_nodes(&bare).await? {
                     if node_id != session.state.cluster.node_id
@@ -1397,7 +1397,7 @@ async fn request_form(session: &ProtocolSession, actor: &AdminActor, node: &str)
             let values = rows
                 .usernames
                 .iter()
-                .map(|username| local_account_jid(username, &session.state.config.domain))
+                .map(|username| local_account_jid(username, session.state.local_domain()))
                 .collect::<Result<Vec<_>>>()?;
             vec![field(
                 "adminjids",
@@ -1415,7 +1415,7 @@ async fn request_form(session: &ProtocolSession, actor: &AdminActor, node: &str)
                 } else {
                     "SHUTDOWN"
                 },
-                session.state.config.domain,
+                session.state.local_domain(),
             );
             vec![
                 field(

@@ -632,13 +632,9 @@ impl ProtocolSession {
                         let full_jid = self.full_jid.as_deref().unwrap_or_default();
                         return Ok(Action::Send(set_to(&iq_result_from(id, to, ""), full_jid)));
                     }
-                    let target_key =
-                        crate::xmpp::xml_util::muc_occupant_key(&room_jid, target_nick);
                     let Some(target) = self
                         .state
-                        .muc_occupants
-                        .get(&target_key)
-                        .map(|entry| entry.value().clone())
+                        .local_muc_occupant_by_nick(&room_jid, target_nick)
                     else {
                         if kind == "get" || kind == "set" {
                             return Ok(Action::Send(iq_error(id, "item-not-found")));

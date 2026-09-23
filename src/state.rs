@@ -1699,6 +1699,51 @@ pub struct MucOccupant {
     pub payload: String,
 }
 
+/// The process-local identity needed to remove one occupancy without touching
+/// a connection that later reused its room nickname.
+#[derive(Clone, Copy)]
+pub(crate) struct LocalMucOccupantIdentity<'a> {
+    pub room_jid: &'a str,
+    pub nick: &'a str,
+    pub full_jid: &'a str,
+    pub connection_id: uuid::Uuid,
+    pub cluster_epoch: uuid::Uuid,
+}
+
+impl<'a> From<&'a MucOccupant> for LocalMucOccupantIdentity<'a> {
+    fn from(occupant: &'a MucOccupant) -> Self {
+        Self {
+            room_jid: &occupant.room_jid,
+            nick: &occupant.nick,
+            full_jid: &occupant.full_jid,
+            connection_id: occupant.connection_id,
+            cluster_epoch: occupant.cluster_epoch,
+        }
+    }
+}
+
+fn remove_local_muc_occupant_exact_from(
+    occupants: &DashMap<String, MucOccupant>,
+    identity: LocalMucOccupantIdentity<'_>,
+) -> Option<MucOccupant> {
+    if identity.connection_id.is_nil() || identity.cluster_epoch.is_nil() {
+        return None;
+    }
+    let room_jid = crate::jid::canonicalize_bare(identity.room_jid).ok()?;
+    let key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, identity.nick);
+    occupants
+        .remove_if(&key, |_, current| {
+            current.room_jid == room_jid
+                && muc_departure_identity_matches(
+                    current,
+                    identity.full_jid,
+                    identity.connection_id,
+                    identity.cluster_epoch,
+                )
+        })
+        .map(|(_, occupant)| occupant)
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct SerializableMucOccupant {
     pub full_jid: String,
@@ -1720,6 +1765,18 @@ pub struct SerializableMucOccupant {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sm_session_id: Option<uuid::Uuid>,
     pub payload: String,
+}
+
+impl<'a> From<&'a SerializableMucOccupant> for LocalMucOccupantIdentity<'a> {
+    fn from(occupant: &'a SerializableMucOccupant) -> Self {
+        Self {
+            room_jid: &occupant.room_jid,
+            nick: &occupant.nick,
+            full_jid: &occupant.full_jid,
+            connection_id: occupant.connection_id,
+            cluster_epoch: occupant.cluster_epoch,
+        }
+    }
 }
 
 impl From<&MucOccupant> for SerializableMucOccupant {
@@ -3163,6 +3220,10 @@ impl AppState {
 
     pub(crate) fn s2s_dane_required(&self) -> bool {
         self.config.federation_dane_mode == crate::s2s::dane::DaneMode::Required
+    }
+
+    pub(crate) fn s2s_dane_mode(&self) -> crate::s2s::dane::DaneMode {
+        self.config.federation_dane_mode
     }
 
     pub(crate) fn s2s_private_addresses_allowed(&self) -> bool {
@@ -6405,6 +6466,28 @@ impl AppState {
             .collect()
     }
 
+    pub(crate) fn local_muc_occupant_by_nick(
+        &self,
+        room_jid: &str,
+        nick: &str,
+    ) -> Option<MucOccupant> {
+        let room_jid = crate::jid::canonicalize_bare(room_jid).ok()?;
+        let key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, nick);
+        self.muc_occupants
+            .get(&key)
+            .filter(|occupant| occupant.room_jid == room_jid)
+            .map(|occupant| occupant.value().clone())
+    }
+
+    /// Compare and remove under one map shard lock. Callers retain the removed
+    /// value for any post-removal delivery; no map guard crosses an await.
+    pub(crate) fn remove_local_muc_occupant_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+    ) -> Option<MucOccupant> {
+        remove_local_muc_occupant_exact_from(&self.muc_occupants, identity)
+    }
+
     /// Revoke the exact live protocol actor membership represented by an
     /// occupant.  All four identities are required so a delayed kick or
     /// teardown cannot affect a later connection or a reused nickname.
@@ -8865,14 +8948,16 @@ mod session_key_tests {
         encode_api_control_entropy, ephemeral_api_control_secret, federation_rule_matches,
         insert_restored_muc_occupant, muc_actor_identity_matches, muc_departure_identity_matches,
         muc_suspended_teardown_identity_matches, promote_suspended_muc_buffer,
-        runtime_control_startup_retry_delay, seal_suspended_muc_buffer, service_control_applies,
-        session_lookup, snapshot_suspended_muc_buffer_for_resume, staged_route_activation_allowed,
+        remove_local_muc_occupant_exact_from, runtime_control_startup_retry_delay,
+        seal_suspended_muc_buffer, service_control_applies, session_lookup,
+        snapshot_suspended_muc_buffer_for_resume, staged_route_activation_allowed,
         suspended_muc_resume_actor_matches, suspended_occupant_is_created,
-        transfer_muc_suffix_to_checkpoint, FederationWritePolicy, JoinedMucMembership, MucOccupant,
-        MucOccupantEndpoint, RouteIncarnationSignal, SerializableMucOccupant, SessionLookup,
-        StagedRouteActivationCheck, StagedRouteIdentity, SuspendedMucBuffer, SuspendedMucEndpoint,
-        SuspendedMucPhase, SuspendedMucRoute,
+        transfer_muc_suffix_to_checkpoint, FederationWritePolicy, JoinedMucMembership,
+        LocalMucOccupantIdentity, MucOccupant, MucOccupantEndpoint, RouteIncarnationSignal,
+        SerializableMucOccupant, SessionLookup, StagedRouteActivationCheck, StagedRouteIdentity,
+        SuspendedMucBuffer, SuspendedMucEndpoint, SuspendedMucPhase, SuspendedMucRoute,
     };
+    use dashmap::DashMap;
     use std::collections::{BTreeSet, VecDeque};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -9791,6 +9876,45 @@ mod session_key_tests {
             old_connection,
             old_epoch,
         ));
+    }
+
+    #[test]
+    fn exact_muc_removal_preserves_a_reused_nickname() {
+        let old_connection = uuid::Uuid::new_v4();
+        let old_epoch = uuid::Uuid::new_v4();
+        let replacement = test_muc_occupant(
+            "alice@example.test/Phone",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        let key = crate::xmpp::xml_util::muc_occupant_key(&replacement.room_jid, &replacement.nick);
+        let occupants = DashMap::new();
+        occupants.insert(key.clone(), replacement.clone());
+
+        let stale = LocalMucOccupantIdentity {
+            room_jid: &replacement.room_jid,
+            nick: &replacement.nick,
+            full_jid: &replacement.full_jid,
+            connection_id: old_connection,
+            cluster_epoch: old_epoch,
+        };
+        assert!(remove_local_muc_occupant_exact_from(&occupants, stale).is_none());
+        assert_eq!(
+            occupants.get(&key).unwrap().connection_id,
+            replacement.connection_id
+        );
+
+        let exact = LocalMucOccupantIdentity::from(&replacement);
+        assert!(remove_local_muc_occupant_exact_from(
+            &occupants,
+            LocalMucOccupantIdentity {
+                connection_id: uuid::Uuid::nil(),
+                ..exact
+            },
+        )
+        .is_none());
+        assert!(remove_local_muc_occupant_exact_from(&occupants, exact).is_some());
+        assert!(!occupants.contains_key(&key));
     }
 
     #[test]

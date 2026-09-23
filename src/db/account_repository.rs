@@ -313,7 +313,7 @@ impl AccountRepository for PostgresAccountRepository {
             )
             .await?;
         match outcome {
-            crate::abuse::TransactionalGuardOutcome::Allowed(_) => {
+            crate::abuse::TransactionalGuardOutcome::Allowed => {
                 if !db::api_control::mark_idempotency_guard_verified_fence_in_tx(
                     &mut transaction,
                     request.lease.record_id,
@@ -368,7 +368,7 @@ impl AccountRepository for PostgresAccountRepository {
             .await
             .context("registration anti-abuse admission failed")?;
         match admission_outcome {
-            crate::abuse::TransactionalGuardOutcome::Allowed(_) => {}
+            crate::abuse::TransactionalGuardOutcome::Allowed => {}
             crate::abuse::TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
                 let requirement = error.requirement().clone();
                 transaction

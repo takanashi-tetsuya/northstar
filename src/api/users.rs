@@ -72,7 +72,7 @@ pub async fn change_password(
             state
                 .disconnect_account(
                     account.user_id,
-                    &format!("{}@{}", account.username, state.config.domain),
+                    &format!("{}@{}", account.username, state.local_domain()),
                 )
                 .await;
             crate::api::idempotency::stored_api_response(response)

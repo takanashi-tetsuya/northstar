@@ -688,15 +688,15 @@ impl SessionCleanupService {
             for (room_jid, membership) in memberships {
                 plan.joined_rooms
                     .remove_if(&room_jid, |_, current| current == &membership);
-                let key = crate::xmpp::xml_util::muc_occupant_key(&room_jid, &membership.nick);
-                let Some((_, departed)) = self.state.muc_occupants.remove_if(&key, |_, current| {
-                    crate::state::muc_departure_identity_matches(
-                        current,
+                let Some(departed) = self.state.remove_local_muc_occupant_exact(
+                    crate::state::LocalMucOccupantIdentity {
+                        room_jid: &room_jid,
+                        nick: &membership.nick,
                         full_jid,
-                        plan.connection_id,
-                        membership.cluster_epoch,
-                    )
-                }) else {
+                        connection_id: plan.connection_id,
+                        cluster_epoch: membership.cluster_epoch,
+                    },
+                ) else {
                     continue;
                 };
                 let remaining = self.state.muc_occupants_for(&room_jid);

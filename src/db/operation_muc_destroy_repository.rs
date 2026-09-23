@@ -3,7 +3,7 @@
 use crate::{
     db,
     services::operation_muc_destroy::{
-        MucDestroyCommit, MucDestroyRepository, ValidatedMucDestroy,
+        MucDestroyAudience, MucDestroyCommit, MucDestroyRepository, ValidatedMucDestroy,
     },
 };
 use anyhow::{Context, Result};
@@ -46,7 +46,7 @@ impl MucDestroyRepository for PostgresMucDestroyRepository {
         .fetch_optional(&mut *tx)
         .await?;
         let actor_label = command.actor_id.to_string();
-        let destroyed = if let Some(room_id) = room_id {
+        let committed_audience = if let Some(room_id) = room_id {
             db::admin_destroy_cluster_muc_room_in_tx(
                 &mut tx,
                 command.operation_id,
@@ -58,8 +58,19 @@ impl MucDestroyRepository for PostgresMucDestroyRepository {
             )
             .await?
         } else {
-            false
+            None
         };
+        let destroyed = committed_audience.is_some();
+        let audience = committed_audience
+            .unwrap_or_default()
+            .into_iter()
+            .map(|occupant| MucDestroyAudience {
+                full_jid: occupant.full_jid,
+                nick: occupant.nick,
+                occupant_incarnation: occupant.occupant_incarnation,
+                connection_id: occupant.connection_uuid,
+            })
+            .collect();
         sqlx::query("DELETE FROM api_muc_destroy_intents WHERE operation_id=$1")
             .bind(command.operation_id)
             .execute(&mut *tx)
@@ -78,6 +89,7 @@ impl MucDestroyRepository for PostgresMucDestroyRepository {
         Ok(MucDestroyCommit {
             room_jid: command.room_jid.to_owned(),
             destroyed,
+            audience,
         })
     }
 }

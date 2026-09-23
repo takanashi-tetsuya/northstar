@@ -510,7 +510,7 @@ async fn create_user_with_invitation_guarded_in_tx_bound(
             )
             .await?;
         match decision {
-            TransactionalGuardOutcome::Allowed(_) => {}
+            TransactionalGuardOutcome::Allowed => {}
             TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
                 return Ok(GuardedRegistrationOutcome::AbuseDenied(error));
             }
@@ -1785,7 +1785,7 @@ pub async fn change_password_guarded_v2(
         )
         .await?
     {
-        TransactionalGuardOutcome::Allowed(_) => {
+        TransactionalGuardOutcome::Allowed => {
             // Invalid/missing proofs are rejected before Argon2/SCRAM work.
             // Keep the bounded worker inside this short authoritative
             // transaction so a rollback restores both proof and actor state.
@@ -2190,7 +2190,7 @@ pub async fn begin_account_deletion_quiesce_guarded_v2(
         )
         .await?
     {
-        TransactionalGuardOutcome::Allowed(_) => {
+        TransactionalGuardOutcome::Allowed => {
             let found: bool = sqlx::query_scalar("SELECT northstar_user_quiesce_deletion($1,$2)")
                 .bind(user_id)
                 .bind(expected_auth_generation)
@@ -3793,7 +3793,7 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            TransactionalGuardOutcome::Allowed(_)
+            TransactionalGuardOutcome::Allowed
         ));
         assert!(
             crate::db::mark_idempotency_guard_verified_in_tx(&mut reserve, &lease)

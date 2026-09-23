@@ -543,7 +543,7 @@ async fn authenticate_transport(
     let (mut secure, mut opening, mut features, mut input, peer_certificates, tls_generation) =
         connect_secure_stream_from(state, source_domain, target_domain).await?;
     let mut peer_limits = advertised_stream_limits(&features).unwrap_or_default();
-    let external = state.config.s2s_sasl_external_enabled && sasl_external_advertised(&features);
+    let external = state.s2s_sasl_external_enabled() && sasl_external_advertised(&features);
     let bidi_enabled;
     if external {
         bidi_enabled = request_bidi_if_advertised(&mut secure, &features).await?;
@@ -1190,7 +1190,8 @@ async fn connect_secure_endpoint(
     target_domain: &str,
     endpoint: &FederationEndpoint,
 ) -> Result<SecureS2sConnection> {
-    let dane_policy = if state.config.federation_dane_mode == crate::s2s::dane::DaneMode::Off {
+    let dane_mode = state.s2s_dane_mode();
+    let dane_policy = if dane_mode == crate::s2s::dane::DaneMode::Off {
         None
     } else {
         let resolver = state
@@ -1198,7 +1199,7 @@ async fn connect_secure_endpoint(
             .context("DANE is enabled but the validating DNSSEC resolver is unavailable")?;
         crate::s2s::dane::lookup_dane_policy(
             resolver,
-            state.config.federation_dane_mode,
+            dane_mode,
             endpoint
                 .dane_srv_binding
                 .as_ref()
@@ -1402,7 +1403,7 @@ async fn authenticate_dialback_outbound(
     features: &str,
     input: &mut S2sInputState,
 ) -> Result<()> {
-    if !state.config.dialback_enabled || !advertised(features) {
+    if !state.s2s_dialback_enabled() || !advertised(features) {
         anyhow::bail!("remote server offers neither usable SASL EXTERNAL nor XEP-0220 dialback");
     }
     let id = stream_attribute(opening, "id").context("dialback stream omitted its id")?;
@@ -1623,7 +1624,7 @@ fn envelope_source_domain(state: &AppState, envelope: &FederationEnvelope) -> St
         .map(|jid| jid.domainpart().to_owned());
     source
         .filter(|domain| {
-            state.config.component_domain_configured(domain)
+            state.s2s_component_domain_configured(domain)
                 || same_s2s_domain(domain, state.local_domain())
                 || same_s2s_domain(domain, &format!("pubsub.{}", state.local_domain()))
                 || same_s2s_domain(domain, &format!("conference.{}", state.local_domain()))

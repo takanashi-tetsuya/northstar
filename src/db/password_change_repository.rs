@@ -159,7 +159,7 @@ impl PasswordChangeRepository for PostgresPasswordChangeRepository {
                 )
                 .await?
             {
-                TransactionalGuardOutcome::Allowed(_) => {
+                TransactionalGuardOutcome::Allowed => {
                     anyhow::ensure!(
                         db::mark_idempotency_guard_verified_in_tx(&mut reserve_tx, &lease).await?,
                         "password-change guard lease changed"

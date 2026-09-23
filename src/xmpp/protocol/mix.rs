@@ -667,12 +667,12 @@ fn same_jid_domain(left: &str, right: &str) -> bool {
 }
 
 fn local_mix_domain(state: &AppState) -> String {
-    prepare_domainpart(&format!("mix.{}", state.config.domain))
+    prepare_domainpart(&format!("mix.{}", state.local_domain()))
         .expect("configured XMPP domain must form a valid MIX service domain")
 }
 
 fn local_muc_domain(state: &AppState) -> String {
-    prepare_domainpart(&format!("conference.{}", state.config.domain))
+    prepare_domainpart(&format!("conference.{}", state.local_domain()))
         .expect("configured XMPP domain must form a valid MUC service domain")
 }
 
@@ -2034,7 +2034,7 @@ async fn deliver_mix_relay_stanza(state: &Arc<AppState>, recipient: &str, stanza
         return;
     };
     let domain = recipient_jid.domainpart();
-    if same_jid_domain(domain, &state.config.domain) {
+    if same_jid_domain(domain, state.local_domain()) {
         for target in state.sessions_for(recipient) {
             let _ = target.sender.try_send(stanza.clone());
         }
@@ -2213,7 +2213,7 @@ async fn handle_channel_relay_request(
     let target_real_jid = mapped_target.unwrap_or_else(|| target_participant.jid.clone());
 
     let requester_jid = CanonicalJid::parse_bare(&requester.jid)?;
-    if same_jid_domain(requester_jid.domainpart(), &state.config.domain) {
+    if same_jid_domain(requester_jid.domainpart(), state.local_domain()) {
         if let Some(username) = requester_jid.localpart() {
             if let Some(user) = state.mix_service().find_enabled_user(username).await? {
                 if state
@@ -2238,7 +2238,7 @@ async fn handle_channel_relay_request(
     }
     let target_participant_jid = CanonicalJid::parse_bare(&target_participant.jid)?;
     let target_domain = target_participant_jid.domainpart();
-    if same_jid_domain(target_domain, &state.config.domain) {
+    if same_jid_domain(target_domain, state.local_domain()) {
         let Some(target_username) = target_participant_jid.localpart() else {
             return Ok(relay_error(
                 &request.id,
@@ -2434,7 +2434,7 @@ async fn deliver_channel_stanza(
         }
     };
     let domain = recipient_jid.domainpart();
-    if same_jid_domain(domain, &state.config.domain) {
+    if same_jid_domain(domain, state.local_domain()) {
         let Some(username) = recipient_jid.localpart() else {
             return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
         };
@@ -3485,7 +3485,7 @@ impl ProtocolSession {
         let Some(user) = self.authenticated.as_ref() else {
             return Ok(Some(Action::Send(iq_error_to(
                 &request.id,
-                request.to.as_deref().unwrap_or(&self.state.config.domain),
+                request.to.as_deref().unwrap_or(self.state.local_domain()),
                 request.from.as_deref().unwrap_or_default(),
                 "auth",
                 "not-authorized",
@@ -3494,13 +3494,13 @@ impl ProtocolSession {
         let Some(full_jid) = self.full_jid.as_deref() else {
             return Ok(Some(Action::Send(iq_error_to(
                 &request.id,
-                &self.state.config.domain,
+                self.state.local_domain(),
                 "",
                 "auth",
                 "not-authorized",
             ))));
         };
-        let actor_bare = format!("{}@{}", user.username, self.state.config.domain);
+        let actor_bare = format!("{}@{}", user.username, self.state.local_domain());
         if let Some(asserted) = request.from.as_deref() {
             let asserted = crate::jid::canonicalize(asserted).ok();
             if asserted.as_deref() != Some(full_jid)
@@ -3508,7 +3508,7 @@ impl ProtocolSession {
             {
                 return Ok(Some(Action::Send(iq_error_to(
                     &request.id,
-                    request.to.as_deref().unwrap_or(&self.state.config.domain),
+                    request.to.as_deref().unwrap_or(self.state.local_domain()),
                     full_jid,
                     "auth",
                     "not-authorized",
@@ -4072,7 +4072,7 @@ impl ProtocolSession {
                 "not-authorized",
             ))));
         };
-        let actor_bare = format!("{}@{}", user.username, self.state.config.domain);
+        let actor_bare = format!("{}@{}", user.username, self.state.local_domain());
         let result = process_channel_message(&self.state, &actor_bare, full_jid, raw).await?;
         Ok(Some(result.map_or(Action::None, Action::Send)))
     }
@@ -4102,7 +4102,7 @@ impl ProtocolSession {
                 "not-authorized",
             ))));
         };
-        let actor_bare = format!("{}@{}", user.username, self.state.config.domain);
+        let actor_bare = format!("{}@{}", user.username, self.state.local_domain());
         // Directed MIX presence and verified-caps fallback share the exact
         // resource epoch. Record only a successfully applied transition: an
         // error response must not suppress later initialisation. The set is
@@ -4162,7 +4162,7 @@ impl ProtocolSession {
         } else {
             raw
         };
-        let actor_bare = format!("{}@{}", user.username, self.state.config.domain);
+        let actor_bare = format!("{}@{}", user.username, self.state.local_domain());
         for membership in self.state.mix_service().pam_memberships(user.id).await? {
             if membership.state != "joined"
                 || !membership
@@ -5467,7 +5467,7 @@ async fn handle_mix_mam_iq(
         )]);
     };
     let viewer_id = match CanonicalJid::parse_bare(actor) {
-        Ok(viewer) if same_jid_domain(viewer.domainpart(), &state.config.domain) => {
+        Ok(viewer) if same_jid_domain(viewer.domainpart(), state.local_domain()) => {
             match viewer.localpart() {
                 Some(username) => state
                     .mix_service()
@@ -5927,7 +5927,7 @@ pub(crate) fn start_mix_presence_recovery(
                 continue;
             };
             let domain = participant.domainpart();
-            if same_jid_domain(domain, &state.config.domain) {
+            if same_jid_domain(domain, state.local_domain()) {
                 for (full_jid, session) in state.session_entries_for(&probe.participant_jid) {
                     publish_verified_mix_presence(
                         &state,
@@ -7159,7 +7159,7 @@ pub(crate) async fn federated_mix_iq(
         }
         return Ok(true);
     }
-    if same_jid_domain(to_jid.domainpart(), &state.config.domain)
+    if same_jid_domain(to_jid.domainpart(), state.local_domain())
         && matches!(request.kind.as_str(), "result" | "error")
     {
         let from_jid = CanonicalJid::parse_bare(from)?;
@@ -7380,7 +7380,7 @@ async fn federated_mix_iq_relay(
         return Ok(true);
     }
 
-    if same_jid_domain(to.domainpart(), &state.config.domain) {
+    if same_jid_domain(to.domainpart(), state.local_domain()) {
         let source = crate::jid::CanonicalJid::parse(&request.from)?;
         let (_source_id, channel_jid) = decode_participant_jid(&source.bare())?;
         anyhow::ensure!(
@@ -7499,7 +7499,7 @@ pub(crate) async fn federated_mix_message(
         }
         return Ok(true);
     }
-    if same_jid_domain(to_jid.domainpart(), &state.config.domain) {
+    if same_jid_domain(to_jid.domainpart(), state.local_domain()) {
         if kind != "groupchat" {
             return Ok(false);
         }
@@ -7586,7 +7586,7 @@ pub(crate) async fn federated_mix_presence(
         )
     };
     let to_jid = CanonicalJid::parse(&to)?;
-    if kind == "probe" && same_jid_domain(to_jid.domainpart(), &state.config.domain) {
+    if kind == "probe" && same_jid_domain(to_jid.domainpart(), state.local_domain()) {
         let channel = crate::jid::CanonicalJid::parse_bare(&from)?;
         anyhow::ensure!(
             channel.localpart().is_some()
@@ -7649,7 +7649,7 @@ pub(crate) async fn federated_mix_presence(
         }
         return Ok(true);
     }
-    if same_jid_domain(to_jid.domainpart(), &state.config.domain) {
+    if same_jid_domain(to_jid.domainpart(), state.local_domain()) {
         anyhow::ensure!(
             authenticated_mix_service(from_jid.domainpart(), authenticated_domain),
             "federated MIX presence domain is not authenticated"

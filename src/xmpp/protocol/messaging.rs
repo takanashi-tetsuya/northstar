@@ -324,7 +324,7 @@ impl ProtocolSession {
         }
 
         let target_domain = target_jid.domainpart();
-        let remote_domain = (target_domain != self.state.config.domain
+        let remote_domain = (target_domain != self.state.local_domain()
             && target_domain != self.muc_domain()
             && target_domain != self.upload_domain()
             && target_domain != self.pubsub_domain())
@@ -335,7 +335,7 @@ impl ProtocolSession {
             }
             let stable_id = uuid::Uuid::new_v4();
             let rewritten = set_from(&routed_raw, from);
-            let routed = strip_stanza_ids_by_domain(&rewritten, &self.state.config.domain);
+            let routed = strip_stanza_ids_by_domain(&rewritten, self.state.local_domain());
             let sender_archive = add_stanza_id(&rewritten, bare_jid(from), stable_id);
             if !personal_retraction
                 && direct_delivery_mode(root) == DirectDeliveryMode::VolatileExplicitNoStore
@@ -356,14 +356,14 @@ impl ProtocolSession {
                 // a connection, database admission row, archive or retry.
                 if !crate::s2s::send_volatile_on_authenticated_route(
                     &self.state,
-                    &self.state.config.domain,
+                    self.state.local_domain(),
                     domain,
                     routed,
                 )
                 .await
                 {
                     tracing::debug!(
-                        source_domain = %self.state.config.domain,
+                        source_domain = %self.state.local_domain(),
                         target_domain = %domain,
                         "volatile no-store stanza was not accepted by an authenticated S2S route"
                     );
@@ -623,7 +623,7 @@ impl ProtocolSession {
         let recipient = match self
             .state
             .message_service()
-            .resolve_local_recipient(recipient_local, &self.state.config.domain, from)
+            .resolve_local_recipient(recipient_local, self.state.local_domain(), from)
             .await?
         {
             LocalRecipientDecision::Deliver(recipient) => recipient,
@@ -675,9 +675,9 @@ impl ProtocolSession {
         } else {
             uuid::Uuid::new_v4()
         };
-        let recipient_by = format!("{}@{}", recipient.username, self.state.config.domain);
+        let recipient_by = format!("{}@{}", recipient.username, self.state.local_domain());
         let rewritten = set_from(&routed_raw, from);
-        let routed = strip_stanza_ids_by_domain(&rewritten, &self.state.config.domain);
+        let routed = strip_stanza_ids_by_domain(&rewritten, self.state.local_domain());
         let sender_archive = add_stanza_id(&rewritten, bare_jid(from), sender_stable_id);
         let recipient_delivery = if recipient.id == user.id {
             sender_archive.clone()
@@ -849,7 +849,7 @@ impl ProtocolSession {
             let delayed_delivery = add_delay_from(
                 &recipient_delivery,
                 chrono::Utc::now(),
-                Some(&self.state.config.domain),
+                Some(self.state.local_domain()),
             );
             let admission = ValidatedPersonalMessage {
                 local_actor_id: Some(user.id),
@@ -944,7 +944,7 @@ impl ProtocolSession {
             let delayed_delivery = add_delay_from(
                 &recipient_delivery,
                 chrono::Utc::now(),
-                Some(&self.state.config.domain),
+                Some(self.state.local_domain()),
             );
             let delivery = DeliveryProjection {
                 id: recipient_stable_id,
@@ -1449,7 +1449,7 @@ impl ProtocolSession {
                         let delayed = add_delay_from(
                             &recipient_archive_stanza,
                             chrono::Utc::now(),
-                            Some(&self.state.config.domain),
+                            Some(self.state.local_domain()),
                         );
                         let offline_outcome = self
                             .state

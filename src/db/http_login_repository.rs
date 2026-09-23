@@ -193,7 +193,7 @@ impl HttpLoginRepository for PostgresHttpLoginRepository {
                     )
                     .await?
                 {
-                    TransactionalGuardOutcome::Allowed(_) => {
+                    TransactionalGuardOutcome::Allowed => {
                         proof_recorded_attempt = true;
                         if !db::mark_idempotency_guard_verified_in_tx(&mut guard_tx, lease).await? {
                             guard_tx.rollback().await?;

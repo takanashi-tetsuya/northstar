@@ -18,7 +18,7 @@ use crate::auth;
 use crate::db;
 use crate::error::{AppError, Result};
 use crate::services::challenge_issuance::ChallengeIssueRequest;
-use crate::state::AppState;
+use crate::state::{AppState, HttpLoginEndpointContext};
 
 pub async fn register(
     State(state): State<Arc<AppState>>,
@@ -145,14 +145,15 @@ fn registration_error(error: db::RegistrationError) -> AppError {
 }
 
 pub async fn login(
-    State(state): State<Arc<AppState>>,
+    State(context): State<HttpLoginEndpointContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     mut request: ApiJson<Credentials>,
 ) -> Result<Response, AppError> {
     use crate::services::http_login::{HttpLoginOutcome as Outcome, HttpLoginRequest};
 
-    let peer_ip = client_ip(peer.ip(), &headers, &state);
+    let peer_ip =
+        super::client_ip_with_trusted_proxies(peer.ip(), &headers, context.trusted_proxies());
     let login_identity = login_abuse_identity(peer_ip, &request.value.username);
     let (subject, actors) =
         login_identity.unwrap_or_else(|| (String::new(), vec![ip_actor(peer_ip)]));
@@ -169,8 +170,8 @@ pub async fn login(
         "/api/v1/login",
     );
     idempotency.capacity_scope = capacity_scope.as_bytes();
-    let outcome = state
-        .login_service()
+    let outcome = context
+        .service()
         .login(HttpLoginRequest {
             idempotency,
             username: &request.value.username,
@@ -196,20 +197,14 @@ pub async fn login(
         Outcome::Replay(response) => idempotency_replay_response(response),
         Outcome::Unauthorized => Err(AppError::Unauthorized),
         Outcome::AbuseDenied(error) => {
-            state
-                .metrics
-                .rate_limited_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            context.abuse_denied();
             Err(rate_limited(error))
         }
         Outcome::PasswordWorkOverloaded => Err(AppError::Unavailable(
             "password authentication capacity is temporarily exhausted; retry later".into(),
         )),
         Outcome::BackendUnavailable => {
-            state
-                .metrics
-                .authentication_backend_failures_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            context.backend_unavailable();
             Err(AppError::Unavailable(
                 "password authentication backend is temporarily unavailable; retry later".into(),
             ))

@@ -3,8 +3,49 @@
 //! this module never exposes the complete process registry or application state.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use crate::metrics::{DurationHistogram, DurationTimer};
+
+/// Admission and completion observations for caps side effects.
+pub(crate) struct CapsEffectTelemetry<'a> {
+    coalesced: &'a AtomicU64,
+    queue_saturated: &'a AtomicU64,
+    failures: &'a AtomicU64,
+    latency: &'a DurationHistogram,
+}
+
+impl<'a> CapsEffectTelemetry<'a> {
+    pub(crate) fn new(
+        coalesced: &'a AtomicU64,
+        queue_saturated: &'a AtomicU64,
+        failures: &'a AtomicU64,
+        latency: &'a DurationHistogram,
+    ) -> Self {
+        Self {
+            coalesced,
+            queue_saturated,
+            failures,
+            latency,
+        }
+    }
+
+    pub(crate) fn coalesced(&self) {
+        self.coalesced.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn queue_saturated(&self) {
+        self.queue_saturated.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn failed(&self, failures: u64) {
+        self.failures.fetch_add(failures, Ordering::Relaxed);
+    }
+
+    pub(crate) fn completed_after(&self, elapsed: Duration) {
+        self.latency.observe(elapsed);
+    }
+}
 
 /// One counter for every client frame entering the protocol dispatcher,
 /// including stream framing and malformed XML.

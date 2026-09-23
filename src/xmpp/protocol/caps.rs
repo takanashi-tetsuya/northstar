@@ -1,5 +1,6 @@
 use super::ProtocolSession;
 use crate::state::AppState;
+use crate::xmpp::capabilities::CapsEffectTelemetry;
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::{iq_result_from, stream_id};
 use futures::{stream::FuturesUnordered, StreamExt};
@@ -22,7 +23,7 @@ pub(crate) trait CapsEffectDispatcherExt {
         &self,
         full_jid: String,
         local: bool,
-        metrics: &crate::metrics::Metrics,
+        telemetry: &CapsEffectTelemetry<'_>,
     ) -> CapsEffectAdmission;
 }
 
@@ -31,19 +32,15 @@ impl CapsEffectDispatcherExt for CapsEffectDispatcher {
         &self,
         full_jid: String,
         local: bool,
-        metrics: &crate::metrics::Metrics,
+        telemetry: &CapsEffectTelemetry<'_>,
     ) -> CapsEffectAdmission {
         let admission = self.enqueue_hint(full_jid, local);
         match admission {
             CapsEffectAdmission::Coalesced => {
-                metrics
-                    .caps_effect_coalesced_total
-                    .fetch_add(1, Ordering::Relaxed);
+                telemetry.coalesced();
             }
             CapsEffectAdmission::Saturated => {
-                metrics
-                    .caps_effect_queue_saturated_total
-                    .fetch_add(1, Ordering::Relaxed);
+                telemetry.queue_saturated();
             }
             _ => {}
         }
@@ -132,7 +129,7 @@ fn hint_caps_effects(state: &AppState, full_jid: String) {
         .is_some_and(CapsObservationOwner::is_local);
     match state
         .caps_effect_dispatcher()
-        .hint(full_jid, local, &state.metrics)
+        .hint(full_jid, local, &state.caps_effect_telemetry())
     {
         CapsEffectAdmission::Queued | CapsEffectAdmission::Coalesced => {}
         CapsEffectAdmission::Saturated => {
@@ -388,7 +385,7 @@ async fn run_caps_effect_dispatcher(
         {
             let now = Instant::now();
             for (full_jid, local) in state.caps_by_jid().ready_observations(now) {
-                let _ = dispatcher.hint(full_jid, local, &state.metrics);
+                let _ = dispatcher.hint(full_jid, local, &state.caps_effect_telemetry());
             }
             // Schedule reconstructed hints before sleeping. If a class filled,
             // `hint` left rescan_required set; freeing a slot wakes the next
@@ -437,18 +434,15 @@ async fn run_caps_effect_dispatcher(
                     let _ = dispatcher.hint(
                         job.full_jid.clone(),
                         job.owner.is_local(),
-                        &state.metrics,
+                        &state.caps_effect_telemetry(),
                     );
                 }
-                state.metrics.caps_effect_latency_seconds.observe(job.queued_at.elapsed());
+                state.caps_effect_telemetry().completed_after(job.queued_at.elapsed());
                 let failures = failed.0.count_ones() as u64;
                 if failures == 0 {
                     heartbeat.ok();
                 } else {
-                    state.metrics.caps_effect_failures_total.fetch_add(
-                        failures,
-                        Ordering::Relaxed,
-                    );
+                    state.caps_effect_telemetry().failed(failures);
                     heartbeat.error(format!("{failures} caps side effects failed"));
                 }
             }
@@ -460,7 +454,7 @@ async fn run_caps_effect_dispatcher(
                         let _ = dispatcher.hint(
                             pending.full_jid,
                             pending.owner.is_local(),
-                            &state.metrics,
+                            &state.caps_effect_telemetry(),
                         );
                     }
                 }
@@ -791,10 +785,7 @@ impl ProtocolSession {
         ) {
             CapsVerificationCommit::Applied => hint_caps_effects(&self.state, full_jid),
             CapsVerificationCommit::ResourceLimited => {
-                self.state
-                    .metrics
-                    .caps_effect_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                self.state.caps_effect_telemetry().failed(1);
                 tracing::warn!(jid = %full_jid, "caps semantic memory budget exhausted; verification remains pending");
                 hint_caps_effects(&self.state, full_jid);
             }
@@ -1068,10 +1059,7 @@ pub(crate) async fn handle_federated_caps_response(
     {
         CapsVerificationCommit::Applied => hint_caps_effects(state, resource),
         CapsVerificationCommit::ResourceLimited => {
-            state
-                .metrics
-                .caps_effect_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.caps_effect_telemetry().failed(1);
             tracing::warn!(%resource, "caps semantic memory budget exhausted; verification remains pending");
             hint_caps_effects(state, resource);
         }
@@ -1524,7 +1512,11 @@ mod tests {
 
     #[test]
     fn saturated_ready_queue_is_reconstructible_from_observations() {
-        let metrics = crate::metrics::Metrics::default();
+        let coalesced = std::sync::atomic::AtomicU64::new(0);
+        let queue_saturated = std::sync::atomic::AtomicU64::new(0);
+        let failures = std::sync::atomic::AtomicU64::new(0);
+        let latency = crate::metrics::DurationHistogram::default();
+        let telemetry = CapsEffectTelemetry::new(&coalesced, &queue_saturated, &failures, &latency);
         let dispatcher = CapsEffectDispatcher::with_limits(1, 1);
         let index = CapsResourceIndex::with_limits(4, 4);
         for (resource, seed) in [("a@remote.test/One", 1_u16), ("b@remote.test/Two", 2_u16)] {
@@ -1551,19 +1543,20 @@ mod tests {
             Instant::now(),
         );
         assert_eq!(
-            dispatcher.hint("a@remote.test/One".to_owned(), false, &metrics),
+            dispatcher.hint("a@remote.test/One".to_owned(), false, &telemetry),
             CapsEffectAdmission::Queued
         );
         assert_eq!(
-            dispatcher.hint("b@remote.test/Two".to_owned(), false, &metrics),
+            dispatcher.hint("b@remote.test/Two".to_owned(), false, &telemetry),
             CapsEffectAdmission::Saturated
         );
+        assert_eq!(queue_saturated.load(Ordering::Relaxed), 1);
         assert!(
             dispatcher.begin_rescan(),
             "saturation requests reconstruction"
         );
         assert_eq!(
-            dispatcher.hint(local_resource.to_owned(), true, &metrics),
+            dispatcher.hint(local_resource.to_owned(), true, &telemetry),
             CapsEffectAdmission::Queued,
             "federated saturation has an independent local hint budget"
         );
@@ -1575,7 +1568,7 @@ mod tests {
         let ready = index.ready_observations(Instant::now());
         assert!(ready.iter().any(|(jid, _)| jid == "b@remote.test/Two"));
         assert_eq!(
-            dispatcher.hint("b@remote.test/Two".to_owned(), false, &metrics),
+            dispatcher.hint("b@remote.test/Two".to_owned(), false, &telemetry),
             CapsEffectAdmission::Queued
         );
     }

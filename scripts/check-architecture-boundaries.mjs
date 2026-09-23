@@ -3157,6 +3157,25 @@ if (!operationRuntimeOwnershipSource.includes('state.broadcast_routes().target_s
     || /fn local_target_seeds\(\s*state:\s*&AppState/.test(operationRuntimeOwnershipSource)) {
   throw new Error('administrator broadcast must snapshot and deliver through its exact local-route capability');
 }
+if (!operationRuntimeOwnershipSource.includes('.session_kick_routes()')
+    || !operationRuntimeOwnershipSource.includes('.kick_exact(user_id, generation, connection_id)')
+    || !operationRuntimeOwnershipSource.includes('session.connection_id == connection_id')
+    || !operationRuntimeOwnershipSource.includes('session.auth_generation == auth_generation')) {
+  throw new Error('administrator session kick must cancel only the exact committed route incarnation');
+}
+const loginEndpointSource = read('src/api/auth_routes.rs');
+const loginEndpoint = structBody(loginEndpointSource, 'pub async fn login(');
+const loginContext = structBody(read('src/state/http_login_endpoint.rs'), 'pub(crate) struct HttpLoginEndpointContext');
+if (!loginEndpointSource.includes('State(context): State<HttpLoginEndpointContext>')
+    || /\bstate\.(?:metrics|pool|config)\b/.test(loginEndpoint)
+    || /\bAppState\b|\bMetrics\b|PgPool/.test(loginContext)) {
+  throw new Error('REST login must receive only its service, proxy policy and outcome counters');
+}
+const capsEffectSource = read('src/xmpp/protocol/caps.rs');
+if (/\bstate\.metrics\b|\bself\.state\.metrics\b|&(?:crate::metrics::)?Metrics\b/.test(capsEffectSource)
+    || !capsEffectSource.includes('state.caps_effect_telemetry()')) {
+  throw new Error('caps effect dispatch must receive only its admission and completion telemetry');
+}
 const readinessEndpointSource = read('src/api/system.rs');
 const metricsEndpoint = structBody(readinessEndpointSource, 'pub struct MetricsEndpointState');
 const metricsContext = structBody(read('src/state/metrics_context.rs'), 'pub(crate) struct MetricsContext');
@@ -3344,7 +3363,6 @@ const stateServiceAccessors = [
   'sasl_login_abuse_service',
   'passkey_login_abuse_service',
   'password_change_service',
-  'login_service',
   'operation_muc_destroy_service',
   'locked_muc_expiry_service',
   'operation_effect_fence_service',

@@ -134,6 +134,8 @@ impl axum::extract::FromRef<Arc<AppState>> for OmemoRecoveryPollContext {
     }
 }
 pub(crate) mod api_queries;
+mod http_login_endpoint;
+pub(crate) use http_login_endpoint::HttpLoginEndpointContext;
 mod metrics_context;
 pub(crate) use metrics_context::MetricsContext;
 pub(crate) mod suspension;
@@ -143,6 +145,12 @@ pub(crate) type ApiQueryContext =
 impl axum::extract::FromRef<Arc<AppState>> for ApiQueryContext {
     fn from_ref(state: &Arc<AppState>) -> Self {
         state.api_query_context()
+    }
+}
+
+impl axum::extract::FromRef<Arc<AppState>> for HttpLoginEndpointContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        HttpLoginEndpointContext::from_state(state)
     }
 }
 
@@ -2372,6 +2380,21 @@ impl AppState {
         )
     }
 
+    pub(crate) fn session_kick_routes(&self) -> crate::operation_runtime::LocalSessionKickRoutes {
+        crate::operation_runtime::LocalSessionKickRoutes::new(Arc::clone(&self.sessions))
+    }
+
+    pub(crate) fn caps_effect_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::CapsEffectTelemetry<'_> {
+        crate::xmpp::capabilities::CapsEffectTelemetry::new(
+            &self.metrics.caps_effect_coalesced_total,
+            &self.metrics.caps_effect_queue_saturated_total,
+            &self.metrics.caps_effect_failures_total,
+            &self.metrics.caps_effect_latency_seconds,
+        )
+    }
+
     pub(crate) fn inbound_stanza_telemetry(
         &self,
     ) -> crate::xmpp::capabilities::InboundStanzaTelemetry<'_> {
@@ -4541,14 +4564,6 @@ impl AppState {
     ) -> &crate::services::account::AccountService<db::account_repository::PostgresAccountRepository>
     {
         &self.account_service
-    }
-
-    pub(crate) fn login_service(
-        &self,
-    ) -> &crate::services::http_login::HttpLoginService<
-        db::http_login_repository::PostgresHttpLoginRepository,
-    > {
-        &self.login_service
     }
 
     pub(crate) fn password_change_service(

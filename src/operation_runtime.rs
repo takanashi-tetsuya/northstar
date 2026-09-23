@@ -424,6 +424,40 @@ impl LocalBroadcastRoutes {
     }
 }
 
+/// An administrator operation may cancel only a session with the exact
+/// committed user, credential generation, and connection incarnation.
+pub(crate) struct LocalSessionKickRoutes {
+    sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+}
+
+impl LocalSessionKickRoutes {
+    pub(crate) fn new(
+        sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+    ) -> Self {
+        Self { sessions }
+    }
+
+    pub(crate) fn kick_exact(
+        &self,
+        user_id: Uuid,
+        auth_generation: i64,
+        connection_id: Uuid,
+    ) -> bool {
+        self.sessions
+            .iter()
+            .find(|entry| {
+                let session = entry.value();
+                session.connection_id == connection_id
+                    && session.user_id == user_id
+                    && session.auth_generation == auth_generation
+            })
+            .is_some_and(|session| {
+                session.disconnect.cancel();
+                true
+            })
+    }
+}
+
 struct BroadcastRoute {
     session_key: String,
     user_id: Uuid,
@@ -569,25 +603,10 @@ async fn execute_effect(
             Ok(json!({"sessions_disconnected":disconnected}))
         }
         "admin.session_kick" => {
-            let user_id = uuid_field(payload, "user_id")?;
-            let connection_id = uuid_field(payload, "connection_id")?;
-            let generation = payload
-                .get("auth_generation")
-                .and_then(Value::as_i64)
-                .context("auth generation is missing")?;
+            let (user_id, connection_id, generation) = session_kick_identity(payload)?;
             let kicked = state
-                .sessions
-                .iter()
-                .find(|entry| {
-                    let session = entry.value();
-                    session.connection_id == connection_id
-                        && session.user_id == user_id
-                        && session.auth_generation == generation
-                })
-                .is_some_and(|session| {
-                    session.disconnect.cancel();
-                    true
-                });
+                .session_kick_routes()
+                .kick_exact(user_id, generation, connection_id);
             Ok(json!({"kicked":kicked,"connection_id":connection_id}))
         }
         "admin.broadcast" => state.broadcast_routes().send_exact(payload),
@@ -658,6 +677,16 @@ fn uuid_field(payload: &Value, name: &str) -> Result<Uuid> {
     Ok(id)
 }
 
+fn session_kick_identity(payload: &Value) -> Result<(Uuid, Uuid, i64)> {
+    let user_id = uuid_field(payload, "user_id")?;
+    let connection_id = uuid_field(payload, "connection_id")?;
+    let generation = payload
+        .get("auth_generation")
+        .and_then(Value::as_i64)
+        .context("auth generation is missing")?;
+    Ok((user_id, connection_id, generation))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -705,6 +734,81 @@ mod tests {
             last_activity: Arc::new(std::sync::RwLock::new(Instant::now())),
             disconnect: CancellationToken::new(),
         }
+    }
+
+    #[test]
+    fn exact_session_kick_cancels_pending_route_without_touching_replacements() {
+        let sessions = Arc::new(dashmap::DashMap::new());
+        let routes = LocalSessionKickRoutes::new(Arc::clone(&sessions));
+        let user_id = Uuid::new_v4();
+        let old_connection = Uuid::new_v4();
+        let (old_sender, _old_receiver) = tokio::sync::mpsc::channel(1);
+        let old = session(user_id, 4, old_connection, old_sender);
+        old.routable.store(false, Ordering::Release);
+        let old_disconnect = old.disconnect.clone();
+        sessions.insert("alice@example.test/phone".into(), old);
+
+        assert!(!routes.kick_exact(Uuid::new_v4(), 4, old_connection));
+        assert!(!routes.kick_exact(user_id, 5, old_connection));
+        assert!(!routes.kick_exact(user_id, 4, Uuid::new_v4()));
+        assert!(!old_disconnect.is_cancelled());
+
+        assert!(routes.kick_exact(user_id, 4, old_connection));
+        assert!(old_disconnect.is_cancelled());
+        assert!(routes.kick_exact(user_id, 4, old_connection));
+        assert!(!sessions
+            .get("alice@example.test/phone")
+            .unwrap()
+            .routable
+            .load(Ordering::Acquire));
+
+        let new_connection = Uuid::new_v4();
+        let (new_sender, _new_receiver) = tokio::sync::mpsc::channel(1);
+        let replacement = session(user_id, 5, new_connection, new_sender);
+        let new_disconnect = replacement.disconnect.clone();
+        sessions.insert("alice@example.test/phone".into(), replacement);
+        assert!(!routes.kick_exact(user_id, 4, old_connection));
+        assert!(!new_disconnect.is_cancelled());
+        assert!(routes.kick_exact(user_id, 5, new_connection));
+        assert!(new_disconnect.is_cancelled());
+    }
+
+    #[test]
+    fn session_kick_payload_errors_remain_at_effect_decoding() {
+        let user_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+        for (payload, expected) in [
+            (json!({}), "user_id is missing"),
+            (json!({"user_id":"not-a-uuid"}), "user_id is invalid"),
+            (json!({"user_id":Uuid::nil()}), "user_id must not be nil"),
+            (json!({"user_id":user_id}), "connection_id is missing"),
+            (
+                json!({"user_id":user_id,"connection_id":"not-a-uuid"}),
+                "connection_id is invalid",
+            ),
+            (
+                json!({"user_id":user_id,"connection_id":Uuid::nil()}),
+                "connection_id must not be nil",
+            ),
+            (
+                json!({"user_id":user_id,"connection_id":connection_id}),
+                "auth generation is missing",
+            ),
+        ] {
+            assert_eq!(
+                session_kick_identity(&payload).unwrap_err().to_string(),
+                expected
+            );
+        }
+        assert_eq!(
+            session_kick_identity(&json!({
+                "user_id":user_id,
+                "connection_id":connection_id,
+                "auth_generation":7
+            }))
+            .unwrap(),
+            (user_id, connection_id, 7)
+        );
     }
 
     #[test]

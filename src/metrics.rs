@@ -149,7 +149,7 @@ pub struct Metrics {
     pub stanzas_out_total: AtomicU64,
     pub registrations_total: AtomicU64,
     pub authentication_failures_total: AtomicU64,
-    pub authentication_backend_failures_total: AtomicU64,
+    pub authentication_backend_failures_total: Arc<AtomicU64>,
     /// FAST rows existed but could not be reproduced with the configured
     /// derivation key (operator key mismatch or durable corruption).
     pub fast_credential_integrity_failures_total: AtomicU64,
@@ -217,7 +217,7 @@ pub struct Metrics {
     pub component_deliveries_total: AtomicU64,
     pub component_failures_total: AtomicU64,
     pub anti_abuse_challenges_total: AtomicU64,
-    pub rate_limited_total: AtomicU64,
+    pub rate_limited_total: Arc<AtomicU64>,
     pub omemo_recovery_poll_requests_total: AtomicU64,
     pub omemo_recovery_poll_rate_limited_total: AtomicU64,
     pub omemo_recovery_poll_concurrency_rejected_total: AtomicU64,

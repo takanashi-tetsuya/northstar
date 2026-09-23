@@ -55,7 +55,7 @@ impl<R: ReportRepository, Q: ApiQueryRepository> ReportContext<R, Q> {
         let counter = match effect {
             ReportEffect::ReportCreated => Some(&self.metrics.reports_total),
             ReportEffect::AppealCreated => Some(&self.metrics.appeals_total),
-            ReportEffect::RateLimited => Some(&self.metrics.rate_limited_total),
+            ReportEffect::RateLimited => Some(self.metrics.rate_limited_total.as_ref()),
             ReportEffect::None => None,
         };
         if let Some(counter) = counter {

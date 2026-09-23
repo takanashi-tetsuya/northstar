@@ -427,7 +427,9 @@ and its PostgreSQL repository. Reservation and guard each commit before password
 derivation; publication runs in a new transaction, and a retryable worker or
 database failure yields the lease without erasing the committed guard marker.
 REST login retains pre-hash abuse admission, credential verification on replay,
-and atomic API-session creation behind a dedicated service and repository.
+and atomic API-session creation behind a dedicated service and repository. Its
+HTTP handler now receives that service, trusted-proxy policy and only the two
+outcome counters it can update, without the application-wide state.
 Logout has its own audited session command. Upload claim, staged promotion,
 replay, public read and deletion now pass through the upload lifecycle port;
 the service is available in drain-read-only mode for historical reads and
@@ -486,13 +488,15 @@ delivery.
 The private metrics endpoint now receives a read-only MetricsContext for
 authorization, bounded database snapshots and live gauges. Administrator
 broadcast target capture and exact delivery use LocalBroadcastRoutes; the
+session-kick effect has a separate exact-incarnation cancellation handle. The
 operation worker still needs broader state for its other effects.
 Background housekeeping receives only its two shared counters. Archive
 retention holds ten shared counter cells rather than the metrics registry.
 S2S ingress/egress, C2S stream/authentication and SM resume,
 roster/privacy/blocking side-effect reporting, registration/account abuse,
 Push, component transport, and PEP/PubSub delivery use borrowed counters and
-timers instead of the complete registry.
+timers instead of the complete registry. Caps effect admission and completion
+also receive only their four counters/timer.
 Remaining work includes live-session and account-recovery workers and the six
 broad AppState capabilities.
 TLS now sits behind a private context with immutable handshake snapshots and

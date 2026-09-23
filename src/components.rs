@@ -1069,13 +1069,10 @@ async fn deliver_component_outbox<S: AsyncWrite + Unpin + Send>(
     for _ in 0..drain_limit {
         // Claim only when this socket is ready to start the row. A batch claim
         // would start every lease at once while writes remain serial.
-        let items = crate::db::claim_due_s2s_outbox_for_domains(
-            &state.pool,
-            COMPONENT_OUTBOX_CLAIM_BATCH,
-            state.config.s2s_outbox_lease_seconds,
-            &domains,
-        )
-        .await?;
+        let items = state
+            .s2s_outbox_dispatch_service()
+            .claim_for_domains(COMPONENT_OUTBOX_CLAIM_BATCH, &domains)
+            .await?;
         let Some(item) = items.into_iter().next() else {
             break;
         };
@@ -1110,10 +1107,12 @@ async fn deliver_component_outbox<S: AsyncWrite + Unpin + Send>(
             .component_deliveries_total
             .fetch_add(1, Ordering::Relaxed);
         let completion_budget =
-            component_lease_renewal_period(state.config.s2s_outbox_lease_seconds);
+            component_lease_renewal_period(state.s2s_outbox_dispatch_service().lease_seconds());
         let completed = tokio::time::timeout(
             completion_budget,
-            crate::db::complete_s2s_outbox(&state.pool, envelope.outbox_id, envelope.lock_token),
+            state
+                .s2s_outbox_dispatch_service()
+                .complete(envelope.outbox_id, envelope.lock_token),
         )
         .await
         .context("component outbox completion timed out before the renewed lease boundary")??;
@@ -1154,10 +1153,11 @@ async fn write_component_outbox_with_lease<S: AsyncWrite + Unpin + Send>(
     serialized: String,
     cancel: tokio_util::sync::CancellationToken,
 ) -> std::result::Result<(), ComponentOutboxWriteError> {
-    let renewal_period = component_lease_renewal_period(state.config.s2s_outbox_lease_seconds);
+    let renewal_period =
+        component_lease_renewal_period(state.s2s_outbox_dispatch_service().lease_seconds());
     let renewal_timeout = renewal_period.min(Duration::from_secs(5));
-    let pool = state.pool.clone();
-    let lease_seconds = state.config.s2s_outbox_lease_seconds;
+    let dispatch: crate::services::s2s_outbox_dispatch::S2sOutboxDispatchService<_> =
+        state.s2s_outbox_dispatch_service().clone();
     let result = write_component_outbox_with_renewal(
         io,
         serialized,
@@ -1165,10 +1165,8 @@ async fn write_component_outbox_with_lease<S: AsyncWrite + Unpin + Send>(
         renewal_timeout,
         cancel,
         move || {
-            let pool = pool.clone();
-            async move {
-                crate::db::renew_s2s_outbox_lease(&pool, outbox_id, lock_token, lease_seconds).await
-            }
+            let dispatch = dispatch.clone();
+            async move { dispatch.renew(outbox_id, lock_token).await }
         },
     )
     .await;

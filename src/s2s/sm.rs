@@ -8,7 +8,9 @@ use tokio::{
     time::Instant,
 };
 
-use crate::{db, state::AppState, xmpp::xml_builder::XmlElement};
+use crate::{
+    db, services::s2s_sm_outbox::SmOutboxClaim, state::AppState, xmpp::xml_builder::XmlElement,
+};
 
 use super::{outbound::fail_envelope, write_xml, FederationEnvelope};
 
@@ -88,25 +90,21 @@ impl StreamManagement {
 
     pub(crate) async fn renew(&self, state: &AppState) -> Result<()> {
         // Never revive an expired claim: a different process may already own it.
-        tokio::time::timeout(Duration::from_secs(5), async {
-            for item in self
-                .pending
-                .iter()
-                .filter_map(|pending| pending.durable.as_ref())
-            {
-                ensure!(
-                    db::renew_s2s_outbox_lease(
-                        &state.pool,
-                        item.id,
-                        item.lock_token,
-                        super::resume::WINDOW.as_secs() + 30
-                    )
-                    .await?,
-                    "S2S replay lost its outbox lease"
-                );
-            }
-            Ok::<_, anyhow::Error>(())
-        })
+        let claims: Vec<_> = self
+            .pending
+            .iter()
+            .filter_map(|pending| pending.durable.as_ref())
+            .map(|item| SmOutboxClaim {
+                id: item.id,
+                lock_token: item.lock_token,
+            })
+            .collect();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            state
+                .s2s_sm_outbox_service()
+                .renew_pending(&claims, super::resume::WINDOW.as_secs() + 30),
+        )
         .await
         .context("S2S replay lease renewal timed out")?
     }
@@ -116,10 +114,13 @@ impl StreamManagement {
         tokio::time::timeout(Duration::from_secs(5), async {
             for _ in 0..count {
                 if let Some(item) = &self.pending.front().expect("validated ack count").durable {
-                    ensure!(
-                        db::complete_s2s_outbox(&state.pool, item.id, item.lock_token).await?,
-                        "S2S outbox lease was lost before acknowledgement"
-                    );
+                    state
+                        .s2s_sm_outbox_service()
+                        .complete_acknowledged(SmOutboxClaim {
+                            id: item.id,
+                            lock_token: item.lock_token,
+                        })
+                        .await?;
                 }
                 let item = self.pending.pop_front().expect("validated ack count");
                 self.bytes -= item

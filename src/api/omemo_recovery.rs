@@ -126,7 +126,11 @@ pub async fn prepare_omemo_recovery(
     let source_device_id = i64::from(request.source_device_id);
     let poll_secret = Zeroizing::new(parse_transfer_secret(&request.poll_secret, "poll_secret")?);
     request.value.poll_secret.zeroize();
-    let canonical_account = format!("{}@{}", user.username, state.config.domain);
+    let canonical_account = format!(
+        "{}@{}",
+        user.username,
+        state.public_discovery_context().policy().domain
+    );
     match state
         .omemo_recovery_service()
         .prepare(PrepareOmemoRecoveryRequest {
@@ -240,7 +244,11 @@ pub async fn consume_omemo_recovery(
         "consumer_secret",
     )?);
     request.value.consumer_secret.zeroize();
-    let canonical_account = format!("{}@{}", user.username, state.config.domain);
+    let canonical_account = format!(
+        "{}@{}",
+        user.username,
+        state.public_discovery_context().policy().domain
+    );
     let result = state
         .omemo_recovery_service()
         .consume(ConsumeOmemoRecoveryRequest {
@@ -287,7 +295,11 @@ pub async fn consume_omemo_recovery(
         state
             .disconnect_account_before_auth_generation(
                 user.id,
-                &format!("{}@{}", user.username, state.config.domain),
+                &format!(
+                    "{}@{}",
+                    user.username,
+                    state.public_discovery_context().policy().domain
+                ),
                 cutoff,
             )
             .await;

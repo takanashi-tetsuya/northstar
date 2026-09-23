@@ -1072,6 +1072,19 @@ pub struct ClusterManager {
     pending_acks: Arc<dashmap::DashMap<String, PendingClusterAck>>,
 }
 
+/// Immutable identity used by the readiness persistence probe. Capturing the
+/// local lease epoch alongside the configured key avoids passing live cluster
+/// control-plane authority into the service or repository.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ClusterReadinessAuthority {
+    pub(crate) key_identity: crate::db::ClusterKeyDeploymentIdentity,
+    pub(crate) instance_node_id: String,
+    pub(crate) instance_uuid: uuid::Uuid,
+    pub(crate) instance_epoch: i64,
+    pub(crate) signing_key_id: String,
+    pub(crate) signing_key_epoch: i64,
+}
+
 #[derive(Clone)]
 struct PendingClusterAck {
     source_node: String,
@@ -1539,6 +1552,18 @@ impl ClusterManager {
             previous_public_key_sha256: security.previous_public_key_sha256.clone(),
             staged_next_key_id: security.staged_next_key_id.clone(),
             staged_next_public_key_sha256: security.staged_next_public_key_sha256.clone(),
+        })
+    }
+
+    pub(crate) fn readiness_authority_snapshot(&self) -> Option<ClusterReadinessAuthority> {
+        let security = self.security.as_ref()?;
+        Some(ClusterReadinessAuthority {
+            key_identity: self.key_authority_identity()?,
+            instance_node_id: self.node_id.clone(),
+            instance_uuid: self.connection_uuid,
+            instance_epoch: self.instance_epoch.load(Ordering::Acquire),
+            signing_key_id: security.current_key_id.clone(),
+            signing_key_epoch: security.key_epoch,
         })
     }
 
@@ -8135,6 +8160,14 @@ mod muc_routing_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn readiness_authority_is_absent_without_cluster_security() {
+        let cluster = ClusterManager::new(None, "example.test", None, None, None, None)
+            .await
+            .unwrap();
+        assert!(cluster.readiness_authority_snapshot().is_none());
+    }
 
     #[tokio::test]
     async fn pending_ack_registration_is_bounded_and_cancel_safe() {

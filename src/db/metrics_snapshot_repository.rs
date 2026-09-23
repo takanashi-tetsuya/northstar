@@ -13,6 +13,20 @@ impl PostgresMetricsSnapshotRepository {
     }
 }
 impl MetricsSnapshotRepository for PostgresMetricsSnapshotRepository {
+    async fn ping(&self) -> anyhow::Result<()> {
+        sqlx::query_scalar::<_, i32>("SELECT 1")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    fn pool_status(&self) -> DatabasePoolStatus {
+        DatabasePoolStatus {
+            connections: self.pool.size(),
+            idle_connections: self.pool.num_idle(),
+        }
+    }
+
     async fn collect(
         &self,
         component_domains: &[String],

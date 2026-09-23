@@ -1,6 +1,6 @@
 use crate::abuse::{AbuseAction, PowIntent, PowIntentRequest, PowProof};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use zeroize::Zeroize;
 
 #[derive(Deserialize)]
@@ -32,19 +32,6 @@ pub struct Credentials {
 impl Drop for Credentials {
     fn drop(&mut self) {
         self.password.zeroize();
-    }
-}
-
-#[derive(Serialize)]
-pub struct SessionResponse {
-    pub token: String,
-    pub jid: String,
-    pub is_admin: bool,
-}
-
-impl Drop for SessionResponse {
-    fn drop(&mut self) {
-        self.token.zeroize();
     }
 }
 

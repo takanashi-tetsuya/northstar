@@ -11,7 +11,7 @@ use serde_json::json;
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::abuse::AbuseAction;
 use crate::auth;
@@ -19,25 +19,14 @@ use crate::db;
 use crate::error::{AppError, Result};
 use crate::state::AppState;
 
-/// Release a retryable request without deleting a guard marker that may have
-/// been committed before the expensive or database-backed work failed.
-/// Reacquisition rotates the lease token, so the failed worker remains fenced.
-async fn yield_idempotency_lease_after_retryable_failure(
-    state: &AppState,
-    lease: &db::IdempotencyLease,
-) -> Result<(), AppError> {
-    if !db::yield_idempotency_lease(&state.pool, lease).await? {
-        return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-    }
-    Ok(())
-}
-
 pub async fn register(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     mut request: ApiJson<RegistrationRequest>,
 ) -> Result<Response, AppError> {
+    use crate::services::account::{HttpRegistrationOutcome as Outcome, HttpRegistrationRequest};
+
     let body = &request.value;
     if body
         .invitation_token
@@ -58,291 +47,78 @@ pub async fn register(
     let peer_ip = client_ip(peer.ip(), &headers, &state);
     let actors = vec![ip_actor(peer_ip)];
     let principal_scope = format!("registration:{peer_ip}");
-    // Commit the cheap reservation before any PoW or password derivation.
-    // Concurrent duplicates now single-flight rather than multiplying CPU
-    // work, and the exact request owns the consumed proof across a crash.
-    let mut reserve_tx = state.pool.begin().await?;
-    let lease = match db::acquire_idempotency_in_tx(
-        state.api_control(),
-        &mut reserve_tx,
-        &request.idempotency(
-            None,
-            principal_scope.as_bytes(),
-            db::ApiPrincipalKind::Anonymous,
-            "POST",
-            "/api/v1/register",
-        ),
-    )
-    .await?
-    {
-        db::IdempotencyAcquire::Acquired(lease) => lease,
-        db::IdempotencyAcquire::Replay(replay) => {
-            reserve_tx.commit().await?;
-            return idempotency_replay_response(replay);
+    let outcome = state
+        .account_service()
+        .register_http(HttpRegistrationRequest {
+            idempotency: request.idempotency(
+                None,
+                principal_scope.as_bytes(),
+                db::ApiPrincipalKind::Anonymous,
+                "POST",
+                "/api/v1/register",
+            ),
+            username: &username,
+            password: &password,
+            invitation_token: body.invitation_token.as_deref(),
+            proof: body.pow.as_ref(),
+            intent: &pow_intent,
+            subject: &principal_scope,
+            actors: &actors,
+            availability: state.http_registration_availability(),
+        })
+        .await?;
+    match outcome {
+        Outcome::Created(body) => {
+            state
+                .metrics
+                .registrations_total
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            json_bytes_response(StatusCode::CREATED, body)
         }
-        db::IdempotencyAcquire::FingerprintConflict | db::IdempotencyAcquire::RotationConflict => {
-            reserve_tx.rollback().await?;
-            return Err(AppError::IdempotencyConflict);
-        }
-        db::IdempotencyAcquire::ReplayInvalidated => {
-            reserve_tx.rollback().await?;
-            return Err(AppError::IdempotencyReplayInvalidated);
-        }
-        db::IdempotencyAcquire::Busy {
-            retry_after_seconds,
-        } => {
-            reserve_tx.rollback().await?;
-            return Err(AppError::IdempotencyBusy {
-                retry_after: retry_after_seconds,
-            });
-        }
-        db::IdempotencyAcquire::CapacityLimited {
-            retry_after_seconds,
-        } => {
-            reserve_tx.rollback().await?;
-            return Err(AppError::TooManyRequests {
-                message: "too many unfinished requests; try again later".into(),
-                retry_after: retry_after_seconds,
-            });
-        }
-        db::IdempotencyAcquire::InProgress {
-            retry_after_seconds,
-        } => {
-            reserve_tx.rollback().await?;
-            return Err(AppError::IdempotencyInProgress {
-                retry_after: retry_after_seconds,
-            });
-        }
-    };
-    // A completed request must still replay its original response, which is
-    // why these checks follow idempotency acquisition. Keep the new lease and
-    // the cheap capacity precheck in one transaction: a database failure rolls
-    // the reservation back instead of leaving a 180-second orphan lease. The
-    // creation transaction rechecks both policies after password derivation,
-    // closing the cross-node race.
-    if state.registration_is_closed() {
-        if !db::abandon_idempotency_lease_in_tx(&mut reserve_tx, &lease).await? {
-            reserve_tx.rollback().await?;
-            return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-        }
-        reserve_tx.commit().await?;
-        return Err(AppError::Forbidden);
-    }
-    if db::registrations_last_hour_in_tx(&mut reserve_tx).await?
-        >= i64::from(state.config.registration_rate_per_hour)
-    {
-        if !db::abandon_idempotency_lease_in_tx(&mut reserve_tx, &lease).await? {
-            reserve_tx.rollback().await?;
-            return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-        }
-        reserve_tx.commit().await?;
-        return Err(AppError::TooManyRequests {
-            message: "registration capacity limit reached; try again later".into(),
-            retry_after: 3600,
-        });
-    }
-    reserve_tx.commit().await?;
-
-    // Consume/fence PoW before entering the Argon2/SCRAM worker pool. The
-    // idempotency row remembers this exact request's guard result across a
-    // crash; concurrent requests from the same actor observe the advanced
-    // abuse step before they can multiply password work.
-    let mut guard_verified = lease.guard_verified;
-    if !guard_verified {
-        match state
-            .account_service()
-            .verify_registration_guard(crate::services::account::RegistrationGuardRequest {
-                lease: crate::services::account::RegistrationGuardLease {
-                    record_id: lease.record_id,
-                    lease_token: lease.lease_token(),
-                },
-                lease_seconds: API_IDEMPOTENCY_LEASE_SECONDS,
-                subject: &principal_scope,
-                actors: &actors,
-                proof: body.pow.as_ref(),
-                intent: &pow_intent,
-            })
-            .await?
-        {
-            crate::services::account::RegistrationGuardOutcome::Verified => {
-                guard_verified = true;
-            }
-            crate::services::account::RegistrationGuardOutcome::Denied(error) => {
-                state
-                    .metrics
-                    .rate_limited_total
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return Err(rate_limited(error));
-            }
-            crate::services::account::RegistrationGuardOutcome::LeaseLost => {
-                return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-            }
-        }
-    }
-    let prepared = match db::prepare_registration(
-        &username,
-        &password,
-        state.config.scram_iterations,
-        state.config.scram_sha1_enabled,
-    )
-    .await
-    {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            // Preserve the already-consumed proof marker but fence this
-            // worker. An exact retry may immediately reacquire the request
-            // instead of solving PoW twice after transient worker overload.
-            yield_idempotency_lease_after_retryable_failure(&state, &lease).await?;
-            return Err(registration_error(error));
-        }
-    };
-    let mut tx = state.pool.begin().await?;
-    if !db::resume_idempotency_lease_in_tx(&mut tx, &lease, API_IDEMPOTENCY_LEASE_SECONDS).await? {
-        tx.rollback().await?;
-        return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-    }
-    let outcome = match db::create_user_with_invitation_guarded_in_tx_v2(
-        &mut tx,
-        &state.abuse,
-        &principal_scope,
-        &actors,
-        body.pow.as_ref(),
-        &pow_intent,
-        guard_verified,
-        prepared,
-        body.invitation_token.as_deref(),
-        state.registration_requires_invitation(),
-        state.config.registration_rate_per_hour,
-        Some(lease.request_id),
-    )
-    .await
-    {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            tx.rollback().await?;
-            // The anti-abuse guard was committed before credential
-            // publication. Keep that marker while allowing the same request
-            // key to reacquire immediately after a transient database error.
-            yield_idempotency_lease_after_retryable_failure(&state, &lease).await?;
-            return Err(AppError::Internal(error));
-        }
-    };
-    let (user_id, username) = match outcome {
-        db::GuardedRegistrationOutcome::Created(mut user) => {
-            let identity = (user.id, std::mem::take(&mut user.username));
-            user.password_hash.zeroize();
-            user.password_hash.clear();
-            identity
-        }
-        db::GuardedRegistrationOutcome::AbuseDenied(error) => {
-            if !db::abandon_idempotency_lease_in_tx(&mut tx, &lease).await? {
-                tx.rollback().await?;
-                return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-            }
-            tx.commit().await?;
+        Outcome::Rejected(body) => json_bytes_response(StatusCode::BAD_REQUEST, body),
+        Outcome::Replay(response) => idempotency_replay_response(response),
+        Outcome::AbuseDenied(error) => {
             state
                 .metrics
                 .rate_limited_total
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return Err(rate_limited(error));
+            Err(rate_limited(error))
         }
-        db::GuardedRegistrationOutcome::Rejected(
-            error @ (db::RegistrationError::UsernameTaken
-            | db::RegistrationError::InvitationRejected),
-        ) => {
-            let reason = match error {
-                db::RegistrationError::UsernameTaken => "username_unavailable",
-                db::RegistrationError::InvitationRejected => "invitation_rejected",
-                _ => unreachable!("pattern is restricted above"),
-            };
-            db::audit_registration_rejection_in_tx(&mut tx, lease.request_id, reason).await?;
-            let response_body = registration_rejection_body()?;
-            if !db::complete_idempotency_in_tx(
-                state.api_control(),
-                &mut tx,
-                &lease,
-                StatusCode::BAD_REQUEST.as_u16(),
-                &json_replay_headers(),
-                &response_body,
-            )
-            .await?
-            {
-                return Err(AppError::Internal(anyhow::anyhow!(
-                    "registration rejection idempotency lease changed"
-                )));
-            }
-            tx.commit().await?;
-            return json_bytes_response(StatusCode::BAD_REQUEST, response_body);
-        }
-        db::GuardedRegistrationOutcome::Rejected(db::RegistrationError::CapacityExhausted) => {
-            if !db::abandon_idempotency_lease_in_tx(&mut tx, &lease).await? {
-                tx.rollback().await?;
-                return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-            }
-            tx.commit().await?;
+        Outcome::CapacityExhausted => {
             state
                 .metrics
                 .capacity_reservations_rejected_total
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return Err(AppError::TooManyRequests {
+            Err(AppError::TooManyRequests {
                 message: "deployment account capacity reached".into(),
                 retry_after: 3600,
-            });
+            })
         }
-        db::GuardedRegistrationOutcome::Rejected(error) => {
-            if !db::abandon_idempotency_lease_in_tx(&mut tx, &lease).await? {
-                tx.rollback().await?;
-                return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-            }
-            tx.commit().await?;
-            return Err(registration_error(error));
-        }
-    };
-    if !db::mark_idempotency_guard_verified_in_tx(&mut tx, &lease).await? {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "registration idempotency guard marker changed"
-        )));
+        Outcome::Closed => Err(AppError::Forbidden),
+        Outcome::RateLimited => Err(AppError::TooManyRequests {
+            message: "registration capacity limit reached; try again later".into(),
+            retry_after: 3600,
+        }),
+        Outcome::PasswordWorkOverloaded => Err(AppError::Unavailable(
+            "password registration capacity is temporarily exhausted; retry later".into(),
+        )),
+        Outcome::InvalidUsername => Err(AppError::BadRequest("username is invalid".into())),
+        Outcome::InvitationRejected | Outcome::UsernameTaken => Err(AppError::BadRequest(
+            "registration request could not be accepted".into(),
+        )),
+        Outcome::IdempotencyConflict => Err(AppError::IdempotencyConflict),
+        Outcome::ReplayInvalidated => Err(AppError::IdempotencyReplayInvalidated),
+        Outcome::Busy(retry_after) => Err(AppError::IdempotencyBusy { retry_after }),
+        Outcome::CapacityLimited(retry_after) => Err(AppError::TooManyRequests {
+            message: "too many unfinished requests; try again later".into(),
+            retry_after,
+        }),
+        Outcome::InProgress(retry_after) => Err(AppError::IdempotencyInProgress { retry_after }),
+        Outcome::LeaseLost => Err(AppError::IdempotencyInProgress { retry_after: 1 }),
     }
-    if !db::bind_idempotency_actor_in_tx(&mut tx, &lease, user_id).await? {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "registration idempotency ownership changed"
-        )));
-    }
-    let response_body =
-        serde_json::to_vec(&json!({"jid":format!("{}@{}", username, state.config.domain)}))
-            .map_err(|error| AppError::Internal(error.into()))?;
-    if !db::complete_idempotency_in_tx(
-        state.api_control(),
-        &mut tx,
-        &lease,
-        StatusCode::CREATED.as_u16(),
-        &json_replay_headers(),
-        &response_body,
-    )
-    .await?
-    {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "registration idempotency lease changed"
-        )));
-    }
-    tx.commit().await?;
-    state
-        .metrics
-        .registrations_total
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    json_bytes_response(StatusCode::CREATED, response_body)
 }
 
-fn registration_rejection_body() -> Result<Vec<u8>, AppError> {
-    serde_json::to_vec(&json!({
-        "error": {
-            "code": "bad_request",
-            "message": "registration request could not be accepted"
-        }
-    }))
-    .map_err(|error| AppError::Internal(error.into()))
-}
-
+#[cfg(test)]
 fn registration_error(error: db::RegistrationError) -> AppError {
     match error {
         db::RegistrationError::InvalidUsername(_) => {
@@ -367,101 +143,22 @@ fn registration_error(error: db::RegistrationError) -> AppError {
     }
 }
 
-fn login_unauthorized_body() -> Result<Vec<u8>, AppError> {
-    serde_json::to_vec(&json!({
-        "error": {
-            "code": "unauthorized",
-            "message": "authentication required"
-        }
-    }))
-    .map_err(|error| AppError::Internal(error.into()))
-}
-
-fn login_unauthorized_headers() -> std::collections::BTreeMap<String, String> {
-    let mut headers = json_replay_headers();
-    headers.insert(
-        "www-authenticate".to_owned(),
-        "Bearer realm=\"northstar\"".to_owned(),
-    );
-    headers
-}
-
-async fn complete_login_failure(
-    state: &AppState,
-    mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
-    lease: &db::IdempotencyLease,
-    actors: &[String],
-    attempt_already_recorded: bool,
-) -> Result<Response, AppError> {
-    if !attempt_already_recorded {
-        state
-            .abuse
-            .record_failure_in_tx(&mut tx, AbuseAction::Login, actors)
-            .await?;
-    }
-    if !db::mark_idempotency_guard_verified_in_tx(&mut tx, lease).await? {
-        return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-    }
-    let body = login_unauthorized_body()?;
-    let headers = login_unauthorized_headers();
-    if !db::complete_idempotency_in_tx(
-        state.api_control(),
-        &mut tx,
-        lease,
-        StatusCode::UNAUTHORIZED.as_u16(),
-        &headers,
-        &body,
-    )
-    .await?
-    {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "login failure idempotency lease changed"
-        )));
-    }
-    tx.commit().await?;
-    let mut response = Response::builder().status(StatusCode::UNAUTHORIZED);
-    for (name, value) in headers {
-        response = response.header(name, value);
-    }
-    response
-        .body(Body::from(body))
-        .map_err(|error| AppError::Internal(error.into()))
-}
-
 pub async fn login(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     mut request: ApiJson<Credentials>,
 ) -> Result<Response, AppError> {
-    let body = &request.value;
+    use crate::services::http_login::{HttpLoginOutcome as Outcome, HttpLoginRequest};
+
     let peer_ip = client_ip(peer.ip(), &headers, &state);
-    let login_identity = login_abuse_identity(peer_ip, &body.username);
-    let actors = login_identity
-        .as_ref()
-        .map(|(_, actors)| actors.clone())
-        .unwrap_or_else(|| vec![ip_actor(peer_ip)]);
-
-    if body.username.is_empty()
-        || body.username.len() > 1024
-        || body.password.is_empty()
-        || body.password.len() > 1024
-    {
-        state
-            .abuse
-            .record_failure(AbuseAction::Login, &actors)
-            .await?;
-        return Err(AppError::Unauthorized);
-    }
-
-    let pow_intent = body.pow_intent();
+    let login_identity = login_abuse_identity(peer_ip, &request.value.username);
+    let (subject, actors) =
+        login_identity.unwrap_or_else(|| (String::new(), vec![ip_actor(peer_ip)]));
+    let pow_intent = request.value.pow_intent();
     let password = Zeroizing::new(std::mem::take(&mut request.value.password));
-    let body = &request.value;
-
-    let (subject, actors) = login_identity.expect("validated login abuse identity");
-    // Reserve on the canonical, non-secret account scope before PoW and
-    // password verification. The request actor remains anonymous and
-    // immutable; ownership is bound only after successful authentication.
+    // The service rejects invalid credential bounds before the repository
+    // acquires an idempotency lease, preserving the original abuse penalty.
     let capacity_scope = ip_actor(peer_ip);
     let mut idempotency = request.idempotency(
         None,
@@ -471,281 +168,61 @@ pub async fn login(
         "/api/v1/login",
     );
     idempotency.capacity_scope = capacity_scope.as_bytes();
-    let mut reserve_tx = state.pool.begin().await?;
-    let (lease, replay) =
-        match db::acquire_idempotency_in_tx(state.api_control(), &mut reserve_tx, &idempotency)
-            .await?
-        {
-            db::IdempotencyAcquire::Acquired(lease) => {
-                reserve_tx.commit().await?;
-                (Some(lease), None)
+    let outcome = state
+        .login_service()
+        .login(HttpLoginRequest {
+            idempotency,
+            username: &request.value.username,
+            password: &password,
+            subject: &subject,
+            actors: &actors,
+            proof: request.value.pow.as_ref(),
+            intent: &pow_intent,
+        })
+        .await?;
+    match outcome {
+        Outcome::Committed(response) => {
+            let status = StatusCode::from_u16(response.status)
+                .map_err(|error| AppError::Internal(error.into()))?;
+            let mut result = Response::builder().status(status);
+            for (name, value) in response.headers {
+                result = result.header(name, value);
             }
-            db::IdempotencyAcquire::Replay(replay) => {
-                reserve_tx.commit().await?;
-                (None, Some(replay))
-            }
-            db::IdempotencyAcquire::FingerprintConflict
-            | db::IdempotencyAcquire::RotationConflict => {
-                reserve_tx.rollback().await?;
-                return Err(AppError::IdempotencyConflict);
-            }
-            db::IdempotencyAcquire::ReplayInvalidated => {
-                reserve_tx.rollback().await?;
-                return Err(AppError::IdempotencyReplayInvalidated);
-            }
-            db::IdempotencyAcquire::Busy {
-                retry_after_seconds,
-            } => {
-                reserve_tx.rollback().await?;
-                return Err(AppError::IdempotencyBusy {
-                    retry_after: retry_after_seconds,
-                });
-            }
-            db::IdempotencyAcquire::CapacityLimited {
-                retry_after_seconds,
-            } => {
-                reserve_tx.rollback().await?;
-                return Err(AppError::TooManyRequests {
-                    message: "too many unfinished requests; try again later".into(),
-                    retry_after: retry_after_seconds,
-                });
-            }
-            db::IdempotencyAcquire::InProgress {
-                retry_after_seconds,
-            } => {
-                reserve_tx.rollback().await?;
-                return Err(AppError::IdempotencyInProgress {
-                    retry_after: retry_after_seconds,
-                });
-            }
-        };
-    let mut proof_recorded_attempt = false;
-    if let Some(lease) = lease.as_ref().filter(|lease| !lease.guard_verified) {
-        let mut guard_tx = state.pool.begin().await?;
-        if !db::resume_idempotency_lease_in_tx(&mut guard_tx, lease, API_IDEMPOTENCY_LEASE_SECONDS)
-            .await?
-        {
-            guard_tx.rollback().await?;
-            return Err(AppError::IdempotencyInProgress { retry_after: 1 });
+            result
+                .body(Body::from(response.body))
+                .map_err(|error| AppError::Internal(error.into()))
         }
-        let req = state
-            .abuse
-            .current_requirement_in_tx(&mut guard_tx, AbuseAction::Login, &actors)
-            .await?;
-        if req.work_factor > 1 || req.retry_after_seconds > 0 {
-            if body.pow.is_none() {
-                if !db::abandon_idempotency_lease_in_tx(&mut guard_tx, lease).await? {
-                    guard_tx.rollback().await?;
-                    return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-                }
-                guard_tx.commit().await?;
-                state
-                    .metrics
-                    .rate_limited_total
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return Err(rate_limited(GuardError::Required(req)));
-            }
-            let proof = state
-                .abuse
-                .verify_or_allow_in_tx_v2(
-                    &mut guard_tx,
-                    AbuseAction::Login,
-                    &subject,
-                    &actors,
-                    body.pow.as_ref(),
-                    &pow_intent,
-                )
-                .await?;
-            match proof {
-                crate::abuse::TransactionalGuardOutcome::Allowed(_) => {
-                    proof_recorded_attempt = true;
-                    if !db::mark_idempotency_guard_verified_in_tx(&mut guard_tx, lease).await? {
-                        guard_tx.rollback().await?;
-                        return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-                    }
-                }
-                crate::abuse::TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
-                    if !db::abandon_idempotency_lease_in_tx(&mut guard_tx, lease).await? {
-                        guard_tx.rollback().await?;
-                        return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-                    }
-                    guard_tx.commit().await?;
-                    state
-                        .metrics
-                        .rate_limited_total
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    return Err(rate_limited(error));
-                }
-            }
+        Outcome::Replay(response) => idempotency_replay_response(response),
+        Outcome::Unauthorized => Err(AppError::Unauthorized),
+        Outcome::AbuseDenied(error) => {
+            state
+                .metrics
+                .rate_limited_total
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Err(rate_limited(error))
         }
-        guard_tx.commit().await?;
-    }
-
-    let prepared = match db::prepare_login(
-        &state.pool,
-        &body.username,
-        &password,
-        state.config.scram_iterations,
-        state.config.scram_sha1_enabled,
-    )
-    .await
-    {
-        Ok(prepared) => prepared,
-        Err(error) if crate::password_work::is_overloaded(&error) => {
-            // Overload is not an authentication failure and must not advance
-            // failure penalties. Release a newly acquired idempotency lease so
-            // the client can retry once capacity is available.
-            if let Some(lease) = lease.as_ref() {
-                yield_idempotency_lease_after_retryable_failure(&state, lease).await?;
-            }
-            return Err(AppError::Unavailable(
-                "password authentication capacity is temporarily exhausted; retry later".into(),
-            ));
-        }
-        Err(error) if auth::is_password_verifier_integrity_error(&error) => {
-            // Do not turn a corrupt stored verifier into an unauthenticated
-            // account oracle. prepare_login already performed bounded dummy
-            // Argon2 work; retain a high-signal operator metric/log while the
-            // public response follows the exact ordinary-login-failure path.
+        Outcome::PasswordWorkOverloaded => Err(AppError::Unavailable(
+            "password authentication capacity is temporarily exhausted; retry later".into(),
+        )),
+        Outcome::BackendUnavailable => {
             state
                 .metrics
                 .authentication_backend_failures_total
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            tracing::error!(
-                ?error,
-                "REST login stored verifier failed integrity validation"
-            );
-            None
-        }
-        Err(error) => {
-            if let Some(lease) = lease.as_ref() {
-                yield_idempotency_lease_after_retryable_failure(&state, lease).await?;
-            }
-            state
-                .metrics
-                .authentication_backend_failures_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            tracing::error!(
-                integrity_failure = auth::is_password_verifier_integrity_error(&error),
-                ?error,
-                "REST login verifier backend failed"
-            );
-            return Err(AppError::Unavailable(
+            Err(AppError::Unavailable(
                 "password authentication backend is temporarily unavailable; retry later".into(),
-            ));
+            ))
         }
-    };
-    // A replay never bypasses current credential verification. The database
-    // acquisition already checked the original session token, auth epoch,
-    // account status, and expiry before decrypting a successful response.
-    // Failed replays deliberately perform the real/dummy password work too,
-    // but do not advance the abuse step a second time.
-    if let Some(replay) = replay {
-        return idempotency_replay_response(replay);
+        Outcome::IdempotencyConflict => Err(AppError::IdempotencyConflict),
+        Outcome::ReplayInvalidated => Err(AppError::IdempotencyReplayInvalidated),
+        Outcome::Busy(retry_after) => Err(AppError::IdempotencyBusy { retry_after }),
+        Outcome::CapacityLimited(retry_after) => Err(AppError::TooManyRequests {
+            message: "too many unfinished requests; try again later".into(),
+            retry_after,
+        }),
+        Outcome::InProgress(retry_after) => Err(AppError::IdempotencyInProgress { retry_after }),
+        Outcome::LeaseLost => Err(AppError::IdempotencyInProgress { retry_after: 1 }),
     }
-    let lease = lease.expect("acquired lease exists when response is not replayed");
-    let Some(prepared) = prepared else {
-        let mut tx = state.pool.begin().await?;
-        if !db::resume_idempotency_lease_in_tx(&mut tx, &lease, API_IDEMPOTENCY_LEASE_SECONDS)
-            .await?
-        {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-        }
-        return complete_login_failure(
-            &state,
-            tx,
-            &lease,
-            &actors,
-            lease.guard_verified || proof_recorded_attempt,
-        )
-        .await;
-    };
-    // Retain only response/session identity while the credential-bearing
-    // PreparedLogin stays inside the atomic apply call and zeroizes on drop.
-    let user_id = prepared.user.id;
-    let username = prepared.user.username.clone();
-    let is_admin = prepared.user.is_admin;
-    let auth_generation = prepared.user.auth_generation;
-    let mut tx = state.pool.begin().await?;
-    if !db::resume_idempotency_lease_in_tx(&mut tx, &lease, API_IDEMPOTENCY_LEASE_SECONDS).await? {
-        tx.rollback().await?;
-        return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-    }
-    let login_applied = match db::apply_prepared_login_in_tx(&mut tx, prepared).await {
-        Ok(applied) => applied,
-        Err(error) => {
-            tx.rollback().await?;
-            yield_idempotency_lease_after_retryable_failure(&state, &lease).await?;
-            state
-                .metrics
-                .authentication_backend_failures_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            tracing::error!(?error, user_id = %user_id, "REST login publication backend failed");
-            return Err(AppError::Unavailable(
-                "password authentication backend is temporarily unavailable; retry later".into(),
-            ));
-        }
-    };
-    if !login_applied {
-        return complete_login_failure(
-            &state,
-            tx,
-            &lease,
-            &actors,
-            lease.guard_verified || proof_recorded_attempt,
-        )
-        .await;
-    }
-    if !db::bind_idempotency_actor_in_tx(&mut tx, &lease, user_id).await? {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "login idempotency ownership changed"
-        )));
-    }
-    let created_session = db::create_api_session_in_tx(
-        &mut tx,
-        user_id,
-        state.config.session_ttl_hours,
-        Some(lease.request_id),
-    )
-    .await?;
-    if !db::bind_idempotency_session_in_tx(
-        &mut tx,
-        &lease,
-        created_session.id,
-        &created_session.token_hash,
-        auth_generation,
-        created_session.expires_at,
-    )
-    .await?
-    {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "login replay session binding changed"
-        )));
-    }
-    let session = SessionResponse {
-        token: created_session.token,
-        jid: format!("{}@{}", username, state.config.domain),
-        is_admin,
-    };
-    let response_body =
-        serde_json::to_vec(&session).map_err(|error| AppError::Internal(error.into()))?;
-    if !db::complete_idempotency_in_tx(
-        state.api_control(),
-        &mut tx,
-        &lease,
-        StatusCode::OK.as_u16(),
-        &json_replay_headers(),
-        &response_body,
-    )
-    .await?
-    {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "login idempotency lease changed"
-        )));
-    }
-    tx.commit().await?;
-    json_bytes_response(StatusCode::OK, response_body)
 }
 
 pub async fn logout(
@@ -754,9 +231,10 @@ pub async fn logout(
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
     let token = bearer_token(&headers)?;
-    let mut tx = state.pool.begin().await?;
-    db::delete_api_session_audited_in_tx(&mut tx, token, request_id).await?;
-    tx.commit().await?;
+    state
+        .api_session_service()
+        .logout(token, request_id)
+        .await?;
     Ok(Json(json!({"logged_out":true})))
 }
 

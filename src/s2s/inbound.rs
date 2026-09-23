@@ -3,8 +3,9 @@ use crate::{
     jid::{prepare_domainpart, CanonicalJid},
     services::{
         messaging::{
-            DurableAdmissionOutcome, IdentityAuthority, LocalDelivery, MessageIdentity,
-            MessagePostCommit, PersonalMessageDestination, ValidatedPersonalMessage,
+            DurableAdmissionOutcome, IdentityAuthority, LocalDelivery, LocalRecipientDecision,
+            MessageIdentity, MessagePostCommit, PersonalMessageDestination,
+            ValidatedPersonalMessage,
         },
         retractions::{
             ArchiveWrite, DeliveryProjection, OwnerProjection, RetractionCommand, RetractionOutcome,
@@ -1859,7 +1860,11 @@ pub(crate) async fn route_inbound_presence(
     let Some(recipient_name) = to_jid.localpart() else {
         return Ok(Some(s2s_stanza_error(root, "modify", "jid-malformed")));
     };
-    let Some(recipient) = db::find_enabled_user(&state.pool, recipient_name).await? else {
+    let Some(recipient) = state
+        .presence_service()
+        .find_enabled_user(recipient_name)
+        .await?
+    else {
         return Ok(None);
     };
     let recipient_bare = format!("{}@{}", recipient.username, state.config.domain);
@@ -1885,7 +1890,10 @@ pub(crate) async fn route_inbound_presence(
         "subscribe" | "subscribed" | "unsubscribe" | "unsubscribed"
     );
     if !subscription_kind
-        && db::is_blocked_for_account(&state.pool, recipient.id, &recipient_bare, from).await?
+        && state
+            .presence_service()
+            .is_blocked_for_account(recipient.id, &recipient_bare, from)
+            .await?
     {
         return Ok(None);
     }
@@ -2150,13 +2158,14 @@ async fn route_inbound_presence_probe(
     root: roxmltree::Node<'_, '_>,
     requester: &str,
     target_jid: &CanonicalJid,
-    recipient: &db::EnabledUser,
+    recipient: &crate::services::presence::PresenceAccount,
 ) -> Result<Option<String>> {
     let requester_bare = crate::jid::canonical_bare_key(requester)?;
     let recipient_bare = format!("{}@{}", recipient.username, state.config.domain);
-    let roster_authorized = db::roster_item(&state.pool, recipient.id, &requester_bare)
-        .await?
-        .is_some_and(|item| matches!(item.2.as_str(), "from" | "both"));
+    let roster_authorized = state
+        .s2s_roster_authorization_service()
+        .allows_presence(recipient.id, &requester_bare)
+        .await?;
     let directed_authorized = target_jid.resourcepart().is_some()
         && state
             .session_entries_for(&target_jid.to_string())
@@ -2322,12 +2331,16 @@ pub(crate) async fn route_inbound_iq(
     };
     let recipient_name = to_jid.localpart();
     let recipient = match recipient_name {
-        Some(username) => db::find_enabled_user(&state.pool, username).await?,
+        Some(username) => state.presence_service().find_enabled_user(username).await?,
         None => None,
     };
     if let Some(recipient) = recipient.as_ref() {
         let recipient_bare = format!("{}@{}", recipient.username, state.config.domain);
-        if db::is_blocked_for_account(&state.pool, recipient.id, &recipient_bare, from).await? {
+        if state
+            .presence_service()
+            .is_blocked_for_account(recipient.id, &recipient_bare, from)
+            .await?
+        {
             return if matches!(kind, "get" | "set") {
                 Ok(Some(s2s_iq_error(
                     root.attribute("id").unwrap_or_default(),
@@ -2411,9 +2424,10 @@ pub(crate) async fn route_inbound_iq(
         // and unknown extension IQs; capability discovery is not special.
         if matches!(kind, "get" | "set") {
             let requester_bare = crate::jid::canonical_bare_key(from)?;
-            let subscribed = db::roster_item(&state.pool, recipient.id, &requester_bare)
-                .await?
-                .is_some_and(|item| matches!(item.2.as_str(), "from" | "both"));
+            let subscribed = state
+                .s2s_roster_authorization_service()
+                .allows_presence(recipient.id, &requester_bare)
+                .await?;
             let directed = state
                 .session_entries_for(to)
                 .into_iter()
@@ -2552,13 +2566,15 @@ pub(crate) async fn route_inbound_iq(
             let Some(owner_name) = recipient_name else {
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
             };
-            let Some(owner) = db::find_enabled_user(&state.pool, owner_name).await? else {
-                return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
+            let payload = match state.profile_service().public_vcard(owner_name).await? {
+                crate::services::profile::PublicVCard::MissingAccount => {
+                    return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
+                }
+                crate::services::profile::PublicVCard::Profile(Some(payload)) => payload,
+                crate::services::profile::PublicVCard::Profile(None) => {
+                    XmlElement::namespaced("vCard", "vcard-temp").finish()
+                }
             };
-            let record = db::get_vcard(&state.pool, owner.id).await?;
-            let payload = record
-                .payload_vcard_temp
-                .unwrap_or_else(|| XmlElement::namespaced("vCard", "vcard-temp").finish());
             Ok(Some(s2s_iq_result(id, to, from, &payload)))
         }
         ("pubsub", "http://jabber.org/protocol/pubsub", "get") => {
@@ -2590,7 +2606,12 @@ pub(crate) async fn route_inbound_iq(
             let Some(owner) = state.pubsub_service().find_enabled_user(owner_name).await? else {
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
             };
-            if db::pep_node(&state.pool, owner.id, node).await?.is_none() {
+            if state
+                .pubsub_service()
+                .pep_node(owner.id, node)
+                .await?
+                .is_none()
+            {
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
             }
             if !crate::xmpp::protocol::pep::pep_access_allowed(
@@ -2633,9 +2654,15 @@ pub(crate) async fn route_inbound_iq(
                 None => db::PEP_MAX_ITEMS as i64,
             };
             let stored = if requested.is_empty() {
-                db::pep_items(&state.pool, owner.id, node, None, max_items).await?
+                state
+                    .pubsub_service()
+                    .pep_items(owner.id, node, None, max_items)
+                    .await?
             } else {
-                db::pep_items_by_ids(&state.pool, owner.id, node, &requested, max_items).await?
+                state
+                    .pubsub_service()
+                    .pep_items_by_ids(owner.id, node, &requested, max_items)
+                    .await?
             };
             if stored.is_empty() && !requested.is_empty() {
                 return Ok(Some(s2s_iq_error(id, to, from, "item-not-found")));
@@ -3016,21 +3043,28 @@ pub(crate) async fn route_inbound_message(
     let Some(recipient_name) = to_jid.localpart() else {
         return Ok(inbound_message_error(root, "modify", "jid-malformed"));
     };
-    let Some(recipient) = db::find_enabled_user(&state.pool, recipient_name).await? else {
-        return Ok(
-            if crate::xmpp::protocol::messaging::missing_user_message_should_error(
-                root.attribute("type").unwrap_or("normal"),
-            ) {
-                inbound_message_error(root, "cancel", "service-unavailable")
-            } else {
-                None
-            },
-        );
+    let recipient = match state
+        .message_service()
+        .resolve_local_recipient(recipient_name, &state.config.domain, from)
+        .await?
+    {
+        LocalRecipientDecision::Missing => {
+            return Ok(
+                if crate::xmpp::protocol::messaging::missing_user_message_should_error(
+                    root.attribute("type").unwrap_or("normal"),
+                ) {
+                    inbound_message_error(root, "cancel", "service-unavailable")
+                } else {
+                    None
+                },
+            );
+        }
+        LocalRecipientDecision::Blocked => {
+            return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
+        }
+        LocalRecipientDecision::Deliver(recipient) => recipient,
     };
     let recipient_bare = format!("{}@{}", recipient.username, state.config.domain);
-    if db::is_blocked_for_account(&state.pool, recipient.id, &recipient_bare, from).await? {
-        return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
-    }
     let message_type = root.attribute("type").unwrap_or("normal");
     if personal_retraction && !matches!(message_type, "normal" | "chat") {
         return Ok(inbound_message_error(root, "modify", "bad-request"));
@@ -3077,14 +3111,10 @@ pub(crate) async fn route_inbound_message(
         .is_ok_and(|nodes| nodes.into_iter().any(|node| node != state.cluster.node_id));
     if unfiltered_privacy_candidates == 0
         && !remote_route_exists
-        && db::privacy_denies(
-            &state.pool,
-            recipient.id,
-            None,
-            from,
-            db::PrivacyStanzaKind::Message,
-        )
-        .await?
+        && state
+            .message_service()
+            .default_recipient_privacy_denies(recipient.id, from)
+            .await?
     {
         return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
     }
@@ -3126,10 +3156,16 @@ pub(crate) async fn route_inbound_message(
     // MAM policy lookup is read-only and must finish before any delivery
     // queue or offline transaction accepts the stanza. Once accepted, later
     // archive/retraction failures are log-only to prevent duplicate retries.
-    let archive_allowed = personal_retraction
-        || (mam_storage_eligible(root)
-            && (encrypted || !state.config.require_encrypted_archive)
-            && db::archive_allowed(&state.pool, recipient.id, &canonical_from).await?);
+    let archive_allowed = state
+        .message_service()
+        .archive_enabled(
+            recipient.id,
+            &canonical_from,
+            mam_storage_eligible(root),
+            encrypted,
+            personal_retraction,
+        )
+        .await?;
     let mut history_committed = false;
     let mut durable_c2s_delivery = None;
     let direct_delivery_mode = crate::xmpp::protocol::messaging::direct_delivery_mode(root);

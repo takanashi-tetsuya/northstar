@@ -376,7 +376,7 @@ mod tests {
             &mut tx,
             &lease,
             StatusCode::ACCEPTED.as_u16(),
-            &crate::api::json_replay_headers(),
+            &crate::services::api_mutations::json_replay_headers(),
             response_body.as_bytes(),
         )
         .await
@@ -498,7 +498,7 @@ mod tests {
             &mut missing_tx,
             &missing_lease,
             StatusCode::NOT_FOUND.as_u16(),
-            &crate::api::json_replay_headers(),
+            &crate::services::api_mutations::json_replay_headers(),
             missing_body,
         )
         .await

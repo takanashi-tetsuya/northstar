@@ -6,6 +6,10 @@
 
 use crate::abuse::{GuardError, PowIntent, PowProof, WorkRequirement};
 use anyhow::Result;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
@@ -108,6 +112,73 @@ pub(crate) enum RegistrationGuardOutcome {
     LeaseLost,
 }
 
+/// The live public-registration setting shared with runtime administration.
+/// Repository admission reads it after acquiring the idempotency lease; the
+/// final transaction reads it again after password derivation.
+#[derive(Clone)]
+pub(crate) struct HttpRegistrationAvailability {
+    closed: Arc<AtomicBool>,
+    dependency_locked: bool,
+    invitation_only: bool,
+}
+
+impl HttpRegistrationAvailability {
+    pub(crate) fn new(
+        closed: Arc<AtomicBool>,
+        dependency_locked: bool,
+        invitation_only: bool,
+    ) -> Self {
+        Self {
+            closed,
+            dependency_locked,
+            invitation_only,
+        }
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
+        self.dependency_locked || self.closed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn requires_invitation(&self) -> bool {
+        !self.is_closed() && self.invitation_only
+    }
+}
+
+/// All HTTP registration work that may commit belongs to one repository
+/// operation. The request identity is prepared by the transport from the
+/// original body bytes, before the password is removed from that body.
+pub(crate) struct HttpRegistrationRequest<'a> {
+    pub(crate) idempotency: crate::services::api_mutations::IdempotencyRequest<'a>,
+    pub(crate) username: &'a str,
+    pub(crate) password: &'a str,
+    pub(crate) invitation_token: Option<&'a str>,
+    pub(crate) proof: Option<&'a PowProof>,
+    pub(crate) intent: &'a PowIntent,
+    pub(crate) subject: &'a str,
+    pub(crate) actors: &'a [String],
+    pub(crate) availability: HttpRegistrationAvailability,
+}
+
+pub(crate) enum HttpRegistrationOutcome {
+    Created(Vec<u8>),
+    Rejected(Vec<u8>),
+    Replay(crate::services::api_mutations::IdempotentResponse),
+    AbuseDenied(GuardError),
+    Closed,
+    RateLimited,
+    CapacityExhausted,
+    PasswordWorkOverloaded,
+    InvalidUsername,
+    InvitationRejected,
+    UsernameTaken,
+    IdempotencyConflict,
+    ReplayInvalidated,
+    Busy(u64),
+    CapacityLimited(u64),
+    InProgress(u64),
+    LeaseLost,
+}
+
 pub(crate) struct RegistrationRequest<'a> {
     pub(crate) username: &'a str,
     pub(crate) password: &'a str,
@@ -138,6 +209,11 @@ pub(crate) struct DeletionQuiesceRequest<'a> {
 }
 
 pub(crate) trait AccountRepository: Send + Sync {
+    fn register_http(
+        &self,
+        request: HttpRegistrationRequest<'_>,
+        policy: AccountPolicy,
+    ) -> impl std::future::Future<Output = Result<HttpRegistrationOutcome>> + Send;
     fn verify_registration_guard(
         &self,
         request: RegistrationGuardRequest<'_>,
@@ -179,13 +255,12 @@ pub(crate) struct AccountService<R> {
     policy: AccountPolicy,
 }
 impl<R: AccountRepository> AccountService<R> {
-    pub(crate) async fn verify_registration_guard(
+    pub(crate) async fn register_http(
         &self,
-        request: RegistrationGuardRequest<'_>,
-    ) -> Result<RegistrationGuardOutcome> {
-        self.repository.verify_registration_guard(request).await
+        request: HttpRegistrationRequest<'_>,
+    ) -> Result<HttpRegistrationOutcome> {
+        self.repository.register_http(request, self.policy).await
     }
-
     pub(crate) fn new(
         repository: R,
         invitation_required: bool,

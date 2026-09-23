@@ -1829,6 +1829,9 @@ pub struct AppState {
     metrics_snapshot_service: crate::services::metrics_snapshot::MetricsSnapshotService<
         db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
     >,
+    readiness_service: crate::services::readiness::ReadinessService<
+        db::readiness_repository::PostgresReadinessRepository,
+    >,
     public_discovery_context: PublicDiscoveryContext,
     passkey_service: PasskeyService,
     /// Narrow persistence/orchestration capability for XEP-0060 and PEP.
@@ -1866,6 +1869,16 @@ pub struct AppState {
     replay_service:
         crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>,
     roster_service: RosterService,
+    s2s_roster_authorization_service:
+        crate::services::s2s_roster_authorization::FederatedRosterAuthorizationService<
+            db::s2s_roster_authorization_repository::PostgresFederatedRosterRepository,
+        >,
+    s2s_outbox_dispatch_service: crate::services::s2s_outbox_dispatch::S2sOutboxDispatchService<
+        db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository,
+    >,
+    s2s_sm_outbox_service: crate::services::s2s_sm_outbox::SmOutboxService<
+        db::s2s_sm_outbox_repository::PostgresSmOutboxRepository,
+    >,
     privacy_service:
         crate::services::privacy::PrivacyService<db::privacy::PostgresPrivacyRepository>,
     private_storage_service: crate::services::private_storage::PrivateStorageService<
@@ -1873,6 +1886,12 @@ pub struct AppState {
     >,
     account_service:
         crate::services::account::AccountService<db::account_repository::PostgresAccountRepository>,
+    login_service: crate::services::http_login::HttpLoginService<
+        db::http_login_repository::PostgresHttpLoginRepository,
+    >,
+    password_change_service: crate::services::password_change::PasswordChangeService<
+        db::password_change_repository::PostgresPasswordChangeRepository,
+    >,
     /// Credential lookup, verification and XEP-0484 mutation authority. The
     /// protocol layer receives typed outcomes but neither PgPool nor the FAST
     /// derivation key.
@@ -1917,11 +1936,21 @@ pub struct AppState {
     /// reserve without giving protocol handlers raw pool access.
     durable_outbox_database_admission:
         crate::services::durable_outbox::DurableOutboxDatabaseAdmission,
-    api_control: Arc<db::ApiControlKeyring>,
     account_admin_service: AccountAdminContext,
     registration_admin_service: RegistrationAdminContext,
     session_admin_service: SessionAdminContext,
     operation_admin_service: OperationAdminContext,
+    operation_muc_destroy_service: crate::services::operation_muc_destroy::MucDestroyService<
+        db::operation_muc_destroy_repository::PostgresMucDestroyRepository,
+    >,
+    operation_effect_fence_service:
+        crate::services::operation_effect_fence::OperationEffectFenceService<
+            db::operation_effect_fence_repository::PostgresOperationEffectFenceRepository,
+        >,
+    admin_session_cleanup_worker_service:
+        crate::services::admin_session_cleanup_worker::AdminSessionCleanupWorkerService<
+            db::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository,
+        >,
     admin_dispatch_service: AdminDispatchContext,
     upload_admin_service: UploadAdminContext,
     report_moderation_service: ReportModerationContext,
@@ -2091,6 +2120,14 @@ impl AppState {
         &self.metrics_snapshot_service
     }
 
+    pub(crate) fn readiness_service(
+        &self,
+    ) -> &crate::services::readiness::ReadinessService<
+        db::readiness_repository::PostgresReadinessRepository,
+    > {
+        &self.readiness_service
+    }
+
     pub(crate) fn http_transport_policy(&self) -> HttpTransportPolicy {
         HttpTransportPolicy::new(
             self.config.trusted_proxy_ips.clone(),
@@ -2240,6 +2277,17 @@ impl AppState {
         self.registration_mode() == crate::config::RegistrationMode::InvitationOnly
     }
 
+    pub(crate) fn http_registration_availability(
+        &self,
+    ) -> crate::services::account::HttpRegistrationAvailability {
+        crate::services::account::HttpRegistrationAvailability::new(
+            Arc::clone(&self.registration_closed),
+            self.config.registration_dependency_locked(),
+            self.config.configured_registration_mode()
+                == crate::config::RegistrationMode::InvitationOnly,
+        )
+    }
+
     /// Apply the authoritative registration setting with release ordering.
     pub(crate) fn apply_registration_closed(&self, closed: bool) {
         self.registration_closed.store(
@@ -2339,6 +2387,7 @@ impl AppState {
             process_secret.zeroize();
             keyrings?
         };
+        let api_control = Arc::new(api_control);
         let startup_phase = crate::logging::StartupPhase::begin("mix_delivery_capacity_audit");
         db::audit_mix_delivery_capacity_ledger(&pool)
             .await
@@ -2573,6 +2622,9 @@ impl AppState {
             };
         upload_startup_phase.complete();
         let extdisco_service = crate::services::extdisco::ExtDiscoService::new(
+            config.domain.clone(),
+            config.stun_service.clone(),
+            config.turn_service.clone(),
             config.raw.turn_shared_secret.take(),
             config.turn_credentials_ttl_seconds,
             config.turn_credential_requests_per_minute,
@@ -2819,6 +2871,7 @@ impl AppState {
         )
         .await?;
         let (island_mode, registration_closed) = db::admin_runtime_settings(&pool).await?;
+        let registration_closed = Arc::new(AtomicBool::new(registration_closed));
         let process_started_at: chrono::DateTime<chrono::Utc> =
             sqlx::query_scalar("SELECT clock_timestamp()")
                 .fetch_one(&pool)
@@ -2882,15 +2935,40 @@ impl AppState {
             retraction_content_identity,
             config.domain.clone(),
         );
+        let metrics = Arc::new(Metrics::default());
         let account_service = crate::services::account::AccountService::new(
             db::account_repository::PostgresAccountRepository::new(
                 pool.clone(),
                 config.domain.clone(),
                 Arc::clone(&abuse),
-            ),
+            )
+            .with_api_control(Arc::clone(&api_control)),
             config.configured_registration_mode()
                 == crate::config::RegistrationMode::InvitationOnly,
             config.registration_rate_per_hour,
+            config.scram_iterations,
+            config.scram_sha1_enabled,
+        );
+        let login_service = crate::services::http_login::HttpLoginService::new(
+            db::http_login_repository::PostgresHttpLoginRepository::new(
+                pool.clone(),
+                Arc::clone(&abuse),
+                Arc::clone(&api_control),
+                crate::services::http_login::HttpLoginPolicy {
+                    domain: config.domain.clone(),
+                    scram_iterations: config.scram_iterations,
+                    scram_sha1_enabled: config.scram_sha1_enabled,
+                    session_ttl_hours: config.session_ttl_hours,
+                },
+                metrics.clone() as Arc<dyn crate::services::http_login::LoginFailureMetrics>,
+            ),
+        );
+        let password_change_service = crate::services::password_change::PasswordChangeService::new(
+            db::password_change_repository::PostgresPasswordChangeRepository::new(
+                pool.clone(),
+                Arc::clone(&api_control),
+                Arc::clone(&abuse),
+            ),
             config.scram_iterations,
             config.scram_sha1_enabled,
         );
@@ -2925,7 +3003,7 @@ impl AppState {
             },
             federation.outbox_wakeup(),
         );
-        let upload_service = config.upload_mode.admits_new_uploads().then(|| {
+        let upload_service = config.upload_mode.keeps_storage_runtime().then(|| {
             crate::services::upload::UploadService::new(
                 db::upload::PostgresUploadRepository::new(pool.clone()),
                 Arc::clone(&upload_safety_gate),
@@ -3053,17 +3131,16 @@ impl AppState {
             config.domain.clone(),
         );
         let sessions = Arc::new(DashMap::new());
-        let metrics = Arc::new(Metrics::default());
         let muc_occupants = Arc::new(DashMap::new());
         let started_at = Instant::now();
         let api_cursor = Arc::new(api_cursor);
         let federation_write_policy = FederationWritePolicy::new(island_mode);
-        let registration_closed = Arc::new(AtomicBool::new(registration_closed));
         let public_discovery_context = PublicDiscoveryContext::new(
             http_policy::PublicDiscoveryPolicy {
                 domain: config.domain.clone(),
                 public_url: config.public_url.clone(),
                 trusted_proxy_ips: config.trusted_proxy_ips.clone(),
+                websocket_allowed_origins: config.websocket_allowed_origins.clone(),
                 configured_registration_mode: config.configured_registration_mode(),
                 registration_dependency_locked: config.registration_dependency_locked(),
                 require_encrypted_archive: config.require_encrypted_archive,
@@ -3121,7 +3198,6 @@ impl AppState {
             config.trusted_proxy_ips.clone(),
             Arc::clone(&metrics),
         );
-        let api_control = Arc::new(api_control);
         let admin_mutations = db::admin_mutations::AdminMutationStore::new(
             pool.clone(),
             Arc::clone(&api_control),
@@ -3154,6 +3230,35 @@ impl AppState {
                 admin_mutations.clone(),
             ),
         );
+        let operation_muc_destroy_service =
+            crate::services::operation_muc_destroy::MucDestroyService::new(
+                db::operation_muc_destroy_repository::PostgresMucDestroyRepository::new(
+                    pool.clone(),
+                ),
+            );
+        let operation_effect_fence_service =
+            crate::services::operation_effect_fence::OperationEffectFenceService::new(
+                db::operation_effect_fence_repository::PostgresOperationEffectFenceRepository::new(
+                    pool.clone(),
+                ),
+            );
+        let s2s_outbox_dispatch_service =
+            crate::services::s2s_outbox_dispatch::S2sOutboxDispatchService::new(
+                db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository::new(
+                    pool.clone(),
+                ),
+                crate::services::s2s_outbox_dispatch::S2sOutboxDispatchPolicy {
+                    claim_batch: config.s2s_outbox_claim_batch,
+                    lease_seconds: config.s2s_outbox_lease_seconds,
+                    retry_base_seconds: config.s2s_outbox_retry_base_seconds,
+                    retry_max_seconds: config.s2s_outbox_retry_max_seconds,
+                    max_attempts: config.s2s_outbox_max_attempts,
+                },
+            );
+        let admin_session_cleanup_worker_service =
+            crate::services::admin_session_cleanup_worker::AdminSessionCleanupWorkerService::new(
+                db::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository::new(pool.clone()),
+            );
         let admin_dispatch_service = crate::services::admin_dispatch::AdminDispatchService::new(
             db::admin_dispatch_repository::PostgresAdminDispatchRepository::new(
                 admin_mutations.clone(),
@@ -3221,6 +3326,9 @@ impl AppState {
                         pool.clone(),
                     ),
                 ),
+            readiness_service: crate::services::readiness::ReadinessService::new(
+                db::readiness_repository::PostgresReadinessRepository::new(pool.clone()),
+            ),
             public_discovery_context,
             omemo_recovery_service: crate::services::omemo_recovery::OmemoRecoveryService::new(
                 db::omemo_recovery_repository::PostgresOmemoRecoveryRepository::new(pool.clone()),
@@ -3242,10 +3350,22 @@ impl AppState {
             ),
             replay_service,
             roster_service,
+            s2s_roster_authorization_service:
+                crate::services::s2s_roster_authorization::FederatedRosterAuthorizationService::new(
+                    db::s2s_roster_authorization_repository::PostgresFederatedRosterRepository::new(
+                        pool.clone(),
+                    ),
+                ),
+            s2s_outbox_dispatch_service,
+            s2s_sm_outbox_service: crate::services::s2s_sm_outbox::SmOutboxService::new(
+                db::s2s_sm_outbox_repository::PostgresSmOutboxRepository::new(pool.clone()),
+            ),
             passkey_service,
             privacy_service,
             private_storage_service,
             account_service,
+            login_service,
+            password_change_service,
             authentication_service,
             admin_command_service: crate::services::admin_commands::AdminCommandService::new(
                 db::admin_command_repository::PostgresAdminCommandRepository::new(
@@ -3275,12 +3395,14 @@ impl AppState {
             web_admin_gateway_token,
             omemo_recovery_poll_context,
             durable_outbox_database_admission,
-            api_control,
             report_service,
             account_admin_service,
             registration_admin_service,
             session_admin_service,
             operation_admin_service,
+            operation_muc_destroy_service,
+            operation_effect_fence_service,
+            admin_session_cleanup_worker_service,
             admin_dispatch_service,
             upload_admin_service,
             report_moderation_service,
@@ -3459,10 +3581,6 @@ impl AppState {
         self.abuse_key_deployment.as_ref()
     }
 
-    pub(crate) fn api_control(&self) -> &db::ApiControlKeyring {
-        &self.api_control
-    }
-
     pub(crate) fn upload_store(&self) -> &dyn UploadStore {
         self.upload_store
             .as_deref()
@@ -3572,7 +3690,21 @@ impl AppState {
     pub(crate) fn upload_service(&self) -> &UploadService {
         self.upload_service
             .as_ref()
-            .expect("upload slot admission requires UploadMode::Enabled")
+            .expect("upload routes require an enabled or draining storage runtime")
+    }
+
+    pub(crate) fn api_session_service(
+        &self,
+    ) -> crate::services::api_sessions::ApiSessionService<
+        db::api_session_repository::PostgresApiSessionRepository,
+    > {
+        crate::services::api_sessions::ApiSessionService::new(
+            db::api_session_repository::PostgresApiSessionRepository::new(self.pool.clone()),
+        )
+    }
+
+    pub(crate) fn public_discovery_context(&self) -> &PublicDiscoveryContext {
+        &self.public_discovery_context
     }
 
     pub(crate) fn report_service(
@@ -3681,6 +3813,30 @@ impl AppState {
         &self.roster_service
     }
 
+    pub(crate) fn s2s_roster_authorization_service(
+        &self,
+    ) -> &crate::services::s2s_roster_authorization::FederatedRosterAuthorizationService<
+        db::s2s_roster_authorization_repository::PostgresFederatedRosterRepository,
+    > {
+        &self.s2s_roster_authorization_service
+    }
+
+    pub(crate) fn s2s_outbox_dispatch_service(
+        &self,
+    ) -> &crate::services::s2s_outbox_dispatch::S2sOutboxDispatchService<
+        db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository,
+    > {
+        &self.s2s_outbox_dispatch_service
+    }
+
+    pub(crate) fn s2s_sm_outbox_service(
+        &self,
+    ) -> &crate::services::s2s_sm_outbox::SmOutboxService<
+        db::s2s_sm_outbox_repository::PostgresSmOutboxRepository,
+    > {
+        &self.s2s_sm_outbox_service
+    }
+
     pub(crate) fn privacy_service(
         &self,
     ) -> &crate::services::privacy::PrivacyService<db::privacy::PostgresPrivacyRepository> {
@@ -3700,6 +3856,46 @@ impl AppState {
     ) -> &crate::services::account::AccountService<db::account_repository::PostgresAccountRepository>
     {
         &self.account_service
+    }
+
+    pub(crate) fn login_service(
+        &self,
+    ) -> &crate::services::http_login::HttpLoginService<
+        db::http_login_repository::PostgresHttpLoginRepository,
+    > {
+        &self.login_service
+    }
+
+    pub(crate) fn password_change_service(
+        &self,
+    ) -> &crate::services::password_change::PasswordChangeService<
+        db::password_change_repository::PostgresPasswordChangeRepository,
+    > {
+        &self.password_change_service
+    }
+
+    pub(crate) fn operation_muc_destroy_service(
+        &self,
+    ) -> &crate::services::operation_muc_destroy::MucDestroyService<
+        db::operation_muc_destroy_repository::PostgresMucDestroyRepository,
+    > {
+        &self.operation_muc_destroy_service
+    }
+
+    pub(crate) fn operation_effect_fence_service(
+        &self,
+    ) -> &crate::services::operation_effect_fence::OperationEffectFenceService<
+        db::operation_effect_fence_repository::PostgresOperationEffectFenceRepository,
+    > {
+        &self.operation_effect_fence_service
+    }
+
+    pub(crate) fn admin_session_cleanup_worker_service(
+        &self,
+    ) -> &crate::services::admin_session_cleanup_worker::AdminSessionCleanupWorkerService<
+        db::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository,
+    > {
+        &self.admin_session_cleanup_worker_service
     }
 
     pub(crate) fn authentication_service(

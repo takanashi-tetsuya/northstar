@@ -234,7 +234,7 @@ impl ProfileRepository for PostgresProfileRepository {
             "SELECT v.user_id AS profile_account_id,v.payload
                FROM users u
                LEFT JOIN vcards v ON v.user_id=u.id
-              WHERE u.username=$1",
+              WHERE u.username=$1 AND NOT u.is_disabled",
         )
         .bind(username)
         .fetch_optional(&mut *transaction)
@@ -1735,6 +1735,20 @@ mod tests {
                 .unwrap(),
             PublicVCard::MissingAccount
         );
+        sqlx::query("UPDATE users SET is_disabled=TRUE WHERE id=$1")
+            .bind(new_id)
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            service.public_vcard(&username).await.unwrap(),
+            PublicVCard::MissingAccount
+        );
+        sqlx::query("UPDATE users SET is_disabled=FALSE WHERE id=$1")
+            .bind(new_id)
+            .execute(&database.pool)
+            .await
+            .unwrap();
         sqlx::query("ALTER TABLE vcards ALTER COLUMN payload DROP NOT NULL")
             .execute(&database.pool)
             .await

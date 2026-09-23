@@ -314,7 +314,6 @@ for (const typeName of ['RawConfig', 'Config']) {
 }
 
 for (const field of [
-  'api_control',
   'upload_service',
   'upload_store',
   'message_service',
@@ -2294,13 +2293,19 @@ for (const accessor of ['account_service', 'push_service']) {
 }
 
 const registrationHandler = structBody(read('src/api/auth_routes.rs'), 'pub async fn register(');
-const guardCall = registrationHandler.indexOf('.verify_registration_guard(');
-const passwordWork = registrationHandler.indexOf('db::prepare_registration(');
-if (guardCall < 0 || passwordWork < 0 || guardCall > passwordWork) {
-  throw new Error('HTTP registration must commit the account-service guard before password work');
+if (!/\.account_service\(\)[\s\S]+\.register_http\(HttpRegistrationRequest/.test(registrationHandler)) {
+  throw new Error('HTTP registration must enter the account service with a typed command');
 }
-if (/state\s*\.\s*abuse\s*\.\s*verify_or_allow_in_tx_v2\s*\(/.test(registrationHandler.slice(0, passwordWork))) {
-  throw new Error('HTTP registration regained a direct pre-hash abuse transaction');
+if (/(?:\bstate\s*\.\s*pool\b|\bdb::(?:acquire_idempotency_in_tx|prepare_registration|create_user_with_invitation_guarded_in_tx_v2)\b|\btransaction\b|\bPgPool\b)/.test(registrationHandler)) {
+  throw new Error('HTTP registration regained SQL, transaction or password-work authority');
+}
+const accountRepositorySource = read('src/db/account_repository.rs');
+const httpRegistrationRepository = accountRepositorySource.slice(
+  accountRepositorySource.indexOf('async fn register_http('),
+  accountRepositorySource.indexOf('async fn verify_registration_guard('),
+);
+if (!/acquire_idempotency_in_tx[\s\S]+reservation\.commit\(\)[\s\S]+verify_registration_guard[\s\S]+prepare_registration\([\s\S]+publication\.commit\(\)/.test(httpRegistrationRepository)) {
+  throw new Error('HTTP registration repository must own the ordered reservation, guard and publication transactions');
 }
 
 // ARCH-SVC two-phase bind/resume boundary: protocol code may stage Redis and
@@ -3147,6 +3152,16 @@ for (const task of serviceTaskNames) {
 const stateServiceAccessors = [
   'api_query_service',
   'metrics_snapshot_service',
+  'readiness_service',
+  'api_session_service',
+  'password_change_service',
+  'login_service',
+  'operation_muc_destroy_service',
+  'operation_effect_fence_service',
+  'admin_session_cleanup_worker_service',
+  's2s_roster_authorization_service',
+  's2s_outbox_dispatch_service',
+  's2s_sm_outbox_service',
   'report_service',
   'omemo_recovery_service',
   'authentication_service',
@@ -3171,8 +3186,11 @@ const stateServiceAccessors = [
   'upload_service',
   'extdisco_service',
 ];
+if (!state.includes('let upload_service = config.upload_mode.keeps_storage_runtime().then(')) {
+  throw new Error('upload service must exist while the drain-read-only GET and DELETE routes are mounted');
+}
 const composedServiceAccessors = [
-  ...state.matchAll(/pub\(crate\)\s+fn\s+([a-z_]+_service)\s*\(/g),
+  ...state.matchAll(/pub\(crate\)\s+fn\s+([a-z][a-z0-9_]*_service)\s*\(/g),
 ].map((match) => match[1]);
 assertExactUniqueInventory('AppState service accessor', composedServiceAccessors, stateServiceAccessors);
 for (const accessor of stateServiceAccessors) {

@@ -1,4 +1,3 @@
-pub use crate::services::api_mutations::json_replay_headers;
 use axum::{
     body::{to_bytes, Body},
     extract::{ConnectInfo, FromRequest, FromRequestParts, Request, State},
@@ -570,26 +569,27 @@ fn host_meta_route_contributions(websocket: bool, bosh: bool, xep_0487: bool) ->
 
 pub fn public_router(state: Arc<AppState>) -> Router {
     let readiness = ReadyEndpointState::new(Arc::clone(&state));
+    let policy = state.public_discovery_context().policy();
     let mut router = Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready).with_state(readiness));
-    if state.config.rest_api_enabled {
+    if policy.rest_api_enabled {
         router = router.merge(public_rest_routes());
     }
-    if state.config.upload_mode.keeps_storage_runtime() {
-        let upload_limit = usize::try_from(state.config.upload_max_bytes).unwrap_or(usize::MAX);
+    if policy.upload_mode.keeps_storage_runtime() {
+        let upload_limit = usize::try_from(policy.upload_max_bytes).unwrap_or(usize::MAX);
         router = router.merge(upload_http_routes(
             upload_limit,
-            state.config.upload_mode.admits_new_uploads(),
+            policy.upload_mode.admits_new_uploads(),
         ));
     }
-    if state.config.websocket_enabled {
+    if policy.websocket_enabled {
         router = router.route("/xmpp-websocket", get(websocket));
     }
     let (serve_host_meta_xml, serve_host_meta_json) = host_meta_route_contributions(
-        state.config.websocket_enabled,
-        state.config.bosh_enabled,
-        !state.config.xep_0487_ips.is_empty(),
+        policy.websocket_enabled,
+        policy.bosh_enabled,
+        !policy.xep_0487_ips.is_empty(),
     );
     if serve_host_meta_xml {
         router = router.route("/.well-known/host-meta", get(host_meta_xml));
@@ -597,14 +597,14 @@ pub fn public_router(state: Arc<AppState>) -> Router {
     if serve_host_meta_json {
         router = router.route("/.well-known/host-meta.json", get(host_meta_json));
     }
-    if state.config.bosh_enabled {
+    if policy.bosh_enabled {
         router = router
             .route("/http-bind", post(crate::bosh::http_bind))
             .route("/http-bind", options(crate::bosh::http_bind_options))
             .route("/bosh", post(crate::bosh::http_bind))
             .route("/bosh", options(crate::bosh::http_bind_options));
     }
-    if state.config.web_client_enabled {
+    if policy.web_client_enabled {
         router = router.merge(web_client_static_routes());
     }
     common_http_layers(router, state.http_transport_policy(), true).with_state(state)
@@ -612,12 +612,13 @@ pub fn public_router(state: Arc<AppState>) -> Router {
 
 pub fn administrator_router(state: Arc<AppState>) -> Router {
     let readiness = ReadyEndpointState::new(Arc::clone(&state));
+    let policy = state.public_discovery_context().policy();
     let router = Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready).with_state(readiness))
         .merge(administrator_api_routes(
-            state.config.upload_mode.keeps_storage_runtime(),
-            state.config.web_client_enabled,
+            policy.upload_mode.keeps_storage_runtime(),
+            policy.web_client_enabled,
         ))
         .merge(administrator_static_routes());
     common_http_layers(
@@ -854,7 +855,8 @@ pub fn ip_actor(ip: IpAddr) -> String {
 }
 
 pub fn client_ip(peer_ip: IpAddr, headers: &HeaderMap, state: &AppState) -> IpAddr {
-    client_ip_with_trusted_proxies(peer_ip, headers, &state.config.trusted_proxy_ips)
+    let transport = state.http_transport_policy();
+    client_ip_with_trusted_proxies(peer_ip, headers, transport.trusted_proxies())
 }
 
 fn client_ip_with_trusted_proxies(
@@ -1171,6 +1173,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::api_mutations::json_replay_headers;
 
     #[test]
     fn public_and_administrator_static_manifests_are_explicitly_isolated() {

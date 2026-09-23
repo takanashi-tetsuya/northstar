@@ -412,11 +412,36 @@ The database-backed metrics collector now calls a snapshot service; one
 repository transaction reads all gauges, while the endpoint retains its
 existing deadline and failure response. Its remaining process gauges still
 use broader state.
-HTTP registration now commits its pre-hash PoW and idempotency guard through
-`AccountService`; account publication and replay remain in the endpoint's
-transaction and require a separate use-case move.
-Remaining work covers the other REST reads and mutations, their HTTP contexts,
-and live-session/account-recovery workers.
+HTTP registration now routes reservation, the pre-hash PoW/idempotency guard,
+account publication and exact 201/400 response replay through `AccountService`
+and its PostgreSQL repository. Reservation and guard each commit before password
+derivation; publication runs in a new transaction, and a retryable worker or
+database failure yields the lease without erasing the committed guard marker.
+REST login retains pre-hash abuse admission, credential verification on replay,
+and atomic API-session creation behind a dedicated service and repository.
+Logout has its own audited session command. Upload claim, staged promotion,
+replay, public read and deletion now pass through the upload lifecycle port;
+the service is available in drain-read-only mode for historical reads and
+deletion, while new reservations remain disabled by the route policy.
+REST password changes now use a dedicated command service and PostgreSQL
+repository for replay lookup, bearer and generation locks, proof admission,
+password preparation and conditional credential publication. The HTTP adapter
+maps typed outcomes and performs local session disconnection after commit.
+The administrator MUC-destroy worker now validates its room command in an
+application service and commits the exact intent, room mutation, intent removal
+and audit fact through one repository transaction. The signed wake and local
+occupant cleanup still run only after that commit.
+Readiness persistence checks use an immutable cluster-instance snapshot, and
+inbound S2S roster visibility reads use a scoped authorization port.
+Inbound S2S presence, IQ and message adapters also use the existing presence,
+messaging, profile and PubSub ports for recipient and policy reads. S2S stream
+management and outbound/component dispatch use fenced outbox services for
+renewal, acknowledgement, claims and retries. Administrator session-cleanup
+leases and the operation point-of-no-return transaction use separate worker
+services; effects still start after the durable fence commits. XEP-0215
+service selection and authorization now belong to the ExtDisco service.
+Remaining work includes the other S2S and operation transactions, live-session
+and account-recovery workers, and the seven broad AppState capabilities.
 TLS now sits behind a private context with immutable handshake snapshots and
 the existing current-CRL registration check. Federation outbox admission now
 uses an application service and a database repository; callers receive a

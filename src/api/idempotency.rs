@@ -1,4 +1,4 @@
-use crate::{db, error::AppError, services::api_mutations::StoredApiResponse};
+use crate::{error::AppError, services::api_mutations::StoredApiResponse};
 use axum::{body::Body, response::Response};
 
 pub(crate) fn stored_api_response(stored: StoredApiResponse) -> Result<Response, AppError> {
@@ -32,19 +32,4 @@ pub(crate) fn mutation_rejection(
             retry_after,
         },
     }
-}
-pub(crate) async fn complete_guard_denial(
-    state: &crate::state::AppState,
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    lease: &db::IdempotencyLease,
-    error: crate::abuse::GuardError,
-) -> Result<Response, AppError> {
-    let response = crate::services::api_mutations::guard_denial_response(error)?;
-    if !db::api_mutations::persist_response_in_tx(state.api_control(), tx, lease, &response).await?
-    {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "idempotency lease changed while recording a rate-limit denial"
-        )));
-    }
-    stored_api_response(response)
 }

@@ -2,6 +2,7 @@ pub(crate) mod account;
 pub(crate) mod account_admin;
 pub(crate) mod admin_commands;
 pub(crate) mod admin_dispatch;
+pub(crate) mod admin_session_cleanup_worker;
 pub(crate) mod authentication;
 pub(crate) mod blocking;
 pub(crate) mod capacity_maintenance;
@@ -16,17 +17,22 @@ pub(crate) mod metrics_snapshot;
 pub(crate) mod mix;
 pub(crate) mod muc;
 pub(crate) mod passkeys;
+pub(crate) mod password_change;
 pub(crate) mod presence;
 pub(crate) mod privacy;
 pub(crate) mod private_storage;
 pub(crate) mod profile;
 pub(crate) mod pubsub;
 pub(crate) mod push;
+pub(crate) mod readiness;
 pub(crate) mod replay;
 pub(crate) mod report_moderation;
 pub(crate) mod retention_policy;
 pub(crate) mod retractions;
 pub(crate) mod roster;
+pub(crate) mod s2s_outbox_dispatch;
+pub(crate) mod s2s_roster_authorization;
+pub(crate) mod s2s_sm_outbox;
 pub(crate) mod session_cleanup;
 pub(crate) mod sm;
 pub(crate) mod sm_capacity;
@@ -42,8 +48,13 @@ pub(crate) mod api_queries;
 
 pub(crate) mod omemo_recovery;
 
+pub(crate) mod operation_effect_fence;
+pub(crate) mod operation_muc_destroy;
 pub(crate) mod operations;
 
 pub(crate) mod api_mutations;
+
+pub(crate) mod api_sessions;
+pub(crate) mod http_login;
 
 pub(crate) mod reports;

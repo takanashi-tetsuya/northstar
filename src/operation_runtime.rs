@@ -9,6 +9,11 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::services::admin_session_cleanup_worker::{
+    AdminSessionCleanupKind, AdminSessionCleanupLease, AdminSessionCleanupRepository,
+    AdminSessionCleanupWorkerService,
+};
+use crate::services::operation_effect_fence::FencedEffect;
 use crate::{db, state::AppState};
 
 const LEASE_SECONDS: i64 = 60;
@@ -69,12 +74,10 @@ pub async fn serve_admin_session_cleanup(
 }
 
 async fn run_one_admin_session_cleanup(state: &Arc<AppState>, worker_id: Uuid) -> Result<bool> {
-    let Some(lease) = db::claim_admin_session_cleanup(
-        &state.pool,
-        worker_id,
-        i32::try_from(LEASE_SECONDS).expect("operation lease seconds fit i32"),
-    )
-    .await?
+    let Some(lease) = state
+        .admin_session_cleanup_worker_service()
+        .claim(worker_id)
+        .await?
     else {
         return Ok(false);
     };
@@ -87,7 +90,7 @@ async fn run_one_admin_session_cleanup(state: &Arc<AppState>, worker_id: Uuid) -
         execute_admin_session_cleanup(state, &lease, worker_id),
         |heartbeat_stop| {
             admin_session_cleanup_heartbeat(
-                Arc::clone(state),
+                state.admin_session_cleanup_worker_service(),
                 lease.clone(),
                 worker_id,
                 heartbeat_stop,
@@ -98,18 +101,19 @@ async fn run_one_admin_session_cleanup(state: &Arc<AppState>, worker_id: Uuid) -
 
     match effect {
         Ok(true) => {
-            if !db::complete_admin_session_cleanup(&state.pool, &lease, worker_id).await? {
+            if !state
+                .admin_session_cleanup_worker_service()
+                .complete(&lease, worker_id)
+                .await?
+            {
                 tracing::debug!(effect_id=%lease.id, "administrator session-cleanup lease changed before completion");
             }
         }
         Ok(false) => {
-            if !db::retry_admin_session_cleanup(
-                &state.pool,
-                &lease,
-                worker_id,
-                "target_still_current",
-            )
-            .await?
+            if !state
+                .admin_session_cleanup_worker_service()
+                .retry(&lease, worker_id, "target_still_current")
+                .await?
             {
                 tracing::debug!(effect_id=%lease.id, "administrator session-cleanup lease changed before retry");
             }
@@ -122,7 +126,9 @@ async fn run_one_admin_session_cleanup(state: &Arc<AppState>, worker_id: Uuid) -
                 attempts=lease.attempts,
                 "durable administrator session cleanup will be retried"
             );
-            if !db::retry_admin_session_cleanup(&state.pool, &lease, worker_id, "delivery_failed")
+            if !state
+                .admin_session_cleanup_worker_service()
+                .retry(&lease, worker_id, "delivery_failed")
                 .await?
             {
                 tracing::debug!(effect_id=%lease.id, "administrator session-cleanup lease changed after delivery failure");
@@ -172,9 +178,9 @@ where
     effect_result
 }
 
-async fn admin_session_cleanup_heartbeat(
-    state: Arc<AppState>,
-    lease: db::AdminSessionCleanupLease,
+async fn admin_session_cleanup_heartbeat<R: AdminSessionCleanupRepository>(
+    service: &AdminSessionCleanupWorkerService<R>,
+    lease: AdminSessionCleanupLease,
     worker_id: Uuid,
     stop: CancellationToken,
 ) -> Result<()> {
@@ -182,14 +188,7 @@ async fn admin_session_cleanup_heartbeat(
         tokio::select! {
             _ = stop.cancelled() => return Ok(()),
             _ = tokio::time::sleep(Duration::from_secs(15)) => {
-                if !db::renew_admin_session_cleanup(
-                    &state.pool,
-                    &lease,
-                    worker_id,
-                    i32::try_from(LEASE_SECONDS).expect("operation lease seconds fit i32"),
-                ).await? {
-                    anyhow::bail!("administrator session-cleanup lease fencing was lost");
-                }
+                service.renew_or_fail(&lease, worker_id).await?;
             }
         }
     }
@@ -197,11 +196,11 @@ async fn admin_session_cleanup_heartbeat(
 
 async fn execute_admin_session_cleanup(
     state: &AppState,
-    lease: &db::AdminSessionCleanupLease,
+    lease: &AdminSessionCleanupLease,
     worker_id: Uuid,
 ) -> Result<bool> {
     match lease.kind {
-        db::AdminSessionCleanupKind::AccountGeneration => {
+        AdminSessionCleanupKind::AccountGeneration => {
             let bare_jid = lease
                 .bare_jid
                 .as_deref()
@@ -227,7 +226,7 @@ async fn execute_admin_session_cleanup(
                 .await?;
             Ok(true)
         }
-        db::AdminSessionCleanupKind::ExactConnection => {
+        AdminSessionCleanupKind::ExactConnection => {
             let full_jid = lease
                 .full_jid
                 .as_deref()
@@ -257,7 +256,10 @@ async fn execute_admin_session_cleanup(
                 .cluster
                 .send_session_instance_termination(&full_jid, connection_id)
                 .await?;
-            Ok(!db::admin_session_cleanup_target_current(&state.pool, lease, worker_id).await?)
+            Ok(!state
+                .admin_session_cleanup_worker_service()
+                .target_current(lease, worker_id)
+                .await?)
         }
     }
 }
@@ -298,30 +300,27 @@ async fn run_one(state: &Arc<AppState>, worker_id: Uuid) -> Result<bool> {
             break;
         };
 
-        let mut fence = state.pool.begin().await?;
-        if db::authorize_operation_effect_in_tx(&mut fence, &lease).await?
-            != db::EffectAuthorizationOutcome::Authorized
-            || !db::mark_operation_target_point_of_no_return_in_tx(&mut fence, &target).await?
-        {
-            let _ = db::acknowledge_operation_target_cancel_in_tx(&mut fence, &target).await?;
-            let _ = db::acknowledge_operation_cancel_in_tx(&mut fence, &lease).await?;
-            fence.commit().await?;
+        let fenced = state
+            .operation_effect_fence_service()
+            .execute_after_commit(&lease, &target, || async {
+                let heartbeat_stop = CancellationToken::new();
+                let heartbeat = tokio::spawn(lease_heartbeat(
+                    Arc::clone(state),
+                    lease.clone(),
+                    target.clone(),
+                    heartbeat_stop.clone(),
+                ));
+                let effect = execute_effect(state, &lease.operation, &target.target.payload).await;
+                heartbeat_stop.cancel();
+                heartbeat
+                    .await
+                    .context("operation lease heartbeat panicked")??;
+                Ok(effect)
+            })
+            .await?;
+        let FencedEffect::Executed(effect) = fenced else {
             return Ok(true);
-        }
-        fence.commit().await?;
-
-        let heartbeat_stop = CancellationToken::new();
-        let heartbeat = tokio::spawn(lease_heartbeat(
-            Arc::clone(state),
-            lease.clone(),
-            target.clone(),
-            heartbeat_stop.clone(),
-        ));
-        let effect = execute_effect(state, &lease.operation, &target.target.payload).await;
-        heartbeat_stop.cancel();
-        heartbeat
-            .await
-            .context("operation lease heartbeat panicked")??;
+        };
         let mut finish = state.pool.begin().await?;
         match effect {
             Ok(result) => {
@@ -626,63 +625,16 @@ async fn execute_effect(
             Ok(json!({"sessions_disconnected":disconnected,"user_id":user_id}))
         }
         "admin.muc_destroy" => {
-            let room_jid = payload
-                .get("room_jid")
-                .and_then(Value::as_str)
-                .context("room JID is missing")?;
-            let jid = crate::jid::CanonicalJid::parse(room_jid).context("room JID is invalid")?;
-            anyhow::ensure!(jid.resourcepart().is_none(), "room JID must be bare");
-            let localpart = jid.localpart().context("room JID has no localpart")?;
-            anyhow::ensure!(
-                jid.domainpart() == format!("conference.{}", state.config.domain),
-                "room JID is outside this MUC service"
-            );
-            let mut tx = state.pool.begin().await?;
-            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
-                .bind(format!("northstar:muc-room:{localpart}"))
-                .execute(&mut *tx)
+            let committed = state
+                .operation_muc_destroy_service()
+                .execute(crate::services::operation_muc_destroy::MucDestroyEffect {
+                    operation_id: operation.id,
+                    request_id: operation.request_id,
+                    actor_id: operation.actor_id,
+                    payload,
+                    local_domain: &state.config.domain,
+                })
                 .await?;
-            let intent_matches = sqlx::query_scalar::<_, Uuid>(
-                "SELECT operation_id FROM api_muc_destroy_intents WHERE room_jid=$1 AND localpart=$2 AND operation_id=$3 FOR UPDATE",
-            )
-            .bind(room_jid).bind(localpart).bind(operation.id)
-            .fetch_optional(&mut *tx).await?.is_some();
-            anyhow::ensure!(intent_matches, "durable MUC destroy intent is absent");
-            let room_id: Option<Uuid> = sqlx::query_scalar(
-                "SELECT id FROM muc_rooms
-                  WHERE localpart=$1 AND destroyed_at IS NULL FOR UPDATE",
-            )
-            .bind(localpart)
-            .fetch_optional(&mut *tx)
-            .await?;
-            let actor_id = operation
-                .actor_id
-                .context("admin MUC destroy operation has no actor")?;
-            let actor_label = actor_id.to_string();
-            let alternate_jid = payload.get("alternate_jid").and_then(Value::as_str);
-            let reason = payload.get("reason").and_then(Value::as_str);
-            let destroyed = if let Some(room_id) = room_id {
-                db::admin_destroy_cluster_muc_room_in_tx(
-                    &mut tx,
-                    operation.id,
-                    room_id,
-                    actor_id,
-                    &actor_label,
-                    alternate_jid,
-                    reason,
-                )
-                .await?
-            } else {
-                false
-            };
-            sqlx::query("DELETE FROM api_muc_destroy_intents WHERE operation_id=$1")
-                .bind(operation.id)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("INSERT INTO audit_log(actor_id,action,target,details,request_id,operation_id) VALUES($1,'admin.muc_room.destroy',$2,$3,$4,$5)")
-                .bind(operation.actor_id).bind(room_jid).bind(json!({"destroyed":destroyed}))
-                .bind(operation.request_id).bind(operation.id).execute(&mut *tx).await?;
-            tx.commit().await?;
             if let Err(error) = state
                 .muc_service()
                 .wake_committed_operation(&state.cluster, operation.id)
@@ -693,8 +645,8 @@ async fn execute_effect(
             }
             state
                 .muc_occupants
-                .retain(|_, occupant| occupant.room_jid != room_jid);
-            Ok(json!({"destroyed":destroyed,"room_jid":room_jid}))
+                .retain(|_, occupant| occupant.room_jid != committed.room_jid);
+            Ok(json!({"destroyed":committed.destroyed,"room_jid":committed.room_jid}))
         }
         kind => anyhow::bail!("operation executor is unavailable for {kind}"),
     }

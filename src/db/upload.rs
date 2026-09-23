@@ -4,6 +4,12 @@ use sqlx::{PgPool, Row};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::services::upload::{PromotionClaim, UploadLifecycleRepository};
+pub use crate::services::upload::{
+    UploadClaimOutcome, UploadLease, UploadRenewOutcome, UploadSlot, UploadStageProjection,
+    UserUploadDeleteOutcome,
+};
+
 #[derive(Clone)]
 pub(crate) struct PostgresUploadRepository {
     pool: PgPool,
@@ -40,6 +46,116 @@ impl northstar_upload_application::UploadRepository for PostgresUploadRepository
             request.max_retained_files,
             request.max_retained_bytes,
             request.max_pending_jobs,
+        )
+        .await
+    }
+}
+
+impl UploadLifecycleRepository for PostgresUploadRepository {
+    async fn claim_slot(
+        &self,
+        id: Uuid,
+        token_hash: &[u8],
+        lease_seconds: i64,
+    ) -> Result<UploadClaimOutcome> {
+        claim_upload_slot(&self.pool, id, token_hash, lease_seconds).await
+    }
+
+    async fn record_replay(
+        &self,
+        id: Uuid,
+        token_hash: &[u8],
+        content_sha256: &[u8; 32],
+    ) -> Result<bool> {
+        record_upload_replay(&self.pool, id, token_hash, content_sha256).await
+    }
+
+    async fn renew_claim(
+        &self,
+        id: Uuid,
+        claim_token: Uuid,
+        lease_seconds: i64,
+    ) -> Result<UploadRenewOutcome> {
+        renew_upload_claim(&self.pool, id, claim_token, lease_seconds).await
+    }
+
+    async fn release_claim(&self, id: Uuid, claim_token: Uuid) -> Result<bool> {
+        release_upload_claim(&self.pool, id, claim_token).await
+    }
+
+    async fn record_stage(&self, projection: UploadStageProjection<'_>) -> Result<bool> {
+        record_upload_stage(&self.pool, projection).await
+    }
+
+    async fn claim_promotion(
+        &self,
+        id: Uuid,
+        storage_attempt: Uuid,
+        storage_fence: i64,
+    ) -> Result<Option<Uuid>> {
+        claim_upload_promotion_job(&self.pool, id, storage_attempt, storage_fence).await
+    }
+
+    async fn begin_promotion(&self, claim: PromotionClaim) -> Result<bool> {
+        begin_upload_promotion(
+            &self.pool,
+            claim.id,
+            claim.storage_attempt,
+            claim.storage_fence,
+            claim.promotion_claim_token,
+        )
+        .await
+    }
+
+    async fn retire_promotion(&self, claim: PromotionClaim) -> Result<bool> {
+        retire_upload_promotion_for_cleanup(
+            &self.pool,
+            claim.id,
+            claim.storage_attempt,
+            claim.storage_fence,
+            claim.promotion_claim_token,
+        )
+        .await
+    }
+
+    async fn defer_promotion(&self, claim: PromotionClaim) -> Result<bool> {
+        defer_upload_promotion_job(
+            &self.pool,
+            claim.id,
+            claim.storage_attempt,
+            claim.storage_fence,
+            claim.promotion_claim_token,
+        )
+        .await
+    }
+
+    async fn complete_promotion(&self, projection: PromotedUploadProjection<'_>) -> Result<bool> {
+        complete_promoted_upload(&self.pool, projection).await
+    }
+
+    async fn attempt_committed(&self, identity: CommittedUploadIdentity<'_>) -> Result<bool> {
+        upload_attempt_is_committed(&self.pool, identity).await
+    }
+
+    async fn public_file(&self, id: Uuid) -> Result<Option<UploadSlot>> {
+        uploaded_file(&self.pool, id).await
+    }
+
+    async fn delete_authorized(
+        &self,
+        user_id: Uuid,
+        auth_generation: i64,
+        session_token: &str,
+        id: Uuid,
+        request_id: Uuid,
+    ) -> Result<UserUploadDeleteOutcome> {
+        queue_user_upload_delete_authorized(
+            &self.pool,
+            user_id,
+            auth_generation,
+            session_token,
+            id,
+            request_id,
         )
         .await
     }
@@ -91,48 +207,6 @@ fn cleanup_object_version(
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct UploadSlot {
-    pub id: Uuid,
-    pub content_type: String,
-    pub size: i64,
-    pub remaining_seconds: u64,
-    pub storage_backend: String,
-    pub storage_object_key: Option<String>,
-    pub storage_object_version: Option<String>,
-}
-
-#[derive(Debug)]
-pub struct UploadLease {
-    pub slot: UploadSlot,
-    pub claim_token: Uuid,
-    /// Monotonic database fence for this exact attempt. Unlike the renewable
-    /// claim expiry, it remains stable throughout staged reconciliation.
-    pub storage_fence: i64,
-    /// Bounded by PostgreSQL's clock, not the application host clock.
-    pub remaining_seconds: u64,
-}
-
-#[derive(Debug)]
-pub enum UploadClaimOutcome {
-    Acquired(UploadLease),
-    Replay {
-        slot: UploadSlot,
-        content_sha256: [u8; 32],
-    },
-    InProgress {
-        retry_after_seconds: u64,
-    },
-    Rejected,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum UploadRenewOutcome {
-    Renewed,
-    Busy,
-    Lost,
-}
-
 pub use crate::services::upload_maintenance::UploadAuthorityProbe;
 
 #[derive(Clone, Copy, Debug)]
@@ -145,18 +219,6 @@ pub struct UploadReservation<'a> {
     pub max_files_per_user: i64,
     pub max_bytes_per_user: i64,
     pub storage_backend: &'a str,
-}
-
-pub struct UploadStageProjection<'a> {
-    pub id: Uuid,
-    pub claim_token: Uuid,
-    pub storage_backend: &'a str,
-    pub stage_key: &'a str,
-    pub stage_version: Option<&'a str>,
-    pub object_key: &'a str,
-    pub content_sha256: &'a [u8; 32],
-    pub size: u64,
-    pub storage_fence: i64,
 }
 
 pub use crate::services::upload_maintenance::PromotedUploadProjection;
@@ -1464,12 +1526,6 @@ async fn queue_user_upload_delete_in_tx(
     .execute(&mut **tx)
     .await?;
     Ok(true)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum UserUploadDeleteOutcome {
-    Accepted,
-    Unauthorized,
 }
 
 /// Authenticate the exact bearer and remove an owner-controlled upload in

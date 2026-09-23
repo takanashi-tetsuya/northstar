@@ -59,7 +59,15 @@ pub(crate) type DatabaseMetricsSnapshot = (
     DeploymentCapacitySnapshot,
 );
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DatabasePoolStatus {
+    pub(crate) connections: u32,
+    pub(crate) idle_connections: usize,
+}
+
 pub(crate) trait MetricsSnapshotRepository: Send + Sync {
+    fn ping(&self) -> impl Future<Output = anyhow::Result<()>> + Send;
+    fn pool_status(&self) -> DatabasePoolStatus;
     fn collect(
         &self,
         component_domains: &[String],
@@ -73,6 +81,12 @@ pub(crate) struct MetricsSnapshotService<R> {
 impl<R: MetricsSnapshotRepository> MetricsSnapshotService<R> {
     pub(crate) fn new(repository: R) -> Self {
         Self { repository }
+    }
+    pub(crate) async fn ping(&self) -> anyhow::Result<()> {
+        self.repository.ping().await
+    }
+    pub(crate) fn pool_status(&self) -> DatabasePoolStatus {
+        self.repository.pool_status()
     }
     pub(crate) async fn collect(
         &self,

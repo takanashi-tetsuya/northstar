@@ -1,8 +1,11 @@
+use anyhow::Result as AnyhowResult;
 use base64::Engine;
 use dashmap::DashMap;
 use hmac::{Hmac, Mac};
+use northstar_xep_0215::{PublicService, ServiceHost, ServiceIdentity, ServiceToken};
 use sha1::Sha1;
 use sha2::Sha256;
+use std::num::NonZeroU16;
 use std::{
     collections::VecDeque,
     net::IpAddr,
@@ -38,6 +41,9 @@ pub(crate) struct ExtDiscoService {
 }
 
 struct ExtDiscoInner {
+    domain: String,
+    stun_service: Option<(String, u16)>,
+    turn_service: Option<(String, u16)>,
     turn_shared_secret: Option<Zeroizing<Vec<u8>>>,
     credential_ttl_seconds: u64,
     requests_per_minute: usize,
@@ -52,11 +58,17 @@ struct ExtDiscoInner {
 
 impl ExtDiscoService {
     pub(crate) fn new(
+        domain: String,
+        stun_service: Option<(String, u16)>,
+        turn_service: Option<(String, u16)>,
         mut turn_shared_secret: Option<String>,
         credential_ttl_seconds: u64,
         requests_per_minute: usize,
     ) -> Self {
         Self::new_with_rate_key_limit(
+            domain,
+            stun_service,
+            turn_service,
             turn_shared_secret.take(),
             credential_ttl_seconds,
             requests_per_minute,
@@ -65,6 +77,9 @@ impl ExtDiscoService {
     }
 
     fn new_with_rate_key_limit(
+        domain: String,
+        stun_service: Option<(String, u16)>,
+        turn_service: Option<(String, u16)>,
         mut turn_shared_secret: Option<String>,
         credential_ttl_seconds: u64,
         requests_per_minute: usize,
@@ -77,6 +92,9 @@ impl ExtDiscoService {
         });
         Self {
             inner: Arc::new(ExtDiscoInner {
+                domain,
+                stun_service,
+                turn_service,
                 turn_shared_secret: protected_secret,
                 credential_ttl_seconds,
                 requests_per_minute,
@@ -86,6 +104,65 @@ impl ExtDiscoService {
                 rate_window_checks: AtomicU64::new(0),
             }),
         }
+    }
+
+    pub(crate) fn domain(&self) -> &str {
+        &self.inner.domain
+    }
+
+    pub(crate) fn target_allowed(&self, target: Option<&str>) -> bool {
+        target.is_none_or(|target| {
+            crate::jid::CanonicalJid::parse_bare(target).is_ok_and(|jid| {
+                jid.localpart().is_none()
+                    && jid.resourcepart().is_none()
+                    && jid.domainpart() == self.inner.domain
+            })
+        })
+    }
+
+    pub(crate) fn request_authorized(
+        &self,
+        username: Option<&str>,
+        full_jid: Option<&str>,
+        iq_type: Option<&str>,
+    ) -> bool {
+        let (Some(username), Some(full_jid)) = (username, full_jid) else {
+            return false;
+        };
+        crate::jid::CanonicalJid::parse(full_jid).is_ok_and(|jid| {
+            jid.resourcepart().is_some()
+                && jid.localpart() == Some(username)
+                && jid.domainpart() == self.inner.domain
+                && iq_type == Some("get")
+        })
+    }
+
+    pub(crate) fn public_services(&self) -> AnyhowResult<Vec<PublicService>> {
+        let mut services = Vec::with_capacity(3);
+        if let Some((host, port)) = &self.inner.stun_service {
+            services.push(public_service(
+                host,
+                *port,
+                "stun",
+                "udp",
+                "STUN Service (RFC 5389)",
+                false,
+            )?);
+        }
+        if let Some((host, port)) = &self.inner.turn_service {
+            let restricted = self.turn_is_restricted();
+            for transport in ["udp", "tcp"] {
+                services.push(public_service(
+                    host,
+                    *port,
+                    "turn",
+                    transport,
+                    "TURN Relay (RFC 5766)",
+                    restricted,
+                )?);
+            }
+        }
+        Ok(services)
     }
 
     pub(crate) fn turn_is_restricted(&self) -> bool {
@@ -160,6 +237,26 @@ impl ExtDiscoService {
     }
 }
 
+fn public_service(
+    host: &str,
+    port: u16,
+    service_type: &str,
+    transport: &str,
+    name: &str,
+    restricted: bool,
+) -> AnyhowResult<PublicService> {
+    let mut service = PublicService::new(ServiceIdentity {
+        host: ServiceHost::parse(host)?,
+        service_type: ServiceToken::parse_service_type(service_type)?,
+        port: NonZeroU16::new(port),
+        transport: Some(ServiceToken::parse_transport(transport)?),
+    });
+    service.name = Some(name.to_owned());
+    service.restricted = restricted;
+    service.validate()?;
+    Ok(service)
+}
+
 fn rate_events_allow(events: &mut VecDeque<Instant>, limit: usize, now: Instant) -> bool {
     while events
         .front()
@@ -207,6 +304,53 @@ fn derive_turn_credentials(
 mod tests {
     use super::*;
 
+    fn test_service(secret: Option<String>, ttl: u64, limit: usize) -> ExtDiscoService {
+        ExtDiscoService::new("example.test".to_owned(), None, None, secret, ttl, limit)
+    }
+
+    #[test]
+    fn targets_and_requests_are_bound_to_the_configured_domain() {
+        let service = test_service(None, 60, 4);
+        assert!(service.target_allowed(None));
+        assert!(service.target_allowed(Some("EXAMPLE.test")));
+        assert!(!service.target_allowed(Some("alice@example.test")));
+        assert!(!service.target_allowed(Some("example.test/resource")));
+        assert!(service.request_authorized(
+            Some("alice"),
+            Some("alice@example.test/device"),
+            Some("get")
+        ));
+        assert!(!service.request_authorized(
+            Some("alice"),
+            Some("alice@elsewhere.test/device"),
+            Some("get")
+        ));
+        assert!(!service.request_authorized(
+            Some("alice"),
+            Some("alice@example.test/device"),
+            Some("set")
+        ));
+    }
+
+    #[test]
+    fn advertised_services_are_strict_and_secret_free() {
+        let service = ExtDiscoService::new(
+            "example.test".to_owned(),
+            Some(("stun.example.test".to_owned(), 3478)),
+            Some(("TURN.Example.test.".to_owned(), 3478)),
+            Some(test_secret()),
+            60,
+            4,
+        );
+        let configured = service.public_services().unwrap();
+        assert_eq!(configured.len(), 3);
+        let xml = northstar_xep_0215::build_services_result(None, &configured).unwrap();
+        assert!(xml.contains("host='turn.example.test'"));
+        assert!(xml.contains("restricted='true'"));
+        assert!(!xml.contains("username="));
+        assert!(!xml.contains("password="));
+    }
+
     fn test_secret() -> String {
         use ring::rand::SecureRandom;
         let mut bytes = [0_u8; 32];
@@ -217,7 +361,7 @@ mod tests {
     #[test]
     fn credentials_are_opaque_short_lived_and_verifiable() {
         let secret = test_secret();
-        let service = ExtDiscoService::new(Some(secret.clone()), 3_600, 4);
+        let service = test_service(Some(secret.clone()), 3_600, 4);
         let credentials = service
             .issue_turn_credentials(
                 "alice@example.test",
@@ -243,16 +387,11 @@ mod tests {
         let ip = "192.0.2.10".parse().unwrap();
         let now = Instant::now();
         assert_eq!(
-            ExtDiscoService::new(None, 3_600, 4).issue_turn_credentials(
-                "alice@example.test",
-                ip,
-                now,
-                1
-            ),
+            test_service(None, 3_600, 4).issue_turn_credentials("alice@example.test", ip, now, 1),
             Err(CredentialIssueError::NotConfigured)
         );
         assert_eq!(
-            ExtDiscoService::new(Some(test_secret()), 1, 4).issue_turn_credentials(
+            test_service(Some(test_secret()), 1, 4).issue_turn_credentials(
                 "alice@example.test",
                 ip,
                 now,
@@ -264,7 +403,7 @@ mod tests {
 
     #[test]
     fn account_and_ip_rate_windows_are_bounded_and_recover() {
-        let service = ExtDiscoService::new(Some("a sufficiently long secret".to_owned()), 60, 2);
+        let service = test_service(Some("a sufficiently long secret".to_owned()), 60, 2);
         let start = Instant::now();
         let ip = "192.0.2.10".parse().unwrap();
         assert!(service
@@ -296,7 +435,15 @@ mod tests {
     fn concurrent_new_rate_keys_cannot_cross_the_hard_capacity() {
         const KEY_CAPACITY: usize = 8;
         const CONTENDERS: usize = 64;
-        let service = ExtDiscoService::new_with_rate_key_limit(None, 60, 1, KEY_CAPACITY);
+        let service = ExtDiscoService::new_with_rate_key_limit(
+            "example.test".to_owned(),
+            None,
+            None,
+            None,
+            60,
+            1,
+            KEY_CAPACITY,
+        );
         let barrier = Arc::new(std::sync::Barrier::new(CONTENDERS));
         let now = Instant::now();
         let threads = (0..CONTENDERS)

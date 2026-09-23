@@ -11,6 +11,7 @@ pub(crate) struct PostgresAccountRepository {
     pool: PgPool,
     domain: String,
     abuse: Arc<AbuseGuard>,
+    api_control: Option<Arc<db::ApiControlKeyring>>,
 }
 impl PostgresAccountRepository {
     pub(crate) fn new(pool: PgPool, domain: String, abuse: Arc<AbuseGuard>) -> Self {
@@ -18,10 +19,272 @@ impl PostgresAccountRepository {
             pool,
             domain,
             abuse,
+            api_control: None,
         }
+    }
+
+    pub(crate) fn with_api_control(mut self, api_control: Arc<db::ApiControlKeyring>) -> Self {
+        self.api_control = Some(api_control);
+        self
+    }
+
+    async fn yield_http_registration_lease(&self, lease: &db::IdempotencyLease) -> Result<bool> {
+        db::yield_idempotency_lease(&self.pool, lease).await
     }
 }
 impl AccountRepository for PostgresAccountRepository {
+    async fn register_http(
+        &self,
+        request: HttpRegistrationRequest<'_>,
+        policy: AccountPolicy,
+    ) -> Result<HttpRegistrationOutcome> {
+        use HttpRegistrationOutcome as Outcome;
+
+        let keyring = self
+            .api_control
+            .as_ref()
+            .context("HTTP registration API control keyring is missing")?;
+        let mut reservation = self.pool.begin().await?;
+        let lease =
+            match db::acquire_idempotency_in_tx(keyring, &mut reservation, &request.idempotency)
+                .await?
+            {
+                db::IdempotencyAcquire::Acquired(lease) => lease,
+                db::IdempotencyAcquire::Replay(replay) => {
+                    reservation.commit().await?;
+                    return Ok(Outcome::Replay(replay));
+                }
+                db::IdempotencyAcquire::FingerprintConflict
+                | db::IdempotencyAcquire::RotationConflict => {
+                    reservation.rollback().await?;
+                    return Ok(Outcome::IdempotencyConflict);
+                }
+                db::IdempotencyAcquire::ReplayInvalidated => {
+                    reservation.rollback().await?;
+                    return Ok(Outcome::ReplayInvalidated);
+                }
+                db::IdempotencyAcquire::Busy {
+                    retry_after_seconds,
+                } => {
+                    reservation.rollback().await?;
+                    return Ok(Outcome::Busy(retry_after_seconds));
+                }
+                db::IdempotencyAcquire::CapacityLimited {
+                    retry_after_seconds,
+                } => {
+                    reservation.rollback().await?;
+                    return Ok(Outcome::CapacityLimited(retry_after_seconds));
+                }
+                db::IdempotencyAcquire::InProgress {
+                    retry_after_seconds,
+                } => {
+                    reservation.rollback().await?;
+                    return Ok(Outcome::InProgress(retry_after_seconds));
+                }
+            };
+
+        // A replay precedes policy checks. For a fresh lease, abandon and
+        // commit the cheap reservation together with the policy decision.
+        let closed = request.availability.is_closed();
+        let rate_limited = if closed {
+            false
+        } else {
+            db::registrations_last_hour_in_tx(&mut reservation).await?
+                >= i64::from(policy.registration_rate_per_hour)
+        };
+        if closed || rate_limited {
+            if !db::abandon_idempotency_lease_in_tx(&mut reservation, &lease).await? {
+                reservation.rollback().await?;
+                return Ok(Outcome::LeaseLost);
+            }
+            reservation.commit().await?;
+            return Ok(if closed {
+                Outcome::Closed
+            } else {
+                Outcome::RateLimited
+            });
+        }
+        reservation.commit().await?;
+
+        if !lease.guard_verified {
+            match self
+                .verify_registration_guard(RegistrationGuardRequest {
+                    lease: RegistrationGuardLease {
+                        record_id: lease.record_id,
+                        lease_token: lease.lease_token(),
+                    },
+                    lease_seconds: request.idempotency.lease_seconds,
+                    subject: request.subject,
+                    actors: request.actors,
+                    proof: request.proof,
+                    intent: request.intent,
+                })
+                .await?
+            {
+                RegistrationGuardOutcome::Verified => {}
+                RegistrationGuardOutcome::Denied(error) => return Ok(Outcome::AbuseDenied(error)),
+                RegistrationGuardOutcome::LeaseLost => return Ok(Outcome::LeaseLost),
+            }
+        }
+
+        // No transaction spans password work. The committed guard marker
+        // allows an exact retry to skip already-consumed proof after a worker
+        // or database failure, while the rotated lease fences the old worker.
+        let prepared = match db::prepare_registration(
+            request.username,
+            request.password,
+            policy.scram_iterations,
+            policy.scram_sha1_enabled,
+        )
+        .await
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if !self.yield_http_registration_lease(&lease).await? {
+                    return Ok(Outcome::LeaseLost);
+                }
+                return match error {
+                    db::RegistrationError::InvalidUsername(_) => Ok(Outcome::InvalidUsername),
+                    db::RegistrationError::PasswordWorkOverloaded => {
+                        Ok(Outcome::PasswordWorkOverloaded)
+                    }
+                    db::RegistrationError::Internal(error) => Err(error),
+                    other => Err(anyhow::anyhow!(other)
+                        .context("registration preparation returned an impossible outcome")),
+                };
+            }
+        };
+
+        let mut publication = self.pool.begin().await?;
+        if !db::resume_idempotency_lease_in_tx(
+            &mut publication,
+            &lease,
+            request.idempotency.lease_seconds,
+        )
+        .await?
+        {
+            publication.rollback().await?;
+            return Ok(Outcome::LeaseLost);
+        }
+        let outcome = db::create_user_with_invitation_guarded_in_tx_v2(
+            &mut publication,
+            &self.abuse,
+            request.subject,
+            request.actors,
+            request.proof,
+            request.intent,
+            true,
+            prepared,
+            request.invitation_token,
+            request.availability.requires_invitation(),
+            policy.registration_rate_per_hour,
+            Some(lease.request_id),
+        )
+        .await;
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                publication.rollback().await?;
+                if !self.yield_http_registration_lease(&lease).await? {
+                    return Ok(Outcome::LeaseLost);
+                }
+                return Err(error).context("guarded HTTP registration failed");
+            }
+        };
+        match outcome {
+            db::GuardedRegistrationOutcome::Created(mut user) => {
+                let username = std::mem::take(&mut user.username);
+                let user_id = user.id;
+                user.password_hash.zeroize();
+                user.password_hash.clear();
+                anyhow::ensure!(
+                    db::mark_idempotency_guard_verified_in_tx(&mut publication, &lease).await?,
+                    "registration idempotency guard marker changed"
+                );
+                anyhow::ensure!(
+                    db::bind_idempotency_actor_in_tx(&mut publication, &lease, user_id).await?,
+                    "registration idempotency ownership changed"
+                );
+                let body = serde_json::to_vec(&serde_json::json!({
+                    "jid": format!("{}@{}", username, self.domain)
+                }))?;
+                anyhow::ensure!(
+                    db::complete_idempotency_in_tx(
+                        keyring,
+                        &mut publication,
+                        &lease,
+                        201,
+                        &crate::services::api_mutations::json_replay_headers(),
+                        &body,
+                    )
+                    .await?,
+                    "registration idempotency lease changed"
+                );
+                publication.commit().await?;
+                Ok(Outcome::Created(body))
+            }
+            db::GuardedRegistrationOutcome::AbuseDenied(error) => {
+                if !db::abandon_idempotency_lease_in_tx(&mut publication, &lease).await? {
+                    publication.rollback().await?;
+                    return Ok(Outcome::LeaseLost);
+                }
+                publication.commit().await?;
+                Ok(Outcome::AbuseDenied(error))
+            }
+            db::GuardedRegistrationOutcome::Rejected(
+                error @ (db::RegistrationError::UsernameTaken
+                | db::RegistrationError::InvitationRejected),
+            ) => {
+                let reason = match error {
+                    db::RegistrationError::UsernameTaken => "username_unavailable",
+                    db::RegistrationError::InvitationRejected => "invitation_rejected",
+                    _ => unreachable!("pattern is restricted above"),
+                };
+                db::audit_registration_rejection_in_tx(&mut publication, lease.request_id, reason)
+                    .await?;
+                let body = serde_json::to_vec(&serde_json::json!({
+                    "error": {
+                        "code": "bad_request",
+                        "message": "registration request could not be accepted"
+                    }
+                }))?;
+                anyhow::ensure!(
+                    db::complete_idempotency_in_tx(
+                        keyring,
+                        &mut publication,
+                        &lease,
+                        400,
+                        &crate::services::api_mutations::json_replay_headers(),
+                        &body,
+                    )
+                    .await?,
+                    "registration rejection idempotency lease changed"
+                );
+                publication.commit().await?;
+                Ok(Outcome::Rejected(body))
+            }
+            db::GuardedRegistrationOutcome::Rejected(error) => {
+                if !db::abandon_idempotency_lease_in_tx(&mut publication, &lease).await? {
+                    publication.rollback().await?;
+                    return Ok(Outcome::LeaseLost);
+                }
+                publication.commit().await?;
+                match error {
+                    db::RegistrationError::CapacityExhausted => Ok(Outcome::CapacityExhausted),
+                    db::RegistrationError::Closed => Ok(Outcome::Closed),
+                    db::RegistrationError::RateLimited => Ok(Outcome::RateLimited),
+                    db::RegistrationError::PasswordWorkOverloaded => {
+                        Ok(Outcome::PasswordWorkOverloaded)
+                    }
+                    db::RegistrationError::InvalidUsername(_) => Ok(Outcome::InvalidUsername),
+                    db::RegistrationError::InvitationRejected => Ok(Outcome::InvitationRejected),
+                    db::RegistrationError::UsernameTaken => Ok(Outcome::UsernameTaken),
+                    db::RegistrationError::Internal(error) => Err(error),
+                }
+            }
+        }
+    }
+
     async fn verify_registration_guard(
         &self,
         request: RegistrationGuardRequest<'_>,
@@ -304,6 +567,7 @@ mod registration_guard_tests {
     use base64::Engine as _;
     use ring::rand::{SecureRandom, SystemRandom};
     use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     fn test_key() -> String {
@@ -330,6 +594,313 @@ mod registration_guard_tests {
         unreachable!()
     }
 
+    async fn register_http_once(
+        service: &AccountService<PostgresAccountRepository>,
+        availability: &HttpRegistrationAvailability,
+        username: &str,
+        key: &str,
+        request_id: Uuid,
+        scope: &str,
+        proof: Option<&PowProof>,
+    ) -> HttpRegistrationOutcome {
+        let password = "correct horse battery staple";
+        let body = serde_json::json!({
+            "username": username,
+            "password": password,
+            "invitation_token": null,
+        });
+        let raw_body = serde_json::to_vec(&serde_json::json!({
+            "username": username,
+            "password": password,
+            "invitation_token": null,
+            "pow": proof.map(|proof| serde_json::json!({
+                "challenge_id": proof.challenge_id,
+                "nonce": proof.nonce,
+            })),
+        }))
+        .unwrap();
+        let intent = PowIntent::http_json(AbuseAction::Registration, "/api/v1/register", &body);
+        let actors = vec![scope.to_owned()];
+        service
+            .register_http(HttpRegistrationRequest {
+                idempotency: IdempotencyRequest {
+                    request_id,
+                    actor_id: None,
+                    principal_scope: scope.as_bytes(),
+                    capacity_scope: scope.as_bytes(),
+                    target_scope: b"",
+                    principal_kind: ApiPrincipalKind::Anonymous,
+                    method: "POST",
+                    route: "/api/v1/register",
+                    idempotency_key: key,
+                    request_fingerprint: api_request_fingerprint("application/json", &raw_body),
+                    ttl_seconds: 3_600,
+                    lease_seconds: 30,
+                },
+                username,
+                password,
+                invitation_token: None,
+                proof,
+                intent: &intent,
+                subject: scope,
+                actors: &actors,
+                availability: availability.clone(),
+            })
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL pointing at an isolated PostgreSQL database"]
+    async fn http_registration_replays_exact_created_and_rejected_responses_after_policy_closure() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("set TEST_DATABASE_URL");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&url)
+            .await
+            .unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
+            .await
+            .unwrap();
+        let guard = Arc::new(AbuseGuard::new_persistent(
+            AbuseConfig {
+                base_work_factor: 2,
+                max_work_factor: 64,
+                window: Duration::from_secs(60),
+                cooldown_step: Duration::from_secs(60),
+                max_wait: Duration::from_secs(900),
+                message_free_burst: 6,
+                approximate_max_device_seconds: 8,
+            },
+            pool.clone(),
+            Some(test_key().as_bytes()),
+            None,
+        ));
+        let api_control =
+            Arc::new(crate::db::ApiControlKeyring::new(test_key().as_bytes(), None).unwrap());
+        let service = AccountService::new(
+            PostgresAccountRepository::new(pool.clone(), "example.test".into(), guard)
+                .with_api_control(api_control),
+            false,
+            1_000_000,
+            crate::auth::MIN_SCRAM_ITERATIONS,
+            false,
+        );
+        let closed = Arc::new(AtomicBool::new(false));
+        let availability = HttpRegistrationAvailability::new(Arc::clone(&closed), false, false);
+        let suffix = Uuid::new_v4().simple().to_string();
+        let username = format!("registration-{suffix}");
+        let created_key = format!("created-{suffix}");
+        let created_id = Uuid::new_v4();
+        let created_scope = format!("registration:192.0.2.{}", 40);
+        let created = register_http_once(
+            &service,
+            &availability,
+            &username,
+            &created_key,
+            created_id,
+            &created_scope,
+            None,
+        )
+        .await;
+        let HttpRegistrationOutcome::Created(created_body) = created else {
+            panic!("expected newly created account");
+        };
+        assert_eq!(
+            created_body,
+            serde_json::to_vec(&serde_json::json!({"jid": format!("{username}@example.test")}))
+                .unwrap()
+        );
+        closed.store(true, Ordering::Release);
+        let replayed = register_http_once(
+            &service,
+            &availability,
+            &username,
+            &created_key,
+            created_id,
+            &created_scope,
+            None,
+        )
+        .await;
+        let HttpRegistrationOutcome::Replay(replayed) = replayed else {
+            panic!("created response must replay before closure check");
+        };
+        assert_eq!(replayed.request_id, created_id);
+        assert_eq!(replayed.status, 201);
+        assert_eq!(
+            replayed.headers,
+            crate::services::api_mutations::json_replay_headers()
+        );
+        assert_eq!(replayed.body, created_body);
+
+        closed.store(false, Ordering::Release);
+        let rejected_key = format!("rejected-{suffix}");
+        let rejected_id = Uuid::new_v4();
+        let rejected_scope = "registration:192.0.2.41";
+        let rejected = register_http_once(
+            &service,
+            &availability,
+            &username,
+            &rejected_key,
+            rejected_id,
+            rejected_scope,
+            None,
+        )
+        .await;
+        let HttpRegistrationOutcome::Rejected(rejected_body) = rejected else {
+            panic!("expected deterministic username rejection");
+        };
+        assert_eq!(
+            rejected_body,
+            serde_json::to_vec(&serde_json::json!({
+                "error": {
+                    "code": "bad_request",
+                    "message": "registration request could not be accepted"
+                }
+            }))
+            .unwrap()
+        );
+        closed.store(true, Ordering::Release);
+        let replayed = register_http_once(
+            &service,
+            &availability,
+            &username,
+            &rejected_key,
+            rejected_id,
+            rejected_scope,
+            None,
+        )
+        .await;
+        let HttpRegistrationOutcome::Replay(replayed) = replayed else {
+            panic!("rejection must replay before closure check");
+        };
+        assert_eq!(replayed.request_id, rejected_id);
+        assert_eq!(replayed.status, 400);
+        assert_eq!(
+            replayed.headers,
+            crate::services::api_mutations::json_replay_headers()
+        );
+        assert_eq!(replayed.body, rejected_body);
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL pointing at an isolated PostgreSQL database"]
+    async fn http_registration_overload_preserves_committed_proof_marker_for_exact_retry() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("set TEST_DATABASE_URL");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&url)
+            .await
+            .unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
+            .await
+            .unwrap();
+        let guard = Arc::new(AbuseGuard::new_persistent(
+            AbuseConfig {
+                base_work_factor: 2,
+                max_work_factor: 64,
+                window: Duration::from_secs(60),
+                cooldown_step: Duration::from_secs(60),
+                max_wait: Duration::from_secs(900),
+                message_free_burst: 6,
+                approximate_max_device_seconds: 8,
+            },
+            pool.clone(),
+            Some(test_key().as_bytes()),
+            None,
+        ));
+        let api_control =
+            Arc::new(crate::db::ApiControlKeyring::new(test_key().as_bytes(), None).unwrap());
+        let service = AccountService::new(
+            PostgresAccountRepository::new(pool.clone(), "example.test".into(), Arc::clone(&guard))
+                .with_api_control(api_control),
+            false,
+            1_000_000,
+            crate::auth::MIN_SCRAM_ITERATIONS,
+            false,
+        );
+        let availability =
+            HttpRegistrationAvailability::new(Arc::new(AtomicBool::new(false)), false, false);
+        let suffix = Uuid::new_v4().simple().to_string();
+        let username = format!("retry-{suffix}");
+        let key = format!("retry-{suffix}");
+        let request_id = Uuid::new_v4();
+        let scope = "registration:192.0.2.42";
+        let actors = vec![scope.to_owned()];
+        let body = serde_json::json!({
+            "username": username,
+            "password": "correct horse battery staple",
+            "invitation_token": null,
+        });
+        let intent = PowIntent::http_json(AbuseAction::Registration, "/api/v1/register", &body);
+        assert!(guard
+            .verify_or_allow_v2(AbuseAction::Registration, scope, &actors, None, &intent)
+            .await
+            .unwrap()
+            .is_ok());
+        let challenge = guard
+            .issue_v2(AbuseAction::Registration, scope, &actors, &intent)
+            .await
+            .unwrap();
+        let proof = solve_pow(&challenge);
+        let mut admissions = Vec::new();
+        while let Ok(admission) = crate::password_work::admit() {
+            admissions.push(admission);
+        }
+        assert!(!admissions.is_empty());
+        let overloaded = register_http_once(
+            &service,
+            &availability,
+            &username,
+            &key,
+            request_id,
+            scope,
+            Some(&proof),
+        )
+        .await;
+        assert!(matches!(
+            overloaded,
+            HttpRegistrationOutcome::PasswordWorkOverloaded
+        ));
+        let marker: bool = sqlx::query_scalar(
+            "SELECT guard_verified_at IS NOT NULL FROM api_idempotency_records WHERE request_id=$1",
+        )
+        .bind(request_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            marker,
+            "the pre-hash guard marker must survive worker overload"
+        );
+        let proof_retained: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM abuse_pow_challenges WHERE id=$1)")
+                .bind(proof.challenge_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            !proof_retained,
+            "proof consumption must commit with the marker"
+        );
+        drop(admissions);
+        let retried = register_http_once(
+            &service,
+            &availability,
+            &username,
+            &key,
+            request_id,
+            scope,
+            Some(&proof),
+        )
+        .await;
+        assert!(matches!(retried, HttpRegistrationOutcome::Created(_)));
+        pool.close().await;
+    }
+
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL pointing at an isolated PostgreSQL database"]
     async fn registration_guard_consumes_v2_proof_with_marker_and_fences_old_worker() {
@@ -340,6 +911,9 @@ mod registration_guard_tests {
             .await
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
+        crate::db::initialize_admin_runtime_settings(&pool, false, false, false)
+            .await
+            .unwrap();
         let abuse_key = test_key();
         let api_key = test_key();
         let guard = Arc::new(AbuseGuard::new_persistent(

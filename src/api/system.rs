@@ -22,6 +22,11 @@ use crate::state::AppState;
 use crate::xmpp;
 
 use crate::services::metrics_snapshot::DatabaseMetricsSnapshot;
+#[cfg(test)]
+use crate::services::readiness::{
+    admin_session_cleanup_ready, ADMIN_CLEANUP_MAX_READY_AGE_SECONDS,
+    ADMIN_CLEANUP_MAX_READY_ATTEMPTS,
+};
 
 /// Minimal capability set for the private observability listener. Keeping
 /// authentication, concurrency control and caching outside `AppState` avoids
@@ -35,11 +40,6 @@ pub struct MetricsEndpointState {
 const READINESS_CACHE_TTL: Duration = Duration::from_secs(2);
 const READINESS_GATE_WAIT: Duration = Duration::from_millis(200);
 const READINESS_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
-// Cleanup retries cap at a 300-second backoff. Allow one full capped interval
-// plus recovery margin, but do not advertise readiness forever when committed
-// credential or connection revocations are not converging.
-const ADMIN_CLEANUP_MAX_READY_AGE_SECONDS: f64 = 600.0;
-const ADMIN_CLEANUP_MAX_READY_ATTEMPTS: i64 = 9;
 
 #[derive(Clone)]
 enum ReadinessSnapshot {
@@ -225,28 +225,20 @@ fn upload_storage_ready(state: crate::services::upload_safety::UploadSafetyState
 }
 
 async fn probe_readiness(state: &AppState) -> ReadinessSnapshot {
-    let persistence_probe = async {
-        if let Some(identity) = state.abuse_key_deployment() {
-            crate::db::validate_abuse_key_deployment(&state.pool, identity).await?;
-        }
-        if let Some(identity) = state.cluster.key_authority_identity() {
-            crate::db::validate_cluster_key_deployment(&state.pool, &identity).await?;
-            state
-                .cluster
-                .validate_instance_authority(&state.pool)
-                .await?;
-        }
-        // This unconditional authority query also proves database connectivity.
-        // A separate ping would add another pool wait to the same probe budget.
-        let cleanup = crate::db::admin_session_cleanup_snapshot(&state.pool).await?;
-        anyhow::ensure!(
-            admin_session_cleanup_ready(&cleanup),
-            "administrator session-cleanup authority is inconsistent, full, or not converging"
-        );
-        Ok::<_, anyhow::Error>(())
-    };
+    let cluster_authority = state.cluster.readiness_authority_snapshot();
+    let persistence_probe = state
+        .readiness_service()
+        .validate_persistence(state.abuse_key_deployment(), cluster_authority.as_ref());
     match tokio::time::timeout(READINESS_PROBE_TIMEOUT, persistence_probe).await {
         Ok(Ok(())) => {
+            // An instance lease may be replaced while the persistence query is
+            // in flight. Never report ready for a superseded local epoch.
+            if cluster_authority != state.cluster.readiness_authority_snapshot() {
+                tracing::warn!("readiness cluster authority changed during persistence probe");
+                return ReadinessSnapshot::Unavailable(
+                    "database or persisted security authority is not ready",
+                );
+            }
             if !state.sm_memory_governor().is_ready() {
                 return ReadinessSnapshot::Unavailable(
                     "XEP-0198 memory or recovery capacity is not ready",
@@ -274,17 +266,6 @@ async fn probe_readiness(state: &AppState) -> ReadinessSnapshot {
         }
         Err(_) => ReadinessSnapshot::Unavailable("readiness persistence authority probe timed out"),
     }
-}
-
-fn admin_session_cleanup_ready(cleanup: &crate::db::AdminSessionCleanupSnapshot) -> bool {
-    cleanup.pending >= 0
-        && cleanup.running >= 0
-        && cleanup.capacity > 0
-        && cleanup.queued == cleanup.pending.saturating_add(cleanup.running)
-        && cleanup.queued < cleanup.capacity
-        && (cleanup.queued == 0
-            || (cleanup.oldest_age_seconds <= ADMIN_CLEANUP_MAX_READY_AGE_SECONDS
-                && cleanup.maximum_attempts < ADMIN_CLEANUP_MAX_READY_ATTEMPTS))
 }
 
 pub async fn metrics(
@@ -373,7 +354,7 @@ async fn collect_metrics(state: &AppState) -> String {
     let ping_started = std::time::Instant::now();
     let database_up = tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&state.pool),
+        state.metrics_snapshot_service().ping(),
     )
     .await
     .is_ok_and(|result| result.is_ok());
@@ -383,6 +364,7 @@ async fn collect_metrics(state: &AppState) -> String {
         .database_operation_duration_seconds
         .observe(database_ping_duration);
     let database_ping_seconds = database_ping_duration.as_secs_f64();
+    let pool_status = state.metrics_snapshot_service().pool_status();
     let component_domains = state.configured_component_domains();
     let collector = tokio::time::timeout(
         std::time::Duration::from_secs(2),
@@ -459,8 +441,8 @@ async fn collect_metrics(state: &AppState) -> String {
         ),
         u8::from(database_up),
         database_ping_seconds,
-        state.pool.size(),
-        state.pool.num_idle(),
+        pool_status.connections,
+        pool_status.idle_connections,
         state.config.database_max_connections,
         state.config.s2s_outbox_max_rows,
         state.config.s2s_outbox_max_bytes,
@@ -681,11 +663,12 @@ pub async fn websocket(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
+    let policy = state.public_discovery_context().policy();
     if !secure_websocket_request(
         peer.ip(),
         &headers,
-        &state.config.trusted_proxy_ips,
-        &state.config.public_url,
+        &policy.trusted_proxy_ips,
+        &policy.public_url,
     ) {
         return (
             axum::http::StatusCode::BAD_REQUEST,
@@ -695,8 +678,8 @@ pub async fn websocket(
     }
     if !allowed_websocket_origin(
         &headers,
-        &state.config.public_url,
-        &state.config.websocket_allowed_origins,
+        &policy.public_url,
+        &policy.websocket_allowed_origins,
     ) {
         return (
             axum::http::StatusCode::FORBIDDEN,
@@ -1162,6 +1145,22 @@ mod tests {
                 > ready.find("probe_readiness(&endpoint.app).await").unwrap(),
             "a database probe started before shutdown cannot restore readiness"
         );
+    }
+
+    #[test]
+    fn readiness_persistence_uses_service_without_transport_database_authority() {
+        let source = include_str!("system.rs");
+        let probe = source
+            .split("async fn probe_readiness(")
+            .nth(1)
+            .expect("readiness probe exists")
+            .split("pub async fn metrics(")
+            .next()
+            .expect("metrics handler follows readiness probe");
+        assert!(probe.contains(".readiness_service()"));
+        assert!(!probe.contains("state.pool"));
+        assert!(!probe.contains("crate::db::"));
+        assert!(probe.contains("READINESS_PROBE_TIMEOUT"));
     }
 
     #[test]

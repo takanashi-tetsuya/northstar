@@ -139,21 +139,30 @@ assert.match(appError, /IdempotencyBusy[\s\S]+StatusCode::SERVICE_UNAVAILABLE[\s
   'idempotency contention must remain an explicit retryable 503 response');
 const httpRegistration = authRoutes.slice(
   authRoutes.indexOf('pub async fn register('),
-  authRoutes.indexOf('fn registration_rejection_body('),
+  authRoutes.indexOf('fn registration_error('),
 );
-assert.ok(
-  httpRegistration.indexOf('.verify_registration_guard(') >= 0
-    && httpRegistration.indexOf('.verify_registration_guard(')
-      < httpRegistration.indexOf('prepare_registration('),
-  'HTTP registration must commit its proof marker before password derivation',
+assert.match(httpRegistration, /\.account_service\(\)[\s\S]+\.register_http\(HttpRegistrationRequest/,
+  'HTTP registration must enter the account service with a typed command');
+assert.doesNotMatch(httpRegistration, /(?:\.pool\.begin\(|db::prepare_registration\(|db::acquire_idempotency_in_tx\()/,
+  'HTTP registration must not own a database transaction or password derivation');
+const httpRepositoryRegistration = accountRepository.slice(
+  accountRepository.indexOf('async fn register_http('),
+  accountRepository.indexOf('async fn verify_registration_guard('),
 );
-assert.doesNotMatch(
-  httpRegistration.slice(0, httpRegistration.indexOf('prepare_registration(')),
-  /verify_or_allow_in_tx_v2\(/,
-  'HTTP registration must not reclaim the pre-hash abuse transaction from its account service',
-);
-assert.match(accountService, /async fn verify_registration_guard\([\s\S]+self\.repository\.verify_registration_guard\(request\)\.await/,
-  'the account service must delegate registration guard authority through its repository port');
+assert.match(httpRepositoryRegistration,
+  /acquire_idempotency_in_tx[\s\S]+reservation\.commit\(\)[\s\S]+verify_registration_guard[\s\S]+prepare_registration\([\s\S]+\.pool\.begin\(\)[\s\S]+resume_idempotency_lease_in_tx[\s\S]+create_user_with_invitation_guarded_in_tx_v2/,
+  'HTTP repository must commit reservation and proof marker before password work, then publish in a fresh transaction');
+assert.match(httpRepositoryRegistration,
+  /IdempotencyAcquire::Replay\(replay\)[\s\S]+reservation\.commit\(\)[\s\S]+Outcome::Replay\(replay\)/,
+  'an exact completed registration must replay before current closure/capacity checks');
+assert.match(httpRepositoryRegistration,
+  /\b201,[\s\S]+json_replay_headers\(\)[\s\S]+publication\.commit\(\)/,
+  'successful registration must persist its exact response before committing');
+assert.match(httpRepositoryRegistration,
+  /400[\s\S]+json_replay_headers\(\)[\s\S]+publication\.commit\(\)/,
+  'deterministic registration rejection must persist its exact response before committing');
+assert.match(accountService, /async fn register_http\([\s\S]+self\.repository\.register_http\(request, self\.policy\)\.await/,
+  'the account service must delegate the complete HTTP registration command through its repository port');
 const repositoryRegistrationGuard = accountRepository.slice(
   accountRepository.indexOf('async fn verify_registration_guard('),
   accountRepository.indexOf('async fn register('),
@@ -164,7 +173,7 @@ assert.match(repositoryRegistrationGuard,
 assert.match(repositoryRegistrationGuard,
   /DeniedNeedsCommit[\s\S]+abandon_idempotency_lease_fence_in_tx[\s\S]+transaction\.commit\(\)/,
   'a registration denial must commit its penalty and abandon only the fenced lease');
-assert.match(httpRegistration, /yield_idempotency_lease/,
+assert.match(httpRepositoryRegistration, /yield_http_registration_lease/,
   'temporary password-worker overload must preserve the committed proof marker while fencing the old worker');
 assert.match(dbUsers, /change_password_guarded_v2[\s\S]+verify_or_allow_in_tx_v2[\s\S]+apply_password_credentials_in_tx/,
   'XMPP password proof consumption and credential rotation must share one transaction');

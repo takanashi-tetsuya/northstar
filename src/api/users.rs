@@ -1,8 +1,7 @@
 use crate::api::*;
 use axum::{
-    body::Body,
     extract::{ConnectInfo, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Response,
     Json,
 };
@@ -14,62 +13,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::abuse::AbuseAction;
-use crate::auth;
 use crate::db;
 use crate::error::{AppError, Result};
 use crate::state::AppState;
-
-/// End a retryable worker lease while retaining any anti-abuse proof marker
-/// committed before password verification or publication began.
-async fn yield_idempotency_lease_after_retryable_failure(
-    state: &AppState,
-    lease: &db::IdempotencyLease,
-) -> Result<(), AppError> {
-    if !db::yield_idempotency_lease(&state.pool, lease).await? {
-        return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-    }
-    Ok(())
-}
-
-async fn complete_password_response(
-    state: &AppState,
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    lease: &db::IdempotencyLease,
-    status: StatusCode,
-    body: Value,
-) -> Result<Response, AppError> {
-    let mut replay_headers = json_replay_headers();
-    if status == StatusCode::UNAUTHORIZED {
-        replay_headers.insert(
-            "www-authenticate".to_owned(),
-            "Bearer realm=\"northstar\"".to_owned(),
-        );
-    }
-    let response_body =
-        serde_json::to_vec(&body).map_err(|error| AppError::Internal(error.into()))?;
-    if !db::complete_idempotency_in_tx(
-        state.api_control(),
-        tx,
-        lease,
-        status.as_u16(),
-        &replay_headers,
-        &response_body,
-    )
-    .await?
-    {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "password-change idempotency lease changed"
-        )));
-    }
-    let mut response = Response::builder().status(status);
-    for (name, value) in replay_headers {
-        response = response.header(name, value);
-    }
-    response
-        .body(Body::from(response_body))
-        .map_err(|error| AppError::Internal(error.into()))
-}
 
 pub async fn me(
     State(state): State<crate::state::ApiQueryContext>,
@@ -87,305 +33,87 @@ pub async fn change_password(
     headers: HeaderMap,
     mut request: ApiJson<PasswordChange>,
 ) -> Result<Response, AppError> {
+    use crate::services::password_change::{PasswordChangeCommand, PasswordChangeResult};
+
     let presented_session = zeroize::Zeroizing::new(bearer_token(&headers)?.to_owned());
-    let invalid_input = request.value.current_password.is_empty()
-        || request.value.current_password.len() > 1024
-        || auth::validate_password(&request.value.new_password).is_err();
     let pow_intent = request.value.pow_intent();
     let current_password =
         zeroize::Zeroizing::new(std::mem::take(&mut request.value.current_password));
     let new_password = zeroize::Zeroizing::new(std::mem::take(&mut request.value.new_password));
-    let body = &request.value;
     let peer_ip = client_ip(peer.ip(), &headers, &state);
-    let idempotency = request.idempotency(
-        None,
-        presented_session.as_bytes(),
-        db::ApiPrincipalKind::User,
-        "PATCH",
-        "/api/v1/me/password",
-    );
-    let mut replay_tx = state.pool.begin().await?;
-    match db::lookup_password_change_replay_in_tx(state.api_control(), &mut replay_tx, &idempotency)
-        .await?
-    {
-        db::IdempotencyReplayLookup::Miss => replay_tx.commit().await?,
-        db::IdempotencyReplayLookup::Replay(replay) => {
-            replay_tx.commit().await?;
-            return idempotency_replay_response(replay);
+    let outcome = state
+        .password_change_service()
+        .execute(PasswordChangeCommand {
+            idempotency: request.idempotency(
+                None,
+                presented_session.as_bytes(),
+                db::ApiPrincipalKind::User,
+                "PATCH",
+                "/api/v1/me/password",
+            ),
+            presented_session: &presented_session,
+            current_password: &current_password,
+            new_password: &new_password,
+            proof: request.value.pow.as_ref(),
+            intent: &pow_intent,
+            peer_ip,
+        })
+        .await?;
+    match outcome {
+        PasswordChangeResult::Replay(replay) => idempotency_replay_response(replay),
+        PasswordChangeResult::Fresh(response) => {
+            crate::api::idempotency::stored_api_response(response)
         }
-        db::IdempotencyReplayLookup::FingerprintConflict
-        | db::IdempotencyReplayLookup::RotationConflict => {
-            replay_tx.rollback().await?;
-            return Err(AppError::IdempotencyConflict);
+        PasswordChangeResult::RateLimited(response) => {
+            state
+                .metrics
+                .rate_limited_total
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            crate::api::idempotency::stored_api_response(response)
         }
-    }
-
-    let mut reserve_tx = state.pool.begin().await?;
-    let Some(user) =
-        db::password_change_subject_for_token_in_tx(&mut reserve_tx, &presented_session).await?
-    else {
-        reserve_tx.rollback().await?;
-        return Err(AppError::Unauthorized);
-    };
-    let lease =
-        match db::acquire_idempotency_in_tx(state.api_control(), &mut reserve_tx, &idempotency)
-            .await?
-        {
-            db::IdempotencyAcquire::Acquired(lease) => lease,
-            db::IdempotencyAcquire::Replay(replay) => {
-                reserve_tx.commit().await?;
-                return idempotency_replay_response(replay);
-            }
-            db::IdempotencyAcquire::FingerprintConflict
-            | db::IdempotencyAcquire::RotationConflict => {
-                reserve_tx.rollback().await?;
-                return Err(AppError::IdempotencyConflict);
-            }
-            db::IdempotencyAcquire::ReplayInvalidated => {
-                reserve_tx.rollback().await?;
-                return Err(AppError::IdempotencyReplayInvalidated);
-            }
-            db::IdempotencyAcquire::Busy {
-                retry_after_seconds,
-            } => {
-                reserve_tx.rollback().await?;
-                return Err(AppError::IdempotencyBusy {
-                    retry_after: retry_after_seconds,
-                });
-            }
-            db::IdempotencyAcquire::CapacityLimited {
-                retry_after_seconds,
-            } => {
-                reserve_tx.rollback().await?;
-                return Err(AppError::TooManyRequests {
-                    message: "too many retained requests; try again later".into(),
-                    retry_after: retry_after_seconds,
-                });
-            }
-            db::IdempotencyAcquire::InProgress {
-                retry_after_seconds,
-            } => {
-                reserve_tx.rollback().await?;
-                return Err(AppError::IdempotencyInProgress {
-                    retry_after: retry_after_seconds,
-                });
-            }
-        };
-    let (subject, actors) = abuse_identity(AbuseAction::PasswordChange, peer_ip, Some(&user));
-    if !lease.guard_verified {
-        match state
-            .abuse
-            .verify_or_allow_in_tx_v2(
-                &mut reserve_tx,
-                AbuseAction::PasswordChange,
-                &subject,
-                &actors,
-                body.pow.as_ref(),
-                &pow_intent,
-            )
-            .await?
-        {
-            crate::abuse::TransactionalGuardOutcome::Allowed(_) => {
-                if !db::mark_idempotency_guard_verified_in_tx(&mut reserve_tx, &lease).await? {
-                    return Err(AppError::Internal(anyhow::anyhow!(
-                        "password-change guard lease changed"
-                    )));
-                }
-            }
-            crate::abuse::TransactionalGuardOutcome::DeniedNeedsCommit(error) => {
-                let response = crate::api::idempotency::complete_guard_denial(
-                    &state,
-                    &mut reserve_tx,
-                    &lease,
-                    error,
+        PasswordChangeResult::Changed(response, account) => {
+            state
+                .disconnect_account(
+                    account.user_id,
+                    &format!("{}@{}", account.username, state.config.domain),
                 )
-                .await?;
-                reserve_tx.commit().await?;
-                state
-                    .metrics
-                    .rate_limited_total
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return Ok(response);
-            }
+                .await;
+            crate::api::idempotency::stored_api_response(response)
         }
-    }
-    reserve_tx.commit().await?;
-
-    if invalid_input {
-        let mut tx = state.pool.begin().await?;
-        if !db::resume_idempotency_lease_in_tx(&mut tx, &lease, API_IDEMPOTENCY_LEASE_SECONDS)
-            .await?
-        {
-            tx.rollback().await?;
-            return Err(AppError::IdempotencyInProgress { retry_after: 1 });
+        PasswordChangeResult::Unauthorized => Err(AppError::Unauthorized),
+        PasswordChangeResult::IdempotencyConflict => Err(AppError::IdempotencyConflict),
+        PasswordChangeResult::ReplayInvalidated => Err(AppError::IdempotencyReplayInvalidated),
+        PasswordChangeResult::Busy(retry_after) => Err(AppError::IdempotencyBusy { retry_after }),
+        PasswordChangeResult::CapacityLimited(retry_after) => Err(AppError::TooManyRequests {
+            message: "too many retained requests; try again later".into(),
+            retry_after,
+        }),
+        PasswordChangeResult::InProgress(retry_after) => {
+            Err(AppError::IdempotencyInProgress { retry_after })
         }
-        if !db::authorize_user_in_tx(&mut tx, user.id, user.auth_generation, &presented_session)
-            .await?
-        {
-            tx.rollback().await?;
-            // The bearer is already stale/revoked, so the exact request can
-            // never become valid on retry. This is a deterministic rejection,
-            // not a transient worker failure.
-            db::abandon_idempotency_lease(&state.pool, &lease).await?;
-            return Err(AppError::Unauthorized);
-        }
-        if !db::bind_idempotency_actor_in_tx(&mut tx, &lease, user.id).await? {
-            return Err(AppError::Internal(anyhow::anyhow!(
-                "password-change idempotency ownership changed"
-            )));
-        }
-        let response = complete_password_response(
-            &state,
-            &mut tx,
-            &lease,
-            StatusCode::BAD_REQUEST,
-            json!({"error":{"code":"bad_request","message":"password input is invalid"}}),
-        )
-        .await?;
-        tx.commit().await?;
-        return Ok(response);
-    }
-
-    let mut prework_tx = state.pool.begin().await?;
-    if !db::resume_idempotency_lease_in_tx(&mut prework_tx, &lease, API_IDEMPOTENCY_LEASE_SECONDS)
-        .await?
-    {
-        prework_tx.rollback().await?;
-        return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-    }
-    prework_tx.commit().await?;
-    let prepared = match db::prepare_password_change(
-        user.password_hash(),
-        &current_password,
-        &new_password,
-        state.config.scram_iterations,
-        state.config.scram_sha1_enabled,
-    )
-    .await
-    {
-        Ok(prepared) => prepared,
-        Err(error) if crate::password_work::is_overloaded(&error) => {
-            yield_idempotency_lease_after_retryable_failure(&state, &lease).await?;
-            return Err(AppError::Unavailable(
-                "password-change capacity is temporarily exhausted; retry later".into(),
-            ));
-        }
-        Err(error) => {
-            yield_idempotency_lease_after_retryable_failure(&state, &lease).await?;
+        PasswordChangeResult::LeaseLost => Err(AppError::IdempotencyInProgress { retry_after: 1 }),
+        PasswordChangeResult::WorkerOverloaded => Err(AppError::Unavailable(
+            "password-change capacity is temporarily exhausted; retry later".into(),
+        )),
+        PasswordChangeResult::VerifierUnavailable => {
             state
                 .metrics
                 .authentication_backend_failures_total
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            tracing::error!(
-                integrity_failure = auth::is_password_verifier_integrity_error(&error),
-                ?error,
-                user_id = %user.id,
-                "password-change verifier backend failed"
-            );
-            return Err(AppError::Unavailable(
+            Err(AppError::Unavailable(
                 "password authentication backend is temporarily unavailable; retry later".into(),
-            ));
+            ))
         }
-    };
-
-    let mut tx = state.pool.begin().await?;
-    if !db::resume_idempotency_lease_in_tx(&mut tx, &lease, API_IDEMPOTENCY_LEASE_SECONDS).await? {
-        tx.rollback().await?;
-        return Err(AppError::IdempotencyInProgress { retry_after: 1 });
-    }
-    if matches!(prepared, db::PreparedPasswordChange::InvalidCurrentPassword) {
-        if !db::authorize_password_change_in_tx(
-            &mut tx,
-            user.id,
-            user.password_hash(),
-            user.auth_generation,
-            &presented_session,
-        )
-        .await?
-        {
-            tx.rollback().await?;
-            // Authorization changed after the guard stage. Retrying the same
-            // credential-bearing request cannot restore that authorization.
-            db::abandon_idempotency_lease(&state.pool, &lease).await?;
-            return Err(AppError::Unauthorized);
-        }
-        if !db::bind_idempotency_actor_in_tx(&mut tx, &lease, user.id).await? {
-            return Err(AppError::Internal(anyhow::anyhow!(
-                "password-change failure ownership changed"
-            )));
-        }
-        state
-            .abuse
-            .record_failure_in_tx(&mut tx, AbuseAction::PasswordChange, &actors)
-            .await?;
-        let response = complete_password_response(
-            &state,
-            &mut tx,
-            &lease,
-            StatusCode::UNAUTHORIZED,
-            json!({"error":{"code":"unauthorized","message":"authentication required"}}),
-        )
-        .await?;
-        tx.commit().await?;
-        return Ok(response);
-    }
-    if !db::bind_idempotency_actor_in_tx(&mut tx, &lease, user.id).await? {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "password-change idempotency ownership changed"
-        )));
-    }
-    let outcome = match db::apply_prepared_password_change_in_tx(
-        &mut tx,
-        user.id,
-        user.password_hash(),
-        user.auth_generation,
-        &presented_session,
-        prepared,
-        Some(lease.request_id),
-    )
-    .await
-    {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            tx.rollback().await?;
-            yield_idempotency_lease_after_retryable_failure(&state, &lease).await?;
+        PasswordChangeResult::PublicationUnavailable => {
             state
                 .metrics
                 .authentication_backend_failures_total
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            tracing::error!(
-                ?error,
-                user_id = %user.id,
-                "password-change publication backend failed"
-            );
-            return Err(AppError::Unavailable(
+            Err(AppError::Unavailable(
                 "password-change backend is temporarily unavailable; retry later".into(),
-            ));
+            ))
         }
-    };
-    if outcome != db::PasswordChangeOutcome::Changed {
-        tx.rollback().await?;
-        // The compare-and-swap observed stale authorization, which is a
-        // deterministic rejection for this exact request body and bearer.
-        db::abandon_idempotency_lease(&state.pool, &lease).await?;
-        return Err(AppError::Unauthorized);
     }
-    let response = complete_password_response(
-        &state,
-        &mut tx,
-        &lease,
-        StatusCode::OK,
-        json!({"changed":true,"sessions_revoked":true}),
-    )
-    .await?;
-    tx.commit().await?;
-    state
-        .disconnect_account(
-            user.id,
-            &format!("{}@{}", user.username, state.config.domain),
-        )
-        .await;
-    Ok(response)
 }
 
 const MAX_HISTORY_RESULTS: i64 = 100;

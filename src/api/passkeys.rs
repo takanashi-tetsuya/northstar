@@ -222,7 +222,11 @@ pub(super) async fn remove(
     state
         .disconnect_account_before_auth_generation(
             user.id,
-            &format!("{}@{}", user.username, state.config.domain),
+            &format!(
+                "{}@{}",
+                user.username,
+                state.public_discovery_context().policy().domain
+            ),
             generation,
         )
         .await;

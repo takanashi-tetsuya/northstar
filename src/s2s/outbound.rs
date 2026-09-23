@@ -28,7 +28,6 @@ fn happy_eyeballs_delay(candidate_index: usize) -> Duration {
 }
 
 use crate::{
-    db,
     jid::{prepare_domainpart, CanonicalJid},
     state::AppState,
     xmpp::xml_builder::XmlElement,
@@ -42,6 +41,13 @@ use tokio::{
 };
 
 use super::*;
+#[cfg(test)]
+use crate::db;
+
+use crate::services::s2s_outbox_dispatch::{OutboxFailureDisposition, S2sOutboxDispatchService};
+type DispatchService = S2sOutboxDispatchService<
+    crate::db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository,
+>;
 
 use tokio::sync::mpsc;
 
@@ -398,7 +404,7 @@ async fn renew_first_envelope_lease(
     cancel: tokio_util::sync::CancellationToken,
     disconnect: tokio_util::sync::CancellationToken,
 ) {
-    let interval_seconds = (state.config.s2s_outbox_lease_seconds / 3).max(1);
+    let interval_seconds = (state.s2s_outbox_dispatch_service().lease_seconds() / 3).max(1);
     let database_deadline = Duration::from_secs(interval_seconds.min(5));
     let mut interval = tokio::time::interval(Duration::from_secs(interval_seconds));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -411,12 +417,7 @@ async fn renew_first_envelope_lease(
             _ = cancel.cancelled() => return,
             _ = disconnect.cancelled() => return,
             _ = interval.tick() => {
-                let renewal = db::renew_s2s_outbox_lease(
-                    &state.pool,
-                    outbox_id,
-                    lock_token,
-                    state.config.s2s_outbox_lease_seconds,
-                );
+                let renewal = state.s2s_outbox_dispatch_service().renew(outbox_id, lock_token);
                 tokio::pin!(renewal);
                 let result = tokio::select! {
                     biased;
@@ -915,12 +916,9 @@ async fn deliver_envelope_inner<S: AsyncWrite + Unpin>(
     if managed && envelope.is_durable() {
         let renewed = tokio::time::timeout(
             Duration::from_secs(5),
-            db::renew_s2s_outbox_lease(
-                &state.pool,
-                envelope.outbox_id,
-                envelope.lock_token,
-                state.config.s2s_outbox_lease_seconds,
-            ),
+            state
+                .s2s_outbox_dispatch_service()
+                .renew(envelope.outbox_id, envelope.lock_token),
         )
         .await
         .context("S2S outbox lease renewal timed out")??;
@@ -960,7 +958,11 @@ async fn deliver_envelope_inner<S: AsyncWrite + Unpin>(
         sm.request(secure).await?;
     }
     if envelope.is_durable() && !managed {
-        if !db::complete_s2s_outbox(&state.pool, envelope.outbox_id, envelope.lock_token).await? {
+        if !state
+            .s2s_outbox_dispatch_service()
+            .complete(envelope.outbox_id, envelope.lock_token)
+            .await?
+        {
             state
                 .metrics
                 .s2s_outbox_lease_lost_total
@@ -1014,7 +1016,7 @@ pub(crate) async fn fail_envelope(
                 "remote-server-not-found"
             }
         });
-    let item = db::S2sOutboxItem {
+    let item = northstar_federation_core::S2sOutboxItem {
         id: envelope.outbox_id,
         target_domain: envelope.target_domain.clone(),
         bounce_to: envelope.bounce_to.clone(),
@@ -1022,38 +1024,32 @@ pub(crate) async fn fail_envelope(
         attempt_count: envelope.attempt_count,
         lock_token: envelope.lock_token,
     };
-    match db::fail_s2s_outbox(
-        &state.pool,
-        &item,
-        &format!("{error:#}"),
-        state.config.s2s_outbox_retry_base_seconds,
-        state.config.s2s_outbox_retry_max_seconds,
-        state.config.s2s_outbox_max_attempts,
-        permanent,
-    )
-    .await
+    match state
+        .s2s_outbox_dispatch_service()
+        .fail(&item, &format!("{error:#}"), permanent)
+        .await
     {
-        Ok(db::S2sFailureDisposition::Dropped) => {
+        Ok(OutboxFailureDisposition::Dropped) => {
             state
                 .metrics
                 .s2s_outbox_permanent_failures_total
                 .fetch_add(1, Ordering::Relaxed);
             bounce_delivery_failure_with_condition(state, envelope, bounce_condition);
         }
-        Ok(db::S2sFailureDisposition::Expired) => {
+        Ok(OutboxFailureDisposition::Expired) => {
             state
                 .metrics
                 .s2s_outbox_expired_total
                 .fetch_add(1, Ordering::Relaxed);
             bounce_delivery_failure_with_condition(state, envelope, bounce_condition);
         }
-        Ok(db::S2sFailureDisposition::RetryScheduled) => {
+        Ok(OutboxFailureDisposition::RetryScheduled) => {
             state
                 .metrics
                 .s2s_outbox_retries_total
                 .fetch_add(1, Ordering::Relaxed);
         }
-        Ok(db::S2sFailureDisposition::LeaseLost) => {
+        Ok(OutboxFailureDisposition::LeaseLost) => {
             state
                 .metrics
                 .s2s_outbox_lease_lost_total
@@ -1467,7 +1463,7 @@ async fn request_bidi_if_advertised<S: AsyncWrite + Unpin>(
 /// hint before a mutating query is polled; an unknown database result therefore
 /// falls back to normal durable retry instead of replaying the acceleration.
 async fn recover_authenticated_route_heads(
-    pool: &sqlx::PgPool,
+    service: &DispatchService,
     registry: &S2sConnectionRegistry,
     excluded_domains: &[String],
     domain_allowed: impl Fn(&str) -> bool,
@@ -1495,7 +1491,7 @@ async fn recover_authenticated_route_heads(
             }
             result = tokio::time::timeout_at(
                 deadline,
-                db::s2s_route_recovery_head(pool, &route.remote_domain),
+                service.route_head(&route.remote_domain),
             ) => result.context("authenticated S2S recovery observation exceeded its turn deadline")??,
         };
         let observation = head.as_ref().map(|head| BidiRecoveryHead {
@@ -1526,9 +1522,7 @@ async fn recover_authenticated_route_heads(
             _ = route.disconnect.cancelled() => false,
             result = tokio::time::timeout_at(
                 deadline,
-                db::wake_s2s_route_recovery_head(
-                    pool, head.id, &route.remote_domain, head.attempt_count,
-                ),
+                service.wake_route_head(head.id, &route.remote_domain, head.attempt_count),
             ) => result.context("authenticated S2S recovery write exceeded its turn deadline")??,
         };
         recovered += usize::from(changed);
@@ -1537,7 +1531,7 @@ async fn recover_authenticated_route_heads(
 }
 
 pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
-    for expired in db::expire_s2s_outbox(&state.pool, state.config.s2s_outbox_claim_batch).await? {
+    for expired in state.s2s_outbox_dispatch_service().expire().await? {
         state
             .metrics
             .s2s_outbox_expired_total
@@ -1566,12 +1560,11 @@ pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
     }
     let component_domains = state.configured_component_domains();
     if let Err(error) = recover_authenticated_route_heads(
-        &state.pool,
+        state.s2s_outbox_dispatch_service(),
         state.s2s_connection_registry(),
         &component_domains,
         |domain| state.federation_domain_allowed(domain),
-        usize::try_from(state.config.s2s_outbox_claim_batch)
-            .context("S2S outbox recovery batch must be nonnegative")?,
+        state.s2s_outbox_dispatch_service().recovery_batch_limit()?,
     )
     .await
     {
@@ -1579,13 +1572,10 @@ pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
         // ordinary due work, lease expiry or the established retry policy.
         tracing::warn!(?error, "authenticated S2S route recovery could not finish");
     }
-    let items = db::claim_due_s2s_outbox_excluding_domains(
-        &state.pool,
-        state.config.s2s_outbox_claim_batch,
-        state.config.s2s_outbox_lease_seconds,
-        &component_domains,
-    )
-    .await?;
+    let items = state
+        .s2s_outbox_dispatch_service()
+        .claim_excluding_domains(&component_domains)
+        .await?;
     for item in items {
         let mut envelope = FederationEnvelope::from(item);
         let target_entity = Document::parse(&envelope.stanza)
@@ -1745,6 +1735,22 @@ fn delivery_failure_stanza(stanza: &str, condition: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn test_dispatch(pool: &sqlx::PgPool) -> DispatchService {
+        use crate::services::s2s_outbox_dispatch::S2sOutboxDispatchPolicy;
+        S2sOutboxDispatchService::new(
+            crate::db::s2s_outbox_dispatch_repository::PostgresS2sOutboxDispatchRepository::new(
+                pool.clone(),
+            ),
+            S2sOutboxDispatchPolicy {
+                claim_batch: 10,
+                lease_seconds: 120,
+                retry_base_seconds: 60,
+                retry_max_seconds: 60,
+                max_attempts: 200,
+            },
+        )
+    }
+
     async fn enqueue_authenticated_recovery_test_row(
         pool: &sqlx::PgPool,
         target: &str,
@@ -1805,6 +1811,7 @@ mod tests {
             .await
             .unwrap();
         db::migrate(&pool).await.unwrap();
+        let dispatch = test_dispatch(&pool);
 
         let registry = S2sConnectionRegistry::default();
         let target = "recovered.remote.test";
@@ -1834,7 +1841,7 @@ mod tests {
             db::S2sFailureDisposition::RetryScheduled
         );
         assert_eq!(
-            recover_authenticated_route_heads(&pool, &registry, &[], |_| true, 4)
+            recover_authenticated_route_heads(&dispatch, &registry, &[], |_| true, 4)
                 .await
                 .unwrap(),
             0
@@ -1852,7 +1859,7 @@ mod tests {
             tokio_util::sync::CancellationToken::new(),
         );
         assert_eq!(
-            recover_authenticated_route_heads(&pool, &registry, &[], |_| true, 4)
+            recover_authenticated_route_heads(&dispatch, &registry, &[], |_| true, 4)
                 .await
                 .unwrap(),
             1
@@ -1887,7 +1894,7 @@ mod tests {
             db::S2sFailureDisposition::RetryScheduled
         );
         assert_eq!(
-            recover_authenticated_route_heads(&pool, &registry, &[], |_| true, 4)
+            recover_authenticated_route_heads(&dispatch, &registry, &[], |_| true, 4)
                 .await
                 .unwrap(),
             0,
@@ -1951,7 +1958,7 @@ mod tests {
         // The actual failure cannot commit while the row lock is held. The
         // production recovery helper must retain the exact head's hint.
         assert_eq!(
-            recover_authenticated_route_heads(&pool, &registry, &[], |_| true, 4)
+            recover_authenticated_route_heads(&dispatch, &registry, &[], |_| true, 4)
                 .await
                 .unwrap(),
             0
@@ -1975,7 +1982,7 @@ mod tests {
             db::S2sFailureDisposition::RetryScheduled
         );
         assert_eq!(
-            recover_authenticated_route_heads(&pool, &registry, &[], |_| true, 4)
+            recover_authenticated_route_heads(&dispatch, &registry, &[], |_| true, 4)
                 .await
                 .unwrap(),
             1
@@ -2034,7 +2041,7 @@ mod tests {
             };
             assert_eq!(
                 recover_authenticated_route_heads(
-                    &pool,
+                    &dispatch,
                     &rejected_registry,
                     &excluded,
                     |_| reason != "denied",
@@ -2053,7 +2060,7 @@ mod tests {
                     .retry_due
             );
             assert_eq!(
-                recover_authenticated_route_heads(&pool, &rejected_registry, &[], |_| true, 4)
+                recover_authenticated_route_heads(&dispatch, &rejected_registry, &[], |_| true, 4)
                     .await
                     .unwrap(),
                 0,
@@ -2096,6 +2103,7 @@ mod tests {
             .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
             .unwrap();
         pool.close().await;
+        let dispatch = test_dispatch(&pool);
         for component in [false, true] {
             let registry = S2sConnectionRegistry::default();
             let (sender, _receiver) = mpsc::channel(1);
@@ -2116,9 +2124,15 @@ mod tests {
                 vec![]
             };
             assert_eq!(
-                recover_authenticated_route_heads(&pool, &registry, &excluded, |_| component, 1,)
-                    .await
-                    .unwrap(),
+                recover_authenticated_route_heads(
+                    &dispatch,
+                    &registry,
+                    &excluded,
+                    |_| component,
+                    1,
+                )
+                .await
+                .unwrap(),
                 0
             );
             assert!(registry.pending_bidi_recoveries(1).is_empty());

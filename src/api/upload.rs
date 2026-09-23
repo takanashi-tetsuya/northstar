@@ -16,8 +16,12 @@ use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
 use crate::auth;
-use crate::db;
 use crate::error::{AppError, Result};
+use crate::services::upload::{
+    AcquirePromotionOutcome, FinalizePromotionOutcome, PromotedUploadProjection, PromotionClaim,
+    UploadClaimOutcome, UploadRenewOutcome, UploadSlot, UploadStageProjection,
+    UserUploadDeleteOutcome,
+};
 use crate::services::upload_safety::UploadIoClass;
 use crate::state::AppState;
 
@@ -73,13 +77,16 @@ pub async fn upload_put(
         None => None,
     };
     validate_upload_framing_headers(&headers)?;
-    let claim = db::claim_upload_slot(&state.pool, id, &token_hash, UPLOAD_LEASE_SECONDS).await?;
+    let claim = state
+        .upload_service()
+        .claim_slot(id, &token_hash, UPLOAD_LEASE_SECONDS)
+        .await?;
     let (slot, lease) = match claim {
-        db::UploadClaimOutcome::Rejected => return Err(AppError::Unauthorized),
-        db::UploadClaimOutcome::InProgress {
+        UploadClaimOutcome::Rejected => return Err(AppError::Unauthorized),
+        UploadClaimOutcome::InProgress {
             retry_after_seconds,
         } => return upload_in_progress(retry_after_seconds),
-        db::UploadClaimOutcome::Replay {
+        UploadClaimOutcome::Replay {
             slot,
             content_sha256,
         } => {
@@ -101,12 +108,16 @@ pub async fn upload_put(
                     "stored upload content does not match its committed digest"
                 )));
             }
-            if !db::record_upload_replay(&state.pool, slot.id, &token_hash, &digest).await? {
+            if !state
+                .upload_service()
+                .record_replay(slot.id, &token_hash, &digest)
+                .await?
+            {
                 return Err(AppError::IdempotencyReplayInvalidated);
             }
             return created_upload_response(true);
         }
-        db::UploadClaimOutcome::Acquired(lease) => (lease.slot.clone(), lease),
+        UploadClaimOutcome::Acquired(lease) => (lease.slot.clone(), lease),
     };
     if let Err(error) = validate_upload_metadata(&slot, &content_type, content_length) {
         release_claim(&state, slot.id, lease.claim_token).await?;
@@ -118,18 +129,19 @@ pub async fn upload_put(
     let object_key = slot.id.to_string();
     let attempt_key = lease.claim_token.to_string();
     let renewer = {
-        let pool = state.pool.clone();
+        let upload_service = state.upload_service();
         async move {
             let jitter_millis = (lease.claim_token.as_u128() % 41) as u64;
             loop {
                 tokio::time::sleep(Duration::from_secs(UPLOAD_RENEW_SECONDS)).await;
                 let mut busy_attempt = 0_u32;
                 loop {
-                    match db::renew_upload_claim(&pool, id, lease.claim_token, UPLOAD_LEASE_SECONDS)
+                    match upload_service
+                        .renew_claim(id, lease.claim_token, UPLOAD_LEASE_SECONDS)
                         .await
                     {
-                        Ok(db::UploadRenewOutcome::Renewed) => break,
-                        Ok(db::UploadRenewOutcome::Busy) if busy_attempt < 7 => {
+                        Ok(UploadRenewOutcome::Renewed) => break,
+                        Ok(UploadRenewOutcome::Busy) if busy_attempt < 7 => {
                             let delay = 25_u64
                                 .saturating_mul(1_u64 << busy_attempt.min(5))
                                 .min(800)
@@ -137,7 +149,7 @@ pub async fn upload_put(
                             busy_attempt = busy_attempt.saturating_add(1);
                             tokio::time::sleep(Duration::from_millis(delay)).await;
                         }
-                        Ok(db::UploadRenewOutcome::Busy | db::UploadRenewOutcome::Lost) => {
+                        Ok(UploadRenewOutcome::Busy | UploadRenewOutcome::Lost) => {
                             return;
                         }
                         Err(error) => {
@@ -202,9 +214,9 @@ pub async fn upload_put(
     // error are recovered by the bounded storage worker instead of deleting a
     // stage that a committed promotion job may now own.
     staged.durably_recorded();
-    if !db::record_upload_stage(
-        &state.pool,
-        db::UploadStageProjection {
+    if !state
+        .upload_service()
+        .record_stage(UploadStageProjection {
             id: slot.id,
             claim_token: lease.claim_token,
             storage_backend: state.upload_store().backend(),
@@ -214,9 +226,8 @@ pub async fn upload_put(
             content_sha256: &content_sha256,
             size: slot.size as u64,
             storage_fence: lease.storage_fence,
-        },
-    )
-    .await?
+        })
+        .await?
     {
         // The stage was disarmed before an uncertain database handoff. For an
         // S3 direct-final key, only a fenced lost-authority/deletion
@@ -228,42 +239,21 @@ pub async fn upload_put(
         }
         return upload_in_progress(1);
     }
-    let Some(promotion_claim_token) = db::claim_upload_promotion_job(
-        &state.pool,
-        slot.id,
-        lease.claim_token,
-        lease.storage_fence,
-    )
-    .await?
-    else {
-        return upload_in_progress(1);
-    };
-    if !db::begin_upload_promotion(
-        &state.pool,
-        slot.id,
-        lease.claim_token,
-        lease.storage_fence,
-        promotion_claim_token,
-    )
-    .await?
-    {
-        if db::retire_upload_promotion_for_cleanup(
-            &state.pool,
-            slot.id,
-            lease.claim_token,
-            lease.storage_fence,
-            promotion_claim_token,
-        )
+    let promotion_claim_token = match state
+        .upload_service()
+        .acquire_promotion(slot.id, lease.claim_token, lease.storage_fence)
         .await?
-        {
+    {
+        AcquirePromotionOutcome::Ready(token) => token,
+        AcquirePromotionOutcome::Retired => {
             abort_stage_best_effort(&state, slot.id, lease.claim_token, staged.stage_version())
                 .await;
             return Err(AppError::Conflict(
                 "upload was deleted before promotion".into(),
             ));
         }
-        return upload_in_progress(1);
-    }
+        AcquirePromotionOutcome::Busy => return upload_in_progress(1),
+    };
     // No PostgreSQL lock or transaction spans this storage operation. S3 has
     // already written its private attempt key, so this is an exact-version
     // readback only; local storage performs a create-only hard-link promotion.
@@ -282,23 +272,24 @@ pub async fn upload_put(
     let promoted = match promoted_result {
         Ok(promoted) => promoted,
         Err(error) if crate::storage::is_upload_safety_error(&error) => {
-            db::defer_upload_promotion_job(
-                &state.pool,
-                slot.id,
-                lease.claim_token,
-                lease.storage_fence,
-                promotion_claim_token,
-            )
-            .await?;
+            state
+                .upload_service()
+                .defer_promotion(PromotionClaim {
+                    id: slot.id,
+                    storage_attempt: lease.claim_token,
+                    storage_fence: lease.storage_fence,
+                    promotion_claim_token,
+                })
+                .await?;
             return Err(AppError::Unavailable(
                 "upload authority changed; promotion was deferred".into(),
             ));
         }
         Err(error) => return Err(AppError::Internal(error)),
     };
-    let completed = db::complete_promoted_upload(
-        &state.pool,
-        db::PromotedUploadProjection {
+    let completion = state
+        .upload_service()
+        .finalize_promotion(PromotedUploadProjection {
             id: slot.id,
             claim_token: lease.claim_token,
             promotion_claim_token,
@@ -309,41 +300,21 @@ pub async fn upload_put(
             size: promoted.size,
             retention_seconds: state.config.upload_retention_seconds,
             storage_fence: lease.storage_fence,
-        },
-    )
-    .await?;
-    if !completed {
-        if db::upload_attempt_is_committed(
-            &state.pool,
-            db::CommittedUploadIdentity {
-                id: slot.id,
-                storage_attempt: lease.claim_token,
-                storage_backend: &promoted.backend,
-                object_key: &promoted.object_key,
-                object_version: promoted.object_version.as_deref(),
-                content_sha256: &content_sha256,
-                size: promoted.size,
-                storage_fence: lease.storage_fence,
-            },
-        )
-        .await?
-        {
+        })
+        .await?;
+    match completion {
+        FinalizePromotionOutcome::Committed => {}
+        FinalizePromotionOutcome::ConcurrentlyCommitted => {
             // A concurrent reconciler committed the same immutable bytes.
-        } else if db::retire_upload_promotion_for_cleanup(
-            &state.pool,
-            slot.id,
-            lease.claim_token,
-            lease.storage_fence,
-            promotion_claim_token,
-        )
-        .await?
-        {
+        }
+        FinalizePromotionOutcome::Retired => {
             abort_stage_best_effort(&state, slot.id, lease.claim_token, staged.stage_version())
                 .await;
             return Err(AppError::Conflict(
                 "upload was deleted during promotion".into(),
             ));
-        } else {
+        }
+        FinalizePromotionOutcome::Indeterminate => {
             return Err(AppError::Internal(anyhow::anyhow!(
                 "upload storage projection changed before metadata completion"
             )));
@@ -389,7 +360,7 @@ fn validate_upload_framing_headers(headers: &HeaderMap) -> Result<(), AppError> 
 }
 
 fn validate_upload_metadata(
-    slot: &db::UploadSlot,
+    slot: &UploadSlot,
     content_type: &str,
     content_length: Option<u64>,
 ) -> Result<(), AppError> {
@@ -433,10 +404,7 @@ async fn digest_body(body: Body, expected_size: u64) -> Result<[u8; 32], AppErro
     Ok(digest.finalize().into())
 }
 
-async fn stored_object_digest(
-    state: &AppState,
-    slot: &db::UploadSlot,
-) -> Result<[u8; 32], AppError> {
+async fn stored_object_digest(state: &AppState, slot: &UploadSlot) -> Result<[u8; 32], AppError> {
     if state.upload_store().backend() != slot.storage_backend {
         return Err(AppError::Internal(anyhow::anyhow!(
             "committed upload belongs to a different storage backend"
@@ -555,7 +523,7 @@ pub async fn upload_get(
             "retry_after_seconds":1
         }))
     })?;
-    let Some(slot) = db::uploaded_file(&state.pool, id).await? else {
+    let Some(slot) = state.upload_service().public_file(id).await? else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
     if state.upload_store().backend() != slot.storage_backend {
@@ -682,23 +650,28 @@ pub async fn upload_delete(
     // or another user's UUID returns the same 204 while changing no state.
     // An owned row is atomically removed from the public namespace, audited,
     // and queued for retryable object-store cleanup.
-    match db::queue_user_upload_delete_authorized(
-        &state.pool,
-        user.id,
-        user.auth_generation,
-        user.session_token(),
-        id,
-        request_id.0,
-    )
-    .await?
+    match state
+        .upload_service()
+        .delete_authorized(
+            user.id,
+            user.auth_generation,
+            user.session_token(),
+            id,
+            request_id.0,
+        )
+        .await?
     {
-        db::UserUploadDeleteOutcome::Accepted => Ok(StatusCode::NO_CONTENT),
-        db::UserUploadDeleteOutcome::Unauthorized => Err(AppError::Unauthorized),
+        UserUploadDeleteOutcome::Accepted => Ok(StatusCode::NO_CONTENT),
+        UserUploadDeleteOutcome::Unauthorized => Err(AppError::Unauthorized),
     }
 }
 
 async fn release_claim(state: &AppState, id: Uuid, claim_token: Uuid) -> Result<(), AppError> {
-    if !db::release_upload_claim(&state.pool, id, claim_token).await? {
+    if !state
+        .upload_service()
+        .release_claim(id, claim_token)
+        .await?
+    {
         tracing::warn!(upload_id = %id, "upload claim was already absent while releasing it");
     }
     Ok(())

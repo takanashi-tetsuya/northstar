@@ -10,6 +10,7 @@ use serde_json::json;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::db;
@@ -31,7 +32,7 @@ pub async fn me(
 
 pub async fn change_password(
     State(state): State<PasswordChangeHttpContext>,
-    State(teardown): State<AccountTeardownRuntime>,
+    State(teardown): State<Arc<AccountTeardownRuntime>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     mut request: ApiJson<PasswordChange>,

@@ -27,6 +27,10 @@ use tokio_rustls::TlsAcceptor;
 pub(crate) const MAX_XMPP_FRAME_BYTES: usize = 1024 * 1024;
 const XMPP_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const C2S_BACKEND_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
+// SASL2 inline Bind 2 / SM performs several serial backend operations before
+// it can return one authentication outcome. Give that negotiation a separate,
+// bounded budget without relaxing the per-frame limit for ordinary traffic.
+const C2S_SASL2_INLINE_AUTH_TIMEOUT: Duration = Duration::from_secs(8);
 const WEBSOCKET_TERMINAL_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const C2S_NEGOTIATION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 pub(crate) const C2S_AUTHENTICATED_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -63,6 +67,36 @@ fn c2s_idle_timeout(authenticated: bool) -> Duration {
         C2S_AUTHENTICATED_IDLE_TIMEOUT
     } else {
         C2S_NEGOTIATION_IDLE_TIMEOUT
+    }
+}
+
+fn websocket_handler_timeout(frame: &str) -> (Duration, &'static str) {
+    let Some(root_name) = frame
+        .strip_prefix('<')
+        .and_then(|xml| xml.split([' ', '\t', '\r', '\n', '>', '/']).next())
+    else {
+        return (C2S_BACKEND_OPERATION_TIMEOUT, "stream_frame");
+    };
+    if root_name != "authenticate" && !root_name.ends_with(":authenticate") {
+        return (C2S_BACKEND_OPERATION_TIMEOUT, "stream_frame");
+    }
+    let Ok(document) = roxmltree::Document::parse(frame) else {
+        return (C2S_BACKEND_OPERATION_TIMEOUT, "stream_frame");
+    };
+    let root = document.root_element();
+    let is_inline_sasl2 = root.tag_name().name() == "authenticate"
+        && root.tag_name().namespace() == Some(protocol::sasl2::SASL2_NS)
+        && root.children().any(|child| {
+            child.is_element()
+                && matches!(
+                    (child.tag_name().name(), child.tag_name().namespace()),
+                    ("bind", Some("urn:xmpp:bind:0")) | ("resume", Some("urn:xmpp:sm:3"))
+                )
+        });
+    if is_inline_sasl2 {
+        (C2S_SASL2_INLINE_AUTH_TIMEOUT, "sasl2_inline_auth")
+    } else {
+        (C2S_BACKEND_OPERATION_TIMEOUT, "stream_frame")
     }
 }
 
@@ -1244,11 +1278,24 @@ pub async fn websocket_connection(
                         }
                         let opening = !session.negotiation.is_open();
                         let stream_was_opened = session.negotiation.is_open();
-                        let action = tokio::time::timeout(
-                            C2S_BACKEND_OPERATION_TIMEOUT,
+                        let (handler_timeout, operation) = websocket_handler_timeout(&frame);
+                        let handler_started = std::time::Instant::now();
+                        let action = match tokio::time::timeout(
+                            handler_timeout,
                             session.handle(&frame),
-                        ).await.map_err(|_| anyhow::anyhow!("XMPP protocol/backend operation timed out"))
-                            .and_then(|result| result);
+                        ).await {
+                            Ok(result) => result,
+                            Err(_) => {
+                                tracing::error!(
+                                    %peer_ip,
+                                    operation,
+                                    timeout_ms = handler_timeout.as_millis(),
+                                    elapsed_ms = handler_started.elapsed().as_millis(),
+                                    "XMPP WebSocket protocol/backend operation timed out"
+                                );
+                                Err(anyhow::anyhow!("XMPP protocol/backend operation timed out"))
+                            }
+                        };
                         if stream_was_opened
                             && !session.negotiation.is_open()
                             && session.authenticated.is_some()
@@ -1815,6 +1862,32 @@ mod tests {
             assert!(
                 !crate::transport_parsing::websocket_frame_starts_with_markup(invalid),
                 "{invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn websocket_inline_sasl2_has_a_separate_bounded_handler_budget() {
+        for frame in [
+            "<authenticate xmlns='urn:xmpp:sasl:2'><bind xmlns='urn:xmpp:bind:0'/></authenticate>",
+            "<s:authenticate xmlns:s='urn:xmpp:sasl:2'><resume xmlns='urn:xmpp:sm:3'/></s:authenticate>",
+        ] {
+            assert_eq!(
+                websocket_handler_timeout(frame),
+                (C2S_SASL2_INLINE_AUTH_TIMEOUT, "sasl2_inline_auth")
+            );
+        }
+        for frame in [
+            "<message xmlns='jabber:client'><body>authenticate</body></message>",
+            "<authenticate xmlns='urn:xmpp:sasl:2'/>",
+            "<authenticate xmlns='urn:other'><bind xmlns='urn:xmpp:bind:0'/></authenticate>",
+            "<s:authenticate xmlns:s='urn:other'><bind xmlns='urn:xmpp:bind:0'/></s:authenticate>",
+            "<authenticate xmlns='urn:xmpp:sasl:2'><bind xmlns='urn:other'/></authenticate>",
+            "<authenticate xmlns='urn:xmpp:sasl:2'><bind",
+        ] {
+            assert_eq!(
+                websocket_handler_timeout(frame),
+                (C2S_BACKEND_OPERATION_TIMEOUT, "stream_frame")
             );
         }
     }

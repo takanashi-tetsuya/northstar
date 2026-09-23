@@ -1,6 +1,6 @@
 use axum::{
     body::{to_bytes, Body},
-    extract::{ConnectInfo, FromRequest, FromRequestParts, Request, State},
+    extract::{ConnectInfo, FromRef, FromRequest, FromRequestParts, Request, State},
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -16,7 +16,14 @@ use crate::abuse::AbuseAction;
 use crate::auth;
 use crate::db;
 use crate::error::{AppError, Result};
-use crate::state::{AdminGatewayVerifier, AppState, HttpTransportPolicy, MetricsContext};
+use crate::state::{
+    api_session_http::ApiSessionHttpContext,
+    http_registration_endpoint::HttpRegistrationEndpointContext,
+    omemo_recovery_http::OmemoRecoveryHttpContext, passkey_http::PasskeyStartHttpContext,
+    AdminGatewayVerifier, ApiQueryContext, AppState, HttpLoginEndpointContext, HttpTransportPolicy,
+    MetricsContext, OmemoRecoveryPollContext, PasskeyLoginFinishContext, PublicDiscoveryContext,
+    RetentionPolicyContext, UploadHttpReadContext,
+};
 
 use crate::abuse::GuardError;
 use axum::extract::DefaultBodyLimit;
@@ -295,7 +302,7 @@ pub use upload::*;
 pub use upload_admin::*;
 pub use users::*;
 
-fn public_rest_routes() -> Router<Arc<AppState>> {
+fn public_rest_routes() -> Router {
     Router::new()
         // Keep the API namespace out of every static fallback. Without an
         // explicit root route, a file service can turn a missing API endpoint
@@ -307,32 +314,473 @@ fn public_rest_routes() -> Router<Arc<AppState>> {
             "/api/docs/assets/5.32.14",
             ServeDir::new("third_party/swagger-ui/dist"),
         )
-        .route("/api/v1/config", get(public_config))
-        .route("/api/v1/register", post(register))
-        .route("/api/v1/anti-abuse/challenge", post(anti_abuse_challenge))
+}
+
+fn upload_http_routes(
+    state: &Arc<AppState>,
+    upload_limit: usize,
+    admission_enabled: bool,
+) -> Router {
+    if admission_enabled {
+        Router::new()
+            .route(
+                "/api/v1/upload/{id}",
+                put(upload_put)
+                    .delete(upload_delete)
+                    // The storage reader deliberately consumes one byte beyond
+                    // the reserved size to distinguish an oversized stream from
+                    // an exact upload without buffering it.
+                    .layer(DefaultBodyLimit::max(upload_limit.saturating_add(1))),
+            )
+            .with_state(UploadEnabledRoute {
+                queries: state.api_query_context(),
+                write: FromRef::from_ref(state),
+                replay: FromRef::from_ref(state),
+                delete: FromRef::from_ref(state),
+            })
+    } else {
+        Router::new()
+            .route("/api/v1/upload/{id}", delete(upload_delete))
+            .with_state(authorized_route_state::<
+                crate::state::upload_http_delete::UploadHttpDeleteContext,
+            >(state))
+    }
+}
+
+fn administrator_command_routes(
+    state: &Arc<AppState>,
+    upload_runtime_enabled: bool,
+    invitation_enabled: bool,
+) -> Router {
+    let mut router = Router::new()
+        .route("/api", get(api_root_not_found))
+        .merge(
+            Router::new()
+                .route("/api/v1/admin/nuke", post(admin_nuke))
+                .with_state(state.api_query_context()),
+        )
+        .merge(
+            Router::new()
+                .route("/api/v1/admin/users/{id}", patch(admin_update_user))
+                .route(
+                    "/api/v1/admin/offline_messages",
+                    get(admin_offline_messages_stats).delete(admin_clear_offline_messages),
+                )
+                .with_state(authorized_route_state::<crate::state::AccountAdminContext>(
+                    state,
+                )),
+        )
+        .merge(
+            Router::new()
+                .route(
+                    "/api/v1/admin/panic_disconnect",
+                    post(admin_panic_disconnect),
+                )
+                .route("/api/v1/admin/island_mode", post(admin_toggle_island_mode))
+                .route(
+                    "/api/v1/admin/muc_rooms/{localpart}",
+                    delete(admin_destroy_muc_room),
+                )
+                .route("/api/v1/admin/broadcast", post(admin_broadcast))
+                .route("/api/v1/admin/tls/reload", post(admin_tls_reload))
+                .with_state(authorized_route_state::<crate::state::AdminDispatchContext>(state)),
+        )
+        .merge(
+            Router::new()
+                .route(
+                    "/api/v1/admin/registration",
+                    post(admin_toggle_registration),
+                )
+                .with_state(authorized_route_state::<
+                    crate::state::RegistrationAdminContext,
+                >(state)),
+        )
+        .merge(
+            Router::new()
+                .route(
+                    "/api/v1/admin/sessions/{connection_id}",
+                    delete(admin_kick_session),
+                )
+                .with_state(authorized_route_state::<crate::state::SessionAdminContext>(
+                    state,
+                )),
+        )
+        .merge(
+            Router::new()
+                .route("/api/v1/admin/reports/{id}", patch(admin_update_report))
+                .route("/api/v1/admin/appeals/{id}", patch(admin_update_appeal))
+                .with_state(authorized_route_state::<
+                    crate::state::ReportModerationContext,
+                >(state)),
+        )
+        .merge(
+            Router::new()
+                .route(
+                    "/api/v1/admin/operations/{id}/cancel",
+                    post(cancel_operation),
+                )
+                .route(
+                    "/api/v1/admin/operations/{id}/reconcile",
+                    post(reconcile_operation),
+                )
+                .route(
+                    "/api/v1/admin/operations/{operation_id}/targets/{target_id}/reconcile",
+                    post(reconcile_target),
+                )
+                .with_state(authorized_route_state::<crate::state::OperationAdminContext>(state)),
+        )
+        .merge(
+            Router::new()
+                .route(
+                    "/api/v1/admin/legal-holds",
+                    get(list_legal_holds).post(create_legal_hold),
+                )
+                .route(
+                    "/api/v1/admin/legal-holds/{id}/release",
+                    post(release_legal_hold),
+                )
+                .route(
+                    "/api/v1/admin/legal-holds/{id}/export",
+                    post(export_legal_hold),
+                )
+                .route("/api/v1/admin/audit/export", post(export_audit))
+                .with_state(authorized_route_state::<crate::state::GovernanceContext>(
+                    state,
+                )),
+        );
+    if upload_runtime_enabled {
+        router = router.merge(
+            Router::new()
+                .route(
+                    "/api/v1/admin/upload-dead-letters/{kind}/{id}/retry",
+                    post(admin_retry_upload_dead_letter),
+                )
+                .with_state(authorized_route_state::<crate::state::UploadAdminContext>(
+                    state,
+                )),
+        );
+    }
+    if invitation_enabled {
+        router = router.merge(
+            Router::new()
+                .route(
+                    "/api/v1/admin/invitations",
+                    get(admin_invitations).post(admin_create_invitation),
+                )
+                .route(
+                    "/api/v1/admin/invitations/{id}",
+                    delete(admin_revoke_invitation),
+                )
+                .with_state(authorized_route_state::<crate::state::InvitationAdminContext>(state)),
+        );
+    }
+    router
+}
+
+fn web_client_static_routes() -> Router {
+    let mut router = Router::new()
+        .route_service("/", ServeFile::new("web/client.html"))
+        .route_service("/client.html", ServeFile::new("web/client.html"))
+        .nest_service("/crypto", ServeDir::new("web/crypto"));
+    for &(route, file) in WEB_CLIENT_STATIC_FILES {
+        router = router.route_service(route, ServeFile::new(file));
+    }
+    router
+}
+
+fn administrator_static_routes() -> Router {
+    let mut router = Router::new()
+        .route_service("/", ServeFile::new("web/index.html"))
+        .route_service("/index.html", ServeFile::new("web/index.html"));
+    for &(route, file) in WEB_ADMIN_STATIC_FILES {
+        router = router.route_service(route, ServeFile::new(file));
+    }
+    router
+}
+
+fn authentication_routes(state: &Arc<AppState>, registration_enabled: bool) -> Router {
+    let login = Router::new()
         .route("/api/v1/login", post(login))
-        .route("/api/v1/me/passkeys", get(passkeys::list))
-        .route(
-            "/api/v1/me/passkeys/register/start",
-            post(passkeys::register_start),
-        )
-        .route(
-            "/api/v1/me/passkeys/register/finish",
-            post(passkeys::register_finish),
-        )
-        .route("/api/v1/me/passkeys/remove", post(passkeys::remove))
-        .route("/api/v1/passkeys/login/start", post(passkeys::login_start))
-        .route(
-            "/api/v1/passkeys/login/finish",
-            post(passkeys::login_finish),
-        )
+        .with_state(HttpLoginEndpointContext::from_ref(state));
+    let logout = Router::new()
         .route("/api/v1/session", delete(logout))
+        .with_state(ApiSessionHttpContext::from_ref(state));
+    let mut router = login.merge(logout);
+    if registration_enabled {
+        router = router.merge(
+            Router::new()
+                .route("/api/v1/register", post(register))
+                .with_state(HttpRegistrationEndpointContext::from_ref(state)),
+        );
+    }
+    router
+}
+
+// An authenticated command needs the bearer lookup and its own use-case
+// capability. Keep those two handles on that route instead of retaining the
+// application state in the entire REST router.
+#[derive(Clone)]
+struct AuthorizedRoute<C> {
+    queries: ApiQueryContext,
+    command: C,
+}
+
+impl<C: Clone> FromRef<AuthorizedRoute<C>> for ApiQueryContext {
+    fn from_ref(state: &AuthorizedRoute<C>) -> Self {
+        state.queries.clone()
+    }
+}
+
+macro_rules! authorized_command_context {
+    ($($context:ty),+ $(,)?) => {
+        $(impl FromRef<AuthorizedRoute<$context>> for $context {
+            fn from_ref(state: &AuthorizedRoute<$context>) -> Self {
+                state.command.clone()
+            }
+        })+
+    };
+}
+
+authorized_command_context!(
+    crate::state::AccountAdminContext,
+    crate::state::AdminDispatchContext,
+    crate::state::GovernanceContext,
+    crate::state::http_challenge_endpoint::HttpChallengeEndpointContext,
+    crate::state::InvitationAdminContext,
+    crate::state::OperationAdminContext,
+    crate::state::passkey_http::PasskeyAccountHttpContext,
+    crate::state::passkey_http::PasskeyStartHttpContext,
+    crate::state::RegistrationAdminContext,
+    crate::state::ReportContext,
+    crate::state::ReportModerationContext,
+    crate::state::SessionAdminContext,
+    crate::state::UploadAdminContext,
+    crate::state::upload_http_delete::UploadHttpDeleteContext,
+);
+
+fn authorized_route_state<C>(state: &Arc<AppState>) -> AuthorizedRoute<C>
+where
+    C: FromRef<Arc<AppState>>,
+{
+    AuthorizedRoute {
+        queries: state.api_query_context(),
+        command: C::from_ref(state),
+    }
+}
+
+#[derive(Clone)]
+struct RoutePair<A, B> {
+    first: A,
+    second: B,
+}
+
+macro_rules! route_pair_contexts {
+    ($first:ty, $second:ty) => {
+        impl FromRef<RoutePair<$first, $second>> for $first {
+            fn from_ref(state: &RoutePair<$first, $second>) -> Self {
+                state.first.clone()
+            }
+        }
+
+        impl FromRef<RoutePair<$first, $second>> for $second {
+            fn from_ref(state: &RoutePair<$first, $second>) -> Self {
+                state.second.clone()
+            }
+        }
+    };
+}
+
+route_pair_contexts!(
+    crate::state::password_change_http::PasswordChangeHttpContext,
+    Arc<crate::state::account_teardown_runtime::AccountTeardownRuntime>
+);
+route_pair_contexts!(
+    OmemoRecoveryHttpContext,
+    crate::state::account_generation_teardown::AccountGenerationTeardownSequence
+);
+
+#[derive(Clone)]
+struct PasskeyRemovalRoute {
+    queries: ApiQueryContext,
+    account: crate::state::passkey_http::PasskeyAccountHttpContext,
+    start: PasskeyStartHttpContext,
+    teardown: crate::state::account_generation_teardown::AccountGenerationTeardownSequence,
+}
+
+impl FromRef<PasskeyRemovalRoute> for ApiQueryContext {
+    fn from_ref(state: &PasskeyRemovalRoute) -> Self {
+        state.queries.clone()
+    }
+}
+
+impl FromRef<PasskeyRemovalRoute> for crate::state::passkey_http::PasskeyAccountHttpContext {
+    fn from_ref(state: &PasskeyRemovalRoute) -> Self {
+        state.account.clone()
+    }
+}
+
+impl FromRef<PasskeyRemovalRoute> for PasskeyStartHttpContext {
+    fn from_ref(state: &PasskeyRemovalRoute) -> Self {
+        state.start.clone()
+    }
+}
+
+impl FromRef<PasskeyRemovalRoute>
+    for crate::state::account_generation_teardown::AccountGenerationTeardownSequence
+{
+    fn from_ref(state: &PasskeyRemovalRoute) -> Self {
+        state.teardown.clone()
+    }
+}
+
+#[derive(Clone)]
+struct UploadEnabledRoute {
+    queries: ApiQueryContext,
+    write: crate::state::upload_http_write::UploadHttpWriteContext,
+    replay: crate::state::UploadHttpReplayReadContext,
+    delete: crate::state::upload_http_delete::UploadHttpDeleteContext,
+}
+
+impl FromRef<UploadEnabledRoute> for ApiQueryContext {
+    fn from_ref(state: &UploadEnabledRoute) -> Self {
+        state.queries.clone()
+    }
+}
+
+impl FromRef<UploadEnabledRoute> for crate::state::upload_http_write::UploadHttpWriteContext {
+    fn from_ref(state: &UploadEnabledRoute) -> Self {
+        state.write.clone()
+    }
+}
+
+impl FromRef<UploadEnabledRoute> for crate::state::UploadHttpReplayReadContext {
+    fn from_ref(state: &UploadEnabledRoute) -> Self {
+        state.replay.clone()
+    }
+}
+
+impl FromRef<UploadEnabledRoute> for crate::state::upload_http_delete::UploadHttpDeleteContext {
+    fn from_ref(state: &UploadEnabledRoute) -> Self {
+        state.delete.clone()
+    }
+}
+
+fn public_query_routes(queries: ApiQueryContext) -> Router {
+    Router::new()
         .route("/api/v1/me", get(me))
+        .route("/api/v1/history", get(history))
+        .with_state(queries)
+}
+
+fn public_authorized_routes(state: &Arc<AppState>) -> Router {
+    Router::new()
+        .merge(
+            Router::new()
+                .route("/api/v1/anti-abuse/challenge", post(anti_abuse_challenge))
+                .with_state(authorized_route_state::<
+                    crate::state::http_challenge_endpoint::HttpChallengeEndpointContext,
+                >(state)),
+        )
+        .merge(
+            Router::new()
+                .route("/api/v1/me/passkeys", get(passkeys::list))
+                .route(
+                    "/api/v1/me/passkeys/register/finish",
+                    post(passkeys::register_finish),
+                )
+                .with_state(authorized_route_state::<
+                    crate::state::passkey_http::PasskeyAccountHttpContext,
+                >(state)),
+        )
+        .merge(
+            Router::new()
+                .route(
+                    "/api/v1/me/passkeys/register/start",
+                    post(passkeys::register_start),
+                )
+                .with_state(authorized_route_state::<PasskeyStartHttpContext>(state)),
+        )
+        .merge(
+            Router::new()
+                .route("/api/v1/reports", get(my_reports).post(create_report))
+                .route("/api/v1/reports/{id}/appeals", post(create_appeal))
+                .with_state(authorized_route_state::<crate::state::ReportContext>(state)),
+        )
+}
+
+fn personal_credential_routes(state: &Arc<AppState>) -> Router {
+    Router::new()
+        .merge(
+            Router::new()
+                .route("/api/v1/me/passkeys/remove", post(passkeys::remove))
+                .with_state(PasskeyRemovalRoute {
+                    queries: state.api_query_context(),
+                    account: FromRef::from_ref(state),
+                    start: FromRef::from_ref(state),
+                    teardown: FromRef::from_ref(state),
+                }),
+        )
+        .merge(
+            Router::new()
+                .route("/api/v1/me/password", patch(change_password))
+                .with_state(RoutePair {
+                    first: FromRef::from_ref(state),
+                    second: Arc::new(FromRef::from_ref(state)),
+                }),
+        )
+        .merge(
+            Router::new()
+                .route(
+                    "/api/v1/me/omemo-recovery-transfers/{id}/consume",
+                    post(consume_omemo_recovery),
+                )
+                .with_state(RoutePair {
+                    first: OmemoRecoveryHttpContext::from_ref(state),
+                    second: FromRef::from_ref(state),
+                }),
+        )
+}
+
+fn public_capability_routes(state: &Arc<AppState>) -> Router {
+    Router::new()
+        .merge(
+            Router::new()
+                .route("/api/v1/passkeys/login/start", post(passkeys::login_start))
+                .with_state(PasskeyStartHttpContext::from_ref(state)),
+        )
+        .merge(
+            Router::new()
+                .route(
+                    "/api/v1/passkeys/login/finish",
+                    post(passkeys::login_finish),
+                )
+                .with_state(PasskeyLoginFinishContext::from_ref(state)),
+        )
+        .merge(
+            Router::new()
+                .route(
+                    "/api/v1/omemo-recovery-transfers/{id}/poll",
+                    post(poll_omemo_recovery),
+                )
+                .with_state(OmemoRecoveryPollContext::from_ref(state)),
+        )
+}
+
+fn personal_policy_routes(state: &Arc<AppState>) -> Router {
+    Router::new()
         .route(
             "/api/v1/me/retention",
             get(get_my_retention).put(update_my_retention),
         )
-        .route("/api/v1/me/password", patch(change_password))
+        .route(
+            "/api/v1/muc_rooms/{id}/retention",
+            get(get_muc_retention).put(update_muc_retention),
+        )
+        .with_state(RetentionPolicyContext::from_ref(state))
+}
+
+fn omemo_recovery_routes(state: &Arc<AppState>) -> Router {
+    Router::new()
         .route(
             "/api/v1/me/omemo-recovery-transfers",
             post(prepare_omemo_recovery),
@@ -347,170 +795,83 @@ fn public_rest_routes() -> Router<Arc<AppState>> {
                 .put(seal_omemo_recovery)
                 .delete(revoke_omemo_recovery),
         )
-        .route(
-            "/api/v1/me/omemo-recovery-transfers/{id}/consume",
-            post(consume_omemo_recovery),
-        )
-        .route(
-            "/api/v1/omemo-recovery-transfers/{id}/poll",
-            post(poll_omemo_recovery),
-        )
-        .route("/api/v1/history", get(history))
-        .route("/api/v1/reports", get(my_reports).post(create_report))
-        .route("/api/v1/reports/{id}/appeals", post(create_appeal))
-        .route(
-            "/api/v1/muc_rooms/{id}/retention",
-            get(get_muc_retention).put(update_muc_retention),
-        )
+        .with_state(OmemoRecoveryHttpContext::from_ref(state))
 }
 
-fn upload_http_routes(upload_limit: usize, admission_enabled: bool) -> Router<Arc<AppState>> {
-    let router = Router::new().route("/uploads/{id}", get(upload_get));
-    if admission_enabled {
-        router.route(
-            "/api/v1/upload/{id}",
-            put(upload_put)
-                .delete(upload_delete)
-                // The storage reader deliberately consumes one byte beyond
-                // the reserved size to distinguish an oversized stream from
-                // an exact upload without buffering it.
-                .layer(DefaultBodyLimit::max(upload_limit.saturating_add(1))),
-        )
-    } else {
-        router.route("/api/v1/upload/{id}", delete(upload_delete))
-    }
+fn public_upload_read_routes(state: &Arc<AppState>) -> Router {
+    Router::new()
+        .route("/uploads/{id}", get(upload_get))
+        .with_state(UploadHttpReadContext::from_ref(state))
 }
 
-fn administrator_api_routes(
-    upload_runtime_enabled: bool,
-    invitation_enabled: bool,
-) -> Router<Arc<AppState>> {
-    // Authentication and public config are duplicated intentionally on the
-    // private administration origin: the admin SPA never needs cross-origin
-    // access to the public REST listener.
+fn administrator_query_routes(queries: ApiQueryContext, upload_runtime_enabled: bool) -> Router {
     let router = Router::new()
-        .route("/api", get(api_root_not_found))
-        .route("/api/v1/config", get(public_config))
-        .route("/api/v1/login", post(login))
-        .route("/api/v1/session", delete(logout))
         .route("/api/v1/admin/stats", get(admin_stats))
-        .route("/api/v1/admin/nuke", post(admin_nuke))
-        .route(
-            "/api/v1/admin/panic_disconnect",
-            post(admin_panic_disconnect),
-        )
-        .route("/api/v1/admin/island_mode", post(admin_toggle_island_mode))
-        .route(
-            "/api/v1/admin/registration",
-            post(admin_toggle_registration),
-        )
         .route("/api/v1/admin/sessions", get(admin_sessions))
-        .route(
-            "/api/v1/admin/sessions/{connection_id}",
-            delete(admin_kick_session),
-        )
-        .route(
-            "/api/v1/admin/offline_messages",
-            get(admin_offline_messages_stats).delete(admin_clear_offline_messages),
-        )
         .route("/api/v1/admin/muc_rooms", get(admin_muc_rooms))
-        .route(
-            "/api/v1/admin/muc_rooms/{localpart}",
-            delete(admin_destroy_muc_room),
-        )
-        .route("/api/v1/admin/broadcast", post(admin_broadcast))
         .route("/api/v1/admin/users", get(admin_users))
-        .route("/api/v1/admin/users/{id}", patch(admin_update_user))
         .route("/api/v1/admin/reports", get(admin_reports))
-        .route("/api/v1/admin/reports/{id}", patch(admin_update_report))
-        .route("/api/v1/admin/appeals/{id}", patch(admin_update_appeal))
-        .route("/api/v1/admin/tls/reload", post(admin_tls_reload))
         .route("/api/v1/admin/operations", get(list_operations))
         .route("/api/v1/admin/operations/{id}", get(get_operation))
         .route("/api/v1/admin/operations/{id}/targets", get(list_targets))
         .route(
             "/api/v1/admin/operations/{operation_id}/targets/{target_id}",
             get(get_target),
-        )
-        .route(
-            "/api/v1/admin/operations/{id}/cancel",
-            post(cancel_operation),
-        )
-        .route(
-            "/api/v1/admin/operations/{id}/reconcile",
-            post(reconcile_operation),
-        )
-        .route(
-            "/api/v1/admin/operations/{operation_id}/targets/{target_id}/reconcile",
-            post(reconcile_target),
-        )
-        .route(
-            "/api/v1/admin/legal-holds",
-            get(list_legal_holds).post(create_legal_hold),
-        )
-        .route(
-            "/api/v1/admin/legal-holds/{id}/release",
-            post(release_legal_hold),
-        )
-        .route(
-            "/api/v1/admin/legal-holds/{id}/export",
-            post(export_legal_hold),
-        )
-        .route("/api/v1/admin/audit/export", post(export_audit));
+        );
     let router = if upload_runtime_enabled {
-        router
-            .route(
-                "/api/v1/admin/upload-dead-letters",
-                get(admin_upload_dead_letters),
-            )
-            .route(
-                "/api/v1/admin/upload-dead-letters/{kind}/{id}/retry",
-                post(admin_retry_upload_dead_letter),
-            )
+        router.route(
+            "/api/v1/admin/upload-dead-letters",
+            get(admin_upload_dead_letters),
+        )
     } else {
         router
     };
-    if invitation_enabled {
-        router
-            .route(
-                "/api/v1/admin/invitations",
-                get(admin_invitations).post(admin_create_invitation),
-            )
-            .route(
-                "/api/v1/admin/invitations/{id}",
-                delete(admin_revoke_invitation),
-            )
-    } else {
-        router
-    }
+    router.with_state(queries)
 }
 
-fn web_client_static_routes() -> Router<Arc<AppState>> {
-    let mut router = Router::new()
-        .route_service("/", ServeFile::new("web/client.html"))
-        .route_service("/client.html", ServeFile::new("web/client.html"))
-        .nest_service("/crypto", ServeDir::new("web/crypto"));
-    for &(route, file) in WEB_CLIENT_STATIC_FILES {
-        router = router.route_service(route, ServeFile::new(file));
+fn discovery_routes(
+    context: PublicDiscoveryContext,
+    config_enabled: bool,
+    host_meta_xml_enabled: bool,
+    host_meta_json_enabled: bool,
+) -> Router {
+    let mut router: Router<PublicDiscoveryContext> = Router::new();
+    if config_enabled {
+        router = router.route("/api/v1/config", get(public_config));
     }
-    router
+    if host_meta_xml_enabled {
+        router = router.route("/.well-known/host-meta", get(host_meta_xml));
+    }
+    if host_meta_json_enabled {
+        router = router.route("/.well-known/host-meta.json", get(host_meta_json));
+    }
+    router.with_state(context)
 }
 
-fn administrator_static_routes() -> Router<Arc<AppState>> {
-    let mut router = Router::new()
-        .route_service("/", ServeFile::new("web/index.html"))
-        .route_service("/index.html", ServeFile::new("web/index.html"));
-    for &(route, file) in WEB_ADMIN_STATIC_FILES {
-        router = router.route_service(route, ServeFile::new(file));
+fn xmpp_transport_routes(
+    state: Arc<AppState>,
+    websocket_enabled: bool,
+    bosh_enabled: bool,
+) -> Router {
+    let mut router: Router<Arc<AppState>> = Router::new();
+    if websocket_enabled {
+        router = router.route("/xmpp-websocket", get(websocket));
     }
-    router
+    if bosh_enabled {
+        router = router
+            .route("/http-bind", post(crate::bosh::http_bind))
+            .route("/http-bind", options(crate::bosh::http_bind_options))
+            .route("/bosh", post(crate::bosh::http_bind))
+            .route("/bosh", options(crate::bosh::http_bind_options));
+    }
+    router.with_state(state)
 }
 
 fn common_http_layers(
-    router: Router<Arc<AppState>>,
+    router: Router,
     state: HttpTransportPolicy,
     allow_plaintext_observability: bool,
-) -> Router<Arc<AppState>> {
+) -> Router {
     let router = if allow_plaintext_observability {
         router.layer(middleware::from_fn_with_state(state, secure_http_transport))
     } else {
@@ -569,57 +930,73 @@ fn host_meta_route_contributions(websocket: bool, bosh: bool, xep_0487: bool) ->
 
 pub fn public_router(state: Arc<AppState>) -> Router {
     let readiness = ReadyEndpointState::new(state.readiness_context());
-    let policy = state.public_discovery_context().policy();
+    let discovery = state.public_discovery_context().clone();
+    let policy = discovery.policy();
     let mut router = Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready).with_state(readiness));
     if policy.rest_api_enabled {
-        router = router.merge(public_rest_routes());
+        router = router
+            .merge(public_rest_routes())
+            .merge(authentication_routes(&state, true))
+            .merge(public_query_routes(state.api_query_context()))
+            .merge(public_authorized_routes(&state))
+            .merge(personal_credential_routes(&state))
+            .merge(public_capability_routes(&state))
+            .merge(personal_policy_routes(&state))
+            .merge(omemo_recovery_routes(&state));
     }
     if policy.upload_mode.keeps_storage_runtime() {
         let upload_limit = usize::try_from(policy.upload_max_bytes).unwrap_or(usize::MAX);
-        router = router.merge(upload_http_routes(
-            upload_limit,
-            policy.upload_mode.admits_new_uploads(),
-        ));
-    }
-    if policy.websocket_enabled {
-        router = router.route("/xmpp-websocket", get(websocket));
+        router = router
+            .merge(upload_http_routes(
+                &state,
+                upload_limit,
+                policy.upload_mode.admits_new_uploads(),
+            ))
+            .merge(public_upload_read_routes(&state));
     }
     let (serve_host_meta_xml, serve_host_meta_json) = host_meta_route_contributions(
         policy.websocket_enabled,
         policy.bosh_enabled,
         !policy.xep_0487_ips.is_empty(),
     );
-    if serve_host_meta_xml {
-        router = router.route("/.well-known/host-meta", get(host_meta_xml));
-    }
-    if serve_host_meta_json {
-        router = router.route("/.well-known/host-meta.json", get(host_meta_json));
-    }
-    if policy.bosh_enabled {
-        router = router
-            .route("/http-bind", post(crate::bosh::http_bind))
-            .route("/http-bind", options(crate::bosh::http_bind_options))
-            .route("/bosh", post(crate::bosh::http_bind))
-            .route("/bosh", options(crate::bosh::http_bind_options));
-    }
+    router = router
+        .merge(discovery_routes(
+            discovery.clone(),
+            policy.rest_api_enabled,
+            serve_host_meta_xml,
+            serve_host_meta_json,
+        ))
+        .merge(xmpp_transport_routes(
+            Arc::clone(&state),
+            policy.websocket_enabled,
+            policy.bosh_enabled,
+        ));
     if policy.web_client_enabled {
         router = router.merge(web_client_static_routes());
     }
-    common_http_layers(router, state.http_transport_policy(), true).with_state(state)
+    common_http_layers(router, state.http_transport_policy(), true)
 }
 
 pub fn administrator_router(state: Arc<AppState>) -> Router {
     let readiness = ReadyEndpointState::new(state.readiness_context());
-    let policy = state.public_discovery_context().policy();
+    let discovery = state.public_discovery_context().clone();
+    let policy = discovery.policy();
     let router = Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready).with_state(readiness))
-        .merge(administrator_api_routes(
+        .merge(administrator_command_routes(
+            &state,
             policy.upload_mode.keeps_storage_runtime(),
             policy.web_client_enabled,
         ))
+        .merge(administrator_query_routes(
+            state.api_query_context(),
+            policy.upload_mode.keeps_storage_runtime(),
+        ))
+        .merge(authentication_routes(&state, false))
+        .merge(discovery_routes(discovery.clone(), true, false, false))
         .merge(administrator_static_routes());
     common_http_layers(
         router.layer(middleware::from_fn_with_state(
@@ -629,7 +1006,6 @@ pub fn administrator_router(state: Arc<AppState>) -> Router {
         state.http_transport_policy(),
         false,
     )
-    .with_state(state)
 }
 
 async fn api_request_id(mut request: Request, next: Next) -> Response {

@@ -247,20 +247,35 @@ pub(crate) async fn send_volatile_on_authenticated_route(
     target_domain: &str,
     stanza: String,
 ) -> bool {
+    send_volatile_with_context(
+        &state.s2s_outbox_dispatch_context(),
+        source_domain,
+        target_domain,
+        stanza,
+    )
+    .await
+}
+
+async fn send_volatile_with_context(
+    context: &S2sOutboxDispatchContext,
+    source_domain: &str,
+    target_domain: &str,
+    stanza: String,
+) -> bool {
     let Ok(source_domain) = prepare_domainpart(source_domain) else {
         return false;
     };
     let Ok(target_domain) = prepare_domainpart(target_domain) else {
         return false;
     };
-    if state.island_mode_enabled() || !state.federation_domain_allowed(&target_domain) {
+    if context.island_mode_enabled() || !context.federation_domain_allowed(&target_domain) {
         return false;
     }
     let target_entity_allowed = Document::parse(&stanza).ok().is_some_and(|document| {
         document
             .root_element()
             .attribute("to")
-            .is_some_and(|target| state.federation_entity_allowed(target))
+            .is_some_and(|target| context.federation_entity_allowed(target))
     });
     if !target_entity_allowed {
         return false;
@@ -278,10 +293,7 @@ pub(crate) async fn send_volatile_on_authenticated_route(
     let mut accepted = false;
 
     if let Some(route_key) = bidi_connection_key(&source_domain, &target_domain) {
-        if let Some(route) = state
-            .s2s_connection_registry()
-            .bidirectional_route(&route_key)
-        {
+        if let Some(route) = context.bidirectional_route(&route_key) {
             let candidate = envelope.take().expect("volatile envelope is present");
             match route.sender.try_send(candidate) {
                 Ok(()) => accepted = true,
@@ -292,8 +304,8 @@ pub(crate) async fn send_volatile_on_authenticated_route(
 
     if !accepted {
         let connection_key = format!("{source_domain}\0{target_domain}");
-        if let Some(sender) = state
-            .s2s_connection_registry()
+        if let Some(sender) = context
+            .registry()
             .authenticated_outbound_sender(&connection_key)
         {
             let candidate = envelope.take().expect("volatile envelope is present");
@@ -334,7 +346,7 @@ async fn run_outbound_connection(
     let lease_valid = Arc::new(AtomicBool::new(true));
     let lease_cancel = tokio_util::sync::CancellationToken::new();
     let lease_task = tokio::spawn(renew_first_envelope_lease(
-        Arc::clone(&state),
+        state.s2s_outbox_dispatch_service().clone(),
         first.outbox_id,
         first.lock_token,
         Arc::clone(&lease_valid),
@@ -398,14 +410,14 @@ async fn run_outbound_connection(
 }
 
 async fn renew_first_envelope_lease(
-    state: Arc<AppState>,
+    service: DispatchService,
     outbox_id: uuid::Uuid,
     lock_token: uuid::Uuid,
     lease_valid: Arc<AtomicBool>,
     cancel: tokio_util::sync::CancellationToken,
     disconnect: tokio_util::sync::CancellationToken,
 ) {
-    let interval_seconds = (state.s2s_outbox_dispatch_service().lease_seconds() / 3).max(1);
+    let interval_seconds = (service.lease_seconds() / 3).max(1);
     let database_deadline = Duration::from_secs(interval_seconds.min(5));
     let mut interval = tokio::time::interval(Duration::from_secs(interval_seconds));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -418,7 +430,7 @@ async fn renew_first_envelope_lease(
             _ = cancel.cancelled() => return,
             _ = disconnect.cancelled() => return,
             _ = interval.tick() => {
-                let renewal = state.s2s_outbox_dispatch_service().renew(outbox_id, lock_token);
+                let renewal = service.renew(outbox_id, lock_token);
                 tokio::pin!(renewal);
                 let result = tokio::select! {
                     biased;

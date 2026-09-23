@@ -54,9 +54,12 @@ export function verifySubserverBoundaries({ main, subservers, maintenanceOwnersh
     !/heartbeat\.(?:ok|error)\(/.test(coordinator) &&
     [...coordinator.matchAll(/observed_database = true;/g)].length === 2,
   'control coordinator must report exactly its two actual database-read paths through the reviewed health function');
+  requireBoundary(/let repository = self\.connection\.lock\(\)\.await\.take\(\)/.test(coordinator) &&
+    /let mut control = RuntimeControlService::new\(repository\)/.test(coordinator),
+  'control coordinator must retain the exact reserved connection through one repository');
   for (const [declaration, query] of [
-    ['if refresh_policy', /db::runtime_control_snapshot\(\s*&mut connection,\s*\|phase\|\s*\{\s*diagnostics\.database_read\(phase\)\s*\}\s*,?\)/],
-    ['if self.service_control_enabled', /db::poll_admin_service_control\(\s*&mut connection\s*\)/],
+    ['if refresh_policy', /control\s*\.policy_snapshot\(\s*\|phase\|\s*diagnostics\.database_read\(phase\)\s*\)/],
+    ['if self.service_control_enabled', /control\.service_control\(\)/],
   ]) {
     const read = body(coordinator, declaration);
     requireBoundary(read.includes('observed_database = true;') && query.test(codeOnly(read)),

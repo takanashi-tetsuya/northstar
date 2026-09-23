@@ -72,8 +72,8 @@ rejectsMutation('coordinator must use the reviewed error-preserving health repor
   'report_runtime_control_health(&heartbeat, observed_database, first_error);',
   'heartbeat.ok();', /control coordinator/);
 rejectsMutation('instrumented settings reads still use the reserved connection', 'runtimeControl',
-  'db::runtime_control_snapshot(&mut connection, |phase| {',
-  'db::runtime_control_snapshot(&state.pool, |phase| {', /exact reserved connection/);
+  'let repository = self.connection.lock().await.take()',
+  'let repository = acquire_shared_repository()', /exact reserved connection/);
 rejectsMutation('control read instrumentation cannot silently drop its phase observation', 'runtimeControl',
   'diagnostics.database_read(phase)',
   'drop(phase)', /exact reserved connection/);

@@ -15,6 +15,7 @@ pub(crate) mod passkeys;
 pub(crate) mod password_change_repository;
 pub(crate) mod report_moderation_repository;
 pub(crate) mod retention_policy_repository;
+pub(crate) mod runtime_control_repository;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub(crate) mod upload_admin_repository;

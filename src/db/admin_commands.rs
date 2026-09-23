@@ -50,14 +50,8 @@ pub struct AdminCommandFence<'a> {
 
 pub use crate::services::presence::ServiceMessageDeliveryClaim as ClaimedAdminServiceMessage;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DurableServiceControl {
-    pub generation: Uuid,
-    pub action: String,
-    pub execute_at: chrono::DateTime<chrono::Utc>,
-    pub fired_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
-}
+pub use crate::services::runtime_control::DurableServiceControl;
+pub(crate) use crate::services::runtime_control::RuntimeControlReadPhase;
 
 // The service-control watcher has a three-second WorkerRegistry silence
 // budget. Keep all database phases materially below that budget so a stalled
@@ -1659,11 +1653,6 @@ pub async fn admin_runtime_settings(pool: &PgPool) -> Result<(bool, bool)> {
         .fetch_all(pool)
         .await?;
     admin_runtime_settings_from_rows(rows)
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum RuntimeControlReadPhase {
-    Snapshot,
 }
 
 /// Read the complete runtime control-plane projection over the caller's

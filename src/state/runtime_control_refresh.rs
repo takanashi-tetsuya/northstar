@@ -4,7 +4,10 @@ use super::{
     report_runtime_control_health, service_control_applies, AppState, FederationWritePolicy,
     RuntimeControlDiagnostics, RuntimeControlPhase, RuntimeFederationPolicy,
 };
-use crate::{db, s2s::S2sOutboundClearance, workers::WorkerHeartbeat};
+use crate::{
+    db::runtime_control_repository::PostgresRuntimeControlRepository, s2s::S2sOutboundClearance,
+    services::runtime_control::RuntimeControlService, workers::WorkerHeartbeat,
+};
 use anyhow::Result;
 use arc_swap::ArcSwap;
 use sqlx::{pool::PoolConnection, Postgres};
@@ -17,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(super) struct RuntimeControlRefreshContext {
     liveness: Weak<()>,
-    connection: Arc<Mutex<Option<PoolConnection<Postgres>>>>,
+    connection: Arc<Mutex<Option<PostgresRuntimeControlRepository>>>,
     federation_writes: Arc<FederationWritePolicy>,
     registration_closed: Arc<AtomicBool>,
     registration_dependency_locked: bool,
@@ -32,7 +35,9 @@ impl RuntimeControlRefreshContext {
     pub(super) fn from_state(state: &AppState, connection: PoolConnection<Postgres>) -> Self {
         Self {
             liveness: Arc::downgrade(&state.runtime_control_liveness),
-            connection: Arc::new(Mutex::new(Some(connection))),
+            connection: Arc::new(Mutex::new(Some(PostgresRuntimeControlRepository::new(
+                connection,
+            )))),
             federation_writes: Arc::clone(&state.federation_write_policy),
             registration_closed: Arc::clone(&state.registration_closed),
             registration_dependency_locked: state.config.registration_dependency_locked(),
@@ -51,13 +56,14 @@ impl RuntimeControlRefreshContext {
         max_silence: Duration,
     ) -> Result<()> {
         let mut diagnostics = RuntimeControlDiagnostics::new(diagnostic_cancel, max_silence);
-        let mut connection = self.connection.lock().await.take().ok_or_else(|| {
+        let repository = self.connection.lock().await.take().ok_or_else(|| {
             anyhow::anyhow!(
                 "runtime-control coordinator was restarted after its reserved connection ended"
             )
         })?;
         // The connection cannot be returned to another worker after this
         // attempt ends. Reads, application and service control stay serialized.
+        let mut control = RuntimeControlService::new(repository);
         let mut interval = tokio::time::interval(Duration::from_millis(500));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut refresh_policy = true;
@@ -72,25 +78,24 @@ impl RuntimeControlRefreshContext {
             let mut observed_database = false;
             if refresh_policy {
                 observed_database = true;
-                match db::runtime_control_snapshot(&mut connection, |phase| {
-                    diagnostics.database_read(phase)
-                })
-                .await
+                match control
+                    .policy_snapshot(|phase| diagnostics.database_read(phase))
+                    .await
                 {
-                    Ok((island_mode, registration_closed, blacklist, whitelist)) => {
+                    Ok(policy) => {
                         diagnostics.enter(RuntimeControlPhase::PolicyApply);
-                        let was_island = self.federation_writes.refresh(island_mode).await;
+                        let was_island = self.federation_writes.refresh(policy.island_mode).await;
                         self.registration_closed.store(
-                            registration_closed || self.registration_dependency_locked,
+                            policy.registration_closed || self.registration_dependency_locked,
                             std::sync::atomic::Ordering::Release,
                         );
-                        if island_mode && !was_island {
+                        if policy.island_mode && !was_island {
                             self.s2s_connections.clear_for_island_mode();
                         }
                         self.federation_rules
                             .store(Arc::new(RuntimeFederationPolicy {
-                                blacklist: blacklist.into_iter().collect(),
-                                whitelist: whitelist.into_iter().collect(),
+                                blacklist: policy.blacklist.into_iter().collect(),
+                                whitelist: policy.whitelist.into_iter().collect(),
                             }));
                     }
                     Err(error) => {
@@ -108,7 +113,7 @@ impl RuntimeControlRefreshContext {
             if self.service_control_enabled && self.service_shutdown.get().is_some() {
                 observed_database = true;
                 diagnostics.enter(RuntimeControlPhase::ServiceControlRead);
-                match db::poll_admin_service_control(&mut connection).await {
+                match control.service_control().await {
                     Ok(Some(control))
                         if service_control_applies(self.process_started_at, &control)
                             && acted_service_control != Some(control.generation) =>

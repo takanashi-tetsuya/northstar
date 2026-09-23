@@ -50,6 +50,7 @@ pub(crate) mod report_moderation;
 pub(crate) mod retention_policy;
 pub(crate) mod retractions;
 pub(crate) mod roster;
+pub(crate) mod runtime_control;
 pub(crate) mod s2s_outbox_dispatch;
 pub(crate) mod s2s_roster_authorization;
 pub(crate) mod s2s_sm_outbox;

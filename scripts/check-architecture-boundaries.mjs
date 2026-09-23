@@ -388,18 +388,23 @@ for (const invariant of [
 const runtimeControlRefresh = structBody(state, 'fn start_runtime_control_refresh(');
 const runtimeControlContext = read('src/state/runtime_control_refresh.rs');
 const runtimeControlRun = structBody(runtimeControlContext, 'pub(super) async fn run(');
+const runtimeControlAdapter = read('src/db/runtime_control_repository.rs');
+if (!/let repository = self\.connection\.lock\(\)\.await\.take\(\)/.test(runtimeControlRun)
+    || !/let mut control = RuntimeControlService::new\(repository\)/.test(runtimeControlRun)
+    || !/match control\s*\.policy_snapshot\(\|phase\|\s*diagnostics\.database_read\(phase\)\)/s.test(runtimeControlRun)
+    || !/match control\.service_control\(\)\.await/.test(runtimeControlRun)) {
+  throw new Error('runtime-control refresh must use one repository-owned control connection');
+}
 for (const [call, description] of [
   ['runtime_control_snapshot', 'runtime administration and federation refresh'],
   ['poll_admin_service_control', 'XEP-0133 service-control refresh'],
 ]) {
-  const observer = call === 'runtime_control_snapshot'
-    ? String.raw`\s*,\s*\|phase\|\s*\{\s*diagnostics\.database_read\(phase\)\s*\}\s*,?`
-    : '';
-  if (!new RegExp(`match db::${call}\\(\\s*&mut connection${observer}\\s*\\)`, 's').test(runtimeControlRun)) {
-    throw new Error(`${description} must use the coordinator-owned control connection`);
+  if (!new RegExp(`db::${call}\\(\\s*&mut self\\.connection`, 's').test(runtimeControlAdapter)) {
+    throw new Error(`${description} must use the repository-owned control connection`);
   }
-  if (new RegExp(`${call}\\(&state\\.(?:pool|runtime_control_pool)\\)`).test(runtimeControlRun)) {
-    throw new Error(`${description} must not acquire from a traffic or shared control pool`);
+  if (new RegExp(`\\bdb::${call}\\(`).test(runtimeControlRun)
+      || new RegExp(`${call}\\(&state\\.(?:pool|runtime_control_pool)\\)`).test(runtimeControlRun)) {
+    throw new Error(`${description} must not access database authority from the refresh worker`);
   }
 }
 if ((runtimeControlRefresh.match(/let\s+max_silence\s*=/g) ?? []).length !== 1
@@ -2283,7 +2288,7 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownSequence)
     || !/self\.routes\.revoke\([\s\S]+self\.sm\.revoke_user_with_teardown\(user_id\)\.await[\s\S]+self\.generation\.committed_generation\(user_id\)\.await[\s\S]+send_account_generation_teardown\(/.test(accountTeardownRuntime)
     || !/pub\(super\) async fn remove\(\s*State\(teardown\): State<AccountGenerationTeardownSequence>/.test(passkeyApiSource)
     || !/pub async fn consume_omemo_recovery\(\s*State\(context\): State<OmemoRecoveryHttpContext>,\s*State\(teardown\): State<AccountGenerationTeardownSequence>/.test(recoveryApiSource)
-    || !/pub async fn change_password\(\s*State\(state\): State<PasswordChangeHttpContext>,\s*State\(teardown\): State<AccountTeardownRuntime>/.test(read('src/api/users.rs'))
+    || !/pub async fn change_password\(\s*State\(state\): State<PasswordChangeHttpContext>,\s*State\(teardown\): State<Arc<AccountTeardownRuntime>>/.test(read('src/api/users.rs'))
     || /State<Arc<AppState>>/.test(passkeyApiSource + recoveryApiSource + read('src/api/users.rs'))) {
   throw new Error('post-commit account teardown must use scoped HTTP contexts and ordered effects');
 }

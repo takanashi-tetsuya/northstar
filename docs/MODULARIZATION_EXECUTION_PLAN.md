@@ -338,7 +338,7 @@ next stage changes runtime behavior. The issue ledger remains
 | 1 — ARCH-SVC | Inject existing use-case repository ports, move persistence adapters into `src/db`, and replace broad API/worker state with narrow contexts | No raw SQL or transaction handles in application services or transport adapters; no broad state hidden in contexts; AppState public capabilities reach zero; rollback and post-commit failures retain their existing semantics |
 | 2 — ARCH-DB-ROLE | Separate database identities and pools by transaction responsibility | Per-role negative SQL tests, exact routine/ACL attestation, bounded aggregate connection budgets, and existing-volume upgrade/restore rehearsals |
 | 3 — ARCH-CLU-MUC | Atomic legal batches of role and affiliation operations | Consistent single-node/cluster authorization, exact occupant generations, final-owner protection, stable events/audiences and whole-batch rollback/retry tests |
-| 4 — storage and restore | Resumable offline Local/S3 migration and independently restartable restore diagnosis/recovery | Full manifest verification, fenced cutover, retained rollback data, and interruption tests at every durable transition |
+| 4 — storage and restore | Resumable offline Local/S3 migration, verifiable S3 backup/restore, and independently restartable restore recovery | Exact object-version manifests, fenced cutover, durable commit evidence, retained rollback data, and interruption tests at every durable transition |
 
 Stage 1 remains open. Application services now keep SQL and transactions in
 database adapters, and startup metadata queries follow the same boundary.
@@ -606,18 +606,25 @@ and conflicting-target rules, authorization against the original authority,
 final-state validation and consistent room/occupancy lock order. Repeatable
 read alone is not an authorization or serialization guarantee. Single-node
 in-memory role updates must converge with the durable cluster model before a
-SQL transaction can cover the complete operation.
+SQL transaction can cover the complete operation. A batch's operation identity
+must depend on the authenticated stream and IQ identity, not on a nickname's
+current occupant; the canonical request digest detects reuse with new content.
 
 Storage migration first requires maintenance mode, bounded copying to immutable
 destination keys, a durable manifest/checkpoint and complete version/size/SHA-256
 verification. Locator and namespace activation share a database cutover; object
 copying is not part of that atomic commit. Source cleanup is a later explicit
-operation. S3-to-Local migration requires a single-node destination.
+operation. S3-to-Local migration requires a single-node destination. Backups
+must include an independently protected, version-pinned S3 object manifest and
+verify every object on restore; a database dump alone is not a complete S3
+backup. After new writes begin, rollback requires a fresh reverse migration.
 
 Restore recovery reuses the existing fsynced XID intent and transaction barrier.
 A restartable tool must verify database identity/lineage, restore generation,
 journal and exact object locations before resuming or compensating. It must
 also support controlled maintenance reconnection while the workload fence is
-active. A missing/old XID outcome, damaged journal or conflicting evidence keeps
-the fence and recovery artifacts intact; it must not guess or promise universal
-automatic recovery.
+active. Each replacement transaction needs a durable marker binding the exact
+restore ID and manifest digest to its outcome, and trusted restore state must
+record that digest independently of its monotonic rollback floor. A missing or
+old XID outcome without matching transaction evidence, a damaged journal, or
+conflicting evidence keeps the fence and recovery artifacts intact.

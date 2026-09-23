@@ -4618,82 +4618,6 @@ impl ClusterManager {
             .delivered)
     }
 
-    /// Signed MIX-only fanout with tri-state capability evidence. A live
-    /// ingress stanza remains deliberately volatile; a claimed recipient row
-    /// supplies `source` and then requires an exact typed transport hand-off.
-    /// Unknown resources are reported to the source so its ordered row can
-    /// remain pending until a route becomes eligible.
-    pub async fn send_to_node_mix(
-        &self,
-        node_id: &str,
-        target_jid: &str,
-        stanza: &str,
-        source: Option<crate::outbound::MixDelivery>,
-    ) -> Result<NodeDeliveryReceipt> {
-        self.send_to_node_receipt(
-            node_id,
-            target_jid,
-            stanza,
-            NodeDeliveryOptions {
-                mix_capable_only: true,
-                mix_transport_receipt_required: source.is_some(),
-                mix_delivery: source,
-                ..NodeDeliveryOptions::default()
-            },
-        )
-        .await
-    }
-
-    /// Deliver an exact-resource non-message stanza without crossing an
-    /// account delete/recreate boundary. MIX-PAM result journals use this
-    /// after committing their terminal state; the UUID is the original
-    /// account authority captured by that transaction.
-    pub async fn send_to_node_exact_account(
-        &self,
-        node_id: &str,
-        target_full_jid: &str,
-        stanza: &str,
-        expected_user_id: uuid::Uuid,
-    ) -> Result<bool> {
-        let target = crate::jid::CanonicalJid::parse(target_full_jid)?;
-        anyhow::ensure!(
-            target.resourcepart().is_some(),
-            "exact cluster delivery requires a full JID"
-        );
-        let canonical_target = target.to_string();
-        let document = roxmltree::Document::parse(stanza)
-            .context("exact cluster delivery requires one valid XML stanza")?;
-        let root = document.root_element();
-        anyhow::ensure!(
-            root.tag_name().name() == "iq"
-                && root.tag_name().namespace() == Some("jabber:client")
-                && matches!(root.attribute("type"), Some("result" | "error"))
-                && root.attribute("id").is_some_and(|id| !id.is_empty())
-                && root.attribute("to").is_some_and(|to| {
-                    crate::jid::canonical_session_key(to).ok().as_deref()
-                        == Some(canonical_target.as_str())
-                }),
-            "exact cluster delivery must be an IQ addressed to the target resource"
-        );
-        let receipt = self
-            .send_to_node_receipt(
-                node_id,
-                target_full_jid,
-                stanza,
-                NodeDeliveryOptions {
-                    expected_user_id: Some(expected_user_id),
-                    transport_receipt_required: true,
-                    ..NodeDeliveryOptions::default()
-                },
-            )
-            .await?;
-        anyhow::ensure!(
-            receipt.acknowledged,
-            "exact cluster delivery was not acknowledged"
-        );
-        Ok(receipt.delivered)
-    }
-
     /// Route a bare-JID broadcast only to resources that have announced
     /// available presence with a non-negative priority.  RFC 6121 uses this
     /// delivery mode for headline messages; ordinary cluster broadcasts
@@ -5126,6 +5050,85 @@ impl ClusterUnavailableDelivery {
 }
 
 impl ClusterNodeDelivery {
+    pub(crate) async fn send_mix(
+        &self,
+        node_id: &str,
+        target_jid: &str,
+        stanza: &str,
+        source: Option<crate::outbound::MixDelivery>,
+    ) -> Result<NodeDeliveryReceipt> {
+        self.send_to_node_receipt(
+            node_id,
+            target_jid,
+            stanza,
+            NodeDeliveryOptions {
+                mix_capable_only: true,
+                mix_transport_receipt_required: source.is_some(),
+                mix_delivery: source,
+                ..NodeDeliveryOptions::default()
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn send_mix_exact_account(
+        &self,
+        node_id: &str,
+        target_full_jid: &str,
+        stanza: &str,
+        expected_user_id: uuid::Uuid,
+    ) -> Result<bool> {
+        let target = crate::jid::CanonicalJid::parse(target_full_jid)?;
+        anyhow::ensure!(
+            target.resourcepart().is_some(),
+            "exact cluster delivery requires a full JID"
+        );
+        let canonical_target = target.to_string();
+        let document = roxmltree::Document::parse(stanza)
+            .context("exact cluster delivery requires one valid XML stanza")?;
+        let root = document.root_element();
+        anyhow::ensure!(
+            root.tag_name().name() == "iq"
+                && root.tag_name().namespace() == Some("jabber:client")
+                && matches!(root.attribute("type"), Some("result" | "error"))
+                && root.attribute("id").is_some_and(|id| !id.is_empty())
+                && root.attribute("to").is_some_and(|to| {
+                    crate::jid::canonical_session_key(to).ok().as_deref()
+                        == Some(canonical_target.as_str())
+                }),
+            "exact cluster delivery must be an IQ addressed to the target resource"
+        );
+        let receipt = self
+            .send_to_node_receipt(
+                node_id,
+                target_full_jid,
+                stanza,
+                NodeDeliveryOptions {
+                    expected_user_id: Some(expected_user_id),
+                    transport_receipt_required: true,
+                    ..NodeDeliveryOptions::default()
+                },
+            )
+            .await?;
+        anyhow::ensure!(
+            receipt.acknowledged,
+            "exact cluster delivery was not acknowledged"
+        );
+        Ok(receipt.delivered)
+    }
+
+    pub(crate) async fn send_pubsub_notification(
+        &self,
+        node_id: &str,
+        target_jid: &str,
+        stanza: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .send_to_node_receipt(node_id, target_jid, stanza, NodeDeliveryOptions::default())
+            .await?
+            .delivered)
+    }
+
     pub(crate) async fn send_roster_push(
         &self,
         node_id: &str,

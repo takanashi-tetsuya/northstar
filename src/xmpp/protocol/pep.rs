@@ -14,6 +14,7 @@ use crate::services::{
         PubSubOutboxInsert, PubSubService,
     },
 };
+use crate::state::pep_last_items::PepLastItemsContext;
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::Result;
@@ -21,7 +22,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use northstar_pubsub_application::PepPublishItemsCommand;
 use roxmltree::Node;
 use sha1::{Digest, Sha1};
-use std::{collections::HashSet, sync::Arc};
+use std::collections::HashSet;
 
 const NS_PUBSUB: &str = "http://jabber.org/protocol/pubsub";
 const NS_PUBSUB_EVENT: &str = "http://jabber.org/protocol/pubsub#event";
@@ -1743,111 +1744,8 @@ fn access_error_for_model(access_model: &str) -> &'static str {
     }
 }
 
-async fn route_pep_message(
-    state: &crate::state::AppState,
-    sender_bare_jid: &str,
-    recipient: &str,
-    message: String,
-    expected_local_epoch: Option<crate::state::LocalCapsEpoch>,
-) -> Result<()> {
-    let sender_bare_jid = crate::jid::canonicalize_bare(sender_bare_jid)?;
-    let recipient_jid = crate::jid::CanonicalJid::parse(recipient)?;
-    let domain = recipient_jid.domainpart();
-    if domain == state.local_domain() {
-        let mut delivered = false;
-        let recipient_key = recipient_jid.to_string();
-        let targets = state.session_entries_for(&recipient_key);
-        let same_account = recipient_jid.bare() == sender_bare_jid;
-        let mut policy_eligible = 0_usize;
-        for (_, target) in &targets {
-            if expected_local_epoch.is_some_and(|epoch| target.connection_id != epoch.connection_id)
-            {
-                continue;
-            }
-            if !same_account
-                && !state
-                    .privacy_allows_session(
-                        target,
-                        &sender_bare_jid,
-                        crate::services::privacy::PrivacyStanzaKind::Message,
-                    )
-                    .await?
-            {
-                continue;
-            }
-            policy_eligible += 1;
-            if let Some(epoch) = expected_local_epoch {
-                // The potentially slow policy/database work above stays
-                // outside the resource gate. Only the final route check and
-                // nonblocking send are linearized with a newer caps
-                // observation or live SM takeover.
-                let expected_gate = Arc::clone(&target.mix_presence_gate);
-                let _epoch_guard = Arc::clone(&expected_gate).lock_owned().await;
-                let exact_route =
-                    state.local_caps_epoch_is_current(&recipient_key, epoch, Some(&expected_gate));
-                if !exact_route {
-                    continue;
-                }
-                match target.sender.try_send(message.clone()) {
-                    Ok(()) => delivered = true,
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                        // The gate and epoch check above identify this exact
-                        // transport incarnation. Saturation is a transport
-                        // failure: retain the caps effect and tear down the
-                        // slow route so it cannot be reported as delivered.
-                        target.sender.disconnect_backpressured_transport();
-                        anyhow::bail!(
-                            "exact local PEP transport queue is full for {recipient_key}"
-                        );
-                    }
-                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                        anyhow::bail!(
-                            "exact local PEP transport queue is closed for {recipient_key}"
-                        );
-                    }
-                }
-                continue;
-            }
-            delivered |= target.sender.try_send(message.clone()).is_ok();
-        }
-        let mut remote_nodes = 0_usize;
-        if !delivered && expected_local_epoch.is_none() {
-            let remote = state
-                .route_local_notification_remote(recipient, &message)
-                .await?;
-            remote_nodes = remote.remote_nodes;
-            delivered = remote.delivered;
-        }
-        if !delivered {
-            if expected_local_epoch.is_some() {
-                return Ok(());
-            }
-            if remote_nodes == 0 && !targets.is_empty() && policy_eligible == 0 {
-                return Ok(());
-            }
-            anyhow::bail!("no local PEP resource accepted the notification");
-        }
-    } else if state.federation_domain_allowed(domain) {
-        if !state.federation_outbox().send(domain, message, None).await {
-            anyhow::bail!("federated PEP notification was not admitted to the durable outbox");
-        }
-    } else {
-        anyhow::bail!("federated PEP notification is denied by domain policy");
-    }
-    Ok(())
-}
-
-pub(super) async fn route_pep_outbox_message(
-    state: &crate::state::AppState,
-    sender_bare_jid: &str,
-    recipient: &str,
-    message: String,
-) -> Result<()> {
-    route_pep_message(state, sender_bare_jid, recipient, message, None).await
-}
-
 pub(crate) async fn send_pep_last_item(
-    state: &crate::state::AppState,
+    context: &PepLastItemsContext,
     owner: &crate::services::pubsub::PubSubAccount,
     node: &str,
     recipient: &str,
@@ -1855,7 +1753,7 @@ pub(crate) async fn send_pep_last_item(
     expected_local_epoch: Option<crate::state::LocalCapsEpoch>,
 ) -> Result<()> {
     send_pep_last_item_for_owner(
-        state,
+        context,
         owner.id,
         &owner.username,
         node,
@@ -1904,7 +1802,7 @@ pub(crate) fn prepare_pep_last_item_outbox(
 }
 
 async fn send_pep_last_item_for_owner(
-    state: &crate::state::AppState,
+    context: &PepLastItemsContext,
     owner_id: uuid::Uuid,
     owner_username: &str,
     node: &str,
@@ -1912,7 +1810,7 @@ async fn send_pep_last_item_for_owner(
     on_presence: bool,
     expected_local_epoch: Option<crate::state::LocalCapsEpoch>,
 ) -> Result<()> {
-    let Some(config) = state.pubsub_service().pep_node(owner_id, node).await? else {
+    let Some(config) = context.pubsub_service().pep_node(owner_id, node).await? else {
         return Ok(());
     };
     if config.send_last_published_item == "never"
@@ -1921,7 +1819,7 @@ async fn send_pep_last_item_for_owner(
     {
         return Ok(());
     }
-    let Some(item) = state
+    let Some(item) = context
         .pubsub_service()
         .pep_items_with_timestamp(owner_id, node, 1)
         .await?
@@ -1930,7 +1828,7 @@ async fn send_pep_last_item_for_owner(
     else {
         return Ok(());
     };
-    let owner_jid = canonical_account_jid(owner_username, state.local_domain())?;
+    let owner_jid = canonical_account_jid(owner_username, context.local_domain())?;
     let payload = published_event_item(node, &item.item_id, &item.payload)?;
     let mut items = XmlElement::new("items").attr("node", node);
     items.push_validated_fragment(&payload)?;
@@ -1945,35 +1843,37 @@ async fn send_pep_last_item_for_owner(
                 .attr("stamp", item.updated_at.to_rfc3339()),
         )
         .finish();
-    route_pep_message(state, &owner_jid, recipient, message, expected_local_epoch).await
+    context
+        .route_message(&owner_jid, recipient, message, expected_local_epoch)
+        .await
 }
 
 /// Delivers XEP-0060 send-last events for durable explicit subscriptions.
 /// Unlike XEP-0163 automatic subscriptions, explicit subscriptions do not
 /// depend on an XEP-0115 `node+notify` feature advertisement.
 pub(crate) async fn deliver_explicit_pep_last_items_for_resource(
-    state: &crate::state::AppState,
+    context: &PepLastItemsContext,
     full_jid: &str,
     expected_local_epoch: Option<crate::state::LocalCapsEpoch>,
 ) -> Result<()> {
     let full_jid = crate::jid::canonical_session_key(full_jid)?;
-    for subscription in state
+    for subscription in context
         .pubsub_service()
         .pep_subscriptions_for_available_resource(&full_jid)
         .await?
     {
         if pep_access_allowed_for_owner(
-            state.pubsub_service(),
+            context.pubsub_service(),
             subscription.owner_id,
             &subscription.owner_username,
-            state.local_domain(),
+            context.local_domain(),
             &subscription.node,
             &full_jid,
         )
         .await?
         {
             send_pep_last_item_for_owner(
-                state,
+                context,
                 subscription.owner_id,
                 &subscription.owner_username,
                 &subscription.node,
@@ -1988,11 +1888,11 @@ pub(crate) async fn deliver_explicit_pep_last_items_for_resource(
 }
 
 pub(crate) async fn deliver_pep_last_items_for_resource(
-    state: &crate::state::AppState,
+    context: &PepLastItemsContext,
     full_jid: &str,
     expected_local_epoch: crate::state::LocalCapsEpoch,
 ) -> Result<()> {
-    let wanted = super::caps::pep_notify_nodes(state, full_jid);
+    let wanted = context.pep_notify_nodes(full_jid);
     if wanted.is_empty() {
         return Ok(());
     }
@@ -2001,10 +1901,10 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
     let Some(username) = full.localpart() else {
         return Ok(());
     };
-    let Some(subscriber) = state.pubsub_service().find_enabled_user(username).await? else {
+    let Some(subscriber) = context.pubsub_service().find_enabled_user(username).await? else {
         return Ok(());
     };
-    let explicit = state
+    let explicit = context
         .pubsub_service()
         .pep_subscriptions_for_available_resource(full_jid)
         .await?
@@ -2013,14 +1913,14 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
         .collect::<HashSet<_>>();
     for node in &wanted {
         if !explicit.contains(&(subscriber.id, node.clone()))
-            && state
+            && context
                 .pubsub_service()
                 .pep_node(subscriber.id, node)
                 .await?
                 .is_some()
         {
             send_pep_last_item(
-                state,
+                context,
                 &subscriber,
                 node,
                 full_jid,
@@ -2030,42 +1930,42 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
             .await?;
         }
     }
-    for (contact, _, subscription, _) in state.pubsub_service().roster(subscriber.id).await? {
+    for (contact, _, subscription, _) in context.pubsub_service().roster(subscriber.id).await? {
         if !matches!(subscription.as_str(), "to" | "both") {
             continue;
         }
         let Ok(contact_jid) = crate::jid::CanonicalJid::parse_bare(&contact) else {
             continue;
         };
-        if contact_jid.domainpart() != state.local_domain() {
+        if contact_jid.domainpart() != context.local_domain() {
             continue;
         }
         let Some(contact_name) = contact_jid.localpart() else {
             continue;
         };
-        let Some(owner) = state
+        let Some(owner) = context
             .pubsub_service()
             .find_enabled_user(contact_name)
             .await?
         else {
             continue;
         };
-        if state.pubsub_service().is_blocked(owner.id, &bare).await? {
+        if context.pubsub_service().is_blocked(owner.id, &bare).await? {
             continue;
         }
         for node in &wanted {
             if !explicit.contains(&(owner.id, node.clone()))
                 && pep_access_allowed(
-                    state.pubsub_service(),
+                    context.pubsub_service(),
                     &owner,
-                    state.local_domain(),
+                    context.local_domain(),
                     node,
                     &bare,
                 )
                 .await?
             {
                 send_pep_last_item(
-                    state,
+                    context,
                     &owner,
                     node,
                     full_jid,
@@ -2080,48 +1980,52 @@ pub(crate) async fn deliver_pep_last_items_for_resource(
 }
 
 pub(crate) async fn deliver_pep_last_items_for_federated_resource(
-    state: &crate::state::AppState,
+    context: &PepLastItemsContext,
     full_jid: &str,
 ) -> Result<()> {
-    let wanted = super::caps::pep_notify_nodes(state, full_jid);
+    let wanted = context.pep_notify_nodes(full_jid);
     if wanted.is_empty() {
         return Ok(());
     }
     let remote = crate::jid::CanonicalJid::parse(full_jid)?;
-    if remote.resourcepart().is_none() || remote.domainpart() == state.local_domain() {
+    if remote.resourcepart().is_none() || remote.domainpart() == context.local_domain() {
         return Ok(());
     }
     let bare = remote.bare();
-    let explicit = state
+    let explicit = context
         .pubsub_service()
         .pep_subscriptions_for_available_resource(full_jid)
         .await?
         .into_iter()
         .map(|subscription| (subscription.owner_id, subscription.node))
         .collect::<HashSet<_>>();
-    for username in state
+    for username in context
         .pubsub_service()
         .pep_owner_usernames_for_presence_subscriber(&bare)
         .await?
     {
-        let Some(owner) = state.pubsub_service().find_enabled_user(&username).await? else {
+        let Some(owner) = context
+            .pubsub_service()
+            .find_enabled_user(&username)
+            .await?
+        else {
             continue;
         };
-        if state.pubsub_service().is_blocked(owner.id, &bare).await? {
+        if context.pubsub_service().is_blocked(owner.id, &bare).await? {
             continue;
         }
         for node in &wanted {
             if !explicit.contains(&(owner.id, node.clone()))
                 && pep_access_allowed(
-                    state.pubsub_service(),
+                    context.pubsub_service(),
                     &owner,
-                    state.local_domain(),
+                    context.local_domain(),
                     node,
                     full_jid,
                 )
                 .await?
             {
-                send_pep_last_item(state, &owner, node, full_jid, true, None).await?;
+                send_pep_last_item(context, &owner, node, full_jid, true, None).await?;
             }
         }
     }

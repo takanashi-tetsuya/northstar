@@ -9,6 +9,7 @@ pub(crate) trait LockedMucExpiryRepository: Send + Sync {
     fn expire_locked_rooms(&self, limit: i64) -> impl Future<Output = Result<Vec<String>>> + Send;
 }
 
+#[derive(Clone)]
 pub(crate) struct LockedMucExpiryService<R> {
     repository: R,
 }

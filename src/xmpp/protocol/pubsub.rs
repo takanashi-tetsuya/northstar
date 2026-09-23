@@ -1,12 +1,10 @@
 use super::{Action, ProtocolSession};
 use crate::mam_pubsub_parsing::{self, PubSubNamespace, PubSubRsmRequest};
-use crate::services::privacy::PrivacyStanzaKind;
 use crate::services::pubsub::{
-    ClaimedPubSubOutboxDelivery, CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome,
-    PepOutboxAuthorizationOutcome, PubSubConfigOutcome, PubSubConfigureNodeCommand,
-    PubSubConfigureNodeWrite, PubSubCreateNodeCommand, PubSubCreateNodeWrite,
-    PubSubDeleteNodeCommand, PubSubDeleteNodeWrite, PubSubItem, PubSubNode, PubSubNodeConfig,
-    PubSubOutboxDeliveryKind, PubSubPublishCommand, PubSubPublishOutcome, PubSubPublishWrite,
+    CollectionUpdateOutcome, CreateNodeOutcome, OwnerMutationOutcome, PubSubConfigOutcome,
+    PubSubConfigureNodeCommand, PubSubConfigureNodeWrite, PubSubCreateNodeCommand,
+    PubSubCreateNodeWrite, PubSubDeleteNodeCommand, PubSubDeleteNodeWrite, PubSubItem, PubSubNode,
+    PubSubNodeConfig, PubSubPublishCommand, PubSubPublishOutcome, PubSubPublishWrite,
     PubSubPurgeNodeCommand, PubSubPurgeNodeWrite, PubSubRetractCommand, PubSubRetractOutcome,
     PubSubRetractWrite, PubSubSetAffiliationsCommand, PubSubSetAffiliationsWrite,
     PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsWrite, PubSubSubscribeCommand,
@@ -14,7 +12,7 @@ use crate::services::pubsub::{
     PubSubUnsubscribeCommand, PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite,
     SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscriptionOptionsOutcome,
 };
-use crate::state::AppState;
+use crate::state::{pubsub_digest_worker::PubSubDigestWorkerContext, AppState};
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::Result;
@@ -2397,95 +2395,7 @@ fn event_body(event: &str) -> Result<Option<String>> {
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
-async fn route_pubsub_message_children(
-    state: &AppState,
-    recipient: &str,
-    children: &str,
-    show_values: Option<&[String]>,
-) -> Result<()> {
-    route_pubsub_message_children_with_id(
-        state,
-        recipient,
-        children,
-        show_values,
-        uuid::Uuid::new_v4(),
-    )
-    .await
-}
-
-async fn route_pubsub_message_children_with_id(
-    state: &AppState,
-    recipient: &str,
-    children: &str,
-    show_values: Option<&[String]>,
-    message_id: uuid::Uuid,
-) -> Result<()> {
-    let service = pubsub_domain(state);
-    let target = crate::jid::CanonicalJid::parse(recipient)?;
-    let target_domain = target.domainpart();
-    if target_domain == state.local_domain() {
-        if local_account_blocks_pubsub(state, &target, &service).await? {
-            return Ok(());
-        }
-        if let Some(show_values) = show_values {
-            let mut delivered = false;
-            let targets = state.session_entries_for(recipient);
-            let mut show_eligible = 0_usize;
-            let mut policy_eligible = 0_usize;
-            for (full_jid, session) in targets.iter() {
-                let show = match session.show.load(std::sync::atomic::Ordering::Relaxed) {
-                    1 => "online",
-                    2 => "away",
-                    3 => "chat",
-                    4 => "dnd",
-                    5 => "xa",
-                    _ => continue,
-                };
-                if !show_values.iter().any(|allowed| allowed == show) {
-                    continue;
-                }
-                show_eligible += 1;
-                if !state
-                    .privacy_allows_session(session, &service, PrivacyStanzaKind::Message)
-                    .await?
-                {
-                    continue;
-                }
-                policy_eligible += 1;
-                let message = XmlElement::namespaced("message", "jabber:client")
-                    .attr("type", "headline")
-                    .attr("id", message_id)
-                    .attr("from", &service)
-                    .attr("to", full_jid)
-                    .validated_fragment(children)?
-                    .finish();
-                delivered |= session.sender.try_send(message).is_ok();
-            }
-            if !delivered {
-                if pubsub_policy_suppression_is_terminal(show_eligible, policy_eligible) {
-                    // Policy suppression is a successful terminal outcome;
-                    // durable digests must not retry a deliberately denied
-                    // service notification forever. A bound but unavailable
-                    // resource, or one whose show value is outside the
-                    // subscription filter, is not a policy denial: keep the
-                    // durable lease for a later eligible presence.
-                    return Ok(());
-                }
-                anyhow::bail!("no eligible local PubSub resource accepted the notification");
-            }
-            return Ok(());
-        }
-    }
-    let message = XmlElement::namespaced("message", "jabber:client")
-        .attr("type", "headline")
-        .attr("id", message_id)
-        .attr("from", &service)
-        .attr("to", recipient)
-        .validated_fragment(children)?
-        .finish();
-    route_service_message(state, &service, recipient, message).await
-}
-
+#[cfg(test)]
 fn pubsub_policy_suppression_is_terminal(
     show_eligible_resources: usize,
     policy_eligible_resources: usize,
@@ -2496,22 +2406,18 @@ fn pubsub_policy_suppression_is_terminal(
     )
 }
 
-pub(crate) async fn deliver_due_pubsub_digests(state: &AppState) -> Result<usize> {
-    let digests = state
-        .pubsub_service()
-        .claim_due_pubsub_digests(1_000)
-        .await?;
+pub(crate) async fn deliver_due_pubsub_digests(
+    context: &PubSubDigestWorkerContext,
+) -> Result<usize> {
+    let digests = context.claim_due().await?;
     let count = digests.len();
     for digest in digests {
         let show_values = if let Some(snapshot) = digest.show_values.clone() {
             Some(snapshot)
         } else {
-            state
-                .pubsub_service()
-                .outbox_get_subscription(digest.subscription_node_id, &digest.subscriber_jid)
+            context
+                .current_show_values(digest.subscription_node_id, &digest.subscriber_jid)
                 .await?
-                .filter(|subscription| subscription.deliver && subscription.is_active())
-                .map(|subscription| subscription.show_values)
         };
         if let Some(show_values) = show_values {
             let mut batches = Vec::<(Vec<uuid::Uuid>, String)>::new();
@@ -2534,34 +2440,27 @@ pub(crate) async fn deliver_due_pubsub_digests(state: &AppState) -> Result<usize
             }
             for index in 0..batches.len() {
                 let (ids, children) = &batches[index];
-                if let Err(error) = route_pubsub_message_children(
-                    state,
-                    &digest.subscriber_jid,
-                    children,
-                    Some(&show_values),
-                )
-                .await
+                if let Err(error) = context
+                    .notification()
+                    .route_children(
+                        &digest.subscriber_jid,
+                        children,
+                        Some(&show_values),
+                        uuid::Uuid::new_v4(),
+                    )
+                    .await
                 {
                     let pending_ids = batches[index..]
                         .iter()
                         .flat_map(|(ids, _)| ids.iter().copied())
                         .collect::<Vec<_>>();
-                    state
-                        .pubsub_service()
-                        .release_pubsub_digests(&pending_ids)
-                        .await?;
+                    context.release(&pending_ids).await?;
                     return Err(error);
                 }
-                state
-                    .pubsub_service()
-                    .acknowledge_pubsub_digests(ids)
-                    .await?;
+                context.acknowledge(ids).await?;
             }
         } else {
-            state
-                .pubsub_service()
-                .acknowledge_pubsub_digests(&digest.ids)
-                .await?;
+            context.acknowledge(&digest.ids).await?;
         }
     }
     Ok(count)
@@ -2572,6 +2471,7 @@ pub(crate) fn start_pubsub_digest_delivery(
     cancel: tokio_util::sync::CancellationToken,
 ) {
     let registry = Arc::clone(state.worker_registry());
+    let context = Arc::new(state.pubsub_digest_worker_context());
     registry.supervise(
         "pubsub-digest-delivery",
         crate::workers::WorkerCriticality::Restartable,
@@ -2579,13 +2479,13 @@ pub(crate) fn start_pubsub_digest_delivery(
         Some(Duration::from_secs(5)),
         cancel,
         move |heartbeat| {
-            let state = Arc::clone(&state);
+            let context = Arc::clone(&context);
             async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(1));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     interval.tick().await;
-                    if let Err(error) = deliver_due_pubsub_digests(&state).await {
+                    if let Err(error) = deliver_due_pubsub_digests(&context).await {
                         heartbeat.error(&error);
                         tracing::error!(
                             ?error,
@@ -2600,93 +2500,12 @@ pub(crate) fn start_pubsub_digest_delivery(
     );
 }
 
-async fn deliver_pubsub_outbox_item(
-    state: &AppState,
-    item: &ClaimedPubSubOutboxDelivery,
-) -> Result<()> {
-    if !item.payload_binding_valid() {
-        anyhow::bail!("PubSub outbox payload digest mismatch");
-    }
-    match item.delivery_kind {
-        PubSubOutboxDeliveryKind::PubSubChildren => {
-            route_pubsub_message_children_with_id(
-                state,
-                &item.recipient_jid,
-                &item.payload_xml,
-                item.show_values.as_deref(),
-                item.event_id,
-            )
-            .await
-        }
-        PubSubOutboxDeliveryKind::PubSubDigest => {
-            state
-                .pubsub_service()
-                .enqueue_pubsub_digest_snapshot(
-                    item.delivery_id,
-                    item.subscription_node_id.ok_or_else(|| {
-                        anyhow::anyhow!("digest outbox row lacks subscription node")
-                    })?,
-                    &item.recipient_jid,
-                    &item.payload_xml,
-                    item.digest_frequency_ms
-                        .ok_or_else(|| anyhow::anyhow!("digest outbox row lacks frequency"))?,
-                    item.show_values.as_deref().unwrap_or(&[]),
-                )
-                .await
-        }
-        PubSubOutboxDeliveryKind::PubSubDirect => {
-            let service = pubsub_domain(state);
-            route_service_message(
-                state,
-                &service,
-                &item.recipient_jid,
-                item.payload_xml.clone(),
-            )
-            .await
-        }
-        PubSubOutboxDeliveryKind::PepStanza => {
-            match state
-                .pubsub_service()
-                .authorize_pep_outbox_delivery(item)
-                .await?
-            {
-                PepOutboxAuthorizationOutcome::Deliver => {}
-                PepOutboxAuthorizationOutcome::Drop(reason) => {
-                    tracing::warn!(
-                        delivery_id = %item.delivery_id,
-                        event_id = %item.event_id,
-                        ?reason,
-                        "ACK-dropping PEP outbox delivery after live authorization denial"
-                    );
-                    return Ok(());
-                }
-            }
-            let Some(subject) = item.pep_subject.as_ref() else {
-                // Authorization already fail-closes and counts every missing
-                // subject before it can return Deliver. Keep this impossible
-                // branch as a local invariant guard, not a repository bypass.
-                tracing::error!(
-                    delivery_id = %item.delivery_id,
-                    "ACK-dropping PEP outbox delivery without a structured subject"
-                );
-                return Ok(());
-            };
-            super::pep::route_pep_outbox_message(
-                state,
-                &subject.sender_bare_jid,
-                &item.recipient_jid,
-                item.payload_xml.clone(),
-            )
-            .await
-        }
-    }
-}
-
 pub(crate) fn start_pubsub_event_outbox_delivery(
     state: Arc<AppState>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
     let registry = Arc::clone(state.worker_registry());
+    let context = Arc::new(state.pubsub_event_outbox_worker_context());
     registry.supervise(
         "pubsub-event-outbox-delivery",
         crate::workers::WorkerCriticality::Restartable,
@@ -2694,7 +2513,7 @@ pub(crate) fn start_pubsub_event_outbox_delivery(
         Some(Duration::from_secs(30)),
         cancel.clone(),
         move |heartbeat| {
-            let state = Arc::clone(&state);
+            let context = Arc::clone(&context);
             let cancel = cancel.clone();
             async move {
                 let mut maintenance_ticks = 0_u32;
@@ -2703,15 +2522,10 @@ pub(crate) fn start_pubsub_event_outbox_delivery(
                         _ = cancel.cancelled() => return Ok(()),
                         _ = tokio::time::sleep(Duration::from_millis(250)) => {}
                     }
-                    let claimed = state.pubsub_service().claim_pubsub_outbox(256).await?;
-                    let telemetry = state.pubsub_outbox_telemetry();
+                    let claimed = context.claim().await?;
                     for item in claimed {
-                        let _delivery_timer = telemetry.start_delivery_timer();
-                        if !state
-                            .pubsub_service()
-                            .renew_pubsub_outbox_lease(item.delivery_id, item.lease_token)
-                            .await?
-                        {
+                        let _delivery_timer = context.start_delivery_timer();
+                        if !context.renew(&item).await? {
                             tracing::warn!(
                                 delivery_id = %item.delivery_id,
                                 event_id = %item.event_id,
@@ -2730,7 +2544,7 @@ pub(crate) fn start_pubsub_event_outbox_delivery(
                         // completing after another worker has taken over.
                         let result = match tokio::time::timeout(
                             Duration::from_secs(20),
-                            deliver_pubsub_outbox_item(&state, &item),
+                            context.deliver(&item),
                         )
                         .await
                         {
@@ -2741,11 +2555,7 @@ pub(crate) fn start_pubsub_event_outbox_delivery(
                         };
                         match result {
                             Ok(()) => {
-                                if !state
-                                    .pubsub_service()
-                                    .acknowledge_pubsub_outbox(item.delivery_id, item.lease_token)
-                                    .await?
-                                {
+                                if !context.acknowledge(&item).await? {
                                     tracing::warn!(
                                         delivery_id = %item.delivery_id,
                                         "PubSub event outbox acknowledgement lost its lease"
@@ -2753,117 +2563,25 @@ pub(crate) fn start_pubsub_event_outbox_delivery(
                                 }
                             }
                             Err(error) if !item.payload_binding_valid() => {
-                                state
-                                    .pubsub_service()
-                                    .dead_letter_pubsub_outbox(
-                                        item.delivery_id,
-                                        item.lease_token,
-                                        "payload-integrity",
-                                        &error.to_string(),
-                                    )
+                                context
+                                    .dead_letter_integrity(&item, &error.to_string())
                                     .await?;
                             }
                             Err(error) => {
-                                state
-                                    .pubsub_service()
-                                    .retry_pubsub_outbox(&item, &error.to_string())
-                                    .await?;
+                                context.retry(&item, &error.to_string()).await?;
                             }
                         }
                     }
                     maintenance_ticks = maintenance_ticks.saturating_add(1);
                     if maintenance_ticks >= 20 {
                         maintenance_ticks = 0;
-                        state.pubsub_service().expire_pubsub_outbox(1_000).await?;
-                        state
-                            .pubsub_service()
-                            .cleanup_pubsub_dead_letters(1_000)
-                            .await?;
-                        state
-                            .pubsub_service()
-                            .cleanup_idle_pubsub_event_streams(1_000)
-                            .await?;
-                        let snapshot = state.pubsub_service().pubsub_outbox_snapshot().await?;
-                        telemetry.publish_snapshot(
-                            snapshot.pending_rows,
-                            snapshot.pending_bytes,
-                            snapshot.dead_letter_rows,
-                        );
+                        context.maintain().await?;
                     }
                     heartbeat.ok();
                 }
             }
         },
     );
-}
-
-async fn route_service_message(
-    state: &AppState,
-    service: &str,
-    recipient: &str,
-    message: String,
-) -> Result<()> {
-    let target = crate::jid::CanonicalJid::parse(recipient)?;
-    let target_domain = target.domainpart();
-    if target_domain == state.local_domain() {
-        if local_account_blocks_pubsub(state, &target, service).await? {
-            return Ok(());
-        }
-        let mut delivered = false;
-        let targets = state.session_entries_for(recipient);
-        let mut policy_eligible = 0_usize;
-        for (_, session) in &targets {
-            if !state
-                .privacy_allows_session(session, service, PrivacyStanzaKind::Message)
-                .await?
-            {
-                continue;
-            }
-            policy_eligible += 1;
-            delivered |= session.sender.try_send(message.clone()).is_ok();
-        }
-        let mut remote_nodes = 0_usize;
-        if !delivered {
-            let remote = state
-                .route_local_notification_remote(recipient, &message)
-                .await?;
-            remote_nodes = remote.remote_nodes;
-            delivered = remote.delivered;
-        }
-        if !delivered {
-            if remote_nodes == 0 && !targets.is_empty() && policy_eligible == 0 {
-                return Ok(());
-            }
-            anyhow::bail!("no local PubSub resource accepted the notification");
-        }
-    } else if state.federation_domain_allowed(target_domain) {
-        if !state
-            .federation_outbox()
-            .send(target_domain, message, Some(service.to_owned()))
-            .await
-        {
-            anyhow::bail!("federated PubSub notification was not admitted to the durable outbox");
-        }
-    } else {
-        anyhow::bail!("federated PubSub notification is denied by domain policy");
-    }
-    Ok(())
-}
-
-async fn local_account_blocks_pubsub(
-    state: &AppState,
-    target: &crate::jid::CanonicalJid,
-    service: &str,
-) -> Result<bool> {
-    let Some(username) = target.localpart() else {
-        return Ok(false);
-    };
-    // XEP-0191 is account-wide and has non-overridable precedence over any
-    // XEP-0016 allow rule. Resource-specific privacy is checked separately.
-    state
-        .pubsub_service()
-        .local_account_blocks_pubsub(username, service)
-        .await
 }
 
 async fn deliver_last_items_on_presence(

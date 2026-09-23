@@ -477,9 +477,7 @@ async fn run() -> Result<()> {
             )
         },
     );
-    let bg_counters = state.background_housekeeping_counters();
-    let bg_housekeeping = Arc::new(state.background_housekeeping_context(bg_counters.clone()));
-    let bg_state = state.clone();
+    let bg_context = Arc::new(state.background_maintenance_context());
     let bg_cancel = cancel.clone();
     worker_registry.supervise(
         "background-maintenance",
@@ -488,49 +486,10 @@ async fn run() -> Result<()> {
         Some(std::time::Duration::from_secs(180)),
         cancel.clone(),
         move |heartbeat| {
-            let bg_housekeeping = Arc::clone(&bg_housekeeping);
-            let bg_state = Arc::clone(&bg_state);
+            let bg_context = Arc::clone(&bg_context);
             let bg_cancel = bg_cancel.clone();
-            let bg_counters = bg_counters.clone();
             async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                loop {
-                    tokio::select! {
-                _ = bg_cancel.cancelled() => return Ok(()),
-                _ = interval.tick() => {
-                    let failures_before = bg_counters.failures_total();
-                    if let Err(error) = bg_state.challenge_cleanup_service().cleanup().await {
-                        tracing::warn!(?error, "anti-abuse cleanup failed");
-                        bg_counters.record_failure();
-                    }
-                    bg_housekeeping.sweep_database().await;
-                    if let Err(e) = bg_state.admin_command_service().cleanup_sessions().await {
-                        tracing::error!("failed to cleanup expired admin command sessions: {e}");
-                        bg_counters.record_failure();
-                    }
-                    match bg_state.cleanup_expired_sm_sessions().await {
-                        Ok(expired) => {
-                            if expired > 0 {
-                                tracing::info!(expired, "tore down expired SM resume sessions");
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("failed to cleanup expired SM resume sessions: {e}");
-                            bg_counters.record_failure();
-                        }
-                    }
-                    let now = std::time::Instant::now();
-                    bg_state.caps_cache().sweep(now);
-                    let failures_after = bg_counters.failures_total();
-                    if failures_after == failures_before {
-                        heartbeat.ok();
-                    } else {
-                        heartbeat.error("one or more background maintenance operations failed");
-                    }
-                }
-            }
-                }
+                state::background_maintenance::serve(bg_context, bg_cancel, heartbeat).await
             }
         },
     );

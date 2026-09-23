@@ -20,6 +20,9 @@ use crate::services::mix::{
     NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG, NODE_INFO, NODE_JIDMAP, NODE_MESSAGES,
     NODE_PRESENCE,
 };
+use crate::state::mix_iq_relay::{MixIqRelayExpiryContext, MixIqRelayRoute};
+use crate::state::mix_outbox::MixOutboxContext;
+use crate::state::mix_presence_recovery::MixPresenceRecoveryContext;
 use crate::state::{AppState, MixIqRelayStage, PendingMixIqRelay};
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::{
@@ -171,7 +174,7 @@ enum MixOutboxWork {
 /// turns.  A slow external delivery therefore never holds the start slot of a
 /// correlated PAM reply.
 async fn claim_mix_outbox_work(
-    state: &AppState,
+    context: &MixOutboxContext,
     stop_claiming: &tokio_util::sync::CancellationToken,
     cancel: &tokio_util::sync::CancellationToken,
     queue: MixOutboxQueue,
@@ -184,8 +187,8 @@ async fn claim_mix_outbox_work(
             let deliveries = drainable_mix_outbox_claim(
                 stop_claiming,
                 cancel,
-                state
-                    .mix_service()
+                context
+                    .service()
                     .claim_mix_deliveries(claim_limit, 8 * 1024 * 1024),
             )
             .await?;
@@ -197,7 +200,7 @@ async fn claim_mix_outbox_work(
         MixOutboxQueue::PamResult => Ok(drainable_mix_outbox_claim(
             stop_claiming,
             cancel,
-            state.mix_service().claim_pam_results(claim_limit),
+            context.service().claim_pam_results(claim_limit),
         )
         .await?
         .into_iter()
@@ -211,7 +214,7 @@ type MixOutboxClaimTask = BoxFuture<'static, Result<Vec<MixOutboxWork>>>;
 type MixOutboxMaintenanceTask = BoxFuture<'static, Result<()>>;
 
 fn process_mix_outbox_work(
-    state: Arc<AppState>,
+    context: Arc<MixOutboxContext>,
     work: MixOutboxWork,
     cancel: tokio_util::sync::CancellationToken,
 ) -> MixOutboxTask {
@@ -219,11 +222,11 @@ fn process_mix_outbox_work(
         match work {
             MixOutboxWork::Delivery(delivery) => (
                 MixOutboxQueue::Delivery,
-                process_claimed_mix_delivery(state, delivery, cancel).await,
+                process_claimed_mix_delivery(context, delivery, cancel).await,
             ),
             MixOutboxWork::PamResult(result) => (
                 MixOutboxQueue::PamResult,
-                process_claimed_pam_result(state, result, cancel).await,
+                process_claimed_pam_result(context, result, cancel).await,
             ),
         }
     })
@@ -234,14 +237,14 @@ fn process_mix_outbox_work(
 /// shutdown must keep polling it; only hard cancellation or its deadline can
 /// leave that unknown token for lease recovery.
 fn process_mix_outbox_claim(
-    state: Arc<AppState>,
+    context: Arc<MixOutboxContext>,
     stop_claiming: tokio_util::sync::CancellationToken,
     cancel: tokio_util::sync::CancellationToken,
     queue: MixOutboxQueue,
     available: usize,
 ) -> MixOutboxClaimTask {
     Box::pin(async move {
-        claim_mix_outbox_work(&state, &stop_claiming, &cancel, queue, available).await
+        claim_mix_outbox_work(&context, &stop_claiming, &cancel, queue, available).await
     })
 }
 
@@ -251,29 +254,23 @@ fn process_mix_outbox_claim(
 /// at which a claimed delivery can no longer make the progress needed to
 /// release that same resource.
 fn process_mix_outbox_maintenance(
-    state: Arc<AppState>,
+    context: Arc<MixOutboxContext>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> MixOutboxMaintenanceTask {
     Box::pin(async move {
         cancellable_mix_outbox_turn(&cancel, async {
-            state
-                .mix_service()
-                .maintain_mix_delivery_retention()
-                .await?;
-            state
-                .mix_service()
+            context.service().maintain_mix_delivery_retention().await?;
+            context
+                .service()
                 .prune_expired_business_intents(512)
                 .await?;
-            state
-                .mix_service()
+            context
+                .service()
                 .prune_expired_federated_iq_results(512)
                 .await?;
-            state
-                .mix_service()
-                .reconcile_expired_remote_pam(128)
-                .await?;
-            state
-                .mix_service()
+            context.service().reconcile_expired_remote_pam(128).await?;
+            context
+                .service()
                 .prune_expired_pam_results(512)
                 .await
                 .map(|_| ())
@@ -1960,7 +1957,7 @@ fn register_mix_iq_relay(state: &Arc<AppState>, id: String, stage: MixIqRelaySta
     state.pending_mix_iq().admit(id, stage, Instant::now())
 }
 
-async fn expire_mix_iq_relay(state: &Arc<AppState>, pending: PendingMixIqRelay) {
+async fn expire_mix_iq_relay(route: &MixIqRelayRoute, pending: PendingMixIqRelay) {
     let (requester, stanza) = match pending.stage {
         MixIqRelayStage::Participant {
             requester_full_jid,
@@ -1993,14 +1990,14 @@ async fn expire_mix_iq_relay(state: &Arc<AppState>, pending: PendingMixIqRelay) 
             (requester_full_jid, stanza)
         }
     };
-    deliver_mix_relay_stanza(state, &requester, stanza).await;
+    route.deliver(&requester, stanza).await;
 }
 
 pub(crate) fn start_mix_iq_relay_expiry(
-    state: Arc<AppState>,
+    context: Arc<MixIqRelayExpiryContext>,
+    registry: Arc<crate::workers::WorkerRegistry>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
-    let registry = Arc::clone(state.worker_registry());
     registry.supervise(
         "mix-iq-relay-expiry",
         crate::workers::WorkerCriticality::Restartable,
@@ -2008,7 +2005,7 @@ pub(crate) fn start_mix_iq_relay_expiry(
         Some(Duration::from_secs(10)),
         cancel.clone(),
         move |heartbeat| {
-            let state = Arc::clone(&state);
+            let context = Arc::clone(&context);
             let cancel = cancel.clone();
             async move {
                 let mut interval = tokio::time::interval(Duration::from_millis(250));
@@ -2017,8 +2014,8 @@ pub(crate) fn start_mix_iq_relay_expiry(
                     tokio::select! {
                         _ = cancel.cancelled() => return Ok(()),
                         _ = interval.tick() => {
-                            for pending in state.pending_mix_iq().take_expired(Instant::now()) {
-                                expire_mix_iq_relay(&state, pending).await;
+                            for pending in context.take_expired(Instant::now()) {
+                                expire_mix_iq_relay(context.route(), pending).await;
                             }
                             heartbeat.ok();
                         }
@@ -2030,17 +2027,7 @@ pub(crate) fn start_mix_iq_relay_expiry(
 }
 
 async fn deliver_mix_relay_stanza(state: &Arc<AppState>, recipient: &str, stanza: String) {
-    let Ok(recipient_jid) = CanonicalJid::parse(recipient) else {
-        return;
-    };
-    let domain = recipient_jid.domainpart();
-    if same_jid_domain(domain, state.local_domain()) {
-        for target in state.sessions_for(recipient) {
-            let _ = target.sender.try_send(stanza.clone());
-        }
-    } else if state.federation_domain_allowed(domain) {
-        let _ = state.federation_outbox().send(domain, stanza, None).await;
-    }
+    state.mix_iq_relay_route().deliver(recipient, stanza).await;
 }
 
 async fn relay_vcard_payload(
@@ -2382,7 +2369,7 @@ enum ChannelStanzaDeliveryOutcome {
 }
 
 async fn deliver_channel_stanza(
-    state: &Arc<AppState>,
+    context: &MixOutboxContext,
     delivery: ChannelStanzaDelivery<'_>,
 ) -> Result<ChannelStanzaDeliveryOutcome> {
     let ChannelStanzaDelivery {
@@ -2418,7 +2405,7 @@ async fn deliver_channel_stanza(
         Ok(jid) => jid,
         Err(error) => {
             record_mix_post_commit_failure(
-                state,
+                context,
                 channel_jid,
                 &recipient.jid,
                 "invalid persisted recipient JID",
@@ -2434,7 +2421,7 @@ async fn deliver_channel_stanza(
         }
     };
     let domain = recipient_jid.domainpart();
-    if same_jid_domain(domain, state.local_domain()) {
+    if same_jid_domain(domain, context.local_domain()) {
         let Some(username) = recipient_jid.localpart() else {
             return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
         };
@@ -2443,17 +2430,17 @@ async fn deliver_channel_stanza(
         }
         let user = match database_lane {
             ChannelStanzaDatabaseLane::LiveIngress => {
-                state.mix_service().find_enabled_user(username).await
+                context.service().find_enabled_user(username).await
             }
             ChannelStanzaDatabaseLane::DurableOutbox => {
-                state.mix_service().outbox_find_enabled_user(username).await
+                context.service().outbox_find_enabled_user(username).await
             }
         };
         let user = match user {
             Ok(user) => user,
             Err(error) => {
                 record_mix_post_commit_failure(
-                    state,
+                    context,
                     channel_jid,
                     &recipient.jid,
                     "local account lookup",
@@ -2484,11 +2471,11 @@ async fn deliver_channel_stanza(
         }
         let blocked = match database_lane {
             ChannelStanzaDatabaseLane::LiveIngress => {
-                state.mix_service().is_blocked(user.id, channel_jid).await
+                context.service().is_blocked(user.id, channel_jid).await
             }
             ChannelStanzaDatabaseLane::DurableOutbox => {
-                state
-                    .mix_service()
+                context
+                    .service()
                     .outbox_is_blocked(user.id, channel_jid)
                     .await
             }
@@ -2497,7 +2484,7 @@ async fn deliver_channel_stanza(
             Ok(blocked) => blocked,
             Err(error) => {
                 record_mix_post_commit_failure(
-                    state,
+                    context,
                     channel_jid,
                     &recipient.jid,
                     "blocking lookup",
@@ -2528,8 +2515,8 @@ async fn deliver_channel_stanza(
             let client_stanza_id = authoritative_stanza_id.to_string();
             let admission = match database_lane {
                 ChannelStanzaDatabaseLane::LiveIngress => {
-                    state
-                        .mix_service()
+                    context
+                        .service()
                         .archive_mix_message_once(
                             archive_id,
                             user.id,
@@ -2542,8 +2529,8 @@ async fn deliver_channel_stanza(
                         .await
                 }
                 ChannelStanzaDatabaseLane::DurableOutbox => {
-                    state
-                        .mix_service()
+                    context
+                        .service()
                         .outbox_archive_mix_message_once(
                             archive_id,
                             user.id,
@@ -2565,7 +2552,7 @@ async fn deliver_channel_stanza(
                 Ok(SourceArchiveAdmission::Replay(_)) => {}
                 Err(error) => {
                     record_mix_post_commit_failure(
-                        state,
+                        context,
                         channel_jid,
                         &recipient.jid,
                         "personal MAM archive",
@@ -2578,7 +2565,7 @@ async fn deliver_channel_stanza(
                 }
             }
         }
-        let mut local_targets = state.session_entries_for(&recipient.jid);
+        let mut local_targets = context.session_entries_for(&recipient.jid);
         // One leased recipient row may cross exactly one local transport.
         // Sorting makes the choice deterministic across the hash-map-backed
         // live-route registry; a source transferred to SM/BOSH or written to
@@ -2594,7 +2581,7 @@ async fn deliver_channel_stanza(
         let mut accepted = false;
         let mut transferred_to_recoverable_transport = false;
         for (jid, session) in &local_targets {
-            match session_mix_capability(state, jid) {
+            match context.session_mix_capability(jid) {
                 MixSessionCapability::Supported => {
                     had_deliverable_target = true;
                     if durable {
@@ -2618,7 +2605,7 @@ async fn deliver_channel_stanza(
                             }
                             Err(error) => {
                                 record_mix_post_commit_failure(
-                                    state,
+                                    context,
                                     channel_jid,
                                     jid,
                                     "local session durable transport hand-off",
@@ -2628,7 +2615,7 @@ async fn deliver_channel_stanza(
                         }
                     } else if let Err(error) = session.sender.try_send(stanza.clone()) {
                         record_mix_post_commit_failure(
-                            state,
+                            context,
                             channel_jid,
                             jid,
                             "local session queue",
@@ -2650,24 +2637,16 @@ async fn deliver_channel_stanza(
             tracing::debug!(delivery_id = %delivery_id, "MIX durable delivery resolving cluster authorities");
         }
         let nodes = match database_lane {
-            ChannelStanzaDatabaseLane::LiveIngress => {
-                state
-                    .mix_cluster_routing()
-                    .lookup_nodes(&recipient.jid)
-                    .await
-            }
+            ChannelStanzaDatabaseLane::LiveIngress => context.lookup_nodes(&recipient.jid).await,
             ChannelStanzaDatabaseLane::DurableOutbox => {
-                state
-                    .mix_cluster_routing()
-                    .outbox_lookup_cluster_nodes(&recipient.jid)
-                    .await
+                context.outbox_lookup_cluster_nodes(&recipient.jid).await
             }
         };
         let nodes = match nodes {
             Ok(nodes) => nodes,
             Err(error) => {
                 record_mix_post_commit_failure(
-                    state,
+                    context,
                     channel_jid,
                     &recipient.jid,
                     "cluster recipient lookup",
@@ -2681,8 +2660,8 @@ async fn deliver_channel_stanza(
         };
         for node_id in nodes {
             had_route_target = true;
-            match state
-                .send_cluster_mix_to_node(&node_id, &recipient.jid, &stanza, durable_source)
+            match context
+                .send_cluster_mix(&node_id, &recipient.jid, &stanza, durable_source)
                 .await
             {
                 Ok(receipt) => {
@@ -2707,7 +2686,7 @@ async fn deliver_channel_stanza(
                 Err(error) => {
                     cluster_delivery_failed = true;
                     record_mix_post_commit_failure(
-                        state,
+                        context,
                         channel_jid,
                         &recipient.jid,
                         "cluster queue",
@@ -2755,7 +2734,7 @@ async fn deliver_channel_stanza(
                 }
             }
         }
-    } else if !state.federation_domain_allowed(domain) {
+    } else if !context.federation_domain_allowed(domain) {
         if durable {
             return Err(permanent_mix_delivery_error(
                 "policy-cancelled",
@@ -2768,18 +2747,18 @@ async fn deliver_channel_stanza(
         }
         let admitted = match database_lane {
             ChannelStanzaDatabaseLane::LiveIngress => {
-                state.federation_outbox().send(domain, stanza, None).await
+                context.federation_outbox().send(domain, stanza, None).await
             }
             ChannelStanzaDatabaseLane::DurableOutbox => {
-                state
-                    .mix_service()
-                    .outbox_admit_federated_stanza(state.federation_outbox(), domain, stanza)
+                context
+                    .service()
+                    .outbox_admit_federated_stanza(context.federation_outbox(), domain, stanza)
                     .await
             }
         };
         if !admitted {
             record_mix_post_commit_failure(
-                state,
+                context,
                 channel_jid,
                 &recipient.jid,
                 "federation queue rejected stanza",
@@ -2804,7 +2783,7 @@ fn addressed_mix_delivery(template: &str, recipient: &str) -> Result<String> {
 }
 
 async fn process_claimed_mix_delivery(
-    state: Arc<AppState>,
+    context: Arc<MixOutboxContext>,
     delivery: crate::services::mix::ClaimedMixDelivery,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
@@ -2815,7 +2794,7 @@ async fn process_claimed_mix_delivery(
             let moved = match bounded_mix_outbox_turn(
                 &cancel,
                 attempt_deadline,
-                state.mix_service().dead_letter_mix_delivery(
+                context.service().dead_letter_mix_delivery(
                     delivery.delivery_id,
                     delivery.lease_token,
                     "invalid-template",
@@ -2839,14 +2818,14 @@ async fn process_claimed_mix_delivery(
         }
     };
 
-    let renewal_state = Arc::clone(&state);
+    let renewal_context = Arc::clone(&context);
     let result = match run_claimed_mix_effect_with_lease(
         cancel.clone(),
         attempt_deadline,
         MIX_OUTBOX_LEASE_RENEWAL_INTERVAL,
         async {
             Ok(deliver_channel_stanza(
-                &state,
+                &context,
                 ChannelStanzaDelivery {
                     delivery_id: Some(delivery.delivery_id),
                     mix_source: Some(crate::outbound::MixDelivery {
@@ -2866,12 +2845,12 @@ async fn process_claimed_mix_delivery(
             .await)
         },
         move || -> BoxFuture<'static, Result<bool>> {
-            let state = Arc::clone(&renewal_state);
+            let context = Arc::clone(&renewal_context);
             let delivery_id = delivery.delivery_id;
             let lease_token = delivery.lease_token;
             Box::pin(async move {
-                state
-                    .mix_service()
+                context
+                    .service()
                     .renew_mix_delivery_lease(delivery_id, lease_token)
                     .await
             })
@@ -2897,8 +2876,8 @@ async fn process_claimed_mix_delivery(
             bounded_mix_outbox_turn(
                 &cancel,
                 attempt_deadline,
-                state
-                    .mix_service()
+                context
+                    .service()
                     .acknowledge_mix_delivery(delivery.delivery_id, delivery.lease_token),
             )
             .await
@@ -2922,7 +2901,7 @@ async fn process_claimed_mix_delivery(
                 bounded_mix_outbox_turn(
                     &cancel,
                     attempt_deadline,
-                    state.mix_service().defer_mix_delivery(
+                    context.service().defer_mix_delivery(
                         delivery.delivery_id,
                         delivery.lease_token,
                         delivery.route_wake_generation,
@@ -2934,7 +2913,7 @@ async fn process_claimed_mix_delivery(
                 bounded_mix_outbox_turn(
                     &cancel,
                     attempt_deadline,
-                    state.mix_service().dead_letter_mix_delivery(
+                    context.service().dead_letter_mix_delivery(
                         delivery.delivery_id,
                         delivery.lease_token,
                         permanent.reason,
@@ -2946,7 +2925,7 @@ async fn process_claimed_mix_delivery(
                 bounded_mix_outbox_turn(
                     &cancel,
                     attempt_deadline,
-                    state.mix_service().retry_mix_delivery(
+                    context.service().retry_mix_delivery(
                         delivery.delivery_id,
                         delivery.lease_token,
                         delivery.attempt_count,
@@ -2979,7 +2958,7 @@ enum PamResultRoute {
 }
 
 async fn deliver_claimed_pam_result(
-    state: &Arc<AppState>,
+    context: &MixOutboxContext,
     result: &ClaimedPamResult,
 ) -> Result<PamResultRoute> {
     let target = CanonicalJid::parse(&result.requester_full_jid)?;
@@ -2987,7 +2966,7 @@ async fn deliver_claimed_pam_result(
         target.resourcepart().is_some(),
         "PAM result target is not a full JID"
     );
-    for (jid, session) in state.session_entries_for(&result.requester_full_jid) {
+    for (jid, session) in context.session_entries_for(&result.requester_full_jid) {
         if jid != result.requester_full_jid || session.user_id != result.user_id {
             continue;
         }
@@ -3015,13 +2994,12 @@ async fn deliver_claimed_pam_result(
             }
         }
     }
-    let nodes = state
-        .mix_cluster_routing()
+    let nodes = context
         .outbox_lookup_cluster_nodes(&result.requester_full_jid)
         .await?;
     for node in nodes {
-        if state
-            .send_cluster_mix_exact_account(
+        if context
+            .send_cluster_pam_result(
                 &node,
                 &result.requester_full_jid,
                 &result.response_xml,
@@ -3036,24 +3014,24 @@ async fn deliver_claimed_pam_result(
 }
 
 async fn process_claimed_pam_result(
-    state: Arc<AppState>,
+    context: Arc<MixOutboxContext>,
     result: ClaimedPamResult,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     let attempt_deadline = tokio::time::Instant::now() + MIX_OUTBOX_ATTEMPT_DEADLINE;
-    let renewal_state = Arc::clone(&state);
+    let renewal_context = Arc::clone(&context);
     let routed = match run_claimed_mix_effect_with_lease(
         cancel.clone(),
         attempt_deadline,
         MIX_OUTBOX_LEASE_RENEWAL_INTERVAL,
-        async { Ok(deliver_claimed_pam_result(&state, &result).await) },
+        async { Ok(deliver_claimed_pam_result(&context, &result).await) },
         move || -> BoxFuture<'static, Result<bool>> {
-            let state = Arc::clone(&renewal_state);
+            let context = Arc::clone(&renewal_context);
             let operation_id = result.operation_id;
             let lease_token = result.lease_token;
             Box::pin(async move {
-                state
-                    .mix_service()
+                context
+                    .service()
                     .renew_pam_result_lease(operation_id, lease_token)
                     .await
             })
@@ -3078,8 +3056,8 @@ async fn process_claimed_pam_result(
             bounded_mix_outbox_turn(
                 &cancel,
                 attempt_deadline,
-                state
-                    .mix_service()
+                context
+                    .service()
                     .acknowledge_pam_result(result.operation_id, result.lease_token),
             )
             .await
@@ -3090,8 +3068,8 @@ async fn process_claimed_pam_result(
             bounded_mix_outbox_turn(
                 &cancel,
                 attempt_deadline,
-                state
-                    .mix_service()
+                context
+                    .service()
                     .defer_pam_result(result.operation_id, result.lease_token, 5),
             )
             .await
@@ -3110,7 +3088,7 @@ async fn process_claimed_pam_result(
             bounded_mix_outbox_turn(
                 &cancel,
                 attempt_deadline,
-                state.mix_service().retry_pam_result(
+                context.service().retry_pam_result(
                     result.operation_id,
                     result.lease_token,
                     result.attempt_count,
@@ -3136,13 +3114,13 @@ async fn process_claimed_pam_result(
 }
 
 fn record_mix_post_commit_failure(
-    state: &AppState,
+    context: &MixOutboxContext,
     channel_jid: &str,
     recipient: &str,
     stage: &str,
     error: &dyn std::fmt::Display,
 ) {
-    state.mix_post_commit_telemetry().delivery_failed();
+    context.record_post_commit_failure();
     tracing::warn!(
         channel = channel_jid,
         recipient,
@@ -3156,7 +3134,7 @@ fn record_mix_post_commit_failure(
 /// the timer is only a wake mechanism.  A crash after personal MAM commit is
 /// safe because archive replay continues to the same stanza-id delivery.
 async fn run_mix_outbox_lane(
-    state: Arc<AppState>,
+    context: Arc<MixOutboxContext>,
     stop_claiming: tokio_util::sync::CancellationToken,
     cancel: tokio_util::sync::CancellationToken,
     queue: MixOutboxQueue,
@@ -3173,7 +3151,7 @@ async fn run_mix_outbox_lane(
     // one second, retaining durable recovery across listener outages, expired
     // leases and retry deadlines. PAM has no such wake and stays at 250 ms.
     let mut delivery_wake = matches!(queue, MixOutboxQueue::Delivery)
-        .then(|| state.mix_service().subscribe_delivery_wake());
+        .then(|| context.service().subscribe_delivery_wake());
     let mut claim_schedule = MixClaimSchedule::starting_at(queue, tokio::time::Instant::now());
     // Startup must first make already-committed user delivery eligible.
     // Retention work is important but cannot be allowed to put a maintenance
@@ -3204,7 +3182,7 @@ async fn run_mix_outbox_lane(
             && maintenance_schedule.due(tokio::time::Instant::now())
         {
             maintenance_task = Some(process_mix_outbox_maintenance(
-                Arc::clone(&state),
+                Arc::clone(&context),
                 cancel.clone(),
             ));
         }
@@ -3217,7 +3195,7 @@ async fn run_mix_outbox_lane(
         {
             let available = concurrency - in_flight.len();
             claim_task = Some(process_mix_outbox_claim(
-                Arc::clone(&state),
+                Arc::clone(&context),
                 stop_claiming.clone(),
                 cancel.clone(),
                 queue,
@@ -3268,7 +3246,7 @@ async fn run_mix_outbox_lane(
                                 claim_schedule.record_claim(tokio::time::Instant::now(), !claimed.is_empty());
                                 for work in claimed {
                                     in_flight.push(process_mix_outbox_work(
-                                        Arc::clone(&state),
+                                        Arc::clone(&context),
                                         work,
                                         cancel.clone(),
                                     ));
@@ -3378,10 +3356,10 @@ where
 }
 
 pub(crate) fn start_mix_delivery_outbox(
-    state: Arc<AppState>,
+    context: Arc<MixOutboxContext>,
+    registry: Arc<crate::workers::WorkerRegistry>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
-    let registry = Arc::clone(state.worker_registry());
     registry.supervise_draining(
         "mix-delivery-outbox",
         crate::workers::WorkerCriticality::Restartable,
@@ -3390,18 +3368,18 @@ pub(crate) fn start_mix_delivery_outbox(
         MIX_OUTBOX_DRAIN_GRACE,
         cancel.clone(),
         move |heartbeat| {
-            let state = Arc::clone(&state);
+            let context = Arc::clone(&context);
             let cancel = cancel.clone();
             async move {
                 let (delivery_budget, pam_budget) =
-                    mix_outbox_lane_budgets(state.mix_service().outbox_background_budget());
+                    mix_outbox_lane_budgets(context.service().outbox_background_budget());
                 // Server shutdown stops admission without discarding an
                 // in-progress claim response or delivery. Lane failures use
                 // a fresh, independent hard-cancel token for this attempt;
                 // the supervisor still bounds the whole drain to 14 seconds.
                 let lane_cancel = tokio_util::sync::CancellationToken::new();
                 let delivery = run_mix_outbox_lane(
-                    Arc::clone(&state),
+                    Arc::clone(&context),
                     cancel.clone(),
                     lane_cancel.clone(),
                     MixOutboxQueue::Delivery,
@@ -3410,7 +3388,7 @@ pub(crate) fn start_mix_delivery_outbox(
                     heartbeat.clone(),
                 );
                 let pam = run_mix_outbox_lane(
-                    state,
+                    context,
                     cancel.clone(),
                     lane_cancel.clone(),
                     MixOutboxQueue::PamResult,
@@ -5741,8 +5719,8 @@ async fn process_channel_presence(
 /// verified. Once capability verification succeeds, publish a conservative
 /// available state so a fresh cache or server restart does not permanently
 /// omit that resource from MIX. Later presence updates replace this item.
-pub(crate) async fn publish_verified_mix_presence(
-    state: &Arc<AppState>,
+pub(crate) async fn publish_verified_mix_presence_with(
+    context: &MixPresenceRecoveryContext,
     actor_full: &str,
     expected_connection_id: Uuid,
     expected_caps_generation: u64,
@@ -5753,16 +5731,14 @@ pub(crate) async fn publish_verified_mix_presence(
     // route is deliberately re-read after the async lock acquisition; using a
     // cloned pre-lock session here would let a delayed caps job act on a
     // removed or SM-replaced resource.
-    let Some(mix_presence_gate) =
-        state.local_mix_presence_gate(&actor_full, expected_connection_id)
-    else {
+    let Some(mix_presence_gate) = context.routes().gate(&actor_full, expected_connection_id) else {
         return Ok(());
     };
     let expected_mix_presence_gate = Arc::clone(&mix_presence_gate);
     let Some(username) = actor.localpart() else {
         return Ok(());
     };
-    let Some(user) = state.mix_service().find_enabled_user(username).await? else {
+    let Some(user) = context.find_enabled_user(username).await? else {
         return Ok(());
     };
     let actor_bare = actor.bare();
@@ -5770,14 +5746,11 @@ pub(crate) async fn publish_verified_mix_presence(
     // head eligible immediately. This is deliberately separate from the
     // presence projection below: a MAM/archive write or presence update never
     // acknowledges the durable recipient row.
-    state
-        .mix_service()
-        .wake_mix_delivery_recipient(&actor_bare)
-        .await?;
+    context.wake_delivery_recipient(&actor_bare).await?;
     let available = XmlElement::namespaced("presence", "jabber:client")
         .attr("from", &actor_full)
         .finish();
-    for membership in state.mix_service().pam_memberships(user.id).await? {
+    for membership in context.pam_memberships(user.id).await? {
         if !pam_membership_receives(&membership, NODE_PRESENCE) {
             continue;
         }
@@ -5792,7 +5765,7 @@ pub(crate) async fn publish_verified_mix_presence(
         // teardown can therefore make progress between channels, and every
         // iteration revalidates the exact route before applying an effect.
         let mix_presence_epoch = Arc::clone(&mix_presence_gate).lock_owned().await;
-        let Some((epoch_is_current, fallback_suppressed)) = state.local_mix_presence_epoch_state(
+        let Some((epoch_is_current, fallback_suppressed)) = context.routes().epoch_state(
             &actor_full,
             expected_connection_id,
             expected_caps_generation,
@@ -5807,9 +5780,8 @@ pub(crate) async fn publish_verified_mix_presence(
         if fallback_suppressed {
             continue;
         }
-        if domain == local_mix_domain(state) {
-            let Some(channel) = state
-                .mix_service()
+        if domain == context.local_mix_domain() {
+            let Some(channel) = context
                 .mix_channel(
                     domain,
                     channel
@@ -5820,14 +5792,12 @@ pub(crate) async fn publish_verified_mix_presence(
             else {
                 continue;
             };
-            let _ = state
-                .mix_service()
-                .ensure_mix_presence(channel.id, &actor_bare, &actor_full, "")
+            let _ = context
+                .ensure_presence(channel.id, &actor_bare, &actor_full)
                 .await?;
-        } else if state.federation_domain_allowed(domain) {
-            let _ = state
-                .federation_outbox()
-                .send(domain, directed, Some(actor_bare.clone()))
+        } else if context.federation_domain_allowed(domain) {
+            context
+                .send_federated(domain, directed, Some(actor_bare.clone()))
                 .await;
         }
         drop(mix_presence_epoch);
@@ -5851,7 +5821,8 @@ pub(crate) fn mix_presence_route_is_current(
 }
 
 pub(crate) fn start_mix_presence_recovery(
-    state: Arc<AppState>,
+    context: Arc<MixPresenceRecoveryContext>,
+    registry: Arc<crate::workers::WorkerRegistry>,
     cutoff: chrono::DateTime<chrono::Utc>,
     // The state layer snapshots these targets straight from its own
     // repository query; the persistence-type conversion happens on this
@@ -5860,7 +5831,6 @@ pub(crate) fn start_mix_presence_recovery(
     cancel: tokio_util::sync::CancellationToken,
 ) {
     let probes: Vec<MixPresenceProbeTarget> = probes.into_iter().map(Into::into).collect();
-    let registry = Arc::clone(state.worker_registry());
     registry.supervise(
         "mix-presence-recovery",
         crate::workers::WorkerCriticality::Restartable,
@@ -5868,7 +5838,7 @@ pub(crate) fn start_mix_presence_recovery(
         Some(Duration::from_secs(90)),
         cancel,
         move |heartbeat| {
-            let state = Arc::clone(&state);
+            let context = Arc::clone(&context);
             let probes = probes.clone();
             async move {
         for probe in probes {
@@ -5877,33 +5847,31 @@ pub(crate) fn start_mix_presence_recovery(
                 continue;
             };
             let domain = participant.domainpart();
-            if same_jid_domain(domain, state.local_domain()) {
-                for (full_jid, session) in state.session_entries_for(&probe.participant_jid) {
-                    publish_verified_mix_presence(
-                        &state,
+            if same_jid_domain(domain, context.local_domain()) {
+                for (full_jid, connection_id, caps_generation) in context.routes().local_epochs(&probe.participant_jid) {
+                    publish_verified_mix_presence_with(
+                        &context,
                         &full_jid,
-                        session.connection_id,
-                        session
-                            .caps_observation_generation
-                            .load(std::sync::atomic::Ordering::Acquire),
+                        connection_id,
+                        caps_generation,
                     )
                     .await?;
                 }
                 continue;
             }
-            if !state.federation_domain_allowed(domain) { continue; }
+            if !context.federation_domain_allowed(domain) { continue; }
             let stanza = XmlElement::namespaced("presence", "jabber:client")
                 .attr("type", "probe")
                 .attr("from", &probe.channel_jid)
                 .attr("to", &probe.participant_jid)
                 .finish();
-            let _ = state.federation_outbox().send(domain, stanza, None).await;
+            context.send_federated(domain, stanza, None).await;
         }
         // The deadline is intentionally short and bounded: a remote resource
         // that cannot answer a startup probe is no longer authoritative
         // current state. A later available presence recreates the item.
         tokio::time::sleep(MIX_IQ_RELAY_TTL).await;
-        let expired = match state.mix_service().expire_unrefreshed_mix_presence( cutoff).await {
+        let _expired_count = match context.expire_unrefreshed(cutoff).await {
             Ok(expired) => expired,
             Err(error) => {
                 return Err(error).context("failed to expire unrefreshed MIX presence");
@@ -5911,7 +5879,6 @@ pub(crate) fn start_mix_presence_recovery(
         };
         // Expiry and every unavailable projection were committed atomically;
         // the delivery worker owns transport retries.
-        let _expired_count = expired.len();
         heartbeat.ok();
         Ok(())
             }
@@ -6070,7 +6037,7 @@ async fn process_private_message(
     // XEP-0404 explicitly forbids the MIX channel from archiving private
     // messages. Participant servers remain free to archive them locally.
     deliver_channel_stanza(
-        state,
+        &state.mix_outbox_context(),
         ChannelStanzaDelivery {
             delivery_id: None,
             mix_source: None,
@@ -7199,7 +7166,7 @@ async fn federated_mix_iq_relay(
         };
         if pending.expires_at <= Instant::now() {
             if let Some(expired) = state.pending_mix_iq().remove(&request.id) {
-                expire_mix_iq_relay(state, expired).await;
+                expire_mix_iq_relay(&state.mix_iq_relay_route(), expired).await;
             }
             return Ok(true);
         }
@@ -8550,6 +8517,24 @@ mod tests {
         assert_eq!(index.take_expired(Instant::now()).len(), 1);
         assert!(index.take_expired(Instant::now()).is_empty());
         assert_eq!(index.len(), 0);
+    }
+
+    #[test]
+    fn mix_iq_relay_response_and_expiry_cannot_both_claim_one_id() {
+        let index = Arc::new(MixIqRelayIndex::with_limits(2, Duration::ZERO));
+        assert!(index.admit("relay".to_owned(), relay_stage(1), Instant::now()));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let response_index = Arc::clone(&index);
+        let response_barrier = Arc::clone(&barrier);
+        let response = std::thread::spawn(move || {
+            response_barrier.wait();
+            response_index.remove("relay").is_some()
+        });
+        barrier.wait();
+        let expired = index.take_expired(Instant::now()).len();
+        let responded = response.join().expect("MIX response worker panicked");
+        assert_eq!(expired + usize::from(responded), 1);
+        assert!(index.is_empty());
     }
 
     #[test]

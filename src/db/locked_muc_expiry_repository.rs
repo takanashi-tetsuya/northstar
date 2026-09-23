@@ -4,6 +4,7 @@ use crate::services::locked_muc_expiry::LockedMucExpiryRepository;
 use anyhow::Result;
 use sqlx::PgPool;
 
+#[derive(Clone)]
 pub(crate) struct PostgresLockedMucExpiryRepository {
     pool: PgPool,
 }

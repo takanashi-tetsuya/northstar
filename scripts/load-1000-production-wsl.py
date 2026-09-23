@@ -260,6 +260,7 @@ def fanout(sender, sessions: list[object]) -> tuple[dict[str, float], float]:
             f"to='{USERNAME}@{fixture.DOMAIN}/load-{index}' id='{marker}'>"
             f"<body>{marker}</body><no-store xmlns='urn:xmpp:hints'/></message>"
         )
+    send_elapsed = time.monotonic() - started
 
     def receive(index: int) -> float:
         marker = f"load-message-{nonce}-{index}"
@@ -270,7 +271,9 @@ def fanout(sender, sessions: list[object]) -> tuple[dict[str, float], float]:
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as executor:
         latencies = list(executor.map(receive, range(len(sessions))))
     elapsed = time.monotonic() - started
-    return summary(latencies), len(sessions) / elapsed
+    measured = summary(latencies)
+    measured["send_seconds"] = send_elapsed
+    return measured, len(sessions) / elapsed
 
 
 def verify_large_websocket_frame(sender, recipient) -> int:
@@ -473,6 +476,12 @@ def run() -> None:
         complete_sessions = [session for session in sessions if session is not None]
         fixture.check(len(complete_sessions) == SESSION_COUNT, "a load session slot was empty")
         message_summary, message_rate = fanout(sender, complete_sessions)
+        print(json.dumps({
+            "message_seconds": message_summary,
+            "messages_per_second": message_rate,
+            "ramp_seconds": ramp_elapsed,
+            "websocket_seconds": websocket_summary,
+        }, sort_keys=True), flush=True)
         assert_summary("full-JID message round trip", message_summary, "message")
         fixture.check(message_rate >= LIMITS["message_rate"],
                       f"message throughput {message_rate:.2f}/s was below {LIMITS['message_rate']:.2f}/s")

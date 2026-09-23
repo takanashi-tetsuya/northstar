@@ -27,6 +27,26 @@ impl S2sOutboundCountProbe {
     }
 }
 
+/// Only the outbound routes and their count can be cleared on an island
+/// transition. The same lock serializes this with registration and removal.
+#[derive(Clone)]
+pub(crate) struct S2sOutboundClearance {
+    outbound: Arc<DashMap<String, OutboundS2sSession>>,
+    count: Arc<AtomicUsize>,
+    count_gate: Arc<Mutex<()>>,
+}
+
+impl S2sOutboundClearance {
+    pub(crate) fn clear_for_island_mode(&self) {
+        let _count_gate = self
+            .count_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.outbound.clear();
+        self.count.store(0, Ordering::Relaxed);
+    }
+}
+
 /// Guard-free snapshot of one bidirectional route. No DashMap guard crosses
 /// the registry boundary or survives queue admission.
 pub(crate) struct BidiRouteSnapshot {
@@ -150,9 +170,9 @@ impl RegisteredBidi {
 #[derive(Default)]
 pub(crate) struct S2sConnectionRegistry {
     pub(crate) resumption: super::resume::Registry,
-    outbound: DashMap<String, OutboundS2sSession>,
+    outbound: Arc<DashMap<String, OutboundS2sSession>>,
     outbound_count: Arc<AtomicUsize>,
-    outbound_count_gate: Mutex<()>,
+    outbound_count_gate: Arc<Mutex<()>>,
     bidirectional: DashMap<String, RegisteredBidi>,
     bidi_recovery_cursor: AtomicUsize,
 }
@@ -342,16 +362,14 @@ impl S2sConnectionRegistry {
             .is_some()
     }
 
-    /// Island mode intentionally drains only client-initiated outbound
-    /// workers, matching the previous behavior. Established inbound streams
-    /// remain registered but routing policy rejects their federation traffic.
-    pub(crate) fn clear_outbound_for_island_mode(&self) {
-        let _count_gate = self
-            .outbound_count_gate
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.outbound.clear();
-        self.outbound_count.store(0, Ordering::Relaxed);
+    /// Island mode drains client-initiated outbound routes only. Established
+    /// inbound streams remain registered; routing policy rejects their traffic.
+    pub(crate) fn outbound_clearance(&self) -> S2sOutboundClearance {
+        S2sOutboundClearance {
+            outbound: Arc::clone(&self.outbound),
+            count: Arc::clone(&self.outbound_count),
+            count_gate: Arc::clone(&self.outbound_count_gate),
+        }
     }
 
     pub(crate) fn outbound_count_probe(&self) -> S2sOutboundCountProbe {
@@ -397,7 +415,7 @@ mod recovery_tests {
 
         registry.register_outbound("b".into(), OutboundS2sSession::new(second));
         assert_eq!(count.count(), 1);
-        registry.clear_outbound_for_island_mode();
+        registry.outbound_clearance().clear_for_island_mode();
         assert_eq!(count.count(), 0);
         assert_eq!(registry.outbound.len(), 0);
     }

@@ -1,5 +1,5 @@
 use super::ProtocolSession;
-use crate::state::AppState;
+use crate::state::{caps_effect_dispatch::CapsEffectDispatchContext, AppState};
 use crate::xmpp::capabilities::CapsEffectTelemetry;
 use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::{iq_result_from, stream_id};
@@ -51,12 +51,15 @@ impl CapsEffectDispatcherExt for CapsEffectDispatcher {
 const DISCO_INFO_NS: &str = northstar_xep_0115::DISCO_INFO_NS;
 const MAX_DISCO_PAYLOAD_BYTES: usize = northstar_xep_0115::MAX_DISCO_PAYLOAD_BYTES;
 
-struct CapsEffectRunGuard(Arc<AppState>);
+struct CapsEffectRunGuard<'a> {
+    observations: &'a CapsResourceIndex,
+    dispatcher: &'a CapsEffectDispatcher,
+}
 
-impl Drop for CapsEffectRunGuard {
+impl Drop for CapsEffectRunGuard<'_> {
     fn drop(&mut self) {
-        self.0.caps_by_jid().recover_interrupted(Instant::now());
-        self.0.caps_effect_dispatcher().request_rescan();
+        self.observations.recover_interrupted(Instant::now());
+        self.dispatcher.request_rescan();
     }
 }
 
@@ -124,17 +127,20 @@ fn allocate_local_caps_epoch(
     }
 }
 
-fn caps_owner_is_current(state: &AppState, job: &CapsEffectJob) -> bool {
-    state.caps_by_jid().current_owner(&job.full_jid, job.owner)
+fn caps_owner_is_current(context: &CapsEffectDispatchContext, job: &CapsEffectJob) -> bool {
+    context.observations.current_owner(&job.full_jid, job.owner)
         && match job.owner {
             CapsObservationOwner::Local(epoch) => {
-                local_caps_epoch_is_current(state, &job.full_jid, epoch)
+                context.local_epoch_is_current(&job.full_jid, epoch)
             }
             CapsObservationOwner::Federated { .. } => true,
         }
 }
 
-async fn send_caps_disco_query(state: &AppState, job: &CapsEffectJob) -> anyhow::Result<()> {
+async fn send_caps_disco_query(
+    context: &CapsEffectDispatchContext,
+    job: &CapsEffectJob,
+) -> anyhow::Result<()> {
     let key = job
         .key
         .as_ref()
@@ -143,8 +149,8 @@ async fn send_caps_disco_query(state: &AppState, job: &CapsEffectJob) -> anyhow:
     // admitted together before the first response arrives; the pending index
     // single-flights that first request, and followers resolve from this same
     // Arc on their event-driven retry instead of emitting duplicate IQs.
-    if let Some(summary) = state.caps_cache().query(key, Instant::now()) {
-        return match state.caps_by_jid().mark_cached_verified(
+    if let Some(summary) = context.cache.query(key, Instant::now()) {
+        return match context.observations.mark_cached_verified(
             &job.full_jid,
             job.owner,
             key,
@@ -161,26 +167,26 @@ async fn send_caps_disco_query(state: &AppState, job: &CapsEffectJob) -> anyhow:
     }
     let id = format!("caps-{}", stream_id());
     let expires_at = Instant::now() + PENDING_TTL;
-    if !state
-        .caps_by_jid()
+    if !context
+        .observations
         .begin_query(&job.full_jid, job.owner, key, id.clone())
     {
         anyhow::bail!("caps observation no longer needs this disco query");
     }
-    if !state.pending_caps().insert(
+    if !context.pending.insert(
         id.clone(),
         job.full_jid.clone(),
         key.clone(),
         job.owner,
         expires_at,
     ) {
-        state
-            .caps_by_jid()
+        context
+            .observations
             .mark_query_failed(&job.full_jid, job.owner, &id);
         anyhow::bail!("caps IQ correlation ID or semantic key is already in flight");
     }
     let query = caps_disco_request(
-        state.local_domain(),
+        context.local_domain(),
         &job.full_jid,
         &id,
         &key.node,
@@ -188,7 +194,7 @@ async fn send_caps_disco_query(state: &AppState, job: &CapsEffectJob) -> anyhow:
     );
     let sent = match job.owner {
         CapsObservationOwner::Local(epoch) => {
-            let sender = state.local_caps_sender_if_current(&job.full_jid, epoch);
+            let sender = context.local_sender_if_current(&job.full_jid, epoch);
             match sender {
                 Some(sender) => match sender.try_send(query) {
                     Ok(()) => true,
@@ -208,30 +214,30 @@ async fn send_caps_disco_query(state: &AppState, job: &CapsEffectJob) -> anyhow:
             let domain = crate::jid::CanonicalJid::parse(&job.full_jid)?
                 .domainpart()
                 .to_owned();
-            state
-                .federation_outbox()
-                .send(&domain, query, Some(state.local_domain().to_owned()))
-                .await
+            context.send_federated_disco(&domain, query).await
         }
     };
     if sent {
         Ok(())
     } else {
-        state.pending_caps().remove(&id);
-        state
-            .caps_by_jid()
+        context.pending.remove(&id);
+        context
+            .observations
             .mark_query_failed(&job.full_jid, job.owner, &id);
         anyhow::bail!("caps disco query was not accepted by its exact transport")
     }
 }
 
-async fn execute_caps_effects_inner(state: &Arc<AppState>, job: &CapsEffectJob) -> CapsEffects {
-    if !caps_owner_is_current(state, job) {
+async fn execute_caps_effects_inner(
+    context: &CapsEffectDispatchContext,
+    job: &CapsEffectJob,
+) -> CapsEffects {
+    if !caps_owner_is_current(context, job) {
         return CapsEffects::default();
     }
     let mut failed = CapsEffects::default();
     if job.effects.contains(CapsEffects::DISCO_QUERY) {
-        if let Err(error) = send_caps_disco_query(state, job).await {
+        if let Err(error) = send_caps_disco_query(context, job).await {
             failed.0 |= CapsEffects::DISCO_QUERY.0;
             tracing::warn!(?error, resource = %job.full_jid, "failed to dispatch capability disco query");
         }
@@ -242,7 +248,7 @@ async fn execute_caps_effects_inner(state: &Arc<AppState>, job: &CapsEffectJob) 
             CapsObservationOwner::Federated { .. } => None,
         };
         if let Err(error) = super::pep::deliver_explicit_pep_last_items_for_resource(
-            state,
+            context.pep(),
             &job.full_jid,
             local_epoch,
         )
@@ -255,11 +261,15 @@ async fn execute_caps_effects_inner(state: &Arc<AppState>, job: &CapsEffectJob) 
     if job.effects.contains(CapsEffects::AUTOMATIC_PEP_LAST_ITEMS) {
         let result = match job.owner {
             CapsObservationOwner::Local(epoch) => {
-                super::pep::deliver_pep_last_items_for_resource(state, &job.full_jid, epoch).await
+                super::pep::deliver_pep_last_items_for_resource(context.pep(), &job.full_jid, epoch)
+                    .await
             }
             CapsObservationOwner::Federated { .. } => {
-                super::pep::deliver_pep_last_items_for_federated_resource(state, &job.full_jid)
-                    .await
+                super::pep::deliver_pep_last_items_for_federated_resource(
+                    context.pep(),
+                    &job.full_jid,
+                )
+                .await
             }
         };
         if let Err(error) = result {
@@ -270,8 +280,8 @@ async fn execute_caps_effects_inner(state: &Arc<AppState>, job: &CapsEffectJob) 
     if job.effects.contains(CapsEffects::VERIFIED_MIX_PRESENCE) {
         let result = match job.owner {
             CapsObservationOwner::Local(epoch) => {
-                super::mix::publish_verified_mix_presence(
-                    state,
+                super::mix::publish_verified_mix_presence_with(
+                    context.mix(),
                     &job.full_jid,
                     epoch.connection_id,
                     epoch.generation,
@@ -288,28 +298,34 @@ async fn execute_caps_effects_inner(state: &Arc<AppState>, job: &CapsEffectJob) 
     failed
 }
 
-async fn execute_caps_effects(state: Arc<AppState>, job: &CapsEffectJob) -> CapsEffects {
+async fn execute_caps_effects(
+    context: Arc<CapsEffectDispatchContext>,
+    job: &CapsEffectJob,
+) -> CapsEffects {
     match job.owner {
-        CapsObservationOwner::Local(_) => execute_caps_effects_inner(&state, job).await,
+        CapsObservationOwner::Local(_) => execute_caps_effects_inner(&context, job).await,
         CapsObservationOwner::Federated { .. } => {
-            let _resource_epoch = state.federated_caps_gates().lock(&job.full_jid).await;
-            execute_caps_effects_inner(&state, job).await
+            let _resource_epoch = context.lock_federated_resource(&job.full_jid).await;
+            execute_caps_effects_inner(&context, job).await
         }
     }
 }
 
 async fn run_caps_effect_dispatcher(
-    state: Arc<AppState>,
+    context: Arc<CapsEffectDispatchContext>,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> anyhow::Result<()> {
-    let dispatcher = Arc::clone(state.caps_effect_dispatcher());
-    state.caps_by_jid().recover_interrupted(Instant::now());
+    let dispatcher = context.dispatcher.as_ref();
+    context.observations.recover_interrupted(Instant::now());
     // A restart performs one authoritative reconstruction. Thereafter new
     // work, saturation, completions and exact retry/expiry deadlines are the
     // only wake sources; correctness does not depend on fixed polling.
     dispatcher.request_rescan();
-    let _recovery = CapsEffectRunGuard(Arc::clone(&state));
+    let _recovery = CapsEffectRunGuard {
+        observations: &context.observations,
+        dispatcher,
+    };
     let mut running = FuturesUnordered::<CapsEffectFuture>::new();
     let mut draining = false;
     let mut liveness = tokio::time::interval(Duration::from_secs(15));
@@ -329,14 +345,17 @@ async fn run_caps_effect_dispatcher(
                 drop(permit);
                 break;
             };
-            let Some(job) = state.caps_by_jid().claim_effects(&full_jid, Instant::now()) else {
+            let Some(job) = context
+                .observations
+                .claim_effects(&full_jid, Instant::now())
+            else {
                 drop(permit);
                 continue;
             };
-            let effect_state = Arc::clone(&state);
+            let effect_context = Arc::clone(&context);
             running.push(Box::pin(async move {
                 let _permit = permit;
-                let failed = execute_caps_effects(effect_state, &job).await;
+                let failed = execute_caps_effects(effect_context, &job).await;
                 (job, failed)
             }));
         }
@@ -346,8 +365,8 @@ async fn run_caps_effect_dispatcher(
             && dispatcher.begin_rescan()
         {
             let now = Instant::now();
-            for (full_jid, local) in state.caps_by_jid().ready_observations(now) {
-                let _ = dispatcher.hint(full_jid, local, &state.caps_effect_telemetry());
+            for (full_jid, local) in context.observations.ready_observations(now) {
+                let _ = dispatcher.hint(full_jid, local, &context.telemetry());
             }
             // Schedule reconstructed hints before sleeping. If a class filled,
             // `hint` left rescan_required set; freeing a slot wakes the next
@@ -365,8 +384,8 @@ async fn run_caps_effect_dispatcher(
             None
         } else {
             match (
-                state.caps_by_jid().next_retry_deadline(now),
-                state.pending_caps().next_expiration(),
+                context.observations.next_retry_deadline(now),
+                context.pending.next_expiration(),
             ) {
                 (Some(left), Some(right)) => Some(left.min(right)),
                 (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
@@ -387,51 +406,54 @@ async fn run_caps_effect_dispatcher(
                 dispatcher.close();
             }
             Some((job, failed)) = running.next(), if !running.is_empty() => {
-                if matches!(job.owner, CapsObservationOwner::Local(epoch) if !local_caps_epoch_is_current(&state, &job.full_jid, epoch)) {
+                if matches!(job.owner, CapsObservationOwner::Local(epoch) if !context.local_epoch_is_current(&job.full_jid, epoch)) {
                     if let CapsObservationOwner::Local(epoch) = job.owner {
-                        state.pending_caps().remove_local_epoch(&job.full_jid, epoch);
-                        state.caps_by_jid().remove_local_epoch(&job.full_jid, epoch);
+                        context.pending.remove_local_epoch(&job.full_jid, epoch);
+                        context.observations.remove_local_epoch(&job.full_jid, epoch);
                     }
-                } else if state.caps_by_jid().complete_effects(&job, failed, Instant::now()) {
+                } else if context.observations.complete_effects(&job, failed, Instant::now()) {
                     let _ = dispatcher.hint(
                         job.full_jid.clone(),
                         job.owner.is_local(),
-                        &state.caps_effect_telemetry(),
+                        &context.telemetry(),
                     );
                 }
-                state.caps_effect_telemetry().completed_after(job.queued_at.elapsed());
+                context.telemetry().completed_after(job.queued_at.elapsed());
                 let failures = failed.0.count_ones() as u64;
                 if failures == 0 {
                     heartbeat.ok();
                 } else {
-                    state.caps_effect_telemetry().failed(failures);
+                    context.telemetry().failed(failures);
                     heartbeat.error(format!("{failures} caps side effects failed"));
                 }
             }
             _ = dispatcher.wake.notified() => {}
             _ = &mut deadline_wait, if !draining => {
                 let now = Instant::now();
-                for (id, pending) in state.pending_caps().take_expired(now) {
-                    if state.caps_by_jid().rearm_expired(&id, &pending, now) {
+                for (id, pending) in context.pending.take_expired(now) {
+                    if context.observations.rearm_expired(&id, &pending, now) {
                         let _ = dispatcher.hint(
                             pending.full_jid,
                             pending.owner.is_local(),
-                            &state.caps_effect_telemetry(),
+                            &context.telemetry(),
                         );
                     }
                 }
                 dispatcher.request_rescan();
             }
             _ = liveness.tick() => {
-                state.caps_cache().sweep(Instant::now());
+                context.cache.sweep(Instant::now());
                 heartbeat.pulse();
             }
         }
     }
 }
 
-pub(crate) fn start_caps_effect_dispatcher(state: Arc<AppState>, cancel: CancellationToken) {
-    let worker_registry = Arc::clone(state.worker_registry());
+pub(crate) fn start_caps_effect_dispatcher(
+    context: Arc<CapsEffectDispatchContext>,
+    worker_registry: Arc<crate::workers::WorkerRegistry>,
+    cancel: CancellationToken,
+) {
     worker_registry.supervise_draining(
         "caps-side-effects",
         crate::workers::WorkerCriticality::Restartable,
@@ -440,9 +462,9 @@ pub(crate) fn start_caps_effect_dispatcher(state: Arc<AppState>, cancel: Cancell
         CAPS_EFFECT_DRAIN_GRACE,
         cancel.clone(),
         move |heartbeat| {
-            let state = Arc::clone(&state);
+            let context = Arc::clone(&context);
             let cancel = cancel.clone();
-            async move { run_caps_effect_dispatcher(state, cancel, heartbeat).await }
+            async move { run_caps_effect_dispatcher(context, cancel, heartbeat).await }
         },
     );
 }
@@ -1048,17 +1070,6 @@ pub(crate) fn cached_disco_result(
     Some(iq_result_from(id, &target, &query))
 }
 
-pub(crate) fn pep_notify_nodes(state: &AppState, target: &str) -> Vec<String> {
-    let Ok(target) = crate::jid::canonical_session_key(target) else {
-        return Vec::new();
-    };
-    current_caps_observation(state, &target)
-        .and_then(|observation| observation.summary)
-        .map_or_else(Vec::new, |summary| {
-            summary.notify_nodes().map(str::to_owned).collect()
-        })
-}
-
 /// MIX/PEP consumers share the strict top-level feature parser used at caps
 /// verification time. Text, identities and nested data-form elements cannot
 /// impersonate a disco feature. Successful use refreshes both LRU layers.
@@ -1458,6 +1469,42 @@ mod tests {
             .expect("failed work remains authoritative");
         assert_eq!(retry.owner, job.owner);
         assert_eq!(retry.effects, job.effects);
+    }
+
+    #[test]
+    fn dispatcher_drop_rearms_claimed_effects_and_requests_rescan() {
+        let observations = CapsResourceIndex::with_limits(4, 4);
+        let dispatcher = CapsEffectDispatcher::with_limits(1, 1);
+        let resource = "alice@remote.test/Phone";
+        observations
+            .observe_federated(
+                resource.to_owned(),
+                uuid::Uuid::new_v4(),
+                "remote.test".to_owned(),
+                None,
+                None,
+                Instant::now(),
+            )
+            .unwrap();
+        let claimed = observations
+            .claim_effects(resource, Instant::now())
+            .unwrap();
+        assert!(observations
+            .claim_effects(resource, Instant::now())
+            .is_none());
+        assert!(!dispatcher.begin_rescan());
+
+        drop(CapsEffectRunGuard {
+            observations: &observations,
+            dispatcher: dispatcher.as_ref(),
+        });
+
+        assert!(dispatcher.begin_rescan());
+        let retry = observations
+            .claim_effects(resource, Instant::now())
+            .unwrap();
+        assert_eq!(retry.owner, claimed.owner);
+        assert_eq!(retry.effects, claimed.effects);
     }
 
     #[test]

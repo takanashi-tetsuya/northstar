@@ -37,6 +37,7 @@ pub(crate) trait ChallengeCleanupRepository: Send + Sync {
     fn cleanup(&self) -> impl Future<Output = Result<()>> + Send;
 }
 
+#[derive(Clone)]
 pub(crate) struct ChallengeCleanupService<R> {
     repository: R,
 }

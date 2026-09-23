@@ -361,7 +361,11 @@ the S2S outbox worker uses a dispatch context for claims, policy, retry and
 bounce. New outbound connections still enter the broad TLS/DNS/SM transport
 actor. HTTP transport rejection, OMEMO recovery polling, account-deletion
 roster push and local session cleanup now retain only their required shared
-counters. Other broad worker and transport paths remain, so
+counters. Background maintenance, durable-SM expiry, locked-room expiry,
+runtime-control refresh, CAPS effects, MIX relay/recovery/outbox, and PubSub
+digest/event outbox delivery now use purpose-built worker contexts. They keep
+the existing claim, lease and post-commit ordering. Transport actors still
+share broader state, so
 this is not the Stage 1 exit. Database roles, MUC batch commands and
 storage/restore tooling follow after the Stage 1 boundary checks pass.
 

@@ -29,6 +29,11 @@ pub(crate) trait SmTeardownRepository: Send + Sync {
         lease_seconds: u64,
     ) -> impl Future<Output = Result<Option<Self::Snapshot>>> + Send;
 
+    fn take_expired(
+        &self,
+        lease_seconds: u64,
+    ) -> impl Future<Output = Result<Vec<Self::Snapshot>>> + Send;
+
     fn take_before_generation(
         &self,
         user_id: Uuid,
@@ -109,6 +114,42 @@ impl<R: SmTeardownRepository> SmTeardownService<R> {
             self.finish(snapshot, render).await?;
         }
         Ok(())
+    }
+
+    /// Finish every expired claim before reporting an effect failure. A failed
+    /// effect leaves its leased row for the next maintenance pass.
+    pub(crate) async fn cleanup_expired<Render, RenderFuture>(
+        &self,
+        mut render: Render,
+    ) -> Result<usize>
+    where
+        Render: FnMut(R::Snapshot) -> RenderFuture + Send,
+        RenderFuture: Future<Output = Result<()>> + Send,
+    {
+        let mut total = 0usize;
+        let mut first_error = None;
+        loop {
+            let snapshots = self.repository.take_expired(self.lease_seconds).await?;
+            let batch = snapshots.len();
+            total = total.saturating_add(batch);
+            for snapshot in snapshots {
+                if let Err(error) = self.finish(snapshot, &mut render).await {
+                    tracing::warn!(
+                        ?error,
+                        "expired SM teardown will be retried after its lease"
+                    );
+                    first_error.get_or_insert(error);
+                }
+            }
+            if batch < 256 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        Ok(total)
     }
 
     pub(crate) async fn revoke_before_generation<Render, RenderFuture>(
@@ -239,6 +280,8 @@ mod tests {
         user_takes: Vec<(Uuid, u64)>,
         exact: VecDeque<Option<Snapshot>>,
         exact_takes: Vec<(Uuid, u64)>,
+        expired_batches: VecDeque<Vec<Snapshot>>,
+        expired_takes: Vec<u64>,
         batches: VecDeque<SmTeardownBatch<Snapshot>>,
         counts: VecDeque<i64>,
         takes: Vec<(Uuid, i64, u64)>,
@@ -260,6 +303,15 @@ mod tests {
             let mut trace = self.0.lock().unwrap();
             trace.exact_takes.push((session_id, lease_seconds));
             Ok(trace.exact.pop_front().expect("fixture exact claim"))
+        }
+
+        async fn take_expired(&self, lease_seconds: u64) -> Result<Vec<Self::Snapshot>> {
+            let mut trace = self.0.lock().unwrap();
+            trace.expired_takes.push(lease_seconds);
+            Ok(trace
+                .expired_batches
+                .pop_front()
+                .expect("fixture expired batch"))
         }
 
         async fn take_before_generation(
@@ -364,6 +416,38 @@ mod tests {
         let trace = trace.lock().unwrap();
         assert_eq!(trace.exact_takes, [(session_id, 1); 3]);
         assert_eq!(trace.finalized, [claimed.0]);
+    }
+
+    #[tokio::test]
+    async fn expired_cleanup_finishes_other_claims_and_replays_a_failed_effect() {
+        let failed = snapshot();
+        let completed = snapshot();
+        let trace = Arc::new(Mutex::new(Trace {
+            expired_batches: VecDeque::from([
+                vec![failed.clone(), completed.clone()],
+                vec![failed.clone()],
+            ]),
+            ..Trace::default()
+        }));
+        let service = SmTeardownService::new(FakeRepository(Arc::clone(&trace)), 0);
+        let failed_id = failed.0.session_id;
+        assert!(service
+            .cleanup_expired(|snapshot| async move {
+                if snapshot.0.session_id == failed_id {
+                    anyhow::bail!("presence failed");
+                }
+                Ok(())
+            })
+            .await
+            .is_err());
+        assert_eq!(trace.lock().unwrap().finalized, [completed.0]);
+        assert_eq!(
+            service.cleanup_expired(|_| async { Ok(()) }).await.unwrap(),
+            1
+        );
+        let trace = trace.lock().unwrap();
+        assert_eq!(trace.expired_takes, [1, 1]);
+        assert_eq!(trace.finalized, [completed.0, failed.0]);
     }
 
     #[tokio::test]

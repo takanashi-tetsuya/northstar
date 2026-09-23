@@ -386,6 +386,8 @@ for (const invariant of [
   }
 }
 const runtimeControlRefresh = structBody(state, 'fn start_runtime_control_refresh(');
+const runtimeControlContext = read('src/state/runtime_control_refresh.rs');
+const runtimeControlRun = structBody(runtimeControlContext, 'pub(super) async fn run(');
 for (const [call, description] of [
   ['runtime_control_snapshot', 'runtime administration and federation refresh'],
   ['poll_admin_service_control', 'XEP-0133 service-control refresh'],
@@ -393,17 +395,20 @@ for (const [call, description] of [
   const observer = call === 'runtime_control_snapshot'
     ? String.raw`\s*,\s*\|phase\|\s*\{\s*diagnostics\.database_read\(phase\)\s*\}\s*,?`
     : '';
-  if (!new RegExp(`match db::${call}\\(\\s*&mut connection${observer}\\s*\\)`, 's').test(runtimeControlRefresh)) {
+  if (!new RegExp(`match db::${call}\\(\\s*&mut connection${observer}\\s*\\)`, 's').test(runtimeControlRun)) {
     throw new Error(`${description} must use the coordinator-owned control connection`);
   }
-  if (new RegExp(`${call}\\(&state\\.(?:pool|runtime_control_pool)\\)`).test(runtimeControlRefresh)) {
+  if (new RegExp(`${call}\\(&state\\.(?:pool|runtime_control_pool)\\)`).test(runtimeControlRun)) {
     throw new Error(`${description} must not acquire from a traffic or shared control pool`);
   }
 }
 if ((runtimeControlRefresh.match(/let\s+max_silence\s*=/g) ?? []).length !== 1
     || !/let max_silence = Duration::from_secs\(5\);/.test(runtimeControlRefresh)
     || !/"runtime-control-refresh",\s*crate::workers::WorkerCriticality::Critical,\s*crate::workers::WorkerMode::Continuous,\s*Some\(max_silence\),/s.test(runtimeControlRefresh)
-    || !/RuntimeControlDiagnostics::new\(diagnostic_cancel,\s*max_silence\)/s.test(runtimeControlRefresh)) {
+    || !/RuntimeControlDiagnostics::new\(diagnostic_cancel,\s*max_silence\)/s.test(runtimeControlRun)
+    || /\bArc<AppState>\b/.test(runtimeControlContext)
+    || !runtimeControlRun.includes('Duration::from_millis(500)')
+    || !runtimeControlRun.includes('self.connection.lock().await.take()')) {
   throw new Error('runtime-control diagnostics and supervision must share the unchanged five-second silence bound');
 }
 if (!/"runtime-control-refresh"/.test(runtimeControlRefresh)) {
@@ -468,7 +473,7 @@ if (terminalMain.replace(/\s+/g, '') !== 'logging::report_result(run().await)') 
 const runtimeMain = structBody(mainSource, 'async fn run()');
 if (!runtimeMain.includes('let authority_probe = state.abuse_key_authority_probe();')
     || !/tokio::time::timeout\(\s*ABUSE_KEY_AUTHORITY_QUERY_TIMEOUT,\s*authority_probe\.validate\(&authority_identity\)/s.test(runtimeMain)
-    || !runtimeMain.includes('let bg_housekeeping = Arc::new(state.background_housekeeping_context(bg_counters.clone()));')
+    || !runtimeMain.includes('let bg_context = Arc::new(state.background_maintenance_context());')
     || /let authority_pool = state\.pool\.clone\(\)/.test(runtimeMain)) {
   throw new Error('critical key guard and housekeeping must use narrow repository-backed capabilities');
 }
@@ -503,15 +508,14 @@ if (!/self\.service_shutdown\s*\.set\(cancel\)/s.test(serviceControlInstallation
   throw new Error('XEP-0133 service control must install the shutdown authority before the coordinator polls it');
 }
 for (const invariant of [
-  'state.config.enable_xmpp_service_control',
-  'state.service_shutdown.get().is_some()',
+  'self.service_control_enabled && self.service_shutdown.get().is_some()',
   'report_runtime_control_health(&heartbeat, observed_database, first_error)',
 ]) {
-  if (!runtimeControlRefresh.includes(invariant)) {
+  if (!runtimeControlRun.includes(invariant)) {
     throw new Error(`runtime control coordinator lost a fail-closed XEP-0133 invariant: ${invariant}`);
   }
 }
-if (!/service_control_applies\(\s*state\.process_started_at,\s*&control\s*,?\s*\)/s.test(runtimeControlRefresh)) {
+if (!/service_control_applies\(\s*self\.process_started_at,\s*&control\s*,?\s*\)/s.test(runtimeControlRun)) {
   throw new Error('runtime control coordinator must retain the XEP-0133 process/generation authority check');
 }
 if (!responsibilityDocument.includes('| runtime control pool | `northstar_runtime` | exactly 1 reserved connection; at most 3 s per initial handshake within one absolute 15 s admission deadline, including jitter, role attestation and reservation |')) {
@@ -604,7 +608,7 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     !/next_mix_outbox_progress\s*\(\s*&mut\s+in_flight\s*,\s*&mut\s+claim_task\s*,\s*&mut\s+maintenance_task\s*\)/.test(
       mixOutboxLaneWorker,
     ) ||
-    !/claim_mix_outbox_work\s*\(\s*&state\s*,\s*&stop_claiming\s*,\s*&cancel\s*,\s*queue\s*,\s*available\s*,?\s*\)/.test(
+    !/claim_mix_outbox_work\s*\(\s*&context\s*,\s*&stop_claiming\s*,\s*&cancel\s*,\s*queue\s*,\s*available\s*,?\s*\)/.test(
       mixOutboxClaim,
     ) ||
     countMatches(mixOutboxClaimWork, /drainable_mix_outbox_claim\s*\(\s*stop_claiming\s*,\s*cancel\s*,/g) !== 2 ||
@@ -689,8 +693,8 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     lane.includes('_=cancel.cancelled(),ifaccepting=>{accepting=false;}'),
   'lane admission must close for either parent stop or hard cancellation');
   requireMix(lane.includes('ifaccepting&&claim_task.is_none()&&maintenance_task.is_none()&&in_flight.len()<concurrency&&tokio::time::Instant::now()>=claim_schedule.next_claim{') &&
-    lane.includes('process_mix_outbox_claim(Arc::clone(&state),stop_claiming.clone(),cancel.clone(),queue,available)') &&
-    lane.includes('process_mix_outbox_work(Arc::clone(&state),work,cancel.clone())'),
+    lane.includes('process_mix_outbox_claim(Arc::clone(&context),stop_claiming.clone(),cancel.clone(),queue,available)') &&
+    lane.includes('process_mix_outbox_work(Arc::clone(&context),work,cancel.clone())'),
   'new claims require open bounded admission; pending claims and work keep the independent hard token');
   requireMix(lane.includes('if!accepting{maintenance_task.take();}') &&
     lane.includes('if!accepting&&in_flight.is_empty()&&claim_task.is_none(){returnmatchterminal_error{') &&
@@ -720,8 +724,8 @@ export function verifyMixOutboxLifecycle(mixProtocol) {
     'every supervised attempt must construct its own independent hard token before starting lanes');
   requireMix(startup.includes('letlane_cancel=tokio_util::sync::CancellationToken::new();') &&
     !/\.child_token\s*\(/.test(startMixOutbox) &&
-    startup.includes('run_mix_outbox_lane(Arc::clone(&state),cancel.clone(),lane_cancel.clone(),MixOutboxQueue::Delivery,delivery_budget,true,heartbeat.clone())') &&
-    startup.includes('run_mix_outbox_lane(state,cancel.clone(),lane_cancel.clone(),MixOutboxQueue::PamResult,pam_budget,false,heartbeat)') &&
+    startup.includes('run_mix_outbox_lane(Arc::clone(&context),cancel.clone(),lane_cancel.clone(),MixOutboxQueue::Delivery,delivery_budget,true,heartbeat.clone())') &&
+    startup.includes('run_mix_outbox_lane(context,cancel.clone(),lane_cancel.clone(),MixOutboxQueue::PamResult,pam_budget,false,heartbeat)') &&
     startup.includes('join_mix_outbox_lanes(cancel,lane_cancel,delivery,pam).await'),
   'production lanes must share a fresh independent hard token and receive the parent stop separately');
   requireMix(startup.includes('registry.supervise_draining(,crate::workers::WorkerCriticality::Restartable,crate::workers::WorkerMode::Continuous,Some(Duration::from_secs(30)),MIX_OUTBOX_DRAIN_GRACE,cancel.clone(),'),
@@ -3457,8 +3461,16 @@ if (/\b(?:self\.)?state\s*\.metrics\b/.test(mucProtocol)
     || !mucProtocol.includes('state.muc_telemetry().post_commit_failure()')) {
   throw new Error('MUC authority and post-commit reporting must use its narrow telemetry port');
 }
+const mixOutboxContext = read('src/state/mix_outbox.rs');
+const mixOutboxStart = structBody(mixProtocolProduction, 'pub(crate) fn start_mix_delivery_outbox(');
 if (/\bstate\s*\.metrics\b/.test(mixProtocol)
-    || !mixProtocol.includes('state.mix_post_commit_telemetry().delivery_failed()')) {
+    || !mixProtocol.includes('context.record_post_commit_failure()')
+    || !mixOutboxContext.includes('MixPostCommitTelemetry::new(&self.delivery_failures, &self.post_accept_failures)')
+    || !state.includes('Arc::new(state.mix_outbox_context())')
+    || /\b(?:Arc<AppState>|PgPool|ClusterManager|Arc<Metrics>)\b/.test(mixOutboxContext)
+    || /\bArc<AppState>\b/.test(mixOutboxStart)
+    || !/self\s*\.\s*service\s*\.\s*outbox_lookup_cluster_nodes\s*\(/.test(mixOutboxContext)
+    || !/self\s*\.\s*cluster_delivery\s*\.\s*send_mix\s*\(/.test(mixOutboxContext)) {
   throw new Error('MIX post-commit delivery must use its two-counter telemetry port');
 }
 const accountRecoverySource = read('src/account_recovery.rs');
@@ -3662,9 +3674,23 @@ if (!housekeepingContext.includes('counters: BackgroundHousekeepingCounters')
   throw new Error('background housekeeping must not retain the complete metrics registry');
 }
 const lockedMucExpiryWorker = structBody(state, 'fn start_locked_muc_expiry(');
-if (!lockedMucExpiryWorker.includes('.locked_muc_expiry_service()')
+const lockedMucExpiryContext = read('src/state/locked_muc_expiry.rs');
+if (!lockedMucExpiryWorker.includes('.locked_muc_expiry_context')
+    || !lockedMucExpiryContext.includes('.expire_locked_rooms(')
     || /db::delete_expired_locked_muc_rooms\s*\(/.test(lockedMucExpiryWorker)) {
   throw new Error('locked MUC expiry worker must commit through its repository service');
+}
+const mixPresenceRecovery = structBody(read('src/xmpp/protocol/mix.rs'), 'pub(crate) fn start_mix_presence_recovery(');
+const mixPresenceContext = read('src/state/mix_presence_recovery.rs');
+const verifiedMixPresence = structBody(read('src/xmpp/protocol/mix.rs'), 'async fn publish_verified_mix_presence_with(');
+if (!state.includes('Arc::new(state.mix_presence_recovery_context())')
+    || /\b(?:AppState|PgPool|ClusterManager)\b/.test(mixPresenceRecovery)
+    || /\b(?:Arc<AppState>|PgPool|ClusterManager)\b/.test(mixPresenceContext)
+    || !mixPresenceRecovery.includes('context.routes().local_epochs(')
+    || !mixPresenceRecovery.includes('context.expire_unrefreshed(cutoff)')
+    || !verifiedMixPresence.includes('context.routes().epoch_state(')
+    || !mixPresenceContext.includes('self.runtime_policy.load().allows_domain(')) {
+  throw new Error('MIX presence recovery must use live route fences and narrow application effects');
 }
 const serviceTaskNames = [
   'XMPP',
@@ -3696,9 +3722,7 @@ const stateServiceAccessors = [
   'cluster_instance_release_service',
   'cluster_muc_occupancy_maintenance_service',
   'challenge_issue_service',
-  'challenge_cleanup_service',
   'sasl_login_abuse_service',
-  'locked_muc_expiry_service',
   's2s_roster_authorization_service',
   's2s_outbox_dispatch_service',
   's2s_sm_outbox_service',

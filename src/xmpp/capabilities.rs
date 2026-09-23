@@ -677,7 +677,6 @@ impl<'a> PepTelemetry<'a> {
 
 /// PubSub outbox worker timing and last-successful-maintenance gauges.
 pub(crate) struct PubSubOutboxTelemetry<'a> {
-    delivery_duration: &'a DurationHistogram,
     pending_rows: &'a AtomicU64,
     pending_bytes: &'a AtomicU64,
     dead_letter_rows: &'a AtomicU64,
@@ -685,21 +684,15 @@ pub(crate) struct PubSubOutboxTelemetry<'a> {
 
 impl<'a> PubSubOutboxTelemetry<'a> {
     pub(crate) fn new(
-        delivery_duration: &'a DurationHistogram,
         pending_rows: &'a AtomicU64,
         pending_bytes: &'a AtomicU64,
         dead_letter_rows: &'a AtomicU64,
     ) -> Self {
         Self {
-            delivery_duration,
             pending_rows,
             pending_bytes,
             dead_letter_rows,
         }
-    }
-
-    pub(crate) fn start_delivery_timer(&self) -> DurationTimer<'_> {
-        self.delivery_duration.start_timer()
     }
 
     pub(crate) fn publish_snapshot(
@@ -786,12 +779,10 @@ mod tests {
 
     #[test]
     fn pubsub_snapshot_clamps_negative_database_counts() {
-        let histogram = DurationHistogram::default();
         let pending_rows = AtomicU64::new(7);
         let pending_bytes = AtomicU64::new(11);
         let dead_letters = AtomicU64::new(13);
-        let telemetry =
-            PubSubOutboxTelemetry::new(&histogram, &pending_rows, &pending_bytes, &dead_letters);
+        let telemetry = PubSubOutboxTelemetry::new(&pending_rows, &pending_bytes, &dead_letters);
 
         telemetry.publish_snapshot(-1, i64::MAX, -3);
         assert_eq!(pending_rows.load(Ordering::Relaxed), 0);

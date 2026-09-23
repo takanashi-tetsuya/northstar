@@ -153,6 +153,9 @@ pub(crate) mod account_generation_teardown;
 pub(crate) use account_deletion_recovery::AccountDeletionRecoveryContext;
 pub(crate) mod account_teardown_runtime;
 mod admin_session_cleanup;
+pub(crate) mod background_maintenance;
+pub(crate) mod caps_effect_dispatch;
+pub(crate) mod pep_last_items;
 pub(crate) use admin_session_cleanup::AdminSessionCleanupContext;
 mod admin_cluster_queries;
 pub(crate) mod cluster_account_teardown_notifier;
@@ -173,12 +176,14 @@ pub(crate) mod cluster_muc_projection;
 pub(crate) mod cluster_routing;
 mod cluster_shutdown;
 pub(crate) mod federated_muc_cluster_effects;
+mod locked_muc_expiry;
 mod message_cluster_routing;
-pub(crate) mod mix_cluster_routing;
+pub(crate) mod mix_iq_relay;
+pub(crate) mod mix_outbox;
+pub(crate) mod mix_presence_recovery;
 pub(crate) mod muc_cluster_effects;
 pub(crate) mod muc_cluster_routing;
 pub(crate) mod muc_delivery;
-mod notification_routing;
 pub(crate) mod operation_island_effects;
 pub(crate) mod operation_muc_destroy_effects;
 pub(crate) mod operation_panic_effects;
@@ -195,6 +200,10 @@ pub(crate) mod omemo_recovery_http;
 pub(crate) mod passkey_http;
 pub(crate) mod password_change_http;
 mod presence_cluster_routing;
+pub(crate) mod pubsub_digest_worker;
+pub(crate) mod pubsub_event_outbox_worker;
+pub(crate) mod pubsub_notification_delivery;
+mod runtime_control_refresh;
 mod s2s_cluster_routing;
 pub(crate) mod s2s_outbox_dispatch;
 pub(crate) mod session_cleanup_bookkeeping;
@@ -208,6 +217,7 @@ pub(crate) mod session_cleanup_sm;
 pub(crate) mod session_cleanup_sm_revoker;
 pub(crate) mod session_cleanup_unavailable;
 mod session_cluster_route;
+mod sm_expiry;
 mod sm_teardown_local;
 mod sm_teardown_muc_cluster;
 mod sm_teardown_muc_projection;
@@ -2632,6 +2642,75 @@ mod account_revocation_route_tests {
         }
     }
 
+    #[tokio::test]
+    async fn mix_recovery_rechecks_the_live_epoch_after_waiting_for_its_gate() {
+        let sessions = Arc::new(DashMap::new());
+        let full_jid = "alice@example.test/fixture";
+        let current = session(uuid::Uuid::new_v4(), 1, true);
+        current.available.store(true, Ordering::Release);
+        current
+            .caps_observation_generation
+            .store(7, Ordering::Release);
+        sessions.insert(full_jid.into(), current);
+        let routes = mix_presence_recovery::MixPresenceRecoveryRoutes::new(Arc::clone(&sessions));
+        let [(snapshot_jid, connection_id, generation)] = routes
+            .local_epochs("alice@example.test")
+            .try_into()
+            .unwrap();
+        assert_eq!(snapshot_jid, full_jid);
+        let gate = routes.gate(full_jid, connection_id).unwrap();
+        let held = Arc::clone(&gate).lock_owned().await;
+        let (waiting_tx, waiting_rx) = tokio::sync::oneshot::channel();
+        let recheck = tokio::spawn(async move {
+            let _ = waiting_tx.send(());
+            let _epoch = Arc::clone(&gate).lock_owned().await;
+            routes.epoch_state(
+                &snapshot_jid,
+                connection_id,
+                generation,
+                &gate,
+                "room@mix.example.test",
+            )
+        });
+        waiting_rx.await.unwrap();
+        sessions
+            .get(full_jid)
+            .unwrap()
+            .caps_observation_generation
+            .store(8, Ordering::Release);
+        drop(held);
+        assert_eq!(recheck.await.unwrap(), Some((false, false)));
+    }
+
+    #[test]
+    fn mix_recovery_rejects_a_replaced_route_even_when_its_generation_matches() {
+        let sessions = Arc::new(DashMap::new());
+        let full_jid = "alice@example.test/fixture";
+        let old = session(uuid::Uuid::new_v4(), 1, true);
+        old.available.store(true, Ordering::Release);
+        sessions.insert(full_jid.into(), old);
+        let routes = mix_presence_recovery::MixPresenceRecoveryRoutes::new(Arc::clone(&sessions));
+        let [(snapshot_jid, connection_id, generation)] = routes
+            .local_epochs("alice@example.test")
+            .try_into()
+            .unwrap();
+        let old_gate = routes.gate(full_jid, connection_id).unwrap();
+        let replacement = session(uuid::Uuid::new_v4(), 1, true);
+        replacement.available.store(true, Ordering::Release);
+        sessions.insert(full_jid.into(), replacement);
+        assert!(routes.gate(full_jid, connection_id).is_none());
+        assert_eq!(
+            routes.epoch_state(
+                &snapshot_jid,
+                connection_id,
+                generation,
+                &old_gate,
+                "room@mix.example.test",
+            ),
+            Some((false, false)),
+        );
+    }
+
     #[test]
     fn narrow_revoker_fences_pending_old_generations_but_not_replacements() {
         let sessions = Arc::new(DashMap::new());
@@ -3173,6 +3252,7 @@ pub struct AppState {
     locked_muc_expiry_service: crate::services::locked_muc_expiry::LockedMucExpiryService<
         db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
     >,
+    locked_muc_expiry_context: std::sync::OnceLock<Arc<locked_muc_expiry::LockedMucExpiryContext>>,
     operation_effect_fence_service:
         crate::services::operation_effect_fence::OperationEffectFenceService<
             db::operation_effect_fence_repository::PostgresOperationEffectFenceRepository,
@@ -3216,17 +3296,17 @@ pub struct AppState {
     s2s_dnssec_resolver: Option<TokioResolver>,
     /// XEP-0403 IQ relay correlations. Keys are server-generated opaque IQ
     /// ids, never client-controlled ids; entries are bounded and short-lived.
-    pending_mix_iq: northstar_protocol_runtime::mix::MixIqRelayIndex,
+    pending_mix_iq: Arc<northstar_protocol_runtime::mix::MixIqRelayIndex>,
     /// XEP-0115 entries are inserted only after the advertised verification
     /// string has been recomputed successfully. Unverified payloads never
     /// enter this shared cache.
-    caps_cache: northstar_protocol_runtime::caps::CapsCacheIndex,
+    caps_cache: Arc<northstar_protocol_runtime::caps::CapsCacheIndex>,
     caps_by_jid: Arc<northstar_protocol_runtime::caps::CapsResourceIndex>,
     pending_caps: Arc<northstar_protocol_runtime::caps::PendingCapsIndex>,
     /// Cross-stream ordering authority for one authenticated federated full
     /// JID's capability lifecycle. Weak, self-cleaning entries exist only
     /// while an observer or response owns or waits for the resource.
-    federated_caps_gates: northstar_protocol_runtime::caps::FederatedCapsGateIndex,
+    federated_caps_gates: Arc<northstar_protocol_runtime::caps::FederatedCapsGateIndex>,
     /// Bounded, per-full-JID single-flight boundary for XEP-0115-triggered
     /// PEP last-item delivery and verified MIX presence publication.
     caps_effect_dispatcher: Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>,
@@ -3272,7 +3352,8 @@ pub struct AppState {
     /// Durable XEP-0133 federation policy overlay. Static environment policy
     /// remains the outer ceiling; runtime rules may only restrict it further.
     federation_runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
-    service_shutdown: std::sync::OnceLock<CancellationToken>,
+    service_shutdown: Arc<std::sync::OnceLock<CancellationToken>>,
+    runtime_control_liveness: Arc<()>,
     workers: Arc<crate::workers::WorkerRegistry>,
 }
 
@@ -3804,15 +3885,6 @@ impl AppState {
         )
     }
 
-    pub(crate) fn mix_post_commit_telemetry(
-        &self,
-    ) -> crate::xmpp::capabilities::MixPostCommitTelemetry<'_> {
-        crate::xmpp::capabilities::MixPostCommitTelemetry::new(
-            &self.metrics.mix_post_commit_delivery_failures_total,
-            &self.metrics.post_accept_side_effect_failures_total,
-        )
-    }
-
     pub(crate) fn caps_effect_telemetry(
         &self,
     ) -> crate::xmpp::capabilities::CapsEffectTelemetry<'_> {
@@ -3985,17 +4057,6 @@ impl AppState {
             &self.metrics.pep_items_published_total,
             &self.metrics.pep_items_retracted_total,
             &self.metrics.pep_retrievals_total,
-        )
-    }
-
-    pub(crate) fn pubsub_outbox_telemetry(
-        &self,
-    ) -> crate::xmpp::capabilities::PubSubOutboxTelemetry<'_> {
-        crate::xmpp::capabilities::PubSubOutboxTelemetry::new(
-            &self.metrics.outbox_delivery_duration_seconds,
-            &self.metrics.pubsub_event_outbox_pending_rows,
-            &self.metrics.pubsub_event_outbox_pending_bytes,
-            &self.metrics.pubsub_event_outbox_dead_letter_rows,
         )
     }
 
@@ -4251,14 +4312,6 @@ impl AppState {
         self.federation_write_policy.permit().await
     }
 
-    /// Refresh the cached island-mode value and return the previous value.
-    /// Unchanged observations do not wait for socket writes. Actual changes
-    /// take the exclusive delivery guard, drain in-flight stanza writes, and
-    /// fence queued writers until they can observe the new policy.
-    async fn refresh_island_mode(&self, enabled: bool) -> bool {
-        self.federation_write_policy.refresh(enabled).await
-    }
-
     /// Read the public-registration kill switch with acquire ordering.
     pub(crate) fn registration_is_closed(&self) -> bool {
         self.config.registration_dependency_locked()
@@ -4286,14 +4339,6 @@ impl AppState {
             self.config.configured_registration_mode()
                 == crate::config::RegistrationMode::InvitationOnly,
         )
-    }
-
-    /// Apply the authoritative registration setting with release ordering.
-    pub(crate) fn apply_registration_closed(&self, closed: bool) {
-        self.registration_closed.store(
-            closed || self.config.registration_dependency_locked(),
-            Ordering::Release,
-        );
     }
 
     /// Evaluate one resource's session-local XEP-0016 selection (or the
@@ -5422,6 +5467,7 @@ impl AppState {
             operation_admin_service,
             operation_muc_destroy_service,
             locked_muc_expiry_service,
+            locked_muc_expiry_context: std::sync::OnceLock::new(),
             operation_effect_fence_service,
             operation_journal_worker_service,
             admin_session_cleanup_worker_service,
@@ -5443,11 +5489,13 @@ impl AppState {
             s2s_connection_registry: Arc::new(crate::s2s::S2sConnectionRegistry::default()),
             s2s_dns_resolver,
             s2s_dnssec_resolver,
-            pending_mix_iq: northstar_protocol_runtime::mix::MixIqRelayIndex::new(),
-            caps_cache: northstar_protocol_runtime::caps::CapsCacheIndex::new(),
+            pending_mix_iq: Arc::new(northstar_protocol_runtime::mix::MixIqRelayIndex::new()),
+            caps_cache: Arc::new(northstar_protocol_runtime::caps::CapsCacheIndex::new()),
             caps_by_jid: Arc::new(northstar_protocol_runtime::caps::CapsResourceIndex::new()),
             pending_caps: Arc::new(northstar_protocol_runtime::caps::PendingCapsIndex::new()),
-            federated_caps_gates: northstar_protocol_runtime::caps::FederatedCapsGateIndex::new(),
+            federated_caps_gates: Arc::new(
+                northstar_protocol_runtime::caps::FederatedCapsGateIndex::new(),
+            ),
             caps_effect_dispatcher: northstar_protocol_runtime::caps::CapsEffectDispatcher::new(),
             dialback_secret,
             dialback_verifications: Arc::new(Semaphore::new(64)),
@@ -5494,7 +5542,8 @@ impl AppState {
                     whitelist: runtime_whitelist.into_iter().collect(),
                 },
             )),
-            service_shutdown: std::sync::OnceLock::new(),
+            service_shutdown: Arc::new(std::sync::OnceLock::new()),
+            runtime_control_liveness: Arc::new(()),
             workers: crate::workers::WorkerRegistry::new(),
         });
         state.worker_registry().register_observer(
@@ -5515,7 +5564,8 @@ impl AppState {
             .enabled(northstar_xep_0115::XEP_ID)
         {
             crate::xmpp::protocol::caps::start_caps_effect_dispatcher(
-                Arc::clone(&state),
+                Arc::new(state.caps_effect_dispatch_context()),
+                Arc::clone(state.worker_registry()),
                 worker_cancel.clone(),
             );
         }
@@ -5526,17 +5576,20 @@ impl AppState {
             worker_cancel.clone(),
         );
         crate::xmpp::protocol::mix::start_mix_presence_recovery(
-            Arc::clone(&state),
+            Arc::new(state.mix_presence_recovery_context()),
+            Arc::clone(state.worker_registry()),
             mix_presence_recovery.0,
             mix_presence_recovery.1,
             worker_cancel.clone(),
         );
         crate::xmpp::protocol::mix::start_mix_iq_relay_expiry(
-            Arc::clone(&state),
+            Arc::new(state.mix_iq_relay_expiry_context()),
+            Arc::clone(state.worker_registry()),
             worker_cancel.clone(),
         );
         crate::xmpp::protocol::mix::start_mix_delivery_outbox(
-            Arc::clone(&state),
+            Arc::new(state.mix_outbox_context()),
+            Arc::clone(state.worker_registry()),
             worker_cancel.clone(),
         );
         crate::xmpp::protocol::pubsub::start_pubsub_digest_delivery(
@@ -5548,6 +5601,12 @@ impl AppState {
             worker_cancel.clone(),
         );
         crate::cluster::start_muc_outbox_delivery(Arc::clone(&state), worker_cancel.clone());
+        assert!(state
+            .locked_muc_expiry_context
+            .set(Arc::new(
+                locked_muc_expiry::LockedMucExpiryContext::from_state(&state)
+            ))
+            .is_ok());
         Self::start_locked_muc_expiry(Arc::clone(&state), worker_cancel.clone());
         // Both durable policy snapshots deliberately share the single reserved
         // control-plane connection.  They must therefore be refreshed by one
@@ -5602,7 +5661,7 @@ impl AppState {
     }
 
     pub(crate) fn pending_mix_iq(&self) -> &northstar_protocol_runtime::mix::MixIqRelayIndex {
-        &self.pending_mix_iq
+        self.pending_mix_iq.as_ref()
     }
 
     pub(crate) fn caps_cache(&self) -> &northstar_protocol_runtime::caps::CapsCacheIndex {
@@ -5754,14 +5813,6 @@ impl AppState {
         db::challenge_issuance_repository::PostgresChallengeRepository,
     > {
         &self.challenge_issue_service
-    }
-
-    pub(crate) fn challenge_cleanup_service(
-        &self,
-    ) -> &crate::services::challenge_issuance::ChallengeCleanupService<
-        db::challenge_issuance_repository::PostgresChallengeRepository,
-    > {
-        &self.challenge_cleanup_service
     }
 
     pub(crate) fn sasl_login_abuse_service(
@@ -5948,14 +5999,6 @@ impl AppState {
             .await
     }
 
-    pub(crate) fn locked_muc_expiry_service(
-        &self,
-    ) -> &crate::services::locked_muc_expiry::LockedMucExpiryService<
-        db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
-    > {
-        &self.locked_muc_expiry_service
-    }
-
     pub(crate) fn authentication_service(
         &self,
     ) -> &crate::services::authentication::AuthenticationService<
@@ -6023,7 +6066,12 @@ impl AppState {
     }
 
     fn start_locked_muc_expiry(state: Arc<Self>, cancel: CancellationToken) {
-        let weak = Arc::downgrade(&state);
+        let weak = Arc::downgrade(
+            state
+                .locked_muc_expiry_context
+                .get()
+                .expect("locked MUC expiry context is initialized"),
+        );
         state.worker_registry().supervise(
             "locked-muc-expiry",
             crate::workers::WorkerCriticality::Restartable,
@@ -6032,58 +6080,7 @@ impl AppState {
             cancel,
             move |heartbeat| {
                 let weak = weak.clone();
-                async move {
-                    let mut interval = tokio::time::interval(Duration::from_secs(5));
-                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                    loop {
-                        interval.tick().await;
-                        let Some(state) = weak.upgrade() else {
-                            return Ok(());
-                        };
-                        let expired = match state
-                            .locked_muc_expiry_service()
-                            .expire_locked_rooms(100)
-                            .await
-                        {
-                            Ok(expired) => expired,
-                            Err(error) => {
-                                heartbeat.error(&error);
-                                tracing::error!(
-                                    ?error,
-                                    "could not expire abandoned locked MUC rooms"
-                                );
-                                continue;
-                            }
-                        };
-                        heartbeat.ok();
-                        for localpart in expired {
-                            let room_jid =
-                                format!("{}@conference.{}", localpart, state.config.domain);
-                            for (key, occupant) in state.muc_occupants_for(&room_jid) {
-                                let serializable = SerializableMucOccupant::from(&occupant);
-                                state.remove_live_muc_membership(&serializable);
-                                state.muc_occupants.remove_if(&key, |_, current| {
-                                    current.cluster_epoch == occupant.cluster_epoch
-                                        && current.connection_id == occupant.connection_id
-                                });
-                                if !state.cluster.is_enabled() {
-                                    let unavailable = crate::xmpp::xml_util::muc_destroy_presence(
-                                        &serializable,
-                                        None,
-                                        None,
-                                    );
-                                    let _ =
-                                        state.deliver_to_muc_occupant(&occupant, unavailable).await;
-                                }
-                            }
-                            // The expiry transaction committed the tombstone
-                            // and terminal outbox. Cluster nodes
-                            // catch it up from PostgreSQL; emitting the legacy
-                            // Redis destroy command would reintroduce a second
-                            // executable authority.
-                        }
-                    }
-                }
+                async move { locked_muc_expiry::run_locked_muc_expiry(weak, heartbeat).await }
             },
         );
     }
@@ -6093,8 +6090,9 @@ impl AppState {
         connection: PoolConnection<Postgres>,
         cancel: CancellationToken,
     ) {
-        let weak = Arc::downgrade(&state);
-        let connection = Arc::new(tokio::sync::Mutex::new(Some(connection)));
+        let context = Arc::new(
+            runtime_control_refresh::RuntimeControlRefreshContext::from_state(&state, connection),
+        );
         let max_silence = Duration::from_secs(5);
         let diagnostic_cancel = cancel.clone();
         state.worker_registry().supervise(
@@ -6104,105 +6102,9 @@ impl AppState {
             Some(max_silence),
             cancel,
             move |heartbeat| {
-                let weak = weak.clone();
-                let connection = Arc::clone(&connection);
+                let context = Arc::clone(&context);
                 let diagnostic_cancel = diagnostic_cancel.clone();
-                async move {
-                    let mut diagnostics =
-                        RuntimeControlDiagnostics::new(diagnostic_cancel, max_silence);
-                    let mut connection = connection.lock().await.take().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "runtime-control coordinator was restarted after its reserved connection ended"
-                        )
-                    })?;
-                    // This coordinator is the sole owner of the one reserved
-                    // control-plane connection. It serializes committed
-                    // administration, federation, and (when enabled) service
-                    // control reads instead of allowing its own workers to
-                    // contend for that connection.
-                    let mut interval = tokio::time::interval(Duration::from_millis(500));
-                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                    let mut refresh_policy = true;
-                    let mut acted_service_control = None;
-                    loop {
-                        interval.tick().await;
-                        let Some(state) = weak.upgrade() else {
-                            return Ok(());
-                        };
-
-                        let mut first_error = None;
-                        let mut observed_database = false;
-                        if refresh_policy {
-                            observed_database = true;
-                            match db::runtime_control_snapshot(&mut connection, |phase| {
-                                diagnostics.database_read(phase)
-                            })
-                            .await
-                            {
-                                Ok((island_mode, registration_closed, blacklist, whitelist)) => {
-                                    diagnostics.enter(RuntimeControlPhase::PolicyApply);
-                                    let was_island = state.refresh_island_mode(island_mode).await;
-                                    state.apply_registration_closed(registration_closed);
-                                    if island_mode && !was_island {
-                                        state
-                                            .s2s_connection_registry()
-                                            .clear_outbound_for_island_mode();
-                                    }
-                                    state.replace_runtime_federation_cache(blacklist, whitelist);
-                                }
-                                Err(error) => {
-                                    tracing::error!(
-                                        ?error,
-                                        "could not refresh durable administration settings"
-                                    );
-                                    first_error = Some(error);
-                                }
-                            }
-
-                        }
-
-                        if state.config.enable_xmpp_service_control
-                            && state.service_shutdown.get().is_some()
-                        {
-                            observed_database = true;
-                            diagnostics.enter(RuntimeControlPhase::ServiceControlRead);
-                            match db::poll_admin_service_control(&mut connection).await {
-                                Ok(Some(control))
-                                    if service_control_applies(
-                                        state.process_started_at,
-                                        &control,
-                                    ) && acted_service_control != Some(control.generation) =>
-                                {
-                                    acted_service_control = Some(control.generation);
-                                    tracing::warn!(
-                                        operation = %control.action,
-                                        generation = %control.generation,
-                                        execute_at = %control.execute_at,
-                                        expires_at = %control.expires_at,
-                                        "executing durable cluster-wide service control"
-                                    );
-                                    if let Some(shutdown) = state.service_shutdown.get() {
-                                        shutdown.cancel();
-                                    }
-                                }
-                                Ok(_) => {}
-                                Err(error) => {
-                                    tracing::error!(
-                                        ?error,
-                                        "could not poll durable cluster-wide service control"
-                                    );
-                                    if first_error.is_none() {
-                                        first_error = Some(error);
-                                    }
-                                }
-                            }
-                        }
-
-                        report_runtime_control_health(&heartbeat, observed_database, first_error);
-                        diagnostics.reported();
-                        refresh_policy = !refresh_policy;
-                    }
-                }
+                async move { context.run(heartbeat, diagnostic_cancel, max_silence).await }
             },
         );
     }
@@ -6515,25 +6417,6 @@ impl AppState {
         })
     }
 
-    pub(crate) fn local_caps_sender_if_current(
-        &self,
-        full_jid: &str,
-        epoch: LocalCapsEpoch,
-    ) -> Option<crate::outbound::OutboundSender> {
-        self.sessions.get(full_jid).and_then(|session| {
-            local_caps_route_epoch_matches(
-                session.connection_id,
-                session.caps_observation_generation.load(Ordering::Acquire),
-                session.routable.load(Ordering::Acquire),
-                session.disconnect.is_cancelled(),
-                session.lifecycle.load(Ordering::Acquire),
-                true,
-                epoch,
-            )
-            .then(|| session.sender.clone())
-        })
-    }
-
     pub(crate) fn local_caps_observer_connection_is_current(
         &self,
         full_jid: &str,
@@ -6546,44 +6429,6 @@ impl AppState {
                 && session.routable.load(Ordering::Acquire)
                 && !session.disconnect.is_cancelled()
                 && session.lifecycle.load(Ordering::Acquire) == 0
-        })
-    }
-
-    pub(crate) fn local_mix_presence_gate(
-        &self,
-        full_jid: &str,
-        connection_id: uuid::Uuid,
-    ) -> Option<Arc<tokio::sync::Mutex<()>>> {
-        self.sessions
-            .get(full_jid)
-            .filter(|session| session.connection_id == connection_id)
-            .map(|session| Arc::clone(&session.mix_presence_gate))
-    }
-
-    pub(crate) fn local_mix_presence_epoch_state(
-        &self,
-        full_jid: &str,
-        expected_connection_id: uuid::Uuid,
-        expected_caps_generation: u64,
-        expected_gate: &Arc<tokio::sync::Mutex<()>>,
-        channel_jid: &str,
-    ) -> Option<(bool, bool)> {
-        self.sessions.get(full_jid).map(|session| {
-            (
-                mix_presence_epoch_is_current(
-                    session.connection_id,
-                    expected_connection_id,
-                    session.caps_observation_generation.load(Ordering::Acquire),
-                    expected_caps_generation,
-                    session.routable.load(Ordering::Acquire),
-                    session.available.load(Ordering::Acquire),
-                    Arc::ptr_eq(&session.mix_presence_gate, expected_gate),
-                ),
-                mix_presence_fallback_is_suppressed(
-                    &session.mix_presence_fallback_suppressed,
-                    channel_jid,
-                ),
-            )
         })
     }
 
@@ -6930,43 +6775,6 @@ impl AppState {
         self.account_teardown_runtime()
             .disconnect_account(user_id, bare_account_jid)
             .await;
-    }
-
-    /// Atomically acquire and tear down every expired durable SM stream.
-    /// PostgreSQL skips a still-live resume claim, ensuring that activation
-    /// and expiry can never both own the same presence session.
-    pub async fn cleanup_expired_sm_sessions(&self) -> anyhow::Result<usize> {
-        let mut total = 0usize;
-        let mut first_error = None;
-        loop {
-            let snapshots = db::cleanup_expired_sm_sessions(
-                &self.pool,
-                self.config.sm_claim_lease_seconds.max(1),
-            )
-            .await?;
-            let batch = snapshots.len();
-            total = total.saturating_add(batch);
-            for snapshot in snapshots {
-                // An unclean process/transport failure can leave `resumable`
-                // false until the live lease expires. Expiry is final in
-                // either representation and therefore owns teardown.
-                if let Err(error) = self.perform_and_finalize_sm_teardown(snapshot).await {
-                    tracing::warn!(
-                        ?error,
-                        "expired SM teardown will be retried after its lease"
-                    );
-                    first_error.get_or_insert(error);
-                }
-            }
-            if batch < 256 {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        if let Some(error) = first_error {
-            return Err(error);
-        }
-        Ok(total)
     }
 
     pub async fn revoke_sm_session_with_teardown(&self, id: uuid::Uuid) -> anyhow::Result<()> {

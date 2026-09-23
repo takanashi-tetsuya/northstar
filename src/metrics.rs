@@ -101,7 +101,7 @@ pub struct Metrics {
     pub authentication_duration_seconds: DurationHistogram,
     pub database_operation_duration_seconds: DurationHistogram,
     pub routing_duration_seconds: DurationHistogram,
-    pub outbox_delivery_duration_seconds: DurationHistogram,
+    pub outbox_delivery_duration_seconds: Arc<DurationHistogram>,
     pub redis_operation_duration_seconds: DurationHistogram,
     pub upload_operation_duration_seconds: Arc<DurationHistogram>,
     pub upload_storage_reconciliation_failures_total: AtomicU64,
@@ -194,9 +194,9 @@ pub struct Metrics {
     pub carbon_fanout_target_timeouts_total: AtomicU64,
     pub pubsub_post_commit_delivery_failures_total: AtomicU64,
     pub pep_post_commit_delivery_failures_total: AtomicU64,
-    pub pubsub_event_outbox_pending_rows: AtomicU64,
-    pub pubsub_event_outbox_pending_bytes: AtomicU64,
-    pub pubsub_event_outbox_dead_letter_rows: AtomicU64,
+    pub pubsub_event_outbox_pending_rows: Arc<AtomicU64>,
+    pub pubsub_event_outbox_pending_bytes: Arc<AtomicU64>,
+    pub pubsub_event_outbox_dead_letter_rows: Arc<AtomicU64>,
     pub muc_post_commit_delivery_failures_total: AtomicU64,
     pub cluster_muc_outbox_deliveries_total: AtomicU64,
     pub cluster_muc_outbox_retries_total: AtomicU64,
@@ -205,7 +205,7 @@ pub struct Metrics {
     pub cluster_muc_outbox_oldest_age_seconds: AtomicU64,
     pub cluster_muc_pg_reconciliations_total: AtomicU64,
     pub cluster_muc_authority_rejections_total: AtomicU64,
-    pub mix_post_commit_delivery_failures_total: AtomicU64,
+    pub mix_post_commit_delivery_failures_total: Arc<AtomicU64>,
     pub federation_inbound_connections_total: AtomicU64,
     pub federation_outbound_deliveries_total: Arc<AtomicU64>,
     pub federation_failures_total: Arc<AtomicU64>,
@@ -230,14 +230,14 @@ pub struct Metrics {
     pub pep_retrievals_total: AtomicU64,
     /// New full-JID effects rejected after the process-wide XEP-0115
     /// side-effect queue reached its fixed cardinality ceiling.
-    pub caps_effect_queue_saturated_total: AtomicU64,
+    pub caps_effect_queue_saturated_total: Arc<AtomicU64>,
     /// Repeated presence/capability observations folded into an existing
     /// per-full-JID job rather than allocating another task or waiter.
-    pub caps_effect_coalesced_total: AtomicU64,
+    pub caps_effect_coalesced_total: Arc<AtomicU64>,
     /// Individual PEP/MIX effects which failed inside the supervised worker.
-    pub caps_effect_failures_total: AtomicU64,
+    pub caps_effect_failures_total: Arc<AtomicU64>,
     /// Queue admission through completion, including bounded queue wait.
-    pub caps_effect_latency_seconds: DurationHistogram,
+    pub caps_effect_latency_seconds: Arc<DurationHistogram>,
     pub federation_inbound_active: AtomicU64,
     pub background_maintenance_failures_total: Arc<AtomicU64>,
     pub retention_personal_mam_deleted_total: Arc<AtomicU64>,

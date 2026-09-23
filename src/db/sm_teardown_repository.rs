@@ -36,6 +36,10 @@ impl SmTeardownRepository for PostgresSmTeardownRepository {
         db::take_sm_session_for_teardown(&self.pool, session_id, lease_seconds).await
     }
 
+    async fn take_expired(&self, lease_seconds: u64) -> Result<Vec<Self::Snapshot>> {
+        db::cleanup_expired_sm_sessions(&self.pool, lease_seconds).await
+    }
+
     async fn take_before_generation(
         &self,
         user_id: Uuid,

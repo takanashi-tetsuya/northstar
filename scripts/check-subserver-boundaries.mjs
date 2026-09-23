@@ -48,7 +48,8 @@ export function verifySubserverBoundaries({ main, subservers, maintenanceOwnersh
   const report = codeOnly(body(state, 'fn report_runtime_control_health(')).replace(/\s+/g, '');
   requireBoundary(report === 'ifletSome(error)=error{heartbeat.error(error);}elseifobserved_database{heartbeat.ok();}else{heartbeat.pulse();}',
     'control health must preserve errors on idle ticks and clear them only after successful database observation');
-  const coordinator = body(state, 'fn start_runtime_control_refresh(');
+  const runtimeControl = fs.readFileSync(path.join(root, 'src/state/runtime_control_refresh.rs'), 'utf8');
+  const coordinator = body(runtimeControl, 'pub(super) async fn run(');
   requireBoundary(coordinator.includes('let mut observed_database = false;') &&
     coordinator.includes('report_runtime_control_health(&heartbeat, observed_database, first_error);') &&
     !/heartbeat\.(?:ok|error)\(/.test(coordinator) &&
@@ -56,7 +57,7 @@ export function verifySubserverBoundaries({ main, subservers, maintenanceOwnersh
   'control coordinator must report exactly its two actual database-read paths through the reviewed health function');
   for (const [declaration, query] of [
     ['if refresh_policy', /db::runtime_control_snapshot\(\s*&mut connection,\s*\|phase\|\s*\{\s*diagnostics\.database_read\(phase\)\s*\}\s*,?\)/],
-    ['if state.config.enable_xmpp_service_control', /db::poll_admin_service_control\(\s*&mut connection\s*\)/],
+    ['if self.service_control_enabled', /db::poll_admin_service_control\(\s*&mut connection\s*\)/],
   ]) {
     const read = body(coordinator, declaration);
     requireBoundary(read.includes('observed_database = true;') && query.test(codeOnly(read)),

@@ -2078,6 +2078,7 @@ for (const [name, source] of [
   ['AdminDispatchService', read('src/services/admin_dispatch.rs')],
   ['GovernanceService', read('src/services/governance.rs')],
   ['GovernanceContext', read('src/state/governance.rs')],
+  ['MetricsSnapshotService', read('src/services/metrics_snapshot.rs')],
   ['UploadAdminService', read('src/services/upload_admin.rs')],
   ['ReportModerationService', read('src/services/report_moderation.rs')],
   ['InvitationAdminService', read('src/services/invitation_admin.rs')],
@@ -3133,6 +3134,7 @@ for (const task of serviceTaskNames) {
 }
 const stateServiceAccessors = [
   'api_query_service',
+  'metrics_snapshot_service',
   'report_service',
   'omemo_recovery_service',
   'authentication_service',

@@ -1826,6 +1826,9 @@ pub struct AppState {
     pub config: Config,
     pub pool: PgPool,
     api_query_context: ApiQueryContext,
+    metrics_snapshot_service: crate::services::metrics_snapshot::MetricsSnapshotService<
+        db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
+    >,
     public_discovery_context: PublicDiscoveryContext,
     passkey_service: PasskeyService,
     /// Narrow persistence/orchestration capability for XEP-0060 and PEP.
@@ -2072,6 +2075,14 @@ fn ephemeral_api_control_secret() -> [u8; 64] {
 }
 
 impl AppState {
+    pub(crate) fn metrics_snapshot_service(
+        &self,
+    ) -> &crate::services::metrics_snapshot::MetricsSnapshotService<
+        db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
+    > {
+        &self.metrics_snapshot_service
+    }
+
     pub(crate) fn http_transport_policy(&self) -> HttpTransportPolicy {
         HttpTransportPolicy::new(
             self.config.trusted_proxy_ips.clone(),
@@ -3196,6 +3207,12 @@ impl AppState {
         let state = Arc::new(Self {
             config,
             api_query_context,
+            metrics_snapshot_service:
+                crate::services::metrics_snapshot::MetricsSnapshotService::new(
+                    db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository::new(
+                        pool.clone(),
+                    ),
+                ),
             public_discovery_context,
             omemo_recovery_service: crate::services::omemo_recovery::OmemoRecoveryService::new(
                 db::omemo_recovery_repository::PostgresOmemoRecoveryRepository::new(pool.clone()),

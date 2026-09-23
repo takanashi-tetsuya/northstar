@@ -11,6 +11,7 @@ pub(crate) mod governance;
 pub(crate) mod invitation_admin;
 pub(crate) mod mam;
 pub(crate) mod messaging;
+pub(crate) mod metrics_snapshot;
 pub(crate) mod mix;
 pub(crate) mod muc;
 pub(crate) mod passkeys;

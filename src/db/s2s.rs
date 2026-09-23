@@ -18,6 +18,7 @@ pub use northstar_federation_core::{
 /// could claim now. Successors hidden behind a per-domain head-of-line item do
 /// not make the queue look healthier than it is. Component rows remain part of
 /// the global totals and are also broken out separately.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct S2sOutboxSnapshot {
     pub pending_rows: i64,

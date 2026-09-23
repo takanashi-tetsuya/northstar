@@ -408,6 +408,10 @@ Public configuration and host metadata now read a narrow discovery context;
 transport and administrator gateway middleware receive only their required
 policy and verifier. The discovery context shares the live registration and
 island-mode flags, so administrative changes remain visible without broad state.
+The database-backed metrics collector now calls a snapshot service; one
+repository transaction reads all gauges, while the endpoint retains its
+existing deadline and failure response. Its remaining process gauges still
+use broader state.
 Remaining work covers the other REST reads and mutations, their HTTP contexts,
 and live-session/account-recovery workers.
 AppState still has nine public fields, so stage 1 remains open. Changing field

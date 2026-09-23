@@ -18,9 +18,8 @@ const MAX_OPERATION_PAYLOAD_BYTES: usize = 256 * 1024;
 const MAX_TARGET_PAYLOAD_BYTES: usize = 64 * 1024;
 const MAX_TARGET_BYTES: usize = 4096;
 
-/// Bounded operational view used by the Prometheus collector.  Keep this a
-/// single aggregate query so scraping cannot enumerate operator payloads or
-/// contend with the worker's row-level leases.
+/// Test projection for the aggregate operation-backlog query.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ApiOperationSnapshot {
     pub pending: i64,

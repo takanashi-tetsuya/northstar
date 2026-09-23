@@ -188,6 +188,10 @@ Key ownership:
   middleware receives only trusted proxy addresses and its rejection counter;
   the administrator listener receives a separate gateway credential verifier.
   These entry paths no longer need general application state for those checks.
+- Database-backed metrics use one read-only repository transaction for a
+  coherent snapshot. The HTTP collector keeps its two-second deadline and
+  suppresses derived gauges when the query fails. Other process metrics and
+  endpoint state still have separate boundaries to narrow.
 - Report and appeal services validate content before requesting a complete
   repository operation. Authorization, proof admission, semantic rejection or
   business mutation, and encrypted response replay share one transaction.

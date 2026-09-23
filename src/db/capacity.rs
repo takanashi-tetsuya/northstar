@@ -49,6 +49,7 @@ pub enum LiveSessionReservation {
     CapacityExhausted,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DeploymentCapacitySnapshot {
     pub configuration_epoch: i64,

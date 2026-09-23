@@ -41,6 +41,7 @@ pub mod identity_migration;
 pub mod jid_identity;
 pub(crate) mod mam;
 pub(crate) mod messaging;
+pub(crate) mod metrics_snapshot_repository;
 #[cfg(test)]
 mod migration_upgrade_test;
 pub mod mix;

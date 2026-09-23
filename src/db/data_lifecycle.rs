@@ -1390,14 +1390,6 @@ pub async fn purge_governance_export_leases_batch(
     Ok(u64::try_from(removed).unwrap_or(0))
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct DataGovernanceSnapshot {
-    pub active_holds: i64,
-    pub preserved_offline_records: i64,
-    pub active_export_leases: i64,
-    pub expired_incomplete_export_leases: i64,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -313,11 +313,14 @@ pub async fn prepare_omemo_recovery_transfer(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
+    // Use one database timestamp for both columns. Independent clock_timestamp()
+    // calls can put expiry a few microseconds past the seven-day CHECK bound.
     let row = sqlx::query(&format!(
-        "INSERT INTO omemo_recovery_transfers(\
-             id,user_id,generation,source_device_id,state,expires_at) \
-         VALUES($1,$2,$3,$4,'preparing',\
-                clock_timestamp()+INTERVAL '7 days') \
+        "WITH issued_at AS MATERIALIZED (SELECT clock_timestamp() AS value) \
+         INSERT INTO omemo_recovery_transfers(\
+             id,user_id,generation,source_device_id,state,created_at,expires_at) \
+         SELECT $1,$2,$3,$4,'preparing',issued_at.value,\
+                issued_at.value+INTERVAL '7 days' FROM issued_at \
          RETURNING {TRANSFER_COLUMNS}"
     ))
     .bind(transfer_id)
@@ -929,6 +932,10 @@ mod tests {
         let PrepareOmemoRecovery::Prepared(first) = first else {
             panic!("first transfer was not prepared")
         };
+        assert_eq!(
+            first.expires_at - first.created_at,
+            chrono::Duration::days(7)
+        );
         assert!(matches!(
             prepare_omemo_recovery_transfer(
                 &pool,

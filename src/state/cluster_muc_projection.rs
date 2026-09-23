@@ -1,9 +1,8 @@
 //! Exact process-local projections of committed cluster MUC policy events.
 
-use super::{
-    with_local_muc_occupant_exact, AppState, LocalMucOccupantIdentity, MucOccupant,
-    MucOccupantEndpoint, SerializableMucOccupant,
-};
+#[cfg(test)]
+use super::{with_local_muc_occupant_exact, LocalMucOccupantIdentity, SerializableMucOccupant};
+use super::{AppState, MucOccupant, MucOccupantEndpoint};
 use dashmap::DashMap;
 
 impl AppState {
@@ -20,24 +19,6 @@ impl AppState {
             authenticated_domain,
             connection_id,
         )
-    }
-
-    /// Update only the local incarnation named by the committed outbox snapshot.
-    /// A resumed or rejoined occupant can reuse the nickname before delivery;
-    /// compare and update must therefore happen under the same map guard.
-    pub(crate) fn apply_cluster_muc_policy_projection_exact(
-        &self,
-        snapshot: &SerializableMucOccupant,
-    ) -> bool {
-        apply_cluster_muc_policy_projection_exact_in(&self.muc_occupants, snapshot)
-    }
-
-    /// A committed role event does not change room anonymity policy.
-    pub(crate) fn apply_cluster_muc_role_projection_exact(
-        &self,
-        snapshot: &SerializableMucOccupant,
-    ) -> bool {
-        apply_cluster_muc_role_projection_exact_in(&self.muc_occupants, snapshot)
     }
 }
 
@@ -76,6 +57,7 @@ fn federated_muc_occupants_for_closed_connection_in(
         .collect()
 }
 
+#[cfg(test)]
 fn apply_cluster_muc_policy_projection_exact_in(
     occupants: &DashMap<String, MucOccupant>,
     snapshot: &SerializableMucOccupant,
@@ -83,13 +65,15 @@ fn apply_cluster_muc_policy_projection_exact_in(
     apply_cluster_muc_projection_exact_in(occupants, snapshot, true)
 }
 
-fn apply_cluster_muc_role_projection_exact_in(
+#[cfg(test)]
+pub(super) fn apply_cluster_muc_role_projection_exact_in(
     occupants: &DashMap<String, MucOccupant>,
     snapshot: &SerializableMucOccupant,
 ) -> bool {
     apply_cluster_muc_projection_exact_in(occupants, snapshot, false)
 }
 
+#[cfg(test)]
 fn apply_cluster_muc_projection_exact_in(
     occupants: &DashMap<String, MucOccupant>,
     snapshot: &SerializableMucOccupant,

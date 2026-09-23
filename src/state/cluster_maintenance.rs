@@ -2,9 +2,12 @@
 //! No database pool, Redis client, or signing authority crosses this boundary.
 
 use super::{
+    cancel_local_session_if_connection_in,
     cluster_muc_projection::local_cluster_muc_projection_snapshot_in,
-    local_session_authority_snapshots_in, local_session_lease_snapshots_in, AppState,
+    local_session_authority_snapshots_in, local_session_lease_snapshots_in,
+    remove_live_muc_membership_in, remove_local_muc_occupant_exact_from, AppState,
     LocalSessionAuthoritySnapshot, LocalSessionLeaseSnapshot, MucOccupant, OnlineSession,
+    SerializableMucOccupant,
 };
 use crate::metrics::{DurationTimer, Metrics};
 use dashmap::DashMap;
@@ -28,6 +31,17 @@ impl ClusterMaintenanceLocals {
 
     pub(crate) fn muc_occupant_snapshots(&self) -> Vec<MucOccupant> {
         local_cluster_muc_projection_snapshot_in(&self.occupants)
+    }
+
+    pub(crate) fn remove_stale_muc_actor(&self, occupant: &MucOccupant) {
+        let serializable = SerializableMucOccupant::from(occupant);
+        remove_live_muc_membership_in(&self.sessions, &serializable);
+        remove_local_muc_occupant_exact_from(&self.occupants, occupant.into());
+        cancel_local_session_if_connection_in(
+            &self.sessions,
+            &occupant.full_jid,
+            occupant.connection_id,
+        );
     }
 
     pub(crate) fn record_background_failure(&self) {

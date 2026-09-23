@@ -4,7 +4,8 @@ use super::AppState;
 use anyhow::Result;
 
 pub(crate) struct MixClusterRouting<'a> {
-    state: &'a AppState,
+    routes: crate::cluster::ClusterMixRouteLookup,
+    outbox: &'a crate::services::mix::MixService<crate::db::mix_repository::PostgresMixRepository>,
 }
 
 fn remote_nodes_in_order(nodes: Vec<String>, local_node: &str) -> Vec<String> {
@@ -16,56 +17,53 @@ fn remote_nodes_in_order(nodes: Vec<String>, local_node: &str) -> Vec<String> {
 
 impl AppState {
     pub(crate) fn mix_cluster_routing(&self) -> MixClusterRouting<'_> {
-        MixClusterRouting { state: self }
-    }
-}
-
-impl MixClusterRouting<'_> {
-    /// Live ingress resolves Redis route authority without entering the
-    /// durable outbox database-admission lane.
-    pub(crate) async fn lookup_nodes(&self, jid: &str) -> Result<Vec<String>> {
-        let nodes = self.state.cluster.lookup_nodes(jid).await?;
-        Ok(remote_nodes_in_order(nodes, &self.state.cluster.node_id))
+        MixClusterRouting {
+            routes: self.cluster.mix_route_lookup(),
+            outbox: self.mix_service(),
+        }
     }
 
-    /// A claimed outbox row uses MIX's existing route lookup path; it never
-    /// holds the database-admission permit while awaiting Redis.
-    pub(crate) async fn outbox_lookup_cluster_nodes(&self, jid: &str) -> Result<Vec<String>> {
-        let nodes = self
-            .state
-            .mix_service()
-            .outbox_lookup_cluster_nodes(&self.state.cluster, jid)
-            .await?;
-        Ok(remote_nodes_in_order(nodes, &self.state.cluster.node_id))
-    }
-
-    /// Preserve the peer's typed receipt, including v13 hand-off ownership.
-    /// The caller decides whether the source lease must stop or retry.
-    pub(crate) async fn send_to_node_mix(
+    pub(crate) async fn send_cluster_mix_to_node(
         &self,
         node: &str,
         recipient: &str,
         stanza: &str,
         source: Option<crate::outbound::MixDelivery>,
     ) -> Result<crate::cluster::NodeDeliveryReceipt> {
-        self.state
-            .cluster
+        self.cluster
             .send_to_node_mix(node, recipient, stanza, source)
             .await
     }
 
-    /// PAM results use an account-bound IQ hand-off, not MIX fan-out.
-    pub(crate) async fn send_to_node_exact_account(
+    pub(crate) async fn send_cluster_mix_exact_account(
         &self,
         node: &str,
         target_full_jid: &str,
         result_xml: &str,
         expected_user_id: uuid::Uuid,
     ) -> Result<bool> {
-        self.state
-            .cluster
+        self.cluster
             .send_to_node_exact_account(node, target_full_jid, result_xml, expected_user_id)
             .await
+    }
+}
+
+impl MixClusterRouting<'_> {
+    /// Live ingress resolves the PostgreSQL-backed route authority without
+    /// entering the durable outbox database-admission lane.
+    pub(crate) async fn lookup_nodes(&self, jid: &str) -> Result<Vec<String>> {
+        let nodes = self.routes.lookup_nodes(jid).await?;
+        Ok(remote_nodes_in_order(nodes, self.routes.node_id()))
+    }
+
+    /// A claimed outbox row uses MIX's existing route lookup path; it never
+    /// holds the database-admission permit while reading route authority.
+    pub(crate) async fn outbox_lookup_cluster_nodes(&self, jid: &str) -> Result<Vec<String>> {
+        let nodes = self
+            .outbox
+            .outbox_lookup_cluster_nodes(&self.routes, jid)
+            .await?;
+        Ok(remote_nodes_in_order(nodes, self.routes.node_id()))
     }
 }
 

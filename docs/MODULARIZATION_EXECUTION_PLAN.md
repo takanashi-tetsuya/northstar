@@ -111,7 +111,7 @@ in large root orchestration modules and infrastructure ownership:
   traits;
 - transport actors still reach a broad protocol session object.
 
-`AppState` has been reduced to one public field and protocol modules have no
+`AppState` now has no public fields, and protocol modules have no
 direct `db::`, `PgPool`, SQLx or `state.pool` authority according to the
 architecture gate. This is an intermediate boundary, not the final service
 graph.
@@ -342,32 +342,26 @@ next stage changes runtime behavior. The issue ledger remains
 
 Stage 1 remains open. Application services now keep SQL and transactions in
 database adapters, and startup metadata queries follow the same boundary.
-Local and federated MUC protocol handlers use scoped state operations; the
-cluster failure supervisor has a separate authority context. Cluster lease
-maintenance now passes a Redis-only handle after its PostgreSQL authority
-checks. Authenticated Passkey listing/registration completion and OMEMO
-recovery read/write routes use scoped HTTP contexts. `AppState` still exposes
-the cluster capability. Public registration, logout and Passkey challenge
-starts also use scoped contexts; the PubSub listener has a separate transport
-and self-loop handle. Its ACK admission, local account-revocation and exact
-session-termination effects now have separate handles; Presence and MUC
-dispatch still read the broad cluster manager. Anti-abuse challenge issuance
-and upload deletion use
-scoped HTTP contexts, while MUC outbox database reads and item completion use
-the worker's existing bounded admission. Account-generation teardown now
-centralizes local-route, durable-SM and cluster ordering. Listener message
-dispatch, MUC endpoint rendering and post-commit account teardown still need
-independent runtime capabilities before the last broad state references can
-be removed. Durable SM generation teardown now has its own lease/finalize
-repository service; the existing runtime still supplies Presence, MUC and
-delivery effects between claim and finalization. Roster and unavailable-presence
-authorization use a repository port, while exact local session and suspended-MUC
-teardown uses a separate map handle. Upload PUT uses a scoped write context;
-its replay verifies the exact stored object version through a scoped
-guarded-read capability,
-and password-change admission uses a scoped HTTP context. Database role
-separation, MUC batch commands and storage/restore tooling follow after these
-Stage 1 boundaries pass CI.
+`AppState` has no public fields, and protocol handlers have no direct database
+authority. Local and federated MUC use scoped operations. HTTP registration,
+login, Passkeys, OMEMO recovery and upload routes use narrow contexts.
+Post-commit password, Passkey-removal and OMEMO-recovery teardown uses typed
+local-route, durable-SM, generation-read and cluster-notification capabilities.
+Failures after the credential commit are logged without undoing that commit.
+
+Session cleanup stores only typed handles, though its constructor still takes
+`Arc<AppState>` to assemble them. The cluster listener separates admission,
+signed ACKs, local dispatch and exact session/MUC effects. Its failure
+supervisor and maintenance paths have separate authority and Redis handles.
+The ordinary operation worker claims, renews and fences work through
+`OperationWorkerControl`; session, TLS, island, MUC-destroy and panic effects
+have dedicated handles. The composition root builds `OperationWorkerRuntime`
+before `serve` starts. Roster's deferred flush retains one failure counter;
+the S2S outbox worker uses a dispatch context for claims, policy, retry and
+bounce. New outbound connections still enter the broad TLS/DNS/SM transport
+actor. Other broad worker and transport paths remain, so
+this is not the Stage 1 exit. Database roles, MUC batch commands and
+storage/restore tooling follow after the Stage 1 boundary checks pass.
 
 ### Transaction and authority map
 
@@ -399,8 +393,8 @@ contexts. Upload reconciliation also has a dedicated context and repository
 with the same storage fences and one-use startup audit handoff.
 SM suspension recovery has a separate context sharing the existing MUC endpoint
 maps and capacity leases. Its port exposes only suspension, suffix append and
-exact MUC suspension transitions. Session cleanup no longer calls the database
-directly, but still needs a narrower runtime context for delivery and teardown.
+exact MUC suspension transitions. Session cleanup retains typed delivery and
+teardown handles after construction, without direct database calls.
 Existing cross-table transactions, admission permits, account
 fences and post-commit recovery behavior remain intact.
 
@@ -411,7 +405,7 @@ open transaction or AppState.
 OMEMO transfer lifecycle operations and authorized recovery reads also use
 repository ports. Public completion polling has a separate service/context
 with shared bounded admission and its dedicated connection pool. Authenticated
-recovery handlers still need a narrower runtime context for account teardown.
+recovery handlers use a separate post-commit account teardown context.
 Report and appeal writes now use complete repository transactions, including
 one-use proof admission and idempotent responses. Their HTTP context exposes
 only identity lookup, submissions, trusted proxies and commit counters. Shared
@@ -537,8 +531,9 @@ broadcast target capture and exact delivery use LocalBroadcastRoutes; the
 session-kick effect has a separate exact-incarnation cancellation handle. The
 user-session-cleanup effect can cancel only matching account and credential
 generation routes. Emergency disconnect cancels all local routes before its
-separate durable SM teardown. The operation worker still needs broader state
-for its other effects.
+separate durable SM teardown. The operation worker assembles its effect handles
+from broad state at startup; its claim loop and effect execution use those
+handles.
 Background housekeeping receives only its two shared counters. Archive
 retention holds ten shared counter cells rather than the metrics registry.
 The periodic anti-abuse key guard calls a single validation probe under its
@@ -559,15 +554,14 @@ Passkey login completion receives its service without the broader HTTP state;
 it checks the live allowed origin before consuming the challenge.
 Account-deletion recovery reports successful completion, failure and lost
 leases through three borrowed counters.
-Remaining work includes account-recovery workers and the remaining broad
-cluster capability on `AppState`.
+Remaining work includes broad internal worker and transport entry points.
 TLS now sits behind a private context with immutable handshake snapshots and
 the existing current-CRL registration check. Federation outbox admission now
 uses an application service and a database repository; callers receive a
 copied policy and post-commit wake capability. Metrics updates now pass through
 event-specific state methods while observability rendering retains its private
-registry. `AppState` still exposes the cluster manager, so stage 1 remains open.
-Changing field visibility alone does not demonstrate reduced authority.
+registry. The cluster manager is private to `AppState`; stage 1 remains open
+because some runtime paths still receive broad state.
 Clustered-MUC delivery now obtains its committed event and audience projections
 through a read port while keeping the cached-recipient fast path and three
 independently admitted database reads in the transport worker.
@@ -588,9 +582,9 @@ application configuration directly.
 Presence, personal-message and MIX transport adapters now use purpose-specific
 cluster routes. Resource binding, SM resume and administrator teardown use
 exact session-route commands; MUC join and leave use exact Redis projection
-operations. The cluster worker, MUC command adapters and shutdown path still
-need narrower ownership before the final public `AppState.cluster` field can
-be removed.
+operations. The cluster listener now has separate admission, signed-ACK and
+dispatch capabilities. MUC command adapters and other worker composition
+paths still need narrower runtime ownership.
 
 Role names follow this map after the transaction boundaries are stable. Each
 cross-domain operation must either have one narrowly authorized transaction

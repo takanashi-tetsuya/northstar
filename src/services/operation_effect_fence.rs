@@ -26,6 +26,7 @@ pub(crate) trait OperationEffectFenceRepository: Send + Sync {
     ) -> impl Future<Output = Result<EffectFenceDecision>> + Send;
 }
 
+#[derive(Clone)]
 pub(crate) struct OperationEffectFenceService<R> {
     repository: R,
 }

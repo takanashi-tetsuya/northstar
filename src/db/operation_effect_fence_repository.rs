@@ -8,6 +8,7 @@ use crate::services::operation_effect_fence::{
 use anyhow::Result;
 use sqlx::PgPool;
 
+#[derive(Clone)]
 pub(crate) struct PostgresOperationEffectFenceRepository {
     pool: PgPool,
 }

@@ -3,6 +3,7 @@
 //! this module never exposes the complete process registry or application state.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::metrics::{DurationHistogram, DurationTimer};
@@ -163,12 +164,12 @@ impl<'a> InboundStanzaTelemetry<'a> {
 
 /// One post-commit delivery failure counter shared by roster, blocking and
 /// privacy pushes. Each caller retains its own recovery/disconnect decision.
-pub(crate) struct PostAcceptFailureTelemetry<'a> {
-    failures: &'a AtomicU64,
+pub(crate) struct PostAcceptFailureTelemetry {
+    failures: Arc<AtomicU64>,
 }
 
-impl<'a> PostAcceptFailureTelemetry<'a> {
-    pub(crate) fn new(failures: &'a AtomicU64) -> Self {
+impl PostAcceptFailureTelemetry {
+    pub(crate) fn new(failures: Arc<AtomicU64>) -> Self {
         Self { failures }
     }
 
@@ -721,10 +722,21 @@ impl<'a> PubSubOutboxTelemetry<'a> {
 mod tests {
     use super::{
         FederatedMucTelemetry, PepTelemetry, PersonalMessageTelemetry,
-        PersonalMessageTelemetryCells, PubSubOutboxTelemetry, PushSubscriptionTelemetry,
+        PersonalMessageTelemetryCells, PostAcceptFailureTelemetry, PubSubOutboxTelemetry,
+        PushSubscriptionTelemetry,
     };
     use crate::metrics::DurationHistogram;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn deferred_failure_telemetry_shares_its_counter() {
+        let failures = Arc::new(AtomicU64::new(0));
+        let telemetry = PostAcceptFailureTelemetry::new(Arc::clone(&failures));
+        telemetry.record_failure();
+
+        assert_eq!(failures.load(Ordering::Relaxed), 1);
+    }
 
     #[test]
     fn push_subscription_rejection_counts_global_and_feature_limits() {

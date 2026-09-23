@@ -28,6 +28,14 @@ impl SmTeardownClaim for db::SmTeardownSnapshot {
 impl SmTeardownRepository for PostgresSmTeardownRepository {
     type Snapshot = db::SmTeardownSnapshot;
 
+    async fn take_exact(
+        &self,
+        session_id: Uuid,
+        lease_seconds: u64,
+    ) -> Result<Option<Self::Snapshot>> {
+        db::take_sm_session_for_teardown(&self.pool, session_id, lease_seconds).await
+    }
+
     async fn take_before_generation(
         &self,
         user_id: Uuid,
@@ -45,6 +53,35 @@ impl SmTeardownRepository for PostgresSmTeardownRepository {
             snapshots: batch.snapshots,
             pending: batch.pending,
         })
+    }
+
+    async fn take_all(&self, lease_seconds: u64) -> Result<SmTeardownBatch<Self::Snapshot>> {
+        let batch = db::take_all_sm_sessions_for_teardown(&self.pool, lease_seconds).await?;
+        Ok(SmTeardownBatch {
+            snapshots: batch.snapshots,
+            pending: batch.pending,
+        })
+    }
+
+    async fn count_all(&self) -> Result<i64> {
+        db::count_all_sm_rows(&self.pool).await
+    }
+
+    async fn take_user(
+        &self,
+        user_id: Uuid,
+        lease_seconds: u64,
+    ) -> Result<SmTeardownBatch<Self::Snapshot>> {
+        let batch =
+            db::take_user_sm_sessions_for_teardown(&self.pool, user_id, lease_seconds).await?;
+        Ok(SmTeardownBatch {
+            snapshots: batch.snapshots,
+            pending: batch.pending,
+        })
+    }
+
+    async fn count_user(&self, user_id: Uuid) -> Result<i64> {
+        db::count_user_sm_rows(&self.pool, user_id).await
     }
 
     async fn count_before_generation(

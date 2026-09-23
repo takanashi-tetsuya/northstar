@@ -1973,17 +1973,15 @@ impl<R: MixRepository> MixService<R> {
 
     /// Resolve the cluster authority route for a claimed durable outbox row.
     ///
-    /// `ClusterManager::lookup_nodes` reads the Redis-backed session-route
-    /// authority. It is not part of the PostgreSQL outbox transaction, so it
-    /// must not retain a scarce outbox database-admission permit while waiting
-    /// for the Redis authority pool. The caller preserves the lookup's own
-    /// timeout and error semantics.
+    /// The route handle reads PostgreSQL's current session ownership outside
+    /// the claimed outbox transaction. Do not retain a scarce outbox database
+    /// admission permit while this separate authority read is pending.
     pub(crate) async fn outbox_lookup_cluster_nodes(
         &self,
-        cluster: &crate::cluster::ClusterManager,
+        routes: &crate::cluster::ClusterMixRouteLookup,
         jid: &str,
     ) -> Result<Vec<String>> {
-        cluster.lookup_nodes(jid).await
+        routes.lookup_nodes(jid).await
     }
 
     /// Durably admit a claimed MIX outbox stanza to federation.

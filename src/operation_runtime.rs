@@ -20,17 +20,48 @@ use crate::services::operation_journal_worker::{
 use crate::{
     db,
     services::operation_muc_destroy::MucDestroyCommit,
-    state::{AppState, LocalMucOccupantIdentity},
+    state::{
+        AdminSessionCleanupContext, AppState, LocalMucOccupantIdentity, OperationIslandEffects,
+        OperationMucDestroyEffects, OperationPanicEffects, OperationSessionEffects,
+        OperationTlsReloadEffects, OperationWorkerControl,
+    },
 };
 
 const LEASE_SECONDS: i64 = 60;
 
-pub async fn serve(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> {
+/// The durable worker owns only the authorities needed to execute a committed
+/// operation. Every handle refers to the same live state as protocol traffic.
+pub(crate) struct OperationWorkerRuntime {
+    control: Arc<OperationWorkerControl>,
+    session_effects: OperationSessionEffects,
+    tls_reload_effects: OperationTlsReloadEffects,
+    island_effects: OperationIslandEffects,
+    muc_destroy_effects: OperationMucDestroyEffects,
+    panic_effects: OperationPanicEffects,
+}
+
+impl OperationWorkerRuntime {
+    pub(crate) fn from_state(state: &AppState) -> Self {
+        Self {
+            control: Arc::new(state.operation_worker_control()),
+            session_effects: state.operation_session_effects(),
+            tls_reload_effects: state.operation_tls_reload_effects(),
+            island_effects: state.operation_island_effects(),
+            muc_destroy_effects: state.operation_muc_destroy_effects(),
+            panic_effects: state.operation_panic_effects(),
+        }
+    }
+}
+
+pub(crate) async fn serve(
+    runtime: OperationWorkerRuntime,
+    cancel: CancellationToken,
+) -> Result<()> {
     let worker_id = Uuid::new_v4();
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
-            result = run_one(&state, worker_id) => match result {
+            result = run_one(&runtime, worker_id) => match result {
                 Ok(true) => {},
                 Ok(false) => tokio::time::sleep(Duration::from_millis(250)).await,
                 Err(error) => {
@@ -49,7 +80,7 @@ pub async fn serve(state: Arc<AppState>, cancel: CancellationToken) -> Result<()
 /// allow an unrelated long broadcast to delay a committed credential or exact
 /// connection revocation.
 pub async fn serve_admin_session_cleanup(
-    state: Arc<AppState>,
+    context: Arc<AdminSessionCleanupContext>,
     cancel: CancellationToken,
     health: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
@@ -58,7 +89,7 @@ pub async fn serve_admin_session_cleanup(
         health.pulse();
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
-            result = run_one_admin_session_cleanup(&state, worker_id) => match result {
+            result = run_one_admin_session_cleanup(&context, worker_id) => match result {
                 Ok(true) => health.ok(),
                 Ok(false) => {
                     health.ok();
@@ -80,12 +111,11 @@ pub async fn serve_admin_session_cleanup(
     }
 }
 
-async fn run_one_admin_session_cleanup(state: &Arc<AppState>, worker_id: Uuid) -> Result<bool> {
-    let Some(lease) = state
-        .admin_session_cleanup_worker_service()
-        .claim(worker_id)
-        .await?
-    else {
+async fn run_one_admin_session_cleanup(
+    context: &AdminSessionCleanupContext,
+    worker_id: Uuid,
+) -> Result<bool> {
+    let Some(lease) = context.service().claim(worker_id).await? else {
         return Ok(false);
     };
     // Keep the renewal future in this attempt's structured-concurrency scope.
@@ -94,10 +124,10 @@ async fn run_one_admin_session_cleanup(state: &Arc<AppState>, worker_id: Uuid) -
     // drop and could continue renewing a lease after its effect owner ceased
     // to exist.
     let effect = execute_with_lease_renewal(
-        execute_admin_session_cleanup(state, &lease, worker_id),
+        execute_admin_session_cleanup(context, &lease, worker_id),
         |heartbeat_stop| {
             admin_session_cleanup_heartbeat(
-                state.admin_session_cleanup_worker_service(),
+                context.service(),
                 lease.clone(),
                 worker_id,
                 heartbeat_stop,
@@ -108,17 +138,13 @@ async fn run_one_admin_session_cleanup(state: &Arc<AppState>, worker_id: Uuid) -
 
     match effect {
         Ok(true) => {
-            if !state
-                .admin_session_cleanup_worker_service()
-                .complete(&lease, worker_id)
-                .await?
-            {
+            if !context.service().complete(&lease, worker_id).await? {
                 tracing::debug!(effect_id=%lease.id, "administrator session-cleanup lease changed before completion");
             }
         }
         Ok(false) => {
-            if !state
-                .admin_session_cleanup_worker_service()
+            if !context
+                .service()
                 .retry(&lease, worker_id, "target_still_current")
                 .await?
             {
@@ -133,8 +159,8 @@ async fn run_one_admin_session_cleanup(state: &Arc<AppState>, worker_id: Uuid) -
                 attempts=lease.attempts,
                 "durable administrator session cleanup will be retried"
             );
-            if !state
-                .admin_session_cleanup_worker_service()
+            if !context
+                .service()
                 .retry(&lease, worker_id, "delivery_failed")
                 .await?
             {
@@ -202,7 +228,7 @@ async fn admin_session_cleanup_heartbeat<R: AdminSessionCleanupRepository>(
 }
 
 async fn execute_admin_session_cleanup(
-    state: &AppState,
+    context: &AdminSessionCleanupContext,
     lease: &AdminSessionCleanupLease,
     worker_id: Uuid,
 ) -> Result<bool> {
@@ -215,16 +241,17 @@ async fn execute_admin_session_cleanup(
             let bare_jid = crate::jid::CanonicalJid::parse_bare(bare_jid)
                 .context("generation cleanup has an invalid bare JID")?;
             anyhow::ensure!(
-                bare_jid.localpart().is_some() && bare_jid.domainpart() == state.local_domain(),
+                bare_jid.localpart().is_some() && bare_jid.domainpart() == context.local_domain(),
                 "generation cleanup must target an account on the local XMPP domain"
             );
-            state.revoke_local_account_routes(
+            context.revoke_generation_routes(
                 lease.user_id,
                 &bare_jid.to_string(),
-                Some(lease.auth_generation),
+                lease.auth_generation,
             );
-            state
-                .notify_remote_account_generation_teardown(
+            context
+                .notifier()
+                .send_account_generation_teardown(
                     &bare_jid.to_string(),
                     lease.user_id,
                     lease.auth_generation,
@@ -242,44 +269,40 @@ async fn execute_admin_session_cleanup(
             anyhow::ensure!(
                 full_jid.localpart().is_some()
                     && full_jid.resourcepart().is_some()
-                    && full_jid.domainpart() == state.local_domain(),
+                    && full_jid.domainpart() == context.local_domain(),
                 "exact cleanup must target a full account JID on the local XMPP domain"
             );
             let full_jid = full_jid.to_string();
             let connection_id = lease
                 .connection_id
                 .context("exact cleanup has no connection identity")?;
-            state.fence_local_admin_session(
+            context.fence_exact_session(
                 &full_jid,
                 lease.user_id,
                 lease.auth_generation,
                 connection_id,
             );
-            state
-                .notify_remote_session_instance_termination(&full_jid, connection_id)
+            context
+                .notifier()
+                .send_session_instance_termination(&full_jid, connection_id)
                 .await?;
-            Ok(!state
-                .admin_session_cleanup_worker_service()
-                .target_current(lease, worker_id)
-                .await?)
+            Ok(!context.service().target_current(lease, worker_id).await?)
         }
     }
 }
 
-async fn run_one(state: &Arc<AppState>, worker_id: Uuid) -> Result<bool> {
-    let Some(lease) = state
-        .operation_journal_worker_service()
-        .claim_parent_with_targets(worker_id, LEASE_SECONDS, |operation| {
-            state.broadcast_routes().target_seeds(operation)
-        })
+async fn run_one(runtime: &OperationWorkerRuntime, worker_id: Uuid) -> Result<bool> {
+    let control = &runtime.control;
+    let Some(lease) = control
+        .claim_parent_with_targets(worker_id, LEASE_SECONDS)
         .await?
     else {
         return Ok(false);
     };
 
     loop {
-        let target = match state
-            .operation_journal_worker_service()
+        let target = match control
+            .journal()
             .next_target(&lease, worker_id, LEASE_SECONDS)
             .await?
         {
@@ -288,17 +311,26 @@ async fn run_one(state: &Arc<AppState>, worker_id: Uuid) -> Result<bool> {
             NextTarget::Claimed(target) => target,
         };
 
-        let fenced = state
-            .operation_effect_fence_service()
+        let fenced = control
+            .effects()
             .execute_after_commit(&lease, &target, || async {
                 let heartbeat_stop = CancellationToken::new();
                 let heartbeat = tokio::spawn(lease_heartbeat(
-                    Arc::clone(state),
+                    Arc::clone(control),
                     lease.clone(),
                     target.clone(),
                     heartbeat_stop.clone(),
                 ));
-                let effect = execute_effect(state, &lease.operation, &target.target.payload).await;
+                let effect = execute_effect(
+                    &runtime.session_effects,
+                    &runtime.tls_reload_effects,
+                    &runtime.island_effects,
+                    &runtime.muc_destroy_effects,
+                    &runtime.panic_effects,
+                    &lease.operation,
+                    &target.target.payload,
+                )
+                .await;
                 heartbeat_stop.cancel();
                 heartbeat
                     .await
@@ -309,8 +341,8 @@ async fn run_one(state: &Arc<AppState>, worker_id: Uuid) -> Result<bool> {
         let FencedEffect::Executed(effect) = fenced else {
             return Ok(true);
         };
-        match state
-            .operation_journal_worker_service()
+        match control
+            .journal()
             .settle_target(
                 &lease,
                 &target,
@@ -325,15 +357,12 @@ async fn run_one(state: &Arc<AppState>, worker_id: Uuid) -> Result<bool> {
         }
     }
 
-    let _ = state
-        .operation_journal_worker_service()
-        .terminalize_parent(&lease)
-        .await?;
+    let _ = control.journal().terminalize_parent(&lease).await?;
     Ok(true)
 }
 
 async fn lease_heartbeat(
-    state: Arc<AppState>,
+    control: Arc<OperationWorkerControl>,
     parent: db::OperationLease,
     target: db::OperationTargetLease,
     stop: CancellationToken,
@@ -342,7 +371,7 @@ async fn lease_heartbeat(
         tokio::select! {
             _ = stop.cancelled() => return Ok(()),
             _ = tokio::time::sleep(Duration::from_secs(15)) => {
-                if state.operation_journal_worker_service()
+                if control.journal()
                     .renew_effect_leases(&parent, &target, LEASE_SECONDS)
                     .await? == LeaseRenewal::Lost
                 {
@@ -363,6 +392,12 @@ pub(crate) struct LocalBroadcastRoutes {
     node_id: String,
 }
 
+/// Claim-time route snapshot only; it cannot deliver an administrator message.
+pub(crate) struct LocalBroadcastTargetSnapshot {
+    sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
+    node_id: String,
+}
+
 impl LocalBroadcastRoutes {
     pub(crate) fn new(
         sessions: Arc<dashmap::DashMap<String, crate::state::OnlineSession>>,
@@ -376,20 +411,11 @@ impl LocalBroadcastRoutes {
         }
     }
 
-    pub(crate) fn target_seeds(&self, operation: ClaimedOperation<'_>) -> Result<Vec<TargetSeed>> {
-        let routes = self.sessions.iter().filter_map(|entry| {
-            let session = entry.value();
-            session
-                .routable
-                .load(Ordering::Acquire)
-                .then(|| BroadcastRoute {
-                    session_key: entry.key().clone(),
-                    user_id: session.user_id,
-                    auth_generation: session.auth_generation,
-                    connection_id: session.connection_id,
-                })
-        });
-        target_seeds_for_operation(operation, &self.node_id, routes)
+    pub(crate) fn target_snapshot(&self) -> LocalBroadcastTargetSnapshot {
+        LocalBroadcastTargetSnapshot {
+            sessions: Arc::clone(&self.sessions),
+            node_id: self.node_id.clone(),
+        }
     }
 
     pub(crate) fn send_exact(&self, payload: &Value) -> Result<Value> {
@@ -420,6 +446,24 @@ impl LocalBroadcastRoutes {
                 && session.sender.try_send(stanza).is_ok()
         });
         Ok(json!({"sent":sent,"connection_id":connection_id}))
+    }
+}
+
+impl LocalBroadcastTargetSnapshot {
+    pub(crate) fn target_seeds(&self, operation: ClaimedOperation<'_>) -> Result<Vec<TargetSeed>> {
+        let routes = self.sessions.iter().filter_map(|entry| {
+            let session = entry.value();
+            session
+                .routable
+                .load(Ordering::Acquire)
+                .then(|| BroadcastRoute {
+                    session_key: entry.key().clone(),
+                    user_id: session.user_id,
+                    auth_generation: session.auth_generation,
+                    connection_id: session.connection_id,
+                })
+        });
+        target_seeds_for_operation(operation, &self.node_id, routes)
     }
 }
 
@@ -505,7 +549,7 @@ impl LocalPanicDisconnectRoutes {
     }
 }
 
-async fn panic_disconnect_with<Teardown, TeardownFuture>(
+pub(crate) async fn panic_disconnect_with<Teardown, TeardownFuture>(
     routes: &LocalPanicDisconnectRoutes,
     teardown: Teardown,
 ) -> Result<Value>
@@ -570,25 +614,17 @@ fn target_seeds_for_operation(
 }
 
 async fn execute_effect(
-    state: &AppState,
+    session_effects: &OperationSessionEffects,
+    tls_reload_effects: &OperationTlsReloadEffects,
+    island_effects: &OperationIslandEffects,
+    muc_destroy_effects: &OperationMucDestroyEffects,
+    panic_effects: &OperationPanicEffects,
     operation: &db::OperationRecord,
     payload: &Value,
 ) -> Result<Value> {
     match operation.kind.as_str() {
         "admin.tls_reload" => {
-            let tls = state.tls_context().clone();
-            let outcome = match tokio::task::spawn_blocking(move || tls.reload()).await {
-                Ok(Ok(outcome)) => outcome,
-                Ok(Err(error)) => {
-                    state.record_tls_reload_failure();
-                    return Err(error);
-                }
-                Err(error) => {
-                    state.record_tls_reload_failure();
-                    return Err(error.into());
-                }
-            };
-            state.record_tls_reload_revocations(&outcome);
+            let outcome = tls_reload_effects.reload().await?;
             for session in &outcome.drained_sessions {
                 tracing::warn!(
                     operation_id = %operation.id,
@@ -624,57 +660,39 @@ async fn execute_effect(
                 "drained_outbound_s2s_external":outcome.drained_outbound_s2s_external
             }))
         }
-        "admin.panic_disconnect" => {
-            panic_disconnect_with(&state.panic_disconnect_routes(), || {
-                state.revoke_all_sm_sessions_with_teardown()
-            })
-            .await
-        }
+        "admin.panic_disconnect" => panic_effects.execute().await,
         "admin.session_kick" => {
             let (user_id, connection_id, generation) = session_kick_identity(payload)?;
-            let kicked = state
-                .session_kick_routes()
-                .kick_exact(user_id, generation, connection_id);
+            let kicked = session_effects.kick_exact(user_id, generation, connection_id);
             Ok(json!({"kicked":kicked,"connection_id":connection_id}))
         }
-        "admin.broadcast" => state.broadcast_routes().send_exact(payload),
+        "admin.broadcast" => session_effects.send_broadcast_exact(payload),
         "admin.island_converge" => {
             let enabled = match payload.get("mode").and_then(Value::as_str) {
                 Some("enabled") => true,
                 Some("disabled") => false,
                 _ => anyhow::bail!("invalid island mode"),
             };
-            state.apply_island_mode(enabled).await;
-            if enabled {
-                state
-                    .s2s_connection_registry()
-                    .clear_outbound_for_island_mode();
-            }
+            island_effects.converge(enabled).await;
             Ok(json!({"island_mode":enabled}))
         }
         "admin.user_session_cleanup" => {
             let (user_id, generation) = generation_cleanup_identity(payload)?;
-            let disconnected = state
-                .generation_cleanup_routes()
-                .cancel_exact_generation(user_id, generation);
+            let disconnected = session_effects.cancel_exact_generation(user_id, generation);
             Ok(json!({"sessions_disconnected":disconnected,"user_id":user_id}))
         }
         "admin.muc_destroy" => {
-            let committed = state
-                .operation_muc_destroy_service()
-                .execute(crate::services::operation_muc_destroy::MucDestroyEffect {
+            let committed = muc_destroy_effects
+                .commit(crate::services::operation_muc_destroy::MucDestroyEffect {
                     operation_id: operation.id,
                     request_id: operation.request_id,
                     actor_id: operation.actor_id,
                     payload,
                 })
                 .await?;
-            if let Err(error) = state.wake_committed_muc_operation(operation.id).await {
-                tracing::warn!(?error, operation_id=%operation.id,
-                    "admin MUC destroy committed; signed wake failed and PostgreSQL polling will catch up");
-            }
+            muc_destroy_effects.notify_committed(operation.id).await;
             remove_committed_muc_audience(&committed, |identity| {
-                state.remove_local_muc_occupant_exact(identity).is_some()
+                muc_destroy_effects.remove_local_occupant_exact(identity)
             });
             Ok(json!({"destroyed":committed.destroyed,"room_jid":committed.room_jid}))
         }
@@ -1104,6 +1122,7 @@ mod tests {
         sessions.insert(key.into(), session(user_id, 3, old_connection, old_sender));
         let operation_payload = json!({"message":"<&>'\""});
         let old_seed = routes
+            .target_snapshot()
             .target_seeds(ClaimedOperation {
                 kind: "admin.broadcast",
                 payload: &operation_payload,
@@ -1123,6 +1142,7 @@ mod tests {
         assert!(new_receiver.try_recv().is_err());
 
         let new_seed = routes
+            .target_snapshot()
             .target_seeds(ClaimedOperation {
                 kind: "admin.broadcast",
                 payload: &operation_payload,
@@ -1175,6 +1195,7 @@ mod tests {
         );
         let operation_payload = json!({"message":"maintenance"});
         let empty = routes
+            .target_snapshot()
             .target_seeds(ClaimedOperation {
                 kind: "admin.broadcast",
                 payload: &operation_payload,
@@ -1195,6 +1216,7 @@ mod tests {
             session(Uuid::new_v4(), 3, connection_id, sender),
         );
         let seed = routes
+            .target_snapshot()
             .target_seeds(ClaimedOperation {
                 kind: "admin.broadcast",
                 payload: &operation_payload,

@@ -256,6 +256,7 @@ pub async fn serve(
     let mut outbox_poll = tokio::time::interval(std::time::Duration::from_secs(1));
     outbox_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut outbound_wake_open = true;
+    let outbox_dispatch = state.s2s_outbox_dispatch_context();
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
@@ -289,13 +290,13 @@ pub async fn serve(
                 }
             }
             _ = outbox_poll.tick() => {
-                if let Err(error) = dispatch_due_outbox(&state).await {
+                if let Err(error) = dispatch_due_outbox(&outbox_dispatch, &state).await {
                     tracing::error!(?error, "failed to dispatch the durable federation outbox");
                 }
             }
             wake = outbound_wake.recv(), if outbound_wake_open => {
                 if wake.is_some() {
-                    if let Err(error) = dispatch_due_outbox(&state).await {
+                    if let Err(error) = dispatch_due_outbox(&outbox_dispatch, &state).await {
                         tracing::error!(?error, "failed to dispatch the durable federation outbox after wake-up");
                     }
                 } else {

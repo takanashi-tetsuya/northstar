@@ -2682,8 +2682,7 @@ async fn deliver_channel_stanza(
         for node_id in nodes {
             had_route_target = true;
             match state
-                .mix_cluster_routing()
-                .send_to_node_mix(&node_id, &recipient.jid, &stanza, durable_source)
+                .send_cluster_mix_to_node(&node_id, &recipient.jid, &stanza, durable_source)
                 .await
             {
                 Ok(receipt) => {
@@ -3022,8 +3021,7 @@ async fn deliver_claimed_pam_result(
         .await?;
     for node in nodes {
         if state
-            .mix_cluster_routing()
-            .send_to_node_exact_account(
+            .send_cluster_mix_exact_account(
                 &node,
                 &result.requester_full_jid,
                 &result.response_xml,
@@ -5737,42 +5735,6 @@ async fn process_channel_presence(
         PresenceOutcome::Unchanged => Ok(None),
         PresenceOutcome::Published | PresenceOutcome::Retracted => Ok(None),
     }
-}
-
-/// Remove the disconnected resource from every joined presence node.  This
-/// is also called when the client transport disappears without first sending
-/// unavailable presence; the database operation is idempotent so a graceful
-/// unavailable followed by socket teardown cannot create a duplicate event.
-pub(crate) async fn disconnect_mix_presence(
-    state: &Arc<AppState>,
-    user_id: Uuid,
-    actor_bare: &str,
-    actor_full: &str,
-) -> Result<()> {
-    let unavailable = XmlElement::namespaced("presence", "jabber:client")
-        .attr("from", actor_full)
-        .attr("type", "unavailable")
-        .finish();
-    for membership in state.mix_service().pam_memberships(user_id).await? {
-        if !pam_membership_receives(&membership, NODE_PRESENCE) {
-            continue;
-        }
-        let Ok(channel) = CanonicalJid::parse_bare(&membership.channel_jid) else {
-            tracing::warn!(channel = %membership.channel_jid, "ignored malformed persisted MIX membership JID");
-            continue;
-        };
-        let domain = channel.domainpart();
-        let directed = crate::xmpp::xml_util::set_to(&unavailable, &membership.channel_jid);
-        if domain == local_mix_domain(state) {
-            let _ = process_channel_presence(state, actor_bare, actor_full, &directed).await?;
-        } else if state.federation_domain_allowed(domain) {
-            let _ = state
-                .federation_outbox()
-                .send(domain, directed, Some(actor_bare.to_owned()))
-                .await;
-        }
-    }
-    Ok(())
 }
 
 /// A first presence may arrive before the advertised XEP-0115 hash has been

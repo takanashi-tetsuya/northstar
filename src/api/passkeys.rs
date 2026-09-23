@@ -1,6 +1,7 @@
 use super::*;
 use crate::services::passkeys::{PasskeyActor, PasskeyError};
 use crate::state::{
+    account_generation_teardown::AccountGenerationTeardownSequence,
     passkey_http::{PasskeyAccountHttpContext, PasskeyStartHttpContext},
     PasskeyLoginFinishContext,
 };
@@ -194,7 +195,7 @@ pub(super) struct Remove {
 }
 
 pub(super) async fn remove(
-    State(teardown_state): State<Arc<AppState>>,
+    State(teardown): State<AccountGenerationTeardownSequence>,
     State(start): State<PasskeyStartHttpContext>,
     State(account): State<PasskeyAccountHttpContext>,
     State(queries): State<crate::state::ApiQueryContext>,
@@ -216,8 +217,8 @@ pub(super) async fn remove(
     )
     .await?;
     let generation = account.remove(actor(&user), &password, body.id).await?;
-    teardown_state
-        .disconnect_account_before_auth_generation(
+    teardown
+        .run(
             user.id,
             &format!("{}@{}", user.username, queries.domain()),
             generation,

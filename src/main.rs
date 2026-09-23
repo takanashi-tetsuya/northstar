@@ -535,7 +535,7 @@ async fn run() -> Result<()> {
         },
     );
 
-    let deletion_state = Arc::clone(&state);
+    let deletion_context = Arc::new(state.account_deletion_recovery_context());
     let deletion_cancel = cancel.clone();
     worker_registry.supervise(
         "account-deletion-recovery",
@@ -547,7 +547,7 @@ async fn run() -> Result<()> {
         cancel.clone(),
         move |heartbeat| {
             account_recovery::serve(
-                Arc::clone(&deletion_state),
+                Arc::clone(&deletion_context),
                 deletion_cancel.clone(),
                 heartbeat,
             )
@@ -674,10 +674,11 @@ async fn run() -> Result<()> {
         "external component",
         components::serve(state.clone(), cancel.clone(), component_listener),
     );
+    let operation_worker_runtime = operation_runtime::OperationWorkerRuntime::from_state(&state);
     spawn_service_task(
         &mut service_tasks,
         "durable operation worker",
-        operation_runtime::serve(state.clone(), cancel.clone()),
+        operation_runtime::serve(operation_worker_runtime, cancel.clone()),
     );
 
     // Credential-generation and exact-connection cleanup is a security
@@ -685,7 +686,7 @@ async fn run() -> Result<()> {
     // independently supervised worker so a large broadcast cannot delay a
     // committed revocation. One attempt owns a 60-second renewable database
     // lease; the watchdog includes a bounded margin for delivery and cleanup.
-    let admin_cleanup_state = Arc::clone(&state);
+    let admin_cleanup_context = Arc::new(state.admin_session_cleanup_context());
     let admin_cleanup_cancel = cancel.clone();
     worker_registry.supervise(
         "admin-session-cleanup",
@@ -695,7 +696,7 @@ async fn run() -> Result<()> {
         cancel.clone(),
         move |heartbeat| {
             operation_runtime::serve_admin_session_cleanup(
-                Arc::clone(&admin_cleanup_state),
+                Arc::clone(&admin_cleanup_context),
                 admin_cleanup_cancel.clone(),
                 heartbeat,
             )
@@ -741,7 +742,7 @@ async fn run() -> Result<()> {
             },
         );
 
-        let state_maintenance = state.clone();
+        let maintenance_context = Arc::new(state.cluster_maintenance_context());
         let maintenance_cancel = cancel.clone();
         worker_registry.supervise(
             "cluster-maintenance",
@@ -750,10 +751,11 @@ async fn run() -> Result<()> {
             Some(std::time::Duration::from_secs(90)),
             cancel.clone(),
             move |heartbeat| {
-                let state_maintenance = Arc::clone(&state_maintenance);
+                let maintenance_context = Arc::clone(&maintenance_context);
                 let maintenance_cancel = maintenance_cancel.clone();
                 async move {
-                    cluster::run_maintenance(state_maintenance, maintenance_cancel, heartbeat).await
+                    cluster::run_maintenance(maintenance_context, maintenance_cancel, heartbeat)
+                        .await
                 }
             },
         );

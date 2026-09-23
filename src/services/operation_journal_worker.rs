@@ -107,6 +107,7 @@ pub(crate) trait OperationJournalWorkerRepository: Send + Sync {
     ) -> impl Future<Output = Result<ParentTerminalization>> + Send;
 }
 
+#[derive(Clone)]
 pub(crate) struct OperationJournalWorkerService<R> {
     repository: R,
 }

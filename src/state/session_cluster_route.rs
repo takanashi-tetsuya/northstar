@@ -66,25 +66,4 @@ impl AppState {
             .send_user_agent_replacement(account, user_id, device_id, epoch)
             .await
     }
-
-    pub(crate) async fn notify_remote_account_generation_teardown(
-        &self,
-        account: &str,
-        user_id: uuid::Uuid,
-        auth_generation: i64,
-    ) -> anyhow::Result<()> {
-        self.cluster
-            .send_account_generation_teardown(account, user_id, auth_generation)
-            .await
-    }
-
-    pub(crate) async fn notify_remote_session_instance_termination(
-        &self,
-        full_jid: &str,
-        connection_id: uuid::Uuid,
-    ) -> anyhow::Result<bool> {
-        self.cluster
-            .send_session_instance_termination(full_jid, connection_id)
-            .await
-    }
 }

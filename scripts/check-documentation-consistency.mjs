@@ -340,19 +340,19 @@ for (const relativePath of [
 
 const architecture = read('docs/ARCHITECTURE.md').replace(/\s+/g, ' ');
 const architectureBudget =
-  '`AppState=3` public fields and, across the production protocol tree (excluding `#[cfg(test)]` code), ' +
+  '`AppState=0` public fields and, across the production protocol tree (excluding `#[cfg(test)]` code), ' +
   '`0 db authority references / 0 db domain-model references / 0 state.pool / 0 sqlx:: / 0 PgPool`';
 if (!architecture.includes(architectureBudget)) {
-  throw new Error('docs/ARCHITECTURE.md does not state the current 3/0/0/0/0/0 architecture budget');
+  throw new Error('docs/ARCHITECTURE.md does not state the current 0/0/0/0/0/0 architecture budget');
 }
-if (!knownIssues.replace(/\s+/g, ' ').includes('`AppState=3 public fields`')) {
+if (!knownIssues.replace(/\s+/g, ' ').includes('`AppState=0 public fields`')) {
   throw new Error('KNOWN_ISSUES.md does not state the current AppState public-field count');
 }
 const responsibilityModel = read('docs/PROGRAM_RESPONSIBILITIES.md');
 for (const marker of [
   '## Executable programs and deployment identities',
   '## Runtime layers',
-  '### Reviewed public `AppState` capabilities',
+  '### `AppState` capability boundary',
   '## Source ownership map',
   '## End-to-end authority hand-offs',
   '## Process and operation lifecycles',
@@ -361,12 +361,8 @@ for (const marker of [
   '## Restore child-session responsibilities',
   '## Placement rules for new work',
   '## Residual coupling and reduction order',
-  '`config`',
-  '`pool`',
-  '`cluster`',
-  '`sessions`',
-  '`muc_occupants`',
-  '`metrics`',
+  'All fields are private',
+  'Session cleanup, some workers and transport entry points',
   '`challenge_issue_service()`',
   '`tls_context()`',
   '`federation_outbox()`',

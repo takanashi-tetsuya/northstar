@@ -29,7 +29,10 @@ fn happy_eyeballs_delay(candidate_index: usize) -> Duration {
 
 use crate::{
     jid::{prepare_domainpart, CanonicalJid},
-    state::AppState,
+    state::{
+        s2s_outbox_dispatch::{S2sOutboxDispatchContext, S2sOutboxFailureEffects},
+        AppState,
+    },
     xmpp::xml_builder::XmlElement,
 };
 use anyhow::{Context, Result};
@@ -995,6 +998,21 @@ pub(crate) async fn fail_envelope(
     error: &anyhow::Error,
     permanent: bool,
 ) {
+    fail_envelope_with(
+        &state.s2s_outbox_failure_effects(),
+        envelope,
+        error,
+        permanent,
+    )
+    .await;
+}
+
+async fn fail_envelope_with(
+    effects: &S2sOutboxFailureEffects,
+    envelope: &FederationEnvelope,
+    error: &anyhow::Error,
+    permanent: bool,
+) {
     if !envelope.is_durable() {
         return;
     }
@@ -1016,26 +1034,24 @@ pub(crate) async fn fail_envelope(
         attempt_count: envelope.attempt_count,
         lock_token: envelope.lock_token,
     };
-    match state
-        .s2s_outbox_dispatch_service()
+    match effects
+        .service()
         .fail(&item, &format!("{error:#}"), permanent)
         .await
     {
         Ok(OutboxFailureDisposition::Dropped) => {
-            state
-                .s2s_outbound_disposition_telemetry()
-                .permanent_failure();
-            bounce_delivery_failure_with_condition(state, envelope, bounce_condition);
+            effects.telemetry().permanent_failure();
+            effects.bounce(envelope, bounce_condition);
         }
         Ok(OutboxFailureDisposition::Expired) => {
-            state.s2s_outbound_disposition_telemetry().expired();
-            bounce_delivery_failure_with_condition(state, envelope, bounce_condition);
+            effects.telemetry().expired();
+            effects.bounce(envelope, bounce_condition);
         }
         Ok(OutboxFailureDisposition::RetryScheduled) => {
-            state.s2s_outbound_disposition_telemetry().retry();
+            effects.telemetry().retry();
         }
         Ok(OutboxFailureDisposition::LeaseLost) => {
-            state.s2s_outbound_disposition_telemetry().lease_lost();
+            effects.telemetry().lease_lost();
         }
         Err(database_error) => tracing::error!(
             outbox_id = %envelope.outbox_id,
@@ -1513,9 +1529,12 @@ async fn recover_authenticated_route_heads(
     Ok(recovered)
 }
 
-pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
-    for expired in state.s2s_outbox_dispatch_service().expire().await? {
-        state.s2s_outbound_disposition_telemetry().expired();
+pub(crate) async fn dispatch_due_outbox(
+    context: &S2sOutboxDispatchContext,
+    actor_state: &Arc<AppState>,
+) -> Result<()> {
+    for expired in context.service().expire().await? {
+        context.failure().telemetry().expired();
         tracing::warn!(
             outbox_id = %expired.id,
             domain = %expired.target_domain,
@@ -1532,19 +1551,21 @@ pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
             expired.stanza,
             FederationDeliveryMode::DurableOutbox,
         );
-        bounce_delivery_failure(state, &envelope);
+        context
+            .failure()
+            .bounce(&envelope, "remote-server-not-found");
     }
 
-    if state.island_mode_enabled() {
+    if context.island_mode_enabled() {
         return Ok(());
     }
-    let component_domains = state.configured_component_domains();
+    let component_domains = context.component_domains();
     if let Err(error) = recover_authenticated_route_heads(
-        state.s2s_outbox_dispatch_service(),
-        state.s2s_connection_registry(),
-        &component_domains,
-        |domain| state.federation_domain_allowed(domain),
-        state.s2s_outbox_dispatch_service().recovery_batch_limit()?,
+        context.service(),
+        context.registry(),
+        component_domains,
+        |domain| context.federation_domain_allowed(domain),
+        context.service().recovery_batch_limit()?,
     )
     .await
     {
@@ -1552,23 +1573,23 @@ pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
         // ordinary due work, lease expiry or the established retry policy.
         tracing::warn!(?error, "authenticated S2S route recovery could not finish");
     }
-    let items = state
-        .s2s_outbox_dispatch_service()
-        .claim_excluding_domains(&component_domains)
+    let items = context
+        .service()
+        .claim_excluding_domains(component_domains)
         .await?;
     for item in items {
         let mut envelope = FederationEnvelope::from(item);
         let target_entity = Document::parse(&envelope.stanza)
             .ok()
             .and_then(|document| document.root_element().attribute("to").map(str::to_owned));
-        if state.island_mode_enabled()
-            || !state.federation_domain_allowed(&envelope.target_domain)
+        if context.island_mode_enabled()
+            || !context.federation_domain_allowed(&envelope.target_domain)
             || !target_entity
                 .as_deref()
-                .is_some_and(|target| state.federation_entity_allowed(target))
+                .is_some_and(|target| context.federation_entity_allowed(target))
         {
-            fail_envelope(
-                state,
+            fail_envelope_with(
+                context.failure(),
                 &envelope,
                 &anyhow::anyhow!("target domain is denied by federation policy"),
                 true,
@@ -1576,12 +1597,9 @@ pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
             .await;
             continue;
         }
-        let source_domain = envelope_source_domain(state, &envelope);
+        let source_domain = envelope_source_domain(context, &envelope);
         if let Some(route_key) = bidi_connection_key(&source_domain, &envelope.target_domain) {
-            if let Some(route) = state
-                .s2s_connection_registry()
-                .bidirectional_route(&route_key)
-            {
+            if let Some(route) = context.bidirectional_route(&route_key) {
                 if bidi_envelope_authorized(&envelope, &route.local_domain) {
                     match route.sender.try_send(envelope) {
                         Ok(()) => continue,
@@ -1590,10 +1608,13 @@ pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
                 }
             }
         }
-        let Some(sender) = get_or_create_outbound(state, &source_domain, &envelope.target_domain)
+        // A new connection still enters the existing S2S actor runtime. Its
+        // broad transport dependencies are separate from outbox claim authority.
+        let Some(sender) =
+            get_or_create_outbound(actor_state, &source_domain, &envelope.target_domain)
         else {
-            fail_envelope(
-                state,
+            fail_envelope_with(
+                context.failure(),
                 &envelope,
                 &anyhow::anyhow!("federation connection capacity is exhausted"),
                 false,
@@ -1603,8 +1624,8 @@ pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
         };
         if let Err(error) = sender.try_send(envelope) {
             let envelope = error.into_inner();
-            fail_envelope(
-                state,
+            fail_envelope_with(
+                context.failure(),
                 &envelope,
                 &anyhow::anyhow!("local federation worker queue is saturated"),
                 false,
@@ -1615,7 +1636,10 @@ pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
     Ok(())
 }
 
-fn envelope_source_domain(state: &AppState, envelope: &FederationEnvelope) -> String {
+fn envelope_source_domain(
+    context: &S2sOutboxDispatchContext,
+    envelope: &FederationEnvelope,
+) -> String {
     let parsed = Document::parse(&envelope.stanza).ok();
     let source = parsed
         .as_ref()
@@ -1624,13 +1648,13 @@ fn envelope_source_domain(state: &AppState, envelope: &FederationEnvelope) -> St
         .map(|jid| jid.domainpart().to_owned());
     source
         .filter(|domain| {
-            state.s2s_component_domain_configured(domain)
-                || same_s2s_domain(domain, state.local_domain())
-                || same_s2s_domain(domain, &format!("pubsub.{}", state.local_domain()))
-                || same_s2s_domain(domain, &format!("conference.{}", state.local_domain()))
-                || same_s2s_domain(domain, &format!("mix.{}", state.local_domain()))
+            context.component_domain_configured(domain)
+                || same_s2s_domain(domain, context.local_domain())
+                || same_s2s_domain(domain, &format!("pubsub.{}", context.local_domain()))
+                || same_s2s_domain(domain, &format!("conference.{}", context.local_domain()))
+                || same_s2s_domain(domain, &format!("mix.{}", context.local_domain()))
         })
-        .unwrap_or_else(|| state.local_domain().to_owned())
+        .unwrap_or_else(|| context.local_domain().to_owned())
 }
 
 fn bidi_envelope_authorized(envelope: &FederationEnvelope, local_stream_domain: &str) -> bool {
@@ -1663,27 +1687,7 @@ fn bidi_stanza_authorized(stanza: &str, local_stream_domain: &str, target_domain
             .is_some_and(|domain| same_s2s_domain(domain, target_domain))
 }
 
-pub(crate) fn bounce_delivery_failure(state: &AppState, envelope: &FederationEnvelope) {
-    bounce_delivery_failure_with_condition(state, envelope, "remote-server-not-found");
-}
-
-fn bounce_delivery_failure_with_condition(
-    state: &AppState,
-    envelope: &FederationEnvelope,
-    condition: &str,
-) {
-    let Some(origin) = &envelope.bounce_to else {
-        return;
-    };
-    let Some(error) = delivery_failure_stanza(&envelope.stanza, condition) else {
-        return;
-    };
-    for session in state.sessions_for(origin) {
-        let _ = session.sender.try_send(error.clone());
-    }
-}
-
-fn delivery_failure_stanza(stanza: &str, condition: &str) -> Option<String> {
+pub(crate) fn delivery_failure_stanza(stanza: &str, condition: &str) -> Option<String> {
     // Restrict element names to the conditions emitted by this outbox. This
     // keeps the generic reflector from ever receiving an attacker-controlled
     // XML name if a future caller passes through a remote diagnostic string.

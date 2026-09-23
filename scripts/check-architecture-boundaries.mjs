@@ -264,11 +264,9 @@ const publicFieldNames = [
 
 // Public capability counts may only decrease as service boundaries narrow.
 // New work must use application services without raising these ceilings.
-const MAX_APP_STATE_PUBLIC_FIELDS = 1;
+const MAX_APP_STATE_PUBLIC_FIELDS = 0;
 const MAX_APP_STATE_CRATE_PUBLIC_FIELDS = 0;
-const EXPECTED_APP_STATE_PUBLIC_CAPABILITIES = [
-  'cluster',
-];
+const EXPECTED_APP_STATE_PUBLIC_CAPABILITIES = [];
 
 if (publicFields > MAX_APP_STATE_PUBLIC_FIELDS) {
   throw new Error(
@@ -303,7 +301,8 @@ if (!state.includes('fn local_domain(&self) -> &str')
 const clusterMessageResolver = structBody(read('src/cluster.rs'), 'async fn resolve_node_message_delivery<');
 if (!clusterMessageResolver.includes('verifier.resolve(request, stanza, target_jid).await?')
     || /sqlx::|\.fetch_(?:one|optional|all)\(/.test(clusterMessageResolver)
-    || !read('src/cluster.rs').includes('state.node_message_contract_verifier()')) {
+    || !read('src/cluster.rs').includes('message_policy.verifier()')
+    || !read('src/state/cluster_listener_message.rs').includes('verifier: self.node_message_contract_verifier()')) {
   throw new Error('inbound cluster message contracts must use the PostgreSQL projection verifier port');
 }
 
@@ -340,7 +339,6 @@ for (const field of [
   'admin_command_service',
   'push_service',
   'extdisco_service',
-  'session_authority_sweep_service',
   'locked_muc_expiry_service',
   'operation_journal_worker_service',
   'component_credentials',
@@ -2268,10 +2266,22 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passwordChangeContext)
 }
 const accountGenerationTeardown = read('src/state/account_generation_teardown.rs');
 const teardownSequence = structBody(accountGenerationTeardown, 'pub(crate) struct AccountGenerationTeardownSequence');
+const accountTeardownRuntime = read('src/state/account_teardown_runtime.rs');
+const fullTeardownContext = structBody(accountTeardownRuntime, 'pub(crate) struct AccountTeardownRuntime');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownSequence)
-    || !/self\.routes\s*\.\s*revoke\s*\(/.test(accountGenerationTeardown)
-    || !/revoke_durable_sm\(\)\.await[\s\S]+notify_cluster\(\)\.await/.test(accountGenerationTeardown)) {
-  throw new Error('generation teardown sequence must fence local routes before SM and cluster effects');
+    || /\b(?:AppState|ClusterManager|PgPool)\b/.test(fullTeardownContext)
+    || !teardownSequence.includes('SmTeardownService<PostgresSmTeardownRepository>')
+    || !fullTeardownContext.includes('SessionCleanupSmRevoker')
+    || !fullTeardownContext.includes('AccountGenerationService<PostgresAccountGenerationRepository>')
+    || !/routes\.revoke\(/.test(accountGenerationTeardown)
+    || !/notifier\.send_account_generation_teardown\(/.test(accountGenerationTeardown)
+    || !/revoke_durable_sm\(\)\.await[\s\S]+notify_cluster\(\)\.await/.test(accountGenerationTeardown)
+    || !/self\.routes\.revoke\([\s\S]+self\.sm\.revoke_user_with_teardown\(user_id\)\.await[\s\S]+self\.generation\.committed_generation\(user_id\)\.await[\s\S]+send_account_generation_teardown\(/.test(accountTeardownRuntime)
+    || !/pub\(super\) async fn remove\(\s*State\(teardown\): State<AccountGenerationTeardownSequence>/.test(passkeyApiSource)
+    || !/pub async fn consume_omemo_recovery\(\s*State\(context\): State<OmemoRecoveryHttpContext>,\s*State\(teardown\): State<AccountGenerationTeardownSequence>/.test(recoveryApiSource)
+    || !/pub async fn change_password\(\s*State\(state\): State<PasswordChangeHttpContext>,\s*State\(teardown\): State<AccountTeardownRuntime>/.test(read('src/api/users.rs'))
+    || /State<Arc<AppState>>/.test(passkeyApiSource + recoveryApiSource + read('src/api/users.rs'))) {
+  throw new Error('post-commit account teardown must use scoped HTTP contexts and ordered effects');
 }
 const smTeardownService = read('src/services/sm_teardown.rs');
 if (/\b(?:sqlx|PgPool|AppState|ClusterManager)\b/.test(smTeardownService.split('#[cfg(test)]')[0])
@@ -2279,8 +2289,27 @@ if (/\b(?:sqlx|PgPool|AppState|ClusterManager)\b/.test(smTeardownService.split('
     || !smTeardownService.includes('self.repository.finalize(lease).await?')
     || !smTeardownService.includes('batch.pending == 0')
     || !smTeardownService.includes('Duration::from_millis(25)')
-    || !read('src/state.rs').includes('.revoke_before_generation(user_id, auth_generation_exclusive,')) {
+    || !accountGenerationTeardown.includes('self.sm.revoke_before_generation(')) {
   throw new Error('durable SM generation teardown must retain fenced claims and post-effect finalization');
+}
+const operationWorkerControl = read('src/state/operation_worker_control.rs');
+const operationWorkerFields = structBody(operationWorkerControl, 'pub(crate) struct OperationWorkerControl');
+const operationRuntime = read('src/operation_runtime.rs');
+const operationRuntimeFields = structBody(operationRuntime, 'pub(crate) struct OperationWorkerRuntime');
+const ordinaryRun = structBody(operationRuntime, 'async fn run_one(');
+const ordinaryHeartbeat = structBody(operationRuntime, 'async fn lease_heartbeat(');
+const ordinaryEffects = structBody(operationRuntime, 'async fn execute_effect(');
+if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(operationWorkerFields)
+    || /\b(?:AppState|ClusterManager|PgPool)\b/.test(operationRuntimeFields)
+    || /\bAppState\b/.test(ordinaryRun + ordinaryHeartbeat + ordinaryEffects)
+    || !operationWorkerControl.includes('claim_parent_with_targets')
+    || !ordinaryRun.includes('.execute_after_commit(')
+    || !ordinaryRun.includes('execute_effect(')
+    || !ordinaryHeartbeat.includes('.renew_effect_leases(')
+    || !operationRuntime.includes('session_effects: &OperationSessionEffects')
+    || !operationRuntime.includes('control: Arc::new(state.operation_worker_control())')
+    || !/pub\(crate\) async fn serve\(\s*runtime: OperationWorkerRuntime/.test(operationRuntime)) {
+  throw new Error('ordinary operation claims and effects must retain scoped worker authority');
 }
 const disabledFactoryReset = structBody(read('src/api/admin.rs'), 'pub async fn admin_nuke(');
 if (!/pub async fn admin_nuke\(\s*_actor: ApiAdmin/.test(read('src/api/admin.rs'))
@@ -2360,8 +2389,12 @@ if (/state\.pool|sqlx::Transaction|db::(?:operation_work_pending|claim_operation
 if (/\.wake_committed_operation\s*\(\s*&state\.pool\b/.test(operationRuntimeSource)) {
   throw new Error('operation_runtime.rs bypasses MucService for committed MUC wakes');
 }
-if (!/state\.wake_committed_muc_operation\s*\(\s*operation\.id\s*\)/.test(operationRuntimeSource)) {
-  throw new Error('operation_runtime.rs no longer routes committed MUC wakes through the narrow state operation');
+const operationMucDestroyEffectsSource = read('src/state/operation_muc_destroy_effects.rs');
+const committedMucWakeServiceSource = read('src/services/operation_muc_wake.rs');
+if (!/muc_destroy_effects\.notify_committed\(operation\.id\)\.await/.test(operationRuntimeSource)
+    || !operationMucDestroyEffectsSource.includes('self.wake.notify(&self.publisher, operation_id).await')
+    || !committedMucWakeServiceSource.includes('notify_committed_operation(self.repository.descriptor(operation_id), wake, operation_id)')) {
+  throw new Error('operation worker must wake committed MUC effects through the typed post-commit port');
 }
 const mucServiceSource = read('src/services/muc.rs');
 const mucServiceBody = structBody(mucServiceSource, 'pub(crate) struct MucService');
@@ -3351,24 +3384,34 @@ if (/\blocal_domain\b/.test(mucDestroyEffect)
     || !state.includes('config.domain.clone(),')) {
   throw new Error('MUC destruction must validate the immutable service-owned local domain');
 }
-if (!operationRuntimeOwnershipSource.includes('state.broadcast_routes().target_seeds(operation)')
-    || !operationRuntimeOwnershipSource.includes('"admin.broadcast" => state.broadcast_routes().send_exact(payload)')
+const operationWorkerControlSource = read('src/state/operation_worker_control.rs');
+const operationSessionEffectsSource = read('src/state/operation_session_effects.rs');
+if (!operationWorkerControlSource.includes('self.broadcast_routes().target_snapshot()')
+    || !operationWorkerControlSource.includes('self.routes.target_seeds(operation)')
+    || !/control\s*\.claim_parent_with_targets\(worker_id, LEASE_SECONDS\)/.test(operationRuntimeOwnershipSource)
+    || !operationRuntimeOwnershipSource.includes('"admin.broadcast" => session_effects.send_broadcast_exact(payload)')
+    || !operationSessionEffectsSource.includes('self.broadcast.send_exact(payload)')
     || /fn local_target_seeds\(\s*state:\s*&AppState/.test(operationRuntimeOwnershipSource)) {
   throw new Error('administrator broadcast must snapshot and deliver through its exact local-route capability');
 }
-if (!operationRuntimeOwnershipSource.includes('.session_kick_routes()')
-    || !operationRuntimeOwnershipSource.includes('.kick_exact(user_id, generation, connection_id)')
+if (!operationSessionEffectsSource.includes('self.session_kick_routes()')
+    || !operationRuntimeOwnershipSource.includes('session_effects.kick_exact(user_id, generation, connection_id)')
+    || !operationSessionEffectsSource.includes('.kick_exact(user_id, auth_generation, connection_id)')
     || !operationRuntimeOwnershipSource.includes('session.connection_id == connection_id')
     || !operationRuntimeOwnershipSource.includes('session.auth_generation == auth_generation')) {
   throw new Error('administrator session kick must cancel only the exact committed route incarnation');
 }
-if (!operationRuntimeOwnershipSource.includes('.generation_cleanup_routes()')
-    || !operationRuntimeOwnershipSource.includes('.cancel_exact_generation(user_id, generation)')
+if (!operationSessionEffectsSource.includes('self.generation_cleanup_routes()')
+    || !operationRuntimeOwnershipSource.includes('session_effects.cancel_exact_generation(user_id, generation)')
+    || !operationSessionEffectsSource.includes('.cancel_exact_generation(user_id, auth_generation)')
     || !operationRuntimeOwnershipSource.includes('session.user_id == user_id && session.auth_generation == auth_generation')) {
   throw new Error('administrator account cleanup must cancel only the exact account generation');
 }
 const panicDisconnect = structBody(operationRuntimeOwnershipSource, 'async fn panic_disconnect_with<');
-if (!operationRuntimeOwnershipSource.includes('panic_disconnect_with(&state.panic_disconnect_routes()')
+const panicEffectsSource = read('src/state/operation_panic_effects.rs');
+const panicEffectsFields = structBody(panicEffectsSource, 'pub(crate) struct OperationPanicEffects');
+if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(panicEffectsFields)
+    || !panicEffectsSource.includes('panic_disconnect_with(&self.routes, || self.sm.revoke_all_with_teardown()).await')
     || !/let disconnected = routes\.cancel_all\(\);\s*teardown\(\)\.await\?;/.test(panicDisconnect)) {
   throw new Error('emergency disconnect must cancel all local routes before durable SM teardown');
 }
@@ -3425,9 +3468,9 @@ if (/\.metrics\b/.test(accountRecoverySource)
     || !accountRecoveryTelemetry.includes("success: &'a AtomicU64")
     || !accountRecoveryTelemetry.includes("failure: &'a AtomicU64")
     || !accountRecoveryTelemetry.includes("lease_loss: &'a AtomicU64")
-    || countMatches(accountRecoverySource, /account_deletion_recovery_telemetry\(\)\.succeeded\(\)/g) !== 1
-    || countMatches(accountRecoverySource, /account_deletion_recovery_telemetry\(\)\.failed\(\)/g) !== 1
-    || countMatches(accountRecoverySource, /account_deletion_recovery_telemetry\(\)\.lease_lost\(\)/g) !== 1) {
+    || countMatches(accountRecoverySource, /context\.telemetry\(\)\.succeeded\(\)/g) !== 1
+    || countMatches(accountRecoverySource, /context\.telemetry\(\)\.failed\(\)/g) !== 1
+    || countMatches(accountRecoverySource, /context\.telemetry\(\)\.lease_lost\(\)/g) !== 1) {
   throw new Error('account deletion recovery must use its three shared telemetry cells');
 }
 const readinessEndpointSource = read('src/api/system.rs');
@@ -3459,7 +3502,7 @@ if (/\bstate\.cluster\b/.test(clusterMaintenance)
     || !/\bredis\s*\.\s*reconcile_muc_soft_state\s*\(/.test(clusterMaintenance)) {
   throw new Error('cluster lease maintenance must use scoped Redis projection authority');
 }
-if (!clusterMaintenance.includes('state.cluster_muc_occupancy_maintenance_service()')
+if (!clusterMaintenance.includes('let occupancy_maintenance = &context.muc_occupancy;')
     || !clusterMaintenance.includes('.renew_exact(authority, &control.node_id)')
     || /crate::db::(?:authoritative_cluster_muc_occupancies_for_node|renew_cluster_muc_occupancy)\s*\(/.test(clusterMaintenance)) {
   throw new Error('cluster MUC reconciliation must snapshot and renew exact authority through its narrow port');
@@ -3480,7 +3523,7 @@ if (clusterListener.includes('db::cluster_session_route_authority(')
     || !listenerDispatch.includes('fence_local_session_in(')) {
   throw new Error('signed session termination must re-read exact route authority through its service');
 }
-if (!clusterMaintenance.includes('.session_authority_sweep_service()')
+if (!clusterMaintenance.includes('.session_authority')
     || /(?:crate::)?db::(?:auth_states_for_users|user_agent_login_epochs)\s*\(/.test(clusterMaintenance)) {
   throw new Error('cluster credential maintenance must use the read-only session authority service');
 }
@@ -3655,12 +3698,7 @@ const stateServiceAccessors = [
   'challenge_issue_service',
   'challenge_cleanup_service',
   'sasl_login_abuse_service',
-  'operation_muc_destroy_service',
   'locked_muc_expiry_service',
-  'operation_effect_fence_service',
-  'admin_session_cleanup_worker_service',
-  'session_authority_sweep_service',
-  'operation_journal_worker_service',
   's2s_roster_authorization_service',
   's2s_outbox_dispatch_service',
   's2s_sm_outbox_service',

@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::net::SocketAddr;
 
 use axum::{
     body::Body,
@@ -19,7 +19,10 @@ use crate::{
     },
     error::AppError,
     services::omemo_recovery::*,
-    state::{omemo_recovery_http::OmemoRecoveryHttpContext, AppState},
+    state::{
+        account_generation_teardown::AccountGenerationTeardownSequence,
+        omemo_recovery_http::OmemoRecoveryHttpContext,
+    },
 };
 
 fn parse_sha256(value: &str) -> Result<[u8; 32], AppError> {
@@ -217,7 +220,7 @@ pub async fn get_omemo_recovery_authority(
 
 pub async fn consume_omemo_recovery(
     State(context): State<OmemoRecoveryHttpContext>,
-    State(state): State<Arc<AppState>>,
+    State(teardown): State<AccountGenerationTeardownSequence>,
     ApiPath(transfer_id): ApiPath<Uuid>,
     headers: HeaderMap,
     mut request: ApiJson<OmemoRecoveryConsumeRequest>,
@@ -273,9 +276,7 @@ pub async fn consume_omemo_recovery(
                 "consumed OMEMO recovery transfer has no authorization fence"
             ))
         })?;
-        state
-            .disconnect_account_before_auth_generation(user.id, &canonical_account, cutoff)
-            .await;
+        teardown.run(user.id, &canonical_account, cutoff).await;
     }
     Ok(response)
 }

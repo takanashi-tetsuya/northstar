@@ -109,6 +109,7 @@ const DELIVERY_CONTRACT_PROTOCOL_VERSION: u16 = 13;
 const DELIVERY_CONTRACT_PROTOCOL_MIN: u16 = 8;
 const PRESENCE_AUTHORITY_VERSION: u16 = 1;
 const LEGACY_DELIVERY_PROTOCOL_MAX: u16 = 7;
+#[cfg(test)]
 const MAX_REPLAY_ENTRIES: usize = 65_536;
 
 async fn open_pubsub(client: &redis::Client) -> Result<redis::aio::PubSub> {
@@ -964,8 +965,11 @@ pub struct ClusterManager {
     instance_epoch: Arc<AtomicI64>,
     authorized_instances: Arc<dashmap::DashMap<String, AuthorizedClusterInstance>>,
     authorized_peer_keys: Arc<dashmap::DashMap<String, AuthorizedPeerKeys>>,
+    #[cfg(test)]
     replay_cache: Arc<dashmap::DashMap<String, i64>>,
+    #[cfg(test)]
     replay_cache_gate: Arc<Mutex<()>>,
+    #[cfg(test)]
     replay_cache_next_expiry: Arc<AtomicI64>,
     #[cfg(test)]
     replay_cache_sweeps: Arc<AtomicU64>,
@@ -977,6 +981,23 @@ pub struct ClusterManager {
     listener_rotation: Arc<tokio::sync::Notify>,
     pending_ack_slots: Arc<tokio::sync::Semaphore>,
     pending_acks: Arc<dashmap::DashMap<String, PendingClusterAck>>,
+}
+
+/// MIX route discovery reads current PostgreSQL session ownership without
+/// receiving publication, Redis, or session-mutation authority.
+#[derive(Clone)]
+pub(crate) struct ClusterMixRouteLookup {
+    routes: ClusterListenerPresenceRoutes,
+}
+
+impl ClusterMixRouteLookup {
+    pub(crate) async fn lookup_nodes(&self, jid: &str) -> Result<Vec<String>> {
+        self.routes.lookup_nodes(jid).await
+    }
+
+    pub(crate) fn node_id(&self) -> &str {
+        self.routes.node_id()
+    }
 }
 
 /// The PubSub reader's connection, self-loop and generation fence. This handle
@@ -1054,6 +1075,163 @@ impl ClusterListenerAdmission {
     }
 }
 
+impl ClusterListenerSecurity {
+    fn verify_current_envelope(
+        &self,
+        raw: &str,
+        channel: &str,
+        expected_source: Option<&str>,
+    ) -> Result<crate::cluster_security::SignedClusterEnvelope> {
+        anyhow::ensure!(
+            raw.len() <= MAX_CLUSTER_PAYLOAD_BYTES,
+            "cluster envelope is oversized"
+        );
+        let security = self
+            .publisher
+            .security
+            .as_ref()
+            .context("cluster verifier is not configured")?;
+        let envelope: crate::cluster_security::SignedClusterEnvelope =
+            serde_json::from_str(raw).context("cluster envelope is invalid JSON")?;
+        envelope.verify(
+            &self.publisher.namespace,
+            &self.publisher.node_id,
+            channel,
+            expected_source,
+            security.peers().as_ref(),
+            chrono::Utc::now().timestamp(),
+        )?;
+        self.validate_verified_envelope(&envelope)?;
+        Ok(envelope)
+    }
+
+    fn validate_verified_envelope(
+        &self,
+        envelope: &crate::cluster_security::SignedClusterEnvelope,
+    ) -> Result<()> {
+        let security = self
+            .publisher
+            .security
+            .as_ref()
+            .context("cluster verifier is not configured")?;
+        envelope
+            .current_verification_key(security.peers().as_ref(), chrono::Utc::now().timestamp())?;
+        anyhow::ensure!(
+            envelope.destination_connection_uuid == self.publisher.connection_uuid
+                && envelope.destination_connection_epoch
+                    == self.publisher.instance_epoch.load(Ordering::Acquire)
+                && envelope.destination_key_id == security.current_key_id
+                && envelope.destination_key_epoch == security.key_epoch,
+            "cluster destination process instance or key is mismatched"
+        );
+        let key_authority = self
+            .authorized_peer_keys
+            .get(&envelope.source_node)
+            .context("cluster source key has no current PostgreSQL authority cache")?;
+        anyhow::ensure!(
+            key_authority.accepts(&envelope.key_id, envelope.key_epoch, Instant::now()),
+            "cluster source key generation is staged incorrectly, stale, or retired"
+        );
+        let authority = self
+            .publisher
+            .authorized_instances
+            .get(&envelope.source_node)
+            .context("cluster source process has no active PostgreSQL instance lease")?;
+        anyhow::ensure!(
+            authoritative_instance_matches(
+                &authority,
+                envelope.connection_uuid,
+                envelope.connection_epoch,
+                &envelope.key_id,
+                envelope.key_epoch,
+                Instant::now(),
+            ),
+            "cluster source process instance lease is stale or mismatched"
+        );
+        Ok(())
+    }
+
+    async fn verify_signed_payload_persisted(
+        &self,
+        raw: &str,
+        channel: &str,
+        expected_source: Option<&str>,
+    ) -> Result<crate::cluster_security::SignedClusterEnvelope> {
+        let envelope = self.verify_current_envelope(raw, channel, expected_source)?;
+        if envelope.kind == crate::cluster_security::ClusterCommandKind::Ack {
+            anyhow::ensure!(
+                serde_json::to_vec(&envelope.payload)?.len() <= MAX_DELIVERY_ACK_BYTES,
+                "cluster acknowledgement payload is oversized"
+            );
+        }
+        let pool = self
+            .authority_pool
+            .get()
+            .context("cluster replay authority pool is unavailable")?;
+        let admitted = match crate::db::admit_cluster_envelope_replay(
+            pool,
+            &self.publisher.namespace,
+            &envelope,
+        )
+        .await
+        {
+            Ok(admitted) => admitted,
+            Err(error) => {
+                // PostgreSQL replay failures are control-plane failures, not
+                // unauthenticated traffic. Rotate and fail closed for repair.
+                record_cluster_failure(
+                    &self.publisher.health,
+                    &self.publisher.listener_rotation,
+                    self.publisher.is_enabled(),
+                    self.publisher.failure_policy,
+                    ClusterFailureClass::PostgreSqlAuthority,
+                    &error,
+                );
+                return Err(error);
+            }
+        };
+        if !admitted {
+            self.publisher
+                .health
+                .replay_rejections
+                .fetch_add(1, Ordering::Relaxed);
+            anyhow::bail!("cluster envelope replay rejected by PostgreSQL authority");
+        }
+        // The durable unique fence has committed. A process-local replay
+        // cache must not reject this already-consumed command afterward.
+        Ok(envelope)
+    }
+
+    async fn publish_ack(
+        &self,
+        admission: &ClusterListenerAdmission,
+        source_node: &str,
+        ack: NodeDeliveryAck,
+        authority: &ListenerCommandAuthority,
+    ) -> Result<()> {
+        let Some(pool) = &self.publisher.pool else {
+            return Ok(());
+        };
+        let mut conn = pool.get().await?;
+        authority.validate(admission, self)?;
+        let channel = self.publisher.key(format!("node:{source_node}"));
+        self.publisher
+            .publish_signed(&mut conn, source_node, &channel, serde_json::to_value(ack)?)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Authenticate and durably admit listener envelopes, then publish only their
+/// correlated acknowledgements. This has no command routing or Redis mutation
+/// authority beyond the signed ACK channel.
+#[derive(Clone)]
+pub(crate) struct ClusterListenerSecurity {
+    publisher: ClusterSignedPublisher,
+    authorized_peer_keys: Arc<dashmap::DashMap<String, AuthorizedPeerKeys>>,
+    authority_pool: Arc<std::sync::OnceLock<sqlx::PgPool>>,
+}
+
 /// Immutable identity used by the readiness persistence probe. Capturing the
 /// local lease epoch alongside the configured key avoids passing live cluster
 /// control-plane authority into the service or repository.
@@ -1121,6 +1299,801 @@ pub(crate) struct ClusterMaintenanceControl {
     health: Arc<ClusterHealth>,
     listener_rotation: Arc<tokio::sync::Notify>,
     failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
+}
+
+/// Shared signed command publication without listener replay, database, or
+/// session-routing authority. Only cluster-owned projections use this signer.
+#[derive(Clone)]
+struct ClusterSignedPublisher {
+    pool: Option<Pool<RedisConnectionManager>>,
+    namespace: String,
+    key_prefix: String,
+    node_id: String,
+    security: Option<Arc<crate::cluster_security::ClusterSecurityConfig>>,
+    connection_uuid: uuid::Uuid,
+    instance_epoch: Arc<AtomicI64>,
+    authorized_instances: Arc<dashmap::DashMap<String, AuthorizedClusterInstance>>,
+    health: Arc<ClusterHealth>,
+    listener_rotation: Arc<tokio::sync::Notify>,
+    failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
+    publication_gate: Arc<tokio::sync::RwLock<()>>,
+}
+
+/// Bounded correlated control ACKs shared by the manager and teardown notifier.
+/// It can publish authenticated controls but cannot discover or mutate routes.
+#[derive(Clone)]
+struct ClusterCorrelatedControlSender {
+    publisher: ClusterSignedPublisher,
+    transport_ready: bool,
+    pending_ack_slots: Arc<tokio::sync::Semaphore>,
+    pending_acks: Arc<dashmap::DashMap<String, PendingClusterAck>>,
+}
+
+/// Signed, acknowledged stanza delivery. This projection can neither mutate
+/// session routes nor consume listener replay authority.
+#[derive(Clone)]
+pub(crate) struct ClusterNodeDelivery {
+    publisher: ClusterSignedPublisher,
+    pool: Option<Pool<RedisConnectionManager>>,
+    client: Option<redis::Client>,
+    health: Arc<ClusterHealth>,
+    pending_ack_slots: Arc<tokio::sync::Semaphore>,
+    pending_acks: Arc<dashmap::DashMap<String, PendingClusterAck>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ClusterUnavailableDelivery {
+    routes: ClusterListenerPresenceRoutes,
+    sender: ClusterNodeDelivery,
+}
+
+/// Post-commit revocation controls can discover only PostgreSQL-owned routes
+/// and send exact, signed, acknowledged account/session teardowns.
+#[derive(Clone)]
+pub(crate) struct ClusterAccountTeardownNotifier {
+    routes: ClusterListenerPresenceRoutes,
+    sender: ClusterCorrelatedControlSender,
+}
+
+/// Exact durable SM session teardown control, without route mutation or
+/// general cluster publication authority.
+#[derive(Clone)]
+pub(crate) struct ClusterSmSessionTeardownNotifier {
+    routes: ClusterListenerPresenceRoutes,
+    sender: ClusterCorrelatedControlSender,
+}
+
+/// Exact clustered SM MUC teardown with correlated ACKs and a fenced Redis
+/// tombstone. It cannot publish arbitrary stanzas or change other occupancies.
+#[derive(Clone)]
+pub(crate) struct ClusterSmMucTeardown {
+    sender: ClusterCorrelatedControlSender,
+}
+
+/// Exact local occupant withdrawal followed by its signed room presence.
+/// This handle cannot join a room or mutate another occupant's role.
+#[derive(Clone)]
+pub(crate) struct ClusterMucDeparture {
+    projection: ClusterSmMucTeardownProjection,
+    publisher: ClusterSignedPublisher,
+}
+
+impl ClusterMucDeparture {
+    pub(crate) async fn publish_local_departure(
+        &self,
+        departed: &crate::state::MucOccupant,
+        was_last: bool,
+    ) -> Result<()> {
+        self.projection
+            .unregister_muc_occupant_epoch(
+                &departed.room_jid,
+                &departed.nick,
+                departed.cluster_epoch,
+                departed.connection_id,
+            )
+            .await?;
+        if was_last {
+            self.projection.leave_muc(&departed.room_jid).await?;
+        }
+        self.publisher
+            .send_muc_presence_with_status(
+                &departed.room_jid,
+                &crate::state::SerializableMucOccupant::from(departed),
+                true,
+                false,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+    }
+}
+
+/// Exact SM/MUC suspension projection and committed-operation wake. It can
+/// neither consume listener replay authority nor access PostgreSQL directly.
+#[derive(Clone)]
+pub(crate) struct ClusterSmSuspension {
+    publisher: ClusterSignedPublisher,
+    muc_outbox_notify: Arc<tokio::sync::Notify>,
+}
+
+/// Publish only a committed MUC operation wake using the shared signed
+/// cluster transport; no SM suspension or route mutation authority is exposed.
+#[derive(Clone)]
+pub(crate) struct ClusterMucOperationWake {
+    publisher: ClusterSignedPublisher,
+    muc_outbox_notify: Arc<tokio::sync::Notify>,
+}
+
+impl ClusterSignedPublisher {
+    fn is_enabled(&self) -> bool {
+        self.pool.is_some()
+    }
+
+    fn key(&self, suffix: String) -> String {
+        format!("{}:{suffix}", self.key_prefix)
+    }
+
+    async fn active_muc_nodes(&self, room_jid: &str) -> Result<Vec<String>> {
+        let Some(pool) = &self.pool else {
+            return Ok(Vec::new());
+        };
+        let room = crate::jid::canonicalize_bare(room_jid)?;
+        let mut conn = pool.get().await?;
+        let key = self.key(format!("muc_nodes:{room}"));
+        // Fan-out uses bounded live-node hints; full reconciliation belongs
+        // to maintenance and explicit room reads. The peer limit includes one
+        // extra slot for this process.
+        let script = redis::Script::new(
+            r#"
+            if redis.call('scard', KEYS[1]) > tonumber(ARGV[2]) then
+                return redis.error_reply('MUC routing node hint limit exceeded')
+            end
+            local nodes = redis.call('smembers', KEYS[1])
+            for _, node in ipairs(nodes) do
+                if #node == 0 or #node > tonumber(ARGV[3]) then
+                    return redis.error_reply('MUC routing node hint has an invalid length')
+                end
+            end
+            local active = {}
+            local stale = {}
+            for _, node in ipairs(nodes) do
+                if redis.call('get', ARGV[1] .. node .. ':alive') then
+                    table.insert(active, node)
+                else
+                    table.insert(stale, node)
+                end
+            end
+            for _, node in ipairs(stale) do
+                redis.call('srem', KEYS[1], node)
+            end
+            return active
+            "#,
+        );
+        let mut nodes: Vec<String> = script
+            .key(key)
+            .arg(self.key("node:".to_owned()))
+            .arg(crate::cluster_security::MAX_PEERS + 1)
+            .arg(crate::cluster_security::MAX_NODE_ID_BYTES)
+            .invoke_async(&mut *conn)
+            .await?;
+        nodes.sort_unstable();
+        Ok(nodes)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn send_muc_presence_with_status(
+        &self,
+        room_jid: &str,
+        occupant: &crate::state::SerializableMucOccupant,
+        unavailable: bool,
+        created: bool,
+        id: Option<&str>,
+        removal_status: Option<u16>,
+        actor_nick: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        let Some(pool) = &self.pool else {
+            return Ok(());
+        };
+        let nodes = self.active_muc_nodes(room_jid).await?;
+        let payload = serde_json::json!({
+            "target": room_jid,
+            "muc_presence": true,
+            "occupant": occupant,
+            "unavailable": unavailable,
+            "created": created,
+            "id": id,
+            "removal_status": removal_status,
+            "actor_nick": actor_nick,
+            "reason": reason,
+        });
+        let mut conn = pool.get().await?;
+        for node_id in nodes {
+            if node_id != self.node_id {
+                let channel = self.key(format!("node:{node_id}"));
+                let _ = self
+                    .publish_signed(&mut conn, &node_id, &channel, payload.clone())
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    fn process_instance_token(&self) -> Result<String> {
+        let epoch = self.instance_epoch.load(Ordering::Acquire);
+        anyhow::ensure!(epoch >= 1, "cluster process instance is not authoritative");
+        Ok(format!("{}.{}", self.connection_uuid.simple(), epoch))
+    }
+
+    fn process_alive_key(&self) -> Result<String> {
+        Ok(self.key(format!(
+            "node_instance:{}:{}:alive",
+            self.node_id,
+            self.process_instance_token()?
+        )))
+    }
+
+    fn sign_payload(
+        &self,
+        destination_node: &str,
+        channel: &str,
+        payload: serde_json::Value,
+    ) -> Result<String> {
+        let security = self
+            .security
+            .as_ref()
+            .context("cluster signer is not configured")?;
+        let destination = self
+            .authorized_instances
+            .get(destination_node)
+            .context("cluster destination process authority is unavailable")?;
+        anyhow::ensure!(
+            destination.valid_until > Instant::now() && destination.refresh_until > Instant::now(),
+            "cluster destination process authority is stale"
+        );
+        let kind = crate::cluster_security::infer_kind(&payload)?;
+        let envelope = crate::cluster_security::SignedClusterEnvelope::sign(
+            &security.signer(),
+            &self.namespace,
+            &self.node_id,
+            destination_node,
+            destination.instance_uuid,
+            destination.instance_epoch,
+            &destination.signing_key_id,
+            destination.signing_key_epoch,
+            channel,
+            kind,
+            self.connection_uuid,
+            self.instance_epoch.load(Ordering::Acquire),
+            payload,
+            chrono::Utc::now().timestamp(),
+        )?;
+        let encoded =
+            serde_json::to_string(&envelope).context("could not encode signed cluster envelope")?;
+        anyhow::ensure!(
+            encoded.len() <= MAX_CLUSTER_PAYLOAD_BYTES,
+            "cluster envelope exceeds the transport limit"
+        );
+        Ok(encoded)
+    }
+
+    async fn publish_signed(
+        &self,
+        conn: &mut redis::aio::MultiplexedConnection,
+        destination_node: &str,
+        channel: &str,
+        payload: serde_json::Value,
+    ) -> Result<i32> {
+        let _publication = self.publication_gate.read().await;
+        admit_health(&self.health, ClusterOperation::VolatileDelivery)?;
+        let encoded = self.sign_payload(destination_node, channel, payload)?;
+        match conn.publish(channel, encoded).await {
+            Ok(receivers) if receivers > 0 => Ok(receivers),
+            Ok(_) => {
+                let failure =
+                    anyhow::anyhow!("signed cluster publish had no authoritative subscriber");
+                self.record_control_plane_failure(&failure);
+                Err(failure)
+            }
+            Err(error) => {
+                let failure = anyhow::Error::new(error).context("signed cluster publish failed");
+                self.record_control_plane_failure(&failure);
+                Err(failure)
+            }
+        }
+    }
+
+    fn record_control_plane_failure(&self, error: &anyhow::Error) {
+        record_cluster_failure(
+            &self.health,
+            &self.listener_rotation,
+            self.is_enabled(),
+            self.failure_policy,
+            ClusterFailureClass::RedisCommand,
+            error,
+        );
+    }
+}
+
+impl ClusterCorrelatedControlSender {
+    async fn send_control_to_node(
+        &self,
+        node_id: &str,
+        target: &str,
+        payload: serde_json::Value,
+    ) -> Result<()> {
+        let acknowledgement = self
+            .send_control_to_node_ack(node_id, target, payload)
+            .await?;
+        anyhow::ensure!(
+            acknowledgement.control_processed == Some(true),
+            "cluster control was rejected by its authoritative receiver"
+        );
+        Ok(())
+    }
+
+    async fn send_control_to_node_ack(
+        &self,
+        node_id: &str,
+        target: &str,
+        mut payload: serde_json::Value,
+    ) -> Result<NodeDeliveryAck> {
+        let Some(pool) = self
+            .publisher
+            .pool
+            .as_ref()
+            .filter(|_| self.transport_ready)
+        else {
+            anyhow::bail!("cluster control requested without an active cluster transport");
+        };
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let nonce = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let mut conn = pool.get().await?;
+        let peer_version: Option<String> = conn
+            .get(self.publisher.key(format!("node:{node_id}:alive")))
+            .await?;
+        if !supports_current_cluster_protocol(peer_version.as_deref()) {
+            if peer_version.is_some() {
+                note_incompatible_peer_version(
+                    &self.publisher.health,
+                    node_id,
+                    peer_version.as_deref(),
+                );
+            }
+            anyhow::bail!("cluster peer does not support authenticated current-version controls");
+        }
+        let Some(fields) = payload.as_object_mut() else {
+            anyhow::bail!("cluster control payload is not an object");
+        };
+        anyhow::ensure!(
+            fields.get("target").and_then(serde_json::Value::as_str) == Some(target),
+            "cluster control target mismatch"
+        );
+        fields.insert("request_id".to_owned(), request_id.clone().into());
+        fields.insert("ack_nonce".to_owned(), nonce.clone().into());
+        fields.insert("protocol_version".to_owned(), NODE_PROTOCOL_VERSION.into());
+        let channel = self.publisher.key(format!("node:{node_id}"));
+        let mut acknowledgement = register_pending_ack_in(
+            &self.pending_ack_slots,
+            &self.pending_acks,
+            &request_id,
+            node_id,
+            &nonce,
+        )?;
+        let result = async {
+            let receivers = self
+                .publisher
+                .publish_signed(&mut conn, node_id, &channel, payload)
+                .await?;
+            // Keep only the bounded registration while the peer publishes its
+            // ACK; the listener needs this pool to send that ACK.
+            drop(conn);
+            if receivers == 0 {
+                let error = anyhow::anyhow!("cluster control had no subscriber");
+                self.publisher.record_control_plane_failure(&error);
+                return Err(error);
+            }
+            let deadline = tokio::time::Instant::now() + DELIVERY_ACK_TIMEOUT;
+            loop {
+                let Some(ack) = tokio::time::timeout_at(deadline, acknowledgement.recv())
+                    .await
+                    .ok()
+                    .flatten()
+                else {
+                    let error = anyhow::anyhow!("cluster control acknowledgement timed out");
+                    self.publisher.record_control_plane_failure(&error);
+                    return Err(error);
+                };
+                if ack.control_processed.is_some() {
+                    return Ok(ack);
+                }
+            }
+        }
+        .await;
+        result
+    }
+}
+
+impl ClusterAccountTeardownNotifier {
+    pub(crate) async fn send_account_generation_teardown(
+        &self,
+        bare_jid: &str,
+        user_id: uuid::Uuid,
+        minimum_generation: i64,
+    ) -> Result<()> {
+        anyhow::ensure!(minimum_generation >= 0, "invalid auth generation");
+        let bare_jid = crate::jid::canonicalize_bare(bare_jid)?;
+        if !self.sender.publisher.is_enabled() {
+            return Ok(());
+        }
+        let nodes = self.routes.lookup_nodes(&bare_jid).await?;
+        let payload = serde_json::json!({
+            "target": bare_jid,
+            "account_generation_teardown": true,
+            "user_id": user_id,
+            "minimum_generation": minimum_generation,
+        });
+        for node_id in nodes {
+            if node_id != self.routes.node_id() {
+                self.sender
+                    .send_control_to_node(&node_id, &bare_jid, payload.clone())
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn send_session_instance_termination(
+        &self,
+        full_jid: &str,
+        expected_connection_id: uuid::Uuid,
+    ) -> Result<bool> {
+        anyhow::ensure!(
+            !expected_connection_id.is_nil(),
+            "session termination requires a non-nil connection identity"
+        );
+        let full_jid = crate::jid::canonical_session_key(full_jid)?;
+        if !self.sender.publisher.is_enabled() {
+            return Ok(false);
+        }
+        let authority_pool = self
+            .routes
+            .authority_pool
+            .get()
+            .context("cluster session authority pool is unavailable")?;
+        let Some(route) = crate::db::cluster_session_route_authority(
+            authority_pool,
+            &self.routes.namespace,
+            &full_jid,
+        )
+        .await?
+        else {
+            return Ok(false);
+        };
+        if route.connection_uuid != expected_connection_id
+            || route.owner_node_id == self.routes.node_id()
+        {
+            return Ok(false);
+        }
+        let payload = serde_json::json!({
+            "target":full_jid,
+            "session_termination":true,
+            "connection_id":expected_connection_id,
+        });
+        let acknowledgement = self
+            .sender
+            .send_control_to_node_ack(&route.owner_node_id, &full_jid, payload)
+            .await?;
+        match acknowledgement.control_outcome {
+            Some(ClusterControlOutcome::Matched) => Ok(true),
+            Some(ClusterControlOutcome::AuthoritativelyAbsent) => Ok(false),
+            Some(ClusterControlOutcome::WrongOwner) => {
+                anyhow::bail!("cluster session termination reached the wrong process owner")
+            }
+            None => {
+                anyhow::bail!("cluster session termination acknowledgement omitted its outcome")
+            }
+        }
+    }
+}
+
+impl ClusterSmSessionTeardownNotifier {
+    pub(crate) async fn send_sm_session_teardown(
+        &self,
+        full_jid: &str,
+        sm_session_id: uuid::Uuid,
+    ) -> Result<()> {
+        let full_jid = crate::jid::canonical_session_key(full_jid)?;
+        if !self.sender.publisher.is_enabled() {
+            return Ok(());
+        }
+        let started = tokio::time::Instant::now();
+        let nodes = self.routes.lookup_nodes(&full_jid).await;
+        tracing::debug!(
+            elapsed_ms = started.elapsed().as_millis(),
+            success = nodes.is_ok(),
+            "Redis session-route lookup completed"
+        );
+        let nodes = nodes?;
+        let payload = serde_json::json!({
+            "target": full_jid,
+            "sm_session_teardown": true,
+            "sm_session_id": sm_session_id,
+        });
+        for node_id in nodes {
+            if node_id != self.routes.node_id() {
+                self.sender
+                    .send_control_to_node(&node_id, &full_jid, payload.clone())
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ClusterSmMucTeardown {
+    /// Acknowledge every current room node before writing the exact SM
+    /// tombstone and removing matching Redis occupancy indexes.
+    pub(crate) async fn send_sm_muc_teardown(
+        &self,
+        room_jid: &str,
+        sm_session_id: uuid::Uuid,
+        occupant: &crate::state::SerializableMucOccupant,
+    ) -> Result<()> {
+        let Some(pool) = &self.sender.publisher.pool else {
+            return Ok(());
+        };
+        let room_jid = crate::jid::canonicalize_bare(room_jid)?;
+        let nick = crate::xmpp::xml_util::prepare_muc_nick(&occupant.nick)?;
+        let nodes = self.sender.publisher.active_muc_nodes(&room_jid).await?;
+        let occupants_key = self
+            .sender
+            .publisher
+            .key(format!("muc_occupants:{room_jid}"));
+        let owners_key = self
+            .sender
+            .publisher
+            .key(format!("muc_occupant_nodes:{room_jid}"));
+        let nodes_key = self.sender.publisher.key(format!("muc_nodes:{room_jid}"));
+        let instances_key = self
+            .sender
+            .publisher
+            .key(format!("muc_occupant_instances:{room_jid}"));
+        let node_counts_key = self
+            .sender
+            .publisher
+            .key(format!("muc_node_counts:{room_jid}"));
+        let tombstone_key = self
+            .sender
+            .publisher
+            .key(format!("sm_muc_teardown:{sm_session_id}"));
+        let payload = serde_json::json!({
+            "target": &room_jid,
+            "sm_muc_teardown": true,
+            "sm_session_id": sm_session_id,
+            "occupant": occupant,
+        });
+        // Capture and acknowledge every current room node before mutating the
+        // Redis ownership indexes. If the owner node removes itself first,
+        // a crash could otherwise make a retry forget which live process
+        // still needs the unavailable broadcast.
+        for node_id in &nodes {
+            if node_id != &self.sender.publisher.node_id {
+                self.sender
+                    .send_control_to_node(node_id, &room_jid, payload.clone())
+                    .await?;
+            }
+        }
+        let mut conn = pool.get().await?;
+        let script = redis::Script::new(
+            r#"
+            redis.call('set', KEYS[4], '1', 'EX', ARGV[6])
+            local raw = redis.call('hget', KEYS[1], ARGV[1])
+            if not raw then return 0 end
+            local ok, decoded = pcall(cjson.decode, raw)
+            if not ok
+                or decoded['sm_session_id'] ~= ARGV[2]
+                or decoded['full_jid'] ~= ARGV[3]
+                or decoded['cluster_epoch'] ~= ARGV[4]
+                or decoded['connection_id'] ~= ARGV[5]
+            then return 0 end
+            local owner = redis.call('hget', KEYS[2], ARGV[1])
+            redis.call('hdel', KEYS[1], ARGV[1])
+            redis.call('hdel', KEYS[2], ARGV[1])
+            redis.call('hdel', KEYS[5], ARGV[1])
+            if owner then
+                local remaining = redis.call('hincrby', KEYS[6], owner, -1)
+                if remaining <= 0 then
+                    redis.call('hdel', KEYS[6], owner)
+                    redis.call('srem', KEYS[3], owner)
+                end
+            end
+            if redis.call('hlen', KEYS[1]) == 0 and redis.call('hlen', KEYS[2]) == 0 then
+                redis.call('del', KEYS[1], KEYS[2], KEYS[3], KEYS[5], KEYS[6])
+            else
+                redis.call('expire', KEYS[1], ARGV[7])
+                redis.call('expire', KEYS[2], ARGV[7])
+                redis.call('expire', KEYS[3], ARGV[7])
+                redis.call('expire', KEYS[5], ARGV[7])
+                redis.call('expire', KEYS[6], ARGV[7])
+            end
+            return 1
+            "#,
+        );
+        let _: i32 = script
+            .key(occupants_key)
+            .key(owners_key)
+            .key(nodes_key)
+            .key(tombstone_key)
+            .key(instances_key)
+            .key(node_counts_key)
+            .arg(&nick)
+            .arg(sm_session_id.to_string())
+            .arg(&occupant.full_jid)
+            .arg(occupant.cluster_epoch.to_string())
+            .arg(occupant.connection_id.to_string())
+            .arg(SM_TEARDOWN_TOMBSTONE_TTL_SECONDS)
+            .arg(MUC_SOFT_STATE_TTL_SECONDS)
+            .invoke_async(&mut *conn)
+            .await?;
+        Ok(())
+    }
+}
+
+impl ClusterSmSuspension {
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.publisher.is_enabled()
+    }
+
+    pub(crate) fn node_id(&self) -> &str {
+        &self.publisher.node_id
+    }
+
+    /// Refresh only the exact occupancy/SM epoch. A teardown tombstone wins
+    /// over a delayed disconnect task and prevents a ghost from reappearing.
+    pub(crate) async fn register_suspended_muc_occupant(
+        &self,
+        room_jid: &str,
+        nick: &str,
+        sm_session_id: uuid::Uuid,
+        json: &str,
+    ) -> Result<bool> {
+        admit_health(&self.publisher.health, ClusterOperation::Resume)?;
+        let incoming: crate::state::SerializableMucOccupant = serde_json::from_str(json)?;
+        anyhow::ensure!(
+            incoming.sm_session_id == Some(sm_session_id)
+                && !incoming.cluster_epoch.is_nil()
+                && !incoming.connection_id.is_nil(),
+            "suspended MUC refresh requires the exact occupancy and SM identities"
+        );
+        let Some(pool) = &self.publisher.pool else {
+            return Ok(true);
+        };
+        let mut conn = pool.get().await?;
+        let room = crate::jid::canonicalize_bare(room_jid)?;
+        let nick = crate::xmpp::xml_util::prepare_muc_nick(nick)?;
+        let process_instance = self.publisher.process_instance_token()?;
+        let occupants_key = self.publisher.key(format!("muc_occupants:{room}"));
+        let owners_key = self.publisher.key(format!("muc_occupant_nodes:{room}"));
+        let tombstone_key = self
+            .publisher
+            .key(format!("sm_muc_teardown:{sm_session_id}"));
+        let nodes_key = self.publisher.key(format!("muc_nodes:{room}"));
+        let instances_key = self.publisher.key(format!("muc_occupant_instances:{room}"));
+        let node_counts_key = self.publisher.key(format!("muc_node_counts:{room}"));
+        let alive_key = self
+            .publisher
+            .key(format!("node:{}:alive", self.publisher.node_id));
+        let process_alive_key = self.publisher.process_alive_key()?;
+        let script = redis::Script::new(
+            r#"
+            if redis.call('exists', KEYS[3]) == 1 then return 0 end
+            if redis.call('hget', KEYS[2], ARGV[1]) ~= ARGV[2] then return 0 end
+            if redis.call('hget', KEYS[5], ARGV[1]) ~= ARGV[3] then return 0 end
+            local raw = redis.call('hget', KEYS[1], ARGV[1])
+            if not raw then return 0 end
+            local ok, current = pcall(cjson.decode, raw)
+            if not ok or current['cluster_epoch'] ~= ARGV[5]
+                or current['connection_id'] ~= ARGV[6] then return 0 end
+            redis.call('hset', KEYS[1], ARGV[1], ARGV[4])
+            redis.call('sadd', KEYS[4], ARGV[2])
+            redis.call('set', KEYS[7], ARGV[8], 'EX', ARGV[7])
+            redis.call('set', KEYS[8], ARGV[8], 'EX', ARGV[7])
+            redis.call('expire', KEYS[1], ARGV[9])
+            redis.call('expire', KEYS[2], ARGV[9])
+            redis.call('expire', KEYS[4], ARGV[9])
+            redis.call('expire', KEYS[5], ARGV[9])
+            redis.call('expire', KEYS[6], ARGV[9])
+            return 1
+            "#,
+        );
+        let stored: i32 = script
+            .key(occupants_key)
+            .key(owners_key)
+            .key(tombstone_key)
+            .key(nodes_key)
+            .key(instances_key)
+            .key(node_counts_key)
+            .key(alive_key)
+            .key(process_alive_key)
+            .arg(&nick)
+            .arg(&self.publisher.node_id)
+            .arg(process_instance)
+            .arg(json)
+            .arg(incoming.cluster_epoch.to_string())
+            .arg(incoming.connection_id.to_string())
+            .arg(NODE_TTL_SECONDS)
+            .arg(NODE_PROTOCOL_VERSION)
+            .arg(MUC_SOFT_STATE_TTL_SECONDS)
+            .invoke_async(&mut *conn)
+            .await?;
+        Ok(stored == 1)
+    }
+
+    async fn send_muc_operation_wake(
+        &self,
+        descriptor: &northstar_room_core::ClusterMucWakeDescriptor,
+    ) -> Result<()> {
+        send_muc_operation_wake(&self.publisher, &self.muc_outbox_notify, descriptor).await
+    }
+}
+
+async fn send_muc_operation_wake(
+    publisher: &ClusterSignedPublisher,
+    muc_outbox_notify: &tokio::sync::Notify,
+    descriptor: &northstar_room_core::ClusterMucWakeDescriptor,
+) -> Result<()> {
+    if descriptor
+        .target_nodes
+        .iter()
+        .any(|node| node == &publisher.node_id)
+    {
+        muc_outbox_notify.notify_one();
+    }
+    let Some(pool) = &publisher.pool else {
+        return Ok(());
+    };
+    let payload = serde_json::json!({
+        "target": descriptor.room_id.to_string(),
+        "muc_operation_wake": true,
+        "operation_id": descriptor.operation_id.to_string(),
+        "database_event_id": descriptor.event_id.to_string(),
+        "event_sequence": descriptor.event_sequence,
+        "request_id": descriptor.operation_id.to_string(),
+    });
+    let mut conn = pool.get().await?;
+    for node_id in &descriptor.target_nodes {
+        if node_id == &publisher.node_id {
+            continue;
+        }
+        let channel = publisher.key(format!("node:{node_id}"));
+        let _ = publisher
+            .publish_signed(&mut conn, node_id, &channel, payload.clone())
+            .await?;
+    }
+    Ok(())
+}
+
+impl crate::services::muc::MucWakePort for ClusterSmSuspension {
+    async fn wake(&self, descriptor: &northstar_room_core::ClusterMucWakeDescriptor) -> Result<()> {
+        self.send_muc_operation_wake(descriptor).await
+    }
+
+    fn record_failure(&self, error: &anyhow::Error) {
+        self.publisher.record_control_plane_failure(error);
+    }
+}
+
+impl crate::services::muc::MucWakePort for ClusterMucOperationWake {
+    async fn wake(&self, descriptor: &northstar_room_core::ClusterMucWakeDescriptor) -> Result<()> {
+        send_muc_operation_wake(&self.publisher, &self.muc_outbox_notify, descriptor).await
+    }
+
+    fn record_failure(&self, error: &anyhow::Error) {
+        self.publisher.record_control_plane_failure(error);
+    }
 }
 
 /// PostgreSQL-fenced maintenance of disposable Redis projections. This handle
@@ -1299,120 +2272,7 @@ impl ClusterMaintenanceRedis {
     }
 
     async fn reconcile_muc_soft_state(&self, room_jid: &str) -> Result<()> {
-        let Some(pool) = &self.pool else {
-            return Ok(());
-        };
-        let room = crate::jid::canonicalize_bare(room_jid)?;
-        let occupants_key = self.key(format!("muc_occupants:{room}"));
-        let owners_key = self.key(format!("muc_occupant_nodes:{room}"));
-        let nodes_key = self.key(format!("muc_nodes:{room}"));
-        let instances_key = self.key(format!("muc_occupant_instances:{room}"));
-        let node_counts_key = self.key(format!("muc_node_counts:{room}"));
-        let alive_prefix = self.key("node:".to_owned());
-        let instance_alive_prefix = self.key("node_instance:".to_owned());
-        let mut conn = pool.get().await?;
-        let script = redis::Script::new(
-            r#"
-            local alive_cache = {}
-            local function node_is_alive(node)
-                local cached = alive_cache[node]
-                if cached == nil then
-                    cached = redis.call('exists', ARGV[1] .. node .. ':alive')
-                    alive_cache[node] = cached
-                end
-                return cached == 1
-            end
-
-            local function instance_is_alive(node, instance)
-                if not instance then return false end
-                local cache_key = node .. '|' .. instance
-                local cached = alive_cache[cache_key]
-                if cached == nil then
-                    cached = redis.call(
-                        'exists', ARGV[2] .. node .. ':' .. instance .. ':alive'
-                    )
-                    alive_cache[cache_key] = cached
-                end
-                return cached == 1
-            end
-
-            local owners = redis.call('hgetall', KEYS[2])
-            for index = 1, #owners, 2 do
-                local nick = owners[index]
-                local owner = owners[index + 1]
-                local instance = redis.call('hget', KEYS[4], nick)
-                if redis.call('hexists', KEYS[1], nick) == 0
-                    or not node_is_alive(owner)
-                    or not instance_is_alive(owner, instance)
-                then
-                    redis.call('hdel', KEYS[1], nick)
-                    redis.call('hdel', KEYS[2], nick)
-                    redis.call('hdel', KEYS[4], nick)
-                end
-            end
-
-            local occupants = redis.call('hgetall', KEYS[1])
-            for index = 1, #occupants, 2 do
-                local nick = occupants[index]
-                if redis.call('hexists', KEYS[2], nick) == 0
-                    or redis.call('hexists', KEYS[4], nick) == 0
-                then
-                    redis.call('hdel', KEYS[1], nick)
-                    redis.call('hdel', KEYS[2], nick)
-                    redis.call('hdel', KEYS[4], nick)
-                end
-            end
-
-            for _, nick in ipairs(redis.call('hkeys', KEYS[4])) do
-                if redis.call('hexists', KEYS[1], nick) == 0
-                    or redis.call('hexists', KEYS[2], nick) == 0
-                then
-                    redis.call('hdel', KEYS[4], nick)
-                end
-            end
-
-            local live_owner_nodes = {}
-            redis.call('del', KEYS[5])
-            owners = redis.call('hgetall', KEYS[2])
-            for index = 1, #owners, 2 do
-                local owner = owners[index + 1]
-                live_owner_nodes[owner] = true
-                redis.call('hincrby', KEYS[5], owner, 1)
-                redis.call('sadd', KEYS[3], owner)
-            end
-            for _, node in ipairs(redis.call('smembers', KEYS[3])) do
-                if not live_owner_nodes[node] or not node_is_alive(node) then
-                    redis.call('srem', KEYS[3], node)
-                end
-            end
-
-            if redis.call('hlen', KEYS[1]) == 0
-                and redis.call('hlen', KEYS[2]) == 0
-                and redis.call('hlen', KEYS[4]) == 0
-            then
-                redis.call('del', KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5])
-                return 0
-            end
-            redis.call('expire', KEYS[1], ARGV[3])
-            redis.call('expire', KEYS[2], ARGV[3])
-            redis.call('expire', KEYS[3], ARGV[3])
-            redis.call('expire', KEYS[4], ARGV[3])
-            redis.call('expire', KEYS[5], ARGV[3])
-            return redis.call('hlen', KEYS[1])
-            "#,
-        );
-        let _: usize = script
-            .key(occupants_key)
-            .key(owners_key)
-            .key(nodes_key)
-            .key(instances_key)
-            .key(node_counts_key)
-            .arg(alive_prefix)
-            .arg(instance_alive_prefix)
-            .arg(MUC_SOFT_STATE_TTL_SECONDS)
-            .invoke_async(&mut *conn)
-            .await?;
-        Ok(())
+        reconcile_muc_soft_state_in(self.pool.as_ref(), &self.key_prefix, room_jid).await
     }
 
     pub async fn register_muc_occupant(
@@ -1574,6 +2434,366 @@ pub(crate) struct ClusterMucOutboxSignal {
     wake: Arc<tokio::sync::Notify>,
 }
 
+/// PostgreSQL session-route discovery for listener presence probes. Redis is
+/// only the command transport; it is not the authority for session ownership.
+#[derive(Clone)]
+pub(crate) struct ClusterListenerPresenceRoutes {
+    authority_pool: Arc<std::sync::OnceLock<sqlx::PgPool>>,
+    namespace: String,
+    node_id: String,
+    enabled: bool,
+}
+
+impl ClusterListenerPresenceRoutes {
+    async fn lookup_nodes(&self, jid: &str) -> Result<Vec<String>> {
+        let jid = crate::jid::CanonicalJid::parse(jid)?;
+        if !self.enabled {
+            return Ok(Vec::new());
+        }
+        let authority_pool = self
+            .authority_pool
+            .get()
+            .context("cluster session authority pool is unavailable")?;
+        let nodes = if jid.resourcepart().is_some() {
+            crate::db::cluster_session_route_authority(
+                authority_pool,
+                &self.namespace,
+                &jid.to_string(),
+            )
+            .await?
+            .map(|authority| authority.owner_node_id)
+            .into_iter()
+            .collect()
+        } else {
+            crate::db::cluster_session_nodes_for_bare(authority_pool, &self.namespace, &jid.bare())
+                .await?
+        };
+        Ok(nodes)
+    }
+
+    pub(crate) async fn remote_nodes(&self, jid: &str) -> Result<Vec<String>> {
+        Ok(self
+            .lookup_nodes(jid)
+            .await?
+            .into_iter()
+            .filter(|node_id| node_id != &self.node_id)
+            .collect())
+    }
+
+    pub(crate) fn node_id(&self) -> &str {
+        &self.node_id
+    }
+}
+
+/// Disposable Redis room-membership projection used after an exact local
+/// removal. The script keeps a node subscribed while any occupancy remains.
+#[derive(Clone)]
+pub(crate) struct ClusterListenerMucProjection {
+    pool: Option<Pool<RedisConnectionManager>>,
+    key_prefix: String,
+    node_id: String,
+}
+
+impl ClusterListenerMucProjection {
+    pub(crate) async fn leave_empty_room(&self, room_jid: &str) -> Result<()> {
+        leave_muc_node_projection(
+            self.pool.as_ref(),
+            &self.key_prefix,
+            &self.node_id,
+            room_jid,
+        )
+        .await
+    }
+}
+
+/// Exact local SM-owned occupancy removal and reconciled room emptiness.
+/// It cannot publish node commands or mutate PostgreSQL authority.
+#[derive(Clone)]
+pub(crate) struct ClusterSmMucTeardownProjection {
+    pool: Option<Pool<RedisConnectionManager>>,
+    key_prefix: String,
+    node_id: String,
+    connection_uuid: uuid::Uuid,
+    instance_epoch: Arc<AtomicI64>,
+}
+
+impl ClusterSmMucTeardownProjection {
+    fn key(&self, suffix: String) -> String {
+        format!("{}:{suffix}", self.key_prefix)
+    }
+
+    fn process_instance_token(&self) -> Result<String> {
+        let epoch = self.instance_epoch.load(Ordering::Acquire);
+        anyhow::ensure!(epoch >= 1, "cluster process instance is not authoritative");
+        Ok(format!("{}.{}", self.connection_uuid.simple(), epoch))
+    }
+
+    pub(crate) async fn unregister_muc_occupant_epoch(
+        &self,
+        room_jid: &str,
+        nick: &str,
+        cluster_epoch: uuid::Uuid,
+        connection_id: uuid::Uuid,
+    ) -> Result<bool> {
+        anyhow::ensure!(
+            !cluster_epoch.is_nil() && !connection_id.is_nil(),
+            "MUC unregister requires non-nil occupancy and connection identities"
+        );
+        let Some(pool) = &self.pool else {
+            return Ok(true);
+        };
+        let mut conn = pool.get().await?;
+        let room = crate::jid::canonicalize_bare(room_jid)?;
+        let nick = crate::xmpp::xml_util::prepare_muc_nick(nick)?;
+        let process_instance = self.process_instance_token()?;
+        let occupants_key = self.key(format!("muc_occupants:{room}"));
+        let owners_key = self.key(format!("muc_occupant_nodes:{room}"));
+        let nodes_key = self.key(format!("muc_nodes:{room}"));
+        let instances_key = self.key(format!("muc_occupant_instances:{room}"));
+        let node_counts_key = self.key(format!("muc_node_counts:{room}"));
+        let script = redis::Script::new(
+            r#"
+            if redis.call('hget', KEYS[2], ARGV[1]) ~= ARGV[2] then return 0 end
+            if redis.call('hget', KEYS[4], ARGV[1]) ~= ARGV[3] then return 0 end
+            local raw = redis.call('hget', KEYS[1], ARGV[1])
+            if not raw then return 0 end
+            local ok, decoded = pcall(cjson.decode, raw)
+            if not ok or decoded['cluster_epoch'] ~= ARGV[4]
+                or decoded['connection_id'] ~= ARGV[5] then return 0 end
+            redis.call('hdel', KEYS[1], ARGV[1])
+            redis.call('hdel', KEYS[2], ARGV[1])
+            redis.call('hdel', KEYS[4], ARGV[1])
+            local remaining = redis.call('hincrby', KEYS[5], ARGV[2], -1)
+            if remaining <= 0 then
+                redis.call('hdel', KEYS[5], ARGV[2])
+                redis.call('srem', KEYS[3], ARGV[2])
+            end
+            if redis.call('hlen', KEYS[1]) == 0 and redis.call('hlen', KEYS[2]) == 0 then
+                redis.call('del', KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5])
+            else
+                redis.call('expire', KEYS[1], ARGV[6])
+                redis.call('expire', KEYS[2], ARGV[6])
+                redis.call('expire', KEYS[3], ARGV[6])
+                redis.call('expire', KEYS[4], ARGV[6])
+                redis.call('expire', KEYS[5], ARGV[6])
+            end
+            return 1
+            "#,
+        );
+        let removed: i32 = script
+            .key(occupants_key)
+            .key(owners_key)
+            .key(nodes_key)
+            .key(instances_key)
+            .key(node_counts_key)
+            .arg(&nick)
+            .arg(&self.node_id)
+            .arg(process_instance)
+            .arg(cluster_epoch.to_string())
+            .arg(connection_id.to_string())
+            .arg(MUC_SOFT_STATE_TTL_SECONDS)
+            .invoke_async(&mut *conn)
+            .await?;
+        Ok(removed == 1)
+    }
+
+    pub(crate) async fn get_muc_occupants(
+        &self,
+        room_jid: &str,
+    ) -> Result<HashMap<String, String>> {
+        let Some(pool) = &self.pool else {
+            return Ok(HashMap::new());
+        };
+        let room = crate::jid::canonicalize_bare(room_jid)?;
+        reconcile_muc_soft_state_in(self.pool.as_ref(), &self.key_prefix, &room).await?;
+        let mut conn = pool.get().await?;
+        let occupants_key = self.key(format!("muc_occupants:{room}"));
+        Ok(conn.hgetall(&occupants_key).await?)
+    }
+
+    pub(crate) async fn leave_muc(&self, room_jid: &str) -> Result<()> {
+        leave_muc_node_projection(
+            self.pool.as_ref(),
+            &self.key_prefix,
+            &self.node_id,
+            room_jid,
+        )
+        .await
+    }
+
+    pub(crate) async fn room_is_empty(&self, room_jid: &str) -> Result<bool> {
+        Ok(self.get_muc_occupants(room_jid).await?.is_empty())
+    }
+}
+
+async fn reconcile_muc_soft_state_in(
+    pool: Option<&Pool<RedisConnectionManager>>,
+    key_prefix: &str,
+    room_jid: &str,
+) -> Result<()> {
+    let Some(pool) = pool else {
+        return Ok(());
+    };
+    let key = |suffix: String| format!("{key_prefix}:{suffix}");
+    let room = crate::jid::canonicalize_bare(room_jid)?;
+    let occupants_key = key(format!("muc_occupants:{room}"));
+    let owners_key = key(format!("muc_occupant_nodes:{room}"));
+    let nodes_key = key(format!("muc_nodes:{room}"));
+    let instances_key = key(format!("muc_occupant_instances:{room}"));
+    let node_counts_key = key(format!("muc_node_counts:{room}"));
+    let alive_prefix = key("node:".to_owned());
+    let instance_alive_prefix = key("node_instance:".to_owned());
+    let mut conn = pool.get().await?;
+    let script = redis::Script::new(
+        r#"
+        local alive_cache = {}
+        local function node_is_alive(node)
+            local cached = alive_cache[node]
+            if cached == nil then
+                cached = redis.call('exists', ARGV[1] .. node .. ':alive')
+                alive_cache[node] = cached
+            end
+            return cached == 1
+        end
+
+        local function instance_is_alive(node, instance)
+            if not instance then return false end
+            local cache_key = node .. '|' .. instance
+            local cached = alive_cache[cache_key]
+            if cached == nil then
+                cached = redis.call(
+                    'exists', ARGV[2] .. node .. ':' .. instance .. ':alive'
+                )
+                alive_cache[cache_key] = cached
+            end
+            return cached == 1
+        end
+
+        local owners = redis.call('hgetall', KEYS[2])
+        for index = 1, #owners, 2 do
+            local nick = owners[index]
+            local owner = owners[index + 1]
+            local instance = redis.call('hget', KEYS[4], nick)
+            if redis.call('hexists', KEYS[1], nick) == 0
+                or not node_is_alive(owner)
+                or not instance_is_alive(owner, instance)
+            then
+                redis.call('hdel', KEYS[1], nick)
+                redis.call('hdel', KEYS[2], nick)
+                redis.call('hdel', KEYS[4], nick)
+            end
+        end
+
+        local occupants = redis.call('hgetall', KEYS[1])
+        for index = 1, #occupants, 2 do
+            local nick = occupants[index]
+            if redis.call('hexists', KEYS[2], nick) == 0
+                or redis.call('hexists', KEYS[4], nick) == 0
+            then
+                redis.call('hdel', KEYS[1], nick)
+                redis.call('hdel', KEYS[2], nick)
+                redis.call('hdel', KEYS[4], nick)
+            end
+        end
+
+        for _, nick in ipairs(redis.call('hkeys', KEYS[4])) do
+            if redis.call('hexists', KEYS[1], nick) == 0
+                or redis.call('hexists', KEYS[2], nick) == 0
+            then
+                redis.call('hdel', KEYS[4], nick)
+            end
+        end
+
+        local live_owner_nodes = {}
+        redis.call('del', KEYS[5])
+        owners = redis.call('hgetall', KEYS[2])
+        for index = 1, #owners, 2 do
+            local owner = owners[index + 1]
+            live_owner_nodes[owner] = true
+            redis.call('hincrby', KEYS[5], owner, 1)
+            redis.call('sadd', KEYS[3], owner)
+        end
+        for _, node in ipairs(redis.call('smembers', KEYS[3])) do
+            if not live_owner_nodes[node] or not node_is_alive(node) then
+                redis.call('srem', KEYS[3], node)
+            end
+        end
+
+        if redis.call('hlen', KEYS[1]) == 0
+            and redis.call('hlen', KEYS[2]) == 0
+            and redis.call('hlen', KEYS[4]) == 0
+        then
+            redis.call('del', KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5])
+            return 0
+        end
+        redis.call('expire', KEYS[1], ARGV[3])
+        redis.call('expire', KEYS[2], ARGV[3])
+        redis.call('expire', KEYS[3], ARGV[3])
+        redis.call('expire', KEYS[4], ARGV[3])
+        redis.call('expire', KEYS[5], ARGV[3])
+        return redis.call('hlen', KEYS[1])
+        "#,
+    );
+    let _: usize = script
+        .key(occupants_key)
+        .key(owners_key)
+        .key(nodes_key)
+        .key(instances_key)
+        .key(node_counts_key)
+        .arg(alive_prefix)
+        .arg(instance_alive_prefix)
+        .arg(MUC_SOFT_STATE_TTL_SECONDS)
+        .invoke_async(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+async fn leave_muc_node_projection(
+    pool: Option<&Pool<RedisConnectionManager>>,
+    key_prefix: &str,
+    node_id: &str,
+    room_jid: &str,
+) -> Result<()> {
+    let Some(pool) = pool else {
+        return Ok(());
+    };
+    let mut conn = pool.get().await?;
+    let room = crate::jid::canonicalize_bare(room_jid)?;
+    let key = |suffix: &str| format!("{key_prefix}:{suffix}");
+    let owners_key = key(&format!("muc_occupant_nodes:{room}"));
+    let nodes_key = key(&format!("muc_nodes:{room}"));
+    let occupants_key = key(&format!("muc_occupants:{room}"));
+    let instances_key = key(&format!("muc_occupant_instances:{room}"));
+    let node_counts_key = key(&format!("muc_node_counts:{room}"));
+    let script = redis::Script::new(
+        r#"
+        if tonumber(redis.call('hget', KEYS[5], ARGV[1]) or '0') > 0 then return 0 end
+        redis.call('srem', KEYS[2], ARGV[1])
+        if redis.call('hlen', KEYS[3]) == 0 then
+            redis.call('del', KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5])
+        else
+            redis.call('expire', KEYS[1], ARGV[2])
+            redis.call('expire', KEYS[2], ARGV[2])
+            redis.call('expire', KEYS[3], ARGV[2])
+            redis.call('expire', KEYS[4], ARGV[2])
+            redis.call('expire', KEYS[5], ARGV[2])
+        end
+        return 1
+        "#,
+    );
+    let _: i32 = script
+        .key(owners_key)
+        .key(nodes_key)
+        .key(occupants_key)
+        .key(instances_key)
+        .key(node_counts_key)
+        .arg(node_id)
+        .arg(MUC_SOFT_STATE_TTL_SECONDS)
+        .invoke_async(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 /// Identity needed to authorize a signed session-termination command against
 /// the PostgreSQL route. The epoch is read after the authority query, so a
 /// listener never uses a stale process-instance snapshot.
@@ -1583,6 +2803,74 @@ pub(crate) struct ClusterSessionTerminationIdentity {
     node_id: String,
     instance_uuid: uuid::Uuid,
     instance_epoch: Arc<AtomicI64>,
+}
+
+/// Exact local route release after a connection has been removed from the
+/// process-local map. This handle cannot register routes or publish commands.
+#[derive(Clone)]
+pub(crate) struct ClusterSessionRouteRelease {
+    pool: Option<Pool<RedisConnectionManager>>,
+    authority_pool: Arc<std::sync::OnceLock<sqlx::PgPool>>,
+    namespace: String,
+    key_prefix: String,
+    node_id: String,
+    connection_uuid: uuid::Uuid,
+    instance_epoch: Arc<AtomicI64>,
+}
+
+impl ClusterSessionRouteRelease {
+    pub(crate) async fn release_exact_local_session_route(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+    ) -> Result<()> {
+        let (full_jid, bare) = session_route_keys(full_jid)?;
+        let Some(pool) = &self.pool else {
+            return Ok(());
+        };
+        let authority_pool = self
+            .authority_pool
+            .get()
+            .context("cluster session authority pool is unavailable")?;
+        let _ = crate::db::release_cluster_session_route(
+            authority_pool,
+            &self.namespace,
+            &full_jid,
+            &self.node_id,
+            self.connection_uuid,
+            self.instance_epoch.load(Ordering::Acquire),
+            connection_id,
+        )
+        .await?;
+        let mut conn = pool.get().await?;
+        let full_key = format!("{}:session:{full_jid}", self.key_prefix);
+        let bare_key = format!("{}:user_sessions:{bare}", self.key_prefix);
+        let activity_key = format!("{}:session_activity", self.key_prefix);
+        let instance_key = format!("{}:session_instance:{full_jid}", self.key_prefix);
+        let script = redis::Script::new(
+            r#"
+            if redis.call('get', KEYS[1]) == ARGV[1] and redis.call('get', KEYS[4]) == ARGV[3] then
+                redis.call('del', KEYS[1])
+                redis.call('del', KEYS[4])
+                redis.call('srem', KEYS[2], ARGV[2])
+                redis.call('zrem', KEYS[3], ARGV[2])
+                return 1
+            end
+            return 0
+            "#,
+        );
+        let _: i32 = script
+            .key(&full_key)
+            .key(&bare_key)
+            .key(&activity_key)
+            .key(&instance_key)
+            .arg(&self.node_id)
+            .arg(&full_jid)
+            .arg(connection_id.to_string())
+            .invoke_async(&mut *conn)
+            .await?;
+        Ok(())
+    }
 }
 
 impl ClusterSessionTerminationIdentity {
@@ -1985,6 +3273,40 @@ impl Drop for PendingAckRegistration {
     }
 }
 
+fn register_pending_ack_in(
+    slots: &Arc<tokio::sync::Semaphore>,
+    entries: &Arc<dashmap::DashMap<String, PendingClusterAck>>,
+    request_id: &str,
+    source_node: &str,
+    nonce: &str,
+) -> Result<PendingAckRegistration> {
+    let permit = Arc::clone(slots)
+        .try_acquire_owned()
+        .map_err(|_| anyhow::anyhow!("cluster acknowledgement capacity is exhausted"))?;
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+    let registration_id = uuid::Uuid::new_v4();
+    match entries.entry(request_id.to_owned()) {
+        dashmap::mapref::entry::Entry::Vacant(entry) => {
+            entry.insert(PendingClusterAck {
+                source_node: source_node.to_owned(),
+                nonce: nonce.to_owned(),
+                registration_id,
+                sender,
+            });
+        }
+        dashmap::mapref::entry::Entry::Occupied(_) => {
+            anyhow::bail!("cluster acknowledgement request ID collided");
+        }
+    }
+    Ok(PendingAckRegistration {
+        request_id: request_id.to_owned(),
+        registration_id,
+        entries: Arc::clone(entries),
+        receiver,
+        _permit: permit,
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ClusterFailureClass {
     RedisCommand,
@@ -2295,8 +3617,11 @@ impl ClusterManager {
                 instance_epoch: Arc::new(AtomicI64::new(0)),
                 authorized_instances: Arc::new(dashmap::DashMap::new()),
                 authorized_peer_keys: Arc::new(dashmap::DashMap::new()),
+                #[cfg(test)]
                 replay_cache: Arc::new(dashmap::DashMap::new()),
+                #[cfg(test)]
                 replay_cache_gate: Arc::new(Mutex::new(())),
+                #[cfg(test)]
                 replay_cache_next_expiry: Arc::new(AtomicI64::new(i64::MAX)),
                 #[cfg(test)]
                 replay_cache_sweeps: Arc::new(AtomicU64::new(0)),
@@ -2365,8 +3690,11 @@ impl ClusterManager {
             instance_epoch: Arc::new(AtomicI64::new(0)),
             authorized_instances: Arc::new(dashmap::DashMap::new()),
             authorized_peer_keys: Arc::new(dashmap::DashMap::new()),
+            #[cfg(test)]
             replay_cache: Arc::new(dashmap::DashMap::new()),
+            #[cfg(test)]
             replay_cache_gate: Arc::new(Mutex::new(())),
+            #[cfg(test)]
             replay_cache_next_expiry: Arc::new(AtomicI64::new(i64::MAX)),
             #[cfg(test)]
             replay_cache_sweeps: Arc::new(AtomicU64::new(0)),
@@ -2462,11 +3790,141 @@ impl ClusterManager {
         }
     }
 
+    fn signed_publisher(&self) -> ClusterSignedPublisher {
+        ClusterSignedPublisher {
+            pool: self.pool.clone(),
+            namespace: self.namespace.clone(),
+            key_prefix: self.key_prefix.clone(),
+            node_id: self.node_id.clone(),
+            security: self.security.clone(),
+            connection_uuid: self.connection_uuid,
+            instance_epoch: Arc::clone(&self.instance_epoch),
+            authorized_instances: Arc::clone(&self.authorized_instances),
+            health: Arc::clone(&self.health),
+            listener_rotation: Arc::clone(&self.listener_rotation),
+            failure_policy: self.failure_policy(),
+            publication_gate: Arc::clone(&self.publication_gate),
+        }
+    }
+
+    fn correlated_control_sender(&self) -> ClusterCorrelatedControlSender {
+        ClusterCorrelatedControlSender {
+            publisher: self.signed_publisher(),
+            transport_ready: self.client.is_some(),
+            pending_ack_slots: Arc::clone(&self.pending_ack_slots),
+            pending_acks: Arc::clone(&self.pending_acks),
+        }
+    }
+
+    pub(crate) fn node_delivery(&self) -> ClusterNodeDelivery {
+        ClusterNodeDelivery {
+            publisher: self.signed_publisher(),
+            pool: self.pool.clone(),
+            client: self.client.clone(),
+            health: Arc::clone(&self.health),
+            pending_ack_slots: Arc::clone(&self.pending_ack_slots),
+            pending_acks: Arc::clone(&self.pending_acks),
+        }
+    }
+
+    pub(crate) fn unavailable_delivery(&self) -> ClusterUnavailableDelivery {
+        ClusterUnavailableDelivery {
+            routes: self.listener_presence_routes(),
+            sender: self.node_delivery(),
+        }
+    }
+
+    pub(crate) fn account_teardown_notifier(&self) -> ClusterAccountTeardownNotifier {
+        ClusterAccountTeardownNotifier {
+            routes: self.listener_presence_routes(),
+            sender: self.correlated_control_sender(),
+        }
+    }
+
+    pub(crate) fn sm_session_teardown_notifier(&self) -> ClusterSmSessionTeardownNotifier {
+        ClusterSmSessionTeardownNotifier {
+            routes: self.listener_presence_routes(),
+            sender: self.correlated_control_sender(),
+        }
+    }
+
+    pub(crate) fn sm_muc_teardown(&self) -> ClusterSmMucTeardown {
+        ClusterSmMucTeardown {
+            sender: self.correlated_control_sender(),
+        }
+    }
+
+    pub(crate) fn sm_suspension(&self) -> ClusterSmSuspension {
+        ClusterSmSuspension {
+            publisher: self.signed_publisher(),
+            muc_outbox_notify: Arc::clone(&self.muc_outbox_notify),
+        }
+    }
+
+    pub(crate) fn muc_operation_wake(&self) -> ClusterMucOperationWake {
+        ClusterMucOperationWake {
+            publisher: self.signed_publisher(),
+            muc_outbox_notify: Arc::clone(&self.muc_outbox_notify),
+        }
+    }
+
+    pub(crate) fn listener_presence_routes(&self) -> ClusterListenerPresenceRoutes {
+        ClusterListenerPresenceRoutes {
+            authority_pool: Arc::clone(&self.authority_pool),
+            namespace: self.namespace.clone(),
+            node_id: self.node_id.clone(),
+            enabled: self.pool.is_some(),
+        }
+    }
+
+    pub(crate) fn mix_route_lookup(&self) -> ClusterMixRouteLookup {
+        ClusterMixRouteLookup {
+            routes: self.listener_presence_routes(),
+        }
+    }
+
+    pub(crate) fn listener_muc_projection(&self) -> ClusterListenerMucProjection {
+        ClusterListenerMucProjection {
+            pool: self.pool.clone(),
+            key_prefix: self.key_prefix.clone(),
+            node_id: self.node_id.clone(),
+        }
+    }
+
+    pub(crate) fn sm_muc_teardown_projection(&self) -> ClusterSmMucTeardownProjection {
+        ClusterSmMucTeardownProjection {
+            pool: self.pool.clone(),
+            key_prefix: self.key_prefix.clone(),
+            node_id: self.node_id.clone(),
+            connection_uuid: self.connection_uuid,
+            instance_epoch: Arc::clone(&self.instance_epoch),
+        }
+    }
+
+    pub(crate) fn muc_departure(&self) -> ClusterMucDeparture {
+        ClusterMucDeparture {
+            projection: self.sm_muc_teardown_projection(),
+            publisher: self.signed_publisher(),
+        }
+    }
+
     pub(crate) fn session_termination_identity(&self) -> ClusterSessionTerminationIdentity {
         ClusterSessionTerminationIdentity {
             namespace: self.namespace.clone(),
             node_id: self.node_id.clone(),
             instance_uuid: self.connection_uuid,
+            instance_epoch: Arc::clone(&self.instance_epoch),
+        }
+    }
+
+    pub(crate) fn session_route_release(&self) -> ClusterSessionRouteRelease {
+        ClusterSessionRouteRelease {
+            pool: self.pool.clone(),
+            authority_pool: Arc::clone(&self.authority_pool),
+            namespace: self.namespace.clone(),
+            key_prefix: self.key_prefix.clone(),
+            node_id: self.node_id.clone(),
+            connection_uuid: self.connection_uuid,
             instance_epoch: Arc::clone(&self.instance_epoch),
         }
     }
@@ -2492,6 +3950,14 @@ impl ClusterManager {
         }
     }
 
+    pub(crate) fn listener_security(&self) -> ClusterListenerSecurity {
+        ClusterListenerSecurity {
+            publisher: self.signed_publisher(),
+            authorized_peer_keys: Arc::clone(&self.authorized_peer_keys),
+            authority_pool: Arc::clone(&self.authority_pool),
+        }
+    }
+
     pub fn is_enabled(&self) -> bool {
         self.pool.is_some()
     }
@@ -2502,85 +3968,20 @@ impl ClusterManager {
             .map_err(|_| anyhow::anyhow!("cluster PostgreSQL authority pool was configured twice"))
     }
 
-    async fn verify_signed_payload_persisted(
-        &self,
-        raw: &str,
-        channel: &str,
-        expected_source: Option<&str>,
-    ) -> Result<crate::cluster_security::SignedClusterEnvelope> {
-        let envelope = self.verify_signed_payload_inner(raw, channel, expected_source, false)?;
-        if envelope.kind == crate::cluster_security::ClusterCommandKind::Ack {
-            anyhow::ensure!(
-                serde_json::to_vec(&envelope.payload)?.len() <= MAX_DELIVERY_ACK_BYTES,
-                "cluster acknowledgement payload is oversized"
-            );
-        }
-        let pool = self
-            .authority_pool
-            .get()
-            .context("cluster replay authority pool is unavailable")?;
-        let admitted = match crate::db::admit_cluster_envelope_replay(
-            pool,
-            &self.namespace,
-            &envelope,
-        )
-        .await
-        {
-            Ok(admitted) => admitted,
-            Err(error) => {
-                // A full/drifted replay ledger and a PostgreSQL timeout are
-                // control-plane authority failures, not unauthenticated input.
-                // Rotate the listener and fail cluster mutations closed until
-                // the bounded cleanup/attestation pass proves recovery.
-                self.record_authority_failure(&error);
-                return Err(error);
-            }
-        };
-        if !admitted {
-            self.health
-                .replay_rejections
-                .fetch_add(1, Ordering::Relaxed);
-            anyhow::bail!("cluster envelope replay rejected by PostgreSQL authority");
-        }
-        // PostgreSQL is the durable replay authority for this path. Once its
-        // unique fence commits, a bounded process-local cache must not turn a
-        // successfully consumed event into an application failure: the retry
-        // would then be rejected by PostgreSQL and the event would be lost.
-        // Volatile channels still use the fail-closed in-memory cache below.
-        Ok(envelope)
-    }
-
+    #[cfg(test)]
     fn register_pending_ack(
         &self,
         request_id: &str,
         source_node: &str,
         nonce: &str,
     ) -> Result<PendingAckRegistration> {
-        let permit = Arc::clone(&self.pending_ack_slots)
-            .try_acquire_owned()
-            .map_err(|_| anyhow::anyhow!("cluster acknowledgement capacity is exhausted"))?;
-        let (sender, receiver) = tokio::sync::mpsc::channel(1);
-        let registration_id = uuid::Uuid::new_v4();
-        match self.pending_acks.entry(request_id.to_owned()) {
-            dashmap::mapref::entry::Entry::Vacant(entry) => {
-                entry.insert(PendingClusterAck {
-                    source_node: source_node.to_owned(),
-                    nonce: nonce.to_owned(),
-                    registration_id,
-                    sender,
-                });
-            }
-            dashmap::mapref::entry::Entry::Occupied(_) => {
-                anyhow::bail!("cluster acknowledgement request ID collided");
-            }
-        }
-        Ok(PendingAckRegistration {
-            request_id: request_id.to_owned(),
-            registration_id,
-            entries: Arc::clone(&self.pending_acks),
-            receiver,
-            _permit: permit,
-        })
+        register_pending_ack_in(
+            &self.pending_ack_slots,
+            &self.pending_acks,
+            request_id,
+            source_node,
+            nonce,
+        )
     }
 
     #[cfg(test)]
@@ -2792,10 +4193,6 @@ impl ClusterManager {
         self.record_failure(ClusterFailureClass::PubSub, error);
     }
 
-    fn record_authority_failure(&self, error: &anyhow::Error) {
-        self.record_failure(ClusterFailureClass::PostgreSqlAuthority, error);
-    }
-
     fn record_failure(&self, class: ClusterFailureClass, error: &anyhow::Error) {
         record_cluster_failure(
             &self.health,
@@ -2860,50 +4257,6 @@ impl ClusterManager {
         )))
     }
 
-    fn sign_payload(
-        &self,
-        destination_node: &str,
-        channel: &str,
-        payload: serde_json::Value,
-    ) -> Result<String> {
-        let security = self
-            .security
-            .as_ref()
-            .context("cluster signer is not configured")?;
-        let destination = self
-            .authorized_instances
-            .get(destination_node)
-            .context("cluster destination process authority is unavailable")?;
-        anyhow::ensure!(
-            destination.valid_until > Instant::now() && destination.refresh_until > Instant::now(),
-            "cluster destination process authority is stale"
-        );
-        let kind = crate::cluster_security::infer_kind(&payload)?;
-        let envelope = crate::cluster_security::SignedClusterEnvelope::sign(
-            &security.signer(),
-            &self.namespace,
-            &self.node_id,
-            destination_node,
-            destination.instance_uuid,
-            destination.instance_epoch,
-            &destination.signing_key_id,
-            destination.signing_key_epoch,
-            channel,
-            kind,
-            self.connection_uuid,
-            self.instance_epoch.load(Ordering::Acquire),
-            payload,
-            chrono::Utc::now().timestamp(),
-        )?;
-        let encoded =
-            serde_json::to_string(&envelope).context("could not encode signed cluster envelope")?;
-        anyhow::ensure!(
-            encoded.len() <= MAX_CLUSTER_PAYLOAD_BYTES,
-            "cluster envelope exceeds the transport limit"
-        );
-        Ok(encoded)
-    }
-
     async fn publish_signed(
         &self,
         conn: &mut redis::aio::MultiplexedConnection,
@@ -2911,23 +4264,9 @@ impl ClusterManager {
         channel: &str,
         payload: serde_json::Value,
     ) -> Result<i32> {
-        let _publication = self.publication_gate.read().await;
-        self.admit(ClusterOperation::VolatileDelivery)?;
-        let encoded = self.sign_payload(destination_node, channel, payload)?;
-        match conn.publish(channel, encoded).await {
-            Ok(receivers) if receivers > 0 => Ok(receivers),
-            Ok(_) => {
-                let failure =
-                    anyhow::anyhow!("signed cluster publish had no authoritative subscriber");
-                self.record_control_plane_failure(&failure);
-                Err(failure)
-            }
-            Err(error) => {
-                let failure = anyhow::Error::new(error).context("signed cluster publish failed");
-                self.record_control_plane_failure(&failure);
-                Err(failure)
-            }
-        }
+        self.signed_publisher()
+            .publish_signed(conn, destination_node, channel, payload)
+            .await
     }
 
     #[cfg(test)]
@@ -2940,6 +4279,7 @@ impl ClusterManager {
         self.verify_signed_payload_inner(raw, channel, expected_source, true)
     }
 
+    #[cfg(test)]
     fn verify_signed_payload_inner(
         &self,
         raw: &str,
@@ -2947,75 +4287,16 @@ impl ClusterManager {
         expected_source: Option<&str>,
         remember_replay: bool,
     ) -> Result<crate::cluster_security::SignedClusterEnvelope> {
-        anyhow::ensure!(
-            raw.len() <= MAX_CLUSTER_PAYLOAD_BYTES,
-            "cluster envelope is oversized"
-        );
-        let security = self
-            .security
-            .as_ref()
-            .context("cluster verifier is not configured")?;
-        let envelope: crate::cluster_security::SignedClusterEnvelope =
-            serde_json::from_str(raw).context("cluster envelope is invalid JSON")?;
-        envelope.verify(
-            &self.namespace,
-            &self.node_id,
-            channel,
-            expected_source,
-            security.peers().as_ref(),
-            chrono::Utc::now().timestamp(),
-        )?;
-        self.validate_verified_envelope(&envelope)?;
+        let envelope =
+            self.listener_security()
+                .verify_current_envelope(raw, channel, expected_source)?;
         if remember_replay {
             self.remember_envelope_replay(&envelope)?;
         }
         Ok(envelope)
     }
 
-    fn validate_verified_envelope(
-        &self,
-        envelope: &crate::cluster_security::SignedClusterEnvelope,
-    ) -> Result<()> {
-        let security = self
-            .security
-            .as_ref()
-            .context("cluster verifier is not configured")?;
-        envelope
-            .current_verification_key(security.peers().as_ref(), chrono::Utc::now().timestamp())?;
-        anyhow::ensure!(
-            envelope.destination_connection_uuid == self.connection_uuid
-                && envelope.destination_connection_epoch
-                    == self.instance_epoch.load(Ordering::Acquire)
-                && envelope.destination_key_id == security.current_key_id
-                && envelope.destination_key_epoch == security.key_epoch,
-            "cluster destination process instance or key is mismatched"
-        );
-        let key_authority = self
-            .authorized_peer_keys
-            .get(&envelope.source_node)
-            .context("cluster source key has no current PostgreSQL authority cache")?;
-        anyhow::ensure!(
-            key_authority.accepts(&envelope.key_id, envelope.key_epoch, Instant::now()),
-            "cluster source key generation is staged incorrectly, stale, or retired"
-        );
-        let authority = self
-            .authorized_instances
-            .get(&envelope.source_node)
-            .context("cluster source process has no active PostgreSQL instance lease")?;
-        anyhow::ensure!(
-            authoritative_instance_matches(
-                &authority,
-                envelope.connection_uuid,
-                envelope.connection_epoch,
-                &envelope.key_id,
-                envelope.key_epoch,
-                Instant::now(),
-            ),
-            "cluster source process instance lease is stale or mismatched"
-        );
-        Ok(())
-    }
-
+    #[cfg(test)]
     fn remember_envelope_replay(
         &self,
         envelope: &crate::cluster_security::SignedClusterEnvelope,
@@ -3034,6 +4315,7 @@ impl ClusterManager {
         self.remember_replay_key(replay_key, accept_until, now, MAX_REPLAY_ENTRIES)
     }
 
+    #[cfg(test)]
     fn remember_replay_key(
         &self,
         replay_key: String,
@@ -3096,10 +4378,6 @@ impl ClusterManager {
             }
         }
         Ok(())
-    }
-
-    fn note_incompatible_peer_version(&self, node_id: &str, observed: Option<&str>) {
-        note_incompatible_peer_version(&self.health, node_id, observed);
     }
 
     async fn touch_node(&self) -> Result<()> {
@@ -3209,87 +4487,14 @@ impl ClusterManager {
         full_jid: &str,
         connection_id: uuid::Uuid,
     ) -> Result<()> {
-        let (full_jid, bare) = session_route_keys(full_jid)?;
-        let Some(pool) = &self.pool else {
-            return Ok(());
-        };
-        let authority_pool = self
-            .authority_pool
-            .get()
-            .context("cluster session authority pool is unavailable")?;
-        let _ = crate::db::release_cluster_session_route(
-            authority_pool,
-            &self.namespace,
-            &full_jid,
-            &self.node_id,
-            self.connection_uuid,
-            self.instance_epoch.load(Ordering::Acquire),
-            connection_id,
-        )
-        .await?;
-        let mut conn = pool.get().await?;
-        let full_key = self.key(format!("session:{full_jid}"));
-        let bare_key = self.key(format!("user_sessions:{bare}"));
-        let activity_key = self.key("session_activity".to_owned());
-        let instance_key = self.key(format!("session_instance:{full_jid}"));
-        let script = redis::Script::new(
-            r#"
-            if redis.call('get', KEYS[1]) == ARGV[1] and redis.call('get', KEYS[4]) == ARGV[3] then
-                redis.call('del', KEYS[1])
-                redis.call('del', KEYS[4])
-                redis.call('srem', KEYS[2], ARGV[2])
-                redis.call('zrem', KEYS[3], ARGV[2])
-                return 1
-            end
-            return 0
-            "#,
-        );
-        let _: i32 = script
-            .key(&full_key)
-            .key(&bare_key)
-            .key(&activity_key)
-            .key(&instance_key)
-            .arg(&self.node_id)
-            .arg(&full_jid)
-            .arg(connection_id.to_string())
-            .invoke_async(&mut *conn)
-            .await?;
-        Ok(())
+        self.session_route_release()
+            .release_exact_local_session_route(full_jid, connection_id)
+            .await
     }
 
     pub async fn lookup_nodes(&self, jid: &str) -> Result<Vec<String>> {
         let started = tokio::time::Instant::now();
-        let result = async {
-            let jid = crate::jid::CanonicalJid::parse(jid)?;
-            let Some(_) = &self.pool else {
-                return Ok(Vec::new());
-            };
-            if jid.resourcepart().is_some() {
-                let jid = jid.to_string();
-                let authority_pool = self
-                    .authority_pool
-                    .get()
-                    .context("cluster session authority pool is unavailable")?;
-                let route = crate::db::cluster_session_route_authority(
-                    authority_pool,
-                    &self.namespace,
-                    &jid,
-                )
-                .await?;
-                return Ok(route
-                    .map(|authority| authority.owner_node_id)
-                    .into_iter()
-                    .collect());
-            }
-
-            let jid = jid.bare();
-            let authority_pool = self
-                .authority_pool
-                .get()
-                .context("cluster session authority pool is unavailable")?;
-            crate::db::cluster_session_nodes_for_bare(authority_pool, &self.namespace, &jid).await
-        }
-        .await;
+        let result = self.listener_presence_routes().lookup_nodes(jid).await;
         tracing::debug!(
             elapsed_ms = started.elapsed().as_millis(),
             success = result.is_ok(),
@@ -3439,32 +4644,6 @@ impl ClusterManager {
         .await
     }
 
-    pub async fn send_to_node_confirmed(
-        &self,
-        node_id: &str,
-        target_jid: &str,
-        stanza: &str,
-        exclude_jid: Option<&str>,
-    ) -> Result<bool> {
-        let exclude_jids = exclude_jid.into_iter().collect::<Vec<_>>();
-        let receipt = self
-            .send_to_node_receipt(
-                node_id,
-                target_jid,
-                stanza,
-                NodeDeliveryOptions {
-                    exclude_jids: &exclude_jids,
-                    ..NodeDeliveryOptions::default()
-                },
-            )
-            .await?;
-        anyhow::ensure!(
-            receipt.acknowledged,
-            "cluster presence delivery was not acknowledged"
-        );
-        Ok(receipt.delivered)
-    }
-
     /// Deliver an exact-resource non-message stanza without crossing an
     /// account delete/recreate boundary. MIX-PAM result journals use this
     /// after committing their terminal state; the UUID is the original
@@ -3601,33 +4780,6 @@ impl ClusterManager {
             .delivered)
     }
 
-    pub async fn send_to_node_available_presence_confirmed_excluding(
-        &self,
-        node_id: &str,
-        target_jid: &str,
-        stanza: &str,
-        exclude_jid: Option<&str>,
-    ) -> Result<bool> {
-        let exclude_jids = exclude_jid.into_iter().collect::<Vec<_>>();
-        let receipt = self
-            .send_to_node_receipt(
-                node_id,
-                target_jid,
-                stanza,
-                NodeDeliveryOptions {
-                    available_only: true,
-                    exclude_jids: &exclude_jids,
-                    ..NodeDeliveryOptions::default()
-                },
-            )
-            .await?;
-        anyhow::ensure!(
-            receipt.acknowledged,
-            "cluster presence delivery was not acknowledged"
-        );
-        Ok(receipt.delivered)
-    }
-
     /// Ask the node that owns one or more resources of `owner` to replay
     /// those resources' current available presence to every available
     /// resource of `recipient`. This closes the RFC 6121 initial-presence
@@ -3683,34 +4835,6 @@ impl ClusterManager {
             .delivered)
     }
 
-    /// Deliver an RFC 6121 roster push only to resources that have requested
-    /// their roster on this (possibly resumed) session.
-    pub async fn send_to_node_roster(
-        &self,
-        node_id: &str,
-        target_jid: &str,
-        expected_user_id: uuid::Uuid,
-        roster_version: i64,
-        stanza: &str,
-        annotated_stanza: Option<&str>,
-    ) -> Result<bool> {
-        Ok(self
-            .send_to_node_receipt(
-                node_id,
-                target_jid,
-                stanza,
-                NodeDeliveryOptions {
-                    roster_requested_only: true,
-                    expected_user_id: Some(expected_user_id),
-                    roster_version: Some(roster_version),
-                    roster_annotated_stanza: annotated_stanza,
-                    ..NodeDeliveryOptions::default()
-                },
-            )
-            .await?
-            .delivered)
-    }
-
     /// Deliver an XEP-0016 list-definition push only to resources that have
     /// requested privacy-list state during this logical (possibly resumed)
     /// session.
@@ -3758,31 +4882,6 @@ impl ClusterManager {
                     expected_auth_generation: Some(authority.recipient_auth_generation),
                     presence_authority: Some(authority),
                     presence_delivery: Some(ClusterPresenceDelivery::Subscription),
-                    ..NodeDeliveryOptions::default()
-                },
-            )
-            .await?
-            .delivered)
-    }
-
-    async fn send_to_node_current_presence_replay(
-        &self,
-        node_id: &str,
-        target_jid: &str,
-        stanza: &str,
-        authority: ClusterPresenceAuthority,
-    ) -> Result<bool> {
-        Ok(self
-            .send_to_node_receipt(
-                node_id,
-                target_jid,
-                stanza,
-                NodeDeliveryOptions {
-                    available_only: true,
-                    expected_user_id: Some(authority.recipient_id),
-                    expected_auth_generation: Some(authority.recipient_auth_generation),
-                    presence_authority: Some(authority),
-                    presence_delivery: Some(ClusterPresenceDelivery::CurrentReplay),
                     ..NodeDeliveryOptions::default()
                 },
             )
@@ -3928,64 +5027,6 @@ impl ClusterManager {
         .await
     }
 
-    /// Cancel the exact live transport whose durable XEP-0198 epoch was
-    /// revoked. Receivers compare the UUID, so delayed control traffic cannot
-    /// disconnect a later bind that reused the full JID.
-    pub async fn send_sm_session_teardown(
-        &self,
-        full_jid: &str,
-        sm_session_id: uuid::Uuid,
-    ) -> Result<()> {
-        let full_jid = crate::jid::canonical_session_key(full_jid)?;
-        if self.pool.is_none() {
-            return Ok(());
-        }
-        let nodes = self.lookup_nodes(&full_jid).await?;
-        let payload = serde_json::json!({
-            "target": full_jid,
-            "sm_session_teardown": true,
-            "sm_session_id": sm_session_id,
-        });
-        for node_id in nodes {
-            if node_id != self.node_id {
-                self.send_control_to_node(&node_id, &full_jid, payload.clone())
-                    .await?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Cancel credential-stale transports on every node currently routing an
-    /// account.  Receivers compare both the immutable user UUID and monotonic
-    /// generation, so delayed or replayed controls cannot kill a replacement
-    /// account or a session authenticated after the mutation.
-    pub async fn send_account_generation_teardown(
-        &self,
-        bare_jid: &str,
-        user_id: uuid::Uuid,
-        minimum_generation: i64,
-    ) -> Result<()> {
-        anyhow::ensure!(minimum_generation >= 0, "invalid auth generation");
-        let bare_jid = crate::jid::canonicalize_bare(bare_jid)?;
-        if self.pool.is_none() {
-            return Ok(());
-        }
-        let nodes = self.lookup_nodes(&bare_jid).await?;
-        let payload = serde_json::json!({
-            "target": bare_jid,
-            "account_generation_teardown": true,
-            "user_id": user_id,
-            "minimum_generation": minimum_generation,
-        });
-        for node_id in nodes {
-            if node_id != self.node_id {
-                self.send_control_to_node(&node_id, &bare_jid, payload.clone())
-                    .await?;
-            }
-        }
-        Ok(())
-    }
-
     /// Revoke older live logins belonging to one XEP-0388 client
     /// installation. The PostgreSQL epoch makes delayed/replayed controls
     /// harmless to a later replacement login.
@@ -4018,57 +5059,6 @@ impl ClusterManager {
         Ok(())
     }
 
-    /// Terminate only the caller-authorized immutable connection instance.
-    /// This primitive verifies the immutable connection UUID against current
-    /// authority, so an admin effect committed for an old connection cannot
-    /// be retargeted to a later bind of the same full JID while the effect is
-    /// being dispatched or retried.
-    pub async fn send_session_instance_termination(
-        &self,
-        full_jid: &str,
-        expected_connection_id: uuid::Uuid,
-    ) -> Result<bool> {
-        anyhow::ensure!(
-            !expected_connection_id.is_nil(),
-            "session termination requires a non-nil connection identity"
-        );
-        let full_jid = crate::jid::canonical_session_key(full_jid)?;
-        if self.pool.is_none() {
-            return Ok(false);
-        }
-        let authority_pool = self
-            .authority_pool
-            .get()
-            .context("cluster session authority pool is unavailable")?;
-        let Some(route) =
-            crate::db::cluster_session_route_authority(authority_pool, &self.namespace, &full_jid)
-                .await?
-        else {
-            return Ok(false);
-        };
-        if route.connection_uuid != expected_connection_id || route.owner_node_id == self.node_id {
-            return Ok(false);
-        }
-        let payload = serde_json::json!({
-            "target":full_jid,
-            "session_termination":true,
-            "connection_id":expected_connection_id,
-        });
-        let acknowledgement = self
-            .send_control_to_node_ack(&route.owner_node_id, &full_jid, payload)
-            .await?;
-        match acknowledgement.control_outcome {
-            Some(ClusterControlOutcome::Matched) => Ok(true),
-            Some(ClusterControlOutcome::AuthoritativelyAbsent) => Ok(false),
-            Some(ClusterControlOutcome::WrongOwner) => {
-                anyhow::bail!("cluster session termination reached the wrong process owner")
-            }
-            None => {
-                anyhow::bail!("cluster session termination acknowledgement omitted its outcome")
-            }
-        }
-    }
-
     /// Deliver an idempotent cluster control operation and wait until the
     /// addressed node confirms that it processed it. Redis Pub/Sub's publish
     /// return value only proves that a subscriber existed; without this
@@ -4080,78 +5070,186 @@ impl ClusterManager {
         target: &str,
         payload: serde_json::Value,
     ) -> Result<()> {
-        let acknowledgement = self
-            .send_control_to_node_ack(node_id, target, payload)
-            .await?;
-        anyhow::ensure!(
-            acknowledgement.control_processed == Some(true),
-            "cluster control was rejected by its authoritative receiver"
-        );
-        Ok(())
+        self.correlated_control_sender()
+            .send_control_to_node(node_id, target, payload)
+            .await
     }
 
-    async fn send_control_to_node_ack(
+    async fn send_to_node_receipt(
         &self,
         node_id: &str,
-        target: &str,
-        mut payload: serde_json::Value,
-    ) -> Result<NodeDeliveryAck> {
-        let (Some(pool), Some(_)) = (&self.pool, &self.client) else {
-            anyhow::bail!("cluster control requested without an active cluster transport");
-        };
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let nonce = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
-        let mut conn = pool.get().await?;
-        let peer_version: Option<String> =
-            conn.get(self.key(format!("node:{node_id}:alive"))).await?;
-        if !supports_current_cluster_protocol(peer_version.as_deref()) {
-            if peer_version.is_some() {
-                self.note_incompatible_peer_version(node_id, peer_version.as_deref());
+        target_jid: &str,
+        stanza: &str,
+        options: NodeDeliveryOptions<'_>,
+    ) -> Result<NodeDeliveryReceipt> {
+        self.node_delivery()
+            .send_to_node_receipt(node_id, target_jid, stanza, options)
+            .await
+    }
+}
+
+impl ClusterUnavailableDelivery {
+    /// Preserve PostgreSQL route order and require the signed delivery ACK
+    /// before considering a cleanup unavailable notification complete.
+    pub(crate) async fn send_unavailable_to_remote_nodes(
+        &self,
+        target_jid: &str,
+        stanza: &str,
+        exclude_jid: &str,
+        bare_target: bool,
+    ) -> Result<()> {
+        for node_id in self.routes.lookup_nodes(target_jid).await? {
+            if node_id == self.routes.node_id {
+                continue;
             }
-            anyhow::bail!("cluster peer does not support authenticated current-version controls");
-        }
-        let Some(fields) = payload.as_object_mut() else {
-            anyhow::bail!("cluster control payload is not an object");
-        };
-        anyhow::ensure!(
-            fields.get("target").and_then(serde_json::Value::as_str) == Some(target),
-            "cluster control target mismatch"
-        );
-        fields.insert("request_id".to_owned(), request_id.clone().into());
-        fields.insert("ack_nonce".to_owned(), nonce.clone().into());
-        fields.insert("protocol_version".to_owned(), NODE_PROTOCOL_VERSION.into());
-        let channel = self.key(format!("node:{node_id}"));
-        let mut acknowledgement = self.register_pending_ack(&request_id, node_id, &nonce)?;
-        let result = async {
-            let receivers = self
-                .publish_signed(&mut conn, node_id, &channel, payload)
+            let exclusions = [exclude_jid];
+            let receipt = self
+                .sender
+                .send_to_node_receipt(
+                    &node_id,
+                    target_jid,
+                    stanza,
+                    NodeDeliveryOptions {
+                        available_only: bare_target,
+                        exclude_jids: &exclusions,
+                        ..NodeDeliveryOptions::default()
+                    },
+                )
                 .await?;
-            // ACK publication needs the same bounded pool. Keep only the
-            // pending registration while waiting for the remote receipt.
-            drop(conn);
-            if receivers == 0 {
-                let error = anyhow::anyhow!("cluster control had no subscriber");
-                self.record_control_plane_failure(&error);
-                return Err(error);
-            }
-            let deadline = tokio::time::Instant::now() + DELIVERY_ACK_TIMEOUT;
-            loop {
-                let Some(ack) = tokio::time::timeout_at(deadline, acknowledgement.recv())
-                    .await
-                    .ok()
-                    .flatten()
-                else {
-                    let error = anyhow::anyhow!("cluster control acknowledgement timed out");
-                    self.record_control_plane_failure(&error);
-                    return Err(error);
-                };
-                if ack.control_processed.is_some() {
-                    return Ok(ack);
-                }
-            }
+            anyhow::ensure!(
+                receipt.acknowledged,
+                "cluster presence delivery was not acknowledged"
+            );
         }
-        .await;
-        result
+        Ok(())
+    }
+}
+
+impl ClusterNodeDelivery {
+    pub(crate) async fn send_roster_push(
+        &self,
+        node_id: &str,
+        target_jid: &str,
+        expected_user_id: uuid::Uuid,
+        roster_version: i64,
+        stanza: &str,
+        annotated_stanza: Option<&str>,
+    ) -> Result<bool> {
+        Ok(self
+            .send_to_node_receipt(
+                node_id,
+                target_jid,
+                stanza,
+                NodeDeliveryOptions {
+                    roster_requested_only: true,
+                    expected_user_id: Some(expected_user_id),
+                    roster_version: Some(roster_version),
+                    roster_annotated_stanza: annotated_stanza,
+                    ..NodeDeliveryOptions::default()
+                },
+            )
+            .await?
+            .delivered)
+    }
+
+    pub(crate) async fn send_account_removal_presence(
+        &self,
+        node_id: &str,
+        target_jid: &str,
+        stanza: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .send_to_node_receipt(node_id, target_jid, stanza, NodeDeliveryOptions::default())
+            .await?
+            .delivered)
+    }
+
+    pub(crate) async fn send_available_presence(
+        &self,
+        node_id: &str,
+        target_jid: &str,
+        stanza: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .send_to_node_receipt(
+                node_id,
+                target_jid,
+                stanza,
+                NodeDeliveryOptions {
+                    available_only: true,
+                    ..NodeDeliveryOptions::default()
+                },
+            )
+            .await?
+            .delivered)
+    }
+
+    pub(crate) async fn send_current_presence_replay(
+        &self,
+        node_id: &str,
+        target_jid: &str,
+        stanza: &str,
+        authority: ClusterPresenceAuthority,
+    ) -> Result<bool> {
+        Ok(self
+            .send_to_node_receipt(
+                node_id,
+                target_jid,
+                stanza,
+                NodeDeliveryOptions {
+                    available_only: true,
+                    expected_user_id: Some(authority.recipient_id),
+                    expected_auth_generation: Some(authority.recipient_auth_generation),
+                    presence_authority: Some(authority),
+                    presence_delivery: Some(ClusterPresenceDelivery::CurrentReplay),
+                    ..NodeDeliveryOptions::default()
+                },
+            )
+            .await?
+            .delivered)
+    }
+
+    fn key(&self, suffix: String) -> String {
+        self.publisher.key(suffix)
+    }
+
+    fn admit(&self, operation: ClusterOperation) -> Result<()> {
+        admit_health(&self.health, operation)
+    }
+
+    fn note_incompatible_peer_version(&self, node_id: &str, observed: Option<&str>) {
+        note_incompatible_peer_version(&self.health, node_id, observed);
+    }
+
+    fn record_control_plane_failure(&self, error: &anyhow::Error) {
+        self.publisher.record_control_plane_failure(error);
+    }
+
+    fn register_pending_ack(
+        &self,
+        request_id: &str,
+        source_node: &str,
+        nonce: &str,
+    ) -> Result<PendingAckRegistration> {
+        register_pending_ack_in(
+            &self.pending_ack_slots,
+            &self.pending_acks,
+            request_id,
+            source_node,
+            nonce,
+        )
+    }
+
+    async fn publish_signed(
+        &self,
+        conn: &mut redis::aio::MultiplexedConnection,
+        destination_node: &str,
+        channel: &str,
+        payload: serde_json::Value,
+    ) -> Result<i32> {
+        self.publisher
+            .publish_signed(conn, destination_node, channel, payload)
+            .await
     }
 
     async fn send_to_node_receipt(
@@ -4437,7 +5535,9 @@ impl ClusterManager {
         .await;
         result
     }
+}
 
+impl ClusterManager {
     /// Reconcile disposable Redis room indexes without consulting them for
     /// authority. Both the stable node lease and the exact process-instance
     /// lease must be live. This lets a restarted process remove its own old
@@ -5031,72 +6131,9 @@ impl ClusterManager {
         sm_session_id: uuid::Uuid,
         json: &str,
     ) -> Result<bool> {
-        self.admit(ClusterOperation::Resume)?;
-        let incoming: crate::state::SerializableMucOccupant = serde_json::from_str(json)?;
-        anyhow::ensure!(
-            incoming.sm_session_id == Some(sm_session_id)
-                && !incoming.cluster_epoch.is_nil()
-                && !incoming.connection_id.is_nil(),
-            "suspended MUC refresh requires the exact occupancy and SM identities"
-        );
-        let Some(pool) = &self.pool else {
-            return Ok(true);
-        };
-        let mut conn = pool.get().await?;
-        let room = crate::jid::canonicalize_bare(room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(nick)?;
-        let process_instance = self.process_instance_token()?;
-        let occupants_key = self.key(format!("muc_occupants:{room}"));
-        let owners_key = self.key(format!("muc_occupant_nodes:{room}"));
-        let tombstone_key = self.key(format!("sm_muc_teardown:{sm_session_id}"));
-        let nodes_key = self.key(format!("muc_nodes:{room}"));
-        let instances_key = self.key(format!("muc_occupant_instances:{room}"));
-        let node_counts_key = self.key(format!("muc_node_counts:{room}"));
-        let alive_key = self.key(format!("node:{}:alive", self.node_id));
-        let process_alive_key = self.process_alive_key()?;
-        let script = redis::Script::new(
-            r#"
-            if redis.call('exists', KEYS[3]) == 1 then return 0 end
-            if redis.call('hget', KEYS[2], ARGV[1]) ~= ARGV[2] then return 0 end
-            if redis.call('hget', KEYS[5], ARGV[1]) ~= ARGV[3] then return 0 end
-            local raw = redis.call('hget', KEYS[1], ARGV[1])
-            if not raw then return 0 end
-            local ok, current = pcall(cjson.decode, raw)
-            if not ok or current['cluster_epoch'] ~= ARGV[5]
-                or current['connection_id'] ~= ARGV[6] then return 0 end
-            redis.call('hset', KEYS[1], ARGV[1], ARGV[4])
-            redis.call('sadd', KEYS[4], ARGV[2])
-            redis.call('set', KEYS[7], ARGV[8], 'EX', ARGV[7])
-            redis.call('set', KEYS[8], ARGV[8], 'EX', ARGV[7])
-            redis.call('expire', KEYS[1], ARGV[9])
-            redis.call('expire', KEYS[2], ARGV[9])
-            redis.call('expire', KEYS[4], ARGV[9])
-            redis.call('expire', KEYS[5], ARGV[9])
-            redis.call('expire', KEYS[6], ARGV[9])
-            return 1
-            "#,
-        );
-        let stored: i32 = script
-            .key(occupants_key)
-            .key(owners_key)
-            .key(tombstone_key)
-            .key(nodes_key)
-            .key(instances_key)
-            .key(node_counts_key)
-            .key(alive_key)
-            .key(process_alive_key)
-            .arg(&nick)
-            .arg(&self.node_id)
-            .arg(process_instance)
-            .arg(json)
-            .arg(incoming.cluster_epoch.to_string())
-            .arg(incoming.connection_id.to_string())
-            .arg(NODE_TTL_SECONDS)
-            .arg(NODE_PROTOCOL_VERSION)
-            .arg(MUC_SOFT_STATE_TTL_SECONDS)
-            .invoke_async(&mut *conn)
-            .await?;
-        Ok(stored == 1)
+        self.sm_suspension()
+            .register_suspended_muc_occupant(room_jid, nick, sm_session_id, json)
+            .await
     }
 
     /// Remove only the exact occupancy epoch owned by this node.  This is the
@@ -5109,66 +6146,9 @@ impl ClusterManager {
         cluster_epoch: uuid::Uuid,
         connection_id: uuid::Uuid,
     ) -> Result<bool> {
-        anyhow::ensure!(
-            !cluster_epoch.is_nil() && !connection_id.is_nil(),
-            "MUC unregister requires non-nil occupancy and connection identities"
-        );
-        let Some(pool) = &self.pool else {
-            return Ok(true);
-        };
-        let mut conn = pool.get().await?;
-        let room = crate::jid::canonicalize_bare(room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(nick)?;
-        let process_instance = self.process_instance_token()?;
-        let occupants_key = self.key(format!("muc_occupants:{room}"));
-        let owners_key = self.key(format!("muc_occupant_nodes:{room}"));
-        let nodes_key = self.key(format!("muc_nodes:{room}"));
-        let instances_key = self.key(format!("muc_occupant_instances:{room}"));
-        let node_counts_key = self.key(format!("muc_node_counts:{room}"));
-        let script = redis::Script::new(
-            r#"
-            if redis.call('hget', KEYS[2], ARGV[1]) ~= ARGV[2] then return 0 end
-            if redis.call('hget', KEYS[4], ARGV[1]) ~= ARGV[3] then return 0 end
-            local raw = redis.call('hget', KEYS[1], ARGV[1])
-            if not raw then return 0 end
-            local ok, decoded = pcall(cjson.decode, raw)
-            if not ok or decoded['cluster_epoch'] ~= ARGV[4]
-                or decoded['connection_id'] ~= ARGV[5] then return 0 end
-            redis.call('hdel', KEYS[1], ARGV[1])
-            redis.call('hdel', KEYS[2], ARGV[1])
-            redis.call('hdel', KEYS[4], ARGV[1])
-            local remaining = redis.call('hincrby', KEYS[5], ARGV[2], -1)
-            if remaining <= 0 then
-                redis.call('hdel', KEYS[5], ARGV[2])
-                redis.call('srem', KEYS[3], ARGV[2])
-            end
-            if redis.call('hlen', KEYS[1]) == 0 and redis.call('hlen', KEYS[2]) == 0 then
-                redis.call('del', KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5])
-            else
-                redis.call('expire', KEYS[1], ARGV[6])
-                redis.call('expire', KEYS[2], ARGV[6])
-                redis.call('expire', KEYS[3], ARGV[6])
-                redis.call('expire', KEYS[4], ARGV[6])
-                redis.call('expire', KEYS[5], ARGV[6])
-            end
-            return 1
-            "#,
-        );
-        let removed: i32 = script
-            .key(occupants_key)
-            .key(owners_key)
-            .key(nodes_key)
-            .key(instances_key)
-            .key(node_counts_key)
-            .arg(&nick)
-            .arg(&self.node_id)
-            .arg(process_instance)
-            .arg(cluster_epoch.to_string())
-            .arg(connection_id.to_string())
-            .arg(MUC_SOFT_STATE_TTL_SECONDS)
-            .invoke_async(&mut *conn)
-            .await?;
-        Ok(removed == 1)
+        self.sm_muc_teardown_projection()
+            .unregister_muc_occupant_epoch(room_jid, nick, cluster_epoch, connection_id)
+            .await
     }
 
     /// Revoke one exact occupancy, acknowledging the owning node before the
@@ -5282,14 +6262,9 @@ impl ClusterManager {
     }
 
     pub async fn get_muc_occupants(&self, room_jid: &str) -> Result<HashMap<String, String>> {
-        let Some(pool) = &self.pool else {
-            return Ok(HashMap::new());
-        };
-        let room = crate::jid::canonicalize_bare(room_jid)?;
-        self.reconcile_muc_soft_state(&room).await?;
-        let mut conn = pool.get().await?;
-        let occupants_key = self.key(format!("muc_occupants:{room}"));
-        Ok(conn.hgetall(&occupants_key).await?)
+        self.sm_muc_teardown_projection()
+            .get_muc_occupants(room_jid)
+            .await
     }
 
     pub async fn join_muc(&self, room_jid: &str) -> Result<()> {
@@ -5297,90 +6272,11 @@ impl ClusterManager {
     }
 
     pub async fn leave_muc(&self, room_jid: &str) -> Result<()> {
-        let Some(pool) = &self.pool else {
-            return Ok(());
-        };
-        let mut conn = pool.get().await?;
-        let room = crate::jid::canonicalize_bare(room_jid)?;
-        let owners_key = self.key(format!("muc_occupant_nodes:{room}"));
-        let nodes_key = self.key(format!("muc_nodes:{room}"));
-        let occupants_key = self.key(format!("muc_occupants:{room}"));
-        let instances_key = self.key(format!("muc_occupant_instances:{room}"));
-        let node_counts_key = self.key(format!("muc_node_counts:{room}"));
-        let script = redis::Script::new(
-            r#"
-            if tonumber(redis.call('hget', KEYS[5], ARGV[1]) or '0') > 0 then return 0 end
-            redis.call('srem', KEYS[2], ARGV[1])
-            if redis.call('hlen', KEYS[3]) == 0 then
-                redis.call('del', KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5])
-            else
-                redis.call('expire', KEYS[1], ARGV[2])
-                redis.call('expire', KEYS[2], ARGV[2])
-                redis.call('expire', KEYS[3], ARGV[2])
-                redis.call('expire', KEYS[4], ARGV[2])
-                redis.call('expire', KEYS[5], ARGV[2])
-            end
-            return 1
-            "#,
-        );
-        let _: i32 = script
-            .key(owners_key)
-            .key(nodes_key)
-            .key(occupants_key)
-            .key(instances_key)
-            .key(node_counts_key)
-            .arg(&self.node_id)
-            .arg(MUC_SOFT_STATE_TTL_SECONDS)
-            .invoke_async(&mut *conn)
-            .await?;
-        Ok(())
+        self.sm_muc_teardown_projection().leave_muc(room_jid).await
     }
 
     async fn active_muc_nodes(&self, room_jid: &str) -> Result<Vec<String>> {
-        let Some(pool) = &self.pool else {
-            return Ok(Vec::new());
-        };
-        let room = crate::jid::canonicalize_bare(room_jid)?;
-        let mut conn = pool.get().await?;
-        let key = self.key(format!("muc_nodes:{room}"));
-        // Fan-out only examines bounded node hints. Full occupant/index
-        // reconciliation belongs to maintenance and explicit room reads.
-        // The allowlist excludes this process, hence the extra local slot.
-        let script = redis::Script::new(
-            r#"
-            if redis.call('scard', KEYS[1]) > tonumber(ARGV[2]) then
-                return redis.error_reply('MUC routing node hint limit exceeded')
-            end
-            local nodes = redis.call('smembers', KEYS[1])
-            for _, node in ipairs(nodes) do
-                if #node == 0 or #node > tonumber(ARGV[3]) then
-                    return redis.error_reply('MUC routing node hint has an invalid length')
-                end
-            end
-            local active = {}
-            local stale = {}
-            for _, node in ipairs(nodes) do
-                if redis.call('get', ARGV[1] .. node .. ':alive') then
-                    table.insert(active, node)
-                else
-                    table.insert(stale, node)
-                end
-            end
-            for _, node in ipairs(stale) do
-                redis.call('srem', KEYS[1], node)
-            end
-            return active
-            "#,
-        );
-        let mut nodes: Vec<String> = script
-            .key(key)
-            .arg(self.key("node:".to_owned()))
-            .arg(crate::cluster_security::MAX_PEERS + 1)
-            .arg(crate::cluster_security::MAX_NODE_ID_BYTES)
-            .invoke_async(&mut *conn)
-            .await?;
-        nodes.sort_unstable();
-        Ok(nodes)
+        self.signed_publisher().active_muc_nodes(room_jid).await
     }
 
     pub async fn send_to_muc(&self, room_jid: &str, stanza: &str) -> Result<()> {
@@ -5394,35 +6290,9 @@ impl ClusterManager {
         &self,
         descriptor: &northstar_room_core::ClusterMucWakeDescriptor,
     ) -> Result<()> {
-        if descriptor
-            .target_nodes
-            .iter()
-            .any(|node| node == &self.node_id)
-        {
-            self.muc_outbox_notify.notify_one();
-        }
-        let Some(pool) = &self.pool else {
-            return Ok(());
-        };
-        let payload = serde_json::json!({
-            "target": descriptor.room_id.to_string(),
-            "muc_operation_wake": true,
-            "operation_id": descriptor.operation_id.to_string(),
-            "database_event_id": descriptor.event_id.to_string(),
-            "event_sequence": descriptor.event_sequence,
-            "request_id": descriptor.operation_id.to_string(),
-        });
-        let mut conn = pool.get().await?;
-        for node_id in &descriptor.target_nodes {
-            if node_id == &self.node_id {
-                continue;
-            }
-            let channel = self.key(format!("node:{node_id}"));
-            let _ = self
-                .publish_signed(&mut conn, node_id, &channel, payload.clone())
-                .await?;
-        }
-        Ok(())
+        self.sm_suspension()
+            .send_muc_operation_wake(descriptor)
+            .await
     }
 
     pub async fn send_to_muc_from(
@@ -5671,99 +6541,6 @@ impl ClusterManager {
         Ok(())
     }
 
-    /// Ask every other node serving a room to discard an exact suspended SM
-    /// occupant and publish its final unavailable presence locally.  The
-    /// session UUID prevents a late expiry from evicting a newly resumed or
-    /// rejoined occupant that happens to reuse the same nick/full JID.
-    pub async fn send_sm_muc_teardown(
-        &self,
-        room_jid: &str,
-        sm_session_id: uuid::Uuid,
-        occupant: &crate::state::SerializableMucOccupant,
-    ) -> Result<()> {
-        let Some(pool) = &self.pool else {
-            return Ok(());
-        };
-        let room_jid = crate::jid::canonicalize_bare(room_jid)?;
-        let nick = crate::xmpp::xml_util::prepare_muc_nick(&occupant.nick)?;
-        let nodes = self.active_muc_nodes(&room_jid).await?;
-        let occupants_key = self.key(format!("muc_occupants:{room_jid}"));
-        let owners_key = self.key(format!("muc_occupant_nodes:{room_jid}"));
-        let nodes_key = self.key(format!("muc_nodes:{room_jid}"));
-        let instances_key = self.key(format!("muc_occupant_instances:{room_jid}"));
-        let node_counts_key = self.key(format!("muc_node_counts:{room_jid}"));
-        let tombstone_key = self.key(format!("sm_muc_teardown:{sm_session_id}"));
-        let payload = serde_json::json!({
-            "target": &room_jid,
-            "sm_muc_teardown": true,
-            "sm_session_id": sm_session_id,
-            "occupant": occupant,
-        });
-        // Capture and acknowledge every current room node before mutating the
-        // Redis ownership indexes. If the owner node removes itself first,
-        // a crash could otherwise make a retry forget which live process
-        // still needs the unavailable broadcast.
-        for node_id in &nodes {
-            if node_id != &self.node_id {
-                self.send_control_to_node(node_id, &room_jid, payload.clone())
-                    .await?;
-            }
-        }
-        let mut conn = pool.get().await?;
-        let script = redis::Script::new(
-            r#"
-            redis.call('set', KEYS[4], '1', 'EX', ARGV[6])
-            local raw = redis.call('hget', KEYS[1], ARGV[1])
-            if not raw then return 0 end
-            local ok, decoded = pcall(cjson.decode, raw)
-            if not ok
-                or decoded['sm_session_id'] ~= ARGV[2]
-                or decoded['full_jid'] ~= ARGV[3]
-                or decoded['cluster_epoch'] ~= ARGV[4]
-                or decoded['connection_id'] ~= ARGV[5]
-            then return 0 end
-            local owner = redis.call('hget', KEYS[2], ARGV[1])
-            redis.call('hdel', KEYS[1], ARGV[1])
-            redis.call('hdel', KEYS[2], ARGV[1])
-            redis.call('hdel', KEYS[5], ARGV[1])
-            if owner then
-                local remaining = redis.call('hincrby', KEYS[6], owner, -1)
-                if remaining <= 0 then
-                    redis.call('hdel', KEYS[6], owner)
-                    redis.call('srem', KEYS[3], owner)
-                end
-            end
-            if redis.call('hlen', KEYS[1]) == 0 and redis.call('hlen', KEYS[2]) == 0 then
-                redis.call('del', KEYS[1], KEYS[2], KEYS[3], KEYS[5], KEYS[6])
-            else
-                redis.call('expire', KEYS[1], ARGV[7])
-                redis.call('expire', KEYS[2], ARGV[7])
-                redis.call('expire', KEYS[3], ARGV[7])
-                redis.call('expire', KEYS[5], ARGV[7])
-                redis.call('expire', KEYS[6], ARGV[7])
-            end
-            return 1
-            "#,
-        );
-        let _: i32 = script
-            .key(occupants_key)
-            .key(owners_key)
-            .key(nodes_key)
-            .key(tombstone_key)
-            .key(instances_key)
-            .key(node_counts_key)
-            .arg(&nick)
-            .arg(sm_session_id.to_string())
-            .arg(&occupant.full_jid)
-            .arg(occupant.cluster_epoch.to_string())
-            .arg(occupant.connection_id.to_string())
-            .arg(SM_TEARDOWN_TOMBSTONE_TTL_SECONDS)
-            .arg(MUC_SOFT_STATE_TTL_SECONDS)
-            .invoke_async(&mut *conn)
-            .await?;
-        Ok(())
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub async fn send_muc_presence_with_status(
         &self,
@@ -5776,31 +6553,18 @@ impl ClusterManager {
         actor_nick: Option<&str>,
         reason: Option<&str>,
     ) -> Result<()> {
-        let Some(pool) = &self.pool else {
-            return Ok(());
-        };
-        let nodes = self.active_muc_nodes(room_jid).await?;
-        let payload = serde_json::json!({
-            "target": room_jid,
-            "muc_presence": true,
-            "occupant": occupant,
-            "unavailable": unavailable,
-            "created": created,
-            "id": id,
-            "removal_status": removal_status,
-            "actor_nick": actor_nick,
-            "reason": reason,
-        });
-        let mut conn = pool.get().await?;
-        for node_id in nodes {
-            if node_id != self.node_id {
-                let channel = self.key(format!("node:{node_id}"));
-                let _ = self
-                    .publish_signed(&mut conn, &node_id, &channel, payload.clone())
-                    .await?;
-            }
-        }
-        Ok(())
+        self.signed_publisher()
+            .send_muc_presence_with_status(
+                room_jid,
+                occupant,
+                unavailable,
+                created,
+                id,
+                removal_status,
+                actor_nick,
+                reason,
+            )
+            .await
     }
 }
 
@@ -5871,13 +6635,13 @@ pub(crate) async fn run_account_revocations<
     }
 }
 
-pub async fn run_maintenance(
-    state: Arc<AppState>,
+pub(crate) async fn run_maintenance(
+    context: Arc<crate::state::cluster_maintenance_context::ClusterMaintenanceContext>,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
-    let (control, redis) = state.cluster_maintenance_handles();
-    let locals = state.cluster_maintenance_locals();
+    let control = &context.control;
+    let locals = &context.locals;
     let mut interval =
         tokio::time::interval(Duration::from_secs(CLUSTER_MAINTENANCE_INTERVAL_SECONDS));
     loop {
@@ -5888,7 +6652,7 @@ pub async fn run_maintenance(
                     _ = cancel.cancelled() => return Ok(()),
                     result = tokio::time::timeout(
                         CLUSTER_MAINTENANCE_BUDGET,
-                        maintenance_once(&state, &control, &redis, &locals),
+                        maintenance_once(&context),
                     ) => result
                         .context("cluster maintenance pass exceeded its time budget")
                         .and_then(std::convert::identity),
@@ -5907,11 +6671,11 @@ pub async fn run_maintenance(
 }
 
 async fn maintenance_once(
-    state: &AppState,
-    control: &ClusterMaintenanceControl,
-    redis: &ClusterMaintenanceRedis,
-    locals: &crate::state::cluster_maintenance::ClusterMaintenanceLocals,
+    context: &crate::state::cluster_maintenance_context::ClusterMaintenanceContext,
 ) -> Result<()> {
+    let control = &context.control;
+    let redis = &context.redis;
+    let locals = &context.locals;
     // PostgreSQL is authoritative for credential generations.  One bounded
     // batch query provides a Redis-independent safety net for lost controls,
     // node restarts and rolling upgrades.
@@ -5920,8 +6684,8 @@ async fn maintenance_once(
         .iter()
         .map(|snapshot| snapshot.authority)
         .collect::<Vec<_>>();
-    let stale_generations = state
-        .session_authority_sweep_service()
+    let stale_generations = context
+        .session_authority
         .stale_generations(&authority_snapshots)
         .await?;
     for (snapshot, stale) in snapshots.iter().zip(stale_generations) {
@@ -5933,8 +6697,8 @@ async fn maintenance_once(
             snapshot.disconnect.cancel();
         }
     }
-    let stale_device_epochs = state
-        .session_authority_sweep_service()
+    let stale_device_epochs = context
+        .session_authority
         .stale_device_epochs(&authority_snapshots)
         .await?;
     for (snapshot, stale) in snapshots.iter().zip(stale_device_epochs) {
@@ -5963,7 +6727,7 @@ async fn maintenance_once(
     // recovered listener cannot make this node ready while its view of peer
     // process epochs is stale.
     control
-        .refresh_peers_with(&state.cluster_authority_service())
+        .refresh_peers_with(&context.cluster_authority)
         .await?;
     let _redis_timer = locals.redis_operation_timer();
     redis.touch_node().await?;
@@ -5987,7 +6751,7 @@ async fn maintenance_once(
     // complete node snapshot once, then require each local actor to match its
     // exact incarnation and connection fence. Redis is repopulated only as a
     // disposable fan-out cache after the authoritative check succeeds.
-    let occupancy_maintenance = state.cluster_muc_occupancy_maintenance_service();
+    let occupancy_maintenance = &context.muc_occupancy;
     let authoritative_muc = occupancy_maintenance
         .authoritative_for_node(&control.node_id)
         .await?;
@@ -6019,9 +6783,7 @@ async fn maintenance_once(
             false
         };
         if !renewed {
-            state.remove_live_muc_membership(&serializable);
-            state.remove_local_muc_occupant_exact((&occupant).into());
-            state.cancel_local_session_if_connection(&occupant.full_jid, occupant.connection_id);
+            locals.remove_stale_muc_actor(&occupant);
             tracing::warn!(
                 room = %occupant.room_jid,
                 nick = %occupant.nick,
@@ -6077,6 +6839,36 @@ async fn maintenance_once(
     Ok(())
 }
 
+/// Listener capabilities are assembled once; the receive loop never retains
+/// the application state or a general cluster manager.
+struct ClusterListenerRuntime {
+    message_policy: Arc<crate::state::cluster_listener_message::ClusterListenerMessagePolicy>,
+    dispatch: crate::state::cluster_listener_dispatch::ClusterListenerDispatch,
+    muc_endpoints: crate::state::cluster_muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
+    muc_delivery: crate::state::muc_delivery::MucDeliveryContext,
+    mix_caps: crate::state::cluster_listener_mix_caps::ClusterListenerMixCaps,
+    blocking: crate::state::cluster_listener_blocking::ClusterListenerBlocking,
+    sm_muc_teardown: crate::state::cluster_listener_sm_muc_teardown::ClusterListenerSmMucTeardown,
+    presence_sender: Arc<ClusterNodeDelivery>,
+    security: Arc<ClusterListenerSecurity>,
+}
+
+impl ClusterListenerRuntime {
+    fn from_state(state: &AppState) -> Self {
+        Self {
+            message_policy: Arc::new(state.cluster_listener_message_policy()),
+            dispatch: state.cluster_listener_dispatch(),
+            muc_endpoints: state.cluster_muc_delivery_endpoints(),
+            muc_delivery: state.muc_delivery_context(),
+            mix_caps: state.cluster_listener_mix_caps(),
+            blocking: state.cluster_listener_blocking(),
+            sm_muc_teardown: state.cluster_listener_sm_muc_teardown(),
+            presence_sender: Arc::new(state.cluster_listener_presence_sender()),
+            security: Arc::new(state.cluster_listener_security()),
+        }
+    }
+}
+
 pub(crate) async fn run_pubsub_listener(
     transport: Arc<ClusterPubsubListenerTransport>,
     admission: Arc<ClusterListenerAdmission>,
@@ -6087,10 +6879,12 @@ pub(crate) async fn run_pubsub_listener(
     if !transport.is_enabled() {
         return Ok(());
     }
+    let runtime = ClusterListenerRuntime::from_state(&state);
+    drop(state);
     let result = listen_once(
         Arc::clone(&transport),
         Arc::clone(&admission),
-        Arc::clone(&state),
+        runtime,
         cancel.clone(),
         heartbeat,
     )
@@ -6208,16 +7002,14 @@ pub fn start_muc_outbox_delivery(state: Arc<AppState>, cancel: CancellationToken
         Some(Duration::from_secs(30)),
         cancel.clone(),
         move |heartbeat| {
-            let state = Arc::clone(&state);
             let context = Arc::clone(&context);
             let cancel = cancel.clone();
-            async move { run_muc_outbox_delivery(state, context, cancel, heartbeat).await }
+            async move { run_muc_outbox_delivery(context, cancel, heartbeat).await }
         },
     );
 }
 
 async fn run_muc_outbox_delivery(
-    state: Arc<AppState>,
     context: Arc<crate::state::cluster_muc_outbox_worker::ClusterMucOutboxWorkerContext>,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
@@ -6263,7 +7055,7 @@ async fn run_muc_outbox_delivery(
                 }
                 let outcome = tokio::time::timeout(
                     MUC_OUTBOX_DELIVERY_BUDGET,
-                    deliver_cluster_muc_event(&state, &context, &delivery),
+                    deliver_cluster_muc_event(&context, &delivery),
                 )
                 .await
                 .map_err(|_| anyhow::anyhow!("cluster MUC delivery exceeded its time budget"))
@@ -6327,7 +7119,7 @@ async fn run_muc_outbox_delivery(
 }
 
 struct ClusterMucPolicyRender<'a> {
-    state: &'a AppState,
+    endpoints: &'a crate::state::cluster_muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
     context: &'a crate::db::ClusterMucEventContext,
     room_jid: &'a str,
     recipient: &'a crate::state::MucOccupant,
@@ -6339,7 +7131,7 @@ struct ClusterMucPolicyRender<'a> {
 
 fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<'_>) -> Result<()> {
     let ClusterMucPolicyRender {
-        state,
+        endpoints,
         context,
         room_jid,
         recipient,
@@ -6417,12 +7209,11 @@ fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<'_>) -> Res
         // different audience row removed it first, the target row would no
         // longer be able to deliver its required self-unavailable stanza.
         if subject_is_recipient {
-            state.remove_live_muc_membership(&subject);
-            state.remove_local_muc_occupant_exact((&subject).into());
+            endpoints.revoke_exact_recipient(&subject);
         }
     } else {
         if subject_is_recipient {
-            state.apply_cluster_muc_policy_projection_exact(&subject);
+            endpoints.apply_policy_projection_exact(&subject);
         }
         stanzas.push(crate::xmpp::xml_util::muc_presence_stanza(
             &subject,
@@ -6440,10 +7231,10 @@ fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<'_>) -> Res
 }
 
 async fn deliver_cluster_muc_event(
-    state: &Arc<AppState>,
     worker: &crate::state::cluster_muc_outbox_worker::ClusterMucOutboxWorkerContext,
     delivery: &crate::db::ClusterMucOutboxDelivery,
 ) -> Result<()> {
+    let endpoints = &worker.endpoints;
     anyhow::ensure!(
         matches!(delivery.audience_kind.as_str(), "occupant" | "node_pull"),
         "cluster MUC outbox audience kind is unsupported"
@@ -6488,7 +7279,7 @@ async fn deliver_cluster_muc_event(
         // authoritative PostgreSQL pull by reaching this point.
         return Ok(());
     };
-    let cached_recipient = state.local_muc_occupant_by_nick(&room_jid, recipient_nick);
+    let cached_recipient = endpoints.cached_recipient(&room_jid, recipient_nick);
     let exact_cached = cached_recipient.as_ref().is_some_and(|recipient| {
         delivery.recipient_full_jid.as_deref() == Some(&recipient.full_jid)
             && delivery.recipient_occupant_incarnation == Some(recipient.cluster_epoch)
@@ -6519,8 +7310,8 @@ async fn deliver_cluster_muc_event(
         let room_non_anonymous = context.details["non_anonymous"]
             .as_bool()
             .unwrap_or(context.room_non_anonymous);
-        state
-            .cluster_muc_recipient_from_snapshot(
+        endpoints
+            .recipient_from_snapshot(
                 &snapshot,
                 &room_jid,
                 room_non_anonymous,
@@ -6565,7 +7356,7 @@ async fn deliver_cluster_muc_event(
         "join" | "resume" | "role" => {
             let target = target.context("MUC join/resume/role event has no exact target")?;
             if context.operation_kind == "role" {
-                state.apply_cluster_muc_role_projection_exact(&target);
+                endpoints.apply_role_projection_exact(&target);
             }
             let self_presence = target.full_jid == recipient.full_jid;
             stanzas.push(crate::xmpp::xml_util::muc_presence_stanza(
@@ -6618,8 +7409,7 @@ async fn deliver_cluster_muc_event(
                 context.room_non_anonymous || recipient.role == "moderator",
             ));
             if self_presence {
-                state.remove_live_muc_membership(&target);
-                state.remove_local_muc_occupant_exact((&target).into());
+                endpoints.revoke_exact_recipient(&target);
             }
         }
         "suspend" => {
@@ -6637,12 +7427,10 @@ async fn deliver_cluster_muc_event(
                     307
                 }));
             let reason = context.details["reason"].as_str();
-            let actor_nick = context.actor_full_jid.as_deref().and_then(|full| {
-                state
-                    .muc_occupants_for(&room_jid)
-                    .into_iter()
-                    .find_map(|(_, actor)| (actor.full_jid == full).then_some(actor.nick))
-            });
+            let actor_nick = context
+                .actor_full_jid
+                .as_deref()
+                .and_then(|full| endpoints.actor_nick(&room_jid, full));
             let self_presence = target.full_jid == recipient.full_jid;
             stanzas.push(crate::xmpp::xml_util::muc_presence_stanza_with_status(
                 &target,
@@ -6657,8 +7445,7 @@ async fn deliver_cluster_muc_event(
                 reason,
             ));
             if self_presence {
-                state.remove_live_muc_membership(&target);
-                state.remove_local_muc_occupant_exact((&target).into());
+                endpoints.revoke_exact_recipient(&target);
             }
         }
         "destroy" | "locked_expiry" => {
@@ -6696,7 +7483,7 @@ async fn deliver_cluster_muc_event(
             .context("cluster MUC policy event has no exact result snapshot array")?;
             for change in changes {
                 append_cluster_muc_policy_snapshot(ClusterMucPolicyRender {
-                    state,
+                    endpoints,
                     context: &context,
                     room_jid: &room_jid,
                     recipient: &recipient,
@@ -6765,7 +7552,8 @@ async fn deliver_cluster_muc_event(
             continue;
         }
         anyhow::ensure!(
-            state
+            worker
+                .delivery
                 .deliver_to_muc_occupant_with_receipt(&recipient, stanza, delivery,)
                 .await?,
             "exact MUC audience transport did not reach a durable ownership/write boundary"
@@ -6852,12 +7640,12 @@ impl ListenerCommandAuthority {
     fn validate(
         &self,
         admission: &ClusterListenerAdmission,
-        cluster: &ClusterManager,
+        security: &ClusterListenerSecurity,
     ) -> Result<()> {
         admission.validate_generation(self.generation, self.rotation_epoch)?;
         // Recheck expiry and current source key/process authority after deferred
         // work. Replay admission already happened once in the reader.
-        cluster.validate_verified_envelope(&self.envelope)?;
+        security.validate_verified_envelope(&self.envelope)?;
         Ok(())
     }
 }
@@ -6892,41 +7680,36 @@ fn validate_listener_generation_health(
 
 async fn publish_listener_ack(
     admission: &ClusterListenerAdmission,
-    cluster: &ClusterManager,
+    security: &ClusterListenerSecurity,
     source_node: &str,
     ack: NodeDeliveryAck,
     authority: &ListenerCommandAuthority,
 ) -> Result<()> {
-    if let Some(pool) = &cluster.pool {
-        let mut conn = pool.get().await?;
-        authority.validate(admission, cluster)?;
-        let ack_channel = cluster.key(format!("node:{source_node}"));
-        cluster
-            .publish_signed(
-                &mut conn,
-                source_node,
-                &ack_channel,
-                serde_json::to_value(ack)?,
-            )
-            .await?;
-    }
-    Ok(())
+    security
+        .publish_ack(admission, source_node, ack, authority)
+        .await
+}
+
+struct ListenerResponseContext {
+    admission: Arc<ClusterListenerAdmission>,
+    security: Arc<ClusterListenerSecurity>,
+    message_policy: Arc<crate::state::cluster_listener_message::ClusterListenerMessagePolicy>,
+    sender: Arc<ClusterNodeDelivery>,
 }
 
 async fn complete_listener_responses(
-    admission: Arc<ClusterListenerAdmission>,
-    state: Arc<AppState>,
+    context: ListenerResponseContext,
     authority: ListenerCommandAuthority,
     responses: ListenerResponses,
     source_node: String,
     mut ack: Option<NodeDeliveryAck>,
 ) -> Result<()> {
     for response in responses.items {
-        authority.validate(&admission, &state.cluster)?;
+        authority.validate(&context.admission, &context.security)?;
         let result = if let Some(presence_authority) = response.presence_authority {
-            state
-                .cluster
-                .send_to_node_current_presence_replay(
+            context
+                .sender
+                .send_current_presence_replay(
                     &response.node_id,
                     &response.recipient,
                     &response.stanza,
@@ -6934,13 +7717,9 @@ async fn complete_listener_responses(
                 )
                 .await
         } else {
-            state
-                .cluster
-                .send_to_node_available_presence(
-                    &response.node_id,
-                    &response.recipient,
-                    &response.stanza,
-                )
+            context
+                .sender
+                .send_available_presence(&response.node_id, &response.recipient, &response.stanza)
                 .await
         };
         match result {
@@ -6951,15 +7730,22 @@ async fn complete_listener_responses(
             }
             Err(error) => {
                 if response.presence_authority.is_some() {
-                    state.record_cluster_presence_probe_failure();
+                    context.message_policy.presence_probe_failed();
                 }
                 return Err(error.context("cluster listener remote presence response failed"));
             }
         }
     }
-    authority.validate(&admission, &state.cluster)?;
+    authority.validate(&context.admission, &context.security)?;
     if let Some(ack) = ack {
-        publish_listener_ack(&admission, &state.cluster, &source_node, ack, &authority).await?;
+        publish_listener_ack(
+            &context.admission,
+            &context.security,
+            &source_node,
+            ack,
+            &authority,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -6967,10 +7753,21 @@ async fn complete_listener_responses(
 async fn listen_once(
     transport: Arc<ClusterPubsubListenerTransport>,
     admission: Arc<ClusterListenerAdmission>,
-    state: Arc<AppState>,
+    runtime: ClusterListenerRuntime,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
+    let ClusterListenerRuntime {
+        message_policy,
+        dispatch,
+        muc_endpoints,
+        muc_delivery,
+        mix_caps,
+        blocking,
+        sm_muc_teardown,
+        presence_sender,
+        security,
+    } = runtime;
     let client = transport
         .client
         .as_ref()
@@ -6982,7 +7779,7 @@ async fn listen_once(
     tokio::pin!(rotation);
     rotation.as_mut().enable();
     let (candidate_generation, rotation_epoch) = transport.health.begin_listener_attempt();
-    let mut redis_setup_timer = Some(state.start_cluster_redis_operation_timer());
+    let mut redis_setup_timer = Some(message_policy.start_redis_setup_timer());
     let mut pubsub_conn = open_pubsub(client).await?;
     let channel = transport.key(format!("node:{}", transport.node_id));
     let probe_channel = transport.key(format!(
@@ -7009,8 +7806,6 @@ async fn listen_once(
     // No spawned tasks: dropping this listener synchronously drops every
     // outstanding receipt registration before a replacement listener starts.
     let mut continuations = ListenerContinuations::default();
-    let dispatch = state.cluster_listener_dispatch();
-
     enum ListenerInput {
         ProbeDue,
         ProbeTimedOut,
@@ -7103,8 +7898,7 @@ async fn listen_once(
             // Durable deliveries remain eligible for their normal retry.
             continue;
         }
-        let envelope = match state
-            .cluster
+        let envelope = match security
             .verify_signed_payload_persisted(&payload, &channel, None)
             .await
         {
@@ -7229,7 +8023,7 @@ async fn listen_once(
                 );
             let epoch = json["minimum_epoch"].as_i64().filter(|value| *value > 0);
             if let (Some(((account, user_id), device_id)), Some(epoch)) = (parsed, epoch) {
-                for (_, session) in state.session_entries_for(&account) {
+                for (_, session) in dispatch.session_entries_for(&account) {
                     if user_agent_control_revokes(
                         session.user_id,
                         session.user_agent_id,
@@ -7264,7 +8058,7 @@ async fn listen_once(
                 .and_then(|value| uuid::Uuid::parse_str(value).ok())
             {
                 if let Ok(target) = crate::jid::canonical_session_key(target) {
-                    if state.fence_local_sm_session(&target, sm_session_id) {
+                    if dispatch.fence_sm_session(&target, sm_session_id) {
                         delivered = 1;
                     }
                     control_processed = Some(true);
@@ -7297,10 +8091,8 @@ async fn listen_once(
                 }
             };
             if let (Some(owner), Some(recipient), Some(authority)) = (owner, recipient, authority) {
-                if !state
-                    .presence_service()
-                    .cluster_authority_is_current(
-                        state.local_domain(),
+                if !message_policy
+                    .presence_authority_is_current(
                         &owner,
                         authority.owner_id,
                         authority.owner_auth_generation,
@@ -7309,24 +8101,22 @@ async fn listen_once(
                         authority.recipient_auth_generation,
                     )
                     .await
-                    .unwrap_or(false)
                 {
                     admission.note_authentication_failure(&anyhow::anyhow!(
                         "cluster presence probe account authority is stale or mismatched"
                     ));
                     continue;
                 }
-                let authoritative_avatar_hash = state
-                    .presence_service()
-                    .avatar_hash(authority.owner_id)
+                let authoritative_avatar_hash = message_policy
+                    .owner_avatar_hash(authority.owner_id)
                     .await
                     .ok();
                 let mut presences = Vec::new();
-                for (owner_full, session) in state.session_entries_for(&owner) {
+                for (owner_full, session) in dispatch.session_entries_for(&owner) {
                     if session.user_id != authority.owner_id
                         || session.auth_generation != authority.owner_auth_generation
                         || !session.available.load(Ordering::Acquire)
-                        || !state
+                        || !message_policy
                             .privacy_allows_session(
                                 &session,
                                 &recipient,
@@ -7399,7 +8189,7 @@ async fn listen_once(
 
                 let mut processed = true;
                 for presence in presences {
-                    for (_, recipient_session) in state
+                    for (_, recipient_session) in dispatch
                         .session_entries_for(&recipient)
                         .into_iter()
                         .filter(|(_, session)| {
@@ -7408,7 +8198,7 @@ async fn listen_once(
                                 && session.available.load(Ordering::Acquire)
                         })
                     {
-                        if state
+                        if message_policy
                             .privacy_allows_session(
                                 &recipient_session,
                                 &owner,
@@ -7422,12 +8212,9 @@ async fn listen_once(
                             );
                         }
                     }
-                    match state.cluster.lookup_nodes(&recipient).await {
+                    match dispatch.remote_presence_nodes(&recipient).await {
                         Ok(nodes) => {
                             for node_id in nodes {
-                                if node_id == state.cluster.node_id {
-                                    continue;
-                                }
                                 responses.push(ListenerResponse {
                                     node_id,
                                     recipient: recipient.clone(),
@@ -7438,7 +8225,7 @@ async fn listen_once(
                         }
                         Err(error) => {
                             processed = false;
-                            state.record_cluster_presence_probe_failure();
+                            message_policy.presence_probe_failed();
                             tracing::warn!(?error, %owner, %recipient, "could not resolve cross-node initial-presence recipients");
                         }
                     }
@@ -7472,22 +8259,22 @@ async fn listen_once(
                         .collect::<Option<Vec<_>>>()
                 });
             if let (Some(owner), Some(targets), Some(patterns)) = (owner, targets, patterns) {
-                crate::xmpp::protocol::blocking::deliver_blocking_presence_change_with_remote(
-                    &state,
-                    &owner,
-                    &targets,
-                    &patterns,
-                    json["available"].as_bool().unwrap_or(false),
-                    |node_id, recipient, stanza| {
-                        std::future::ready(responses.push(ListenerResponse {
-                            node_id,
-                            recipient,
-                            stanza,
-                            presence_authority: None,
-                        }))
-                    },
-                )
-                .await?;
+                blocking
+                    .deliver_presence_change(
+                        &owner,
+                        &targets,
+                        &patterns,
+                        json["available"].as_bool().unwrap_or(false),
+                        |node_id, recipient, stanza| {
+                            responses.push(ListenerResponse {
+                                node_id,
+                                recipient,
+                                stanza,
+                                presence_authority: None,
+                            })
+                        },
+                    )
+                    .await?;
             }
         } else if is_sm_muc_teardown {
             let parsed = json["sm_session_id"]
@@ -7504,8 +8291,8 @@ async fn listen_once(
                     .ok()
                     .is_some_and(|room| room == occupant.room_jid);
                 if target_matches {
-                    match state
-                        .teardown_suspended_muc_membership(sm_session_id, &occupant)
+                    match sm_muc_teardown
+                        .teardown_exact(sm_session_id, &occupant)
                         .await
                     {
                         Ok(_) => {
@@ -7532,8 +8319,8 @@ async fn listen_once(
                     && !occupant.cluster_epoch.is_nil()
                     && !occupant.connection_id.is_nil()
                 {
-                    state.remove_live_muc_membership(&occupant);
-                    if let Some(removed) = state.remove_local_muc_occupant_exact((&occupant).into())
+                    if let Some(removed) =
+                        muc_endpoints.revoke_exact_recipient_returning_local(&occupant)
                     {
                         let self_presence = crate::xmpp::xml_util::muc_presence_stanza_with_status(
                             &occupant,
@@ -7548,11 +8335,13 @@ async fn listen_once(
                             reason,
                         );
                         delivered += usize::from(
-                            state.deliver_to_muc_occupant(&removed, self_presence).await,
+                            muc_delivery
+                                .deliver_to_muc_occupant(&removed, self_presence)
+                                .await,
                         );
                     }
-                    if state.muc_occupants_for(target).is_empty() {
-                        let _ = state.cluster.leave_muc(target).await;
+                    if muc_endpoints.room_occupants(target).is_empty() {
+                        let _ = dispatch.leave_empty_muc_room(target).await;
                     }
                     control_processed = Some(true);
                 }
@@ -7575,7 +8364,7 @@ async fn listen_once(
                         if identity.cluster_epoch.is_nil() || identity.connection_id.is_nil() {
                             continue;
                         }
-                        let removed = state.remove_local_muc_occupant_exact(
+                        let removed = muc_endpoints.remove_local_exact(
                             crate::state::LocalMucOccupantIdentity {
                                 room_jid: &room,
                                 nick: &identity.nick,
@@ -7587,14 +8376,16 @@ async fn listen_once(
                         if let Some(occupant) = removed {
                             let serializable =
                                 crate::state::SerializableMucOccupant::from(&occupant);
-                            state.remove_live_muc_membership(&serializable);
+                            muc_endpoints.remove_live_membership_exact(&serializable);
                             let presence = crate::xmpp::xml_util::muc_destroy_presence(
                                 &serializable,
                                 alternate.as_deref(),
                                 reason,
                             );
                             delivered += usize::from(
-                                state.deliver_to_muc_occupant(&occupant, presence).await,
+                                muc_delivery
+                                    .deliver_to_muc_occupant(&occupant, presence)
+                                    .await,
                             );
                         }
                     }
@@ -7612,8 +8403,8 @@ async fn listen_once(
                         "moderator" | "participant" | "visitor"
                     )
                 {
-                    state.apply_cluster_muc_policy_projection_exact(&occupant);
-                    for (_, session) in state.muc_occupants_for(target) {
+                    muc_endpoints.apply_policy_projection_exact(&occupant);
+                    for session in muc_endpoints.room_occupants(target) {
                         let self_presence = session.full_jid == occupant.full_jid;
                         let presence = crate::xmpp::xml_util::muc_presence_stanza(
                             &occupant,
@@ -7626,8 +8417,11 @@ async fn listen_once(
                                 || self_presence
                                 || session.role == "moderator",
                         );
-                        delivered +=
-                            usize::from(state.deliver_to_muc_occupant(&session, presence).await);
+                        delivered += usize::from(
+                            muc_delivery
+                                .deliver_to_muc_occupant(&session, presence)
+                                .await,
+                        );
                     }
                     control_processed = Some(true);
                 }
@@ -7648,15 +8442,18 @@ async fn listen_once(
                     && old_occupant.nick != new_occupant.nick
                 {
                     let id = json["id"].as_str();
-                    for (_, session) in state.muc_occupants_for(target) {
+                    for session in muc_endpoints.room_occupants(target) {
                         let unavailable = crate::xmpp::xml_util::muc_nickname_change_presence(
                             &old_occupant,
                             &crate::state::SerializableMucOccupant::from(&session),
                             &new_occupant.nick,
                             id,
                         );
-                        delivered +=
-                            usize::from(state.deliver_to_muc_occupant(&session, unavailable).await);
+                        delivered += usize::from(
+                            muc_delivery
+                                .deliver_to_muc_occupant(&session, unavailable)
+                                .await,
+                        );
                         let available = crate::xmpp::xml_util::muc_presence_stanza(
                             &new_occupant,
                             &session.full_jid,
@@ -7668,8 +8465,11 @@ async fn listen_once(
                                 || session.full_jid == new_occupant.full_jid
                                 || session.role == "moderator",
                         );
-                        delivered +=
-                            usize::from(state.deliver_to_muc_occupant(&session, available).await);
+                        delivered += usize::from(
+                            muc_delivery
+                                .deliver_to_muc_occupant(&session, available)
+                                .await,
+                        );
                     }
                 }
             }
@@ -7685,7 +8485,7 @@ async fn listen_once(
                     .and_then(|value| u16::try_from(value).ok());
                 let actor_nick = json["actor_nick"].as_str();
                 let reason = json["reason"].as_str();
-                for (_, session) in state.muc_occupants_for(target) {
+                for session in muc_endpoints.room_occupants(target) {
                     let disclose = occupant.room_non_anonymous || session.role == "moderator";
                     let self_presence = session.full_jid == occupant.full_jid;
                     let presence = crate::xmpp::xml_util::muc_presence_stanza_with_status(
@@ -7700,8 +8500,11 @@ async fn listen_once(
                         actor_nick,
                         reason,
                     );
-                    delivered +=
-                        usize::from(state.deliver_to_muc_occupant(&session, presence).await);
+                    delivered += usize::from(
+                        muc_delivery
+                            .deliver_to_muc_occupant(&session, presence)
+                            .await,
+                    );
                 }
             }
         } else if let Some(stanza) = json["stanza"].as_str() {
@@ -7771,10 +8574,8 @@ async fn listen_once(
                 if !presence_delivery_stanza_matches(document, expected_delivery)
                     || crate::jid::canonical_bare_key(&recipient).ok()
                         != crate::jid::canonical_bare_key(target).ok()
-                    || !state
-                        .presence_service()
-                        .cluster_authority_is_current(
-                            state.local_domain(),
+                    || !message_policy
+                        .presence_authority_is_current(
                             &owner,
                             authority.owner_id,
                             authority.owner_auth_generation,
@@ -7783,7 +8584,6 @@ async fn listen_once(
                             authority.recipient_auth_generation,
                         )
                         .await
-                        .unwrap_or(false)
                 {
                     admission.note_authentication_failure(&anyhow::anyhow!(
                         "cluster presence delivery account authority is stale or mismatched"
@@ -7804,7 +8604,7 @@ async fn listen_once(
                     match requested_node_message_delivery(json, is_message_stanza) {
                         Ok(Some(request)) => {
                             match resolve_node_message_delivery(
-                                &state.node_message_contract_verifier(),
+                                message_policy.verifier(),
                                 request,
                                 stanza,
                                 target,
@@ -7862,9 +8662,9 @@ async fn listen_once(
             }
             if is_muc_private {
                 if let Some(nick) = json["target_nick"].as_str() {
-                    if let Some(session) = state.local_muc_occupant_by_nick(target, nick) {
+                    if let Some(session) = muc_endpoints.cached_recipient(target, nick) {
                         let delivery = crate::xmpp::xml_util::set_to(stanza, &session.full_jid);
-                        let blocked = state
+                        let blocked = muc_delivery
                             .blocked_muc_recipient_accounts(
                                 std::slice::from_ref(&session),
                                 &muc_senders,
@@ -7874,7 +8674,7 @@ async fn listen_once(
                             .is_ok_and(|owner| blocked.contains(&owner))
                         {
                             delivered += usize::from(
-                                state
+                                muc_delivery
                                     .deliver_to_muc_occupant_unchecked(&session, delivery)
                                     .await,
                             );
@@ -7882,12 +8682,8 @@ async fn listen_once(
                     }
                 }
             } else if is_muc {
-                let sessions = state
-                    .muc_occupants_for(target)
-                    .into_iter()
-                    .map(|(_, occupant)| occupant)
-                    .collect::<Vec<_>>();
-                let blocked = state
+                let sessions = muc_endpoints.room_occupants(target);
+                let blocked = muc_delivery
                     .blocked_muc_recipient_accounts(&sessions, &muc_senders)
                     .await;
                 for session in sessions {
@@ -7898,7 +8694,7 @@ async fn listen_once(
                     }
                     let delivery = crate::xmpp::xml_util::set_to(stanza, &session.full_jid);
                     delivered += usize::from(
-                        state
+                        muc_delivery
                             .deliver_to_muc_occupant_unchecked(&session, delivery)
                             .await,
                     );
@@ -8088,7 +8884,7 @@ async fn listen_once(
                 } else {
                     None
                 };
-                let mut targets = state.session_entries_for(target);
+                let mut targets = dispatch.session_entries_for(target);
                 if (primary_one_to_one || available_only || available_nonnegative_only)
                     && !target.contains('/')
                 {
@@ -8142,7 +8938,10 @@ async fn listen_once(
                         && !privacy_requested_only
                     {
                         if let Some((peer, kind)) = privacy_peer_kind.as_ref() {
-                            match state.privacy_allows_session(&session, peer, *kind).await {
+                            match message_policy
+                                .privacy_allows_session(&session, peer, *kind)
+                                .await
+                            {
                                 Ok(true) => {}
                                 Ok(false) => continue,
                                 Err(error) => {
@@ -8156,15 +8955,15 @@ async fn listen_once(
                         }
                     }
                     if mix_capable_only {
-                        match crate::xmpp::protocol::mix::session_mix_capability(&state, &jid) {
-                            crate::xmpp::protocol::mix::MixSessionCapability::Supported => {
+                        match mix_caps.capability(&jid) {
+                            crate::state::cluster_listener_mix_caps::ClusterMixCapability::Supported => {
                                 mix_supported = mix_supported.saturating_add(1);
                             }
-                            crate::xmpp::protocol::mix::MixSessionCapability::Unsupported => {
+                            crate::state::cluster_listener_mix_caps::ClusterMixCapability::Unsupported => {
                                 mix_unsupported = mix_unsupported.saturating_add(1);
                                 continue;
                             }
-                            crate::xmpp::protocol::mix::MixSessionCapability::Unknown => {
+                            crate::state::cluster_listener_mix_caps::ClusterMixCapability::Unknown => {
                                 mix_unknown = mix_unknown.saturating_add(1);
                                 continue;
                             }
@@ -8242,11 +9041,10 @@ async fn listen_once(
                         // fence before putting it on a local C2S output.  No
                         // acknowledgement is emitted until that output has
                         // itself transferred to its socket/SM/BOSH owner.
-                        let remote_source = match state
-                            .mix_service()
-                            .transfer_mix_delivery_to_cluster(
+                        let remote_source = match message_policy
+                            .transfer_mix_delivery(
                                 source,
-                                &state.cluster.node_id,
+                                dispatch.node_id(),
                                 request_id,
                                 MIX_CLUSTER_HANDOFF_TTL_SECONDS,
                             )
@@ -8292,11 +9090,10 @@ async fn listen_once(
                                     delivery_id = %remote_source.delivery_id,
                                     "remote MIX transport failed before durable ownership"
                                 );
-                                if let Err(release_error) = state
-                                    .mix_service()
-                                    .release_mix_cluster_delivery(
+                                if let Err(release_error) = message_policy
+                                    .release_mix_delivery(
                                         remote_source,
-                                        &state.cluster.node_id,
+                                        dispatch.node_id(),
                                         request_id,
                                     )
                                     .await
@@ -8346,7 +9143,7 @@ async fn listen_once(
                     };
                     if accepted {
                         if is_message_stanza {
-                            state.record_cluster_online_queue_acceptance(
+                            message_policy.record_online_queue_acceptance(
                                 durable_delivery.is_some() || mix_delivery.is_some(),
                             );
                         }
@@ -8371,7 +9168,7 @@ async fn listen_once(
             .map(|(request_id, nonce)| NodeDeliveryAck {
                 request_id: request_id.to_owned(),
                 nonce: nonce.to_owned(),
-                node_id: state.cluster.node_id.clone(),
+                node_id: dispatch.node_id().to_owned(),
                 delivered,
                 accepted_full_jid,
                 mix_supported,
@@ -8389,16 +9186,19 @@ async fn listen_once(
         };
         if responses.items.is_empty() {
             if let Some(ack) = ack {
-                publish_listener_ack(&admission, &state.cluster, &source_node, ack, &authority)
-                    .await?;
+                publish_listener_ack(&admission, &security, &source_node, ack, &authority).await?;
             }
         } else {
             // Only remote receipt waits leave the sequential command turn.
             // Both peers can therefore execute each other's leaf deliveries
             // even when they simultaneously handle presence probes.
             continuations.push(complete_listener_responses(
-                Arc::clone(&admission),
-                state.clone(),
+                ListenerResponseContext {
+                    admission: Arc::clone(&admission),
+                    security: Arc::clone(&security),
+                    message_policy: Arc::clone(&message_policy),
+                    sender: Arc::clone(&presence_sender),
+                },
                 authority,
                 responses,
                 source_node,

@@ -142,25 +142,21 @@ closes the listener and joins/aborts every accepted connection.
 | Layer | Accepted input | Owned capability | Explicitly forbidden | Transaction or failure boundary | Supervisor | Actual isolation | Remaining shared authority |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | configuration/secret loader | CLI, environment, `.env` and secret files | syntax/semantic validation, file checks, single ownership transfer and zeroization | logging, cloning or leaving raw secret values in shared configuration | failure precedes every listener | top-level `main` | initialization phase in runtime process | secrets coexist briefly while state is constructed |
-| `AppState` assembly | validated configuration, pools, routers, stores and key owners | compose services and process-local routing capabilities | becoming an unconstrained public service locator | construction is all-or-nothing before listener start | top-level `main` | Rust private fields/accessors | three reviewed public capabilities remain listed below |
+| `AppState` assembly | validated configuration, pools, routers, stores and key owners | compose services and process-local routing capabilities | becoming an unconstrained public service locator | construction is all-or-nothing before listener start | top-level `main` | Rust private fields/accessors | no public fields; some internal callers still receive broad state |
 | XMPP/BOSH/WebSocket transport adapters | untrusted TCP/TLS bytes, XMPP HTTP frames, peer/proxy identity | framing, size/depth/time budgets, TLS provenance and connection lifetime | business SQL, archive policy and account authorization | per-connection failure closes that connection; listener exit is service-fatal | top-level listener set plus connection actor registry | Tokio tasks in runtime process | shares memory with protocol and services; the REST edge is tracked separately because legacy routes still own direct database access |
 | protocol session | framed XML plus authenticated transport state | stream/SASL/bind/SM state machine, stanza parsing, XMPP errors and resource-ordering | production `db::*` authority, SQLx, `PgPool` and `state.pool` | one connection actor; durable resume is delegated to SM service | connection actor registry | Rust module/static gate | may call typed `AppState` services and live routing; `#[cfg(test)]` is outside zero-reference count |
-| application service | prepared identities/commands from protocol or HTTP | authorization snapshot, policy, transaction intent and typed result | parsing raw transport frames or exposing raw transactions upward | service method defines one business operation and its commit-before-side-effect rule | caller task or dedicated worker | private Rust capability; personal-message and MUC-discussion paths already use injected repository ports | several services still embed SQLx/`PgPool` transaction work that should move into repository ports; services share the runtime role/pool |
+| application service | prepared identities/commands from protocol or HTTP | authorization snapshot, policy, transaction intent and typed result | parsing raw transport frames or exposing raw transactions upward | service method defines one business operation and its commit-before-side-effect rule | caller task or dedicated worker | private Rust capability with injected repository ports | production service code has no direct SQLx pool or query; repositories still share the runtime database role |
 | database repository responsibility | typed service or legacy runtime request | SQL, lock order, transaction, durable identity, admission/outbox invariant | XML/HTTP parsing, socket delivery and retry policy | PostgreSQL transaction/routine/constraint | caller plus PostgreSQL | mostly `src/db/*`, migration constraints and PostgreSQL ACL | repository responsibility is not yet a universal directory boundary: some services, API, cluster, federation and worker paths still contain direct persistence |
 | live routing/outbound | authorized delivery plan and exact route incarnation | transport-neutral ordered admission, bounded adapter queues, route ABA fence, SM/BOSH/socket ownership transfer and slow-peer disconnect | re-deciding privacy/blocking or claiming a DB transaction committed | the ordered-output port returns every backpressured, closed or stale item; ownership moves only at an explicit transfer point | connection actors | process-local data plane; Tokio is one injected sink adapter | online sessions and MUC maps are volatile by design |
 | worker registry | worker closure, criticality, mode and heartbeat | unique registration, restart/backoff, readiness degradation and fatal cancellation | detached `JoinHandle`, unreported exit or infinite silent retry | one supervised attempt at a time | `WorkerRegistry` | supervised Tokio tasks | several closures still receive broader `Arc<AppState>` access than their target ports |
 | observability | internal health/metrics request | bounded cached readiness and metrics rendering | business mutation or anonymous public DB amplification | read-only probe deadline; readiness can degrade independently of commits | HTTP/metrics top-level tasks | separate listener, same process | readiness uses bounded runtime DB access |
 
-### Reviewed public `AppState` capabilities
+### `AppState` capability boundary
 
-The architecture gate now checks the names, not only the count. Replacing one
-field with a different public capability fails CI even if the total stays three.
-
-| Public field | Why it remains public | Target direction |
-| --- | --- | --- |
-| `config` | broad read-only protocol/runtime policy is still consumed across many modules | split immutable transport, protocol and worker policy views |
-| `cluster` | routing and clustered ownership share one manager | expose route, lease and publication ports separately |
-| `muc_occupants` | process-local MUC route/occupancy projection | hide behind a MUC live-routing port |
+All fields are private, and CI rejects any newly public field. This limits
+direct access across modules; it does not make an `Arc<AppState>` a narrow
+capability. Session cleanup, some workers and transport entry points still
+need dedicated contexts before this boundary is complete.
 
 Private `AppState` fields include `pool`, `sessions` and `metrics`, along with
 database keyrings, FAST/Dialback material, stores, component credentials,
@@ -278,12 +274,12 @@ the enforcement column distinguishes a hard gate from a remaining review rule.
 | --- | --- | --- | --- | --- |
 | `src/main.rs` | CLI mode selection, process composition, pool construction/attestation, listener and worker startup, coordinated shutdown | configuration, `AppState`, listener factories, worker registry and one-shot migration/audit modes | stanza policy, business SQL or domain transaction composition | review plus top-level failure tests; it is the only runtime composition root |
 | `src/config.rs` | parsing, normalization, deployment-mode validation, secret-file/value exclusivity and transfer into typed configuration | filesystem metadata and pure validation helpers | opening network listeners, querying application data or logging secret values | typed configuration and tests; secret consumers remain in the same process after transfer |
-| `src/state.rs` | construction of domain capabilities and process-local registries; private capability accessors | services, stores, routers, key owners and worker registry | becoming an unrestricted global service locator or exposing new raw key/pool fields | Rust visibility plus an exact-name CI gate for the nine legacy public capabilities |
+| `src/state.rs` | construction of domain capabilities and process-local registries; private capability accessors | services, stores, routers, key owners and worker registry | becoming an unrestricted global service locator or exposing new raw key/pool fields | Rust visibility and a CI gate requiring zero public `AppState` fields |
 | `src/xmpp/framing.rs`, `src/transport_parsing.rs`, `src/bosh.rs`, WebSocket/C2S entry code | bytes-to-frame conversion, transport provenance, per-connection budgets, BOSH RID/response ownership and connection lifetime | parser utilities, connection actors and `ProtocolSession` | authorization, archive decisions or business database transactions | parser/transport tests and bounded actors; BOSH persistence calls are transport-specific fence bookkeeping, not general business authority |
 | `src/xmpp/protocol.rs`, `src/xmpp/protocol/*` | stream/session state, RFC/XEP parsing, canonical protocol errors and ordered invocation of typed capabilities | `AppState` service methods, XML builders and live-delivery interfaces | `db::*`, SQLx, `PgPool`, `state.pool` or composing archive/offline/outbox transactions | production-tree CI ceiling is exactly zero for every forbidden database reference; test-only fixtures are excluded |
-| `src/services/*` | business authorization, one-snapshot policy, transaction intent, commit/side-effect ordering and typed outcomes | domain repositories, PostgreSQL for the still-embedded repository paths, and narrow runtime ports | raw socket/framing parsing or returning an open transaction to protocol code | Rust visibility and semantic source gates; several services still embed SQLx/`PgPool` work and must be split without moving that authority upward |
+| `src/services/*` | business authorization, one-snapshot policy, transaction intent, commit/side-effect ordering and typed outcomes | domain repositories and narrow runtime ports | raw socket/framing parsing or returning an open transaction to protocol code | Rust visibility and semantic source gates; transaction adapters belong in `src/db` |
 | `src/db/*` | SQL, routines, lock order, isolation level, durable identities, capacity ledgers, claims and outbox/admission atomicity | SQLx/PostgreSQL and typed persistence models | XML/HTTP parsing, socket backpressure or retrying external effects while a transaction is held | module boundary, migration constraints and exact PostgreSQL capability manifest |
-| `src/api/*`, `src/operation_runtime.rs` | HTTP routing, authentication, request/idempotency context, admin operation journal and response mapping | API services, repositories, command/runtime capability pools and operation workers | bootstrap/migrator/backup credentials or unaudited external effects | middleware, DB ACLs and operation journal; many API modules retain direct persistence (`mod.rs` and `reports.rs` are representative) that must move behind services |
+| `src/api/*`, `src/operation_runtime.rs` | HTTP routing, authentication, request/idempotency context, admin operation journal and response mapping | scoped API and worker capabilities | bootstrap/migrator/backup credentials or unaudited external effects | middleware, DB ACLs and operation journal; HTTP account teardown and ordinary operation claims use typed contexts, while some composition paths remain broad |
 | `src/outbound.rs`, `src/connection_actors.rs` | exact live-route incarnation, bounded queue ownership, socket/SM/BOSH transfer and slow-peer action | session/MUC registries, metrics and typed delivery plans | deciding privacy/block policy or claiming persistence before PostgreSQL commits | route generations, bounded channels and actor registry; volatile signals retain their documented best-effort semantics |
 | `src/s2s/*`, `src/components.rs` | remote/component authentication, domain authority, discovery/TLS/Dialback and delivery attempts | federation policy, DNS/TLS, durable outbox repositories and outbound transport | asserting local identity from an unauthenticated stream or treating socket write as universal exactly-once ACK | authenticated stream state plus stable IDs/outbox; XMPP delivery remains at-least-once at defined retry boundaries |
 | `src/cluster.rs`, `src/cluster_security.rs`, `src/db/cluster_*` | signed Redis control envelopes, node/route epochs, PostgreSQL leases and degraded-mode decisions | live registries, PostgreSQL authority and Redis transport | making Redis durable truth or authorization authority | signature/replay checks and PostgreSQL revalidation; multi-node behavior remains experimental |
@@ -425,9 +421,7 @@ environment remains unchanged.
 
 `AppState` constructs these services and exposes crate-private accessors. The
 accessor is the capability boundary: callers receive a specific domain service,
-not a generic database handle or keyring. “Persistence today” records whether
-the service still embeds repository work; it is not permission for callers to
-copy that coupling.
+not a generic database handle or keyring.
 
 | Capability/accessor | Decision responsibility | Persistence/side-effect responsibility today | Explicitly outside the capability |
 | --- | --- | --- | --- |
@@ -464,6 +458,7 @@ copy that coupling.
 | `sasl_login_abuse_service()` / `PasskeyStartHttpContext` | login-specific SASL penalty and Passkey proof decisions | distinct read/failure and proof-verification grants | exposing a general abuse guard to either ingress |
 | `PasswordChangeHttpContext` | authenticated password change, abuse proof and exact request replay | credential-generation checks, proof admission, password publication and response commit in repository-owned transactions | socket teardown and full application state |
 | `SmTeardownService` | generation-fenced durable stream revocation | exact lease/count/finalize repository operations, bounded retry and finalization only after transport effects succeed | rendering Presence/MUC effects or granting direct SQL access to HTTP callers |
+| `AccountGenerationTeardownSequence` / `AccountTeardownRuntime` | post-commit credential-change revocation | local route fence, durable SM teardown and signed cluster notification; full-account teardown reads the committed generation first | rolling back a credential commit because notification or teardown fails; broad state in HTTP handlers |
 | `HttpLoginEndpointContext` | password login, abuse proof and exact request replay | typed login service, trusted-proxy policy and two outcome counters; reservation and proof commit before bounded verifier work and account/session publication | exposing application state, database transactions or the full metrics registry to the handler |
 | `HttpRegistrationEndpointContext` | public account registration | account service, live registration availability, trusted-proxy policy and three outcome counters | raw database access, session teardown or full application state |
 | `HttpChallengeEndpointContext` | public proof-of-work challenge issuance | challenge service, trusted-proxy policy and two counters; authenticated actions use a separate bearer query | generic abuse guard, database pool or full application state |
@@ -474,9 +469,10 @@ copy that coupling.
 | `UploadHttpReadContext` | public upload GET | shared download admission, guarded object read, public-file projection, trusted-proxy policy and stream deadlines | write/claim authority, raw storage bypass or the full application state |
 | `UploadHttpDeleteContext` | authenticated upload DELETE | bearer principal from the query context, upload lifecycle deletion and the operation timer | direct object deletion, claim leases or full application state |
 | `UploadHttpReplayReadContext` | PUT replay object verification | guarded exact-version read with bounded read and operation deadlines | download admission, raw backend writes or general application state |
-| `operation_muc_destroy_service()` | exact room-destruction intent and authority validation | advisory and room locks, deletion, intent completion and audit in one repository transaction | cluster wake and in-memory occupant cleanup before commit |
-| `operation_effect_fence_service()` | point-of-no-return authorization for administrator effects | parent authorization, target fence and denial acknowledgements in one transaction before effect execution | starting an external effect before its durable fence commits |
-| `admin_session_cleanup_worker_service()` | administrator session-cleanup claim and exact lease fence | claim, renewal, completion, retry and target-current query through a PostgreSQL repository | local or cluster delivery inside a database call |
+| `OperationMucDestroyEffects` | exact room destruction and post-commit notification | advisory and room locks, deletion, audit, signed wake and exact local occupant removal in that order | cluster wake or in-memory occupant cleanup before commit |
+| `OperationWorkerRuntime` / `OperationWorkerControl` | administrator operation claim and point-of-no-return effect fence | typed claim, target snapshot, renewal and effect handles assembled before `serve`; effect starts only after its durable fence commits | full application state in the worker loop or an effect before commit |
+| `OperationSessionEffects` / `OperationTlsReloadEffects` / `OperationIslandEffects` / `OperationPanicEffects` | committed administrator effects | exact session routes, TLS reload, island-mode convergence and local cancellation before durable SM teardown | a broad state handle in the operation execution loop |
+| `AdminSessionCleanupContext` | administrator session-cleanup lease, local route fence and remote notification | claim, renewal, exact local fence, signed remote control and completion or retry | delivery inside a database transaction or unrelated application state |
 | `account_revocation_worker_context()` | committed account-revocation consumption | typed consumer, live cluster-instance identity, local route fencing before exact revision ACK and bounded continuation | ACK before local sessions are fenced or broad `AppState` authority in the worker |
 | `session_authority_sweep_service()` | periodic account and device-epoch authority checks | read-only repository queries and ordered stale-route decisions | local route cancellation or Redis publication |
 | `cluster_failure_supervisor_context()` | periodic cluster identity and lease validation | exact PostgreSQL authority, bounded replay and route cleanup, peer-cache refresh and fail-closed shutdown | Redis publication, signing, or unrelated application state |
@@ -484,8 +480,9 @@ copy that coupling.
 | `cluster_muc_outbox_worker_context()` | clustered-MUC audience dispatch | bounded preclaim and claim before delivery, then exact ACK or retry and housekeeping through PostgreSQL services | signing, Redis commands, or advancing a lost claim lease |
 | `locked_muc_expiry_service()` | abandoned locked-room expiry | one PostgreSQL transaction for tombstones and terminal outbox records | local occupant cleanup or presence before commit |
 | `session_termination_authority_service()` | exact cluster route authorization for session termination | PostgreSQL route read and post-read owner comparison | local disconnect or ACK before durable authority is checked |
-| `operation_journal_worker_service()` | administrator operation target claim | parent lease renewal, target claim and cancellation acknowledgement through fenced transactions | executing an effect before target claim commits |
+| `ClusterListenerDispatch` | authenticated cluster commands | exact local session and MUC effects after signed admission and durable authority checks | database pool, full cluster manager or live map guards across awaits |
 | `s2s_roster_authorization_service()` | recipient roster visibility for inbound federation presence and IQ | scoped roster lookup in its PostgreSQL repository | transport framing, socket delivery and unrestricted database reads |
+| `S2sOutboxDispatchContext` | due federation outbox dispatch | claim, expiry, authenticated-route recovery, current policy checks, retry and local bounce | TLS/DNS/SM connection actors; creating a new actor still crosses the transport boundary explicitly |
 | `s2s_outbox_dispatch_service()` | S2S/component outbox claims, lease renewal, completion and retry | fenced dispatch transitions and per-domain admission through one repository | socket writes and cluster policy changes inside database transactions |
 | `s2s_sm_outbox_service()` | XEP-0198 S2S outbox lease renewal and acknowledgement | exact fenced renewal and completion through a PostgreSQL repository | advancing SM counters after a lost lease fence |
 | `tls_context()` | serving/federation TLS snapshots, certificate-session registration and reload | one shared reload manager, activation lock and certificate-session registry | exposing the full mutable TLS manager or mixing handshake generations |
@@ -514,16 +511,14 @@ copy that coupling.
 | `push_service()` | push-enable/disable policy and payload eligibility | subscription/delivery-attempt persistence | claiming a push provider accepted a message without its completion boundary |
 | `upload_service()` | slot reservation ownership, quota, MIME/size and locator policy | injected reservation and upload-lifecycle repository; HTTP owns byte streaming while the service owns claim, stage, promotion and deletion calls | holding a PostgreSQL transaction during upload/download bytes |
 | `extdisco_service()` | XEP-0215 service targeting, advertised STUN/TURN records, eligibility and credential issuance windows | owns the public service projection and private TURN secret | exposing the long-term secret or allowing protocol handlers to select records from broad configuration |
-| `SessionCleanupService` | exact expired/revoked session teardown plan | cleanup claims and capacity release; currently constructed per `ProtocolSession` with `Arc<AppState>` rather than exposed by an `AppState` accessor | deleting a replacement connection that has a newer generation or becoming a pattern for new broad-state services |
+| `SessionCleanupService` | exact expired/revoked session teardown plan | typed local ownership, SM revocation, presence, MUC, MIX and route-release handles; `Arc<AppState>` is used only during construction | deleting a replacement connection or retaining broad state after construction |
 
-Except for the explicitly identified `SessionCleanupService` construction debt,
-the listed accessors are constructed by `AppState` and are crate-private.
+Except for the `SessionCleanupService` construction seam, the listed accessors
+are constructed by `AppState` and are crate-private.
 Services return typed domain outcomes. Transport-specific XML/JSON, SQL row
 types, raw `PgPool`, open transactions, secret bytes and live socket senders
-must not cross these accessors. The remaining services that contain SQLx calls
-own that repository work temporarily; the reduction path is to introduce a
-domain repository port underneath the service, never to move persistence back
-into protocol or API handlers.
+must not cross these accessors. Repository transactions remain in `src/db`;
+remaining broad composition paths must be narrowed before Stage 1 can close.
 
 ## State classes and single sources of truth
 
@@ -863,11 +858,7 @@ Remaining architecture work:
     removed from the parent OS environment after parsing. Eliminating that
     exposure requires a launcher/exec handoff or file-only production policy.
 
-Further reduction should proceed in this order: move direct REST transactions
-behind application services, extract embedded service/runtime persistence into
-repository ports, remove raw `AppState.pool`, replace the session/MUC public
-maps with registries, split operation workers into narrow capability structs,
-then consider per-domain PostgreSQL roles only after the service transaction
-boundaries are stable. CI treats the current field
-identities and zero protocol/database dependency counts as monotonic ceilings:
-a new feature must not widen them.
+Further reduction should split remaining broad session and worker entry points
+into narrow capabilities, then separate database roles once cross-domain
+transaction ownership is clear. CI treats the zero-public-field and zero
+protocol/database-dependency counts as monotonic ceilings.

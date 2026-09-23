@@ -135,34 +135,6 @@ impl AppState {
         Ok(failures)
     }
 
-    pub(crate) async fn route_remote_roster_push(
-        &self,
-        account: &str,
-        owner_id: uuid::Uuid,
-        version: i64,
-        push: &str,
-        annotated_push: Option<&str>,
-    ) -> Result<Vec<RemoteRosterPushFailure>> {
-        let mut failures = Vec::new();
-        for node_id in self.remote_resource_nodes(account).await? {
-            match self
-                .cluster
-                .send_to_node_roster(&node_id, account, owner_id, version, push, annotated_push)
-                .await
-            {
-                Ok(true) => {}
-                Ok(false) => failures.push(RemoteRosterPushFailure::NotAccepted { node_id }),
-                Err(error) => {
-                    failures.push(RemoteRosterPushFailure::Delivery(RemoteRouteFailure {
-                        node_id,
-                        error,
-                    }))
-                }
-            }
-        }
-        Ok(failures)
-    }
-
     /// A roster removal's subscription presence is best effort, as it was
     /// before this routing adapter. The authority fences remain unchanged.
     pub(crate) async fn route_remote_roster_removal_presence(

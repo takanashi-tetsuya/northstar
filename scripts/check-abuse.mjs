@@ -202,12 +202,15 @@ assert.match(dbUsers, /begin_account_deletion_quiesce_in_tx[\s\S]+INSERT INTO ac
 assert.match(deletionRecoveryMigration, /user_id UUID PRIMARY KEY REFERENCES users\(id\) ON DELETE CASCADE/);
 assert.match(deletionRecoveryMigration, /recovery_after TIMESTAMPTZ NOT NULL[\s\S]+claim_token UUID[\s\S]+claim_until TIMESTAMPTZ/,
   'account deletion recovery must be delayed and lease-fenced');
-assert.match(accountRecovery, /revoke_user_sm_sessions_with_teardown[\s\S]+delete_quiesced/,
+assert.match(accountRecovery, /context\s*\.revoke_sm\(user_id\)[\s\S]+context\s*\.delete_quiesced\(user_id\)/,
   'durable SM state must be torn down before the account row can cascade it');
 assert.match(accountRepository, /claim_account_deletion_jobs[\s\S]+release_account_deletion_job/,
   'the account repository must retain deletion claim-token authority');
-assert.match(accountRecovery, /claim_deletion_recovery[\s\S]+release_deletion_recovery/,
+assert.match(accountRecovery, /context\.claim\(\)[\s\S]+context\.release\(&job\)/,
   'failed deletion recovery must release its durable lease with backoff');
+const deletionRecoveryContext = await read('src/state/account_deletion_recovery.rs');
+assert.match(deletionRecoveryContext, /fn claim[\s\S]+claim_deletion_recovery[\s\S]+fn release[\s\S]+release_deletion_recovery/,
+  'the recovery context must preserve durable claim and release semantics');
 assert.match(main, /"account-deletion-recovery"[\s\S]+WorkerCriticality::Restartable/,
   'account deletion recovery must remain under the worker supervisor');
 assert.match(messageAdmissionMigration, /payload_mac BYTEA NOT NULL,[\s\S]*CHECK \(octet_length\(payload_mac\) = 32\)/,

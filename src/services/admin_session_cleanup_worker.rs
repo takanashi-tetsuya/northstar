@@ -40,6 +40,7 @@ pub(crate) trait AdminSessionCleanupRepository: Send + Sync {
     ) -> impl Future<Output = Result<bool>> + Send;
 }
 
+#[derive(Clone)]
 pub(crate) struct AdminSessionCleanupWorkerService<R> {
     repository: R,
 }

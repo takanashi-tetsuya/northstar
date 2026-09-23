@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+#[derive(Clone)]
 pub(crate) struct PostgresOperationJournalWorkerRepository {
     pool: PgPool,
 }

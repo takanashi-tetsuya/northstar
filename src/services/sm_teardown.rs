@@ -23,12 +23,33 @@ pub(crate) struct SmTeardownBatch<S> {
 pub(crate) trait SmTeardownRepository: Send + Sync {
     type Snapshot: SmTeardownClaim;
 
+    fn take_exact(
+        &self,
+        session_id: Uuid,
+        lease_seconds: u64,
+    ) -> impl Future<Output = Result<Option<Self::Snapshot>>> + Send;
+
     fn take_before_generation(
         &self,
         user_id: Uuid,
         generation_exclusive: i64,
         lease_seconds: u64,
     ) -> impl Future<Output = Result<SmTeardownBatch<Self::Snapshot>>> + Send;
+
+    fn take_all(
+        &self,
+        lease_seconds: u64,
+    ) -> impl Future<Output = Result<SmTeardownBatch<Self::Snapshot>>> + Send;
+
+    fn count_all(&self) -> impl Future<Output = Result<i64>> + Send;
+
+    fn take_user(
+        &self,
+        user_id: Uuid,
+        lease_seconds: u64,
+    ) -> impl Future<Output = Result<SmTeardownBatch<Self::Snapshot>>> + Send;
+
+    fn count_user(&self, user_id: Uuid) -> impl Future<Output = Result<i64>> + Send;
 
     fn count_before_generation(
         &self,
@@ -68,6 +89,25 @@ impl<R: SmTeardownRepository> SmTeardownService<R> {
             self.repository.finalize(lease).await?,
             "durable SM teardown lease was lost before finalization"
         );
+        Ok(())
+    }
+
+    pub(crate) async fn revoke_exact<Render, RenderFuture>(
+        &self,
+        session_id: Uuid,
+        render: Render,
+    ) -> Result<()>
+    where
+        Render: FnOnce(R::Snapshot) -> RenderFuture + Send,
+        RenderFuture: Future<Output = Result<()>> + Send,
+    {
+        if let Some(snapshot) = self
+            .repository
+            .take_exact(session_id, self.lease_seconds)
+            .await?
+        {
+            self.finish(snapshot, render).await?;
+        }
         Ok(())
     }
 
@@ -113,6 +153,63 @@ impl<R: SmTeardownRepository> SmTeardownService<R> {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     }
+
+    pub(crate) async fn revoke_all<Render, RenderFuture>(&self, mut render: Render) -> Result<usize>
+    where
+        Render: FnMut(R::Snapshot) -> RenderFuture + Send,
+        RenderFuture: Future<Output = Result<()>> + Send,
+    {
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(self.lease_seconds.saturating_add(2));
+        let mut total = 0usize;
+        loop {
+            let batch = self.repository.take_all(self.lease_seconds).await?;
+            total = total.saturating_add(batch.snapshots.len());
+            for snapshot in batch.snapshots {
+                self.finish(snapshot, &mut render).await?;
+            }
+            if batch.pending == 0 && self.repository.count_all().await? == 0 {
+                return Ok(total);
+            }
+            ensure!(
+                tokio::time::Instant::now() < deadline,
+                "global durable SM teardown claims did not quiesce before the deadline"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    pub(crate) async fn revoke_user<Render, RenderFuture>(
+        &self,
+        user_id: Uuid,
+        mut render: Render,
+    ) -> Result<usize>
+    where
+        Render: FnMut(R::Snapshot) -> RenderFuture + Send,
+        RenderFuture: Future<Output = Result<()>> + Send,
+    {
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(self.lease_seconds.saturating_add(2));
+        let mut total = 0usize;
+        loop {
+            let batch = self
+                .repository
+                .take_user(user_id, self.lease_seconds)
+                .await?;
+            total = total.saturating_add(batch.snapshots.len());
+            for snapshot in batch.snapshots {
+                self.finish(snapshot, &mut render).await?;
+            }
+            if batch.pending == 0 && self.repository.count_user(user_id).await? == 0 {
+                return Ok(total);
+            }
+            ensure!(
+                tokio::time::Instant::now() < deadline,
+                "durable SM account teardown claims did not quiesce before the deadline"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -134,6 +231,14 @@ mod tests {
 
     #[derive(Default)]
     struct Trace {
+        all_batches: VecDeque<SmTeardownBatch<Snapshot>>,
+        all_counts: VecDeque<i64>,
+        all_takes: Vec<u64>,
+        user_batches: VecDeque<SmTeardownBatch<Snapshot>>,
+        user_counts: VecDeque<i64>,
+        user_takes: Vec<(Uuid, u64)>,
+        exact: VecDeque<Option<Snapshot>>,
+        exact_takes: Vec<(Uuid, u64)>,
         batches: VecDeque<SmTeardownBatch<Snapshot>>,
         counts: VecDeque<i64>,
         takes: Vec<(Uuid, i64, u64)>,
@@ -147,6 +252,16 @@ mod tests {
     impl SmTeardownRepository for FakeRepository {
         type Snapshot = Snapshot;
 
+        async fn take_exact(
+            &self,
+            session_id: Uuid,
+            lease_seconds: u64,
+        ) -> Result<Option<Self::Snapshot>> {
+            let mut trace = self.0.lock().unwrap();
+            trace.exact_takes.push((session_id, lease_seconds));
+            Ok(trace.exact.pop_front().expect("fixture exact claim"))
+        }
+
         async fn take_before_generation(
             &self,
             user_id: Uuid,
@@ -158,6 +273,42 @@ mod tests {
                 .takes
                 .push((user_id, generation_exclusive, lease_seconds));
             Ok(trace.batches.pop_front().expect("fixture batch"))
+        }
+
+        async fn take_all(&self, lease_seconds: u64) -> Result<SmTeardownBatch<Self::Snapshot>> {
+            let mut trace = self.0.lock().unwrap();
+            trace.all_takes.push(lease_seconds);
+            Ok(trace.all_batches.pop_front().expect("fixture global batch"))
+        }
+
+        async fn count_all(&self) -> Result<i64> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .all_counts
+                .pop_front()
+                .expect("fixture global count"))
+        }
+
+        async fn take_user(
+            &self,
+            user_id: Uuid,
+            lease_seconds: u64,
+        ) -> Result<SmTeardownBatch<Self::Snapshot>> {
+            let mut trace = self.0.lock().unwrap();
+            trace.user_takes.push((user_id, lease_seconds));
+            Ok(trace.user_batches.pop_front().expect("fixture user batch"))
+        }
+
+        async fn count_user(&self, _user_id: Uuid) -> Result<i64> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .user_counts
+                .pop_front()
+                .expect("fixture user count"))
         }
 
         async fn count_before_generation(
@@ -186,6 +337,114 @@ mod tests {
             session_id: Uuid::new_v4(),
             token: Uuid::new_v4(),
         })
+    }
+
+    #[tokio::test]
+    async fn exact_revocation_retries_effect_before_finalizing_the_claim() {
+        let claimed = snapshot();
+        let session_id = claimed.0.session_id;
+        let trace = Arc::new(Mutex::new(Trace {
+            exact: VecDeque::from([Some(claimed.clone()), Some(claimed.clone()), None]),
+            ..Trace::default()
+        }));
+        let service = SmTeardownService::new(FakeRepository(Arc::clone(&trace)), 0);
+        assert!(service
+            .revoke_exact(session_id, |_| async { anyhow::bail!("delivery failed") })
+            .await
+            .is_err());
+        assert!(trace.lock().unwrap().finalized.is_empty());
+        service
+            .revoke_exact(session_id, |_| async { Ok(()) })
+            .await
+            .unwrap();
+        service
+            .revoke_exact(session_id, |_| async { Ok(()) })
+            .await
+            .unwrap();
+        let trace = trace.lock().unwrap();
+        assert_eq!(trace.exact_takes, [(session_id, 1); 3]);
+        assert_eq!(trace.finalized, [claimed.0]);
+    }
+
+    #[tokio::test]
+    async fn global_revocation_waits_for_pending_claims_and_replays_failed_effects() {
+        let claimed = snapshot();
+        let trace = Arc::new(Mutex::new(Trace {
+            all_batches: VecDeque::from([
+                SmTeardownBatch {
+                    snapshots: vec![claimed.clone()],
+                    pending: 0,
+                },
+                SmTeardownBatch {
+                    snapshots: vec![],
+                    pending: 1,
+                },
+                SmTeardownBatch {
+                    snapshots: vec![claimed.clone()],
+                    pending: 0,
+                },
+                SmTeardownBatch {
+                    snapshots: vec![],
+                    pending: 0,
+                },
+            ]),
+            all_counts: VecDeque::from([1, 0]),
+            ..Trace::default()
+        }));
+        let service = SmTeardownService::new(FakeRepository(Arc::clone(&trace)), 0);
+        assert!(service
+            .revoke_all(|_| async { anyhow::bail!("presence failed") })
+            .await
+            .is_err());
+        assert!(trace.lock().unwrap().finalized.is_empty());
+        assert_eq!(service.revoke_all(|_| async { Ok(()) }).await.unwrap(), 1);
+        let trace = trace.lock().unwrap();
+        assert_eq!(trace.all_takes, [1; 4]);
+        assert_eq!(trace.finalized, [claimed.0]);
+    }
+
+    #[tokio::test]
+    async fn account_revocation_waits_for_pending_claims_and_replays_failed_effects() {
+        let user_id = Uuid::new_v4();
+        let claimed = snapshot();
+        let trace = Arc::new(Mutex::new(Trace {
+            user_batches: VecDeque::from([
+                SmTeardownBatch {
+                    snapshots: vec![claimed.clone()],
+                    pending: 0,
+                },
+                SmTeardownBatch {
+                    snapshots: vec![],
+                    pending: 1,
+                },
+                SmTeardownBatch {
+                    snapshots: vec![claimed.clone()],
+                    pending: 0,
+                },
+                SmTeardownBatch {
+                    snapshots: vec![],
+                    pending: 0,
+                },
+            ]),
+            user_counts: VecDeque::from([1, 0]),
+            ..Trace::default()
+        }));
+        let service = SmTeardownService::new(FakeRepository(Arc::clone(&trace)), 0);
+        assert!(service
+            .revoke_user(user_id, |_| async { anyhow::bail!("delivery failed") })
+            .await
+            .is_err());
+        assert!(trace.lock().unwrap().finalized.is_empty());
+        assert_eq!(
+            service
+                .revoke_user(user_id, |_| async { Ok(()) })
+                .await
+                .unwrap(),
+            1
+        );
+        let trace = trace.lock().unwrap();
+        assert_eq!(trace.user_takes, [(user_id, 1); 4]);
+        assert_eq!(trace.finalized, [claimed.0]);
     }
 
     #[tokio::test]

@@ -7,7 +7,15 @@
 //! exact connection/SM/MUC epoch captured by the protocol actor; a late
 //! cleanup can therefore never remove a replacement session.
 
+use crate::cluster::{ClusterMucDeparture, ClusterSessionRouteRelease};
 use crate::state::AppState;
+use crate::state::{
+    muc_delivery::MucDeliveryContext, session_cleanup_bookkeeping::SessionCleanupBookkeeping,
+    session_cleanup_local::SessionCleanupLocal, session_cleanup_mix::SessionCleanupMix,
+    session_cleanup_presence::SessionCleanupPresence, session_cleanup_rooms::SessionCleanupRooms,
+    session_cleanup_sm::SessionCleanupSm, session_cleanup_sm_revoker::SessionCleanupSmRevoker,
+    session_cleanup_unavailable::SessionCleanupUnavailable,
+};
 use anyhow::Result;
 use dashmap::DashMap;
 use std::{
@@ -522,7 +530,17 @@ async fn run_cleanup_step<T>(
 }
 
 pub(crate) struct SessionCleanupService {
-    state: Arc<AppState>,
+    sm: SessionCleanupSm,
+    sm_revoker: SessionCleanupSmRevoker,
+    local: SessionCleanupLocal,
+    presence: SessionCleanupPresence,
+    rooms: SessionCleanupRooms,
+    muc_delivery: MucDeliveryContext,
+    muc_departure: ClusterMucDeparture,
+    unavailable: SessionCleanupUnavailable,
+    mix: SessionCleanupMix,
+    route_release: ClusterSessionRouteRelease,
+    bookkeeping: SessionCleanupBookkeeping,
 }
 
 async fn run_sm_suspension_recovery<R: super::sm_suspension::SmSuspensionRepository>(
@@ -627,13 +645,37 @@ pub(crate) fn start_sm_suspension_recovery<
 
 impl SessionCleanupService {
     pub(crate) fn new(state: Arc<AppState>) -> Self {
-        Self { state }
+        let sm = state.session_cleanup_sm();
+        let sm_revoker = state.session_cleanup_sm_revoker();
+        let local = state.session_cleanup_local();
+        let presence = state.session_cleanup_presence();
+        let rooms = state.session_cleanup_rooms();
+        let muc_delivery = state.muc_delivery_context();
+        let muc_departure = state.session_cleanup_muc_departure();
+        let unavailable = state.session_cleanup_unavailable();
+        let mix = state.session_cleanup_mix();
+        let route_release = state.session_cleanup_route_release();
+        let bookkeeping = state.session_cleanup_bookkeeping();
+        Self {
+            sm,
+            sm_revoker,
+            local,
+            presence,
+            rooms,
+            muc_delivery,
+            muc_departure,
+            unavailable,
+            mix,
+            route_release,
+            bookkeeping,
+        }
     }
 
     /// Remove exact process-local ownership before any asynchronous cleanup.
     /// This method performs no database or network I/O and is also the model
     /// used by the synchronous `Drop` fallback.
     pub(crate) fn quiesce(&self, plan: SessionCleanupPlan) -> QuiescedSessionCleanup {
+        let local = &self.local;
         let full_jid = plan.full_jid.as_deref().unwrap_or_default();
         let (durable_suspension, revoke_sm_session) = match plan.sm {
             SessionSmCleanup::Suspend {
@@ -648,7 +690,7 @@ impl SessionCleanupService {
                     .iter()
                     .map(|entry| entry.stanza.len())
                     .sum();
-                let endpoints = self.state.suspend_local_muc_occupants(
+                let endpoints = local.suspend_local_muc_occupants(
                     full_jid,
                     plan.connection_id,
                     session_id,
@@ -660,8 +702,7 @@ impl SessionCleanupService {
                 // same synchronous ownership boundary as the route fence.
                 // From this point every volatile MUC suffix append must grow
                 // this shared lease before retaining another stanza.
-                self.state
-                    .retain_suspended_sm_capacity(&endpoints, capacity.clone());
+                local.retain_suspended_sm_capacity(&endpoints, capacity.clone());
                 plan.joined_rooms.clear();
                 (
                     Some(DurableSuspension {
@@ -688,18 +729,18 @@ impl SessionCleanupService {
             for (room_jid, membership) in memberships {
                 plan.joined_rooms
                     .remove_if(&room_jid, |_, current| current == &membership);
-                let Some(departed) = self.state.remove_local_muc_occupant_exact(
-                    crate::state::LocalMucOccupantIdentity {
+                let Some(departed) =
+                    local.remove_local_muc_occupant_exact(crate::state::LocalMucOccupantIdentity {
                         room_jid: &room_jid,
                         nick: &membership.nick,
                         full_jid,
                         connection_id: plan.connection_id,
                         cluster_epoch: membership.cluster_epoch,
-                    },
-                ) else {
+                    })
+                else {
                     continue;
                 };
-                let remaining = self.state.muc_occupants_for(&room_jid);
+                let remaining = local.muc_occupants_for(&room_jid);
                 departures.push(MucDeparture {
                     room_jid,
                     departed,
@@ -709,7 +750,7 @@ impl SessionCleanupService {
         }
 
         let route_removed = plan.registered_key.as_deref().is_some_and(|key| {
-            self.state
+            local
                 .remove_session_if_connection(key, plan.connection_id)
                 .is_some()
         });
@@ -750,7 +791,8 @@ impl SessionCleanupService {
         drop(mix_presence_epoch);
         let deadline = Instant::now() + CLEANUP_TOTAL_BUDGET;
         let mut report = CleanupReport::default();
-        self.state.record_session_finalization_started();
+        self.bookkeeping.finalization_started();
+        let sm = &self.sm;
 
         let mut suspended = false;
         if let Some(suspension) = work.durable_suspension {
@@ -769,8 +811,7 @@ impl SessionCleanupService {
                         deadline,
                         "snapshot-suspended-muc",
                         CleanupRecovery::LeaseOrEpoch,
-                        self.state
-                            .snapshot_suspended_muc_for_disconnect(&endpoints, &mut exact_snapshot),
+                        sm.snapshot_suspended_muc_for_disconnect(&endpoints, &mut exact_snapshot),
                         &mut report,
                     )
                     .await
@@ -780,7 +821,7 @@ impl SessionCleanupService {
                     // snapshot helper validates before changing phase. Keep
                     // the legacy two-step durable fallback available for this
                     // invariant/error path rather than dropping either owner.
-                    self.state.seal_suspended_muc_endpoints(&endpoints).await;
+                    sm.seal_suspended_muc_endpoints(&endpoints).await;
                 }
                 let snapshot_bytes = exact_snapshot.resident_bytes().unwrap_or(usize::MAX);
                 if capacity
@@ -788,34 +829,30 @@ impl SessionCleanupService {
                     .is_none_or(|lease| lease.try_grow_to(snapshot_bytes).is_err())
                 {
                     report.failed("suspend-sm-memory-admission", CleanupRecovery::LeaseOrEpoch);
-                    self.state.sm_memory_governor().mark_invariant_failure();
-                    self.state.seal_suspended_muc_endpoints(&endpoints).await;
+                    sm.mark_memory_invariant_failure();
+                    sm.seal_suspended_muc_endpoints(&endpoints).await;
                     let _ = self
                         .step(
                             deadline,
                             "revoke-sm-after-memory-rejection",
                             CleanupRecovery::LeaseOrEpoch,
-                            self.state.revoke_sm_session_with_teardown(session_id),
+                            self.sm_revoker.revoke_with_teardown(session_id),
                             &mut report,
                         )
                         .await;
                     capacity.take();
                 } else {
-                    let sm_limits = self.state.sm_buffer_limits();
                     match self
                         .step(
                             deadline,
                             "suspend-sm",
                             CleanupRecovery::LeaseOrEpoch,
-                            self.state.sm_service().suspend_exact_session(
+                            sm.suspend_exact_session(
                                 session_id,
                                 work.connection_id,
-                                account.user_id,
-                                account.auth_generation,
+                                account,
                                 &exact_snapshot,
                                 ttl_seconds,
-                                sm_limits.max_unacked_stanzas,
-                                sm_limits.max_unacked_bytes,
                             ),
                             &mut report,
                         )
@@ -827,7 +864,7 @@ impl SessionCleanupService {
                             // promotion below needs reconciliation.
                             suspended = true;
                             let promotion_endpoints = endpoints.clone();
-                            let state = Arc::clone(&self.state);
+                            let promotion_sm = &sm;
                             let promotion = self
                             .step(
                                 deadline,
@@ -835,7 +872,7 @@ impl SessionCleanupService {
                                 CleanupRecovery::LeaseOrEpoch,
                                 async move {
                                     anyhow::ensure!(
-                                        state.mark_suspended_muc_durable(promotion_endpoints).await,
+                                        promotion_sm.mark_suspended_muc_durable(promotion_endpoints).await,
                                         "one or more suspended MUC projections require reconciliation"
                                     );
                                     Ok(())
@@ -844,15 +881,14 @@ impl SessionCleanupService {
                             )
                             .await;
                             if promotion.is_none() {
-                                let queued =
-                                    self.state.sm_suspension_recovery_queue().enqueue_promote(
-                                        work.connection_id,
-                                        session_id,
-                                        endpoints.clone(),
-                                        capacity
-                                            .take()
-                                            .expect("SM suspension owns its capacity lease"),
-                                    );
+                                let queued = sm.queue_promotion(
+                                    work.connection_id,
+                                    session_id,
+                                    endpoints.clone(),
+                                    capacity
+                                        .take()
+                                        .expect("SM suspension owns its capacity lease"),
+                                );
                                 if !queued {
                                     suspended = false;
                                     report.failed(
@@ -864,14 +900,13 @@ impl SessionCleanupService {
                                             deadline,
                                             "revoke-sm-after-recovery-capacity",
                                             CleanupRecovery::LeaseOrEpoch,
-                                            self.state.revoke_sm_session_with_teardown(session_id),
+                                            self.sm_revoker.revoke_with_teardown(session_id),
                                             &mut report,
                                         )
                                         .await;
                                 }
                             } else if let Some(capacity) = capacity.take() {
-                                self.state
-                                    .retain_suspended_sm_capacity(&endpoints, capacity);
+                                sm.retain_suspended_sm_capacity(&endpoints, capacity);
                             }
                             // The SM row is already durable. If promotion times
                             // out or PostgreSQL rejects a MUC suffix, state keeps
@@ -881,7 +916,7 @@ impl SessionCleanupService {
                             // loss. Expiry/revocation remains the terminal owner.
                         }
                         Some(false) => {
-                            self.state.seal_suspended_muc_endpoints(&endpoints).await;
+                            sm.seal_suspended_muc_endpoints(&endpoints).await;
                             if !report
                                 .failures
                                 .iter()
@@ -891,8 +926,8 @@ impl SessionCleanupService {
                             }
                         }
                         None => {
-                            self.state.seal_suspended_muc_endpoints(&endpoints).await;
-                            let queued = self.state.sm_suspension_recovery_queue().enqueue(
+                            sm.seal_suspended_muc_endpoints(&endpoints).await;
+                            let queued = sm.queue_suspension(
                                 account.clone(),
                                 work.connection_id,
                                 session_id,
@@ -910,7 +945,7 @@ impl SessionCleanupService {
                                         deadline,
                                         "revoke-sm-after-recovery-capacity",
                                         CleanupRecovery::LeaseOrEpoch,
-                                        self.state.revoke_sm_session_with_teardown(session_id),
+                                        self.sm_revoker.revoke_with_teardown(session_id),
                                         &mut report,
                                     )
                                     .await;
@@ -920,7 +955,7 @@ impl SessionCleanupService {
                 }
             } else {
                 report.failed("suspend-sm-missing-account", CleanupRecovery::LeaseOrEpoch);
-                self.state.seal_suspended_muc_endpoints(&endpoints).await;
+                sm.seal_suspended_muc_endpoints(&endpoints).await;
             }
         }
 
@@ -930,7 +965,7 @@ impl SessionCleanupService {
                     deadline,
                     "revoke-sm",
                     CleanupRecovery::LeaseOrEpoch,
-                    self.state.sm_service().revoke_session(session_id),
+                    sm.revoke_session(session_id),
                     &mut report,
                 )
                 .await;
@@ -942,9 +977,8 @@ impl SessionCleanupService {
                     deadline,
                     "clear-active-privacy",
                     CleanupRecovery::LeaseOrEpoch,
-                    self.state
-                        .privacy_service()
-                        .clear_active_session(account.user_id, work.connection_id),
+                    self.bookkeeping
+                        .clear_active_privacy_session(account.user_id, work.connection_id),
                     &mut report,
                 )
                 .await;
@@ -957,7 +991,7 @@ impl SessionCleanupService {
                         deadline,
                         "unregister-cluster-session",
                         CleanupRecovery::ClusterReconciliation,
-                        self.state
+                        self.route_release
                             .release_exact_local_session_route(key, work.connection_id),
                         &mut report,
                     )
@@ -1002,9 +1036,7 @@ impl SessionCleanupService {
                     deadline,
                     "release-live-session",
                     CleanupRecovery::LeaseOrEpoch,
-                    self.state
-                        .sm_service()
-                        .release_live_session(work.connection_id),
+                    sm.release_live_session(work.connection_id),
                     &mut report,
                 )
                 .await;
@@ -1023,7 +1055,7 @@ impl SessionCleanupService {
         connection_id: Uuid,
     ) -> CleanupReport {
         let mut report = CleanupReport::default();
-        self.state.record_session_finalization_started();
+        self.bookkeeping.finalization_started();
         if let Some(account) = account {
             let deadline = Instant::now() + CLEANUP_STEP_BUDGET;
             let _ = self
@@ -1031,9 +1063,8 @@ impl SessionCleanupService {
                     deadline,
                     "clear-transferred-privacy",
                     CleanupRecovery::LeaseOrEpoch,
-                    self.state
-                        .privacy_service()
-                        .clear_active_session(account.user_id, connection_id),
+                    self.bookkeeping
+                        .clear_active_privacy_session(account.user_id, connection_id),
                     &mut report,
                 )
                 .await;
@@ -1043,15 +1074,14 @@ impl SessionCleanupService {
 
     fn complete_report(&self, report: CleanupReport) -> CleanupReport {
         if !report.is_clean() {
-            self.state
-                .record_session_finalization_failures(report.failures.len());
+            self.bookkeeping.finalization_failed(report.failures.len());
             tracing::error!(
                 connection_cleanup_failures = report.failures.len(),
                 failures = ?report.failures,
                 "C2S session cleanup completed with recoverable debt"
             );
         }
-        report.observe(self.state.worker_registry());
+        report.observe(self.bookkeeping.worker_registry());
         report
     }
 
@@ -1079,8 +1109,8 @@ impl SessionCleanupService {
                     deadline,
                     "unregister-muc-occupant",
                     CleanupRecovery::ClusterReconciliation,
-                    self.state
-                        .publish_local_muc_departure(&departure.departed, was_last),
+                    self.muc_departure
+                        .publish_local_departure(&departure.departed, was_last),
                     report,
                 )
                 .await;
@@ -1095,16 +1125,16 @@ impl SessionCleanupService {
                     None,
                     departure.departed.room_non_anonymous || target.role == "moderator",
                 );
-                let state = Arc::clone(&self.state);
-                let target = target.clone();
                 let _ = self
                     .step(
                         deadline,
                         "deliver-muc-unavailable",
                         CleanupRecovery::PresenceRefresh,
-                        async move {
+                        async {
                             anyhow::ensure!(
-                                state.deliver_to_muc_occupant(&target, presence).await,
+                                self.muc_delivery
+                                    .deliver_to_muc_occupant(target, presence)
+                                    .await,
                                 "MUC departure target was unavailable"
                             );
                             Ok(())
@@ -1115,23 +1145,12 @@ impl SessionCleanupService {
             }
 
             if departure.remaining.is_empty() {
-                let localpart = crate::state::localpart(&departure.room_jid).to_owned();
-                let muc = self.state.muc_service().clone();
-                let delete_temporary = async move {
-                    let Some(room) = muc.room(&localpart).await? else {
-                        return Ok(());
-                    };
-                    let _ = muc
-                        .delete_temporary_room(room.id, room.room_epoch, room.config_version)
-                        .await?;
-                    Ok(())
-                };
                 let _ = self
                     .step(
                         deadline,
                         "delete-temporary-muc",
                         CleanupRecovery::LeaseOrEpoch,
-                        delete_temporary,
+                        self.rooms.delete_temporary_room(&departure.room_jid),
                         report,
                     )
                     .await;
@@ -1146,18 +1165,17 @@ impl SessionCleanupService {
         active_privacy_list: Option<&str>,
         directed_presence: &[String],
     ) -> Result<()> {
+        let presence_port = &self.presence;
         let presence = northstar_xml_builder::XmlElement::namespaced("presence", "jabber:client")
             .attr("from", full_jid)
             .attr("type", "unavailable")
             .finish();
-        for jid in self
-            .state
-            .presence_service()
+        for jid in presence_port
             .unavailable_recipients(account.user_id)
             .await?
         {
-            self.state
-                .route_unavailable_with_policy(
+            self.unavailable
+                .route_with_policy(
                     account.user_id,
                     active_privacy_list,
                     full_jid,
@@ -1166,20 +1184,11 @@ impl SessionCleanupService {
                 )
                 .await?;
         }
-        let actor_bare = format!("{}@{}", account.username, self.state.local_domain());
-        for (jid, target) in self
-            .state
-            .session_entries_for(&actor_bare)
-            .into_iter()
-            .filter(|(_, target)| target.available.load(Ordering::Relaxed))
-        {
-            let _ = target
-                .sender
-                .try_send(crate::xmpp::xml_util::set_to(&presence, &jid));
-        }
+        let actor_bare = presence_port.actor_bare_jid(&account.username);
+        presence_port.send_available_sibling_presence(&actor_bare, &presence);
         for target_jid in directed_presence {
-            self.state
-                .route_unavailable_with_policy(
+            self.unavailable
+                .route_with_policy(
                     account.user_id,
                     active_privacy_list,
                     full_jid,
@@ -1188,13 +1197,9 @@ impl SessionCleanupService {
                 )
                 .await?;
         }
-        crate::xmpp::protocol::mix::disconnect_mix_presence(
-            &self.state,
-            account.user_id,
-            &actor_bare,
-            full_jid,
-        )
-        .await
+        self.mix
+            .disconnect_presence(account.user_id, &actor_bare, full_jid)
+            .await
     }
 }
 

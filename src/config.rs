@@ -1202,6 +1202,68 @@ pub struct Config {
     pub pow_v1_compatibility_until: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// The immutable domains allowed by the configured component and federation
+/// transports. Runtime federation rules are applied separately by AppState.
+#[derive(Clone)]
+pub(crate) struct ExternalRouteDomainPolicy {
+    local_domain: String,
+    federation_enabled: bool,
+    federation_allowlist: Vec<String>,
+    federation_denylist: Vec<String>,
+    component_domains: Vec<String>,
+}
+
+impl ExternalRouteDomainPolicy {
+    pub(crate) fn federation_domain_allowed(&self, domain: &str) -> bool {
+        federation_domain_allowed_in(
+            domain,
+            &self.local_domain,
+            self.federation_enabled,
+            &self.federation_allowlist,
+            &self.federation_denylist,
+        )
+    }
+
+    pub(crate) fn external_route_domain_allowed(&self, domain: &str) -> bool {
+        crate::jid::prepare_domainpart(domain)
+            .is_ok_and(|domain| self.component_domains.iter().any(|entry| entry == &domain))
+            || self.federation_domain_allowed(domain)
+    }
+}
+
+fn federation_domain_allowed_in(
+    domain: &str,
+    local_domain: &str,
+    enabled: bool,
+    allowlist: &[String],
+    denylist: &[String],
+) -> bool {
+    if !enabled {
+        return false;
+    }
+    let Ok(domain) = crate::jid::prepare_domainpart(domain) else {
+        return false;
+    };
+    if domain == local_domain
+        || domain == format!("conference.{local_domain}")
+        || domain == format!("upload.{local_domain}")
+        || domain == format!("pubsub.{local_domain}")
+        || domain == format!("mix.{local_domain}")
+    {
+        return false;
+    }
+    if denylist
+        .iter()
+        .any(|pattern| domain_pattern_matches(pattern, &domain))
+    {
+        return false;
+    }
+    allowlist.is_empty()
+        || allowlist
+            .iter()
+            .any(|pattern| domain_pattern_matches(pattern, &domain))
+}
+
 #[derive(Clone)]
 pub struct ComponentCredential {
     pub primary_domain: String,
@@ -2826,33 +2888,27 @@ impl Config {
     }
 
     pub fn federation_domain_allowed(&self, domain: &str) -> bool {
-        if !self.raw.federation_enabled {
-            return false;
-        }
-        let Ok(domain) = crate::jid::prepare_domainpart(domain) else {
-            return false;
-        };
-        if domain == self.domain
-            || domain == format!("conference.{}", self.domain)
-            || domain == format!("upload.{}", self.domain)
-            || domain == format!("pubsub.{}", self.domain)
-            || domain == format!("mix.{}", self.domain)
-        {
-            return false;
-        }
+        federation_domain_allowed_in(
+            domain,
+            &self.domain,
+            self.raw.federation_enabled,
+            &self.federation_allowlist,
+            &self.federation_denylist,
+        )
+    }
 
-        if self
-            .federation_denylist
-            .iter()
-            .any(|pattern| domain_pattern_matches(pattern, &domain))
-        {
-            return false;
-        }
-        self.federation_allowlist.is_empty()
-            || self
-                .federation_allowlist
+    pub(crate) fn external_route_domain_policy(&self) -> ExternalRouteDomainPolicy {
+        ExternalRouteDomainPolicy {
+            local_domain: self.domain.clone(),
+            federation_enabled: self.raw.federation_enabled,
+            federation_allowlist: self.federation_allowlist.clone(),
+            federation_denylist: self.federation_denylist.clone(),
+            component_domains: self
+                .components
                 .iter()
-                .any(|pattern| domain_pattern_matches(pattern, &domain))
+                .flat_map(|component| component.allowed_domains.iter().cloned())
+                .collect(),
+        }
     }
 
     /// Returns whether a client-originated stanza may leave the local XMPP
@@ -3317,6 +3373,40 @@ mod tests {
     fn web_dependency_fixture() -> super::RawConfig {
         envy::from_iter::<_, super::RawConfig>(std::iter::empty::<(String, String)>())
             .expect("RawConfig defaults must deserialize")
+    }
+
+    #[test]
+    fn external_route_policy_keeps_component_and_federation_domains_distinct() {
+        let policy = super::ExternalRouteDomainPolicy {
+            local_domain: "example.test".to_owned(),
+            federation_enabled: true,
+            federation_allowlist: vec!["*.federated.test".to_owned()],
+            federation_denylist: vec!["blocked.federated.test".to_owned()],
+            component_domains: vec!["bridge.example.test".to_owned()],
+        };
+        for (domain, federation, external) in [
+            ("chat.federated.test", true, true),
+            ("blocked.federated.test", false, false),
+            ("federated.test", false, false),
+            ("bridge.example.test", false, true),
+            ("mix.example.test", false, false),
+            ("example.test", false, false),
+        ] {
+            assert_eq!(
+                policy.federation_domain_allowed(domain),
+                federation,
+                "{domain}"
+            );
+            assert_eq!(
+                policy.external_route_domain_allowed(domain),
+                external,
+                "{domain}"
+            );
+        }
+        let mut federation_disabled = policy.clone();
+        federation_disabled.federation_enabled = false;
+        assert!(!federation_disabled.federation_domain_allowed("chat.federated.test"));
+        assert!(federation_disabled.external_route_domain_allowed("bridge.example.test"));
     }
 
     #[test]

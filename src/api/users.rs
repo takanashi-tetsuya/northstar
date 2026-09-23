@@ -10,12 +10,14 @@ use serde_json::json;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::db;
 use crate::error::{AppError, Result};
-use crate::state::{password_change_http::PasswordChangeHttpContext, AppState};
+use crate::state::{
+    account_teardown_runtime::AccountTeardownRuntime,
+    password_change_http::PasswordChangeHttpContext,
+};
 
 pub async fn me(
     State(state): State<crate::state::ApiQueryContext>,
@@ -29,7 +31,7 @@ pub async fn me(
 
 pub async fn change_password(
     State(state): State<PasswordChangeHttpContext>,
-    State(teardown_state): State<Arc<AppState>>,
+    State(teardown): State<AccountTeardownRuntime>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     mut request: ApiJson<PasswordChange>,
@@ -71,7 +73,7 @@ pub async fn change_password(
             crate::api::idempotency::stored_api_response(response)
         }
         PasswordChangeResult::Changed(response, account) => {
-            teardown_state
+            teardown
                 .disconnect_account(
                     account.user_id,
                     &format!("{}@{}", account.username, state.domain()),

@@ -10,6 +10,7 @@ pub(crate) mod operation_admin_repository;
 pub(crate) mod operation_effect_fence_repository;
 pub(crate) mod operation_journal_worker_repository;
 pub(crate) mod operation_muc_destroy_repository;
+pub(crate) mod operation_muc_wake_repository;
 pub(crate) mod passkeys;
 pub(crate) mod password_change_repository;
 pub(crate) mod report_moderation_repository;
@@ -35,6 +36,7 @@ pub mod account_deletion;
 pub mod account_repository;
 pub(crate) mod account_revocation_repository;
 pub mod account_revocations;
+pub(crate) mod account_teardown_repository;
 pub mod admin_command_repository;
 pub mod admin_commands;
 pub mod api_control;
@@ -112,6 +114,7 @@ pub mod session_identity;
 pub(crate) mod session_termination_authority_repository;
 pub mod sm;
 pub mod sm_repository;
+pub(crate) mod sm_teardown_muc_repository;
 pub(crate) mod sm_teardown_presence_repository;
 pub(crate) mod sm_teardown_repository;
 pub mod upload;
@@ -229,6 +232,7 @@ pub async fn migrate_for_domain(pool: &PgPool, domain: &str) -> Result<()> {
     }
 }
 
+pub(crate) mod muc_delivery_repository;
 pub(crate) mod upload_maintenance;
 
 pub(crate) mod sm_suspension;

@@ -190,13 +190,13 @@ impl ProtocolSession {
             (iq_result_from(id, &owner_jid, &payload), Vec::new())
         };
 
-        let state = Arc::clone(&self.state);
+        let failure_telemetry = self.state.post_accept_failure_telemetry();
         let outbound = self.outbound.clone();
         let gate = Arc::clone(&self.roster_sync);
         let disconnect = self.disconnect.clone();
         self.defer_after_transport("roster-initial-sync", async move {
             flush_roster_sync(RosterSyncFlush {
-                state,
+                failure_telemetry,
                 outbound,
                 gate,
                 disconnect,
@@ -385,7 +385,7 @@ fn roster_removal_presence(from: &str, to: &str, kind: &str) -> String {
 }
 
 struct RosterSyncFlush {
-    state: Arc<crate::state::AppState>,
+    failure_telemetry: crate::xmpp::capabilities::PostAcceptFailureTelemetry,
     outbound: crate::outbound::OutboundSender,
     gate: Arc<RosterSyncGate>,
     disconnect: tokio_util::sync::CancellationToken,
@@ -397,7 +397,7 @@ struct RosterSyncFlush {
 
 async fn flush_roster_sync(request: RosterSyncFlush) {
     let RosterSyncFlush {
-        state,
+        failure_telemetry,
         outbound,
         gate,
         disconnect,
@@ -418,7 +418,7 @@ async fn flush_roster_sync(request: RosterSyncFlush) {
             gate.fail(permit);
             outbound.disconnect_backpressured_transport();
             disconnect.cancel();
-            state.post_accept_failure_telemetry().record_failure();
+            failure_telemetry.record_failure();
             tracing::warn!(%target, "roster delta could not enter the transport; forcing a full resync");
             return;
         }
@@ -433,7 +433,7 @@ async fn flush_roster_sync(request: RosterSyncFlush) {
                         gate.fail(permit);
                         outbound.disconnect_backpressured_transport();
                         disconnect.cancel();
-                        state.post_accept_failure_telemetry().record_failure();
+                        failure_telemetry.record_failure();
                         tracing::warn!(%target, version, "buffered roster push could not enter the transport; forcing a full resync");
                         return;
                     }
@@ -444,7 +444,7 @@ async fn flush_roster_sync(request: RosterSyncFlush) {
             RosterFlushBatch::Failed | RosterFlushBatch::Superseded => {
                 outbound.disconnect_backpressured_transport();
                 disconnect.cancel();
-                state.post_accept_failure_telemetry().record_failure();
+                failure_telemetry.record_failure();
                 tracing::warn!(%target, "roster synchronization fence failed; forcing a full resync");
                 return;
             }
@@ -512,11 +512,28 @@ pub(crate) async fn deliver_roster_change(
     change: &RosterChange,
     participant_id: Option<&str>,
 ) -> Result<()> {
+    deliver_roster_change_with(
+        &state.roster_push_delivery(),
+        owner_id,
+        owner,
+        change,
+        participant_id,
+    )
+    .await
+}
+
+pub(crate) async fn deliver_roster_change_with(
+    delivery: &crate::state::account_deletion_recovery::RosterPushDelivery,
+    owner_id: uuid::Uuid,
+    owner: &str,
+    change: &RosterChange,
+    participant_id: Option<&str>,
+) -> Result<()> {
     let item = roster_change_item_element(change, None);
     let annotated = participant_id
         .map(|participant_id| roster_change_item_element(change, Some(participant_id)));
-    let owner_jid = format!("{}@{}", owner, state.local_domain());
-    for (target_jid, target) in state.session_entries_for(&owner_jid) {
+    let owner_jid = format!("{}@{}", owner, delivery.local_domain());
+    for (target_jid, target) in delivery.local_sessions(&owner_jid) {
         if target.user_id != owner_id {
             continue;
         }
@@ -536,14 +553,14 @@ pub(crate) async fn deliver_roster_change(
                 if let Err(error) = target.sender.try_send(push) {
                     target.sender.disconnect_backpressured_transport();
                     target.disconnect.cancel();
-                    state.post_accept_failure_telemetry().record_failure();
+                    delivery.record_failure();
                     tracing::warn!(owner = %owner_jid, target = %target_jid, version = change.version, ?error, "committed roster push did not enter the local resource queue; forcing a full resync");
                 }
             }
             RosterPushDisposition::Overflow => {
                 target.sender.disconnect_backpressured_transport();
                 target.disconnect.cancel();
-                state.post_accept_failure_telemetry().record_failure();
+                delivery.record_failure();
                 tracing::warn!(owner = %owner_jid, target = %target_jid, version = change.version, "roster synchronization buffer overflowed; forcing a full resync");
             }
         }
@@ -553,8 +570,8 @@ pub(crate) async fn deliver_roster_change(
     let push = roster_push_xml(&owner_jid, &owner_jid, change.version, item);
     let annotated_push = annotated
         .map(|annotated| roster_push_xml(&owner_jid, &owner_jid, change.version, annotated));
-    match state
-        .route_remote_roster_push(
+    match delivery
+        .route_remote_push(
             &owner_jid,
             owner_id,
             change.version,
@@ -565,7 +582,7 @@ pub(crate) async fn deliver_roster_change(
     {
         Ok(failures) => {
             for failure in failures {
-                state.post_accept_failure_telemetry().record_failure();
+                delivery.record_failure();
                 match failure {
                     crate::state::cluster_routing::RemoteRosterPushFailure::NotAccepted {
                         node_id,
@@ -579,7 +596,7 @@ pub(crate) async fn deliver_roster_change(
             }
         }
         Err(error) => {
-            state.post_accept_failure_telemetry().record_failure();
+            delivery.record_failure();
             tracing::warn!(owner = %owner_jid, version = change.version, ?error, "could not discover remote resources for a committed roster push; roster version recovery remains authoritative");
         }
     }

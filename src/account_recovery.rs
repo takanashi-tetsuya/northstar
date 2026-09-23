@@ -5,9 +5,9 @@
 //! silently drift into two implementations.
 
 use crate::{
-    state::AppState,
+    state::{AccountDeletionRecoveryContext, AppState},
     workers::WorkerHeartbeat,
-    xmpp::{protocol::roster::deliver_roster_change, xml_builder::XmlElement},
+    xmpp::protocol::roster::deliver_roster_change_with,
 };
 use anyhow::{Context, Result};
 use std::{
@@ -65,28 +65,46 @@ pub(crate) async fn finalize(
     user_id: Uuid,
     username: &str,
 ) -> Result<FinalizeAccountDeletion> {
+    finalize_with(
+        &state.account_deletion_recovery_context(),
+        user_id,
+        username,
+    )
+    .await
+}
+
+async fn finalize_with(
+    context: &AccountDeletionRecoveryContext,
+    user_id: Uuid,
+    username: &str,
+) -> Result<FinalizeAccountDeletion> {
     // Durable SM teardown records must be consumed while the user row still
     // exists; deleting first would cascade the only retry authority.
-    state
-        .revoke_user_sm_sessions_with_teardown(user_id)
+    context
+        .revoke_sm(user_id)
         .await
         .context("could not quiesce durable stream-management sessions")?;
 
-    let Some(removed) = state
-        .account_service()
+    let Some(removed) = context
         .delete_quiesced(user_id)
         .await
         .context("could not delete quiesced account")?
     else {
         return Ok(FinalizeAccountDeletion::Missing);
     };
-    let account = format!("{}@{}", username, state.local_domain());
+    let account = format!("{}@{}", username, context.local_domain());
 
     // Deletion is already committed. Notification failures are observable but
     // cannot truthfully turn the successful mutation into an IQ failure.
     for (contact_id, contact_username, change) in &removed.reverse_roster_changes {
-        if let Err(error) =
-            deliver_roster_change(state, *contact_id, contact_username, change, None).await
+        if let Err(error) = deliver_roster_change_with(
+            context.roster(),
+            *contact_id,
+            contact_username,
+            change,
+            None,
+        )
+        .await
         {
             tracing::warn!(
                 contact = %contact_username,
@@ -98,41 +116,23 @@ pub(crate) async fn finalize(
     }
     for (contact, _, subscription, _) in removed.roster {
         if matches!(subscription.as_str(), "to" | "both") {
-            route_account_removal_presence(state, &account, &contact, "unsubscribe").await;
+            context
+                .route_presence(&account, &contact, "unsubscribe")
+                .await;
         }
         if matches!(subscription.as_str(), "from" | "both") {
-            route_account_removal_presence(state, &account, &contact, "unsubscribed").await;
+            context
+                .route_presence(&account, &contact, "unsubscribed")
+                .await;
         }
     }
 
-    state.disconnect_account(user_id, &account).await;
+    context.disconnect_account(user_id, &account).await;
     Ok(FinalizeAccountDeletion::Deleted)
 }
 
-async fn route_account_removal_presence(state: &AppState, from: &str, to: &str, kind: &str) {
-    let stanza = XmlElement::namespaced("presence", "jabber:client")
-        .attr("from", from)
-        .attr("to", to)
-        .attr("type", kind)
-        .finish();
-    let Ok(target) = crate::jid::CanonicalJid::parse(to) else {
-        return;
-    };
-    let domain = target.domainpart();
-    if domain == state.local_domain() {
-        state
-            .route_account_removal_presence_local(to, &stanza)
-            .await;
-    } else if state.federation_domain_allowed(domain) {
-        let _ = state
-            .federation_outbox()
-            .send(domain, stanza, Some(from.to_owned()))
-            .await;
-    }
-}
-
 pub(crate) async fn serve(
-    state: Arc<AppState>,
+    context: Arc<AccountDeletionRecoveryContext>,
     cancel: CancellationToken,
     heartbeat: WorkerHeartbeat,
 ) -> Result<()> {
@@ -142,13 +142,13 @@ pub(crate) async fn serve(
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {
-                let jobs = state.account_service().claim_deletion_recovery(16, 900).await?;
+                let jobs = context.claim().await?;
                 let mut failed = false;
                 for job in jobs {
                     heartbeat.pulse();
-                    match finalize(&state, job.user_id, &job.username).await {
+                    match finalize_with(&context, job.user_id, &job.username).await {
                         Ok(FinalizeAccountDeletion::Deleted) => {
-                            state.account_deletion_recovery_telemetry().succeeded();
+                            context.telemetry().succeeded();
                             tracing::info!(user_id = %job.user_id, "recovered interrupted account deletion");
                         }
                         Ok(FinalizeAccountDeletion::Missing) => {
@@ -158,15 +158,11 @@ pub(crate) async fn serve(
                         }
                         Err(error) => {
                             failed = true;
-                            state.account_deletion_recovery_telemetry().failed();
+                            context.telemetry().failed();
                             tracing::error!(user_id = %job.user_id, ?error, "account deletion recovery failed");
-                            if !state.account_service().release_deletion_recovery(
-                                &job,
-                                "finalization-failed",
-                            )
-                            .await?
+                            if !context.release(&job).await?
                             {
-                                state.account_deletion_recovery_telemetry().lease_lost();
+                                context.telemetry().lease_lost();
                                 tracing::warn!(user_id = %job.user_id, "account deletion recovery lease was lost before release");
                             }
                         }

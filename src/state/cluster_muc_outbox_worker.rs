@@ -2,7 +2,10 @@
 //! renderer owns endpoint projection separately; this worker context cannot
 //! sign messages or issue Redis commands.
 
-use super::AppState;
+use super::{
+    cluster_muc_delivery_endpoints::ClusterMucDeliveryEndpoints, muc_delivery::MucDeliveryContext,
+    AppState,
+};
 use crate::{cluster::ClusterMucOutboxSignal, db, metrics::Metrics, services};
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::OwnedSemaphorePermit;
@@ -10,6 +13,8 @@ use tokio::sync::OwnedSemaphorePermit;
 pub(crate) struct ClusterMucOutboxWorkerContext {
     pub(crate) signal: ClusterMucOutboxSignal,
     pub(crate) domain: String,
+    pub(crate) endpoints: ClusterMucDeliveryEndpoints,
+    pub(crate) delivery: MucDeliveryContext,
     pub(crate) preclaim: services::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService<
         db::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository,
     >,
@@ -70,6 +75,8 @@ impl AppState {
         ClusterMucOutboxWorkerContext {
             signal: self.cluster.muc_outbox_signal(),
             domain: self.local_domain().to_owned(),
+            endpoints: self.cluster_muc_delivery_endpoints(),
+            delivery: self.muc_delivery_context(),
             preclaim: services::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService::new(
                 db::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository::new(
                     self.pool.clone(),

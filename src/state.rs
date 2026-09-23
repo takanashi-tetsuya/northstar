@@ -148,12 +148,26 @@ pub(crate) use upload_http_read::UploadHttpReadContext;
 pub(crate) use upload_http_read::UploadHttpReplayReadContext;
 mod metrics_context;
 pub(crate) use metrics_context::MetricsContext;
-mod account_generation_teardown;
+pub(crate) mod account_deletion_recovery;
+pub(crate) mod account_generation_teardown;
+pub(crate) use account_deletion_recovery::AccountDeletionRecoveryContext;
+pub(crate) mod account_teardown_runtime;
+mod admin_session_cleanup;
+pub(crate) use admin_session_cleanup::AdminSessionCleanupContext;
 mod admin_cluster_queries;
+pub(crate) mod cluster_account_teardown_notifier;
 pub(crate) mod cluster_failure_supervisor;
 mod cluster_listener;
+pub(crate) mod cluster_listener_blocking;
 pub(crate) mod cluster_listener_dispatch;
+pub(crate) mod cluster_listener_message;
+pub(crate) mod cluster_listener_mix_caps;
+pub(crate) mod cluster_listener_presence_sender;
+pub(crate) mod cluster_listener_security;
+pub(crate) mod cluster_listener_sm_muc_teardown;
 pub(crate) mod cluster_maintenance;
+pub(crate) mod cluster_maintenance_context;
+pub(crate) mod cluster_muc_delivery_endpoints;
 pub(crate) mod cluster_muc_outbox_worker;
 pub(crate) mod cluster_muc_projection;
 pub(crate) mod cluster_routing;
@@ -163,14 +177,42 @@ mod message_cluster_routing;
 pub(crate) mod mix_cluster_routing;
 pub(crate) mod muc_cluster_effects;
 pub(crate) mod muc_cluster_routing;
+pub(crate) mod muc_delivery;
 mod notification_routing;
+pub(crate) mod operation_island_effects;
+pub(crate) mod operation_muc_destroy_effects;
+pub(crate) mod operation_panic_effects;
+pub(crate) use operation_island_effects::OperationIslandEffects;
+pub(crate) use operation_muc_destroy_effects::OperationMucDestroyEffects;
+pub(crate) use operation_panic_effects::OperationPanicEffects;
+pub(crate) mod operation_session_effects;
+pub(crate) use operation_session_effects::OperationSessionEffects;
+pub(crate) use operation_tls_reload_effects::OperationTlsReloadEffects;
+pub(crate) mod operation_tls_reload_effects;
+mod operation_worker_control;
+pub(crate) use operation_worker_control::OperationWorkerControl;
 pub(crate) mod omemo_recovery_http;
 pub(crate) mod passkey_http;
 pub(crate) mod password_change_http;
 mod presence_cluster_routing;
 mod s2s_cluster_routing;
+pub(crate) mod s2s_outbox_dispatch;
+pub(crate) mod session_cleanup_bookkeeping;
+pub(crate) mod session_cleanup_local;
+pub(crate) mod session_cleanup_mix;
+pub(crate) mod session_cleanup_muc_departure;
+pub(crate) mod session_cleanup_presence;
+pub(crate) mod session_cleanup_rooms;
+pub(crate) mod session_cleanup_route;
+pub(crate) mod session_cleanup_sm;
+pub(crate) mod session_cleanup_sm_revoker;
+pub(crate) mod session_cleanup_unavailable;
 mod session_cluster_route;
 mod sm_teardown_local;
+mod sm_teardown_muc_cluster;
+mod sm_teardown_muc_projection;
+pub(crate) mod sm_teardown_runtime;
+mod sm_teardown_session;
 pub(crate) mod suspension;
 pub(crate) type ApiQueryContext =
     api_queries::ApiQueryContext<db::api_queries::PostgresApiQueryRepository>;
@@ -2465,6 +2507,29 @@ fn cancel_local_session_if_connection_in(
     true
 }
 
+fn remove_live_muc_membership_in(
+    sessions: &DashMap<String, OnlineSession>,
+    occupant: &SerializableMucOccupant,
+) -> bool {
+    let Ok(full_jid) = crate::jid::canonical_session_key(&occupant.full_jid) else {
+        return false;
+    };
+    let Some(session) = sessions.get(&full_jid) else {
+        return false;
+    };
+    if occupant.connection_id.is_nil() || session.connection_id != occupant.connection_id {
+        return false;
+    }
+    session
+        .muc_memberships
+        .remove_if(&occupant.room_jid, |_, membership| {
+            membership.nick == occupant.nick
+                && membership.cluster_epoch == occupant.cluster_epoch
+                && !membership.cluster_epoch.is_nil()
+        })
+        .is_some()
+}
+
 /// The revocation worker can only fence local routes. It cannot admit,
 /// replace, remove, or deliver through a session.
 #[derive(Clone)]
@@ -3060,14 +3125,10 @@ pub struct AppState {
         db::admin_command_repository::PostgresAdminCommandRepository,
     >,
     push_service: crate::services::push::PushService<db::push::PostgresPushRepository>,
-    pub cluster: crate::cluster::ClusterManager,
+    cluster: crate::cluster::ClusterManager,
     account_revocation_consumer_service:
         crate::services::account_revocation_consumer::AccountRevocationConsumerService<
             db::account_revocation_repository::PostgresAccountRevocationRepository,
-        >,
-    session_authority_sweep_service:
-        crate::services::session_authority_sweep::SessionAuthoritySweepService<
-            db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
         >,
     bosh: Option<crate::bosh::BoshManager>,
     sessions: Arc<DashMap<String, OnlineSession>>,
@@ -3104,8 +3165,10 @@ pub struct AppState {
     registration_admin_service: RegistrationAdminContext,
     session_admin_service: SessionAdminContext,
     operation_admin_service: OperationAdminContext,
-    operation_muc_destroy_service: crate::services::operation_muc_destroy::MucDestroyService<
-        db::operation_muc_destroy_repository::PostgresMucDestroyRepository,
+    operation_muc_destroy_service: Arc<
+        crate::services::operation_muc_destroy::MucDestroyService<
+            db::operation_muc_destroy_repository::PostgresMucDestroyRepository,
+        >,
     >,
     locked_muc_expiry_service: crate::services::locked_muc_expiry::LockedMucExpiryService<
         db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
@@ -3143,7 +3206,7 @@ pub struct AppState {
     /// retains only redacted routing/discovery metadata after construction.
     component_credentials: Arc<[crate::config::ComponentCredential]>,
     components: crate::components::ComponentRegistry,
-    s2s_connection_registry: crate::s2s::S2sConnectionRegistry,
+    s2s_connection_registry: Arc<crate::s2s::S2sConnectionRegistry>,
     /// Shared TTL-aware resolver for SRV, CNAME, A and AAAA federation lookups.
     s2s_dns_resolver: TokioResolver,
     /// Separate locally validating DNSSEC resolver for RFC 7712. It never
@@ -3158,8 +3221,8 @@ pub struct AppState {
     /// string has been recomputed successfully. Unverified payloads never
     /// enter this shared cache.
     caps_cache: northstar_protocol_runtime::caps::CapsCacheIndex,
-    caps_by_jid: northstar_protocol_runtime::caps::CapsResourceIndex,
-    pending_caps: northstar_protocol_runtime::caps::PendingCapsIndex,
+    caps_by_jid: Arc<northstar_protocol_runtime::caps::CapsResourceIndex>,
+    pending_caps: Arc<northstar_protocol_runtime::caps::PendingCapsIndex>,
     /// Cross-stream ordering authority for one authenticated federated full
     /// JID's capability lifecycle. Weak, self-cleaning entries exist only
     /// while an observer or response owns or waits for the resource.
@@ -3204,11 +3267,11 @@ pub struct AppState {
     /// Linearization gate for the federation kill switch. Application
     /// stanza writes hold a read guard only across the socket write; island
     /// mode transitions take the exclusive guard.
-    federation_write_policy: FederationWritePolicy,
+    federation_write_policy: Arc<FederationWritePolicy>,
     registration_closed: Arc<AtomicBool>,
     /// Durable XEP-0133 federation policy overlay. Static environment policy
     /// remains the outer ceiling; runtime rules may only restrict it further.
-    federation_runtime_policy: arc_swap::ArcSwap<RuntimeFederationPolicy>,
+    federation_runtime_policy: Arc<arc_swap::ArcSwap<RuntimeFederationPolicy>>,
     service_shutdown: std::sync::OnceLock<CancellationToken>,
     workers: Arc<crate::workers::WorkerRegistry>,
 }
@@ -3217,6 +3280,20 @@ pub struct AppState {
 struct RuntimeFederationPolicy {
     blacklist: std::collections::HashSet<String>,
     whitelist: std::collections::HashSet<String>,
+}
+
+impl RuntimeFederationPolicy {
+    fn allows_domain(&self, domain: &str) -> bool {
+        let domain_denied = self.blacklist.iter().any(|entry| {
+            crate::jid::CanonicalJid::parse(entry)
+                .is_ok_and(|jid| jid.localpart().is_none() && jid.domainpart() == domain)
+        });
+        let domain_admitted = self.whitelist.is_empty()
+            || self.whitelist.iter().any(|entry| {
+                crate::jid::CanonicalJid::parse(entry).is_ok_and(|jid| jid.domainpart() == domain)
+            });
+        !domain_denied && domain_admitted
+    }
 }
 
 fn federation_rule_matches(rule: &str, entity: &crate::jid::CanonicalJid) -> bool {
@@ -3255,6 +3332,29 @@ fn session_lookup(jid: &str) -> Option<SessionLookup> {
     } else {
         SessionLookup::Bare(jid.bare())
     })
+}
+
+pub(super) fn session_entries_for_in(
+    sessions: &DashMap<String, OnlineSession>,
+    jid: &str,
+) -> Vec<(String, OnlineSession)> {
+    let Some(lookup) = session_lookup(jid) else {
+        return Vec::new();
+    };
+    match lookup {
+        SessionLookup::Full(full) => sessions
+            .get(&full)
+            .filter(|entry| entry.routable.load(Ordering::Acquire))
+            .map(|entry| vec![(entry.key().clone(), entry.value().clone())])
+            .unwrap_or_default(),
+        SessionLookup::Bare(bare) => sessions
+            .iter()
+            .filter(|entry| {
+                bare_jid(entry.key()) == bare.as_str() && entry.routable.load(Ordering::Acquire)
+            })
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect(),
+    }
 }
 
 fn api_keyrings(
@@ -3319,64 +3419,6 @@ impl AppState {
         self.metrics
             .c2s_backpressure_disconnects_total
             .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_cluster_presence_probe_failure(&self) {
-        self.metrics
-            .cluster_presence_probe_failures_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_tls_reload_failure(&self) {
-        self.metrics
-            .tls_reload_failures_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_tls_reload_revocations(&self, outcome: &crate::tls::TlsReloadOutcome) {
-        self.metrics
-            .tls_revocation_rechecks_total
-            .fetch_add(outcome.evaluated_sessions, Ordering::Relaxed);
-        self.metrics
-            .tls_revocation_recheck_inconclusive_total
-            .fetch_add(outcome.inconclusive_rechecks, Ordering::Relaxed);
-        self.metrics
-            .tls_revoked_sessions_drained_total
-            .fetch_add(outcome.drained_total(), Ordering::Relaxed);
-        self.metrics
-            .tls_revoked_c2s_external_sessions_drained_total
-            .fetch_add(outcome.drained_c2s_external, Ordering::Relaxed);
-        self.metrics
-            .tls_revoked_inbound_s2s_external_sessions_drained_total
-            .fetch_add(outcome.drained_inbound_s2s_external, Ordering::Relaxed);
-        self.metrics
-            .tls_revoked_outbound_s2s_external_sessions_drained_total
-            .fetch_add(outcome.drained_outbound_s2s_external, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_session_finalization_started(&self) {
-        self.metrics
-            .session_finalizations_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_session_finalization_failures(&self, failures: usize) {
-        self.metrics
-            .session_finalization_failures_total
-            .fetch_add(failures as u64, Ordering::Relaxed);
-    }
-
-    pub(crate) fn start_cluster_redis_operation_timer(&self) -> crate::metrics::DurationTimer<'_> {
-        self.metrics.redis_operation_duration_seconds.start_timer()
-    }
-
-    pub(crate) fn record_cluster_online_queue_acceptance(&self, durable: bool) {
-        let counter = if durable {
-            &self.metrics.online_queue_durable_acceptances_total
-        } else {
-            &self.metrics.online_queue_volatile_acceptances_total
-        };
-        counter.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn federation_outbox(&self) -> &FederationRouter {
@@ -3726,16 +3768,6 @@ impl AppState {
         MetricsContext::from_state(self)
     }
 
-    pub(crate) fn account_deletion_recovery_telemetry(
-        &self,
-    ) -> crate::account_recovery::AccountDeletionRecoveryTelemetry<'_> {
-        crate::account_recovery::AccountDeletionRecoveryTelemetry::new(
-            &self.metrics.account_deletion_recovery_success_total,
-            &self.metrics.account_deletion_recovery_failures_total,
-            &self.metrics.account_deletion_recovery_lease_losses_total,
-        )
-    }
-
     pub(crate) fn broadcast_routes(&self) -> crate::operation_runtime::LocalBroadcastRoutes {
         crate::operation_runtime::LocalBroadcastRoutes::new(
             Arc::clone(&self.sessions),
@@ -3808,10 +3840,10 @@ impl AppState {
 
     pub(crate) fn post_accept_failure_telemetry(
         &self,
-    ) -> crate::xmpp::capabilities::PostAcceptFailureTelemetry<'_> {
-        crate::xmpp::capabilities::PostAcceptFailureTelemetry::new(
+    ) -> crate::xmpp::capabilities::PostAcceptFailureTelemetry {
+        crate::xmpp::capabilities::PostAcceptFailureTelemetry::new(Arc::clone(
             &self.metrics.post_accept_side_effect_failures_total,
-        )
+        ))
     }
 
     pub(crate) fn push_subscription_telemetry(
@@ -4208,12 +4240,6 @@ impl AppState {
     /// observes an applied value also observes the preceding policy update.
     pub(crate) fn island_mode_enabled(&self) -> bool {
         self.federation_write_policy.enabled()
-    }
-
-    /// Apply an authoritative island-mode value with the release ordering used
-    /// by runtime administration.
-    pub(crate) async fn apply_island_mode(&self, enabled: bool) {
-        self.federation_write_policy.apply(enabled).await;
     }
 
     /// Acquire the application-stanza write boundary and revalidate island
@@ -5099,7 +5125,7 @@ impl AppState {
         let muc_occupants = Arc::new(DashMap::new());
         let started_at = Instant::now();
         let api_cursor = Arc::new(api_cursor);
-        let federation_write_policy = FederationWritePolicy::new(island_mode);
+        let federation_write_policy = Arc::new(FederationWritePolicy::new(island_mode));
         let public_discovery_context = PublicDiscoveryContext::new(
             http_policy::PublicDiscoveryPolicy {
                 domain: config.domain.clone(),
@@ -5195,13 +5221,14 @@ impl AppState {
                 admin_mutations.clone(),
             ),
         );
-        let operation_muc_destroy_service =
+        let operation_muc_destroy_service = Arc::new(
             crate::services::operation_muc_destroy::MucDestroyService::new(
                 db::operation_muc_destroy_repository::PostgresMucDestroyRepository::new(
                     pool.clone(),
                 ),
                 config.domain.clone(),
-            );
+            ),
+        );
         let locked_muc_expiry_service =
             crate::services::locked_muc_expiry::LockedMucExpiryService::new(
                 db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository::new(
@@ -5308,12 +5335,6 @@ impl AppState {
                     pool.clone(),
                 ),
             );
-        let session_authority_sweep_service =
-            crate::services::session_authority_sweep::SessionAuthoritySweepService::new(
-                db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository::new(
-                    pool.clone(),
-                ),
-            );
         let state = Arc::new(Self {
             config,
             api_query_context,
@@ -5377,7 +5398,6 @@ impl AppState {
             pool,
             cluster,
             account_revocation_consumer_service,
-            session_authority_sweep_service,
             bosh,
             sessions,
             muc_occupants,
@@ -5420,13 +5440,13 @@ impl AppState {
             federation_outbox: federation,
             component_credentials,
             components,
-            s2s_connection_registry: crate::s2s::S2sConnectionRegistry::default(),
+            s2s_connection_registry: Arc::new(crate::s2s::S2sConnectionRegistry::default()),
             s2s_dns_resolver,
             s2s_dnssec_resolver,
             pending_mix_iq: northstar_protocol_runtime::mix::MixIqRelayIndex::new(),
             caps_cache: northstar_protocol_runtime::caps::CapsCacheIndex::new(),
-            caps_by_jid: northstar_protocol_runtime::caps::CapsResourceIndex::new(),
-            pending_caps: northstar_protocol_runtime::caps::PendingCapsIndex::new(),
+            caps_by_jid: Arc::new(northstar_protocol_runtime::caps::CapsResourceIndex::new()),
+            pending_caps: Arc::new(northstar_protocol_runtime::caps::PendingCapsIndex::new()),
             federated_caps_gates: northstar_protocol_runtime::caps::FederatedCapsGateIndex::new(),
             caps_effect_dispatcher: northstar_protocol_runtime::caps::CapsEffectDispatcher::new(),
             dialback_secret,
@@ -5468,10 +5488,12 @@ impl AppState {
             tls_context: crate::tls::TlsContext::new(tls),
             federation_write_policy,
             registration_closed,
-            federation_runtime_policy: arc_swap::ArcSwap::from_pointee(RuntimeFederationPolicy {
-                blacklist: runtime_blacklist.into_iter().collect(),
-                whitelist: runtime_whitelist.into_iter().collect(),
-            }),
+            federation_runtime_policy: Arc::new(arc_swap::ArcSwap::from_pointee(
+                RuntimeFederationPolicy {
+                    blacklist: runtime_blacklist.into_iter().collect(),
+                    whitelist: runtime_whitelist.into_iter().collect(),
+                },
+            )),
             service_shutdown: std::sync::OnceLock::new(),
             workers: crate::workers::WorkerRegistry::new(),
         });
@@ -5553,8 +5575,7 @@ impl AppState {
                 max_bytes: self.config.sm_max_unacked_bytes,
             },
             Arc::clone(&self.muc_occupants),
-            Arc::clone(&self.suspended_muc_sessions),
-            self.cluster.clone(),
+            self.cluster.sm_suspension(),
         )
     }
 
@@ -5881,14 +5902,6 @@ impl AppState {
         )
     }
 
-    pub(crate) fn session_authority_sweep_service(
-        &self,
-    ) -> &crate::services::session_authority_sweep::SessionAuthoritySweepService<
-        db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
-    > {
-        &self.session_authority_sweep_service
-    }
-
     pub(crate) fn s2s_outbox_dispatch_service(
         &self,
     ) -> &crate::services::s2s_outbox_dispatch::S2sOutboxDispatchService<
@@ -5926,14 +5939,6 @@ impl AppState {
         &self.account_service
     }
 
-    pub(crate) fn operation_muc_destroy_service(
-        &self,
-    ) -> &crate::services::operation_muc_destroy::MucDestroyService<
-        db::operation_muc_destroy_repository::PostgresMucDestroyRepository,
-    > {
-        &self.operation_muc_destroy_service
-    }
-
     pub(crate) async fn wake_committed_muc_operation(
         &self,
         operation_id: uuid::Uuid,
@@ -5943,79 +5948,12 @@ impl AppState {
             .await
     }
 
-    pub(crate) async fn publish_local_muc_departure(
-        &self,
-        departed: &MucOccupant,
-        was_last: bool,
-    ) -> anyhow::Result<()> {
-        self.cluster
-            .unregister_muc_occupant_epoch(
-                &departed.room_jid,
-                &departed.nick,
-                departed.cluster_epoch,
-                departed.connection_id,
-            )
-            .await?;
-        if was_last {
-            self.cluster.leave_muc(&departed.room_jid).await?;
-        }
-        self.cluster
-            .send_muc_presence(
-                &departed.room_jid,
-                &SerializableMucOccupant::from(departed),
-                true,
-                false,
-                None,
-            )
-            .await
-    }
-
-    pub(crate) async fn route_account_removal_presence_local(&self, recipient: &str, stanza: &str) {
-        for (_, session) in self.session_entries_for(recipient) {
-            let _ = session.sender.try_send(stanza.to_owned());
-        }
-        if let Ok(nodes) = self.cluster.lookup_nodes(recipient).await {
-            for node_id in nodes {
-                if node_id != self.cluster.node_id {
-                    let _ = self
-                        .cluster
-                        .send_to_node(&node_id, recipient, stanza, false, None)
-                        .await;
-                }
-            }
-        }
-    }
-
     pub(crate) fn locked_muc_expiry_service(
         &self,
     ) -> &crate::services::locked_muc_expiry::LockedMucExpiryService<
         db::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository,
     > {
         &self.locked_muc_expiry_service
-    }
-
-    pub(crate) fn operation_effect_fence_service(
-        &self,
-    ) -> &crate::services::operation_effect_fence::OperationEffectFenceService<
-        db::operation_effect_fence_repository::PostgresOperationEffectFenceRepository,
-    > {
-        &self.operation_effect_fence_service
-    }
-
-    pub(crate) fn operation_journal_worker_service(
-        &self,
-    ) -> &crate::services::operation_journal_worker::OperationJournalWorkerService<
-        db::operation_journal_worker_repository::PostgresOperationJournalWorkerRepository,
-    > {
-        &self.operation_journal_worker_service
-    }
-
-    pub(crate) fn admin_session_cleanup_worker_service(
-        &self,
-    ) -> &crate::services::admin_session_cleanup_worker::AdminSessionCleanupWorkerService<
-        db::admin_session_cleanup_worker_repository::PostgresAdminSessionCleanupRepository,
-    > {
-        &self.admin_session_cleanup_worker_service
     }
 
     pub(crate) fn authentication_service(
@@ -6274,15 +6212,7 @@ impl AppState {
             return false;
         };
         let policy = self.federation_runtime_policy.load();
-        let domain_denied = policy.blacklist.iter().any(|entry| {
-            crate::jid::CanonicalJid::parse(entry)
-                .is_ok_and(|jid| jid.localpart().is_none() && jid.domainpart() == domain)
-        });
-        let domain_admitted = policy.whitelist.is_empty()
-            || policy.whitelist.iter().any(|entry| {
-                crate::jid::CanonicalJid::parse(entry).is_ok_and(|jid| jid.domainpart() == domain)
-            });
-        self.config.federation_domain_allowed(&domain) && !domain_denied && domain_admitted
+        self.config.federation_domain_allowed(&domain) && policy.allows_domain(&domain)
     }
 
     /// Apply XEP-0133 entity rules using XEP-0016-style JID specificity: a
@@ -6321,42 +6251,6 @@ impl AppState {
 
     pub fn service_control_available(&self) -> bool {
         self.config.enable_xmpp_service_control && self.service_shutdown.get().is_some()
-    }
-
-    /// Cancel only the local route incarnation whose PostgreSQL MUC occupancy
-    /// has been found stale. A replacement under the same JID remains intact.
-    pub(crate) fn cancel_local_session_if_connection(
-        &self,
-        full_jid: &str,
-        connection_id: uuid::Uuid,
-    ) -> bool {
-        cancel_local_session_if_connection_in(&self.sessions, full_jid, connection_id)
-    }
-
-    pub(crate) fn fence_local_sm_session(&self, full_jid: &str, sm_session_id: uuid::Uuid) -> bool {
-        fence_local_session_in(
-            &self.sessions,
-            full_jid,
-            LocalSessionFence::Sm(sm_session_id),
-        )
-    }
-
-    pub(crate) fn fence_local_admin_session(
-        &self,
-        full_jid: &str,
-        user_id: uuid::Uuid,
-        auth_generation: i64,
-        connection_id: uuid::Uuid,
-    ) -> bool {
-        fence_local_session_in(
-            &self.sessions,
-            full_jid,
-            LocalSessionFence::Admin {
-                user_id,
-                auth_generation,
-                connection_id,
-            },
-        )
     }
 
     /// Reserve a non-routable bind candidate under the same map entry guard
@@ -6733,25 +6627,7 @@ impl AppState {
     }
 
     pub fn session_entries_for(&self, jid: &str) -> Vec<(String, OnlineSession)> {
-        let Some(lookup) = session_lookup(jid) else {
-            return Vec::new();
-        };
-        match lookup {
-            SessionLookup::Full(full) => self
-                .sessions
-                .get(&full)
-                .filter(|entry| entry.routable.load(Ordering::Acquire))
-                .map(|entry| vec![(entry.key().clone(), entry.value().clone())])
-                .unwrap_or_default(),
-            SessionLookup::Bare(bare) => self
-                .sessions
-                .iter()
-                .filter(|entry| {
-                    bare_jid(entry.key()) == bare.as_str() && entry.routable.load(Ordering::Acquire)
-                })
-                .map(|entry| (entry.key().clone(), entry.value().clone()))
-                .collect(),
-        }
+        session_entries_for_in(&self.sessions, jid)
     }
 
     /// Publish only the exact staged route incarnation that survived every
@@ -6800,25 +6676,6 @@ impl AppState {
         true
     }
 
-    /// Cancel local account routes, including non-routable two-phase bind or
-    /// resume candidates.  Public lookup helpers intentionally hide those
-    /// candidates, so authorization revocation must iterate the authority map
-    /// itself and set `routable=false` under the same per-entry write guard
-    /// used by activation.
-    pub(crate) fn revoke_local_account_routes(
-        &self,
-        user_id: uuid::Uuid,
-        bare_account_jid: &str,
-        auth_generation_exclusive: Option<i64>,
-    ) -> usize {
-        AccountRevocationRoutes::revoke_in(
-            &self.sessions,
-            user_id,
-            bare_account_jid,
-            auth_generation_exclusive,
-        )
-    }
-
     /// Remove exactly one local route incarnation. Every rollback and Drop
     /// path must use this instead of an unconditional DashMap removal: a late
     /// old connection must never delete a newly bound/resumed replacement.
@@ -6827,35 +6684,12 @@ impl AppState {
         key: &str,
         connection_id: uuid::Uuid,
     ) -> Option<OnlineSession> {
-        let (_, removed) = self
-            .sessions
-            .remove_if(key, |_, session| session.connection_id == connection_id)?;
-        debug_assert_eq!(removed.route_incarnation.connection_id(), connection_id);
-        // Publish immediately after the exact compare-and-remove.  Any route
-        // inserted between removal and this notification is a new incarnation;
-        // waiters re-read `sessions` and must not mistake that ABA for vacancy.
-        removed.route_incarnation.publish_removed();
-        self.caps_effect_dispatcher
-            .cancel_local(key, removed.connection_id);
-        self.caps_by_jid
-            .remove_local_resource(key, removed.connection_id);
-        self.pending_caps
-            .remove_local_resource(key, removed.connection_id);
-        if removed.metrics_counted.swap(false, Ordering::AcqRel) {
-            self.metrics.active_sessions.fetch_sub(1, Ordering::Relaxed);
-        }
-        Some(removed)
+        self.session_cleanup_local()
+            .remove_session_if_connection(key, connection_id)
     }
 
     pub fn muc_occupants_for(&self, room_jid: &str) -> Vec<(String, MucOccupant)> {
-        let Ok(room_jid) = crate::jid::canonicalize_bare(room_jid) else {
-            return Vec::new();
-        };
-        self.muc_occupants
-            .iter()
-            .filter(|entry| entry.value().room_jid == room_jid)
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect()
+        self.session_cleanup_local().muc_occupants_for(room_jid)
     }
 
     pub(crate) fn local_muc_occupant_by_nick(
@@ -6970,23 +6804,7 @@ impl AppState {
     /// occupant.  All four identities are required so a delayed kick or
     /// teardown cannot affect a later connection or a reused nickname.
     pub fn remove_live_muc_membership(&self, occupant: &SerializableMucOccupant) -> bool {
-        let Ok(full_jid) = crate::jid::canonical_session_key(&occupant.full_jid) else {
-            return false;
-        };
-        let Some(session) = self.sessions.get(&full_jid) else {
-            return false;
-        };
-        if occupant.connection_id.is_nil() || session.connection_id != occupant.connection_id {
-            return false;
-        }
-        session
-            .muc_memberships
-            .remove_if(&occupant.room_jid, |_, membership| {
-                membership.nick == occupant.nick
-                    && membership.cluster_epoch == occupant.cluster_epoch
-                    && !membership.cluster_epoch.is_nil()
-            })
-            .is_some()
+        remove_live_muc_membership_in(&self.sessions, occupant)
     }
 
     /// Resolve a room membership only when it is still owned by the exact
@@ -7031,41 +6849,9 @@ impl AppState {
     }
 
     pub async fn deliver_to_muc_occupant(&self, occupant: &MucOccupant, stanza: String) -> bool {
-        self.deliver_to_muc_occupant_inner(occupant, stanza, None, None)
+        self.muc_delivery_context()
+            .deliver_to_muc_occupant(occupant, stanza)
             .await
-    }
-
-    /// Deliver one durable clustered policy event and wait until the endpoint
-    /// owns it recoverably (SM/BOSH/suspended storage) or its socket write has
-    /// completed. A successful `try_send` alone is deliberately insufficient.
-    pub(crate) async fn deliver_to_muc_occupant_with_receipt(
-        &self,
-        occupant: &MucOccupant,
-        stanza: String,
-        delivery: &db::ClusterMucOutboxDelivery,
-    ) -> anyhow::Result<bool> {
-        let (receipt, mut received) = tokio::sync::mpsc::unbounded_channel();
-        let accepted = self
-            .deliver_to_muc_occupant_inner(occupant, stanza, Some(receipt), None)
-            .await;
-        if !accepted {
-            return Ok(false);
-        }
-        let claim = crate::services::cluster_muc_receipt_claim::ClusterMucReceiptClaimService::new(
-            db::cluster_muc_receipt_claim_repository::PostgresClusterMucReceiptClaimRepository::new(
-                self.pool.clone(),
-            ),
-        );
-        let mut renew = tokio::time::interval(Duration::from_secs(10));
-        renew.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            tokio::select! {
-                result = received.recv() => return Ok(result.is_some()),
-                _ = renew.tick() => {
-                    claim.renew_exact(delivery, Duration::from_secs(30)).await?;
-                }
-            }
-        }
     }
 
     async fn deliver_to_muc_occupant_inner(
@@ -7075,484 +6861,29 @@ impl AppState {
         receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
         write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) -> bool {
-        let senders = roxmltree::Document::parse(&stanza)
-            .ok()
-            .map(|document| {
-                let root = document.root_element();
-                let mut senders = root
-                    .attribute("from")
-                    .and_then(|sender| crate::jid::canonicalize(sender).ok())
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                if root.tag_name().name() == "presence" {
-                    senders.extend(root.descendants().filter_map(|node| {
-                        (node.is_element()
-                            && node.tag_name().name() == "item"
-                            && node.tag_name().namespace()
-                                == Some("http://jabber.org/protocol/muc#user"))
-                        .then(|| node.attribute("jid"))
-                        .flatten()
-                        .and_then(|jid| crate::jid::canonicalize(jid).ok())
-                    }));
-                }
-                senders.sort_unstable();
-                senders.dedup();
-                senders
-            })
-            .unwrap_or_default();
-        if !senders.is_empty() {
-            let blocked = self
-                .blocked_muc_recipient_accounts(std::slice::from_ref(occupant), &senders)
-                .await;
-            if crate::jid::canonical_bare_key(&occupant.full_jid)
-                .is_ok_and(|owner| blocked.contains(&owner))
-            {
-                return false;
-            }
-        }
-        self.deliver_to_muc_occupant_unchecked_result_with_receipt(
-            occupant,
-            stanza,
-            receipt,
-            write_receipt,
-        )
-        .await
-        .unwrap_or_else(|error| {
-            tracing::warn!(?error, "failed to deliver a MUC stanza");
-            false
-        })
+        self.muc_delivery_context()
+            .deliver_to_muc_occupant_inner(occupant, stanza, receipt, write_receipt)
+            .await
     }
 
-    /// Rebuild only the delivery endpoint for an immutable clustered MUC
-    /// audience row. This never restores membership in the live maps and
-    /// never grants authorization: it exists so a committed terminal event
-    /// (kick/ban/destroy/policy eviction) remains deliverable after a process
-    /// crash even though PostgreSQL has already revoked the occupancy.
-    pub(crate) fn cluster_muc_recipient_from_snapshot(
-        &self,
-        snapshot: &db::ClusterMucAudienceSnapshot,
-        room_jid: &str,
-        room_non_anonymous: bool,
-        occupant_id: String,
-    ) -> Option<MucOccupant> {
-        let endpoint = match snapshot.identity_kind.as_str() {
-            "local" => {
-                if let Some(session) = self.sessions.get(&snapshot.full_jid) {
-                    if session.connection_id == snapshot.connection_uuid
-                        && snapshot.local_user_id == Some(session.user_id)
-                    {
-                        MucOccupantEndpoint::Local(session.sender.clone())
-                    } else {
-                        drop(session);
-                        let sm_session_id = snapshot.sm_session_id?;
-                        MucOccupantEndpoint::Suspended(Arc::new(SuspendedMucEndpoint::new_durable(
-                            sm_session_id,
-                        )))
-                    }
-                } else {
-                    let sm_session_id = snapshot.sm_session_id?;
-                    MucOccupantEndpoint::Suspended(Arc::new(SuspendedMucEndpoint::new_durable(
-                        sm_session_id,
-                    )))
-                }
-            }
-            "federated" => MucOccupantEndpoint::Federated {
-                authenticated_domain: snapshot.authenticated_domain.clone()?,
-                connection_id: snapshot.connection_uuid,
-            },
-            _ => return None,
-        };
-        Some(MucOccupant {
-            full_jid: snapshot.full_jid.clone(),
-            room_jid: room_jid.to_owned(),
-            nick: snapshot.nick.clone(),
-            endpoint,
-            affiliation: snapshot.affiliation.clone(),
-            role: snapshot.role.clone(),
-            room_non_anonymous,
-            occupant_id,
-            cluster_epoch: snapshot.occupant_incarnation,
-            connection_id: snapshot.connection_uuid,
-            sm_session_id: snapshot.sm_session_id,
-            // Audience snapshots intentionally omit the recipient's previous
-            // presence payload; endpoint reconstruction is delivery-only and
-            // must not recreate advertised soft state.
-            payload: String::new(),
-        })
-    }
-
-    /// Batch XEP-0191 filter for MUC fan-out. Database failure is fail-closed
-    /// for local occupants so a transient outage cannot leak a blocked room or
-    /// real sender; remote occupants remain the responsibility of their home
-    /// server.
     pub async fn blocked_muc_recipient_accounts(
         &self,
         occupants: &[MucOccupant],
         stanza_senders: &[String],
     ) -> std::collections::HashSet<String> {
-        let occupant_jids = occupants
-            .iter()
-            .map(|occupant| occupant.full_jid.clone())
-            .collect::<Vec<_>>();
-        match db::blocked_local_accounts_for_candidates(
-            &self.pool,
-            &self.config.domain,
-            &occupant_jids,
-            stanza_senders,
-        )
-        .await
-        {
-            Ok(blocked) => blocked,
-            Err(error) => {
-                tracing::warn!(
-                    ?error,
-                    "failed MUC recipient blocklist lookup; denying local delivery"
-                );
-                occupant_jids
-                    .iter()
-                    .filter_map(|jid| crate::jid::CanonicalJid::parse(jid).ok())
-                    .filter(|jid| jid.domainpart() == self.config.domain)
-                    .map(|jid| jid.bare())
-                    .collect()
-            }
-        }
+        self.muc_delivery_context()
+            .blocked_muc_recipient_accounts(occupants, stanza_senders)
+            .await
     }
 
-    /// Use only after `blocked_muc_recipient_accounts` covered the exact
-    /// visible and real senders for this fan-out batch.
     pub async fn deliver_to_muc_occupant_unchecked(
         &self,
         occupant: &MucOccupant,
         stanza: String,
     ) -> bool {
-        self.deliver_to_muc_occupant_unchecked_result(occupant, stanza)
+        self.muc_delivery_context()
+            .deliver_to_muc_occupant_unchecked(occupant, stanza)
             .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(?error, "failed to deliver a MUC stanza");
-                false
-            })
-    }
-
-    async fn deliver_to_muc_occupant_unchecked_result(
-        &self,
-        occupant: &MucOccupant,
-        stanza: String,
-    ) -> anyhow::Result<bool> {
-        self.deliver_to_muc_occupant_unchecked_result_with_receipt(occupant, stanza, None, None)
-            .await
-    }
-
-    async fn deliver_to_muc_occupant_unchecked_result_with_receipt(
-        &self,
-        occupant: &MucOccupant,
-        stanza: String,
-        receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
-        write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
-    ) -> anyhow::Result<bool> {
-        // Installing the session gate precedes the per-room endpoint swaps.
-        // Consulting it first makes that multi-entry transition atomic from
-        // every delivery path's point of view and preserves one cross-room
-        // FIFO from the first quiesced stanza onward.
-        let session_gate = if matches!(
-            &occupant.endpoint,
-            MucOccupantEndpoint::Local(_) | MucOccupantEndpoint::Suspended(_)
-        ) {
-            let sm_session_id = occupant.sm_session_id.or_else(|| {
-                self.sessions.get(&occupant.full_jid).and_then(|session| {
-                    if session.connection_id != occupant.connection_id {
-                        return None;
-                    }
-                    let sm_session_id = *session
-                        .sm_session_id
-                        .read()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    sm_session_id
-                })
-            });
-            sm_session_id.and_then(|sm_session_id| {
-                self.suspended_muc_sessions
-                    .get(&sm_session_id)
-                    .map(|endpoint| Arc::clone(&endpoint))
-            })
-        } else {
-            None
-        };
-        let privacy_peer_kind = roxmltree::Document::parse(&stanza)
-            .ok()
-            .and_then(|document| {
-                let root = document.root_element();
-                let kind = match root.tag_name().name() {
-                    "message" => db::PrivacyStanzaKind::Message,
-                    "iq" => db::PrivacyStanzaKind::Iq,
-                    "presence" => db::PrivacyStanzaKind::PresenceIn,
-                    _ => return None,
-                };
-                let peer = root
-                    .attribute("from")
-                    .and_then(|from| crate::jid::canonicalize(from).ok())?;
-                Some((peer, kind))
-            });
-        if let Some((peer, kind)) = privacy_peer_kind.as_ref() {
-            if let Some(suspended) = &session_gate {
-                if db::privacy_denies_for_sm_session(
-                    &self.pool,
-                    suspended.sm_session_id,
-                    peer,
-                    *kind,
-                )
-                .await?
-                .unwrap_or(true)
-                {
-                    return Ok(false);
-                }
-            } else {
-                match &occupant.endpoint {
-                    MucOccupantEndpoint::Local(_) => {
-                        let Some(session) =
-                            self.sessions_for(&occupant.full_jid).into_iter().next()
-                        else {
-                            return Ok(false);
-                        };
-                        if !self.privacy_allows_session(&session, peer, *kind).await? {
-                            return Ok(false);
-                        }
-                    }
-                    MucOccupantEndpoint::Suspended(suspended) => {
-                        if db::privacy_denies_for_sm_session(
-                            &self.pool,
-                            suspended.sm_session_id,
-                            peer,
-                            *kind,
-                        )
-                        .await?
-                        .unwrap_or(true)
-                        {
-                            return Ok(false);
-                        }
-                    }
-                    MucOccupantEndpoint::Federated { .. } => {}
-                }
-            }
-        }
-        if write_receipt.is_some() {
-            let membership = JoinedMucMembership {
-                nick: occupant.nick.clone(),
-                cluster_epoch: occupant.cluster_epoch,
-            };
-            if self
-                .validated_local_muc_occupant(
-                    &occupant.full_jid,
-                    occupant.connection_id,
-                    &occupant.room_jid,
-                    &membership,
-                )
-                .is_none()
-            {
-                return Ok(false);
-            }
-        }
-        if let Some(suspended) = session_gate {
-            return self
-                .deliver_to_suspended_muc_endpoint(&suspended, stanza, receipt, write_receipt)
-                .await;
-        }
-        match &occupant.endpoint {
-            MucOccupantEndpoint::Local(sender) if write_receipt.is_some() => {
-                let receipt = write_receipt.expect("write receipt was present");
-                match sender.try_send_with_transport_write_receipt(stanza, receipt) {
-                    Ok(()) => Ok(true),
-                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Ok(false),
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                        anyhow::bail!("local MUC shutdown recipient queue is full")
-                    }
-                }
-            }
-            MucOccupantEndpoint::Local(sender) => match receipt {
-                Some(receipt) => match sender.try_send_with_transport_receipt(stanza, receipt) {
-                    Ok(()) => Ok(true),
-                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Ok(false),
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                        anyhow::bail!("local MUC recipient queue is full")
-                    }
-                },
-                None => match sender.try_send(stanza) {
-                    Ok(()) => Ok(true),
-                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Ok(false),
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                        anyhow::bail!("local MUC recipient queue is full")
-                    }
-                },
-            },
-            MucOccupantEndpoint::Suspended(suspended) => {
-                self.deliver_to_suspended_muc_endpoint(suspended, stanza, receipt, None)
-                    .await
-            }
-            MucOccupantEndpoint::Federated {
-                authenticated_domain,
-                ..
-            } => {
-                anyhow::ensure!(
-                    self.federation_outbox
-                        .send(authenticated_domain, stanza, None)
-                        .await,
-                    "federation queue rejected MUC stanza"
-                );
-                if let Some(receipt) = receipt {
-                    let _ = receipt.send(());
-                }
-                Ok(true)
-            }
-        }
-    }
-
-    async fn deliver_to_suspended_muc_endpoint(
-        &self,
-        suspended: &Arc<SuspendedMucEndpoint>,
-        stanza: String,
-        receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
-        write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
-    ) -> anyhow::Result<bool> {
-        if let Some(receipt) = write_receipt {
-            return suspended.try_send_live_write_notification(stanza, receipt);
-        }
-        let mut stanza = Some(stanza);
-        let mut receipt = receipt;
-        let volatile_source_id = uuid::Uuid::new_v4();
-        loop {
-            // Live delivery and Live->Transitioning use this exact synchronous
-            // mutex. There is no check/send window in which cleanup can install
-            // a fence behind an already-approved old transport write.
-            let wait_for_route = {
-                let route = suspended
-                    .route
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                match &*route {
-                    SuspendedMucRoute::Live(sender) => {
-                        let stanza = stanza.take().expect("MUC delivery owns one stanza");
-                        return match receipt.take() {
-                            Some(receipt) => sender
-                                .try_send_with_transport_receipt(stanza, receipt)
-                                .map(|_| true)
-                                .map_err(|error| {
-                                    anyhow::anyhow!(
-                                        "resuming MUC recipient queue rejected stanza: {error}"
-                                    )
-                                }),
-                            None => match sender.try_send(stanza) {
-                                Ok(()) => Ok(true),
-                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Ok(false),
-                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                                    anyhow::bail!("resuming MUC recipient queue is full")
-                                }
-                            },
-                        };
-                    }
-                    SuspendedMucRoute::Transitioning => true,
-                    SuspendedMucRoute::Suspended => false,
-                }
-            };
-            if wait_for_route {
-                // Transitioning is a synchronous critical section; yielding is
-                // sufficient and avoids a lost-wakeup window around Notify.
-                tokio::task::yield_now().await;
-                continue;
-            }
-
-            let mut buffer = suspended.buffer.lock().await;
-            match buffer.phase.clone() {
-                SuspendedMucPhase::Dormant => {
-                    // Commit publishes Dormant before switching the synchronous
-                    // route to Live. Loop through the route fence once more.
-                    drop(buffer);
-                }
-                SuspendedMucPhase::Collecting | SuspendedMucPhase::Resuming => {
-                    anyhow::ensure!(
-                        receipt.is_none(),
-                        "cluster MUC outbox cannot transfer ownership to a volatile suspended buffer"
-                    );
-                    let stanza_ref = stanza.as_deref().expect("MUC delivery owns one stanza");
-                    let next_bytes = buffer
-                        .bytes
-                        .checked_add(stanza_ref.len())
-                        .ok_or_else(|| anyhow::anyhow!("suspended MUC byte count overflow"))?;
-                    let total_stanzas = buffer
-                        .base_stanzas
-                        .checked_add(buffer.stanzas.len() + 1)
-                        .ok_or_else(|| {
-                        anyhow::anyhow!("suspended MUC stanza count overflow")
-                    })?;
-                    let total_bytes = buffer
-                        .base_bytes
-                        .checked_add(next_bytes)
-                        .ok_or_else(|| anyhow::anyhow!("suspended MUC byte count overflow"))?;
-                    anyhow::ensure!(
-                        total_stanzas <= self.config.sm_max_unacked_stanzas
-                            && total_bytes <= self.config.sm_max_unacked_bytes,
-                        "suspended MUC recipient queue is unavailable or full"
-                    );
-                    let capacity = suspended
-                        .sm_capacity
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .clone()
-                        .ok_or_else(|| {
-                            self.sm_memory_governor.mark_invariant_failure();
-                            anyhow::anyhow!("suspended MUC route has no SM memory reservation")
-                        })?;
-                    let growth = std::mem::size_of::<SuspendedMucStanza>()
-                        .checked_add(stanza_ref.len())
-                        .ok_or_else(|| anyhow::anyhow!("suspended MUC allocation overflow"))?;
-                    capacity.try_grow_by(growth).map_err(|error| {
-                        anyhow::anyhow!("suspended MUC memory admission rejected: {error}")
-                    })?;
-                    anyhow::ensure!(
-                        buffer.enqueue_volatile(
-                            stanza.take().expect("MUC delivery owns one stanza"),
-                            self.config.sm_max_unacked_stanzas,
-                            self.config.sm_max_unacked_bytes,
-                        ),
-                        "suspended MUC recipient queue is unavailable or full"
-                    );
-                    return Ok(true);
-                }
-                SuspendedMucPhase::Durable => {
-                    // Keep the session-global endpoint mutex across the append.
-                    // A resume claim cannot overtake this stanza, and every room
-                    // shares the same SM sequence owner.
-                    let stored = db::append_suspended_sm_stanza(
-                        &self.pool,
-                        suspended.sm_session_id,
-                        volatile_source_id,
-                        stanza.as_deref().expect("MUC delivery owns one stanza"),
-                        self.config.sm_max_unacked_stanzas,
-                        self.config.sm_max_unacked_bytes,
-                    )
-                    .await?;
-                    if stored {
-                        stanza.take();
-                        if let Some(receipt) = receipt.take() {
-                            let _ = receipt.send(());
-                        }
-                    }
-                    return Ok(stored);
-                }
-                SuspendedMucPhase::Waiting
-                | SuspendedMucPhase::Reserved
-                | SuspendedMucPhase::Committing
-                | SuspendedMucPhase::CheckpointOwned
-                | SuspendedMucPhase::Sealed => {
-                    // These are ownership transitions, not delivery failures.
-                    // Register the waiter while the phase mutex is still held
-                    // so a concurrent notification cannot be missed.
-                    let notified = suspended.changed.notified();
-                    tokio::pin!(notified);
-                    notified.as_mut().enable();
-                    drop(buffer);
-                    notified.await;
-                }
-            }
-        }
     }
 
     pub fn acquire_client_connection(
@@ -7596,103 +6927,9 @@ impl AppState {
     /// Remote nodes receive the generation fence over Redis, with a 30-second
     /// maintenance sweep as fallback while PostgreSQL remains available.
     pub async fn disconnect_account(&self, user_id: uuid::Uuid, bare_account_jid: &str) {
-        self.revoke_local_account_routes(user_id, bare_account_jid, None);
-        if let Err(error) = self.revoke_user_sm_sessions_with_teardown(user_id).await {
-            tracing::error!(?error, %user_id, "failed to revoke durable SM sessions");
-        }
-        // Credentials are already committed. Log a Redis notification failure
-        // and let the generation sweep retry without failing the mutation.
-        let generation = match db::find_user_by_id(&self.pool, user_id).await {
-            Ok(Some(user)) => user.auth_generation,
-            Ok(None) => i64::MAX,
-            Err(error) => {
-                tracing::error!(?error, %user_id, "could not load the post-mutation auth generation");
-                return;
-            }
-        };
-        if let Err(error) = self
-            .cluster
-            .send_account_generation_teardown(bare_account_jid, user_id, generation)
-            .await
-        {
-            tracing::error!(
-                ?error,
-                %user_id,
-                auth_generation = generation,
-                "cross-node account revocation was not acknowledged; maintenance will retry"
-            );
-        }
-    }
-
-    /// Revoke only transports authenticated before a committed authorization
-    /// fence.  Unlike `disconnect_account`, this remains safe when the control
-    /// is delayed or replayed after the replacement browser has logged in.
-    pub async fn disconnect_account_before_auth_generation(
-        &self,
-        user_id: uuid::Uuid,
-        bare_account_jid: &str,
-        auth_generation_exclusive: i64,
-    ) {
-        self.account_generation_teardown_sequence()
-            .run(
-                user_id,
-                bare_account_jid,
-                auth_generation_exclusive,
-                || {
-                    self.revoke_user_sm_sessions_before_auth_generation_with_teardown(
-                        user_id,
-                        auth_generation_exclusive,
-                    )
-                },
-                || {
-                    self.cluster.send_account_generation_teardown(
-                        bare_account_jid,
-                        user_id,
-                        auth_generation_exclusive,
-                    )
-                },
-            )
+        self.account_teardown_runtime()
+            .disconnect_account(user_id, bare_account_jid)
             .await;
-    }
-
-    pub async fn revoke_user_sm_sessions_with_teardown(
-        &self,
-        user_id: uuid::Uuid,
-    ) -> anyhow::Result<usize> {
-        let lease = self.config.sm_claim_lease_seconds.max(1);
-        let deadline =
-            tokio::time::Instant::now() + std::time::Duration::from_secs(lease.saturating_add(2));
-        let mut total = 0usize;
-        loop {
-            let batch = db::take_user_sm_sessions_for_teardown(&self.pool, user_id, lease).await?;
-            total = total.saturating_add(batch.snapshots.len());
-            for snapshot in batch.snapshots {
-                self.perform_and_finalize_sm_teardown(snapshot).await?;
-            }
-            if batch.pending == 0 && db::count_user_sm_rows(&self.pool, user_id).await? == 0 {
-                return Ok(total);
-            }
-            anyhow::ensure!(
-                tokio::time::Instant::now() < deadline,
-                "durable SM account teardown claims did not quiesce before the deadline"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-    }
-
-    async fn revoke_user_sm_sessions_before_auth_generation_with_teardown(
-        &self,
-        user_id: uuid::Uuid,
-        auth_generation_exclusive: i64,
-    ) -> anyhow::Result<usize> {
-        crate::services::sm_teardown::SmTeardownService::new(
-            db::sm_teardown_repository::PostgresSmTeardownRepository::new(self.pool.clone()),
-            self.config.sm_claim_lease_seconds,
-        )
-        .revoke_before_generation(user_id, auth_generation_exclusive, |snapshot| async move {
-            self.teardown_sm_snapshot(&snapshot).await
-        })
-        .await
     }
 
     /// Atomically acquire and tear down every expired durable SM stream.
@@ -7745,38 +6982,17 @@ impl AppState {
         Ok(())
     }
 
-    pub async fn revoke_all_sm_sessions_with_teardown(&self) -> anyhow::Result<usize> {
-        let lease = self.config.sm_claim_lease_seconds.max(1);
-        let deadline =
-            tokio::time::Instant::now() + std::time::Duration::from_secs(lease.saturating_add(2));
-        let mut total = 0usize;
-        loop {
-            let batch = db::take_all_sm_sessions_for_teardown(&self.pool, lease).await?;
-            total = total.saturating_add(batch.snapshots.len());
-            for snapshot in batch.snapshots {
-                self.perform_and_finalize_sm_teardown(snapshot).await?;
-            }
-            if batch.pending == 0 && db::count_all_sm_rows(&self.pool).await? == 0 {
-                return Ok(total);
-            }
-            anyhow::ensure!(
-                tokio::time::Instant::now() < deadline,
-                "global durable SM teardown claims did not quiesce before the deadline"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-    }
-
     async fn perform_and_finalize_sm_teardown(
         &self,
         snapshot: db::SmTeardownSnapshot,
     ) -> anyhow::Result<()> {
+        let runtime = self.sm_teardown_runtime();
         crate::services::sm_teardown::SmTeardownService::new(
             db::sm_teardown_repository::PostgresSmTeardownRepository::new(self.pool.clone()),
             self.config.sm_claim_lease_seconds,
         )
         .finish(snapshot, |snapshot| async move {
-            self.teardown_sm_snapshot(&snapshot).await
+            runtime.teardown_snapshot(&snapshot).await
         })
         .await
     }
@@ -7793,335 +7009,14 @@ impl AppState {
         )
     }
 
-    async fn teardown_sm_snapshot(&self, snapshot: &db::SmTeardownSnapshot) -> anyhow::Result<()> {
-        let Ok(full_jid) = crate::jid::canonical_session_key(&snapshot.full_jid) else {
-            tracing::warn!(sm_session_id = %snapshot.session_id, "discarded invalid durable SM teardown JID");
-            anyhow::bail!("invalid durable SM teardown JID");
-        };
-        let actor_bare = bare_jid(&full_jid).to_owned();
-        let local = self.sm_teardown_local_effects();
-        local.fence_exact_session(&full_jid, snapshot.session_id);
-        self.cluster
-            .send_sm_session_teardown(&full_jid, snapshot.session_id)
-            .await?;
-
-        let mut first_error = None;
-
-        if snapshot.available {
-            let unavailable = format!(
-                "<presence xmlns='jabber:client' from='{}' type='unavailable'/>",
-                attr_escape(&full_jid)
-            );
-            let mut routed = HashSet::new();
-            let roster = self
-                .sm_teardown_presence_service()
-                .roster_subscribers(snapshot.user_id)
-                .await?;
-            for jid in roster {
-                if routed.insert(jid.clone()) {
-                    if let Err(error) = self
-                        .route_unavailable_with_policy(
-                            snapshot.user_id,
-                            snapshot.active_privacy_list.as_deref(),
-                            &full_jid,
-                            &unavailable,
-                            &jid,
-                        )
-                        .await
-                    {
-                        first_error.get_or_insert(error);
-                    }
-                }
-            }
-
-            // Other resources of the same account are part of the same
-            // presence session audience, independent of roster privacy.
-            if let Err(error) = self
-                .route_sm_unavailable_unchecked(&full_jid, &unavailable, &actor_bare, false)
-                .await
-            {
-                first_error.get_or_insert(error);
-            }
-
-            for target in &snapshot.directed_presence {
-                if routed.insert(target.clone()) {
-                    if let Err(error) = self
-                        .route_unavailable_with_policy(
-                            snapshot.user_id,
-                            snapshot.active_privacy_list.as_deref(),
-                            &full_jid,
-                            &unavailable,
-                            target,
-                        )
-                        .await
-                    {
-                        first_error.get_or_insert(error);
-                    }
-                }
-            }
-        }
-
-        let mut memberships = HashSet::new();
-        for membership in &snapshot.joined_rooms {
-            let Ok(room_jid) = crate::jid::canonicalize_bare(&membership.room_jid) else {
-                continue;
-            };
-            let Ok(nick) = crate::xmpp::xml_util::prepare_muc_nick(&membership.nick) else {
-                continue;
-            };
-            if !memberships.insert((room_jid.clone(), nick.clone())) {
-                continue;
-            }
-            let occupant = self
-                .sm_teardown_muc_occupant(
-                    &local,
-                    snapshot.session_id,
-                    snapshot.user_id,
-                    &full_jid,
-                    &room_jid,
-                    &nick,
-                )
-                .await?;
-            if let Err(error) = self
-                .cluster
-                .send_sm_muc_teardown(&room_jid, snapshot.session_id, &occupant)
-                .await
-            {
-                tracing::warn!(?error, %room_jid, "failed to publish clustered SM MUC teardown");
-                first_error.get_or_insert(error);
-            }
-            if let Err(error) = self
-                .teardown_suspended_muc_membership(snapshot.session_id, &occupant)
-                .await
-            {
-                first_error.get_or_insert(error);
-            }
-        }
-        if let Some(error) = first_error {
-            return Err(error);
-        }
-        local.finish_suspended_session(snapshot.session_id);
-        Ok(())
-    }
-
-    pub(crate) async fn route_unavailable_with_policy(
+    fn sm_teardown_muc_service(
         &self,
-        owner_id: uuid::Uuid,
-        active_privacy_list: Option<&str>,
-        from: &str,
-        unavailable: &str,
-        target: &str,
-    ) -> anyhow::Result<()> {
-        if !self
-            .sm_teardown_presence_service()
-            .allows_unavailable(crate::services::sm_teardown_presence::UnavailablePolicy {
-                owner_id,
-                owner_bare_jid: bare_jid(from),
-                active_privacy_list,
-                from,
-                target,
-                local_domain: &self.config.domain,
-            })
-            .await?
-        {
-            return Ok(());
-        }
-        self.route_sm_unavailable_unchecked(from, unavailable, target, true)
-            .await
-    }
-
-    async fn route_sm_unavailable_unchecked(
-        &self,
-        from: &str,
-        unavailable: &str,
-        target: &str,
-        recipient_privacy: bool,
-    ) -> anyhow::Result<()> {
-        let Ok(target_jid) = crate::jid::CanonicalJid::parse(target) else {
-            anyhow::bail!("invalid SM teardown presence target");
-        };
-        let canonical_target = target_jid.to_string();
-        let delivery = crate::xmpp::xml_util::set_to(unavailable, &canonical_target);
-        if target_jid.domainpart() == self.config.domain {
-            let mut recipients = self.session_entries_for(&canonical_target);
-            if target_jid.resourcepart().is_none() {
-                recipients.retain(|(_, session)| {
-                    session.available.load(std::sync::atomic::Ordering::Relaxed)
-                });
-            }
-            recipients.retain(|(jid, _)| jid != from);
-            for (jid, recipient) in recipients {
-                if recipient_privacy
-                    && !self
-                        .privacy_allows_session(&recipient, from, db::PrivacyStanzaKind::PresenceIn)
-                        .await?
-                {
-                    continue;
-                }
-                if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) = recipient
-                    .sender
-                    .try_send(crate::xmpp::xml_util::set_to(unavailable, &jid))
-                {
-                    anyhow::bail!("local SM unavailable recipient queue is full");
-                }
-            }
-            for node_id in self.cluster.lookup_nodes(&canonical_target).await? {
-                if node_id == self.cluster.node_id {
-                    continue;
-                }
-                if target_jid.resourcepart().is_none() {
-                    self.cluster
-                        .send_to_node_available_presence_confirmed_excluding(
-                            &node_id,
-                            &canonical_target,
-                            &delivery,
-                            Some(from),
-                        )
-                        .await?;
-                } else {
-                    self.cluster
-                        .send_to_node_confirmed(&node_id, &canonical_target, &delivery, Some(from))
-                        .await?;
-                }
-            }
-        } else if self
-            .config
-            .external_route_domain_allowed(target_jid.domainpart())
-        {
-            anyhow::ensure!(
-                self.federation_outbox
-                    .send(target_jid.domainpart(), delivery, Some(from.to_owned()))
-                    .await,
-                "federation queue rejected SM unavailable presence"
-            );
-        }
-        Ok(())
-    }
-
-    async fn sm_teardown_muc_occupant(
-        &self,
-        local: &sm_teardown_local::SmTeardownLocalEffects,
-        sm_session_id: uuid::Uuid,
-        user_id: uuid::Uuid,
-        full_jid: &str,
-        room_jid: &str,
-        nick: &str,
-    ) -> anyhow::Result<SerializableMucOccupant> {
-        if let Some(occupant) =
-            local.cached_suspended_occupant(sm_session_id, full_jid, room_jid, nick)
-        {
-            return Ok(occupant);
-        }
-        let room = db::muc_room(&self.pool, localpart(room_jid)).await?;
-        let affiliation = if let Some(room) = &room {
-            db::muc_affiliation(&self.pool, room.id, user_id)
-                .await?
-                .unwrap_or_else(|| "none".to_owned())
-        } else {
-            "none".to_owned()
-        };
-        let role = if matches!(affiliation.as_str(), "owner" | "admin") {
-            "moderator"
-        } else {
-            "participant"
-        };
-        Ok(SerializableMucOccupant {
-            full_jid: full_jid.to_owned(),
-            room_jid: room_jid.to_owned(),
-            nick: nick.to_owned(),
-            affiliation,
-            role: role.to_owned(),
-            room_non_anonymous: room.as_ref().is_none_or(|room| room.non_anonymous),
-            occupant_id: room
-                .as_ref()
-                .map(|room| {
-                    crate::xmpp::xml_util::muc_occupant_id(
-                        &room.occupant_id_secret,
-                        bare_jid(full_jid),
-                    )
-                })
-                .unwrap_or_default(),
-            cluster_epoch: uuid::Uuid::new_v4(),
-            connection_id: uuid::Uuid::nil(),
-            federated_domain: None,
-            sm_session_id: Some(sm_session_id),
-            payload: String::new(),
-        })
-    }
-
-    /// Remove one exact suspended actor and publish the already-authorized
-    /// unavailable event to this node's room occupants. Called both by the DB
-    /// teardown owner and by authenticated Redis cluster fanout.
-    pub async fn teardown_suspended_muc_membership(
-        &self,
-        sm_session_id: uuid::Uuid,
-        occupant: &SerializableMucOccupant,
-    ) -> anyhow::Result<usize> {
-        let local = self.sm_teardown_local_effects();
-        if local.remove_exact_suspended_occupant(sm_session_id, occupant) {
-            self.cluster
-                .unregister_muc_occupant_epoch(
-                    &occupant.room_jid,
-                    &occupant.nick,
-                    occupant.cluster_epoch,
-                    occupant.connection_id,
-                )
-                .await?;
-        }
-        let remaining = local.room_occupants(&occupant.room_jid);
-        let occupant_jids = remaining
-            .iter()
-            .map(|(_, target)| target.full_jid.clone())
-            .collect::<Vec<_>>();
-        let visible_sender = format!("{}/{}", occupant.room_jid, occupant.nick);
-        let blocked = db::blocked_local_accounts_for_candidates(
-            &self.pool,
-            &self.config.domain,
-            &occupant_jids,
-            &[visible_sender, occupant.full_jid.clone()],
+    ) -> crate::services::sm_teardown_muc::SmTeardownMucService<
+        db::sm_teardown_muc_repository::PostgresSmTeardownMucRepository,
+    > {
+        crate::services::sm_teardown_muc::SmTeardownMucService::new(
+            db::sm_teardown_muc_repository::PostgresSmTeardownMucRepository::new(self.pool.clone()),
         )
-        .await?;
-        let mut delivered = 0;
-        for (_, target) in &remaining {
-            if crate::jid::canonical_bare_key(&target.full_jid)
-                .is_ok_and(|owner| blocked.contains(&owner))
-            {
-                continue;
-            }
-            let presence = crate::xmpp::xml_util::muc_presence_stanza(
-                occupant,
-                &target.full_jid,
-                true,
-                false,
-                false,
-                None,
-                occupant.room_non_anonymous || target.role == "moderator",
-            );
-            delivered += usize::from(
-                self.deliver_to_muc_occupant_unchecked_result(target, presence)
-                    .await?,
-            );
-        }
-        if remaining.is_empty() {
-            self.cluster.leave_muc(&occupant.room_jid).await?;
-        }
-        let globally_empty = self
-            .cluster
-            .get_muc_occupants(&occupant.room_jid)
-            .await?
-            .is_empty();
-        if globally_empty && remaining.is_empty() {
-            if let Some(room) = db::muc_room(&self.pool, localpart(&occupant.room_jid)).await? {
-                db::delete_temporary_muc_room(
-                    &self.pool,
-                    room.id,
-                    room.room_epoch,
-                    room.config_version,
-                )
-                .await?;
-            }
-        }
-        Ok(delivered)
     }
 
     /// Give live locally-owned MUC endpoints XEP-0045 system-shutdown status.
@@ -8155,25 +7050,6 @@ impl AppState {
                 && received.recv().await.is_some()
         }))
         .await
-    }
-
-    pub fn suspend_local_muc_occupants(
-        &self,
-        full_jid: &str,
-        connection_id: uuid::Uuid,
-        sm_session_id: uuid::Uuid,
-        memberships: &DashMap<String, JoinedMucMembership>,
-        base_stanzas: usize,
-        base_bytes: usize,
-    ) -> Vec<Arc<SuspendedMucEndpoint>> {
-        self.sm_suspension_context().suspend_local_muc_occupants(
-            full_jid,
-            connection_id,
-            sm_session_id,
-            memberships,
-            base_stanzas,
-            base_bytes,
-        )
     }
 
     /// Associate MUC occupants which were joined before SM enable with the
@@ -8386,15 +7262,6 @@ impl AppState {
             .await
     }
 
-    pub(crate) fn retain_suspended_sm_capacity(
-        &self,
-        endpoints: &[Arc<SuspendedMucEndpoint>],
-        capacity: crate::services::sm_capacity::SmCapacityLease,
-    ) {
-        self.sm_suspension_context()
-            .retain_suspended_sm_capacity(endpoints, capacity)
-    }
-
     pub(crate) fn clear_suspended_sm_capacity(&self, endpoints: &[Arc<SuspendedMucEndpoint>]) {
         for endpoint in endpoints {
             endpoint
@@ -8403,21 +7270,6 @@ impl AppState {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
         }
-    }
-
-    /// Freeze the one session-global disconnect suffix before the exact SM
-    /// suspension transaction and append it directly to that transaction's
-    /// snapshot while holding the endpoint mutex. The endpoint retains its
-    /// byte-for-byte backup until PostgreSQL confirms ownership. New delivery
-    /// waits instead of creating an uncommitted process-crash window.
-    pub async fn snapshot_suspended_muc_for_disconnect(
-        &self,
-        endpoints: &[Arc<SuspendedMucEndpoint>],
-        snapshot: &mut crate::services::sm::SmSessionSnapshot,
-    ) -> anyhow::Result<()> {
-        self.sm_suspension_context()
-            .snapshot_suspended_muc_for_disconnect(endpoints, snapshot)
-            .await
     }
 
     /// Reattach only memberships that can still be proven valid. Existing

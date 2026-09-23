@@ -741,6 +741,7 @@ pub(crate) async fn lock_enabled_users_in_transaction(
     Ok(locked.len() == user_ids.len())
 }
 
+#[cfg(test)]
 pub async fn find_user_by_id(pool: &PgPool, id: Uuid) -> Result<Option<User>> {
     let row = sqlx::query("SELECT * FROM users WHERE id = $1")
         .bind(id)

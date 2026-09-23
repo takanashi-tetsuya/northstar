@@ -202,8 +202,8 @@ Key ownership:
   reads hold the exact bearer and account-generation locks through the snapshot.
   Public completion polling has its own context, bounded IP/concurrency
   admission and dedicated pool; it accepts only the transfer capability and
-  cannot invoke account mutations. The authenticated consume handler still
-  needs global state for post-commit session teardown.
+  cannot invoke account mutations. The authenticated consume handler uses a
+  separate generation-fenced teardown context after commit.
 - Administrator commands validate claim identity and page bounds before the
   repository. Sensitive reads retain their generation lock and snapshot;
   command mutations retain their dedicated database authority.
@@ -224,11 +224,10 @@ Key ownership:
 - Upload reconciliation receives a repository, its four maintenance limits,
   the exact storage generation and namespace, the guarded object store and
   shared metrics. Startup audit evidence remains one-use across worker restarts.
-- `src/db/` is the primary repository/routine layer for transactional
-  persistence, replay, canonical identity and migration-time invariants.
-  Several application services and API/cluster/federation/worker paths still
-  embed SQL/transaction work; these are tracked extraction debt rather than a
-  claim that the physical repository split is already universal.
+- `src/db/` owns transactional persistence, replay, canonical identity and
+  migration-time invariants. Some API, cluster, federation and worker paths
+  still need narrower runtime authority; zero public state fields do not prove
+  every caller is scoped.
 - `src/s2s/` owns discovery, DANE, TLS, EXTERNAL/Dialback and durable delivery.
 - `src/components.rs` isolates component domain authority and outbox handling.
 - `src/bosh.rs` and the WebSocket path adapt HTTP framing to the same
@@ -252,15 +251,15 @@ Key ownership:
   its private device/session keys.
 
 The architecture gate measures protocol/database dependency and public state
-capability in monotonic budgets. The current baseline is `AppState=3` public
+capability in monotonic budgets. The current baseline is `AppState=0` public
 fields and, across the production protocol tree (excluding `#[cfg(test)]` code),
 `0 db authority references / 0 db domain-model references / 0 state.pool / 0
 sqlx:: / 0 PgPool`. Importing or aliasing database symbols is rejected so an
-import cannot hide authority. These zero protocol/database ceilings must remain
-zero; the three public `AppState` capabilities may only decrease as narrower
-domain ports replace them. API, service, worker and repository transaction
-boundaries require separate runtime checks; subsystem-specific database roles
-remain incomplete. `messaging.rs` additionally has semantic
+import cannot hide authority. These zero ceilings must remain zero. Private
+fields alone do not narrow callers that retain the complete state. HTTP account
+teardown, session cleanup, operation-worker claims and listener dispatch use
+typed capabilities; other composition paths still receive broad state.
+Subsystem-specific database roles remain incomplete. `messaging.rs` additionally has semantic
 gates forbidding raw pool access and bypasses of `MessageService`.
 
 `AppState` no longer exposes raw FAST or Dialback key bytes, REST cursor and
@@ -289,13 +288,13 @@ shared-authority exceptions visible.
 | --- | --- | --- | --- |
 | Transport adapters | TCP/TLS, WebSocket/BOSH framing, byte/depth/time limits, connection lifetime | module APIs and parser/transport tests | same process as protocol and runtime services |
 | Protocol sessions | negotiation state, stanza parsing, RFC/XEP error mapping, per-resource ordering | production-tree static gate forbids DB symbols, SQLx and raw pools | inline test code is excluded from that gate; session still calls `AppState` service capabilities |
-| Application services | authorization snapshots, message/roster/replay policy, transaction intent and typed outcomes | Rust visibility, typed ports and targeted semantic gates | several services still embed SQLx/`PgPool`; some operation/background paths also hold broad `Arc<AppState>` |
-| Database repository responsibility | SQL, lock order, transactions, durable identity, outbox/admission invariants | PostgreSQL workload ACLs, reviewed routines and Rust module boundary | primarily `src/db/*`, but some service/API/cluster/federation/worker paths still embed persistence; most share the runtime role |
+| Application services | authorization snapshots, message/roster/replay policy, transaction intent and typed outcomes | Rust visibility, typed ports and targeted semantic gates | some composition paths still receive broad `Arc<AppState>` |
+| Database repository responsibility | SQL, lock order, transactions, durable identity, outbox/admission invariants | PostgreSQL workload ACLs, reviewed routines and Rust module boundary | `src/db/*` owns the extracted transaction paths; most still share the runtime role |
 | Live routing | exact connection incarnation, loss-explicit ordered admission, bounded backpressure, SM/BOSH/socket transfer fences | injected ordered-output port, bounded adapter queues, disconnect/fallback rules and delivery-fence state | in-memory availability state is process-local by design |
 | Federation/components | remote identity, discovery/TLS/Dialback and durable outbox ownership | authenticated streams, domain checks and durable repositories | S2S/component code remains in the same binary and runtime role |
 | Cluster control plane | signed node envelopes, leases, socket hints and degraded state | envelope verification plus PostgreSQL authority; Redis is non-authoritative | multi-node mode remains experimental and shares the server process |
-| Background workers | registered lifecycle, heartbeat and restart/fail-fast policy | worker registry and readiness/fatal cancellation | several workers still receive broader `AppState` access than the target port design |
-| REST/admin operation runtime | API authentication, idempotency, command authorization and recovery | API middleware, operation journal and isolated command-role pool | REST and XMPP run in one process; operation runtime still has broader state access in places |
+| Background workers | registered lifecycle, heartbeat and restart/fail-fast policy | worker registry and readiness/fatal cancellation | ordinary operation claims and effects are scoped, but some worker entry points still assemble them from broad state |
+| REST/admin operation runtime | API authentication, idempotency, command authorization and recovery | API middleware, operation journal and isolated command-role pool | REST and XMPP run in one process; other operation composition paths still need review |
 | Browser cryptography | endpoint OMEMO key/session operations | browser code and no server private-key API | same-origin frontend delivery remains in the E2EE trust/supply-chain boundary |
 
 The production database identities are intentionally non-interchangeable:

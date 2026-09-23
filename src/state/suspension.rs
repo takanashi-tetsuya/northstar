@@ -1,11 +1,9 @@
 //! Shared process-local MUC suspension state and its durable handoff.
 use super::{
-    append_suspended_muc_suffix_to_snapshot, begin_suspended_muc_route_transition,
-    canonical_suspended_muc_endpoint, complete_snapshot_owned_handoff,
-    finalize_suspended_muc_route_transition, localpart, muc_actor_epoch_matches,
-    promote_suspended_muc_buffer, seal_suspended_muc_buffer, JoinedMucMembership, MucOccupant,
-    MucOccupantEndpoint, SerializableMucOccupant, SuspendedMucEndpoint, SuspendedMucPhase,
-    SuspendedMucRoute,
+    append_suspended_muc_suffix_to_snapshot, complete_snapshot_owned_handoff,
+    finalize_suspended_muc_route_transition, localpart, promote_suspended_muc_buffer,
+    seal_suspended_muc_buffer, MucOccupant, MucOccupantEndpoint, SerializableMucOccupant,
+    SuspendedMucEndpoint, SuspendedMucPhase, SuspendedMucRoute,
 };
 use crate::services::sm_suspension::{
     MucSuspensionRequest, SmSuspensionLimits, SmSuspensionRepository, SmSuspensionRequest,
@@ -18,8 +16,7 @@ pub(crate) struct SmSuspensionContext<R> {
     repository: R,
     limits: SmSuspensionLimits,
     muc_occupants: Arc<DashMap<String, MucOccupant>>,
-    suspended_muc_sessions: Arc<DashMap<uuid::Uuid, Arc<SuspendedMucEndpoint>>>,
-    cluster: crate::cluster::ClusterManager,
+    cluster: crate::cluster::ClusterSmSuspension,
 }
 
 impl<R: SmSuspensionRepository> SmSuspensionContext<R> {
@@ -27,14 +24,12 @@ impl<R: SmSuspensionRepository> SmSuspensionContext<R> {
         repository: R,
         limits: SmSuspensionLimits,
         muc_occupants: Arc<DashMap<String, MucOccupant>>,
-        suspended_muc_sessions: Arc<DashMap<uuid::Uuid, Arc<SuspendedMucEndpoint>>>,
-        cluster: crate::cluster::ClusterManager,
+        cluster: crate::cluster::ClusterSmSuspension,
     ) -> Self {
         Self {
             repository,
             limits,
             muc_occupants,
-            suspended_muc_sessions,
             cluster,
         }
     }
@@ -46,56 +41,6 @@ impl<R: SmSuspensionRepository> SmSuspensionContext<R> {
         self.repository
             .suspend_exact_session(request, self.limits)
             .await
-    }
-
-    pub(crate) fn suspend_local_muc_occupants(
-        &self,
-        full_jid: &str,
-        connection_id: uuid::Uuid,
-        sm_session_id: uuid::Uuid,
-        memberships: &DashMap<String, JoinedMucMembership>,
-        base_stanzas: usize,
-        base_bytes: usize,
-    ) -> Vec<Arc<SuspendedMucEndpoint>> {
-        // Publish the session fence before walking independent room entries.
-        // Delivery consults this registry ahead of each endpoint, so no room
-        // can continue accepting into the disappearing transport while a
-        // later room has already switched to the suspension FIFO.
-        let proposed = Arc::new(SuspendedMucEndpoint::new_collecting(
-            sm_session_id,
-            base_stanzas,
-            base_bytes,
-        ));
-        let endpoint =
-            canonical_suspended_muc_endpoint(&self.suspended_muc_sessions, sm_session_id, proposed);
-        begin_suspended_muc_route_transition(&endpoint, base_stanzas, base_bytes);
-        for membership in memberships {
-            let room_jid = membership.key();
-            let membership = membership.value();
-            let key = crate::xmpp::xml_util::muc_occupant_key(room_jid, &membership.nick);
-            let Some(mut occupant) = self.muc_occupants.get_mut(&key) else {
-                continue;
-            };
-            if !muc_actor_epoch_matches(&occupant, full_jid, connection_id, room_jid, membership)
-                || occupant.sm_session_id != Some(sm_session_id)
-            {
-                continue;
-            }
-            match &occupant.endpoint {
-                MucOccupantEndpoint::Local(_) => {
-                    occupant.endpoint = MucOccupantEndpoint::Suspended(Arc::clone(&endpoint));
-                }
-                MucOccupantEndpoint::Suspended(current)
-                    if Arc::ptr_eq(current, &endpoint)
-                        && current.sm_session_id == sm_session_id => {}
-                MucOccupantEndpoint::Suspended(_) | MucOccupantEndpoint::Federated { .. } => {}
-            }
-        }
-        // Even a stale membership plan returns the published fence: an
-        // in-flight delivery may already hold its Arc and must be promoted (or
-        // remain visibly sealed) instead of being acknowledged into a dropped
-        // buffer.
-        vec![endpoint]
     }
 
     pub(crate) async fn mark_suspended_muc_durable(
@@ -199,7 +144,7 @@ impl<R: SmSuspensionRepository> SmSuspensionContext<R> {
                                 occupant_incarnation: occupant.cluster_epoch,
                                 connection_id: occupant.connection_id,
                                 sm_session_id: endpoint.sm_session_id,
-                                node_id: &self.cluster.node_id,
+                                node_id: self.cluster.node_id(),
                                 lease: Duration::from_secs(90),
                             })
                             .await?;
@@ -262,12 +207,7 @@ impl<R: SmSuspensionRepository> SmSuspensionContext<R> {
         endpoints: &[Arc<SuspendedMucEndpoint>],
         capacity: crate::services::sm_capacity::SmCapacityLease,
     ) {
-        for endpoint in endpoints {
-            *endpoint
-                .sm_capacity
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(capacity.clone());
-        }
+        super::session_cleanup_local::retain_suspended_sm_capacity_in(endpoints, capacity);
     }
 
     pub(crate) async fn snapshot_suspended_muc_for_disconnect(
@@ -393,13 +333,14 @@ mod tests {
                     max_bytes: 4096,
                 },
                 Arc::clone(&occupants),
-                Arc::clone(&suspended),
-                cluster.clone(),
+                cluster.sm_suspension(),
             )
         };
         let session_id = Uuid::new_v4();
         let first = context();
-        let endpoints = first.suspend_local_muc_occupants(
+        let endpoints = super::super::session_cleanup_local::suspend_local_muc_occupants_in(
+            &occupants,
+            &suspended,
             "alice@example.test/phone",
             Uuid::new_v4(),
             session_id,

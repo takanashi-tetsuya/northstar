@@ -182,7 +182,7 @@ pub struct Metrics {
     pub post_action_capacity_rejections_total: AtomicU64,
     pub cluster_legacy_delivery_acceptances_total: AtomicU64,
     pub cluster_presence_probe_failures_total: AtomicU64,
-    pub post_accept_side_effect_failures_total: AtomicU64,
+    pub post_accept_side_effect_failures_total: Arc<AtomicU64>,
     /// XEP-0280 Carbon copies that could not be admitted after the primary
     /// message was already accepted.  This is deliberately separate from
     /// primary delivery failures: a Carbon is a best-effort post-accept copy
@@ -207,12 +207,12 @@ pub struct Metrics {
     pub cluster_muc_authority_rejections_total: AtomicU64,
     pub mix_post_commit_delivery_failures_total: AtomicU64,
     pub federation_inbound_connections_total: AtomicU64,
-    pub federation_outbound_deliveries_total: AtomicU64,
-    pub federation_failures_total: AtomicU64,
-    pub s2s_outbox_retries_total: AtomicU64,
-    pub s2s_outbox_expired_total: AtomicU64,
-    pub s2s_outbox_permanent_failures_total: AtomicU64,
-    pub s2s_outbox_lease_lost_total: AtomicU64,
+    pub federation_outbound_deliveries_total: Arc<AtomicU64>,
+    pub federation_failures_total: Arc<AtomicU64>,
+    pub s2s_outbox_retries_total: Arc<AtomicU64>,
+    pub s2s_outbox_expired_total: Arc<AtomicU64>,
+    pub s2s_outbox_permanent_failures_total: Arc<AtomicU64>,
+    pub s2s_outbox_lease_lost_total: Arc<AtomicU64>,
     pub component_connections_active: AtomicU64,
     pub component_deliveries_total: AtomicU64,
     pub component_failures_total: AtomicU64,

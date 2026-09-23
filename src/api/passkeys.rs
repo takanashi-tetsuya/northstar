@@ -1,6 +1,9 @@
 use super::*;
 use crate::services::passkeys::{PasskeyActor, PasskeyError};
-use crate::state::{passkey_http::PasskeyAccountHttpContext, PasskeyLoginFinishContext};
+use crate::state::{
+    passkey_http::{PasskeyAccountHttpContext, PasskeyStartHttpContext},
+    PasskeyLoginFinishContext,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -25,11 +28,6 @@ impl From<PasskeyError> for AppError {
     }
 }
 
-fn check_origin(state: &AppState, headers: &HeaderMap) -> Result<()> {
-    let expected = state.passkey_service().allowed_origin()?;
-    check_expected_origin(&expected, headers)
-}
-
 fn check_expected_origin(expected: &str, headers: &HeaderMap) -> Result<()> {
     let mut origins = headers.get_all(header::ORIGIN).iter();
     if origins.next().and_then(|origin| origin.to_str().ok()) != Some(expected)
@@ -50,7 +48,7 @@ fn actor(user: &ApiUser) -> PasskeyActor<'_> {
 }
 
 async fn guard_start(
-    state: &AppState,
+    state: &PasskeyStartHttpContext,
     peer: SocketAddr,
     headers: &HeaderMap,
     username: &str,
@@ -58,12 +56,11 @@ async fn guard_start(
     body: &Value,
     proof: Option<&crate::abuse::PowProof>,
 ) -> Result<()> {
-    let (subject, actors) = login_abuse_identity(client_ip(peer.ip(), headers, state), username)
-        .ok_or(AppError::Unauthorized)?;
+    let ip = client_ip_with_trusted_proxies(peer.ip(), headers, state.trusted_proxies());
+    let (subject, actors) = login_abuse_identity(ip, username).ok_or(AppError::Unauthorized)?;
     let intent = crate::abuse::PowIntent::http_json(AbuseAction::Login, path, body);
     state
-        .passkey_login_abuse_service()
-        .verify(&subject, &actors, proof, &intent)
+        .verify_start(&subject, &actors, proof, &intent)
         .await?
         .map_err(rate_limited)?;
     Ok(())
@@ -88,13 +85,14 @@ pub(super) struct RegisterStart {
 }
 
 pub(super) async fn register_start(
-    State(state): State<Arc<AppState>>,
+    State(state): State<PasskeyStartHttpContext>,
+    State(queries): State<crate::state::ApiQueryContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(mut body): Json<RegisterStart>,
 ) -> Result<Json<Value>> {
-    check_origin(&state, &headers)?;
-    let user = current_user(&state, &headers).await?;
+    check_expected_origin(&state.allowed_origin()?, &headers)?;
+    let user = current_user_with_queries(&queries, &headers).await?;
     let password = Zeroizing::new(std::mem::take(&mut body.password));
     guard_start(
         &state,
@@ -107,7 +105,6 @@ pub(super) async fn register_start(
     )
     .await?;
     let start = state
-        .passkey_service()
         .register_start(actor(&user), &password, std::mem::take(&mut body.label))
         .await?;
     Ok(Json(
@@ -145,12 +142,12 @@ pub(super) struct LoginStart {
 }
 
 pub(super) async fn login_start(
-    State(state): State<Arc<AppState>>,
+    State(state): State<PasskeyStartHttpContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<LoginStart>,
 ) -> Result<Json<Value>> {
-    check_origin(&state, &headers)?;
+    check_expected_origin(&state.allowed_origin()?, &headers)?;
     guard_start(
         &state,
         peer,
@@ -161,10 +158,7 @@ pub(super) async fn login_start(
         body.pow.as_ref(),
     )
     .await?;
-    let start = state
-        .passkey_service()
-        .login_start(&body.username, body.device_id)
-        .await?;
+    let start = state.login_start(&body.username, body.device_id).await?;
     Ok(Json(
         json!({"challenge_id":start.challenge_id,"options":start.options}),
     ))
@@ -200,16 +194,19 @@ pub(super) struct Remove {
 }
 
 pub(super) async fn remove(
-    State(state): State<Arc<AppState>>,
+    State(teardown_state): State<Arc<AppState>>,
+    State(start): State<PasskeyStartHttpContext>,
+    State(account): State<PasskeyAccountHttpContext>,
+    State(queries): State<crate::state::ApiQueryContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(mut body): Json<Remove>,
 ) -> Result<Json<Value>> {
-    check_origin(&state, &headers)?;
-    let user = current_user(&state, &headers).await?;
+    check_expected_origin(&start.allowed_origin()?, &headers)?;
+    let user = current_user_with_queries(&queries, &headers).await?;
     let password = Zeroizing::new(std::mem::take(&mut body.password));
     guard_start(
-        &state,
+        &start,
         peer,
         &headers,
         &user.username,
@@ -218,18 +215,11 @@ pub(super) async fn remove(
         body.pow.as_ref(),
     )
     .await?;
-    let generation = state
-        .passkey_service()
-        .remove(actor(&user), &password, body.id)
-        .await?;
-    state
+    let generation = account.remove(actor(&user), &password, body.id).await?;
+    teardown_state
         .disconnect_account_before_auth_generation(
             user.id,
-            &format!(
-                "{}@{}",
-                user.username,
-                state.public_discovery_context().policy().domain
-            ),
+            &format!("{}@{}", user.username, queries.domain()),
             generation,
         )
         .await;

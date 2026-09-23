@@ -14,7 +14,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     api::{
-        current_user, ApiJson, ApiPath, OmemoRecoveryConsumeRequest, OmemoRecoveryPollRequest,
+        ApiJson, ApiPath, OmemoRecoveryConsumeRequest, OmemoRecoveryPollRequest,
         OmemoRecoveryPrepareRequest, OmemoRecoverySealRequest,
     },
     error::AppError,
@@ -216,25 +216,22 @@ pub async fn get_omemo_recovery_authority(
 }
 
 pub async fn consume_omemo_recovery(
+    State(context): State<OmemoRecoveryHttpContext>,
     State(state): State<Arc<AppState>>,
     ApiPath(transfer_id): ApiPath<Uuid>,
     headers: HeaderMap,
     mut request: ApiJson<OmemoRecoveryConsumeRequest>,
 ) -> Result<Response, AppError> {
-    let user = current_user(&state, &headers).await?;
+    let user = context.current_user(&headers).await?;
     let digest = parse_sha256(&request.package_sha256)?;
     let consumer_secret = Zeroizing::new(parse_transfer_secret(
         &request.consumer_secret,
         "consumer_secret",
     )?);
     request.value.consumer_secret.zeroize();
-    let canonical_account = format!(
-        "{}@{}",
-        user.username,
-        state.public_discovery_context().policy().domain
-    );
-    let result = state
-        .omemo_recovery_service()
+    let canonical_account = context.canonical_account(&user);
+    let result = context
+        .service()
         .consume(ConsumeOmemoRecoveryRequest {
             user_id: user.id,
             canonical_account: &canonical_account,
@@ -277,15 +274,7 @@ pub async fn consume_omemo_recovery(
             ))
         })?;
         state
-            .disconnect_account_before_auth_generation(
-                user.id,
-                &format!(
-                    "{}@{}",
-                    user.username,
-                    state.public_discovery_context().policy().domain
-                ),
-                cutoff,
-            )
+            .disconnect_account_before_auth_generation(user.id, &canonical_account, cutoff)
             .await;
     }
     Ok(response)

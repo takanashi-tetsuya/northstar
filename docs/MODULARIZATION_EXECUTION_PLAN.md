@@ -347,8 +347,10 @@ cluster failure supervisor has a separate authority context. Cluster lease
 maintenance now passes a Redis-only handle after its PostgreSQL authority
 checks. Authenticated Passkey listing/registration completion and OMEMO
 recovery read/write routes use scoped HTTP contexts. `AppState` still exposes
-the cluster capability, and the listener, MUC outbox renderer and some HTTP
-handlers still receive broader state than they need. Database role
+the cluster capability. Public registration, logout and Passkey challenge
+starts also use scoped contexts; the PubSub listener has a separate transport
+and self-loop handle. Its message dispatch, the MUC outbox renderer and some
+account teardown HTTP handlers still receive broader state than they need. Database role
 separation, MUC batch commands and storage/restore tooling follow after these
 Stage 1 boundaries pass CI.
 

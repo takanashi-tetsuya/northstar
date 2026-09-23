@@ -143,11 +143,11 @@ pub struct Metrics {
     pub bosh_sessions_total: AtomicU64,
     pub bosh_sessions_active: AtomicU64,
     pub active_sessions: AtomicU64,
-    pub capacity_reservations_rejected_total: AtomicU64,
+    pub capacity_reservations_rejected_total: Arc<AtomicU64>,
     pub capacity_session_lease_losses_total: AtomicU64,
     pub stanzas_in_total: AtomicU64,
     pub stanzas_out_total: AtomicU64,
-    pub registrations_total: AtomicU64,
+    pub registrations_total: Arc<AtomicU64>,
     pub authentication_failures_total: AtomicU64,
     pub authentication_backend_failures_total: Arc<AtomicU64>,
     /// FAST rows existed but could not be reproduced with the configured

@@ -2216,13 +2216,31 @@ const passkeyApiSource = productionWithoutCfgTestModules(read('src/api/passkeys.
 for (const forbidden of [/\bdb\s*::/, /\bsqlx\s*::/, /\bstate\s*\.\s*pool\b/, /\.begin_authorized_read\s*\(/]) {
   if (forbidden.test(passkeyApiSource)) throw new Error('Passkeys HTTP regained direct persistence authority');
 }
-if (!passkeyApiSource.includes('.passkey_service()')) {
-  throw new Error('Passkeys HTTP must use its application service');
+if (!passkeyApiSource.includes('State<PasskeyAccountHttpContext>')
+    || !passkeyApiSource.includes('State<PasskeyStartHttpContext>')
+    || !read('src/state/passkey_http.rs').includes('Arc<PasskeyService>')) {
+  throw new Error('Passkeys HTTP must use scoped application services');
 }
 const passkeyAccountContext = structBody(
   read('src/state/passkey_http.rs'),
   'pub(crate) struct PasskeyAccountHttpContext',
 );
+const passkeyStartContext = structBody(read('src/state/passkey_http.rs'), 'pub(crate) struct PasskeyStartHttpContext');
+if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passkeyStartContext)
+    || !/pub\(super\) async fn register_start\(\s*State\(state\): State<PasskeyStartHttpContext>/.test(passkeyApiSource)
+    || !/pub\(super\) async fn login_start\(\s*State\(state\): State<PasskeyStartHttpContext>/.test(passkeyApiSource)) {
+  throw new Error('Passkey challenge starts must use scoped abuse and credential authority');
+}
+const apiSessionHttpContext = structBody(read('src/state/api_session_http.rs'), 'pub(crate) struct ApiSessionHttpContext');
+if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(apiSessionHttpContext)
+    || !/pub async fn logout\(\s*State\(state\): State<ApiSessionHttpContext>/.test(read('src/api/auth_routes.rs'))) {
+  throw new Error('HTTP logout must use only its audited session command');
+}
+const registrationHttpContext = structBody(read('src/state/http_registration_endpoint.rs'), 'pub(crate) struct HttpRegistrationEndpointContext');
+if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(registrationHttpContext)
+    || !/pub async fn register\(\s*State\(context\): State<HttpRegistrationEndpointContext>/.test(read('src/api/auth_routes.rs'))) {
+  throw new Error('HTTP registration must use scoped account admission authority');
+}
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passkeyAccountContext)
     || !/pub\(super\) async fn list\(\s*State\(state\): State<PasskeyAccountHttpContext>,\s*State\(queries\): State<crate::state::ApiQueryContext>/s.test(passkeyApiSource)
     || !/pub\(super\) async fn register_finish\(\s*State\(state\): State<PasskeyAccountHttpContext>,\s*State\(queries\): State<crate::state::ApiQueryContext>/s.test(passkeyApiSource)) {
@@ -2363,7 +2381,7 @@ for (const accessor of ['account_service', 'push_service']) {
 }
 
 const registrationHandler = structBody(read('src/api/auth_routes.rs'), 'pub async fn register(');
-if (!/\.account_service\(\)[\s\S]+\.register_http\(HttpRegistrationRequest/.test(registrationHandler)) {
+if (!/\.service\(\)[\s\S]+\.register_http\(HttpRegistrationRequest/.test(registrationHandler)) {
   throw new Error('HTTP registration must enter the account service with a typed command');
 }
 if (/(?:\bstate\s*\.\s*pool\b|\bdb::(?:acquire_idempotency_in_tx|prepare_registration|create_user_with_invitation_guarded_in_tx_v2)\b|\btransaction\b|\bPgPool\b)/.test(registrationHandler)) {
@@ -3401,6 +3419,14 @@ if (!clusterMaintenance.includes('state.cluster_muc_occupancy_maintenance_servic
   throw new Error('cluster MUC reconciliation must snapshot and renew exact authority through its narrow port');
 }
 const clusterListener = structBody(read('src/cluster.rs'), 'async fn listen_once(');
+const clusterListenerTransport = structBody(read('src/cluster.rs'), 'pub(crate) struct ClusterPubsubListenerTransport');
+const clusterListenerSupervisor = structBody(read('src/cluster.rs'), 'pub(crate) async fn run_pubsub_listener(');
+if (/\b(?:AppState|ClusterManager|signer|pending_acks|replay)\s*:/.test(clusterListenerTransport)
+    || /\bstate\.cluster\b/.test(clusterListenerSupervisor)
+    || !clusterListener.includes('transport.confirm_generation(')
+    || !clusterListener.includes('publish_listener_probe(&transport,')) {
+  throw new Error('PubSub listener setup and generation must use scoped transport authority');
+}
 if (clusterListener.includes('db::cluster_session_route_authority(')
     || !clusterListener.includes('.session_termination_authority_service()')) {
   throw new Error('signed session termination must re-read exact route authority through its service');
@@ -3582,7 +3608,6 @@ const stateServiceAccessors = [
   'challenge_issue_service',
   'challenge_cleanup_service',
   'sasl_login_abuse_service',
-  'passkey_login_abuse_service',
   'password_change_service',
   'operation_muc_destroy_service',
   'locked_muc_expiry_service',
@@ -3597,7 +3622,6 @@ const stateServiceAccessors = [
   'report_service',
   'omemo_recovery_service',
   'authentication_service',
-  'passkey_service',
   'account_service',
   'admin_command_service',
   'message_service',

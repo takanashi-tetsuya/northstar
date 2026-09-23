@@ -159,7 +159,7 @@ const httpRegistration = authRoutes.slice(
   authRoutes.indexOf('pub async fn register('),
   authRoutes.indexOf('fn registration_error('),
 );
-assert.match(httpRegistration, /\.account_service\(\)[\s\S]+\.register_http\(HttpRegistrationRequest/,
+assert.match(httpRegistration, /\.service\(\)[\s\S]+\.register_http\(HttpRegistrationRequest/,
   'HTTP registration must enter the account service with a typed command');
 assert.doesNotMatch(httpRegistration, /(?:\.pool\.begin\(|db::prepare_registration\(|db::acquire_idempotency_in_tx\()/,
   'HTTP registration must not own a database transaction or password derivation');

@@ -126,11 +126,11 @@ async fn subscribe_pubsub(pubsub: &mut redis::aio::PubSub, channel: &str) -> Res
 }
 
 async fn publish_listener_probe(
-    cluster: &ClusterManager,
+    transport: &ClusterPubsubListenerTransport,
     channel: &str,
     token: &str,
 ) -> Result<()> {
-    let pool = cluster
+    let pool = transport
         .pool
         .as_ref()
         .context("Redis listener probe started without a configured pool")?;
@@ -979,6 +979,54 @@ pub struct ClusterManager {
     pending_acks: Arc<dashmap::DashMap<String, PendingClusterAck>>,
 }
 
+/// The PubSub reader's connection, self-loop and generation fence. This handle
+/// cannot sign a command, consume replay authority or dispatch an ACK.
+#[derive(Clone)]
+pub(crate) struct ClusterPubsubListenerTransport {
+    client: Option<redis::Client>,
+    pool: Option<Pool<RedisConnectionManager>>,
+    key_prefix: String,
+    node_id: String,
+    connection_uuid: uuid::Uuid,
+    instance_epoch: Arc<AtomicI64>,
+    health: Arc<ClusterHealth>,
+    listener_rotation: Arc<tokio::sync::Notify>,
+    failure_policy: Option<crate::cluster_security::ClusterFailurePolicy>,
+}
+
+impl ClusterPubsubListenerTransport {
+    fn is_enabled(&self) -> bool {
+        self.pool.is_some()
+    }
+
+    fn key(&self, suffix: String) -> String {
+        format!("{}:{suffix}", self.key_prefix)
+    }
+
+    fn rotation_already_required(&self) -> bool {
+        self.health.listener_generation.load(Ordering::Acquire)
+            < self
+                .health
+                .required_listener_generation
+                .load(Ordering::Acquire)
+    }
+
+    fn record_listener_failure(&self, error: &anyhow::Error) {
+        record_cluster_failure(
+            &self.health,
+            &self.listener_rotation,
+            self.is_enabled(),
+            self.failure_policy,
+            ClusterFailureClass::PubSub,
+            error,
+        );
+    }
+
+    fn confirm_generation(&self, generation: u64, rotation_epoch: u64) -> Result<()> {
+        confirm_listener_generation(&self.health, generation, rotation_epoch)
+    }
+}
+
 /// Immutable identity used by the readiness persistence probe. Capturing the
 /// local lease epoch alongside the configured key avoids passing live cluster
 /// control-plane authority into the service or repository.
@@ -1704,6 +1752,39 @@ fn complete_cluster_reconciliation(
     complete_cluster_reconciliation_locked(health, &mut since, rotation_epoch)
 }
 
+fn confirm_listener_generation(
+    health: &ClusterHealth,
+    generation: u64,
+    rotation_epoch: u64,
+) -> Result<()> {
+    let mut since = health
+        .failure_since
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    anyhow::ensure!(
+        health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED
+            && health.listener_rotation_epoch.load(Ordering::Acquire) == rotation_epoch
+            && generation == health.next_listener_generation()
+            && !health.listener_requires_rotation(generation),
+        "Redis PubSub listener rotation was requested before self-loop confirmation"
+    );
+    health
+        .listener_generation
+        .store(generation, Ordering::Release);
+    // Only the initial self-loop may complete startup reconciliation. Later
+    // recoveries still require the full maintenance pass.
+    if health.state.load(Ordering::Acquire) == CLUSTER_RECONCILING
+        && health.degraded_transitions.load(Ordering::Acquire) == 0
+    {
+        let outcome = complete_cluster_reconciliation_locked(health, &mut since, rotation_epoch)?;
+        anyhow::ensure!(
+            outcome == ReconciliationOutcome::Complete,
+            "confirmed initial listener did not complete startup reconciliation"
+        );
+    }
+    Ok(())
+}
+
 fn complete_cluster_reconciliation_locked(
     health: &ClusterHealth,
     since: &mut std::sync::MutexGuard<'_, Option<Instant>>,
@@ -2296,6 +2377,20 @@ impl ClusterManager {
         }
     }
 
+    pub(crate) fn pubsub_listener_transport(&self) -> ClusterPubsubListenerTransport {
+        ClusterPubsubListenerTransport {
+            client: self.client.clone(),
+            pool: self.pool.clone(),
+            key_prefix: self.key_prefix.clone(),
+            node_id: self.node_id.clone(),
+            connection_uuid: self.connection_uuid,
+            instance_epoch: Arc::clone(&self.instance_epoch),
+            health: Arc::clone(&self.health),
+            listener_rotation: Arc::clone(&self.listener_rotation),
+            failure_policy: self.failure_policy(),
+        }
+    }
+
     pub fn is_enabled(&self) -> bool {
         self.pool.is_some()
     }
@@ -2602,6 +2697,7 @@ impl ClusterManager {
         self.record_failure(ClusterFailureClass::RedisCommand, error);
     }
 
+    #[cfg(test)]
     fn record_listener_failure(&self, error: &anyhow::Error) {
         self.record_failure(ClusterFailureClass::PubSub, error);
     }
@@ -2621,37 +2717,9 @@ impl ClusterManager {
         );
     }
 
+    #[cfg(test)]
     fn confirm_listener_generation(&self, generation: u64, rotation_epoch: u64) -> Result<()> {
-        let mut since = self
-            .health
-            .failure_since
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        anyhow::ensure!(
-            self.health.state.load(Ordering::Acquire) != CLUSTER_SHUTDOWN_REQUIRED
-                && self.health.listener_rotation_epoch.load(Ordering::Acquire) == rotation_epoch
-                && generation == self.health.next_listener_generation()
-                && !self.health.listener_requires_rotation(generation),
-            "Redis PubSub listener rotation was requested before self-loop confirmation"
-        );
-        self.health
-            .listener_generation
-            .store(generation, Ordering::Release);
-        // Startup has no pre-existing local sessions or MUC occupants: State
-        // already reconciled PostgreSQL key/instance authority and activate()
-        // acquired the Redis node lease. The first subscribed listener is the
-        // final empty-state fence. Later recoveries have degraded_transitions
-        // and must pass full maintenance reconciliation instead.
-        if self.health.state.load(Ordering::Acquire) == CLUSTER_RECONCILING
-            && self.health.degraded_transitions.load(Ordering::Acquire) == 0
-        {
-            let outcome = self.complete_reconciliation_locked(&mut since, rotation_epoch)?;
-            anyhow::ensure!(
-                outcome == ReconciliationOutcome::Complete,
-                "confirmed initial listener did not complete startup reconciliation"
-            );
-        }
-        Ok(())
+        confirm_listener_generation(&self.health, generation, rotation_epoch)
     }
 
     #[cfg(test)]
@@ -2671,6 +2739,7 @@ impl ClusterManager {
         complete_cluster_reconciliation(&self.health, rotation_epoch)
     }
 
+    #[cfg(test)]
     fn complete_reconciliation_locked(
         &self,
         since: &mut std::sync::MutexGuard<'_, Option<Instant>>,
@@ -5930,15 +5999,22 @@ async fn maintenance_once(
     Ok(())
 }
 
-pub async fn run_pubsub_listener(
+pub(crate) async fn run_pubsub_listener(
+    transport: Arc<ClusterPubsubListenerTransport>,
     state: Arc<AppState>,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
-    if !state.cluster.is_enabled() {
+    if !transport.is_enabled() {
         return Ok(());
     }
-    let result = listen_once(Arc::clone(&state), cancel.clone(), heartbeat).await;
+    let result = listen_once(
+        Arc::clone(&transport),
+        Arc::clone(&state),
+        cancel.clone(),
+        heartbeat,
+    )
+    .await;
     if cancel.is_cancelled() {
         return result;
     }
@@ -5946,18 +6022,8 @@ pub async fn run_pubsub_listener(
         Ok(()) => anyhow::anyhow!("Redis PubSub stream ended unexpectedly"),
         Err(error) => error,
     };
-    let rotation_already_required = state
-        .cluster
-        .health
-        .listener_generation
-        .load(Ordering::Acquire)
-        < state
-            .cluster
-            .health
-            .required_listener_generation
-            .load(Ordering::Acquire);
-    if !rotation_already_required {
-        state.cluster.record_listener_failure(&error);
+    if !transport.rotation_already_required() {
+        transport.record_listener_failure(&error);
     }
     Err(error)
 }
@@ -6818,36 +6884,36 @@ async fn complete_listener_responses(
 }
 
 async fn listen_once(
+    transport: Arc<ClusterPubsubListenerTransport>,
     state: Arc<AppState>,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
-    let client = state
-        .cluster
+    let client = transport
         .client
         .as_ref()
         .context("Redis listener started without a configured Redis client")?;
     // Register before any setup await: repeated failures can request rotation
     // without increasing the required generation again, so a fresh notified()
     // inside the loop could miss their notify_waiters() call.
-    let rotation = state.cluster.listener_rotation.notified();
+    let rotation = transport.listener_rotation.notified();
     tokio::pin!(rotation);
     rotation.as_mut().enable();
-    let (candidate_generation, rotation_epoch) = state.cluster.health.begin_listener_attempt();
+    let (candidate_generation, rotation_epoch) = transport.health.begin_listener_attempt();
     let mut redis_setup_timer = Some(state.start_cluster_redis_operation_timer());
     let mut pubsub_conn = open_pubsub(client).await?;
-    let channel = state.cluster.key(format!("node:{}", state.cluster.node_id));
-    let probe_channel = state.cluster.key(format!(
+    let channel = transport.key(format!("node:{}", transport.node_id));
+    let probe_channel = transport.key(format!(
         "listener_probe:{}:{}:{}",
-        state.cluster.node_id,
-        state.cluster.connection_uuid,
-        state.cluster.instance_epoch.load(Ordering::Acquire)
+        transport.node_id,
+        transport.connection_uuid,
+        transport.instance_epoch.load(Ordering::Acquire)
     ));
     subscribe_pubsub(&mut pubsub_conn, &channel).await?;
     subscribe_pubsub(&mut pubsub_conn, &probe_channel).await?;
     let (_pubsub_sink, mut stream) = pubsub_conn.split();
     let initial_probe = uuid::Uuid::new_v4().to_string();
-    publish_listener_probe(&state.cluster, &probe_channel, &initial_probe).await?;
+    publish_listener_probe(&transport, &probe_channel, &initial_probe).await?;
     let mut pending_probe = Some((
         initial_probe,
         tokio::time::Instant::now() + REDIS_CONNECT_TIMEOUT,
@@ -6873,8 +6939,7 @@ async fn listen_once(
         // This connection must be allowed to receive its initial self-loop
         // before publishing its generation. Comparing the last completed
         // generation here would reject every startup and recovery attempt.
-        if state
-            .cluster
+        if transport
             .health
             .listener_requires_rotation(candidate_generation)
         {
@@ -6908,7 +6973,7 @@ async fn listen_once(
                     "Redis PubSub self-loop probe remained outstanding"
                 );
                 let token = uuid::Uuid::new_v4().to_string();
-                publish_listener_probe(&state.cluster, &probe_channel, &token).await?;
+                publish_listener_probe(&transport, &probe_channel, &token).await?;
                 pending_probe = Some((
                     token,
                     tokio::time::Instant::now() + REDIS_CONNECT_TIMEOUT,
@@ -6935,9 +7000,7 @@ async fn listen_once(
             {
                 let (_, _, establishing) = pending_probe.take().expect("probe was present");
                 if establishing {
-                    state
-                        .cluster
-                        .confirm_listener_generation(candidate_generation, rotation_epoch)?;
+                    transport.confirm_generation(candidate_generation, rotation_epoch)?;
                     drop(redis_setup_timer.take());
                 }
                 heartbeat.ok();

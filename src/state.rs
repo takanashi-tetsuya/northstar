@@ -134,7 +134,9 @@ impl axum::extract::FromRef<Arc<AppState>> for OmemoRecoveryPollContext {
     }
 }
 pub(crate) mod api_queries;
+pub(crate) mod api_session_http;
 mod http_login_endpoint;
+pub(crate) mod http_registration_endpoint;
 pub(crate) use http_login_endpoint::HttpLoginEndpointContext;
 mod passkey_login_finish;
 pub(crate) use passkey_login_finish::PasskeyLoginFinishContext;
@@ -3183,9 +3185,9 @@ pub struct AppState {
     sasl_login_abuse_service: crate::services::login_abuse::SaslLoginAbuseService<
         db::login_abuse_repository::PostgresSaslLoginAbuseRepository,
     >,
-    passkey_login_abuse_service: crate::services::login_abuse::PasskeyLoginAbuseService<
+    passkey_login_abuse_service: Arc<crate::services::login_abuse::PasskeyLoginAbuseService<
         db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository,
-    >,
+    >>,
     /// Public, irreversible key IDs and the configured generation used by the
     /// readiness path to detect a node that drifted from PostgreSQL authority.
     abuse_key_deployment: Option<db::AbuseKeyDeploymentIdentity>,
@@ -3279,21 +3281,9 @@ fn ephemeral_api_control_secret() -> [u8; 64] {
 }
 
 impl AppState {
-    pub(crate) fn record_http_registration_created(&self) {
-        self.metrics
-            .registrations_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
     pub(crate) fn record_http_rate_limited(&self) {
         self.metrics
             .rate_limited_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_http_capacity_rejected(&self) {
-        self.metrics
-            .capacity_reservations_rejected_total
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -3645,6 +3635,12 @@ impl AppState {
 
     pub(crate) fn cluster_workers_enabled(&self) -> bool {
         self.cluster.is_enabled()
+    }
+
+    pub(crate) fn cluster_pubsub_listener_transport(
+        &self,
+    ) -> crate::cluster::ClusterPubsubListenerTransport {
+        self.cluster.pubsub_listener_transport()
     }
 
     pub(crate) fn test_listener_activation_policy(
@@ -5505,12 +5501,13 @@ impl AppState {
                     &abuse,
                 )),
             ),
-            passkey_login_abuse_service:
+            passkey_login_abuse_service: Arc::new(
                 crate::services::login_abuse::PasskeyLoginAbuseService::new(
                     db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository::new(
                         Arc::clone(&abuse),
                     ),
                 ),
+            ),
             abuse_key_deployment,
             started_at,
             process_started_at,
@@ -5816,14 +5813,6 @@ impl AppState {
         &self.sasl_login_abuse_service
     }
 
-    pub(crate) fn passkey_login_abuse_service(
-        &self,
-    ) -> &crate::services::login_abuse::PasskeyLoginAbuseService<
-        db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository,
-    > {
-        &self.passkey_login_abuse_service
-    }
-
     pub(crate) fn public_discovery_context(&self) -> &PublicDiscoveryContext {
         &self.public_discovery_context
     }
@@ -5932,10 +5921,6 @@ impl AppState {
     ) -> &crate::services::replay::ReplayService<db::replay_repository::PostgresReplayRepository>
     {
         &self.replay_service
-    }
-
-    pub(crate) fn passkey_service(&self) -> &PasskeyService {
-        &self.passkey_service
     }
 
     pub(crate) fn roster_service(&self) -> &RosterService {

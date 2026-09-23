@@ -18,10 +18,14 @@ use crate::auth;
 use crate::db;
 use crate::error::{AppError, Result};
 use crate::services::challenge_issuance::ChallengeIssueRequest;
-use crate::state::{AppState, HttpLoginEndpointContext};
+use crate::state::{
+    api_session_http::ApiSessionHttpContext,
+    http_registration_endpoint::HttpRegistrationEndpointContext, AppState,
+    HttpLoginEndpointContext,
+};
 
 pub async fn register(
-    State(state): State<Arc<AppState>>,
+    State(context): State<HttpRegistrationEndpointContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     mut request: ApiJson<RegistrationRequest>,
@@ -45,11 +49,12 @@ pub async fn register(
     let pow_intent = body.pow_intent();
     let password = Zeroizing::new(std::mem::take(&mut request.value.password));
     let body = &request.value;
-    let peer_ip = client_ip(peer.ip(), &headers, &state);
+    let peer_ip =
+        super::client_ip_with_trusted_proxies(peer.ip(), &headers, context.trusted_proxies());
     let actors = vec![ip_actor(peer_ip)];
     let principal_scope = format!("registration:{peer_ip}");
-    let outcome = state
-        .account_service()
+    let outcome = context
+        .service()
         .register_http(HttpRegistrationRequest {
             idempotency: request.idempotency(
                 None,
@@ -65,22 +70,22 @@ pub async fn register(
             intent: &pow_intent,
             subject: &principal_scope,
             actors: &actors,
-            availability: state.http_registration_availability(),
+            availability: context.availability(),
         })
         .await?;
     match outcome {
         Outcome::Created(body) => {
-            state.record_http_registration_created();
+            context.created();
             json_bytes_response(StatusCode::CREATED, body)
         }
         Outcome::Rejected(body) => json_bytes_response(StatusCode::BAD_REQUEST, body),
         Outcome::Replay(response) => idempotency_replay_response(response),
         Outcome::AbuseDenied(error) => {
-            state.record_http_rate_limited();
+            context.abuse_denied();
             Err(rate_limited(error))
         }
         Outcome::CapacityExhausted => {
-            state.record_http_capacity_rejected();
+            context.capacity_exhausted();
             Err(AppError::TooManyRequests {
                 message: "deployment account capacity reached".into(),
                 retry_after: 3600,
@@ -213,15 +218,12 @@ pub async fn login(
 }
 
 pub async fn logout(
-    State(state): State<Arc<AppState>>,
+    State(state): State<ApiSessionHttpContext>,
     Extension(ApiRequestId(request_id)): Extension<ApiRequestId>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
     let token = bearer_token(&headers)?;
-    state
-        .api_session_service()
-        .logout(token, request_id)
-        .await?;
+    state.logout(token, request_id).await?;
     Ok(Json(json!({"logged_out":true})))
 }
 

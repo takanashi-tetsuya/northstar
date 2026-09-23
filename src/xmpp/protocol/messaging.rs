@@ -206,7 +206,7 @@ impl ProtocolSession {
             let admission_origin_id = direct_origin_id(root);
             let admission = self
                 .state
-                .abuse
+                .message_admission_service()
                 .begin_message_admission(&MessageAdmissionRequest {
                     actor_id: user.id,
                     account_bare: bare_jid(from),
@@ -1621,7 +1621,12 @@ impl ProtocolSession {
         let Some(lease) = lease.take() else {
             return;
         };
-        if let Err(error) = self.state.abuse.accept_message_admission(&lease).await {
+        if let Err(error) = self
+            .state
+            .message_admission_service()
+            .accept_message_admission(&lease)
+            .await
+        {
             // The route has already accepted the stanza. Returning an error
             // would encourage a duplicate retry, so expose the remaining
             // at-least-once recovery window only through logs and metrics.

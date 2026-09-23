@@ -1674,19 +1674,17 @@ impl ProtocolSession {
 
     async fn sasl_login_is_limited(&self, username: &str) -> Result<bool> {
         let actors = self.sasl_abuse_actors(Some(username));
-        let requirement = self
-            .state
-            .abuse
-            .current_requirement(crate::abuse::AbuseAction::Login, &actors)
-            .await?;
-        Ok(requirement.work_factor > 1 || requirement.retry_after_seconds > 0)
+        self.state
+            .sasl_login_abuse_service()
+            .is_limited(&actors)
+            .await
     }
 
     async fn record_sasl_failure(&self, username: Option<&str>) -> Result<()> {
         let actors = self.sasl_abuse_actors(username);
         self.state
-            .abuse
-            .record_failure(crate::abuse::AbuseAction::Login, &actors)
+            .sasl_login_abuse_service()
+            .record_failure(&actors)
             .await
     }
 

@@ -293,8 +293,13 @@ impl ProtocolSession {
                 }
                 let challenge = match self
                     .state
-                    .abuse
-                    .issue_v2(AbuseAction::Registration, &subject, &actors, &intent)
+                    .challenge_issue_service()
+                    .issue(crate::services::challenge_issuance::ChallengeIssueRequest {
+                        action: AbuseAction::Registration,
+                        subject: &subject,
+                        actors: &actors,
+                        intent: Some(&intent),
+                    })
                     .await
                 {
                     Ok(challenge) => Some(challenge),

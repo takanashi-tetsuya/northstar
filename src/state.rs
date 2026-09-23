@@ -1853,6 +1853,9 @@ pub struct AppState {
     /// protocol layer must not compose its own archive/outbox/offline writes.
     message_service:
         crate::services::messaging::MessageService<db::messaging::PostgresMessageRepository>,
+    message_admission_service: crate::services::message_admission::MessageAdmissionService<
+        db::message_admission_repository::PostgresMessageAdmissionRepository,
+    >,
     /// XEP-0424/XEP-0444 tombstone, action archive and federation admission
     /// transaction boundary.
     retraction_service: crate::services::retractions::RetractionService<
@@ -1905,6 +1908,10 @@ pub struct AppState {
     >,
     push_service: crate::services::push::PushService<db::push::PostgresPushRepository>,
     pub cluster: crate::cluster::ClusterManager,
+    account_revocation_consumer_service:
+        crate::services::account_revocation_consumer::AccountRevocationConsumerService<
+            db::account_revocation_repository::PostgresAccountRevocationRepository,
+        >,
     bosh: Option<crate::bosh::BoshManager>,
     pub sessions: Arc<DashMap<String, OnlineSession>>,
     pub muc_occupants: Arc<DashMap<String, MucOccupant>>,
@@ -2010,7 +2017,18 @@ pub struct AppState {
     s2s_connection_attempts: Arc<Semaphore>,
     component_connections: Arc<Semaphore>,
     connection_actors: crate::connection_actors::ConnectionActorRegistry,
-    pub abuse: Arc<AbuseGuard>,
+    challenge_issue_service: crate::services::challenge_issuance::ChallengeIssueService<
+        db::challenge_issuance_repository::PostgresChallengeRepository,
+    >,
+    challenge_cleanup_service: crate::services::challenge_issuance::ChallengeCleanupService<
+        db::challenge_issuance_repository::PostgresChallengeRepository,
+    >,
+    sasl_login_abuse_service: crate::services::login_abuse::SaslLoginAbuseService<
+        db::login_abuse_repository::PostgresSaslLoginAbuseRepository,
+    >,
+    passkey_login_abuse_service: crate::services::login_abuse::PasskeyLoginAbuseService<
+        db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository,
+    >,
     /// Public, irreversible key IDs and the configured generation used by the
     /// readiness path to detect a node that drifted from PostgreSQL authority.
     abuse_key_deployment: Option<db::AbuseKeyDeploymentIdentity>,
@@ -3317,6 +3335,18 @@ impl AppState {
                 Arc::clone(&abuse),
             ),
         );
+        let message_admission_service =
+            crate::services::message_admission::MessageAdmissionService::new(
+                db::message_admission_repository::PostgresMessageAdmissionRepository::new(
+                    Arc::clone(&abuse),
+                ),
+            );
+        let account_revocation_consumer_service =
+            crate::services::account_revocation_consumer::AccountRevocationConsumerService::new(
+                db::account_revocation_repository::PostgresAccountRevocationRepository::new(
+                    pool.clone(),
+                ),
+            );
         let state = Arc::new(Self {
             config,
             api_query_context,
@@ -3338,6 +3368,7 @@ impl AppState {
             extdisco_service,
             muc_service,
             message_service,
+            message_admission_service,
             retraction_service,
             mam_service,
             mix_service,
@@ -3378,6 +3409,7 @@ impl AppState {
             ),
             pool,
             cluster,
+            account_revocation_consumer_service,
             bosh,
             sessions,
             muc_occupants,
@@ -3436,7 +3468,29 @@ impl AppState {
             s2s_connection_attempts,
             component_connections,
             connection_actors,
-            abuse,
+            challenge_issue_service:
+                crate::services::challenge_issuance::ChallengeIssueService::new(
+                    db::challenge_issuance_repository::PostgresChallengeRepository::new(
+                        Arc::clone(&abuse),
+                    ),
+                ),
+            challenge_cleanup_service:
+                crate::services::challenge_issuance::ChallengeCleanupService::new(
+                    db::challenge_issuance_repository::PostgresChallengeRepository::new(
+                        Arc::clone(&abuse),
+                    ),
+                ),
+            sasl_login_abuse_service: crate::services::login_abuse::SaslLoginAbuseService::new(
+                db::login_abuse_repository::PostgresSaslLoginAbuseRepository::new(Arc::clone(
+                    &abuse,
+                )),
+            ),
+            passkey_login_abuse_service:
+                crate::services::login_abuse::PasskeyLoginAbuseService::new(
+                    db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository::new(
+                        Arc::clone(&abuse),
+                    ),
+                ),
             abuse_key_deployment,
             started_at,
             process_started_at,
@@ -3703,6 +3757,38 @@ impl AppState {
         )
     }
 
+    pub(crate) fn challenge_issue_service(
+        &self,
+    ) -> &crate::services::challenge_issuance::ChallengeIssueService<
+        db::challenge_issuance_repository::PostgresChallengeRepository,
+    > {
+        &self.challenge_issue_service
+    }
+
+    pub(crate) fn challenge_cleanup_service(
+        &self,
+    ) -> &crate::services::challenge_issuance::ChallengeCleanupService<
+        db::challenge_issuance_repository::PostgresChallengeRepository,
+    > {
+        &self.challenge_cleanup_service
+    }
+
+    pub(crate) fn sasl_login_abuse_service(
+        &self,
+    ) -> &crate::services::login_abuse::SaslLoginAbuseService<
+        db::login_abuse_repository::PostgresSaslLoginAbuseRepository,
+    > {
+        &self.sasl_login_abuse_service
+    }
+
+    pub(crate) fn passkey_login_abuse_service(
+        &self,
+    ) -> &crate::services::login_abuse::PasskeyLoginAbuseService<
+        db::login_abuse_repository::PostgresPasskeyLoginAbuseRepository,
+    > {
+        &self.passkey_login_abuse_service
+    }
+
     pub(crate) fn public_discovery_context(&self) -> &PublicDiscoveryContext {
         &self.public_discovery_context
     }
@@ -3764,6 +3850,14 @@ impl AppState {
         &self.message_service
     }
 
+    pub(crate) fn message_admission_service(
+        &self,
+    ) -> &crate::services::message_admission::MessageAdmissionService<
+        db::message_admission_repository::PostgresMessageAdmissionRepository,
+    > {
+        &self.message_admission_service
+    }
+
     pub(crate) fn retraction_service(
         &self,
     ) -> &crate::services::retractions::RetractionService<
@@ -3819,6 +3913,14 @@ impl AppState {
         db::s2s_roster_authorization_repository::PostgresFederatedRosterRepository,
     > {
         &self.s2s_roster_authorization_service
+    }
+
+    pub(crate) fn account_revocation_consumer_service(
+        &self,
+    ) -> &crate::services::account_revocation_consumer::AccountRevocationConsumerService<
+        db::account_revocation_repository::PostgresAccountRevocationRepository,
+    > {
+        &self.account_revocation_consumer_service
     }
 
     pub(crate) fn s2s_outbox_dispatch_service(

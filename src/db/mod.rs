@@ -27,6 +27,7 @@ pub(crate) static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migratio
 pub mod abuse_keys;
 pub mod account_deletion;
 pub mod account_repository;
+pub(crate) mod account_revocation_repository;
 pub mod account_revocations;
 pub mod admin_command_repository;
 pub mod admin_commands;
@@ -37,8 +38,10 @@ pub mod archive;
 pub mod authentication;
 pub mod authority_listener;
 pub mod authorization_identity;
+pub(crate) mod background_housekeeping_repository;
 pub mod capacity;
 pub(crate) mod capacity_maintenance_repository;
+pub(crate) mod challenge_issuance_repository;
 pub mod cluster_keys;
 pub mod cluster_muc;
 pub mod data_lifecycle;
@@ -46,7 +49,9 @@ pub mod fast;
 pub(crate) mod federation_outbox_repository;
 pub mod identity_migration;
 pub mod jid_identity;
+pub(crate) mod login_abuse_repository;
 pub(crate) mod mam;
+pub(crate) mod message_admission_repository;
 pub(crate) mod messaging;
 pub(crate) mod metrics_snapshot_repository;
 #[cfg(test)]

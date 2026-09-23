@@ -480,6 +480,16 @@ async fn run() -> Result<()> {
             )
         },
     );
+    let bg_housekeeping = Arc::new(
+        services::background_housekeeping::BackgroundHousekeepingContext::new(
+            db::background_housekeeping_repository::PostgresBackgroundHousekeepingRepository::new(
+                state.pool.clone(),
+            ),
+            state.config.moderation_retention_days,
+            state.config.retention_cleanup_batch_size,
+            Arc::clone(&state.metrics),
+        ),
+    );
     let bg_state = state.clone();
     let bg_cancel = cancel.clone();
     worker_registry.supervise(
@@ -489,6 +499,7 @@ async fn run() -> Result<()> {
         Some(std::time::Duration::from_secs(180)),
         cancel.clone(),
         move |heartbeat| {
+            let bg_housekeeping = Arc::clone(&bg_housekeeping);
             let bg_state = Arc::clone(&bg_state);
             let bg_cancel = bg_cancel.clone();
             async move {
@@ -502,60 +513,14 @@ async fn run() -> Result<()> {
                         .metrics
                         .background_maintenance_failures_total
                         .load(std::sync::atomic::Ordering::Relaxed);
-                    if let Err(error) = bg_state.abuse.cleanup_challenges().await {
+                    if let Err(error) = bg_state.challenge_cleanup_service().cleanup().await {
                         tracing::warn!(?error, "anti-abuse cleanup failed");
                         bg_state.metrics.background_maintenance_failures_total.fetch_add(
                             1,
                             std::sync::atomic::Ordering::Relaxed,
                         );
                     }
-                    match db::purge_resolved_moderation_batch(
-                        &bg_state.pool,
-                        bg_state.config.moderation_retention_days,
-                        bg_state.config.retention_cleanup_batch_size,
-                    ).await {
-                        Ok(deleted) if deleted > 0 => {
-                            bg_state.metrics.retention_moderation_cases_deleted_total.fetch_add(
-                                deleted,
-                                std::sync::atomic::Ordering::Relaxed,
-                            );
-                            tracing::info!(
-                                deleted,
-                                retention_days = bg_state.config.moderation_retention_days,
-                                "expired resolved moderation cases and evidence"
-                            );
-                        },
-                        Ok(_) => {},
-                        Err(error) => {
-                            tracing::error!(?error, "moderation retention cleanup failed");
-                            bg_state.metrics.background_maintenance_failures_total.fetch_add(
-                                1,
-                                std::sync::atomic::Ordering::Relaxed,
-                            );
-                        }
-                    }
-                    if let Err(e) = db::cleanup_expired_sessions(&bg_state.pool).await {
-                        tracing::error!("failed to cleanup expired sessions: {e}");
-                        bg_state.metrics.background_maintenance_failures_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    if let Err(e) = db::cleanup_expired_idempotency(&bg_state.pool, 1000).await {
-                        tracing::error!("failed to cleanup expired API idempotency records: {e}");
-                        bg_state.metrics.background_maintenance_failures_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    if let Err(e) = db::cleanup_fast_tokens(&bg_state.pool).await {
-                        tracing::error!("failed to cleanup expired FAST tokens: {e}");
-                        bg_state.metrics.background_maintenance_failures_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    if let Err(e) =
-                        db::cleanup_expired_user_agent_login_epoch_stages(&bg_state.pool, 1000)
-                            .await
-                    {
-                        tracing::error!("failed to cleanup staged user-agent login epochs: {e}");
-                        bg_state
-                            .metrics
-                            .background_maintenance_failures_total
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
+                    bg_housekeeping.sweep_database().await;
                     if let Err(e) = bg_state.admin_command_service().cleanup_sessions().await {
                         tracing::error!("failed to cleanup expired admin command sessions: {e}");
                         bg_state.metrics.background_maintenance_failures_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

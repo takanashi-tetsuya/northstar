@@ -142,7 +142,7 @@ closes the listener and joins/aborts every accepted connection.
 | Layer | Accepted input | Owned capability | Explicitly forbidden | Transaction or failure boundary | Supervisor | Actual isolation | Remaining shared authority |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | configuration/secret loader | CLI, environment, `.env` and secret files | syntax/semantic validation, file checks, single ownership transfer and zeroization | logging, cloning or leaving raw secret values in shared configuration | failure precedes every listener | top-level `main` | initialization phase in runtime process | secrets coexist briefly while state is constructed |
-| `AppState` assembly | validated configuration, pools, routers, stores and key owners | compose services and process-local routing capabilities | becoming an unconstrained public service locator | construction is all-or-nothing before listener start | top-level `main` | Rust private fields/accessors | seven reviewed public capabilities remain listed below |
+| `AppState` assembly | validated configuration, pools, routers, stores and key owners | compose services and process-local routing capabilities | becoming an unconstrained public service locator | construction is all-or-nothing before listener start | top-level `main` | Rust private fields/accessors | six reviewed public capabilities remain listed below |
 | XMPP/BOSH/WebSocket transport adapters | untrusted TCP/TLS bytes, XMPP HTTP frames, peer/proxy identity | framing, size/depth/time budgets, TLS provenance and connection lifetime | business SQL, archive policy and account authorization | per-connection failure closes that connection; listener exit is service-fatal | top-level listener set plus connection actor registry | Tokio tasks in runtime process | shares memory with protocol and services; the REST edge is tracked separately because legacy routes still own direct database access |
 | protocol session | framed XML plus authenticated transport state | stream/SASL/bind/SM state machine, stanza parsing, XMPP errors and resource-ordering | production `db::*` authority, SQLx, `PgPool` and `state.pool` | one connection actor; durable resume is delegated to SM service | connection actor registry | Rust module/static gate | may call typed `AppState` services and live routing; `#[cfg(test)]` is outside zero-reference count |
 | application service | prepared identities/commands from protocol or HTTP | authorization snapshot, policy, transaction intent and typed result | parsing raw transport frames or exposing raw transactions upward | service method defines one business operation and its commit-before-side-effect rule | caller task or dedicated worker | private Rust capability; personal-message and MUC-discussion paths already use injected repository ports | several services still embed SQLx/`PgPool` transaction work that should move into repository ports; services share the runtime role/pool |
@@ -154,7 +154,7 @@ closes the listener and joins/aborts every accepted connection.
 ### Reviewed public `AppState` capabilities
 
 The architecture gate now checks the names, not only the count. Replacing one
-field with a different public capability fails CI even if the total stays seven.
+field with a different public capability fails CI even if the total stays six.
 
 | Public field | Why it remains public | Target direction |
 | --- | --- | --- |
@@ -164,7 +164,6 @@ field with a different public capability fails CI even if the total stays seven.
 | `sessions` | exact local-resource routing table | hide behind a live-session registry API |
 | `muc_occupants` | process-local MUC route/occupancy projection | hide behind a MUC live-routing port |
 | `metrics` | fixed-cardinality counters are updated across hot paths | pass narrow metric handles or event sinks |
-| `abuse` | pre-pool admission and action policy spans multiple ingress paths | expose action-specific admission ports |
 
 Private `AppState` fields include database keyrings, FAST/Dialback material,
 stores, component credentials, service objects and worker registry. Protocol
@@ -442,15 +441,19 @@ copy that coupling.
 | `RetentionPolicyContext` | user/MUC retention policy and operator ceilings | authorized reads and atomic policy/audit/replay writes | legal-hold/export or cleanup-worker authority |
 | `GovernanceContext` | legal-hold list, create and release; legal-hold and audit exports | exact authorization, signed continuation, export lease, audit and bounded response replay in repository transactions | raw pool, cursor keyring or broad application state in HTTP handlers |
 | `PublicDiscoveryContext` | public configuration and host metadata | startup policy with live registration and island-mode flags | database access, session maps and administrator secrets |
+| `BackgroundHousekeepingContext` | periodic moderation, session, idempotency, FAST and login-epoch cleanup | five independently committed repository operations with per-step failure reporting | rolling back a successful cleanup because a later step fails |
 | `HttpTransportPolicy` / `AdminGatewayVerifier` | trusted-proxy transport admission and administrator gateway authentication | rejection counter and exact gateway credential comparison | general application state or passing the gateway credential to handlers |
 | `metrics_snapshot_service()` | coherent database-backed `/metrics` gauges | one read-only repeatable-read transaction in its repository | rendering HTTP, opening a second pool connection or publishing partial gauges after failure |
 | `readiness_service()` | persisted security-authority and cleanup readiness | bounded abuse-key, cluster-key and administrator-cleanup repository probes | process-local admission checks, caching and HTTP response mapping |
 | `api_session_service()` | audited logout | session deletion and audit in one repository transaction | exposing an open transaction to HTTP handlers |
+| `challenge_issue_service()` / `challenge_cleanup_service()` | challenge issuance for HTTP/XMPP and background expiry | separate issue and cleanup grants over the private abuse guard | exposing arbitrary failure recording or proof verification to these callers |
+| `sasl_login_abuse_service()` / `passkey_login_abuse_service()` | login-specific SASL penalty and Passkey proof decisions | distinct read/failure and proof-verification grants | exposing a general abuse guard to either ingress |
 | `password_change_service()` | authenticated password change, abuse proof and exact request replay | credential-generation checks, proof admission, password publication and response commit in repository-owned transactions | socket teardown and HTTP response mapping |
 | `login_service()` | password login, abuse proof and exact request replay | reservation and proof commits, bounded verifier work, then account/session publication in a repository transaction | HTTP response construction and transport metrics |
 | `operation_muc_destroy_service()` | exact room-destruction intent and authority validation | advisory and room locks, deletion, intent completion and audit in one repository transaction | cluster wake and in-memory occupant cleanup before commit |
 | `operation_effect_fence_service()` | point-of-no-return authorization for administrator effects | parent authorization, target fence and denial acknowledgements in one transaction before effect execution | starting an external effect before its durable fence commits |
 | `admin_session_cleanup_worker_service()` | administrator session-cleanup claim and exact lease fence | claim, renewal, completion, retry and target-current query through a PostgreSQL repository | local or cluster delivery inside a database call |
+| `account_revocation_consumer_service()` | committed account-revocation consumption | exact instance snapshot, local route revocation before revision ACK and bounded continuation | ACK before local sessions are fenced |
 | `s2s_roster_authorization_service()` | recipient roster visibility for inbound federation presence and IQ | scoped roster lookup in its PostgreSQL repository | transport framing, socket delivery and unrestricted database reads |
 | `s2s_outbox_dispatch_service()` | S2S/component outbox claims, lease renewal, completion and retry | fenced dispatch transitions and per-domain admission through one repository | socket writes and cluster policy changes inside database transactions |
 | `s2s_sm_outbox_service()` | XEP-0198 S2S outbox lease renewal and acknowledgement | exact fenced renewal and completion through a PostgreSQL repository | advancing SM counters after a lost lease fence |
@@ -462,6 +465,7 @@ copy that coupling.
 | `account_service()` | registration mode, pre-hash registration guard, invitation/account lifecycle and password-change authorization | guard proof and idempotency lease transaction; user/credential mutations and account-operation transitions | HTTP response mapping and session socket closure, which is requested only after commit |
 | `admin_command_service()` | command session authorization and command semantics | command-role routines and command-session cleanup | general runtime table access or HTTP administrator authentication |
 | `message_service()` | canonical message admission, storage policy, recipient visibility and delivery-plan construction | injected message repository; personal-history/admission/archive/offline/C2S/S2S and invitation atomic paths | socket queue ownership and protocol error serialization |
+| `message_admission_service()` | rated-message proof lease | begin before routing, accept only after a route takes responsibility | returning retryable stanza errors after post-accept finalization fails |
 | `retraction_service()` | who may retract which stable message identity | tombstone/archive/outbox transaction | editing already delivered client state directly |
 | `replay_service()` | replay eligibility, ordering and durable delivery-fence transfer | offline/C2S claim and acknowledgement transitions | creating new business messages during replay |
 | `sm_service()` | XEP-0198 enable/resume/ack/teardown state transitions | durable resume suffix, capacity and teardown routines | owning the current TCP socket before explicit transfer |
@@ -774,7 +778,7 @@ Use these rules before adding a module, dependency or public field:
 
 Every public feature also updates the smallest applicable set of tests,
 metrics, logs, README/operations, OpenAPI and `XEP_MATRIX.md`. The current
-exception classes—seven public `AppState` capabilities, direct REST persistence
+exception classes—six public `AppState` capabilities, direct REST persistence
 and embedded service/runtime repository work—must decrease over time and may
 not be copied into new work.
 
@@ -782,7 +786,7 @@ not be copied into new work.
 
 Remaining architecture work:
 
-1. The seven public `AppState` fields still form a broad same-process authority.
+1. The six public `AppState` fields still form a broad same-process authority.
 2. Operation/background paths still hold `Arc<AppState>` where narrower ports
    would make transaction and failure ownership clearer.
 3. Some REST routes still own direct pool/transaction access instead of a

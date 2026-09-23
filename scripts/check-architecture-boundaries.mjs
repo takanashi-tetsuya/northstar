@@ -264,10 +264,9 @@ const publicFieldNames = [
 
 // Public capability counts may only decrease as service boundaries narrow.
 // New work must use application services without raising these ceilings.
-const MAX_APP_STATE_PUBLIC_FIELDS = 7;
+const MAX_APP_STATE_PUBLIC_FIELDS = 6;
 const MAX_APP_STATE_CRATE_PUBLIC_FIELDS = 0;
 const EXPECTED_APP_STATE_PUBLIC_CAPABILITIES = [
-  'abuse',
   'cluster',
   'config',
   'metrics',
@@ -3154,11 +3153,16 @@ const stateServiceAccessors = [
   'metrics_snapshot_service',
   'readiness_service',
   'api_session_service',
+  'challenge_issue_service',
+  'challenge_cleanup_service',
+  'sasl_login_abuse_service',
+  'passkey_login_abuse_service',
   'password_change_service',
   'login_service',
   'operation_muc_destroy_service',
   'operation_effect_fence_service',
   'admin_session_cleanup_worker_service',
+  'account_revocation_consumer_service',
   's2s_roster_authorization_service',
   's2s_outbox_dispatch_service',
   's2s_sm_outbox_service',
@@ -3169,6 +3173,7 @@ const stateServiceAccessors = [
   'account_service',
   'admin_command_service',
   'message_service',
+  'message_admission_service',
   'retraction_service',
   'replay_service',
   'sm_service',

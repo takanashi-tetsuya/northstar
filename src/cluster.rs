@@ -1433,6 +1433,17 @@ impl ClusterManager {
         Arc::clone(&self.account_revocation_notify)
     }
 
+    pub(crate) fn account_revocation_consumer_identity(
+        &self,
+    ) -> crate::services::account_revocation_consumer::AccountRevocationConsumerIdentity {
+        crate::services::account_revocation_consumer::AccountRevocationConsumerIdentity {
+            domain: self.namespace.clone(),
+            node_id: self.node_id.clone(),
+            instance_uuid: self.connection_uuid,
+            instance_epoch: self.instance_epoch.load(Ordering::Acquire),
+        }
+    }
+
     pub fn is_enabled(&self) -> bool {
         self.pool.is_some()
     }
@@ -5374,7 +5385,7 @@ pub(crate) async fn run_account_revocations(
                 // A replaced process cannot host live sessions. Its queue can
                 // be removed, but an expired lease alone is not replacement.
                 match tokio::time::timeout(Duration::from_secs(2),
-                    crate::db::account_revocations::cleanup(&state.pool)).await {
+                    state.account_revocation_consumer_service().cleanup()).await {
                     Ok(Ok(())) => {},
                     error => tracing::warn!(?error, "account revocation queue cleanup deferred"),
                 }
@@ -5382,37 +5393,14 @@ pub(crate) async fn run_account_revocations(
             }
         }
         let consume = async {
-            let cluster = &state.cluster;
-            let epoch = cluster.instance_epoch.load(Ordering::Acquire);
-            let events = crate::db::account_revocations::pending(
-                &state.pool,
-                &state.config.domain,
-                &cluster.node_id,
-                cluster.connection_uuid,
-                epoch,
-            )
-            .await?;
-            let mut revisions = Vec::with_capacity(events.len());
-            for event in events {
-                state.revoke_local_account_routes(
-                    event.user_id,
-                    &format!("{}@{}", event.username, state.config.domain),
-                    (!event.account_deleted).then_some(event.before_generation),
-                );
-                revisions.push(event.revision);
-            }
-            if !revisions.is_empty() {
-                crate::db::account_revocations::acknowledge(
-                    &state.pool,
-                    &state.config.domain,
-                    &cluster.node_id,
-                    cluster.connection_uuid,
-                    epoch,
-                    &revisions,
-                )
+            let identity = state.cluster.account_revocation_consumer_identity();
+            let more = state
+                .account_revocation_consumer_service()
+                .consume_batch(&identity, |user_id, bare_jid, before_generation| {
+                    state.revoke_local_account_routes(user_id, bare_jid, before_generation);
+                })
                 .await?;
-            }
-            if revisions.len() == 256 {
+            if more {
                 notify.notify_one();
             }
             Ok::<(), anyhow::Error>(())
@@ -8167,6 +8155,27 @@ mod tests {
             .await
             .unwrap();
         assert!(cluster.readiness_authority_snapshot().is_none());
+    }
+
+    #[tokio::test]
+    async fn account_revocation_identity_snapshots_instance_epoch() {
+        let cluster = ClusterManager::new(None, "example.test", None, None, None, None)
+            .await
+            .unwrap();
+        cluster.instance_epoch.store(17, Ordering::Release);
+        let identity = cluster.account_revocation_consumer_identity();
+        cluster.instance_epoch.store(18, Ordering::Release);
+
+        assert_eq!(identity.domain, "example.test");
+        assert_eq!(identity.node_id, cluster.node_id);
+        assert_eq!(identity.instance_uuid, cluster.connection_uuid);
+        assert_eq!(identity.instance_epoch, 17);
+        assert_eq!(
+            cluster
+                .account_revocation_consumer_identity()
+                .instance_epoch,
+            18
+        );
     }
 
     #[tokio::test]

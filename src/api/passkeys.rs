@@ -57,8 +57,8 @@ async fn guard_start(
         .ok_or(AppError::Unauthorized)?;
     let intent = crate::abuse::PowIntent::http_json(AbuseAction::Login, path, body);
     state
-        .abuse
-        .verify_or_allow_v2(AbuseAction::Login, &subject, &actors, proof, &intent)
+        .passkey_login_abuse_service()
+        .verify(&subject, &actors, proof, &intent)
         .await?
         .map_err(rate_limited)?;
     Ok(())

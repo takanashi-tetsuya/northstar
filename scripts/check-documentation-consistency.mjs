@@ -367,7 +367,7 @@ for (const marker of [
   '`sessions`',
   '`muc_occupants`',
   '`metrics`',
-  '`abuse`',
+  '`challenge_issue_service()`',
   '`tls_context()`',
   '`federation_outbox()`',
 ]) {

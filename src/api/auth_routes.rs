@@ -17,6 +17,7 @@ use crate::abuse::AbuseAction;
 use crate::auth;
 use crate::db;
 use crate::error::{AppError, Result};
+use crate::services::challenge_issuance::ChallengeIssueRequest;
 use crate::state::AppState;
 
 pub async fn register(
@@ -274,17 +275,21 @@ pub async fn anti_abuse_challenge(
         .metrics
         .anti_abuse_challenges_total
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let issued = match body.intent.as_ref() {
-        Some(requested) => {
-            let intent = crate::abuse::PowIntent::from_request(action, requested)
-                .map_err(|error| AppError::BadRequest(error.to_string()))?;
-            state
-                .abuse
-                .issue_v2(action, &subject, &actors, &intent)
-                .await
-        }
-        None => state.abuse.issue(action, &subject, &actors).await,
-    };
+    let intent = body
+        .intent
+        .as_ref()
+        .map(|requested| crate::abuse::PowIntent::from_request(action, requested))
+        .transpose()
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    let issued = state
+        .challenge_issue_service()
+        .issue(ChallengeIssueRequest {
+            action,
+            subject: &subject,
+            actors: &actors,
+            intent: intent.as_ref(),
+        })
+        .await;
     let challenge = match issued {
         Ok(challenge) => challenge,
         Err(error) => {

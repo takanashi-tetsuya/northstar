@@ -111,7 +111,7 @@ in large root orchestration modules and infrastructure ownership:
   traits;
 - transport actors still reach a broad protocol session object.
 
-`AppState` has been reduced to seven public fields and protocol modules have no
+`AppState` has been reduced to six public fields and protocol modules have no
 direct `db::`, `PgPool`, SQLx or `state.pool` authority according to the
 architecture gate. This is an intermediate boundary, not the final service
 graph.
@@ -440,12 +440,18 @@ renewal, acknowledgement, claims and retries. Administrator session-cleanup
 leases and the operation point-of-no-return transaction use separate worker
 services; effects still start after the durable fence commits. XEP-0215
 service selection and authorization now belong to the ExtDisco service.
-Remaining work includes the other S2S and operation transactions, live-session
-and account-recovery workers, and the seven broad AppState capabilities.
+Background housekeeping retains five independent database cleanup steps behind
+a worker context. The account-revocation consumer uses one cluster-instance
+snapshot through read, local fencing and exact revision acknowledgement.
+Message admission, challenge issuance/cleanup, SASL penalties and Passkey proof
+checks now expose separate grants over the anti-abuse owner, removing the
+public `AppState.abuse` field. Remaining work includes the other S2S and
+operation transactions, live-session and account-recovery workers, and the
+six broad AppState capabilities.
 TLS now sits behind a private context with immutable handshake snapshots and
 the existing current-CRL registration check. Federation outbox admission now
 uses an application service and a database repository; callers receive a
-copied policy and post-commit wake capability. AppState still has seven public
+copied policy and post-commit wake capability. AppState still has six public
 fields, so stage 1 remains open. Changing field visibility alone does not
 demonstrate reduced authority.
 

@@ -1968,6 +1968,10 @@ pub struct AppState {
         crate::services::session_authority_sweep::SessionAuthoritySweepService<
             db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
         >,
+    session_termination_authority_service:
+        crate::services::session_termination_authority::SessionTerminationAuthorityService<
+            db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository,
+        >,
     bosh: Option<crate::bosh::BoshManager>,
     pub sessions: Arc<DashMap<String, OnlineSession>>,
     pub muc_occupants: Arc<DashMap<String, MucOccupant>>,
@@ -2196,6 +2200,58 @@ impl AppState {
         db::metrics_snapshot_repository::PostgresMetricsSnapshotRepository,
     > {
         &self.metrics_snapshot_service
+    }
+
+    pub(crate) fn record_database_metrics_ping(&self, duration: Duration) {
+        self.metrics
+            .database_operation_duration_seconds
+            .observe(duration);
+    }
+
+    pub(crate) fn process_gauge_snapshot(
+        &self,
+    ) -> crate::services::metrics_snapshot::ProcessGaugeSnapshot {
+        let (tls_not_after, tls_generation) = self.tls_context.leaf_status();
+        let certificate_sessions = self.tls_context.certificate_session_metrics();
+        let now_unix = chrono::Utc::now().timestamp();
+        let tls_seconds_remaining = tls_not_after.saturating_sub(now_unix).max(0);
+        let cluster = self.cluster.metrics_snapshot();
+        let base_metrics = self.metrics.render();
+        crate::services::metrics_snapshot::ProcessGaugeSnapshot {
+            base_metrics,
+            database_max_connections: self.config.database_max_connections,
+            s2s_outbox_max_rows: self.config.s2s_outbox_max_rows,
+            s2s_outbox_max_bytes: self.config.s2s_outbox_max_bytes,
+            s2s_outbox_max_per_domain: self.config.s2s_outbox_max_per_domain,
+            muc_occupants: self.muc_occupants.len(),
+            federation_outbound_workers: self.s2s_connection_registry.outbound_count(),
+            uptime_seconds: self.uptime().as_secs(),
+            tls_not_after,
+            tls_seconds_remaining,
+            tls_generation,
+            certificate_sessions,
+            cluster,
+        }
+    }
+
+    pub(crate) fn sm_recovery_gauge_snapshot(
+        &self,
+    ) -> crate::services::metrics_snapshot::SmRecoveryGaugeSnapshot {
+        let governor = &self.sm_memory_governor;
+        let metrics = governor.metrics();
+        let recovery = self.sm_suspension_recovery.snapshot();
+        crate::services::metrics_snapshot::SmRecoveryGaugeSnapshot {
+            reserved_bytes: metrics.reserved_bytes.load(Ordering::Relaxed),
+            limit_bytes: governor.max_bytes(),
+            peak_reserved_bytes: metrics.peak_reserved_bytes.load(Ordering::Relaxed),
+            admission_rejections_total: metrics.admission_rejections_total.load(Ordering::Relaxed),
+            invariant_failures_total: metrics.invariant_failures_total.load(Ordering::Relaxed),
+            recovery_jobs: recovery.jobs,
+            recovery_job_limit: governor.max_recovery_jobs(),
+            recovery_bytes: recovery.bytes,
+            recovery_byte_limit: governor.max_recovery_bytes(),
+            recovery_oldest_age_seconds: recovery.oldest_age_seconds,
+        }
     }
 
     pub(crate) fn readiness_context(&self) -> ReadinessContext {
@@ -3423,6 +3479,12 @@ impl AppState {
                     pool.clone(),
                 ),
             );
+        let session_termination_authority_service =
+            crate::services::session_termination_authority::SessionTerminationAuthorityService::new(
+                db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository::new(
+                    pool.clone(),
+                ),
+            );
         let state = Arc::new(Self {
             config,
             api_query_context,
@@ -3487,6 +3549,7 @@ impl AppState {
             cluster,
             account_revocation_consumer_service,
             session_authority_sweep_service,
+            session_termination_authority_service,
             bosh,
             sessions,
             muc_occupants,
@@ -4007,6 +4070,14 @@ impl AppState {
         db::session_authority_sweep_repository::PostgresSessionAuthoritySweepRepository,
     > {
         &self.session_authority_sweep_service
+    }
+
+    pub(crate) fn session_termination_authority_service(
+        &self,
+    ) -> &crate::services::session_termination_authority::SessionTerminationAuthorityService<
+        db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository,
+    > {
+        &self.session_termination_authority_service
     }
 
     pub(crate) fn s2s_outbox_dispatch_service(

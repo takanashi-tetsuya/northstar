@@ -332,6 +332,7 @@ for (const field of [
   'push_service',
   'extdisco_service',
   'session_authority_sweep_service',
+  'session_termination_authority_service',
   'operation_journal_worker_service',
   'component_credentials',
   'components',
@@ -3112,6 +3113,11 @@ if (!readinessEndpoint.includes('context: ReadinessContext')
   throw new Error('readiness listeners must receive only a narrow read-only runtime context');
 }
 const clusterMaintenance = structBody(read('src/cluster.rs'), 'async fn maintenance_once(');
+const clusterListener = structBody(read('src/cluster.rs'), 'async fn listen_once(');
+if (clusterListener.includes('db::cluster_session_route_authority(')
+    || !clusterListener.includes('.session_termination_authority_service()')) {
+  throw new Error('signed session termination must re-read exact route authority through its service');
+}
 if (!clusterMaintenance.includes('.session_authority_sweep_service()')
     || /(?:crate::)?db::(?:auth_states_for_users|user_agent_login_epochs)\s*\(/.test(clusterMaintenance)) {
   throw new Error('cluster credential maintenance must use the read-only session authority service');
@@ -3187,6 +3193,7 @@ const stateServiceAccessors = [
   'admin_session_cleanup_worker_service',
   'account_revocation_consumer_service',
   'session_authority_sweep_service',
+  'session_termination_authority_service',
   'operation_journal_worker_service',
   's2s_roster_authorization_service',
   's2s_outbox_dispatch_service',

@@ -88,6 +88,7 @@ pub(crate) mod s2s_sm_outbox_repository;
 pub mod schema;
 pub(crate) mod session_authority_sweep_repository;
 pub mod session_identity;
+pub(crate) mod session_termination_authority_repository;
 pub mod sm;
 pub mod sm_repository;
 pub mod upload;

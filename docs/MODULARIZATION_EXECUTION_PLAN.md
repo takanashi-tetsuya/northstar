@@ -418,8 +418,9 @@ policy and verifier. The discovery context shares the live registration and
 island-mode flags, so administrative changes remain visible without broad state.
 The database-backed metrics collector now calls a snapshot service; one
 repository transaction reads all gauges, while the endpoint retains its
-existing deadline and failure response. Its remaining process gauges still
-use broader state.
+existing deadline and failure response. Process and stream-recovery gauges
+are copied into narrow snapshots before rendering; the HTTP adapter no longer
+reads the corresponding public state fields.
 HTTP registration now routes reservation, the pre-hash PoW/idempotency guard,
 account publication and exact 201/400 response replay through `AccountService`
 and its PostgreSQL repository. Reservation and guard each commit before password
@@ -461,6 +462,9 @@ history now use the message service. Administrator target claim, lease renewal,
 settlement and parent terminalization use a journal worker service. Its
 initial claim and target snapshot now share one repository transaction;
 the live-session snapshot is taken only after a successful claim.
+The signed cluster session-termination listener reads durable route authority
+through a dedicated service and repository. It checks the live local instance
+after that read, then retains connection fencing and acknowledgement ownership.
 Remaining work includes live-session and account-recovery workers and the six
 broad AppState capabilities.
 TLS now sits behind a private context with immutable handshake snapshots and

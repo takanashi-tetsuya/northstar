@@ -40,6 +40,7 @@ pub(crate) mod s2s_roster_authorization;
 pub(crate) mod s2s_sm_outbox;
 pub(crate) mod session_authority_sweep;
 pub(crate) mod session_cleanup;
+pub(crate) mod session_termination_authority;
 pub(crate) mod sm;
 pub(crate) mod sm_capacity;
 pub(crate) mod upload;

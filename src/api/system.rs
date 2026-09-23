@@ -357,10 +357,7 @@ async fn collect_metrics(state: &AppState) -> String {
     .await
     .is_ok_and(|result| result.is_ok());
     let database_ping_duration = ping_started.elapsed();
-    state
-        .metrics
-        .database_operation_duration_seconds
-        .observe(database_ping_duration);
+    state.record_database_metrics_ping(database_ping_duration);
     let database_ping_seconds = database_ping_duration.as_secs_f64();
     let pool_status = state.metrics_snapshot_service().pool_status();
     let component_domains = state.configured_component_domains();
@@ -380,138 +377,20 @@ async fn collect_metrics(state: &AppState) -> String {
             None
         }
     };
-    let (tls_not_after, tls_generation) = state.tls_context().leaf_status();
-    let certificate_sessions = state.tls_context().certificate_session_metrics();
-    let now_unix = chrono::Utc::now().timestamp();
-    let tls_seconds_remaining = tls_not_after.saturating_sub(now_unix).max(0);
-    let cluster = state.cluster.metrics_snapshot();
-    let mut body = state.metrics.render();
-    body.push_str(&format!(
-        concat!(
-            "# TYPE xmpp_database_up gauge\n",
-            "xmpp_database_up {}\n",
-            "# TYPE xmpp_database_ping_duration_seconds gauge\n",
-            "xmpp_database_ping_duration_seconds {:.6}\n",
-            "# TYPE xmpp_database_pool_connections gauge\n",
-            "xmpp_database_pool_connections {}\n",
-            "# TYPE xmpp_database_pool_idle_connections gauge\n",
-            "xmpp_database_pool_idle_connections {}\n",
-            "# TYPE xmpp_database_pool_max_connections gauge\n",
-            "xmpp_database_pool_max_connections {}\n",
-            "# TYPE xmpp_s2s_outbox_max_rows gauge\n",
-            "xmpp_s2s_outbox_max_rows {}\n",
-            "# TYPE xmpp_s2s_outbox_max_bytes gauge\n",
-            "xmpp_s2s_outbox_max_bytes {}\n",
-            "# TYPE xmpp_s2s_outbox_max_per_domain gauge\n",
-            "xmpp_s2s_outbox_max_per_domain {}\n",
-            "# TYPE xmpp_muc_occupants gauge\n",
-            "xmpp_muc_occupants {}\n",
-            "# TYPE xmpp_federation_outbound_workers gauge\n",
-            "xmpp_federation_outbound_workers {}\n",
-            "# TYPE xmpp_uptime_seconds gauge\n",
-            "xmpp_uptime_seconds {}\n",
-            "# TYPE xmpp_tls_certificate_not_after_seconds gauge\n",
-            "xmpp_tls_certificate_not_after_seconds {}\n",
-            "# TYPE xmpp_tls_certificate_seconds_until_expiry gauge\n",
-            "xmpp_tls_certificate_seconds_until_expiry {}\n",
-            "# TYPE xmpp_tls_generation gauge\n",
-            "xmpp_tls_generation {}\n",
-            "# TYPE xmpp_tls_certificate_authenticated_sessions gauge\n",
-            "xmpp_tls_certificate_authenticated_sessions {}\n",
-            "# TYPE xmpp_tls_c2s_external_sessions gauge\n",
-            "xmpp_tls_c2s_external_sessions {}\n",
-            "# TYPE xmpp_tls_inbound_s2s_external_sessions gauge\n",
-            "xmpp_tls_inbound_s2s_external_sessions {}\n",
-            "# TYPE xmpp_tls_outbound_s2s_external_sessions gauge\n",
-            "xmpp_tls_outbound_s2s_external_sessions {}\n",
-            "# TYPE xmpp_cluster_operational_state gauge\n",
-            "xmpp_cluster_operational_state {}\n",
-            "# TYPE xmpp_cluster_listener_generation gauge\n",
-            "xmpp_cluster_listener_generation {}\n",
-            "# TYPE xmpp_cluster_authentication_failures_total counter\n",
-            "xmpp_cluster_authentication_failures_total {}\n",
-            "# TYPE xmpp_cluster_replay_rejections_total counter\n",
-            "xmpp_cluster_replay_rejections_total {}\n",
-            "# TYPE xmpp_cluster_degraded_transitions_total counter\n",
-            "xmpp_cluster_degraded_transitions_total {}\n",
-            "# TYPE xmpp_cluster_incompatible_peer_versions_total counter\n",
-            "xmpp_cluster_incompatible_peer_versions_total {}\n"
-        ),
-        u8::from(database_up),
+    let process = state.process_gauge_snapshot();
+    let mut body = crate::services::metrics_snapshot::render_process_gauges(
+        database_up,
         database_ping_seconds,
-        pool_status.connections,
-        pool_status.idle_connections,
-        state.config.database_max_connections,
-        state.config.s2s_outbox_max_rows,
-        state.config.s2s_outbox_max_bytes,
-        state.config.s2s_outbox_max_per_domain,
-        state.muc_occupants.len(),
-        state.s2s_connection_registry().outbound_count(),
-        state.uptime().as_secs(),
-        tls_not_after,
-        tls_seconds_remaining,
-        tls_generation,
-        certificate_sessions.active,
-        certificate_sessions.c2s_external,
-        certificate_sessions.inbound_s2s_external,
-        certificate_sessions.outbound_s2s_external,
-        cluster.state,
-        cluster.listener_generation,
-        cluster.authentication_failures,
-        cluster.replay_rejections,
-        cluster.degraded_transitions,
-        cluster.incompatible_peer_versions,
-    ));
+        pool_status,
+        &process,
+    );
     body.push_str(&render_password_work_metrics(
         crate::password_work::rejections_total(),
     ));
     body.push_str(&crate::logging::render_metrics());
     body.push_str(&render_database_collector(collector.as_ref()));
-    let governor = state.sm_memory_governor();
-    let sm_metrics = governor.metrics();
-    let recovery = state.sm_suspension_recovery_queue().snapshot();
-    body.push_str(&format!(
-        concat!(
-            "# TYPE xmpp_sm_memory_reserved_bytes gauge\n",
-            "xmpp_sm_memory_reserved_bytes {}\n",
-            "# TYPE xmpp_sm_memory_limit_bytes gauge\n",
-            "xmpp_sm_memory_limit_bytes {}\n",
-            "# TYPE xmpp_sm_memory_peak_reserved_bytes gauge\n",
-            "xmpp_sm_memory_peak_reserved_bytes {}\n",
-            "# TYPE xmpp_sm_capacity_admission_rejections_total counter\n",
-            "xmpp_sm_capacity_admission_rejections_total {}\n",
-            "# TYPE xmpp_sm_capacity_invariant_failures_total counter\n",
-            "xmpp_sm_capacity_invariant_failures_total {}\n",
-            "# TYPE xmpp_sm_recovery_queue_jobs gauge\n",
-            "xmpp_sm_recovery_queue_jobs {}\n",
-            "# TYPE xmpp_sm_recovery_queue_job_limit gauge\n",
-            "xmpp_sm_recovery_queue_job_limit {}\n",
-            "# TYPE xmpp_sm_recovery_queue_bytes gauge\n",
-            "xmpp_sm_recovery_queue_bytes {}\n",
-            "# TYPE xmpp_sm_recovery_queue_byte_limit gauge\n",
-            "xmpp_sm_recovery_queue_byte_limit {}\n",
-            "# TYPE xmpp_sm_recovery_queue_oldest_age_seconds gauge\n",
-            "xmpp_sm_recovery_queue_oldest_age_seconds {}\n"
-        ),
-        sm_metrics
-            .reserved_bytes
-            .load(std::sync::atomic::Ordering::Relaxed),
-        governor.max_bytes(),
-        sm_metrics
-            .peak_reserved_bytes
-            .load(std::sync::atomic::Ordering::Relaxed),
-        sm_metrics
-            .admission_rejections_total
-            .load(std::sync::atomic::Ordering::Relaxed),
-        sm_metrics
-            .invariant_failures_total
-            .load(std::sync::atomic::Ordering::Relaxed),
-        recovery.jobs,
-        governor.max_recovery_jobs(),
-        recovery.bytes,
-        governor.max_recovery_bytes(),
-        recovery.oldest_age_seconds,
-    ));
+    let sm = state.sm_recovery_gauge_snapshot();
+    body.push_str(&crate::services::metrics_snapshot::render_sm_recovery_gauges(&sm));
     body
 }
 

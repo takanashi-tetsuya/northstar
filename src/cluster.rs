@@ -6908,31 +6908,26 @@ async fn listen_once(
             if let (Ok(target), Some(instance)) =
                 (crate::jid::canonical_session_key(target), instance)
             {
-                let authority = crate::db::cluster_session_route_authority(
-                    &state.pool,
-                    &state.cluster.namespace,
-                    &target,
-                )
-                .await?;
+                let authority = state
+                    .session_termination_authority_service()
+                    .authorize(&state.cluster.namespace, &target, instance, || {
+                        crate::services::session_termination_authority::LocalClusterInstance {
+                            node_id: state.cluster.node_id.clone(),
+                            instance_uuid: state.cluster.connection_uuid,
+                            instance_epoch: state.cluster.instance_epoch.load(Ordering::Acquire),
+                        }
+                    })
+                    .await?;
                 match authority {
-                    None => {
+                    crate::services::session_termination_authority::SessionTerminationAuthority::Absent => {
                         control_processed = Some(true);
                         control_outcome = Some(ClusterControlOutcome::AuthoritativelyAbsent);
                     }
-                    Some(authority) if authority.connection_uuid != instance => {
-                        control_processed = Some(true);
-                        control_outcome = Some(ClusterControlOutcome::AuthoritativelyAbsent);
-                    }
-                    Some(authority)
-                        if authority.owner_node_id != state.cluster.node_id
-                            || authority.owner_instance_uuid != state.cluster.connection_uuid
-                            || authority.owner_instance_epoch
-                                != state.cluster.instance_epoch.load(Ordering::Acquire) =>
-                    {
+                    crate::services::session_termination_authority::SessionTerminationAuthority::WrongOwner => {
                         control_processed = Some(false);
                         control_outcome = Some(ClusterControlOutcome::WrongOwner);
                     }
-                    Some(_) => {
+                    crate::services::session_termination_authority::SessionTerminationAuthority::Authorized => {
                         let matched = state.sessions.get_mut(&target).is_some_and(|session| {
                             if session_instance_control_revokes(session.connection_id, instance) {
                                 session.routable.store(false, Ordering::Release);

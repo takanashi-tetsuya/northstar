@@ -167,6 +167,11 @@ Key ownership:
   service, policy ceilings and read timers. Reads hold bearer/account locks
   through the policy snapshot; writes preserve policy, audit and replay in one
   transaction. Legal-hold/export endpoints still need persistence boundaries.
+- Deployment capacity renewal and expiry cleanup use a typed maintenance
+  service and PostgreSQL repository. Renewal snapshots exact route IDs and
+  cancellation tokens from the shared session map; the reaper has no session
+  map authority. Worker deadlines, election locks and cancellation behavior
+  remain unchanged.
 - Report and appeal services validate content before requesting a complete
   repository operation. Authorization, proof admission, semantic rejection or
   business mutation, and encrypted response replay share one transaction.

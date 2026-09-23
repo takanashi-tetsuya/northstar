@@ -1,3 +1,11 @@
+pub(crate) mod capacity_maintenance;
+pub(crate) type CapacityLeaseRenewalContext = capacity_maintenance::CapacityLeaseRenewalContext<
+    db::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
+>;
+pub(crate) type CapacityLeaseReaperContext = capacity_maintenance::CapacityLeaseReaperContext<
+    db::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
+>;
+
 pub(crate) type InvitationAdminContext = crate::services::invitation_admin::InvitationAdminService<
     db::invitation_admin_repository::PostgresInvitationAdminRepository,
 >;
@@ -2008,6 +2016,20 @@ fn ephemeral_api_control_secret() -> [u8; 64] {
 }
 
 impl AppState {
+    pub(crate) fn capacity_lease_renewal_context(&self) -> CapacityLeaseRenewalContext {
+        capacity_maintenance::CapacityLeaseRenewalContext::new(
+            crate::services::capacity_maintenance::CapacityMaintenanceService::new(
+                db::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository::new(
+                    self.pool.clone(),
+                ),
+            ),
+            Arc::clone(&self.sessions),
+            Arc::clone(&self.metrics),
+            Duration::from_secs(self.config.capacity_session_heartbeat_seconds),
+            self.config.capacity_session_lease_seconds,
+        )
+    }
+
     /// Process-local XEP-0124/XEP-0206 session authority. Transport handlers
     /// may submit bounded manager operations but cannot replace the manager.
     pub(crate) fn bosh_manager(&self) -> &crate::bosh::BoshManager {

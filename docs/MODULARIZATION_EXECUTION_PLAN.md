@@ -392,8 +392,11 @@ management and upload retry now use complete command ports and service-only
 HTTP contexts. Their shared database admission receives live cluster health
 without Redis publication authority. User/MUC retention policy endpoints use
 a dedicated policy context; policy reads now hold exact bearer/account locks
-through the snapshot. Legal holds, exports and the remaining runtime commands
-still need their own boundaries.
+through the snapshot. Deployment capacity lease renewal and expiry cleanup now
+use a typed maintenance service and PostgreSQL repository. The renewal context
+keeps only the shared route map needed to snapshot exact cancellation tokens;
+the reaper has no session-map authority. Legal holds, exports and the remaining
+runtime commands still need their own boundaries.
 Remaining work covers the other REST reads and mutations, their HTTP contexts,
 and live-session/account-recovery workers.
 AppState still has nine public fields, so stage 1 remains open. Changing field

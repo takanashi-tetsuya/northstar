@@ -1243,6 +1243,11 @@ mod tests {
             .await
             .unwrap();
         crate::db::migrate(&pool).await.unwrap();
+        let maintenance = crate::services::capacity_maintenance::CapacityMaintenanceService::new(
+            crate::db::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository::new(
+                pool.clone(),
+            ),
+        );
         let authority = DeploymentCapacityConfiguration {
             epoch: 1,
             accounts: 1,
@@ -1291,6 +1296,33 @@ mod tests {
             );
             tx.commit().await.unwrap();
         }
+        let absent = Uuid::new_v4();
+        assert_eq!(
+            maintenance
+                .renew_live_connections(&[first, second, absent], 120)
+                .await
+                .unwrap(),
+            HashSet::from([first, second]),
+        );
+        let mut elected_peer = pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock(1314079572,4)")
+            .execute(&mut *elected_peer)
+            .await
+            .unwrap();
+        let election =
+            tokio::time::timeout(Duration::from_secs(2), maintenance.try_reap_expired(10)).await;
+        // Release the peer before asserting, including on a timed-out query.
+        tokio::time::timeout(Duration::from_secs(5), elected_peer.rollback())
+            .await
+            .expect("capacity reaper fixture could not release its peer lock")
+            .unwrap();
+        assert_eq!(
+            election
+                .expect("capacity reaper election did not return promptly")
+                .unwrap(),
+            None
+        );
+
         let mut rejected = pool.begin().await.unwrap();
         assert_eq!(
             reserve_live_session_in_transaction(
@@ -1343,8 +1375,14 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        assert!(maintenance
+            .renew_live_connections(&[second], 120)
+            .await
+            .unwrap()
+            .is_empty());
         assert_eq!(
-            try_cleanup_expired_live_session_leases(&pool, 10)
+            maintenance
+                .try_reap_expired(10)
                 .await
                 .unwrap()
                 .expect("an isolated fixture must acquire the reaper role"),

@@ -29,6 +29,7 @@ pub mod authentication;
 pub mod authority_listener;
 pub mod authorization_identity;
 pub mod capacity;
+pub(crate) mod capacity_maintenance_repository;
 pub mod cluster_keys;
 pub mod cluster_muc;
 pub mod data_lifecycle;

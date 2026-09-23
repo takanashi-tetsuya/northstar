@@ -211,7 +211,7 @@ async fn execute_admin_session_cleanup(
             let bare_jid = crate::jid::CanonicalJid::parse_bare(bare_jid)
                 .context("generation cleanup has an invalid bare JID")?;
             anyhow::ensure!(
-                bare_jid.localpart().is_some() && bare_jid.domainpart() == state.config.domain,
+                bare_jid.localpart().is_some() && bare_jid.domainpart() == state.local_domain(),
                 "generation cleanup must target an account on the local XMPP domain"
             );
             state.revoke_local_account_routes(
@@ -239,7 +239,7 @@ async fn execute_admin_session_cleanup(
             anyhow::ensure!(
                 full_jid.localpart().is_some()
                     && full_jid.resourcepart().is_some()
-                    && full_jid.domainpart() == state.config.domain,
+                    && full_jid.domainpart() == state.local_domain(),
                 "exact cleanup must target a full account JID on the local XMPP domain"
             );
             let full_jid = full_jid.to_string();
@@ -578,44 +578,15 @@ async fn execute_effect(
             let outcome = match tokio::task::spawn_blocking(move || tls.reload()).await {
                 Ok(Ok(outcome)) => outcome,
                 Ok(Err(error)) => {
-                    state
-                        .metrics
-                        .tls_reload_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    state.record_tls_reload_failure();
                     return Err(error);
                 }
                 Err(error) => {
-                    state
-                        .metrics
-                        .tls_reload_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    state.record_tls_reload_failure();
                     return Err(error.into());
                 }
             };
-            state
-                .metrics
-                .tls_revocation_rechecks_total
-                .fetch_add(outcome.evaluated_sessions, Ordering::Relaxed);
-            state
-                .metrics
-                .tls_revocation_recheck_inconclusive_total
-                .fetch_add(outcome.inconclusive_rechecks, Ordering::Relaxed);
-            state
-                .metrics
-                .tls_revoked_sessions_drained_total
-                .fetch_add(outcome.drained_total(), Ordering::Relaxed);
-            state
-                .metrics
-                .tls_revoked_c2s_external_sessions_drained_total
-                .fetch_add(outcome.drained_c2s_external, Ordering::Relaxed);
-            state
-                .metrics
-                .tls_revoked_inbound_s2s_external_sessions_drained_total
-                .fetch_add(outcome.drained_inbound_s2s_external, Ordering::Relaxed);
-            state
-                .metrics
-                .tls_revoked_outbound_s2s_external_sessions_drained_total
-                .fetch_add(outcome.drained_outbound_s2s_external, Ordering::Relaxed);
+            state.record_tls_reload_revocations(&outcome);
             for session in &outcome.drained_sessions {
                 tracing::warn!(
                     operation_id = %operation.id,

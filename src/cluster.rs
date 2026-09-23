@@ -5463,10 +5463,7 @@ pub async fn run_maintenance(
                 if let Err(error) = maintenance {
                     state.cluster.record_control_plane_failure(&error);
                     heartbeat.error(&error);
-                    state
-                        .metrics
-                        .background_maintenance_failures_total
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    state.record_cluster_background_maintenance_failure();
                     tracing::warn!(?error, "session authorization/cluster lease maintenance failed; it will be retried");
                 } else {
                     heartbeat.ok();
@@ -5531,7 +5528,7 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
         .cluster
         .refresh_instance_authority_with(&state.cluster_authority_service())
         .await?;
-    let _redis_timer = state.metrics.redis_operation_duration_seconds.start_timer();
+    let _redis_timer = state.start_cluster_redis_operation_timer();
     state.cluster.touch_node().await?;
     let sessions = state.local_session_lease_snapshots();
     for snapshot in sessions {
@@ -5558,10 +5555,7 @@ async fn maintenance_once(state: &AppState) -> Result<()> {
     let authoritative_muc = occupancy_maintenance
         .authoritative_for_node(&state.cluster.node_id)
         .await?;
-    state
-        .metrics
-        .cluster_muc_pg_reconciliations_total
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    state.record_cluster_muc_reconciliation();
     let authoritative_muc = authoritative_muc
         .into_iter()
         .map(|occupancy| {
@@ -5866,10 +5860,7 @@ async fn run_muc_outbox_delivery(
                             acknowledged == AckOutcome::Acknowledged,
                             "cluster MUC outbox ACK lost its exact claim lease"
                         );
-                        state
-                            .metrics
-                            .cluster_muc_outbox_deliveries_total
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        state.record_cluster_muc_outbox_delivery();
                     }
                     Err(error) => {
                         tracing::warn!(
@@ -5886,10 +5877,7 @@ async fn run_muc_outbox_delivery(
                                 .retry(&delivery, &error.to_string())
                                 .await?;
                         }
-                        state
-                            .metrics
-                            .cluster_muc_outbox_retries_total
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        state.record_cluster_muc_outbox_retry();
                     }
                 }
                 heartbeat.ok();
@@ -5915,18 +5903,7 @@ async fn run_muc_outbox_delivery(
             let _database_turn = state.durable_outbox_database_turn().await;
             housekeeping.snapshot().await?
         };
-        state.metrics.cluster_muc_outbox_queued.store(
-            snapshot.queued_rows.max(0) as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        state.metrics.cluster_muc_outbox_dead_letters.store(
-            snapshot.dead_letter_rows.max(0) as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        state.metrics.cluster_muc_outbox_oldest_age_seconds.store(
-            snapshot.oldest_age_seconds.max(0) as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        state.record_cluster_muc_outbox_gauges(snapshot);
         heartbeat.ok();
     }
 }
@@ -6106,7 +6083,8 @@ async fn deliver_cluster_muc_event(
     );
     let room_jid = format!(
         "{}@conference.{}",
-        context.room_localpart, state.config.domain
+        context.room_localpart,
+        state.local_domain()
     );
     let Some(recipient_nick) = delivery.recipient_nick.as_deref() else {
         // node_pull rows are wake hints only; the worker has completed the
@@ -6599,10 +6577,7 @@ async fn complete_listener_responses(
             }
             Err(error) => {
                 if response.presence_authority.is_some() {
-                    state
-                        .metrics
-                        .cluster_presence_probe_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    state.record_cluster_presence_probe_failure();
                 }
                 return Err(error.context("cluster listener remote presence response failed"));
             }
@@ -6632,7 +6607,7 @@ async fn listen_once(
     tokio::pin!(rotation);
     rotation.as_mut().enable();
     let (candidate_generation, rotation_epoch) = state.cluster.health.begin_listener_attempt();
-    let mut redis_setup_timer = Some(state.metrics.redis_operation_duration_seconds.start_timer());
+    let mut redis_setup_timer = Some(state.start_cluster_redis_operation_timer());
     let mut pubsub_conn = open_pubsub(client).await?;
     let channel = state.cluster.key(format!("node:{}", state.cluster.node_id));
     let probe_channel = state.cluster.key(format!(
@@ -6969,7 +6944,7 @@ async fn listen_once(
                 if !state
                     .presence_service()
                     .cluster_authority_is_current(
-                        &state.config.domain,
+                        state.local_domain(),
                         &owner,
                         authority.owner_id,
                         authority.owner_auth_generation,
@@ -7107,10 +7082,7 @@ async fn listen_once(
                         }
                         Err(error) => {
                             processed = false;
-                            state
-                                .metrics
-                                .cluster_presence_probe_failures_total
-                                .fetch_add(1, Ordering::Relaxed);
+                            state.record_cluster_presence_probe_failure();
                             tracing::warn!(?error, %owner, %recipient, "could not resolve cross-node initial-presence recipients");
                         }
                     }
@@ -7457,7 +7429,7 @@ async fn listen_once(
                     || !state
                         .presence_service()
                         .cluster_authority_is_current(
-                            &state.config.domain,
+                            state.local_domain(),
                             &owner,
                             authority.owner_id,
                             authority.owner_auth_generation,
@@ -8034,12 +8006,9 @@ async fn listen_once(
                     };
                     if accepted {
                         if is_message_stanza {
-                            let counter = if durable_delivery.is_some() || mix_delivery.is_some() {
-                                &state.metrics.online_queue_durable_acceptances_total
-                            } else {
-                                &state.metrics.online_queue_volatile_acceptances_total
-                            };
-                            counter.fetch_add(1, Ordering::Relaxed);
+                            state.record_cluster_online_queue_acceptance(
+                                durable_delivery.is_some() || mix_delivery.is_some(),
+                            );
                         }
                         delivered += 1;
                         accepted_full_jid.get_or_insert(jid);

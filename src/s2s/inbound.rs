@@ -127,7 +127,7 @@ fn pre_tls_features(state: &AppState) -> String {
             .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-tls")
             .child(crate::xmpp::xml_builder::XmlElement::new("required")),
     );
-    if state.config.federation_enabled {
+    if state.s2s_federation_enabled() {
         features = features.child(
             crate::xmpp::xml_builder::XmlElement::new("bidi")
                 .attr("xmlns", "urn:xmpp:features:bidi"),
@@ -190,7 +190,7 @@ pub async fn serve_s2s_tls(
     cancel: tokio_util::sync::CancellationToken,
     listener: Option<TcpListener>,
 ) -> Result<()> {
-    if !state.config.federation_enabled {
+    if !state.s2s_federation_enabled() {
         wait_for_federation_shutdown(&cancel).await;
         return Ok(());
     }
@@ -241,7 +241,7 @@ pub async fn serve(
     cancel: tokio_util::sync::CancellationToken,
     listener: Option<TcpListener>,
 ) -> Result<()> {
-    if !state.config.federation_enabled {
+    if !state.s2s_federation_enabled() {
         tracing::warn!("server-to-server federation is disabled by policy");
         // This task is selected by main as a long-lived listener. Closing the
         // optional outbox wake channel is not a server shutdown signal.
@@ -635,7 +635,7 @@ async fn authenticate_secure_inbound(
     peer_certificates: Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>,
     input: &mut S2sInputState,
 ) -> Result<Option<InboundAuthentication>> {
-    let certificate_identity = if state.config.s2s_sasl_external_enabled {
+    let certificate_identity = if state.s2s_sasl_external_enabled() {
         match verify_peer_domain(&state, &peer_certificates, &asserted_domain) {
             Ok(identity) => identity,
             Err(error) => {
@@ -688,7 +688,7 @@ async fn authenticate_secure_inbound(
             write_xml(secure, &sasl_failure_then_stream_close("malformed-request")).await?;
             anyhow::bail!("remote server sent a malformed SASL authentication request");
         }
-        if !state.config.s2s_sasl_external_enabled || mechanism.as_deref() != Some("EXTERNAL") {
+        if !state.s2s_sasl_external_enabled() || mechanism.as_deref() != Some("EXTERNAL") {
             write_xml(secure, &sasl_failure_then_stream_close("invalid-mechanism")).await?;
             anyhow::bail!("remote server selected a disabled or invalid SASL mechanism");
         }
@@ -771,7 +771,7 @@ async fn authenticate_secure_inbound(
         }));
     }
 
-    if !state.config.dialback_enabled || element_namespace.as_deref() != Some(DIALBACK_NS) {
+    if !state.s2s_dialback_enabled() || element_namespace.as_deref() != Some(DIALBACK_NS) {
         send_stream_error(secure, "not-authorized").await?;
         anyhow::bail!("remote server did not select an offered S2S authentication mechanism");
     }
@@ -1709,7 +1709,7 @@ async fn route_inbound_scoped(
         // local user and must never be converted into one implicitly.
         return Ok(Some(s2s_stanza_error(root, "auth", "not-authorized")));
     }
-    if from_is_authenticated && state.config.component_domain_configured(to_domain) {
+    if from_is_authenticated && state.s2s_component_domain_configured(to_domain) {
         return if state
             .federation_outbox()
             .send(to_domain, client_raw.clone(), None)
@@ -2509,13 +2509,7 @@ pub(crate) async fn route_inbound_iq(
     }
     let namespace = child.tag_name().namespace().unwrap_or_default();
     match (child.tag_name().name(), namespace, kind) {
-        ("ping", northstar_xep_0199::NAMESPACE, "get")
-            if state.config.xmpp_extensions.route_enabled(
-                northstar_xep_core::StanzaKind::IqGet,
-                northstar_xep_0199::NAMESPACE,
-                "ping",
-            ) =>
-        {
+        ("ping", northstar_xep_0199::NAMESPACE, "get") if state.s2s_ping_route_enabled() => {
             if northstar_xep_0199::parse_ping_element(child).is_err() {
                 Ok(Some(s2s_iq_error(id, to, from, "bad-request")))
             } else {
@@ -2984,7 +2978,7 @@ pub(crate) async fn route_inbound_message(
     to: &str,
     authenticated_domain: &str,
 ) -> Result<Option<String>> {
-    if let Err(condition) = validate_routed_message(root, &state.config.xmpp_extensions) {
+    if let Err(condition) = state.validate_routed_message(root) {
         return Ok(inbound_message_error(
             root,
             stanza_error_type(condition),
@@ -3107,7 +3101,7 @@ pub(crate) async fn route_inbound_message(
     );
     let annotated = add_stanza_id(&authoritative_raw, &recipient_by, stable_id);
     let encrypted = is_encrypted(root);
-    let durable_content_allowed = encrypted || !state.config.require_encrypted_archive;
+    let durable_content_allowed = encrypted || !state.s2s_requires_encrypted_archive();
     let persistence_allowed = personal_retraction || offline_storage_permitted(root);
     let archive = if encrypted {
         if let Some(command) = personal_retraction_command.as_ref() {
@@ -3264,6 +3258,7 @@ pub(crate) async fn route_inbound_message(
             .into_iter()
             .collect::<Vec<_>>();
         let delayed = add_delay_from(&annotated, chrono::Utc::now(), Some(state.local_domain()));
+        let limits = state.s2s_offline_delivery_limits();
         let delivery = DeliveryProjection {
             id: stable_id,
             recipient_id: recipient.id,
@@ -3271,9 +3266,9 @@ pub(crate) async fn route_inbound_message(
             sender_jid: &canonical_from,
             stanza: &delayed,
             encrypted,
-            max_messages: state.config.offline_max_messages_per_account,
-            max_bytes: state.config.offline_max_bytes_per_account,
-            ttl_days: state.config.offline_message_ttl_days,
+            max_messages: limits.max_messages,
+            max_bytes: limits.max_bytes,
+            ttl_days: limits.ttl_days,
             mam_backed: archive_allowed,
         };
         match state

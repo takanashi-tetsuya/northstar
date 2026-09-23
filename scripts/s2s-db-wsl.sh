@@ -83,6 +83,7 @@ run_exact_ignored() {
 
 run_exact_ignored db::s2s::tests::claim_preserves_mam_results_before_fin
 run_exact_ignored db::s2s::tests::scoped_claims_are_cross_worker_ordered_and_component_safe
+run_exact_ignored db::s2s::tests::sm_ack_accepts_terminal_pam_cleanup_without_losing_other_claim_fences
 run_exact_ignored db::s2s::tests::route_recovery_wakes_only_the_observed_fifo_head_and_attempt
 run_exact_ignored db::s2s::tests::route_recovery_waits_for_lease_failure_commit_and_preserves_fencing
 run_exact_ignored s2s::outbound::tests::authenticated_route_recovery_integrates_with_fifo_and_leased_failure_commit

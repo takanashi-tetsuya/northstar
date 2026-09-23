@@ -1624,12 +1624,12 @@ fn envelope_source_domain(state: &AppState, envelope: &FederationEnvelope) -> St
     source
         .filter(|domain| {
             state.config.component_domain_configured(domain)
-                || same_s2s_domain(domain, &state.config.domain)
-                || same_s2s_domain(domain, &format!("pubsub.{}", state.config.domain))
-                || same_s2s_domain(domain, &format!("conference.{}", state.config.domain))
-                || same_s2s_domain(domain, &format!("mix.{}", state.config.domain))
+                || same_s2s_domain(domain, state.local_domain())
+                || same_s2s_domain(domain, &format!("pubsub.{}", state.local_domain()))
+                || same_s2s_domain(domain, &format!("conference.{}", state.local_domain()))
+                || same_s2s_domain(domain, &format!("mix.{}", state.local_domain()))
         })
-        .unwrap_or_else(|| state.config.domain.clone())
+        .unwrap_or_else(|| state.local_domain().to_owned())
 }
 
 fn bidi_envelope_authorized(envelope: &FederationEnvelope, local_stream_domain: &str) -> bool {

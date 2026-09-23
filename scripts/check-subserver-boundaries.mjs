@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const files = { main: 'src/main.rs', subservers: 'src/subservers.rs', retention: 'src/retention.rs',
+const files = { main: 'src/main.rs', subservers: 'src/subservers.rs', maintenanceOwnership: 'src/db/maintenance_ownership.rs', retention: 'src/retention.rs',
   subscriptionCleanup: 'src/subscription_cleanup.rs',
   pubsubProtocol: 'src/xmpp/protocol/pubsub.rs', pubsubService: 'src/services/pubsub.rs',
   state: 'src/state.rs',
@@ -42,7 +42,7 @@ export function readSubserverSources() {
   return Object.fromEntries(Object.entries(files).map(([name, file]) => [name, fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
-export function verifySubserverBoundaries({ main, subservers, retention, subscriptionCleanup, pubsubProtocol, pubsubService, state, cluster, responsibility }) {
+export function verifySubserverBoundaries({ main, subservers, maintenanceOwnership, retention, subscriptionCleanup, pubsubProtocol, pubsubService, state, cluster, responsibility }) {
   // Alternate control ticks can legitimately perform no SQL. They must not
   // reset a lost advisory-lock session's consecutive database error count.
   const report = codeOnly(body(state, 'fn report_runtime_control_health(')).replace(/\s+/g, '');
@@ -119,9 +119,14 @@ export function verifySubserverBoundaries({ main, subservers, retention, subscri
   requireBoundary(subservers.includes('DATABASE_MAX_CONNECTIONS_LIMIT - MAINTENANCE_POOL_MAX_CONNECTIONS'),
     'core capacity must derive from the shared runtime-role budget');
   const claim = body(subservers, 'async fn claim_maintenance_on_connection(');
-  requireBoundary(claim.includes('connection.close_on_drop()') && claim.includes('pg_try_advisory_lock(') &&
-    claim.includes('current_database()') && claim.includes('current_schema()') &&
-    claim.includes('.fetch_one(&mut **connection)') && claim.includes('anyhow::ensure!('),
+  const claimExact = body(maintenanceOwnership, 'async fn claim_exact(');
+  const probeExact = body(maintenanceOwnership, 'async fn probe_exact(');
+  requireBoundary(claim.includes('db::maintenance_ownership::claim_exact(connection).await') &&
+    claimExact.includes('connection.close_on_drop()') && claimExact.includes('pg_try_advisory_lock(') &&
+    claimExact.includes('current_database()') && claimExact.includes('current_schema()') &&
+    claimExact.includes('.fetch_one(&mut **connection)') && claimExact.includes('ensure!(') &&
+    run.includes('db::maintenance_ownership::probe_exact(&mut ownership)') &&
+    probeExact.includes('SELECT 1') && probeExact.includes('.execute(&mut **connection)'),
   'all retention modes must claim the same schema-scoped physical session and close it on drop');
 
   const dispatch = body(main, 'if process_role == subservers::ProcessRole::Maintenance');
@@ -160,7 +165,7 @@ export function verifySubserverBoundaries({ main, subservers, retention, subscri
   requireBoundary(/\.register_observer\("maintenance-ownership",\s*WorkerCriticality::Critical\)/.test(run),
     'maintenance ownership observer must remain critical');
   for (const marker of ['Duration::from_secs(5)', 'Duration::from_secs(3)',
-    'sqlx::query("SELECT 1").execute(&mut *ownership)', 'if !matches!(probe, Ok(Ok(_)))',
+    'db::maintenance_ownership::probe_exact(&mut ownership)', 'if !matches!(probe, Ok(Ok(())))',
     'break Err(anyhow::anyhow!("maintenance database ownership connection failed"))']) {
     requireBoundary(run.replace(/\s+/g, '').includes(marker.replace(/\s+/g, '')),
       `maintenance exact-session loss detection changed: ${marker}`);

@@ -27,7 +27,6 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::panic::AssertUnwindSafe;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
@@ -240,8 +239,7 @@ impl BoshManager {
             .try_acquire_owned()
             .map_err(|_| "policy-violation")?;
         let to = request.to.as_deref().ok_or("improper-addressing")?;
-        if crate::jid::prepare_domainpart(to).ok().as_deref() != Some(state.config.domain.as_str())
-        {
+        if crate::jid::prepare_domainpart(to).ok().as_deref() != Some(state.local_domain()) {
             return Err("host-unknown");
         }
         if !request.payloads.is_empty()
@@ -362,14 +360,7 @@ impl BoshManager {
             tracing::debug!(%peer_ip, ?error, "rejected BOSH connection actor admission");
             return Err("resource-constraint");
         }
-        state
-            .metrics
-            .bosh_sessions_total
-            .fetch_add(1, Ordering::Relaxed);
-        state
-            .metrics
-            .bosh_sessions_active
-            .fetch_add(1, Ordering::Relaxed);
+        state.record_bosh_session_opened();
 
         let version = negotiated_bosh_version(request.ver.as_deref());
         let body = XmlElement::new("body")
@@ -383,7 +374,7 @@ impl BoshManager {
             .attr("polling", state.config.bosh_polling_seconds)
             .attr("maxpause", state.config.bosh_max_pause_seconds)
             .attr("ver", version)
-            .attr("from", &state.config.domain)
+            .attr("from", state.local_domain())
             .attr("ack", request.rid)
             .attr("xmpp:version", "1.0")
             .attr("xmpp:restartlogic", "true")
@@ -630,10 +621,7 @@ impl BoshActor {
             .backpressure_disconnect()
             .is_cancelled()
         {
-            state
-                .metrics
-                .c2s_backpressure_disconnects_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.record_c2s_backpressure_disconnect();
         }
         // Stop admitting HTTP requests before durable/session finalization.
         // Every terminate, timeout, command-channel and backpressure exit
@@ -659,10 +647,7 @@ impl BoshActor {
         // handoff already did; recoverable cleanup failures are observed by
         // ProtocolSession::finalize itself.
         let _ = self.protocol.finalize().await;
-        state
-            .metrics
-            .bosh_sessions_active
-            .fetch_sub(1, Ordering::Relaxed);
+        state.record_bosh_session_closed();
     }
 
     async fn accept_request(
@@ -879,7 +864,7 @@ impl BoshActor {
                     "ignored payloads attached to a BOSH stream restart"
                 );
             }
-            let domain = self.protocol.state.config.domain.clone();
+            let domain = self.protocol.state.local_domain().to_owned();
             let restart_to = match validated_bosh_restart_target(request.to.as_deref(), &domain) {
                 Ok(target) => target,
                 Err(condition) => {

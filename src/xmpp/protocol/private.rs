@@ -29,7 +29,7 @@ impl ProtocolSession {
             return Ok(Action::Send(iq_error(id, "not-authorized")));
         };
 
-        if !private_target_is_self(to, &user.username, &self.state.config.domain) {
+        if !private_target_is_self(to, &user.username, self.state.local_domain()) {
             return Ok(Action::Send(iq_error(id, "forbidden")));
         }
 
@@ -101,7 +101,7 @@ impl ProtocolSession {
             return Ok(Action::Send(iq_error(id, "not-authorized")));
         };
 
-        if !private_target_is_self(to, &user.username, &self.state.config.domain) {
+        if !private_target_is_self(to, &user.username, self.state.local_domain()) {
             return Ok(Action::Send(iq_error(id, "forbidden")));
         }
 

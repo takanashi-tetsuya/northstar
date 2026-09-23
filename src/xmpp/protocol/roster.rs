@@ -101,7 +101,7 @@ impl ProtocolSession {
         if let Some(condition) = roster_target_error(
             iq.attribute("to"),
             &user.username,
-            &self.state.config.domain,
+            self.state.local_domain(),
             false,
         ) {
             return Ok(Action::Send(iq_error(id, condition)));
@@ -156,7 +156,7 @@ impl ProtocolSession {
             changes,
             mix_participants,
         } = snapshot;
-        let owner_jid = format!("{}@{}", user.username, self.state.config.domain);
+        let owner_jid = format!("{}@{}", user.username, self.state.local_domain());
         // A version-only empty result cannot convey newly requested MIX
         // annotations for cached items, so an opt-in request receives a full
         // roster snapshot. Unannotated requests keep normal XEP-0237 deltas.
@@ -222,7 +222,7 @@ impl ProtocolSession {
         if let Some(condition) = roster_target_error(
             iq.attribute("to"),
             &user.username,
-            &self.state.config.domain,
+            self.state.local_domain(),
             true,
         ) {
             return Ok(Action::Send(iq_error(id, condition)));
@@ -245,14 +245,14 @@ impl ProtocolSession {
             Err(condition) => return Ok(Action::Send(iq_error(id, condition))),
         };
         if parsed.remove {
-            let owner_jid = format!("{}@{}", user.username, self.state.config.domain);
+            let owner_jid = format!("{}@{}", user.username, self.state.local_domain());
             let contact_jid = crate::jid::CanonicalJid::parse_bare(&parsed.contact)?;
             let hosted_service = contact_jid.domainpart() == self.muc_domain()
                 || contact_jid.domainpart() == self.upload_domain()
                 || contact_jid.domainpart() == self.pubsub_domain();
             let unsubscribe = roster_removal_presence(&owner_jid, &parsed.contact, "unsubscribe");
             let unsubscribed = roster_removal_presence(&owner_jid, &parsed.contact, "unsubscribed");
-            let remote = contact_jid.domainpart() != self.state.config.domain && !hosted_service;
+            let remote = contact_jid.domainpart() != self.state.local_domain() && !hosted_service;
             let route = if remote {
                 let policy = self.state.federation_outbox().outbox_policy();
                 RosterRemovalRoute::Remote {
@@ -270,7 +270,7 @@ impl ProtocolSession {
             } else {
                 RosterRemovalRoute::Local {
                     owner_jid: &owner_jid,
-                    contact_username: (contact_jid.domainpart() == self.state.config.domain)
+                    contact_username: (contact_jid.domainpart() == self.state.local_domain())
                         .then(|| contact_jid.localpart())
                         .flatten(),
                 }
@@ -303,7 +303,7 @@ impl ProtocolSession {
                 self.state.federation_outbox().wake_outbox();
             }
             if let Some(contact) = removal.local_contact.as_ref() {
-                let target_jid = format!("{}@{}", contact.username, self.state.config.domain);
+                let target_jid = format!("{}@{}", contact.username, self.state.local_domain());
                 // RFC 6121 subscription notifications precede the roster
                 // state they caused. Preserve that order for every local and
                 // clustered interested resource.
@@ -360,7 +360,7 @@ impl ProtocolSession {
             self.push_roster_change(user.id, &user.username, &change, None)
                 .await?;
         }
-        let owner_jid = format!("{}@{}", user.username, self.state.config.domain);
+        let owner_jid = format!("{}@{}", user.username, self.state.local_domain());
         Ok(Action::Send(iq_result_from(id, &owner_jid, "")))
     }
 
@@ -524,7 +524,7 @@ pub(crate) async fn deliver_roster_change(
     let item = roster_change_item_element(change, None);
     let annotated = participant_id
         .map(|participant_id| roster_change_item_element(change, Some(participant_id)));
-    let owner_jid = format!("{}@{}", owner, state.config.domain);
+    let owner_jid = format!("{}@{}", owner, state.local_domain());
     for (target_jid, target) in state.session_entries_for(&owner_jid) {
         if target.user_id != owner_id {
             continue;

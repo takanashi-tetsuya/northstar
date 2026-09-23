@@ -116,7 +116,7 @@ impl ProtocolSession {
                 let Ok(name) = parse_optional_name_control(control, "default") else {
                     return Ok(Action::Send(iq_error(id, "bad-request")));
                 };
-                let account = format!("{}@{}", user.username, self.state.config.domain);
+                let account = format!("{}@{}", user.username, self.state.local_domain());
                 let remote_resource_exists = self
                     .state
                     .cluster
@@ -147,7 +147,7 @@ impl ProtocolSession {
                 if list.items.is_empty() {
                     let active_somewhere = self
                         .state
-                        .sessions_for(&format!("{}@{}", user.username, self.state.config.domain))
+                        .sessions_for(&format!("{}@{}", user.username, self.state.local_domain()))
                         .iter()
                         .any(|session| {
                             session
@@ -211,7 +211,7 @@ impl ProtocolSession {
     }
 
     async fn push_privacy_list_change(&self, username: &str, name: &str) -> Result<Option<String>> {
-        let account = format!("{}@{}", username, self.state.config.domain);
+        let account = format!("{}@{}", username, self.state.local_domain());
         let push_id = format!("privacy-{}", uuid::Uuid::new_v4());
         let payload = XmlElement::namespaced("query", PRIVACY_NS)
             .child(XmlElement::new("list").attr("name", name))

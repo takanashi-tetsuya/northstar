@@ -430,6 +430,33 @@ pub async fn complete_s2s_outbox(pool: &PgPool, id: Uuid, lock_token: Uuid) -> R
     )
 }
 
+/// A terminal MIX-PAM response may remove its request before the peer's SM
+/// acknowledgement reaches us. That response is authoritative for this exact
+/// request, so its later transport acknowledgement can advance the stream.
+/// A live row still requires the original fenced token.
+pub(crate) async fn complete_s2s_outbox_for_sm(
+    pool: &PgPool,
+    id: Uuid,
+    lock_token: Uuid,
+) -> Result<bool> {
+    if complete_s2s_outbox(pool, id, lock_token).await? {
+        return Ok(true);
+    }
+    // Run this as a fresh statement so it observes a terminal-response
+    // transaction that won the race against the fenced DELETE above.
+    sqlx::query_scalar(
+        "SELECT NOT EXISTS (SELECT 1 FROM s2s_outbox WHERE id = $1)
+            AND EXISTS (
+                SELECT 1 FROM mix_pam_operations
+                WHERE request_outbox_id = $1 AND state = 'terminal'
+            )",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .map_err(Into::into)
+}
+
 /// Extend an active delivery lease while DNS, TLS and authentication are in
 /// progress. The token predicate is the fencing boundary: a worker which no
 /// longer owns the exact claim can never revive it.
@@ -632,6 +659,91 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
+    async fn sm_ack_accepts_terminal_pam_cleanup_without_losing_other_claim_fences() {
+        let (admin, pool, schema) = route_recovery_test_pool().await;
+        let user_id = Uuid::new_v4();
+        let username = format!("pam-sm-{}", Uuid::new_v4().simple());
+        sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test-only')")
+            .bind(user_id)
+            .bind(&username)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let request_id = enqueue_s2s_outbox(
+            &pool,
+            "remote.test",
+            "<iq from='user@local.test/device' to='remote.test' id='pam-request'/>",
+            None,
+            300,
+            100,
+            1_000_000,
+            100,
+        )
+        .await
+        .unwrap();
+        let claim = claim_due_s2s_outbox(&pool, 1, 120).await.unwrap().remove(0);
+        assert_eq!(claim.id, request_id);
+        sqlx::query(
+            "INSERT INTO mix_pam_operations(
+                 operation_id,user_id,channel_jid,remote_domain,operation,
+                 remote_request_id,client_request_id,requester_full_jid,
+                 request_digest,request_outbox_id,deadline_at,expires_at
+             ) VALUES($1,$2,'room@remote.test','remote.test','join',$3,
+                      'client-request',$4,$5,$6,
+                      clock_timestamp()+INTERVAL '1 hour',clock_timestamp()+INTERVAL '8 days')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind(format!("request-{}", Uuid::new_v4().simple()))
+        .bind(format!("{username}@local.test/device"))
+        .bind(vec![7_u8; 32])
+        .bind(request_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(
+            !complete_s2s_outbox_for_sm(&pool, request_id, Uuid::new_v4())
+                .await
+                .unwrap(),
+            "a live claim still requires its exact lock token"
+        );
+        let mut transaction = pool.begin().await.unwrap();
+        sqlx::query("DELETE FROM s2s_outbox WHERE id=$1")
+            .bind(request_id)
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE mix_pam_operations SET state='terminal',
+                remote_response_digest=$2,response_xml='<iq type=\"result\"/>'
+             WHERE request_outbox_id=$1",
+        )
+        .bind(request_id)
+        .bind(vec![9_u8; 32])
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+        transaction.commit().await.unwrap();
+        assert!(
+            complete_s2s_outbox_for_sm(&pool, request_id, claim.lock_token)
+                .await
+                .unwrap(),
+            "a terminal PAM response already settled this exact request"
+        );
+        assert!(
+            !complete_s2s_outbox_for_sm(&pool, Uuid::new_v4(), claim.lock_token)
+                .await
+                .unwrap(),
+            "an unrelated missing row is still a lost lease"
+        );
+
+        close_route_recovery_test_pool(admin, pool, schema).await;
     }
 
     #[tokio::test(flavor = "current_thread")]

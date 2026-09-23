@@ -1,7 +1,4 @@
-use crate::{
-    s2s::dane::{DaneMode, DaneSrvBinding},
-    state::AppState,
-};
+use crate::{s2s::dane::DaneSrvBinding, state::AppState};
 use anyhow::{Context, Result};
 use hickory_resolver::{
     net::{DnsError, NetError},
@@ -182,7 +179,7 @@ pub(crate) async fn resolve_federation_endpoints(
         .context("federation target is not a valid RFC 7622 domain")?;
     let dns_domain = crate::jid::domain_to_ascii(&domain)
         .context("federation target cannot be represented as a DNS name")?;
-    if state.config.federation_dane_mode == DaneMode::Required {
+    if state.s2s_dane_required() {
         return resolve_dns_endpoints(state, &domain).await;
     }
     if let Some((_, address, direct_tls)) =
@@ -393,7 +390,7 @@ async fn resolve_dns_endpoints(state: &AppState, domain: &str) -> Result<Vec<Fed
             "remote domain published no usable federation endpoint or SRV discovery was incomplete"
         );
     }
-    if state.config.federation_dane_mode == DaneMode::Required {
+    if state.s2s_dane_required() {
         anyhow::bail!("DANE is required but no XMPP SRV relationship was published");
     }
 
@@ -576,7 +573,7 @@ async fn fetch_xep_0487(state: &AppState, domain: &str) -> Result<HostMetaDiscov
                     anyhow::bail!("XEP-0487 host-meta response has an unsupported media type");
                 }
                 return parse_xep_0487_document(
-                    state.config.federation_allow_private_ips,
+                    state.s2s_private_addresses_allowed(),
                     &response.body,
                 );
             }
@@ -1231,7 +1228,7 @@ fn no_records(error: &NetError) -> bool {
 }
 
 pub(crate) fn validate_endpoint(state: &AppState, address: SocketAddr) -> Result<()> {
-    validate_address_policy(state.config.federation_allow_private_ips, address)
+    validate_address_policy(state.s2s_private_addresses_allowed(), address)
 }
 
 fn validate_address_policy(federation_allow_private_ips: bool, address: SocketAddr) -> Result<()> {

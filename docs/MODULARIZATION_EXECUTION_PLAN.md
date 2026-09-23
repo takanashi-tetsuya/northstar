@@ -111,7 +111,7 @@ in large root orchestration modules and infrastructure ownership:
   traits;
 - transport actors still reach a broad protocol session object.
 
-`AppState` has been reduced to five public fields and protocol modules have no
+`AppState` has been reduced to three public fields and protocol modules have no
 direct `db::`, `PgPool`, SQLx or `state.pool` authority according to the
 architecture gate. This is an intermediate boundary, not the final service
 graph.
@@ -343,7 +343,7 @@ next stage changes runtime behavior. The issue ledger remains
 Stage 1 remains open. The current service boundaries cover HTTP account flows,
 personal-message storage, federation outbox work, administrator cleanup,
 operation-journal target transitions and read-only credential maintenance.
-`AppState` still exposes five capabilities; the largest remaining migrations are
+`AppState` still exposes three capabilities; the largest remaining migrations are
 cluster routing and the runtime policy read by protocol adapters. Database
 role separation, MUC batch commands and storage/restore tooling follow only
 after the Stage 1 exit checks pass.
@@ -537,14 +537,15 @@ Passkey login completion receives its service without the broader HTTP state;
 it checks the live allowed origin before consuming the challenge.
 Account-deletion recovery reports successful completion, failure and lost
 leases through three borrowed counters.
-Remaining work includes live-session and account-recovery workers and the six
-broad AppState capabilities.
+Remaining work includes account-recovery workers and the three broad AppState
+capabilities.
 TLS now sits behind a private context with immutable handshake snapshots and
 the existing current-CRL registration check. Federation outbox admission now
 uses an application service and a database repository; callers receive a
-copied policy and post-commit wake capability. AppState still has five public
-fields, so stage 1 remains open. Changing field visibility alone does not
-demonstrate reduced authority.
+copied policy and post-commit wake capability. Metrics updates now pass through
+event-specific state methods while observability rendering retains its private
+registry. AppState still has three public fields, so stage 1 remains open.
+Changing field visibility alone does not demonstrate reduced authority.
 Clustered-MUC delivery now obtains its committed event and audience projections
 through a read port while keeping the cached-recipient fast path and three
 independently admitted database reads in the transport worker.

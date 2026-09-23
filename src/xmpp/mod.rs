@@ -16,13 +16,7 @@ use axum::extract::ws::{Message, WebSocket};
 use framing::XmlEntityFramer;
 use futures::FutureExt;
 use protocol::{Action, ProtocolSession};
-use std::{
-    future::Future,
-    net::SocketAddr,
-    panic::AssertUnwindSafe,
-    sync::{atomic::Ordering, Arc},
-    time::Duration,
-};
+use std::{future::Future, net::SocketAddr, panic::AssertUnwindSafe, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -99,10 +93,7 @@ pub async fn serve_tcp(
             Some(peer_label),
             async move {
                 let _connection_guard = connection_guard;
-                state
-                    .metrics
-                    .tcp_connections_total
-                    .fetch_add(1, Ordering::Relaxed);
+                state.record_c2s_tcp_connection();
                 let material = state.tls_context().c2s_snapshot(false);
                 let tls = TlsAcceptor::from(material.server_config.clone());
                 if let Err(error) = tcp_connection(
@@ -153,10 +144,7 @@ pub async fn serve_xmpps_tcp(
             Some(peer_label),
             async move {
                 let _connection_guard = connection_guard;
-                state
-                    .metrics
-                    .tcp_connections_total
-                    .fetch_add(1, Ordering::Relaxed);
+                state.record_c2s_tcp_connection();
                 let material = state.tls_context().c2s_snapshot(true);
                 let tls = TlsAcceptor::from(material.server_config.clone());
                 if let Err(error) = xmpps_tcp_connection(
@@ -359,10 +347,7 @@ async fn finish_protocol_session<T>(
 impl Drop for BackpressureDisconnectMetric {
     fn drop(&mut self) {
         if self.disconnect.is_cancelled() {
-            self.state
-                .metrics
-                .c2s_backpressure_disconnects_total
-                .fetch_add(1, Ordering::Relaxed);
+            self.state.record_c2s_backpressure_disconnect();
         }
     }
 }
@@ -1082,10 +1067,7 @@ pub async fn websocket_connection(
     peer_ip: std::net::IpAddr,
     actor_shutdown: tokio_util::sync::CancellationToken,
 ) {
-    state
-        .metrics
-        .websocket_connections_total
-        .fetch_add(1, Ordering::Relaxed);
+    state.record_c2s_websocket_connection();
     let (tx, mut rx) = mpsc::channel(512);
     let mut session = ProtocolSession::new(
         state,

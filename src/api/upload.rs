@@ -48,10 +48,7 @@ pub async fn upload_put(
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response, AppError> {
-    let _operation_timer = state
-        .metrics
-        .upload_operation_duration_seconds
-        .start_timer();
+    let _operation_timer = state.start_upload_operation_timer();
     let client_ip = crate::api::client_ip(peer.ip(), &headers, &state);
     let _request_permit = state.acquire_upload_request(client_ip).ok_or_else(|| {
         AppError::RateLimited(serde_json::json!({
@@ -636,10 +633,7 @@ pub async fn upload_delete(
     crate::api::ApiPath(id): crate::api::ApiPath<Uuid>,
     headers: HeaderMap,
 ) -> Result<StatusCode, AppError> {
-    let _operation_timer = state
-        .metrics
-        .upload_operation_duration_seconds
-        .start_timer();
+    let _operation_timer = state.start_upload_operation_timer();
     let user = crate::api::current_user(&state, &headers).await?;
     // DELETE is deliberately idempotent and non-enumerating: a missing slot
     // or another user's UUID returns the same 204 while changing no state.

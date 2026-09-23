@@ -142,7 +142,7 @@ closes the listener and joins/aborts every accepted connection.
 | Layer | Accepted input | Owned capability | Explicitly forbidden | Transaction or failure boundary | Supervisor | Actual isolation | Remaining shared authority |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | configuration/secret loader | CLI, environment, `.env` and secret files | syntax/semantic validation, file checks, single ownership transfer and zeroization | logging, cloning or leaving raw secret values in shared configuration | failure precedes every listener | top-level `main` | initialization phase in runtime process | secrets coexist briefly while state is constructed |
-| `AppState` assembly | validated configuration, pools, routers, stores and key owners | compose services and process-local routing capabilities | becoming an unconstrained public service locator | construction is all-or-nothing before listener start | top-level `main` | Rust private fields/accessors | six reviewed public capabilities remain listed below |
+| `AppState` assembly | validated configuration, pools, routers, stores and key owners | compose services and process-local routing capabilities | becoming an unconstrained public service locator | construction is all-or-nothing before listener start | top-level `main` | Rust private fields/accessors | three reviewed public capabilities remain listed below |
 | XMPP/BOSH/WebSocket transport adapters | untrusted TCP/TLS bytes, XMPP HTTP frames, peer/proxy identity | framing, size/depth/time budgets, TLS provenance and connection lifetime | business SQL, archive policy and account authorization | per-connection failure closes that connection; listener exit is service-fatal | top-level listener set plus connection actor registry | Tokio tasks in runtime process | shares memory with protocol and services; the REST edge is tracked separately because legacy routes still own direct database access |
 | protocol session | framed XML plus authenticated transport state | stream/SASL/bind/SM state machine, stanza parsing, XMPP errors and resource-ordering | production `db::*` authority, SQLx, `PgPool` and `state.pool` | one connection actor; durable resume is delegated to SM service | connection actor registry | Rust module/static gate | may call typed `AppState` services and live routing; `#[cfg(test)]` is outside zero-reference count |
 | application service | prepared identities/commands from protocol or HTTP | authorization snapshot, policy, transaction intent and typed result | parsing raw transport frames or exposing raw transactions upward | service method defines one business operation and its commit-before-side-effect rule | caller task or dedicated worker | private Rust capability; personal-message and MUC-discussion paths already use injected repository ports | several services still embed SQLx/`PgPool` transaction work that should move into repository ports; services share the runtime role/pool |
@@ -154,20 +154,20 @@ closes the listener and joins/aborts every accepted connection.
 ### Reviewed public `AppState` capabilities
 
 The architecture gate now checks the names, not only the count. Replacing one
-field with a different public capability fails CI even if the total stays six.
+field with a different public capability fails CI even if the total stays three.
 
 | Public field | Why it remains public | Target direction |
 | --- | --- | --- |
 | `config` | broad read-only protocol/runtime policy is still consumed across many modules | split immutable transport, protocol and worker policy views |
-| `pool` | legacy API/operation/background paths still require the runtime pool | move every caller behind a domain service/repository port |
 | `cluster` | routing and clustered ownership share one manager | expose route, lease and publication ports separately |
-| `sessions` | exact local-resource routing table | hide behind a live-session registry API |
 | `muc_occupants` | process-local MUC route/occupancy projection | hide behind a MUC live-routing port |
-| `metrics` | fixed-cardinality counters are updated across hot paths | pass narrow metric handles or event sinks |
 
-Private `AppState` fields include database keyrings, FAST/Dialback material,
-stores, component credentials, service objects and worker registry. Protocol
-handlers access them through purpose-specific methods rather than field access.
+Private `AppState` fields include `pool`, `sessions` and `metrics`, along with
+database keyrings, FAST/Dialback material, stores, component credentials,
+service objects and worker registry. Protocol handlers use purpose-specific
+methods for staged binds, SM takeover and exact route checks. HTTP, transport
+and worker paths record metric events through named methods rather than holding
+the registry.
 TLS is held in a private context. C2S and S2S handshakes receive one immutable
 configuration snapshot; certificate-session registration checks the current
 revocation state, and the operation worker retains the existing atomic reload.
@@ -804,7 +804,7 @@ Use these rules before adding a module, dependency or public field:
 
 Every public feature also updates the smallest applicable set of tests,
 metrics, logs, README/operations, OpenAPI and `XEP_MATRIX.md`. The current
-exception classes—five public `AppState` capabilities, direct REST persistence
+exception classes—three public `AppState` capabilities, direct REST persistence
 and embedded service/runtime repository work—must decrease over time and may
 not be copied into new work.
 
@@ -812,7 +812,7 @@ not be copied into new work.
 
 Remaining architecture work:
 
-1. The five public `AppState` fields still form a broad same-process authority.
+1. The three public `AppState` fields still form a broad same-process authority.
 2. Operation/background paths still hold `Arc<AppState>` where narrower ports
    would make transaction and failure ownership clearer.
 3. Some REST routes still own direct pool/transaction access instead of a

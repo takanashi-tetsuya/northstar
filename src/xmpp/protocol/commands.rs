@@ -1288,28 +1288,7 @@ async fn send_announcement(
     // accounts are traversed once in a keyset-paginated database snapshot and
     // counted as each page is released, so a 100k-account announcement cannot
     // grow a second 100k-entry recipient set in this protocol task.
-    let mut local_recipients = BTreeSet::new();
-    for entry in session.state.sessions.iter() {
-        if entry
-            .value()
-            .routable
-            .load(std::sync::atomic::Ordering::Acquire)
-            && entry
-                .value()
-                .available
-                .load(std::sync::atomic::Ordering::Acquire)
-            && entry
-                .value()
-                .priority
-                .load(std::sync::atomic::Ordering::Acquire)
-                >= 0
-            && entry.value().sender.try_send(stanza.clone()).is_ok()
-        {
-            if let Ok(bare) = crate::jid::canonical_bare_key(entry.key()) {
-                local_recipients.insert(bare);
-            }
-        }
-    }
+    let local_recipients = session.state.send_local_announcement(&stanza);
     let mut recipient_count = local_recipients.len();
     if session.state.cluster.is_enabled() {
         let mut cursor = None;
@@ -1348,13 +1327,7 @@ async fn send_announcement(
 }
 
 async fn online_bare_jids(session: &ProtocolSession) -> Result<BTreeSet<String>> {
-    let mut users = session
-        .state
-        .sessions
-        .iter()
-        .filter(|entry| entry.routable.load(std::sync::atomic::Ordering::Acquire))
-        .filter_map(|entry| crate::jid::canonical_bare_key(entry.key()).ok())
-        .collect::<BTreeSet<_>>();
+    let mut users = session.state.local_online_bare_jids();
     users.extend(session.state.cluster.online_bare_jids().await?);
     Ok(users)
 }
@@ -1363,26 +1336,7 @@ async fn activity_bare_jids(
     session: &ProtocolSession,
 ) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
     let idle_after = std::time::Duration::from_secs(session.state.config.admin_idle_seconds);
-    let mut online = BTreeSet::new();
-    let mut active = BTreeSet::new();
-    for entry in session.state.sessions.iter() {
-        if !entry.routable.load(std::sync::atomic::Ordering::Acquire) {
-            continue;
-        }
-        let Ok(bare) = crate::jid::canonical_bare_key(entry.key()) else {
-            continue;
-        };
-        online.insert(bare.clone());
-        if entry
-            .last_activity
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .elapsed()
-            < idle_after
-        {
-            active.insert(bare);
-        }
-    }
+    let (mut online, mut active) = session.state.local_activity_bare_jids(idle_after);
     let cluster_active = session
         .state
         .cluster

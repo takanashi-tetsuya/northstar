@@ -37,21 +37,21 @@ pub(crate) fn features(state: &AppState, external_available: bool) -> String {
     // every TLS peer makes a legitimate Dialback-only peer select a
     // mechanism that this server must then reject.
     let mut features = crate::xmpp::xml_builder::XmlElement::new("stream:features");
-    if state.config.s2s_sasl_external_enabled && external_available {
+    if state.s2s_sasl_external_enabled() && external_available {
         features = features.child(
             crate::xmpp::xml_builder::XmlElement::new("mechanisms")
                 .attr("xmlns", "urn:ietf:params:xml:ns:xmpp-sasl")
                 .child(crate::xmpp::xml_builder::XmlElement::new("mechanism").text("EXTERNAL")),
         );
     }
-    if state.config.dialback_enabled {
+    if state.s2s_dialback_enabled() {
         features = features.child(
             crate::xmpp::xml_builder::XmlElement::new("dialback")
                 .attr("xmlns", "urn:xmpp:features:dialback")
                 .child(crate::xmpp::xml_builder::XmlElement::new("errors")),
         );
     }
-    if state.config.federation_enabled {
+    if state.s2s_federation_enabled() {
         features = features.child(
             crate::xmpp::xml_builder::XmlElement::new("bidi")
                 .attr("xmlns", "urn:xmpp:features:bidi"),

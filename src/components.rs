@@ -609,7 +609,7 @@ async fn component_connection(
         Ok(opening) => opening,
         Err(error) => {
             if let Some(condition) = component_read_error_condition(&error) {
-                write_legacy_stream_open(&mut stream, &state.config.domain, &stream_id()).await?;
+                write_legacy_stream_open(&mut stream, state.local_domain(), &stream_id()).await?;
                 s2s::send_stream_error(&mut stream, condition).await?;
             }
             return Err(error);
@@ -618,7 +618,7 @@ async fn component_connection(
     let namespace = match stream_namespace(&opening) {
         Ok(namespace) => namespace,
         Err(condition) => {
-            write_legacy_stream_open(&mut stream, &state.config.domain, &stream_id()).await?;
+            write_legacy_stream_open(&mut stream, state.local_domain(), &stream_id()).await?;
             s2s::send_stream_error(&mut stream, condition).await?;
             anyhow::bail!("component sent an invalid initial stream: {condition}");
         }
@@ -629,7 +629,7 @@ async fn component_connection(
     if namespace == "jabber:client" {
         return modern_connection(stream, state, opening, input, cancel).await;
     }
-    write_legacy_stream_open(&mut stream, &state.config.domain, &stream_id()).await?;
+    write_legacy_stream_open(&mut stream, state.local_domain(), &stream_id()).await?;
     s2s::send_stream_error(&mut stream, "invalid-namespace").await?;
     anyhow::bail!("component used an unsupported stream namespace from {peer}")
 }
@@ -648,7 +648,7 @@ async fn legacy_connection(
         {
             Some(domain) => domain,
             None => {
-                write_legacy_stream_open(&mut stream, &state.config.domain, &stream_id()).await?;
+                write_legacy_stream_open(&mut stream, state.local_domain(), &stream_id()).await?;
                 s2s::send_stream_error(&mut stream, "improper-addressing").await?;
                 anyhow::bail!("XEP-0114 component stream omitted a valid domain-only to address");
             }
@@ -746,7 +746,7 @@ async fn modern_connection(
     if component_stream_attribute(&opening, "version", "jabber:client", false).as_deref()
         != Some("1.0")
     {
-        write_component_stream_open(&mut stream, &state.config.domain, "", &stream_id()).await?;
+        write_component_stream_open(&mut stream, state.local_domain(), "", &stream_id()).await?;
         s2s::send_stream_error(&mut stream, "unsupported-version").await?;
         anyhow::bail!("XEP-0225 component did not open a version 1.0 stream");
     }
@@ -755,7 +755,7 @@ async fn modern_connection(
     {
         Some(domain) => domain,
         None => {
-            write_component_stream_open(&mut stream, &state.config.domain, "", &stream_id())
+            write_component_stream_open(&mut stream, state.local_domain(), "", &stream_id())
                 .await?;
             s2s::send_stream_error(&mut stream, "invalid-from").await?;
             anyhow::bail!("XEP-0225 component stream omitted a valid domain-only from address");
@@ -768,7 +768,7 @@ async fn modern_connection(
         None => {
             write_component_stream_open(
                 &mut stream,
-                &state.config.domain,
+                state.local_domain(),
                 &asserted_domain,
                 &stream_id(),
             )
@@ -784,10 +784,10 @@ async fn modern_connection(
                 && credential.connection == ComponentConnectionMode::Accept
                 && credential.modern_0225
         });
-    if !same_component_domain(&target, &state.config.domain) || credential.is_none() {
+    if !same_component_domain(&target, state.local_domain()) || credential.is_none() {
         write_component_stream_open(
             &mut stream,
-            &state.config.domain,
+            state.local_domain(),
             &asserted_domain,
             &stream_id(),
         )
@@ -799,7 +799,7 @@ async fn modern_connection(
 
     write_component_stream_open(
         &mut stream,
-        &state.config.domain,
+        state.local_domain(),
         &asserted_domain,
         &stream_id(),
     )
@@ -844,7 +844,7 @@ async fn modern_connection(
     }
     write_component_stream_open(
         &mut secure,
-        &state.config.domain,
+        state.local_domain(),
         &credential.primary_domain,
         &stream_id(),
     )
@@ -935,7 +935,7 @@ async fn modern_connection(
     }
     write_component_stream_open(
         &mut secure,
-        &state.config.domain,
+        state.local_domain(),
         &credential.primary_domain,
         &stream_id(),
     )
@@ -1449,11 +1449,11 @@ async fn route_component_stanza(
 
     let target = target_domain(to).expect("checked above");
     let hosted_locally = [
-        state.config.domain.clone(),
-        format!("pubsub.{}", state.config.domain),
-        format!("conference.{}", state.config.domain),
-        format!("mix.{}", state.config.domain),
-        format!("upload.{}", state.config.domain),
+        state.local_domain().to_owned(),
+        format!("pubsub.{}", state.local_domain()),
+        format!("conference.{}", state.local_domain()),
+        format!("mix.{}", state.local_domain()),
+        format!("upload.{}", state.local_domain()),
     ]
     .iter()
     .any(|hosted| same_component_domain(&target, hosted));
@@ -1694,7 +1694,7 @@ fn validate_modern_opening(
         return Err("invalid-from");
     }
     if component_stream_attribute(opening, "to", "jabber:client", true)
-        .is_none_or(|domain| !same_component_domain(&domain, &state.config.domain))
+        .is_none_or(|domain| !same_component_domain(&domain, state.local_domain()))
     {
         return Err("host-unknown");
     }

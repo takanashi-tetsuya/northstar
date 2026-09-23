@@ -75,7 +75,7 @@ impl ProtocolSession {
                 self.negotiation.mark_registration_completed();
                 Ok(Action::Send(ibr_success(
                     &username,
-                    &self.state.config.domain,
+                    self.state.local_domain(),
                 )))
             }
             IbrCompletion::Retry(challenge) => {
@@ -154,7 +154,7 @@ impl ProtocolSession {
             IbrCompletion::Created(username) => {
                 self.negotiation.mark_registration_completed();
                 let success_id = format!("ibr-success-{}", uuid::Uuid::new_v4());
-                let success_payload = ibr_success(&username, &self.state.config.domain);
+                let success_payload = ibr_success(&username, self.state.local_domain());
                 let success = XmlElement::namespaced("iq", "jabber:client")
                     .attr("type", "set")
                     .attr("id", &success_id)

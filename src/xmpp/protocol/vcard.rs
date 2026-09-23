@@ -281,7 +281,7 @@ impl ProtocolSession {
             let Ok(target) = crate::jid::CanonicalJid::parse_bare(to) else {
                 return Ok(Action::Send(iq_error(id, "jid-malformed")));
             };
-            if target.domainpart() != self.state.config.domain {
+            if target.domainpart() != self.state.local_domain() {
                 return Ok(Action::Send(iq_error(id, "item-not-found")));
             }
             let Some(localpart) = target.localpart() else {
@@ -338,7 +338,7 @@ impl ProtocolSession {
         if iq.attribute("to").is_some_and(|to| {
             !crate::jid::CanonicalJid::parse_bare(to).is_ok_and(|target| {
                 target.localpart() == Some(user.username.as_str())
-                    && target.domainpart() == self.state.config.domain
+                    && target.domainpart() == self.state.local_domain()
             })
         }) {
             return Ok(Action::Send(iq_error(id, "forbidden")));
@@ -412,7 +412,7 @@ impl ProtocolSession {
         }
         if let AvatarPresenceUpdate::Changed(hash) = outcome.avatar_presence {
             self.refresh_local_avatar_presence(
-                &format!("{}@{}", user.username, self.state.config.domain),
+                &format!("{}@{}", user.username, self.state.local_domain()),
                 hash.as_deref(),
             );
         }

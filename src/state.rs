@@ -1888,6 +1888,27 @@ pub(crate) struct LocalSessionLeaseSnapshot {
     pub(crate) disconnect: CancellationToken,
 }
 
+/// Only the state needed to transfer a live SM resource's presence epoch.
+pub(crate) struct SmPresenceEpoch {
+    pub(crate) gate: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) fallback_suppressed: Arc<DashSet<String>>,
+    pub(crate) caps_generation: Arc<AtomicU64>,
+}
+
+/// Result of one atomic local SM route-table inspection. Every value is owned
+/// before the caller can wait on a gate, durable claim or route-removal signal.
+pub(crate) enum SmStagedRouteClaim {
+    Inserted,
+    Conflict,
+    AdoptPresenceEpoch(SmPresenceEpoch),
+    Replace {
+        connection_id: uuid::Uuid,
+        lifecycle: Arc<AtomicU8>,
+        disconnect: CancellationToken,
+        route_incarnation: Arc<RouteIncarnationSignal>,
+    },
+}
+
 fn local_session_authority_snapshots_in(
     sessions: &DashMap<String, OnlineSession>,
 ) -> Vec<LocalSessionAuthoritySnapshot> {
@@ -1928,6 +1949,66 @@ fn local_session_lease_snapshots_in(
         .collect()
 }
 
+fn try_stage_bound_session_in(
+    sessions: &DashMap<String, OnlineSession>,
+    key: String,
+    session: OnlineSession,
+) -> bool {
+    debug_assert!(!session.routable.load(Ordering::Acquire));
+    match sessions.entry(key) {
+        dashmap::mapref::entry::Entry::Vacant(entry) => {
+            entry.insert(session);
+            true
+        }
+        dashmap::mapref::entry::Entry::Occupied(_) => false,
+    }
+}
+
+fn stage_sm_resumed_session_in(
+    sessions: &DashMap<String, OnlineSession>,
+    key: String,
+    candidate: OnlineSession,
+    claimant_user: uuid::Uuid,
+    claimed_sm_id: uuid::Uuid,
+    expected_gate: &Arc<tokio::sync::Mutex<()>>,
+) -> SmStagedRouteClaim {
+    debug_assert!(!candidate.routable.load(Ordering::Acquire));
+    match sessions.entry(key) {
+        dashmap::mapref::entry::Entry::Vacant(entry) => {
+            entry.insert(candidate);
+            SmStagedRouteClaim::Inserted
+        }
+        dashmap::mapref::entry::Entry::Occupied(entry) => {
+            let existing = entry.get();
+            let existing_sm_id = *existing
+                .sm_session_id
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !matching_sm_route(
+                existing.user_id,
+                existing_sm_id,
+                claimant_user,
+                claimed_sm_id,
+            ) {
+                SmStagedRouteClaim::Conflict
+            } else if !Arc::ptr_eq(expected_gate, &existing.mix_presence_gate) {
+                SmStagedRouteClaim::AdoptPresenceEpoch(SmPresenceEpoch {
+                    gate: Arc::clone(&existing.mix_presence_gate),
+                    fallback_suppressed: Arc::clone(&existing.mix_presence_fallback_suppressed),
+                    caps_generation: Arc::clone(&existing.caps_observation_generation),
+                })
+            } else {
+                SmStagedRouteClaim::Replace {
+                    connection_id: existing.connection_id,
+                    lifecycle: Arc::clone(&existing.lifecycle),
+                    disconnect: existing.disconnect.clone(),
+                    route_incarnation: Arc::clone(&existing.route_incarnation),
+                }
+            }
+        }
+    }
+}
+
 enum LocalSessionFence {
     Instance(uuid::Uuid),
     Sm(uuid::Uuid),
@@ -1936,6 +2017,55 @@ enum LocalSessionFence {
         auth_generation: i64,
         connection_id: uuid::Uuid,
     },
+}
+
+pub(crate) fn local_caps_route_epoch_matches(
+    current_connection_id: uuid::Uuid,
+    current_generation: u64,
+    routable: bool,
+    cancelled: bool,
+    lifecycle: u8,
+    same_gate: bool,
+    expected: LocalCapsEpoch,
+) -> bool {
+    current_connection_id == expected.connection_id
+        && current_generation == expected.generation
+        && routable
+        && !cancelled
+        && lifecycle == 0
+        && same_gate
+}
+
+pub(crate) fn mix_presence_epoch_is_current(
+    current_connection_id: uuid::Uuid,
+    expected_connection_id: uuid::Uuid,
+    current_caps_generation: u64,
+    expected_caps_generation: u64,
+    routable: bool,
+    available: bool,
+    same_gate: bool,
+) -> bool {
+    current_connection_id == expected_connection_id
+        && current_caps_generation == expected_caps_generation
+        && routable
+        && available
+        && same_gate
+}
+
+pub(crate) fn mix_presence_fallback_is_suppressed(
+    suppressed: &DashSet<String>,
+    channel_jid: &str,
+) -> bool {
+    suppressed.contains("*") || suppressed.contains(channel_jid)
+}
+
+pub(crate) fn matching_sm_route(
+    existing_user: uuid::Uuid,
+    existing_sm_id: Option<uuid::Uuid>,
+    claimant_user: uuid::Uuid,
+    claimed_sm_id: uuid::Uuid,
+) -> bool {
+    existing_user == claimant_user && existing_sm_id == Some(claimed_sm_id)
 }
 
 fn fence_local_session_in(
@@ -2274,6 +2404,98 @@ mod account_revocation_route_tests {
         ));
         assert!(!sessions.get(key).unwrap().routable.load(Ordering::Acquire));
     }
+
+    #[test]
+    fn staged_bind_reservation_rejects_a_second_connection() {
+        let sessions = DashMap::new();
+        let key = "alice@example.test/phone";
+        let owner = uuid::Uuid::new_v4();
+        let first = session(owner, 4, false);
+        let first_connection = first.connection_id;
+        assert!(try_stage_bound_session_in(&sessions, key.into(), first));
+        assert!(!try_stage_bound_session_in(
+            &sessions,
+            key.into(),
+            session(owner, 4, false),
+        ));
+        assert_eq!(sessions.get(key).unwrap().connection_id, first_connection);
+        assert!(!sessions.get(key).unwrap().routable.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn sm_takeover_inspection_preserves_exact_owner_and_presence_gate() {
+        let sessions = DashMap::new();
+        let key = "alice@example.test/phone";
+        let owner = uuid::Uuid::new_v4();
+        let sm_id = uuid::Uuid::new_v4();
+        let old = session(owner, 4, true);
+        let old_connection = old.connection_id;
+        *old.sm_session_id.write().unwrap() = Some(sm_id);
+        let old_gate = Arc::clone(&old.mix_presence_gate);
+        let old_signal = Arc::clone(&old.route_incarnation);
+        sessions.insert(key.into(), old);
+        let candidate = || session(owner, 4, false);
+
+        assert!(matches!(
+            stage_sm_resumed_session_in(
+                &sessions,
+                key.into(),
+                candidate(),
+                uuid::Uuid::new_v4(),
+                sm_id,
+                &old_gate,
+            ),
+            SmStagedRouteClaim::Conflict
+        ));
+        assert!(matches!(
+            stage_sm_resumed_session_in(
+                &sessions,
+                key.into(),
+                candidate(),
+                owner,
+                uuid::Uuid::new_v4(),
+                &old_gate,
+            ),
+            SmStagedRouteClaim::Conflict
+        ));
+        let other_gate = Arc::new(tokio::sync::Mutex::new(()));
+        let SmStagedRouteClaim::AdoptPresenceEpoch(epoch) = stage_sm_resumed_session_in(
+            &sessions,
+            key.into(),
+            candidate(),
+            owner,
+            sm_id,
+            &other_gate,
+        ) else {
+            panic!("SM takeover must adopt the current resource gate");
+        };
+        assert!(Arc::ptr_eq(&epoch.gate, &old_gate));
+        let SmStagedRouteClaim::Replace {
+            connection_id,
+            route_incarnation,
+            ..
+        } = stage_sm_resumed_session_in(
+            &sessions,
+            key.into(),
+            candidate(),
+            owner,
+            sm_id,
+            &old_gate,
+        )
+        else {
+            panic!("SM takeover must name the exact old connection");
+        };
+        assert_eq!(connection_id, old_connection);
+        assert!(Arc::ptr_eq(&route_incarnation, &old_signal));
+        assert_eq!(sessions.get(key).unwrap().connection_id, old_connection);
+
+        let vacant = DashMap::new();
+        assert!(matches!(
+            stage_sm_resumed_session_in(&vacant, key.into(), candidate(), owner, sm_id, &old_gate,),
+            SmStagedRouteClaim::Inserted
+        ));
+        assert_eq!(vacant.len(), 1);
+    }
 }
 
 /// Private observability capability. It contains only read-only live probes
@@ -2326,6 +2548,13 @@ impl ReadinessContext {
             .validate_persistence(self.abuse_key_deployment.as_ref(), cluster_authority)
             .await
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct S2sOfflineDeliveryLimits {
+    pub(crate) max_messages: i64,
+    pub(crate) max_bytes: i64,
+    pub(crate) ttl_days: i64,
 }
 
 pub struct AppState {
@@ -2447,7 +2676,7 @@ pub struct AppState {
             db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository,
         >,
     bosh: Option<crate::bosh::BoshManager>,
-    pub sessions: Arc<DashMap<String, OnlineSession>>,
+    sessions: Arc<DashMap<String, OnlineSession>>,
     pub muc_occupants: Arc<DashMap<String, MucOccupant>>,
     /// Exactly one process-local suspension/resume FIFO per durable SM
     /// session.  Every room occupancy for the same client points at this Arc,
@@ -2458,7 +2687,7 @@ pub struct AppState {
     /// sealed until this queue proves a durable handoff.
     sm_suspension_recovery: Arc<crate::services::session_cleanup::SmSuspensionRecoveryQueue>,
     sm_memory_governor: Arc<crate::services::sm_capacity::SmMemoryGovernor>,
-    pub metrics: Arc<Metrics>,
+    metrics: Arc<Metrics>,
     /// Optional credential for the dedicated observability listener. Callers
     /// can ask for an authorization decision but cannot read the token.
     metrics_bearer_token: Option<Arc<Zeroizing<String>>>,
@@ -2663,6 +2892,170 @@ fn ephemeral_api_control_secret() -> [u8; 64] {
 }
 
 impl AppState {
+    pub(crate) fn record_http_registration_created(&self) {
+        self.metrics
+            .registrations_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_http_rate_limited(&self) {
+        self.metrics
+            .rate_limited_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_http_capacity_rejected(&self) {
+        self.metrics
+            .capacity_reservations_rejected_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_http_challenge_requested(&self) {
+        self.metrics
+            .anti_abuse_challenges_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_http_authentication_backend_failure(&self) {
+        self.metrics
+            .authentication_backend_failures_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn start_upload_operation_timer(&self) -> crate::metrics::DurationTimer<'_> {
+        self.metrics.upload_operation_duration_seconds.start_timer()
+    }
+
+    pub(crate) fn record_bosh_session_opened(&self) {
+        self.metrics
+            .bosh_sessions_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .bosh_sessions_active
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_bosh_session_closed(&self) {
+        self.metrics
+            .bosh_sessions_active
+            .fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_c2s_tcp_connection(&self) {
+        self.metrics
+            .tcp_connections_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_c2s_websocket_connection(&self) {
+        self.metrics
+            .websocket_connections_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_c2s_backpressure_disconnect(&self) {
+        self.metrics
+            .c2s_backpressure_disconnects_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_cluster_background_maintenance_failure(&self) {
+        self.metrics
+            .background_maintenance_failures_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_cluster_muc_reconciliation(&self) {
+        self.metrics
+            .cluster_muc_pg_reconciliations_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_cluster_muc_outbox_delivery(&self) {
+        self.metrics
+            .cluster_muc_outbox_deliveries_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_cluster_muc_outbox_retry(&self) {
+        self.metrics
+            .cluster_muc_outbox_retries_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_cluster_presence_probe_failure(&self) {
+        self.metrics
+            .cluster_presence_probe_failures_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_tls_reload_failure(&self) {
+        self.metrics
+            .tls_reload_failures_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_tls_reload_revocations(&self, outcome: &crate::tls::TlsReloadOutcome) {
+        self.metrics
+            .tls_revocation_rechecks_total
+            .fetch_add(outcome.evaluated_sessions, Ordering::Relaxed);
+        self.metrics
+            .tls_revocation_recheck_inconclusive_total
+            .fetch_add(outcome.inconclusive_rechecks, Ordering::Relaxed);
+        self.metrics
+            .tls_revoked_sessions_drained_total
+            .fetch_add(outcome.drained_total(), Ordering::Relaxed);
+        self.metrics
+            .tls_revoked_c2s_external_sessions_drained_total
+            .fetch_add(outcome.drained_c2s_external, Ordering::Relaxed);
+        self.metrics
+            .tls_revoked_inbound_s2s_external_sessions_drained_total
+            .fetch_add(outcome.drained_inbound_s2s_external, Ordering::Relaxed);
+        self.metrics
+            .tls_revoked_outbound_s2s_external_sessions_drained_total
+            .fetch_add(outcome.drained_outbound_s2s_external, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_session_finalization_started(&self) {
+        self.metrics
+            .session_finalizations_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_session_finalization_failures(&self, failures: usize) {
+        self.metrics
+            .session_finalization_failures_total
+            .fetch_add(failures as u64, Ordering::Relaxed);
+    }
+
+    pub(crate) fn start_cluster_redis_operation_timer(&self) -> crate::metrics::DurationTimer<'_> {
+        self.metrics.redis_operation_duration_seconds.start_timer()
+    }
+
+    pub(crate) fn record_cluster_muc_outbox_gauges(
+        &self,
+        snapshot: crate::services::cluster_muc_outbox_housekeeping::ClusterMucOutboxGaugeSnapshot,
+    ) {
+        self.metrics
+            .cluster_muc_outbox_queued
+            .store(snapshot.queued_rows.max(0) as u64, Ordering::Relaxed);
+        self.metrics
+            .cluster_muc_outbox_dead_letters
+            .store(snapshot.dead_letter_rows.max(0) as u64, Ordering::Relaxed);
+        self.metrics
+            .cluster_muc_outbox_oldest_age_seconds
+            .store(snapshot.oldest_age_seconds.max(0) as u64, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_cluster_online_queue_acceptance(&self, durable: bool) {
+        let counter = if durable {
+            &self.metrics.online_queue_durable_acceptances_total
+        } else {
+            &self.metrics.online_queue_volatile_acceptances_total
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(crate) fn federation_outbox(&self) -> &FederationRouter {
         &self.federation_outbox
     }
@@ -2754,6 +3147,57 @@ impl AppState {
     /// Validated local identity for protocol routing without exposing Config.
     pub(crate) fn local_domain(&self) -> &str {
         &self.config.domain
+    }
+
+    pub(crate) fn s2s_federation_enabled(&self) -> bool {
+        self.config.federation_enabled
+    }
+
+    pub(crate) fn s2s_sasl_external_enabled(&self) -> bool {
+        self.config.s2s_sasl_external_enabled
+    }
+
+    pub(crate) fn s2s_dialback_enabled(&self) -> bool {
+        self.config.dialback_enabled
+    }
+
+    pub(crate) fn s2s_dane_required(&self) -> bool {
+        self.config.federation_dane_mode == crate::s2s::dane::DaneMode::Required
+    }
+
+    pub(crate) fn s2s_private_addresses_allowed(&self) -> bool {
+        self.config.federation_allow_private_ips
+    }
+
+    pub(crate) fn s2s_component_domain_configured(&self, domain: &str) -> bool {
+        self.config.component_domain_configured(domain)
+    }
+
+    pub(crate) fn s2s_ping_route_enabled(&self) -> bool {
+        self.config.xmpp_extensions.route_enabled(
+            northstar_xep_core::StanzaKind::IqGet,
+            northstar_xep_0199::NAMESPACE,
+            "ping",
+        )
+    }
+
+    pub(crate) fn validate_routed_message(
+        &self,
+        root: roxmltree::Node<'_, '_>,
+    ) -> Result<(), &'static str> {
+        crate::xmpp::xml_util::validate_routed_message(root, &self.config.xmpp_extensions)
+    }
+
+    pub(crate) fn s2s_requires_encrypted_archive(&self) -> bool {
+        self.config.require_encrypted_archive
+    }
+
+    pub(crate) fn s2s_offline_delivery_limits(&self) -> S2sOfflineDeliveryLimits {
+        S2sOfflineDeliveryLimits {
+            max_messages: self.config.offline_max_messages_per_account,
+            max_bytes: self.config.offline_max_bytes_per_account,
+            ttl_days: self.config.offline_message_ttl_days,
+        }
     }
 
     pub(crate) fn metrics_context(&self) -> MetricsContext {
@@ -5460,6 +5904,357 @@ impl AppState {
                 connection_id,
             },
         )
+    }
+
+    /// Reserve a non-routable bind candidate under the same map entry guard
+    /// that rejects a concurrent bind or resume for this full JID.
+    pub(crate) fn try_stage_bound_session(&self, key: String, session: OnlineSession) -> bool {
+        try_stage_bound_session_in(&self.sessions, key, session)
+    }
+
+    pub(crate) fn staged_session_is_current(
+        &self,
+        key: &str,
+        connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+        lifecycle: &Arc<AtomicU8>,
+    ) -> bool {
+        self.sessions.get(key).is_some_and(|session| {
+            session.connection_id == connection_id
+                && session.user_id == user_id
+                && session.auth_generation == auth_generation
+                && Arc::ptr_eq(&session.lifecycle, lifecycle)
+                && !session.disconnect.is_cancelled()
+                && session.lifecycle.load(Ordering::Acquire) == 0
+        })
+    }
+
+    pub(crate) fn publish_user_agent_epoch_if_current(
+        &self,
+        key: &str,
+        connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+        lifecycle: &Arc<AtomicU8>,
+        user_agent_epoch: Option<i64>,
+    ) -> bool {
+        let Some(mut session) = self.sessions.get_mut(key) else {
+            return false;
+        };
+        if session.connection_id != connection_id
+            || session.user_id != user_id
+            || session.auth_generation != auth_generation
+            || !Arc::ptr_eq(&session.lifecycle, lifecycle)
+            || session.disconnect.is_cancelled()
+            || session.lifecycle.load(Ordering::Acquire) != 0
+        {
+            return false;
+        }
+        session.user_agent_epoch = user_agent_epoch;
+        true
+    }
+
+    /// A carbon preference is session-local and must be visible to fan-out
+    /// before its IQ result is sent to the same connection.
+    pub(crate) fn set_local_carbons_for_connection(
+        &self,
+        key: &str,
+        connection_id: uuid::Uuid,
+        enabled: bool,
+    ) -> bool {
+        let Some(route) = self.sessions.get(key) else {
+            return false;
+        };
+        if route.connection_id != connection_id {
+            return false;
+        }
+        route.carbons.store(enabled, Ordering::Release);
+        true
+    }
+
+    pub(crate) fn sm_pending_route_removal_signal(
+        &self,
+        key: &str,
+        old_connection_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        sm_session_id: uuid::Uuid,
+        cancel_live_route: bool,
+    ) -> Option<tokio::sync::watch::Receiver<bool>> {
+        let session = self.sessions.get(key)?;
+        let exact_sm = session
+            .sm_session_id
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some_and(|current| current == sm_session_id);
+        if session.connection_id != old_connection_id || session.user_id != user_id || !exact_sm {
+            return None;
+        }
+        if cancel_live_route {
+            session.disconnect.cancel();
+        }
+        Some(session.route_incarnation.subscribe())
+    }
+
+    pub(crate) fn sm_presence_epoch(&self, key: &str) -> Option<SmPresenceEpoch> {
+        self.sessions.get(key).map(|session| SmPresenceEpoch {
+            gate: Arc::clone(&session.mix_presence_gate),
+            fallback_suppressed: Arc::clone(&session.mix_presence_fallback_suppressed),
+            caps_generation: Arc::clone(&session.caps_observation_generation),
+        })
+    }
+
+    /// Inspect/insert inside one DashMap entry operation. The caller owns the
+    /// returned gate and route-incarnation handles before any async wait.
+    pub(crate) fn stage_sm_resumed_session(
+        &self,
+        key: String,
+        candidate: OnlineSession,
+        claimant_user: uuid::Uuid,
+        claimed_sm_id: uuid::Uuid,
+        expected_gate: &Arc<tokio::sync::Mutex<()>>,
+    ) -> SmStagedRouteClaim {
+        stage_sm_resumed_session_in(
+            &self.sessions,
+            key,
+            candidate,
+            claimant_user,
+            claimed_sm_id,
+            expected_gate,
+        )
+    }
+
+    /// The command protocol receives only the delivered account identities,
+    /// not mutable access to the session table.
+    pub(crate) fn send_local_announcement(
+        &self,
+        stanza: &str,
+    ) -> std::collections::BTreeSet<String> {
+        let mut recipients = std::collections::BTreeSet::new();
+        for entry in self.sessions.iter() {
+            if entry.routable.load(Ordering::Acquire)
+                && entry.available.load(Ordering::Acquire)
+                && entry.priority.load(Ordering::Acquire) >= 0
+                && entry.sender.try_send(stanza.to_owned()).is_ok()
+            {
+                if let Ok(bare) = crate::jid::canonical_bare_key(entry.key()) {
+                    recipients.insert(bare);
+                }
+            }
+        }
+        recipients
+    }
+
+    pub(crate) fn local_online_bare_jids(&self) -> std::collections::BTreeSet<String> {
+        self.sessions
+            .iter()
+            .filter(|entry| entry.routable.load(Ordering::Acquire))
+            .filter_map(|entry| crate::jid::canonical_bare_key(entry.key()).ok())
+            .collect()
+    }
+
+    pub(crate) fn local_activity_bare_jids(
+        &self,
+        idle_after: Duration,
+    ) -> (
+        std::collections::BTreeSet<String>,
+        std::collections::BTreeSet<String>,
+    ) {
+        let mut online = std::collections::BTreeSet::new();
+        let mut active = std::collections::BTreeSet::new();
+        for entry in self.sessions.iter() {
+            if !entry.routable.load(Ordering::Acquire) {
+                continue;
+            }
+            let Ok(bare) = crate::jid::canonical_bare_key(entry.key()) else {
+                continue;
+            };
+            online.insert(bare.clone());
+            if entry
+                .last_activity
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .elapsed()
+                < idle_after
+            {
+                active.insert(bare);
+            }
+        }
+        (online, active)
+    }
+
+    /// Initial key snapshot for an account presence probe. The protocol then
+    /// rechecks each incarnation after its privacy/database awaits.
+    pub(crate) fn local_presence_owner_keys(&self) -> Vec<String> {
+        self.sessions
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+
+    pub(crate) fn local_presence_owner_candidate(
+        &self,
+        key: &str,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+    ) -> Option<OnlineSession> {
+        self.sessions.get(key).and_then(|session| {
+            (session.routable.load(Ordering::Acquire)
+                && session.user_id == user_id
+                && session.auth_generation == auth_generation
+                && session.available.load(Ordering::Relaxed))
+            .then(|| session.value().clone())
+        })
+    }
+
+    pub(crate) fn local_presence_owner_if_current(
+        &self,
+        key: &str,
+        expected: &OnlineSession,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+    ) -> Option<OnlineSession> {
+        self.sessions.get(key).and_then(|current| {
+            (current.connection_id == expected.connection_id
+                && Arc::ptr_eq(&current.route_incarnation, &expected.route_incarnation)
+                && current.user_id == user_id
+                && current.auth_generation == auth_generation
+                && current.routable.load(Ordering::Acquire)
+                && current.available.load(Ordering::Relaxed))
+            .then(|| current.value().clone())
+        })
+    }
+
+    pub(crate) fn send_presence_if_owner_current(
+        &self,
+        key: &str,
+        expected: &OnlineSession,
+        user_id: uuid::Uuid,
+        auth_generation: i64,
+        recipient: &crate::outbound::OutboundSender,
+        presence: &str,
+    ) -> bool {
+        let Some(current) = self.sessions.get(key) else {
+            return false;
+        };
+        if current.connection_id != expected.connection_id
+            || !Arc::ptr_eq(&current.route_incarnation, &expected.route_incarnation)
+            || current.user_id != user_id
+            || current.auth_generation != auth_generation
+            || !current.routable.load(Ordering::Acquire)
+            || !current.available.load(Ordering::Relaxed)
+        {
+            return false;
+        }
+        recipient.try_send(presence.to_owned()).is_ok()
+    }
+
+    pub(crate) fn local_caps_epoch_is_current(
+        &self,
+        full_jid: &str,
+        epoch: LocalCapsEpoch,
+        expected_gate: Option<&Arc<tokio::sync::Mutex<()>>>,
+    ) -> bool {
+        self.sessions.get(full_jid).is_some_and(|session| {
+            local_caps_route_epoch_matches(
+                session.connection_id,
+                session.caps_observation_generation.load(Ordering::Acquire),
+                session.routable.load(Ordering::Acquire),
+                session.disconnect.is_cancelled(),
+                session.lifecycle.load(Ordering::Acquire),
+                expected_gate.is_none_or(|gate| Arc::ptr_eq(&session.mix_presence_gate, gate)),
+                epoch,
+            )
+        })
+    }
+
+    pub(crate) fn local_caps_sender_if_current(
+        &self,
+        full_jid: &str,
+        epoch: LocalCapsEpoch,
+    ) -> Option<crate::outbound::OutboundSender> {
+        self.sessions.get(full_jid).and_then(|session| {
+            local_caps_route_epoch_matches(
+                session.connection_id,
+                session.caps_observation_generation.load(Ordering::Acquire),
+                session.routable.load(Ordering::Acquire),
+                session.disconnect.is_cancelled(),
+                session.lifecycle.load(Ordering::Acquire),
+                true,
+                epoch,
+            )
+            .then(|| session.sender.clone())
+        })
+    }
+
+    pub(crate) fn local_caps_observer_connection_is_current(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        expected_gate: &Arc<tokio::sync::Mutex<()>>,
+    ) -> bool {
+        self.sessions.get(full_jid).is_some_and(|session| {
+            session.connection_id == connection_id
+                && Arc::ptr_eq(&session.mix_presence_gate, expected_gate)
+                && session.routable.load(Ordering::Acquire)
+                && !session.disconnect.is_cancelled()
+                && session.lifecycle.load(Ordering::Acquire) == 0
+        })
+    }
+
+    pub(crate) fn local_mix_presence_gate(
+        &self,
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+    ) -> Option<Arc<tokio::sync::Mutex<()>>> {
+        self.sessions
+            .get(full_jid)
+            .filter(|session| session.connection_id == connection_id)
+            .map(|session| Arc::clone(&session.mix_presence_gate))
+    }
+
+    pub(crate) fn local_mix_presence_epoch_state(
+        &self,
+        full_jid: &str,
+        expected_connection_id: uuid::Uuid,
+        expected_caps_generation: u64,
+        expected_gate: &Arc<tokio::sync::Mutex<()>>,
+        channel_jid: &str,
+    ) -> Option<(bool, bool)> {
+        self.sessions.get(full_jid).map(|session| {
+            (
+                mix_presence_epoch_is_current(
+                    session.connection_id,
+                    expected_connection_id,
+                    session.caps_observation_generation.load(Ordering::Acquire),
+                    expected_caps_generation,
+                    session.routable.load(Ordering::Acquire),
+                    session.available.load(Ordering::Acquire),
+                    Arc::ptr_eq(&session.mix_presence_gate, expected_gate),
+                ),
+                mix_presence_fallback_is_suppressed(
+                    &session.mix_presence_fallback_suppressed,
+                    channel_jid,
+                ),
+            )
+        })
+    }
+
+    pub(crate) fn local_mix_presence_route_is_current(
+        &self,
+        full_jid: &str,
+        expected_connection_id: uuid::Uuid,
+        expected_gate: &Arc<tokio::sync::Mutex<()>>,
+        require_available: bool,
+    ) -> bool {
+        self.sessions.get(full_jid).is_some_and(|session| {
+            session.connection_id == expected_connection_id
+                && Arc::ptr_eq(&session.mix_presence_gate, expected_gate)
+                && session.routable.load(Ordering::Acquire)
+                && (!require_available || session.available.load(Ordering::Acquire))
+                && !session.disconnect.is_cancelled()
+                && session.lifecycle.load(Ordering::Acquire) == 0
+        })
     }
 
     pub fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {

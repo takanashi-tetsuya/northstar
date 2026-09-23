@@ -80,7 +80,7 @@ pub(crate) async fn finalize(
     else {
         return Ok(FinalizeAccountDeletion::Missing);
     };
-    let account = format!("{}@{}", username, state.config.domain);
+    let account = format!("{}@{}", username, state.local_domain());
 
     // Deletion is already committed. Notification failures are observable but
     // cannot truthfully turn the successful mutation into an IQ failure.
@@ -119,7 +119,7 @@ async fn route_account_removal_presence(state: &AppState, from: &str, to: &str, 
         return;
     };
     let domain = target.domainpart();
-    if domain == state.config.domain {
+    if domain == state.local_domain() {
         for (_, session) in state.session_entries_for(to) {
             let _ = session.sender.try_send(stanza.clone());
         }

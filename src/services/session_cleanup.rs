@@ -750,10 +750,7 @@ impl SessionCleanupService {
         drop(mix_presence_epoch);
         let deadline = Instant::now() + CLEANUP_TOTAL_BUDGET;
         let mut report = CleanupReport::default();
-        self.state
-            .metrics
-            .session_finalizations_total
-            .fetch_add(1, Ordering::Relaxed);
+        self.state.record_session_finalization_started();
 
         let mut suspended = false;
         if let Some(suspension) = work.durable_suspension {
@@ -1026,10 +1023,7 @@ impl SessionCleanupService {
         connection_id: Uuid,
     ) -> CleanupReport {
         let mut report = CleanupReport::default();
-        self.state
-            .metrics
-            .session_finalizations_total
-            .fetch_add(1, Ordering::Relaxed);
+        self.state.record_session_finalization_started();
         if let Some(account) = account {
             let deadline = Instant::now() + CLEANUP_STEP_BUDGET;
             let _ = self
@@ -1050,9 +1044,7 @@ impl SessionCleanupService {
     fn complete_report(&self, report: CleanupReport) -> CleanupReport {
         if !report.is_clean() {
             self.state
-                .metrics
-                .session_finalization_failures_total
-                .fetch_add(report.failures.len() as u64, Ordering::Relaxed);
+                .record_session_finalization_failures(report.failures.len());
             tracing::error!(
                 connection_cleanup_failures = report.failures.len(),
                 failures = ?report.failures,
@@ -1190,7 +1182,7 @@ impl SessionCleanupService {
                 )
                 .await?;
         }
-        let actor_bare = format!("{}@{}", account.username, self.state.config.domain);
+        let actor_bare = format!("{}@{}", account.username, self.state.local_domain());
         for (jid, target) in self
             .state
             .session_entries_for(&actor_bare)

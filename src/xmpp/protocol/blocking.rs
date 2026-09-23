@@ -121,7 +121,7 @@ impl ProtocolSession {
         let Some(user) = &self.authenticated else {
             return;
         };
-        let owner = format!("{}@{}", user.username, self.state.config.domain);
+        let owner = format!("{}@{}", user.username, self.state.local_domain());
         let Some(payload) = blocking_change_payload(action, jids) else {
             tracing::error!(action, "refused unknown XEP-0191 push action");
             return;
@@ -180,7 +180,7 @@ impl ProtocolSession {
         available: bool,
     ) {
         let targets = blocking_presence_targets(roster, changed_patterns);
-        let owner = format!("{}@{}", user.username, self.state.config.domain);
+        let owner = format!("{}@{}", user.username, self.state.local_domain());
         deliver_blocking_presence_change(
             &self.state,
             &owner,
@@ -357,7 +357,7 @@ where
                 continue;
             };
             let delivery = set_to(&base_presence, &target);
-            if target_jid.domainpart() == state.config.domain {
+            if target_jid.domainpart() == state.local_domain() {
                 let mut recipients = state.session_entries_for(&target);
                 if target_jid.resourcepart().is_none() {
                     recipients.retain(|(_, recipient)| recipient.available.load(Ordering::Acquire));

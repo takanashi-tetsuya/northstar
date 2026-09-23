@@ -2467,7 +2467,11 @@ mod tests {
 
         // Deletion has exactly one queue authority. Neither application path
         // may race it by pre-inserting a second cleanup projection.
-        for source in [include_str!("users.rs"), include_str!("../pie.rs")] {
+        for source in [
+            include_str!("users.rs"),
+            include_str!("../pie.rs"),
+            include_str!("pie.rs"),
+        ] {
             assert!(!source.contains("INSERT INTO upload_cleanup_queue"));
         }
         let account_delete = include_str!("users.rs")
@@ -2489,7 +2493,7 @@ mod tests {
                 && capacity_lock < mutation_timeout,
             "account deletion must use SQL-native NOWAIT capacity admission before its normal mutation bound"
         );
-        let pie = include_str!("../pie.rs");
+        let pie = include_str!("pie.rs");
         let capacity_lock = pie
             .find("SELECT northstar_upload_capacity_lock()")
             .expect("PIE replacement capacity lock");

@@ -54,8 +54,9 @@ rejectsMutation('readiness also requires worker health', 'subservers', 'workers.
 rejectsMutation('reap health connections on cancellation', 'subservers', 'connections.shutdown().await', 'drop(connections)', /bounded local authority/);
 rejectsMutation('reject raw health error disclosure', 'subservers', 'let permits =', 'let detail = error.to_string();\nlet permits =', /failure details/);
 rejectsMutation('keep runtime role attestation', 'subservers', 'db::attest_runtime_role(&pool)', 'skip_attestation(&pool)', /startup\/shutdown/);
-rejectsMutation('close the exact advisory-lock session on early return', 'subservers', 'connection.close_on_drop()', 'connection.flush()', /physical session/);
-rejectsMutation('probe the exact ownership connection', 'subservers', 'execute(&mut *ownership)', 'execute(&pool)', /exact-session loss detection/);
+rejectsMutation('close the exact advisory-lock session on early return', 'maintenanceOwnership', 'connection.close_on_drop()', 'connection.flush()', /physical session/);
+rejectsMutation('probe the exact ownership connection', 'maintenanceOwnership', 'execute(&mut **connection)', 'execute(&pool)', /physical session/);
+rejectsMutation('maintenance probes its reserved connection', 'subservers', 'probe_exact(&mut ownership)', 'probe_exact(&mut pool)', /physical session/);
 rejectsMutation('ownership observer stays critical', 'subservers', '.register_observer("maintenance-ownership", WorkerCriticality::Critical)', '.register_observer("maintenance-ownership", WorkerCriticality::Restartable)', /observer must remain critical/);
 rejectsMutation('core cannot acquire embedded retention authority', 'subservers', 'self == Self::Standalone', 'self != Self::Maintenance', /only standalone/);
 rejectsMutation('maintenance cannot load core dotenv', 'main', 'if arguments != ["serve", "maintenance"]', 'if true', /core .env/);

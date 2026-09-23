@@ -171,13 +171,7 @@ pub(crate) async fn claim_maintenance(
 pub(crate) async fn claim_maintenance_on_connection(
     connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
 ) -> Result<()> {
-    // Even an early startup failure must close the physical session rather
-    // than return an advisory-lock owner to a still-live pool.
-    connection.close_on_drop();
-    let claimed: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtextextended(current_database() || ':' || current_schema() || ':northstar:archive-maintenance:v1', 0))")
-        .fetch_one(&mut **connection).await?;
-    anyhow::ensure!(claimed, "archive maintenance is already owned by another process; stop it before changing process topology");
-    Ok(())
+    db::maintenance_ownership::claim_exact(connection).await
 }
 
 pub(crate) async fn run_maintenance() -> Result<()> {
@@ -325,8 +319,11 @@ pub(crate) async fn run_maintenance() -> Result<()> {
             _ = interval.tick() => {
                 // The exact locked connection is probed; substituting a pool
                 // connection would conceal loss of exclusive ownership.
-                let probe = tokio::time::timeout(Duration::from_secs(3), sqlx::query("SELECT 1").execute(&mut *ownership)).await;
-                if !matches!(probe, Ok(Ok(_))) {
+                let probe = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    db::maintenance_ownership::probe_exact(&mut ownership),
+                ).await;
+                if !matches!(probe, Ok(Ok(()))) {
                     workers.observer_error("maintenance-ownership", "database ownership connection failed");
                     break Err(anyhow::anyhow!("maintenance database ownership connection failed"));
                 }

@@ -15,7 +15,6 @@ use crate::{
     state::bare_jid,
 };
 use anyhow::Result;
-use dashmap::mapref::entry::Entry;
 use roxmltree::Node;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
 use zeroize::Zeroizing;
@@ -623,50 +622,45 @@ impl ProtocolSession {
             }
         }
         let available = Arc::new(AtomicBool::new(false));
-        let locally_reserved = match self.state.sessions.entry(key.clone()) {
-            Entry::Occupied(_) => false,
-            Entry::Vacant(entry) => {
-                entry.insert(crate::state::OnlineSession {
-                    user_id: user.id,
-                    auth_generation: user.auth_generation,
-                    user_agent_epoch: None,
-                    connection_id: self.connection_id,
-                    route_incarnation: crate::state::RouteIncarnationSignal::new(
-                        self.connection_id,
-                    ),
-                    lifecycle: Arc::clone(&self.route_lifecycle),
-                    metrics_counted: Arc::new(AtomicBool::new(true)),
-                    routable: Arc::new(AtomicBool::new(false)),
-                    sender: self.outbound.clone(),
-                    available: Arc::clone(&available),
-                    mix_presence_gate: Arc::clone(&self.mix_presence_gate),
-                    mix_presence_fallback_suppressed: Arc::clone(
-                        &self.mix_presence_fallback_suppressed,
-                    ),
-                    caps_observation_generation: Arc::clone(&self.caps_observation_generation),
-                    carbons: Arc::clone(&self.carbons),
-                    priority: Arc::clone(&self.priority),
-                    show: Arc::clone(&self.show),
-                    blocklist_requested: Arc::clone(&self.blocklist_requested),
-                    roster_requested: Arc::clone(&self.roster_requested),
-                    roster_sync: Arc::clone(&self.roster_sync),
-                    mix_roster_annotations: Arc::clone(&self.mix_roster_annotations),
-                    privacy_active: Arc::clone(&self.privacy_active),
-                    privacy_requested: Arc::clone(&self.privacy_requested),
-                    directed_presence: Arc::clone(&self.directed_presence),
-                    last_presence: Arc::clone(&self.last_presence),
-                    ip: Some(self.peer_ip),
-                    resource: resource.clone(),
-                    user_agent_id: self.user_agent_id,
-                    sm_session_id: Arc::clone(&self.sm_session_id_shared),
-                    muc_memberships: Arc::clone(&self.joined_rooms),
-                    connected_at: std::time::Instant::now(),
-                    last_activity: Arc::clone(&self.last_activity),
-                    disconnect: self.disconnect.clone(),
-                });
-                true
-            }
-        };
+        let locally_reserved = self.state.try_stage_bound_session(
+            key.clone(),
+            crate::state::OnlineSession {
+                user_id: user.id,
+                auth_generation: user.auth_generation,
+                user_agent_epoch: None,
+                connection_id: self.connection_id,
+                route_incarnation: crate::state::RouteIncarnationSignal::new(self.connection_id),
+                lifecycle: Arc::clone(&self.route_lifecycle),
+                metrics_counted: Arc::new(AtomicBool::new(true)),
+                routable: Arc::new(AtomicBool::new(false)),
+                sender: self.outbound.clone(),
+                available: Arc::clone(&available),
+                mix_presence_gate: Arc::clone(&self.mix_presence_gate),
+                mix_presence_fallback_suppressed: Arc::clone(
+                    &self.mix_presence_fallback_suppressed,
+                ),
+                caps_observation_generation: Arc::clone(&self.caps_observation_generation),
+                carbons: Arc::clone(&self.carbons),
+                priority: Arc::clone(&self.priority),
+                show: Arc::clone(&self.show),
+                blocklist_requested: Arc::clone(&self.blocklist_requested),
+                roster_requested: Arc::clone(&self.roster_requested),
+                roster_sync: Arc::clone(&self.roster_sync),
+                mix_roster_annotations: Arc::clone(&self.mix_roster_annotations),
+                privacy_active: Arc::clone(&self.privacy_active),
+                privacy_requested: Arc::clone(&self.privacy_requested),
+                directed_presence: Arc::clone(&self.directed_presence),
+                last_presence: Arc::clone(&self.last_presence),
+                ip: Some(self.peer_ip),
+                resource: resource.clone(),
+                user_agent_id: self.user_agent_id,
+                sm_session_id: Arc::clone(&self.sm_session_id_shared),
+                muc_memberships: Arc::clone(&self.joined_rooms),
+                connected_at: std::time::Instant::now(),
+                last_activity: Arc::clone(&self.last_activity),
+                disconnect: self.disconnect.clone(),
+            },
+        );
         // Release the entry guard before touching PostgreSQL on a collision.
         if !locally_reserved {
             self.state
@@ -794,14 +788,13 @@ impl ProtocolSession {
         };
         let issued_fast = receipt.take_issued_fast();
         self.pending_credential_commit = Some(receipt);
-        let route_is_current = self.state.sessions.get_mut(&key).is_some_and(|session| {
-            session.connection_id == self.connection_id
-                && session.user_id == user.id
-                && session.auth_generation == user.auth_generation
-                && Arc::ptr_eq(&session.lifecycle, &self.route_lifecycle)
-                && !session.disconnect.is_cancelled()
-                && session.lifecycle.load(Ordering::Acquire) == 0
-        });
+        let route_is_current = self.state.staged_session_is_current(
+            &key,
+            self.connection_id,
+            user.id,
+            user.auth_generation,
+            &self.route_lifecycle,
+        );
         if !route_is_current {
             self.state
                 .remove_session_if_connection(&key, self.connection_id);
@@ -862,12 +855,10 @@ impl ProtocolSession {
         if !valid_from || !valid_to {
             return Ok(addressed_error("not-allowed"));
         }
-        let Some(route) = self
+        if !self
             .state
-            .sessions
-            .get(full_jid)
-            .filter(|route| route.connection_id == self.connection_id)
-        else {
+            .set_local_carbons_for_connection(full_jid, self.connection_id, enabled)
+        {
             // Never acknowledge a session-local capability unless the exact
             // bound route that fanout will inspect was updated. This also
             // closes a replacement/resumption race where the protocol actor
@@ -877,9 +868,7 @@ impl ProtocolSession {
         // The IQ handler and message fanout can run on different Tokio
         // tasks. Publish the per-resource selection before acknowledging the
         // control IQ so subsequent routing observes it.
-        route.carbons.store(enabled, Ordering::Release);
         self.carbons.store(enabled, Ordering::Release);
-        drop(route);
         // XEP-0280 examples 4 and 7 require the account bare JID as the
         // responder and the enabling resource's full JID as the result
         // target. The connection itself is not a substitute for the wire

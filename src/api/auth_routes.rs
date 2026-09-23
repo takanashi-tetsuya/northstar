@@ -70,26 +70,17 @@ pub async fn register(
         .await?;
     match outcome {
         Outcome::Created(body) => {
-            state
-                .metrics
-                .registrations_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            state.record_http_registration_created();
             json_bytes_response(StatusCode::CREATED, body)
         }
         Outcome::Rejected(body) => json_bytes_response(StatusCode::BAD_REQUEST, body),
         Outcome::Replay(response) => idempotency_replay_response(response),
         Outcome::AbuseDenied(error) => {
-            state
-                .metrics
-                .rate_limited_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            state.record_http_rate_limited();
             Err(rate_limited(error))
         }
         Outcome::CapacityExhausted => {
-            state
-                .metrics
-                .capacity_reservations_rejected_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            state.record_http_capacity_rejected();
             Err(AppError::TooManyRequests {
                 message: "deployment account capacity reached".into(),
                 retry_after: 3600,
@@ -266,10 +257,7 @@ pub async fn anti_abuse_challenge(
             (subject, actors)
         }
     };
-    state
-        .metrics
-        .anti_abuse_challenges_total
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    state.record_http_challenge_requested();
     let intent = body
         .intent
         .as_ref()
@@ -290,10 +278,7 @@ pub async fn anti_abuse_challenge(
         Err(error) => {
             if let Some(capacity) = error.downcast_ref::<crate::abuse::ChallengeCapacityExceeded>()
             {
-                state
-                    .metrics
-                    .rate_limited_total
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                state.record_http_rate_limited();
                 return Err(AppError::TooManyRequests {
                     message: "proof-of-work challenge capacity reached; try again later".into(),
                     retry_after: capacity.retry_after_seconds(),

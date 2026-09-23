@@ -65,10 +65,7 @@ pub async fn change_password(
             crate::api::idempotency::stored_api_response(response)
         }
         PasswordChangeResult::RateLimited(response) => {
-            state
-                .metrics
-                .rate_limited_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            state.record_http_rate_limited();
             crate::api::idempotency::stored_api_response(response)
         }
         PasswordChangeResult::Changed(response, account) => {
@@ -96,19 +93,13 @@ pub async fn change_password(
             "password-change capacity is temporarily exhausted; retry later".into(),
         )),
         PasswordChangeResult::VerifierUnavailable => {
-            state
-                .metrics
-                .authentication_backend_failures_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            state.record_http_authentication_backend_failure();
             Err(AppError::Unavailable(
                 "password authentication backend is temporarily unavailable; retry later".into(),
             ))
         }
         PasswordChangeResult::PublicationUnavailable => {
-            state
-                .metrics
-                .authentication_backend_failures_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            state.record_http_authentication_backend_failure();
             Err(AppError::Unavailable(
                 "password-change backend is temporarily unavailable; retry later".into(),
             ))

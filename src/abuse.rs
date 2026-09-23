@@ -1,3 +1,4 @@
+use crate::db::abuse_actor_state_repository::{lock_db_states, persist_db_states, DbActorState};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use dashmap::DashMap;
 use hmac::{Hmac, Mac};
@@ -7,7 +8,7 @@ pub use northstar_abuse_policy::{
 };
 use rand::RngCore;
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Postgres, QueryBuilder, Row};
+use sqlx::{PgPool, Row};
 use std::{
     collections::{HashSet, VecDeque},
     sync::{Arc, Mutex},
@@ -176,8 +177,6 @@ const MAX_ACTIVE_POW_CHALLENGES_PER_IP: usize =
     northstar_abuse_policy::MAX_ACTIVE_POW_CHALLENGES_PER_IP;
 const MAX_CHALLENGE_ISSUES_PER_IP_WINDOW: usize =
     northstar_abuse_policy::MAX_CHALLENGE_ISSUES_PER_IP_WINDOW;
-const CHALLENGE_CAPACITY_ADVISORY_LOCK: i64 =
-    northstar_abuse_policy::CHALLENGE_CAPACITY_ADVISORY_LOCK;
 #[cfg(test)]
 const MESSAGE_ADMISSION_CAPACITY_SHARDS: u8 =
     northstar_abuse_policy::MESSAGE_ADMISSION_CAPACITY_SHARDS;
@@ -190,6 +189,7 @@ const MESSAGE_ADMISSION_PENDING_TTL: Duration =
     northstar_abuse_policy::MESSAGE_ADMISSION_PENDING_TTL;
 const MESSAGE_ADMISSION_ACCEPTED_TTL: Duration =
     northstar_abuse_policy::MESSAGE_ADMISSION_ACCEPTED_TTL;
+#[cfg(test)]
 const MESSAGE_ADMISSION_CLEANUP_BATCH: i64 =
     northstar_abuse_policy::MESSAGE_ADMISSION_CLEANUP_BATCH;
 /// A delivered offline message retains its replay tombstone for exactly this
@@ -201,11 +201,10 @@ pub(crate) const OFFLINE_MESSAGE_ADMISSION_REPLAY_GRACE: Duration =
 /// Local waiters queue on these stripes before acquiring a PgPool connection.
 /// PostgreSQL try-locks below remain the cross-process authority.
 const ABUSE_STATE_GATE_SHARDS: usize = northstar_abuse_policy::ABUSE_STATE_GATE_SHARDS;
-const ABUSE_STATE_ADVISORY_HASH_SEED: i64 = northstar_abuse_policy::ABUSE_STATE_ADVISORY_HASH_SEED;
 
 #[derive(Debug)]
 pub struct ChallengeCapacityExceeded {
-    retry_after_seconds: u64,
+    pub(crate) retry_after_seconds: u64,
 }
 
 impl ChallengeCapacityExceeded {
@@ -237,16 +236,6 @@ pub fn is_abuse_state_busy(error: &anyhow::Error) -> bool {
     error.downcast_ref::<AbuseStateBusy>().is_some()
 }
 
-#[derive(Debug)]
-struct DbActorState {
-    key: String,
-    events: Vec<chrono::DateTime<chrono::Utc>>,
-    penalty_level: u32,
-    last_activity: chrono::DateTime<chrono::Utc>,
-    blocked_until: chrono::DateTime<chrono::Utc>,
-    sequence: i64,
-}
-
 fn actor_state_keys(action: AbuseAction, actors: &[String], secret: &[u8]) -> Vec<String> {
     let mut keys: Vec<String> = actors
         .iter()
@@ -255,95 +244,6 @@ fn actor_state_keys(action: AbuseAction, actors: &[String], secret: &[u8]) -> Ve
     keys.sort();
     keys.dedup();
     keys
-}
-
-async fn lock_db_states(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    keys: &[String],
-    now: chrono::DateTime<chrono::Utc>,
-) -> anyhow::Result<Vec<DbActorState>> {
-    if keys.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut keys = keys.to_vec();
-    keys.sort();
-    keys.dedup();
-
-    // A blocking row lock is enough to let one hot NAT/account consume every
-    // PgPool connection. Transaction advisory try-locks cover even the
-    // first-ever INSERT (where ON CONFLICT can otherwise wait), and NOWAIT
-    // below protects rolling upgrades from an older node holding a row lock.
-    for key in &keys {
-        let acquired: bool = sqlx::query_scalar(
-            "SELECT pg_try_advisory_xact_lock(hashtextextended($1::text, $2::bigint))",
-        )
-        .bind(key)
-        .bind(ABUSE_STATE_ADVISORY_HASH_SEED)
-        .fetch_one(&mut **tx)
-        .await?;
-        if !acquired {
-            return Err(AbuseStateBusy.into());
-        }
-    }
-    sqlx::query(
-        "INSERT INTO abuse_actor_states (state_key, last_activity, blocked_until)
-         SELECT key, $2, $2 FROM UNNEST($1::text[]) AS key
-         ON CONFLICT (state_key) DO NOTHING",
-    )
-    .bind(&keys)
-    .bind(now)
-    .execute(&mut **tx)
-    .await?;
-    let rows = sqlx::query("SELECT state_key, event_times, penalty_level, last_activity, blocked_until, sequence FROM abuse_actor_states WHERE state_key = ANY($1) ORDER BY state_key FOR UPDATE NOWAIT")
-        .bind(&keys)
-        .fetch_all(&mut **tx)
-        .await
-        .map_err(|error| {
-            if error
-                .as_database_error()
-                .and_then(|database| database.code())
-                .as_deref()
-                == Some("55P03")
-            {
-                anyhow::Error::new(AbuseStateBusy)
-            } else {
-                anyhow::Error::new(error)
-            }
-        })?;
-    Ok(rows
-        .into_iter()
-        .map(|row| DbActorState {
-            key: row.get("state_key"),
-            events: row.get("event_times"),
-            penalty_level: u32::try_from(row.get::<i32, _>("penalty_level")).unwrap_or(10),
-            last_activity: row.get("last_activity"),
-            blocked_until: row.get("blocked_until"),
-            sequence: row.get("sequence"),
-        })
-        .collect())
-}
-
-async fn persist_db_states(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    states: &[DbActorState],
-) -> anyhow::Result<()> {
-    if states.is_empty() {
-        return Ok(());
-    }
-    let mut query = QueryBuilder::<Postgres>::new(
-        "UPDATE abuse_actor_states AS target SET event_times=incoming.event_times, penalty_level=incoming.penalty_level, last_activity=incoming.last_activity, blocked_until=incoming.blocked_until, sequence=incoming.sequence FROM (",
-    );
-    query.push_values(states, |mut row, state| {
-        row.push_bind(&state.key)
-            .push_bind(&state.events)
-            .push_bind(i32::try_from(state.penalty_level).unwrap_or(10))
-            .push_bind(state.last_activity)
-            .push_bind(state.blocked_until)
-            .push_bind(state.sequence);
-    });
-    query.push(") AS incoming(state_key,event_times,penalty_level,last_activity,blocked_until,sequence) WHERE target.state_key=incoming.state_key");
-    query.build().execute(&mut **tx).await?;
-    Ok(())
 }
 
 fn trim_db_events(
@@ -813,26 +713,6 @@ fn ceil_seconds(duration: Duration) -> u64 {
     duration
         .as_secs()
         .saturating_add(u64::from(duration.subsec_nanos() != 0))
-        .max(1)
-}
-
-fn retry_after_db(
-    available_at: Option<chrono::DateTime<chrono::Utc>>,
-    now: chrono::DateTime<chrono::Utc>,
-) -> u64 {
-    available_at
-        .map(|available_at| {
-            u64::try_from(
-                available_at
-                    .signed_duration_since(now)
-                    .num_milliseconds()
-                    .max(1)
-                    .saturating_add(999)
-                    / 1_000,
-            )
-            .unwrap_or(u64::MAX)
-        })
-        .unwrap_or(1)
         .max(1)
 }
 
@@ -2188,17 +2068,14 @@ impl AbuseGuard {
             self.pool.is_some(),
             "transactional abuse decisions require persistent storage"
         );
-        let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-            .fetch_one(&mut **tx)
-            .await?;
         let keys = self.persistent_actor_state_keys(action, actors);
         let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
-        let mut states = lock_db_states(tx, &keys, now).await?;
-        decay_db_states(&mut states, now, &self.config);
-        self.merge_previous_actor_states(action, actors, &mut states);
-        let requirement = requirement_from_db(action, &states, &shared_ip_keys, now, &self.config);
-        persist_db_states(tx, &states).await?;
-        Ok(requirement)
+        crate::db::abuse_actor_state_repository::apply_in_tx(tx, &keys, |states, now| {
+            decay_db_states(states, now, &self.config);
+            self.merge_previous_actor_states(action, actors, states);
+            requirement_from_db(action, states, &shared_ip_keys, now, &self.config)
+        })
+        .await
     }
 
     pub async fn record_failure(
@@ -2227,17 +2104,16 @@ impl AbuseGuard {
             self.pool.is_some(),
             "transactional abuse decisions require persistent storage"
         );
-        let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-            .fetch_one(&mut **tx)
-            .await?;
         let keys = self.persistent_actor_state_keys(action, actors);
         let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
-        let mut states = lock_db_states(tx, &keys, now).await?;
-        decay_db_states(&mut states, now, &self.config);
-        self.merge_previous_actor_states(action, actors, &mut states);
-        let requirement = requirement_from_db(action, &states, &shared_ip_keys, now, &self.config);
-        record_db_states(&mut states, &shared_ip_keys, now, &requirement);
-        persist_db_states(tx, &states).await
+        crate::db::abuse_actor_state_repository::apply_in_tx(tx, &keys, |states, now| {
+            decay_db_states(states, now, &self.config);
+            self.merge_previous_actor_states(action, actors, states);
+            let requirement =
+                requirement_from_db(action, states, &shared_ip_keys, now, &self.config);
+            record_db_states(states, &shared_ip_keys, now, &requirement);
+        })
+        .await
     }
 
     fn record_failure_memory(&self, action: AbuseAction, actors: &[String]) {
@@ -2352,228 +2228,85 @@ impl AbuseGuard {
         actors: &[String],
         intent: Option<&PowIntent>,
     ) -> anyhow::Result<PowChallenge> {
+        use crate::db::abuse_challenge_issuance_repository::{IssueRecord, IssueRequest};
+
         let pool = self.pool.as_ref().expect("persistent abuse pool");
         let _db_state_gates = self.acquire_db_state_gates(action, actors).await;
-        let mut tx = pool.begin().await?;
-        let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-            .fetch_one(&mut *tx)
-            .await?;
-        // One transaction-wide gate makes the global and per-actor active-row
-        // checks exact across processes. Per-IP issue rows still provide the
-        // narrower lock and restart-safe retry time.
-        sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(CHALLENGE_CAPACITY_ADVISORY_LOCK)
-            .execute(&mut *tx)
-            .await?;
-
-        let issue_groups = self.challenge_issue_groups(action, actors);
-        let mut issue_keys = issue_groups
-            .iter()
-            .flat_map(|(keys, _)| keys.iter().cloned())
-            .collect::<Vec<_>>();
-        issue_keys.sort();
-        issue_keys.dedup();
-        for key in &issue_keys {
-            sqlx::query(
-                "INSERT INTO abuse_challenge_issue_windows (actor_key) VALUES ($1) ON CONFLICT (actor_key) DO NOTHING",
-            )
-            .bind(key)
-            .execute(&mut *tx)
-            .await?;
-        }
-        let rows = sqlx::query(
-            "SELECT actor_key,event_times FROM abuse_challenge_issue_windows
-             WHERE actor_key=ANY($1) ORDER BY actor_key FOR UPDATE",
-        )
-        .bind(&issue_keys)
-        .fetch_all(&mut *tx)
-        .await?;
-        let issue_state = rows
-            .into_iter()
-            .map(|row| {
-                (
-                    row.get::<String, _>("actor_key"),
-                    row.get::<Vec<chrono::DateTime<chrono::Utc>>, _>("event_times"),
-                )
-            })
-            .collect::<std::collections::HashMap<_, _>>();
-        let mut merged_issue_state = std::collections::BTreeMap::new();
-        for (group, limit) in issue_groups {
-            let mut events = group
-                .iter()
-                .filter_map(|key| issue_state.get(key))
-                .flatten()
-                .copied()
-                .collect::<Vec<_>>();
-            events.sort();
-            events.dedup();
-            trim_db_events(&mut events, now, self.config.window);
-            if events.len() >= limit {
-                let retry_after_seconds = events
-                    .first()
-                    .map(|oldest| {
-                        let available_at = *oldest + chrono_duration(self.config.window);
-                        u64::try_from(
-                            available_at
-                                .signed_duration_since(now)
-                                .num_milliseconds()
-                                .max(1)
-                                .saturating_add(999)
-                                / 1_000,
-                        )
-                        .unwrap_or(u64::MAX)
-                    })
-                    .unwrap_or(1);
-                return Err(ChallengeCapacityExceeded {
-                    retry_after_seconds,
-                }
-                .into());
-            }
-            events.push(now);
-            for key in group {
-                merged_issue_state.insert(key, events.clone());
-            }
-        }
-        for (key, events) in merged_issue_state {
-            sqlx::query(
-                "UPDATE abuse_challenge_issue_windows SET event_times=$2, updated_at=$3 WHERE actor_key=$1",
-            )
-            .bind(key)
-            .bind(events)
-            .bind(now)
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        let capacity_groups = self.challenge_capacity_groups(action, actors);
-        let mut capacity_actor_keys = capacity_groups
-            .iter()
-            .flat_map(|(keys, _)| keys.iter().cloned())
-            .collect::<Vec<_>>();
-        capacity_actor_keys.sort();
-        capacity_actor_keys.dedup();
+        let request = IssueRequest {
+            issue_groups: self.challenge_issue_groups(action, actors),
+            capacity_groups: self.challenge_capacity_groups(action, actors),
+            actor_state_keys: self.persistent_actor_state_keys(action, actors),
+            window: self.config.window,
+        };
+        let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
         let (primary_key_id, primary_secret) = self.primary_actor_key();
         let subject_hash = subject_hash(action, subject, primary_secret);
-        let (global_count, global_available_at): (i64, Option<chrono::DateTime<chrono::Utc>>) =
-            sqlx::query_as(
-                "SELECT COUNT(*)::bigint,MIN(expires_at)
-                 FROM abuse_pow_challenges
-                 WHERE expires_at > $1",
-            )
-            .bind(now)
-            .fetch_one(&mut *tx)
-            .await?;
-        if global_count >= i64::try_from(MAX_ACTIVE_POW_CHALLENGES_GLOBAL).unwrap_or(i64::MAX) {
-            return Err(ChallengeCapacityExceeded {
-                retry_after_seconds: retry_after_db(global_available_at, now),
-            }
-            .into());
-        }
-        for (group, limit) in &capacity_groups {
-            let (count, available_at): (i64, Option<chrono::DateTime<chrono::Utc>>) =
-                sqlx::query_as(
-                    "SELECT COUNT(*)::bigint,MIN(expires_at)
-                     FROM abuse_pow_challenges
-                     WHERE expires_at > $1
-                       AND capacity_actor_keys && $2::text[]",
-                )
-                .bind(now)
-                .bind(group)
-                .fetch_one(&mut *tx)
-                .await?;
-            if count >= i64::try_from(*limit).unwrap_or(i64::MAX) {
-                return Err(ChallengeCapacityExceeded {
-                    retry_after_seconds: retry_after_db(available_at, now),
-                }
-                .into());
-            }
-        }
-
-        let keys = self.persistent_actor_state_keys(action, actors);
-        let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
-        let mut states = lock_db_states(&mut tx, &keys, now).await?;
-        decay_db_states(&mut states, now, &self.config);
-        self.merge_previous_actor_states(action, actors, &mut states);
-        let requirement = requirement_from_db(action, &states, &shared_ip_keys, now, &self.config);
-        persist_db_states(&mut tx, &states).await?;
-
-        let mut random = [0_u8; 18];
-        rand::thread_rng().fill_bytes(&mut random);
-        let id = Uuid::new_v4();
-        let server_nonce = URL_SAFE_NO_PAD.encode(random);
-        let ttl =
-            Duration::from_secs(120).max(Duration::from_secs(requirement.hard_wait_seconds + 30));
-        let expires_at = now + chrono_duration(ttl);
-        let version = if intent.is_some() {
-            POW_INTENT_VERSION
-        } else {
-            1
-        };
-        let prefix = pow_prefix(
-            primary_secret,
-            version,
-            id,
-            action,
-            primary_key_id,
-            subject,
-            actors,
-            requirement.work_factor,
-            now,
-            expires_at,
-            &server_nonce,
-            intent,
-        );
-        // New dual-key nodes mirror state under both generations, but an
-        // old-only node can verify only the previous generation.  Sign only
-        // the primary generation's sequence snapshot; a dual-key verifier
-        // still loads it while safely ignoring its extra mirrored rows.
         let primary_actor_state_keys = actor_state_keys(action, actors, primary_secret);
-        let actor_sequences = serde_json::Value::Object(
-            states
-                .iter()
-                .filter(|state| {
-                    primary_actor_state_keys.contains(&state.key)
-                        && !shared_ip_keys.contains(&state.key)
-                })
-                .map(|state| (state.key.clone(), serde_json::Value::from(state.sequence)))
-                .collect(),
-        );
-        sqlx::query(
-            "INSERT INTO abuse_pow_challenges (id,action,subject_hash,key_id,prefix,work_factor,not_before,expires_at,actor_sequences,requirement,capacity_actor_keys,protocol_version,intent_method,intent_path,body_sha256,server_nonce,issued_at)
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
-        )
-        .bind(id)
-        .bind(action.as_str())
-        .bind(subject_hash)
-        .bind(primary_key_id)
-        .bind(&prefix)
-        .bind(i64::try_from(requirement.work_factor).unwrap_or(i64::MAX))
-        .bind(now + chrono_duration(Duration::from_secs(requirement.hard_wait_seconds)))
-        .bind(now + chrono_duration(ttl))
-        .bind(actor_sequences)
-        .bind(serde_json::to_value(&requirement)?)
-        .bind(capacity_actor_keys)
-        .bind(i16::try_from(version).unwrap_or(i16::MAX))
-        .bind(intent.map(|intent| intent.method.as_str()))
-        .bind(intent.map(|intent| intent.path.as_str()))
-        .bind(intent.map(|intent| intent.body_sha256.as_slice()))
-        .bind(&server_nonce)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(PowChallenge {
-            version,
-            challenge_id: id,
-            prefix,
-            key_id: primary_key_id.to_owned(),
-            issued_at: now,
-            expires_at,
-            expires_in_seconds: ttl.as_secs(),
-            server_nonce,
-            intent: intent.map(PowIntent::view),
-            requirement,
+        crate::db::abuse_challenge_issuance_repository::issue(pool, request, |states, now| {
+            decay_db_states(states, now, &self.config);
+            self.merge_previous_actor_states(action, actors, states);
+            let requirement =
+                requirement_from_db(action, states, &shared_ip_keys, now, &self.config);
+            let mut random = [0_u8; 18];
+            rand::thread_rng().fill_bytes(&mut random);
+            let id = Uuid::new_v4();
+            let server_nonce = URL_SAFE_NO_PAD.encode(random);
+            let ttl = Duration::from_secs(120)
+                .max(Duration::from_secs(requirement.hard_wait_seconds + 30));
+            let expires_at = now + chrono_duration(ttl);
+            let version = if intent.is_some() {
+                POW_INTENT_VERSION
+            } else {
+                1
+            };
+            let prefix = pow_prefix(
+                primary_secret,
+                version,
+                id,
+                action,
+                primary_key_id,
+                subject,
+                actors,
+                requirement.work_factor,
+                now,
+                expires_at,
+                &server_nonce,
+                intent,
+            );
+            // During key rotation, sign only the primary generation's sequence
+            // snapshot; a dual-key verifier may load additional mirrored rows.
+            let actor_sequences = serde_json::Value::Object(
+                states
+                    .iter()
+                    .filter(|state| {
+                        primary_actor_state_keys.contains(&state.key)
+                            && !shared_ip_keys.contains(&state.key)
+                    })
+                    .map(|state| (state.key.clone(), serde_json::Value::from(state.sequence)))
+                    .collect(),
+            );
+            Ok(IssueRecord {
+                action,
+                challenge: PowChallenge {
+                    version,
+                    challenge_id: id,
+                    prefix,
+                    key_id: primary_key_id.to_owned(),
+                    issued_at: now,
+                    expires_at,
+                    expires_in_seconds: ttl.as_secs(),
+                    server_nonce,
+                    intent: intent.map(PowIntent::view),
+                    requirement,
+                },
+                subject_hash: subject_hash.clone(),
+                actor_sequences,
+                intent_method: intent.map(|intent| intent.method.clone()),
+                intent_path: intent.map(|intent| intent.path.clone()),
+                body_sha256: intent.map(|intent| intent.body_sha256.to_vec()),
+            })
         })
+        .await
     }
 
     async fn current_requirement_persistent(
@@ -2583,19 +2316,14 @@ impl AbuseGuard {
     ) -> anyhow::Result<WorkRequirement> {
         let pool = self.pool.as_ref().expect("persistent abuse pool");
         let _db_state_gates = self.acquire_db_state_gates(action, actors).await;
-        let mut tx = pool.begin().await?;
-        let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-            .fetch_one(&mut *tx)
-            .await?;
         let keys = self.persistent_actor_state_keys(action, actors);
         let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
-        let mut states = lock_db_states(&mut tx, &keys, now).await?;
-        decay_db_states(&mut states, now, &self.config);
-        self.merge_previous_actor_states(action, actors, &mut states);
-        let requirement = requirement_from_db(action, &states, &shared_ip_keys, now, &self.config);
-        persist_db_states(&mut tx, &states).await?;
-        tx.commit().await?;
-        Ok(requirement)
+        crate::db::abuse_actor_state_repository::current_requirement(pool, &keys, |states, now| {
+            decay_db_states(states, now, &self.config);
+            self.merge_previous_actor_states(action, actors, states);
+            requirement_from_db(action, states, &shared_ip_keys, now, &self.config)
+        })
+        .await
     }
 
     async fn record_failure_persistent(
@@ -2605,20 +2333,16 @@ impl AbuseGuard {
     ) -> anyhow::Result<()> {
         let pool = self.pool.as_ref().expect("persistent abuse pool");
         let _db_state_gates = self.acquire_db_state_gates(action, actors).await;
-        let mut tx = pool.begin().await?;
-        let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-            .fetch_one(&mut *tx)
-            .await?;
         let keys = self.persistent_actor_state_keys(action, actors);
         let shared_ip_keys = self.persistent_shared_ip_keys(action, actors);
-        let mut states = lock_db_states(&mut tx, &keys, now).await?;
-        decay_db_states(&mut states, now, &self.config);
-        self.merge_previous_actor_states(action, actors, &mut states);
-        let requirement = requirement_from_db(action, &states, &shared_ip_keys, now, &self.config);
-        record_db_states(&mut states, &shared_ip_keys, now, &requirement);
-        persist_db_states(&mut tx, &states).await?;
-        tx.commit().await?;
-        Ok(())
+        crate::db::abuse_actor_state_repository::record_failure(pool, &keys, |states, now| {
+            decay_db_states(states, now, &self.config);
+            self.merge_previous_actor_states(action, actors, states);
+            let requirement =
+                requirement_from_db(action, states, &shared_ip_keys, now, &self.config);
+            record_db_states(states, &shared_ip_keys, now, &requirement);
+        })
+        .await
     }
 
     async fn verify_persistent_bound(
@@ -2852,72 +2576,12 @@ impl AbuseGuard {
                 .max(self.config.max_wait)
                 .max(max_penalty_decay_horizon(self.config.cooldown_step))
                 .as_secs();
-            // Each maintenance tick is deliberately bounded.  A flood cannot
-            // turn cleanup into an unbounded delete/lock spike on the same
-            // PostgreSQL instance that serves live sessions.
-            sqlx::query(
-                "WITH doomed AS (
-                    SELECT ctid FROM abuse_pow_challenges
-                    WHERE expires_at <= clock_timestamp()
-                    ORDER BY expires_at LIMIT 1000
-                 )
-                 DELETE FROM abuse_pow_challenges AS target
-                 USING doomed WHERE target.ctid=doomed.ctid",
+            return crate::db::challenge_cleanup_repository::cleanup(
+                pool,
+                self.config.window.as_secs(),
+                stale_seconds,
             )
-            .execute(pool)
-            .await?;
-            sqlx::query(
-                "WITH doomed AS (
-                    SELECT ctid FROM abuse_challenge_issue_windows
-                    WHERE updated_at < clock_timestamp() - ($1::bigint * INTERVAL '1 second')
-                    ORDER BY updated_at LIMIT 1000
-                 )
-                 DELETE FROM abuse_challenge_issue_windows AS target
-                 USING doomed WHERE target.ctid=doomed.ctid",
-            )
-            .bind(i64::try_from(self.config.window.as_secs()).unwrap_or(i64::MAX))
-            .execute(pool)
-            .await?;
-            sqlx::query(
-                "WITH doomed AS (
-                    SELECT ctid FROM abuse_actor_states
-                    WHERE GREATEST(last_activity, blocked_until) < clock_timestamp() - ($1::bigint * INTERVAL '1 second')
-                    ORDER BY GREATEST(last_activity, blocked_until) LIMIT 1000
-                 )
-                 DELETE FROM abuse_actor_states AS target
-                 USING doomed WHERE target.ctid=doomed.ctid",
-            )
-                .bind(i64::try_from(stale_seconds).unwrap_or(i64::MAX))
-                .execute(pool)
-                .await?;
-            sqlx::query(
-                "WITH doomed AS (
-                    SELECT admission_key FROM abuse_message_admissions
-                    WHERE expires_at <= clock_timestamp()
-                    ORDER BY expires_at,admission_key
-                    LIMIT $1 FOR UPDATE SKIP LOCKED
-                 )
-                 DELETE FROM abuse_message_admissions AS target
-                 USING doomed WHERE target.admission_key=doomed.admission_key",
-            )
-            .bind(MESSAGE_ADMISSION_CLEANUP_BATCH)
-            .execute(pool)
-            .await?;
-            sqlx::query(
-                "WITH doomed AS (
-                    SELECT identity_digest FROM offline_message_admissions
-                    WHERE offline_message_id IS NULL
-                      AND expires_at IS NOT NULL AND expires_at <= clock_timestamp()
-                    ORDER BY expires_at,identity_digest
-                    LIMIT $1 FOR UPDATE SKIP LOCKED
-                 )
-                 DELETE FROM offline_message_admissions AS target
-                 USING doomed WHERE target.identity_digest=doomed.identity_digest",
-            )
-            .bind(MESSAGE_ADMISSION_CLEANUP_BATCH)
-            .execute(pool)
-            .await?;
-            return Ok(());
+            .await;
         }
         self.cleanup_challenges_memory();
         Ok(())

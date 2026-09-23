@@ -8,7 +8,6 @@ use crate::xmpp::xml_builder::XmlElement;
 use crate::xmpp::xml_util::*;
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use dashmap::mapref::entry::Entry;
 use northstar_xep_0198::{
     acknowledgement_delta, resumability_allowed, resumed_offline_replay_eligible,
 };
@@ -20,6 +19,9 @@ use std::{
     sync::{atomic::Ordering, Arc},
 };
 use zeroize::Zeroizing;
+
+#[cfg(test)]
+use crate::state::matching_sm_route;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SmRouteTakeover {
@@ -139,15 +141,6 @@ async fn wait_for_exact_route_removal(
             }
         }
     }
-}
-
-fn matching_sm_route(
-    existing_user: uuid::Uuid,
-    existing_sm_id: Option<uuid::Uuid>,
-    claimant_user: uuid::Uuid,
-    claimed_sm_id: uuid::Uuid,
-) -> bool {
-    existing_user == claimant_user && existing_sm_id == Some(claimed_sm_id)
 }
 
 fn claim_sm_route_lifecycle(lifecycle: &std::sync::atomic::AtomicU8) -> SmRouteTakeover {
@@ -488,38 +481,20 @@ impl ProtocolSession {
                     ) {
                         continue;
                     }
-                    let route_removed =
-                        self.state
-                            .sessions
-                            .get(&pending.full_jid)
-                            .and_then(|session| {
-                                let exact_sm = session
-                                    .sm_session_id
-                                    .read()
-                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                    .is_some_and(|session_id| session_id == pending.session_id);
-                                let exact_route = session.connection_id
-                                    == pending.old_connection_id
-                                    && session.user_id == current_user.id
-                                    && exact_sm;
-                                if exact_route
-                                    && matches!(
-                                        pending.reason,
-                                        crate::services::sm::SmPendingReason::Live
-                                            | crate::services::sm::SmPendingReason::LiveAndClaim
-                                    )
-                                {
-                                    // A valid resume bearer may supersede only the
-                                    // exact local incarnation named by PostgreSQL.
-                                    // Cancellation starts normal cleanup/snapshot
-                                    // persistence; it never fabricates claim
-                                    // completion. Cross-node owners converge only
-                                    // through their committed DB transition or the
-                                    // authoritative lease boundary.
-                                    session.disconnect.cancel();
-                                }
-                                exact_route.then(|| session.route_incarnation.subscribe())
-                            });
+                    // A valid resume bearer may supersede only the exact
+                    // local incarnation named by PostgreSQL. Cancellation
+                    // starts normal cleanup; route removal remains the wake.
+                    let route_removed = self.state.sm_pending_route_removal_signal(
+                        &pending.full_jid,
+                        pending.old_connection_id,
+                        current_user.id,
+                        pending.session_id,
+                        matches!(
+                            pending.reason,
+                            crate::services::sm::SmPendingReason::Live
+                                | crate::services::sm::SmPendingReason::LiveAndClaim
+                        ),
+                    );
                     let retry_at =
                         tokio::time::Instant::from_std(pending.retry_at.min(ownership_horizon));
                     let wait = wait_for_pending_authority(
@@ -581,15 +556,8 @@ impl ProtocolSession {
             mut caps_observation_generation,
         ) = self
             .state
-            .sessions
-            .get(&key)
-            .map(|session| {
-                (
-                    Arc::clone(&session.mix_presence_gate),
-                    Arc::clone(&session.mix_presence_fallback_suppressed),
-                    Arc::clone(&session.caps_observation_generation),
-                )
-            })
+            .sm_presence_epoch(&key)
+            .map(|epoch| (epoch.gate, epoch.fallback_suppressed, epoch.caps_generation))
             .unwrap_or_else(|| {
                 // A durable resume restores the last projected presence. Do
                 // not let a later caps completion infer a new item until the
@@ -656,108 +624,94 @@ impl ProtocolSession {
         let sm_session_id_shared = Arc::new(std::sync::RwLock::new(Some(claim.session_id)));
         let effective_user_agent = self.user_agent_id.or(claim.user_agent_id);
         loop {
-            match self.state.sessions.entry(key.clone()) {
-                Entry::Vacant(entry) => {
-                    entry.insert(crate::state::OnlineSession {
-                        user_id: current_user.id,
-                        auth_generation: current_user.auth_generation,
-                        route_incarnation: crate::state::RouteIncarnationSignal::new(
-                            self.connection_id,
-                        ),
-                        sender: self.outbound.clone(),
-                        available: Arc::clone(&available),
-                        mix_presence_gate: Arc::clone(&mix_presence_gate),
-                        mix_presence_fallback_suppressed: Arc::clone(
-                            &mix_presence_fallback_suppressed,
-                        ),
-                        caps_observation_generation: Arc::clone(&caps_observation_generation),
-                        carbons: Arc::clone(&carbons),
-                        priority: Arc::clone(&priority),
-                        show: Arc::clone(&show),
-                        blocklist_requested: Arc::clone(&blocklist),
-                        roster_requested: Arc::clone(&roster_requested),
-                        roster_sync: Arc::clone(&roster_sync),
-                        mix_roster_annotations: Arc::clone(&mix_roster_annotations),
-                        privacy_active: Arc::clone(&privacy_active),
-                        privacy_requested: Arc::clone(&privacy_requested),
-                        directed_presence: Arc::clone(&directed_presence),
-                        last_presence: Arc::clone(&last_presence),
-                        user_agent_id: effective_user_agent,
-                        user_agent_epoch: None,
-                        connection_id: self.connection_id,
-                        lifecycle: Arc::clone(&self.route_lifecycle),
-                        metrics_counted: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-                        routable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                        sm_session_id: Arc::clone(&sm_session_id_shared),
-                        muc_memberships: Arc::clone(&self.joined_rooms),
-                        ip: Some(self.peer_ip),
-                        resource: claim.resource.clone(),
-                        connected_at: std::time::Instant::now(),
-                        last_activity: Arc::clone(&self.last_activity),
-                        disconnect: self.disconnect.clone(),
-                    });
+            match self.state.stage_sm_resumed_session(
+                key.clone(),
+                crate::state::OnlineSession {
+                    user_id: current_user.id,
+                    auth_generation: current_user.auth_generation,
+                    route_incarnation: crate::state::RouteIncarnationSignal::new(
+                        self.connection_id,
+                    ),
+                    sender: self.outbound.clone(),
+                    available: Arc::clone(&available),
+                    mix_presence_gate: Arc::clone(&mix_presence_gate),
+                    mix_presence_fallback_suppressed: Arc::clone(&mix_presence_fallback_suppressed),
+                    caps_observation_generation: Arc::clone(&caps_observation_generation),
+                    carbons: Arc::clone(&carbons),
+                    priority: Arc::clone(&priority),
+                    show: Arc::clone(&show),
+                    blocklist_requested: Arc::clone(&blocklist),
+                    roster_requested: Arc::clone(&roster_requested),
+                    roster_sync: Arc::clone(&roster_sync),
+                    mix_roster_annotations: Arc::clone(&mix_roster_annotations),
+                    privacy_active: Arc::clone(&privacy_active),
+                    privacy_requested: Arc::clone(&privacy_requested),
+                    directed_presence: Arc::clone(&directed_presence),
+                    last_presence: Arc::clone(&last_presence),
+                    user_agent_id: effective_user_agent,
+                    user_agent_epoch: None,
+                    connection_id: self.connection_id,
+                    lifecycle: Arc::clone(&self.route_lifecycle),
+                    metrics_counted: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                    routable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    sm_session_id: Arc::clone(&sm_session_id_shared),
+                    muc_memberships: Arc::clone(&self.joined_rooms),
+                    ip: Some(self.peer_ip),
+                    resource: claim.resource.clone(),
+                    connected_at: std::time::Instant::now(),
+                    last_activity: Arc::clone(&self.last_activity),
+                    disconnect: self.disconnect.clone(),
+                },
+                current_user.id,
+                claim.session_id,
+                &mix_presence_gate,
+            ) {
+                crate::state::SmStagedRouteClaim::Inserted => {
                     self.state.sm_session_telemetry().staged_route_installed();
                     break;
                 }
-                Entry::Occupied(entry) => {
-                    let existing = entry.get();
-                    let existing_sm_id = *existing
-                        .sm_session_id
-                        .read()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    if !matching_sm_route(
-                        existing.user_id,
-                        existing_sm_id,
-                        current_user.id,
-                        claim.session_id,
-                    ) {
-                        drop(entry);
-                        self.state
-                            .sm_service()
-                            .release_claim(claim.session_id, claim.claim_token)
-                            .await?;
-                        return Ok((Action::Send(sm_failed("conflict")), None));
-                    }
-                    if !Arc::ptr_eq(&mix_presence_gate, &existing.mix_presence_gate) {
-                        let replacement_gate = Arc::clone(&existing.mix_presence_gate);
-                        let replacement_suppression =
-                            Arc::clone(&existing.mix_presence_fallback_suppressed);
-                        let replacement_caps_generation =
-                            Arc::clone(&existing.caps_observation_generation);
-                        drop(entry);
-                        drop(mix_presence_epoch);
-                        mix_presence_gate = replacement_gate;
-                        mix_presence_fallback_suppressed = replacement_suppression;
-                        caps_observation_generation = replacement_caps_generation;
-                        mix_presence_epoch = match lock_mix_presence_gate_for_claim(
-                            Arc::clone(&mix_presence_gate),
-                            &self.disconnect,
-                            claim_ownership_deadline,
-                        )
-                        .await
-                        {
-                            Ok(guard) => guard,
-                            Err(reason) => {
-                                self.state
-                                    .sm_service()
-                                    .release_claim(claim.session_id, claim.claim_token)
-                                    .await?;
-                                tracing::debug!(
-                                    ?reason,
-                                    connection_id = %self.connection_id,
-                                    sm_session_id = %claim.session_id,
-                                    "SM route takeover lost its claim while adopting the current presence epoch"
-                                );
-                                return Ok((Action::Send(sm_failed("item-not-found")), None));
-                            }
-                        };
-                        continue;
-                    }
-                    let old_connection_id = existing.connection_id;
-                    let old_lifecycle = Arc::clone(&existing.lifecycle);
-                    let old_disconnect = existing.disconnect.clone();
-                    let old_route_incarnation = Arc::clone(&existing.route_incarnation);
-                    drop(entry);
+                crate::state::SmStagedRouteClaim::Conflict => {
+                    self.state
+                        .sm_service()
+                        .release_claim(claim.session_id, claim.claim_token)
+                        .await?;
+                    return Ok((Action::Send(sm_failed("conflict")), None));
+                }
+                crate::state::SmStagedRouteClaim::AdoptPresenceEpoch(epoch) => {
+                    drop(mix_presence_epoch);
+                    mix_presence_gate = epoch.gate;
+                    mix_presence_fallback_suppressed = epoch.fallback_suppressed;
+                    caps_observation_generation = epoch.caps_generation;
+                    mix_presence_epoch = match lock_mix_presence_gate_for_claim(
+                        Arc::clone(&mix_presence_gate),
+                        &self.disconnect,
+                        claim_ownership_deadline,
+                    )
+                    .await
+                    {
+                        Ok(guard) => guard,
+                        Err(reason) => {
+                            self.state
+                                .sm_service()
+                                .release_claim(claim.session_id, claim.claim_token)
+                                .await?;
+                            tracing::debug!(
+                                ?reason,
+                                connection_id = %self.connection_id,
+                                sm_session_id = %claim.session_id,
+                                "SM route takeover lost its claim while adopting the current presence epoch"
+                            );
+                            return Ok((Action::Send(sm_failed("item-not-found")), None));
+                        }
+                    };
+                    continue;
+                }
+                crate::state::SmStagedRouteClaim::Replace {
+                    connection_id: old_connection_id,
+                    lifecycle: old_lifecycle,
+                    disconnect: old_disconnect,
+                    route_incarnation: old_route_incarnation,
+                } => {
                     match claim_sm_route_lifecycle(&old_lifecycle) {
                         SmRouteTakeover::Acquired => {
                             old_disconnect.cancel();
@@ -978,38 +932,18 @@ impl ProtocolSession {
             .state
             .begin_suspended_muc_resume(&paused_muc, remaining.len(), exact_base_bytes)
             .await;
-        let route_state = self.state.sessions.get_mut(&key).map(|session| {
-            (
-                session.connection_id == self.connection_id,
-                session.user_id == current_user.id,
-                session.auth_generation == current_user.auth_generation,
-                Arc::ptr_eq(&session.lifecycle, &self.route_lifecycle),
-                session.disconnect.is_cancelled(),
-                session.lifecycle.load(Ordering::Acquire),
-            )
-        });
-        let route_is_current = route_state.is_some_and(
-            |(
-                same_connection,
-                same_user,
-                same_auth_generation,
-                same_lifecycle,
-                cancelled,
-                state,
-            )| {
-                same_connection
-                    && same_user
-                    && same_auth_generation
-                    && same_lifecycle
-                    && !cancelled
-                    && state == 0
-            },
+        let route_is_current = self.state.staged_session_is_current(
+            &key,
+            self.connection_id,
+            current_user.id,
+            current_user.auth_generation,
+            &self.route_lifecycle,
         );
         if !route_is_current || !muc_resume_ready {
             tracing::warn!(
                 sm_session_id = %claim.session_id,
                 connection_id = %self.connection_id,
-                ?route_state,
+                route_is_current,
                 muc_resume_ready,
                 "committed SM resume lost its staged local route before transport publication"
             );

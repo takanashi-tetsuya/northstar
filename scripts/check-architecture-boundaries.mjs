@@ -264,14 +264,12 @@ const publicFieldNames = [
 
 // Public capability counts may only decrease as service boundaries narrow.
 // New work must use application services without raising these ceilings.
-const MAX_APP_STATE_PUBLIC_FIELDS = 5;
+const MAX_APP_STATE_PUBLIC_FIELDS = 3;
 const MAX_APP_STATE_CRATE_PUBLIC_FIELDS = 0;
 const EXPECTED_APP_STATE_PUBLIC_CAPABILITIES = [
   'cluster',
   'config',
-  'metrics',
   'muc_occupants',
-  'sessions',
 ];
 
 if (publicFields > MAX_APP_STATE_PUBLIC_FIELDS) {
@@ -3226,17 +3224,19 @@ const mucOutcome = clusterMucOutboxWorker.indexOf('let outcome = tokio::time::ti
 const mucAckTurn = clusterMucOutboxWorker.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', mucOutcome);
 const mucAck = clusterMucOutboxWorker.indexOf('.acknowledge(&delivery)', mucAckTurn);
 const mucAckFence = clusterMucOutboxWorker.indexOf('cluster MUC outbox ACK lost its exact claim lease', mucAck);
-const mucDeliveryMetric = clusterMucOutboxWorker.indexOf('cluster_muc_outbox_deliveries_total', mucAckFence);
+const mucDeliveryMetric = clusterMucOutboxWorker.indexOf('state.record_cluster_muc_outbox_delivery()', mucAckFence);
 const mucRetryWarning = clusterMucOutboxWorker.indexOf('cluster MUC audience delivery will retry with the same stable event ID', mucDeliveryMetric);
 const mucRetryTurn = clusterMucOutboxWorker.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', mucRetryWarning);
 const mucRetry = clusterMucOutboxWorker.indexOf('.retry(&delivery, &error.to_string())', mucRetryTurn);
-const mucRetryMetric = clusterMucOutboxWorker.indexOf('cluster_muc_outbox_retries_total', mucRetry);
+const mucRetryMetric = clusterMucOutboxWorker.indexOf('state.record_cluster_muc_outbox_retry()', mucRetry);
 const mucHeartbeat = clusterMucOutboxWorker.indexOf('heartbeat.ok();', mucRetryMetric);
 if ([mucOutcome, mucAckTurn, mucAck, mucAckFence, mucDeliveryMetric,
      mucRetryWarning, mucRetryTurn, mucRetry, mucRetryMetric, mucHeartbeat].some((offset) => offset < 0)
     || /crate::db::(?:ack_cluster_muc_outbox|retry_cluster_muc_outbox)\s*\(/.test(clusterMucOutboxWorker)
     || !clusterMucOutboxWorker.includes('acknowledged == AckOutcome::Acknowledged')
     || !clusterMucOutboxSettlementService.includes('let _ = self.repository.record_retry(delivery, error).await?;')
+    || !/self\.metrics\s*\.cluster_muc_outbox_deliveries_total\s*\.fetch_add\(1, Ordering::Relaxed\)/.test(state)
+    || !/self\.metrics\s*\.cluster_muc_outbox_retries_total\s*\.fetch_add\(1, Ordering::Relaxed\)/.test(state)
     || !clusterMucOutboxSettlementRepository.includes('db::ack_cluster_muc_outbox(&self.pool, delivery.delivery_id, delivery.claim_token)')
     || !clusterMucOutboxSettlementRepository.includes('db::retry_cluster_muc_outbox(&self.pool, delivery, error)')) {
   throw new Error('cluster MUC outbox settlement lost exact ACK, retry, database-turn or metric ordering');

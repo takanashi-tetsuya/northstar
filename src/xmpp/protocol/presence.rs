@@ -1561,41 +1561,23 @@ impl ProtocolSession {
         // Iterate owned keys so a privacy database await never holds a DashMap
         // shard guard. Re-read each exact route after the await: a key may have
         // been rebound to a different connection in the meantime.
-        let owner_keys = self
-            .state
-            .sessions
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect::<Vec<_>>();
+        let owner_keys = self.state.local_presence_owner_keys();
         for owner_key in owner_keys {
-            let Some(session) = self
-                .state
-                .sessions
-                .get(&owner_key)
-                .map(|entry| entry.value().clone())
-            else {
-                continue;
-            };
             if !owner_full.as_ref().map_or_else(
                 || {
                     crate::jid::canonical_bare_key(&owner_key)
                         .is_ok_and(|session_owner| session_owner == owner_bare)
                 },
                 |owner_full| &owner_key == owner_full,
-            ) || !session.routable.load(Ordering::Acquire)
-                || session.user_id != expected_owner_id
-                || session.auth_generation != expected_owner_auth_generation
-                || !session.available.load(Ordering::Relaxed)
-            {
+            ) {
                 continue;
             }
-            let exact_owner_is_routable = |current: &crate::state::OnlineSession| {
-                current.connection_id == session.connection_id
-                    && Arc::ptr_eq(&current.route_incarnation, &session.route_incarnation)
-                    && current.user_id == expected_owner_id
-                    && current.auth_generation == expected_owner_auth_generation
-                    && current.routable.load(Ordering::Acquire)
-                    && current.available.load(Ordering::Relaxed)
+            let Some(session) = self.state.local_presence_owner_candidate(
+                &owner_key,
+                expected_owner_id,
+                expected_owner_auth_generation,
+            ) else {
+                continue;
             };
             if !self
                 .state
@@ -1605,9 +1587,12 @@ impl ProtocolSession {
             {
                 continue;
             }
-            let Some(current_owner) = self.state.sessions.get(&owner_key).and_then(|entry| {
-                exact_owner_is_routable(entry.value()).then(|| entry.value().clone())
-            }) else {
+            let Some(current_owner) = self.state.local_presence_owner_if_current(
+                &owner_key,
+                &session,
+                expected_owner_id,
+                expected_owner_auth_generation,
+            ) else {
                 continue;
             };
             let presence = current_owner
@@ -1646,11 +1631,14 @@ impl ProtocolSession {
                     .await
                     .unwrap_or(false)
                 {
-                    if let Some(current_owner) = self.state.sessions.get(&owner_key) {
-                        if exact_owner_is_routable(current_owner.value()) {
-                            let _ = recipient_session.sender.try_send(presence.clone());
-                        }
-                    }
+                    self.state.send_presence_if_owner_current(
+                        &owner_key,
+                        &session,
+                        expected_owner_id,
+                        expected_owner_auth_generation,
+                        &recipient_session.sender,
+                        &presence,
+                    );
                 }
             }
         }

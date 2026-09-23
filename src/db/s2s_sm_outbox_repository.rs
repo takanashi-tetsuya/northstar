@@ -21,6 +21,6 @@ impl SmOutboxRepository for PostgresSmOutboxRepository {
     }
 
     async fn complete(&self, claim: SmOutboxClaim) -> Result<bool> {
-        crate::db::complete_s2s_outbox(&self.pool, claim.id, claim.lock_token).await
+        crate::db::s2s::complete_s2s_outbox_for_sm(&self.pool, claim.id, claim.lock_token).await
     }
 }

@@ -68,34 +68,7 @@ pub(super) fn local_caps_epoch_is_current(
     full_jid: &str,
     epoch: LocalCapsEpoch,
 ) -> bool {
-    state.sessions.get(full_jid).is_some_and(|session| {
-        local_caps_route_epoch_matches(
-            session.connection_id,
-            session.caps_observation_generation.load(Ordering::Acquire),
-            session.routable.load(Ordering::Acquire),
-            session.disconnect.is_cancelled(),
-            session.lifecycle.load(Ordering::Acquire),
-            true,
-            epoch,
-        )
-    })
-}
-
-pub(super) fn local_caps_route_epoch_matches(
-    current_connection_id: uuid::Uuid,
-    current_generation: u64,
-    routable: bool,
-    cancelled: bool,
-    lifecycle: u8,
-    same_gate: bool,
-    expected: LocalCapsEpoch,
-) -> bool {
-    current_connection_id == expected.connection_id
-        && current_generation == expected.generation
-        && routable
-        && !cancelled
-        && lifecycle == 0
-        && same_gate
+    state.local_caps_epoch_is_current(full_jid, epoch, None)
 }
 
 /// Cleanup-side route removal is synchronous and deliberately cannot await
@@ -215,18 +188,7 @@ async fn send_caps_disco_query(state: &AppState, job: &CapsEffectJob) -> anyhow:
     );
     let sent = match job.owner {
         CapsObservationOwner::Local(epoch) => {
-            let sender = state.sessions.get(&job.full_jid).and_then(|session| {
-                local_caps_route_epoch_matches(
-                    session.connection_id,
-                    session.caps_observation_generation.load(Ordering::Acquire),
-                    session.routable.load(Ordering::Acquire),
-                    session.disconnect.is_cancelled(),
-                    session.lifecycle.load(Ordering::Acquire),
-                    true,
-                    epoch,
-                )
-                .then(|| session.sender.clone())
-            });
+            let sender = state.local_caps_sender_if_current(&job.full_jid, epoch);
             match sender {
                 Some(sender) => match sender.try_send(query) {
                     Ok(()) => true,
@@ -519,13 +481,11 @@ impl ProtocolSession {
         }
 
         let _resource_epoch = Arc::clone(&self.mix_presence_gate).lock_owned().await;
-        let route_is_current = self.state.sessions.get(&full_jid).is_some_and(|session| {
-            session.connection_id == self.connection_id
-                && Arc::ptr_eq(&session.mix_presence_gate, &self.mix_presence_gate)
-                && session.routable.load(Ordering::Acquire)
-                && !session.disconnect.is_cancelled()
-                && session.lifecycle.load(Ordering::Acquire) == 0
-        });
+        let route_is_current = self.state.local_caps_observer_connection_is_current(
+            &full_jid,
+            self.connection_id,
+            &self.mix_presence_gate,
+        );
         if route_is_current {
             self.commit_caps_observation(presence, &full_jid);
         }
@@ -582,13 +542,11 @@ impl ProtocolSession {
         let Ok(full_jid) = crate::jid::canonical_session_key(full_jid) else {
             return;
         };
-        let connection_is_current = self.state.sessions.get(&full_jid).is_some_and(|session| {
-            session.connection_id == self.connection_id
-                && Arc::ptr_eq(&session.mix_presence_gate, &self.mix_presence_gate)
-                && session.routable.load(Ordering::Acquire)
-                && !session.disconnect.is_cancelled()
-                && session.lifecycle.load(Ordering::Acquire) == 0
-        });
+        let connection_is_current = self.state.local_caps_observer_connection_is_current(
+            &full_jid,
+            self.connection_id,
+            &self.mix_presence_gate,
+        );
         if !connection_is_current {
             return;
         }

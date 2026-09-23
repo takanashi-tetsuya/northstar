@@ -698,20 +698,14 @@ impl ProtocolSession {
         let Some(user) = self.authenticated.clone() else {
             return false;
         };
-        let route_is_current = self.state.sessions.get_mut(key).is_some_and(|mut session| {
-            if session.connection_id == self.connection_id
-                && session.user_id == user.id
-                && session.auth_generation == user.auth_generation
-                && Arc::ptr_eq(&session.lifecycle, &self.route_lifecycle)
-                && !session.disconnect.is_cancelled()
-                && session.lifecycle.load(Ordering::Acquire) == 0
-            {
-                session.user_agent_epoch = published_epoch;
-                true
-            } else {
-                false
-            }
-        });
+        let route_is_current = self.state.publish_user_agent_epoch_if_current(
+            key,
+            self.connection_id,
+            user.id,
+            user.auth_generation,
+            &self.route_lifecycle,
+            published_epoch,
+        );
         if !route_is_current || !self.activate_committed_route() {
             self.sm_resume_allowed = false;
             return false;

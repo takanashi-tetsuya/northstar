@@ -118,7 +118,7 @@ impl ProtocolSession {
         };
         (target.localpart().is_none()
             && target.resourcepart().is_none()
-            && target.domainpart() == self.state.config.domain)
+            && target.domainpart() == self.state.local_domain())
             || (target.resourcepart().is_none() && target.bare() == owner.bare())
     }
 
@@ -397,7 +397,7 @@ impl ProtocolSession {
             .as_ref()
             .map(|access| format!("{}@{}", access.localpart(), self.muc_domain()))
             .or_else(|| self.personal_archive_reply_from(to));
-        let personal_archive_by = format!("{}@{}", user.username, self.state.config.domain);
+        let personal_archive_by = format!("{}@{}", user.username, self.state.local_domain());
         let mut replies = Vec::with_capacity(page.rows.len() + 1);
         let rows: Box<dyn Iterator<Item = &ArchiveRow>> = if parsed.flip_page {
             Box::new(page.rows.iter().rev())

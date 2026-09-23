@@ -1786,19 +1786,8 @@ async fn route_pep_message(
                 // observation or live SM takeover.
                 let expected_gate = Arc::clone(&target.mix_presence_gate);
                 let _epoch_guard = Arc::clone(&expected_gate).lock_owned().await;
-                let exact_route = state.sessions.get(&recipient_key).is_some_and(|current| {
-                    super::caps::local_caps_route_epoch_matches(
-                        current.connection_id,
-                        current
-                            .caps_observation_generation
-                            .load(std::sync::atomic::Ordering::Acquire),
-                        current.routable.load(std::sync::atomic::Ordering::Acquire),
-                        current.disconnect.is_cancelled(),
-                        current.lifecycle.load(std::sync::atomic::Ordering::Acquire),
-                        Arc::ptr_eq(&current.mix_presence_gate, &expected_gate),
-                        epoch,
-                    )
-                });
+                let exact_route =
+                    state.local_caps_epoch_is_current(&recipient_key, epoch, Some(&expected_gate));
                 if !exact_route {
                     continue;
                 }

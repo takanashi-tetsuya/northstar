@@ -36,7 +36,7 @@ impl ProtocolSession {
     }
 
     pub(crate) fn upload_domain(&self) -> String {
-        crate::jid::prepare_domainpart(&format!("upload.{}", self.state.config.domain))
+        crate::jid::prepare_domainpart(&format!("upload.{}", self.state.local_domain()))
             .expect("configured XMPP domain must form a valid upload service domain")
     }
 

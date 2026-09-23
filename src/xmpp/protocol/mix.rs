@@ -34,6 +34,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+#[cfg(test)]
+use crate::state::{mix_presence_epoch_is_current, mix_presence_fallback_is_suppressed};
+
 pub(crate) const CORE_NS: &str = "urn:xmpp:mix:core:1";
 pub(crate) const PAM_NS: &str = "urn:xmpp:mix:pam:2";
 pub(crate) const ADMIN_NS: &str = "urn:xmpp:mix:admin:0";
@@ -5800,11 +5803,8 @@ pub(crate) async fn publish_verified_mix_presence(
     // route is deliberately re-read after the async lock acquisition; using a
     // cloned pre-lock session here would let a delayed caps job act on a
     // removed or SM-replaced resource.
-    let Some(mix_presence_gate) = state
-        .sessions
-        .get(&actor_full)
-        .filter(|entry| entry.connection_id == expected_connection_id)
-        .map(|entry| Arc::clone(&entry.mix_presence_gate))
+    let Some(mix_presence_gate) =
+        state.local_mix_presence_gate(&actor_full, expected_connection_id)
     else {
         return Ok(());
     };
@@ -5842,27 +5842,13 @@ pub(crate) async fn publish_verified_mix_presence(
         // teardown can therefore make progress between channels, and every
         // iteration revalidates the exact route before applying an effect.
         let mix_presence_epoch = Arc::clone(&mix_presence_gate).lock_owned().await;
-        let Some((epoch_is_current, fallback_suppressed)) =
-            state.sessions.get(&actor_full).map(|entry| {
-                (
-                    mix_presence_epoch_is_current(
-                        entry.connection_id,
-                        expected_connection_id,
-                        entry
-                            .caps_observation_generation
-                            .load(std::sync::atomic::Ordering::Acquire),
-                        expected_caps_generation,
-                        entry.routable.load(std::sync::atomic::Ordering::Acquire),
-                        entry.available.load(std::sync::atomic::Ordering::Acquire),
-                        Arc::ptr_eq(&entry.mix_presence_gate, &expected_mix_presence_gate),
-                    ),
-                    mix_presence_fallback_is_suppressed(
-                        &entry.mix_presence_fallback_suppressed,
-                        &membership.channel_jid,
-                    ),
-                )
-            })
-        else {
+        let Some((epoch_is_current, fallback_suppressed)) = state.local_mix_presence_epoch_state(
+            &actor_full,
+            expected_connection_id,
+            expected_caps_generation,
+            &expected_mix_presence_gate,
+            &membership.channel_jid,
+        ) else {
             break;
         };
         if !epoch_is_current {
@@ -5899,22 +5885,6 @@ pub(crate) async fn publish_verified_mix_presence(
     Ok(())
 }
 
-fn mix_presence_epoch_is_current(
-    current_connection_id: uuid::Uuid,
-    expected_connection_id: uuid::Uuid,
-    current_caps_generation: u64,
-    expected_caps_generation: u64,
-    routable: bool,
-    available: bool,
-    same_gate: bool,
-) -> bool {
-    current_connection_id == expected_connection_id
-        && current_caps_generation == expected_caps_generation
-        && routable
-        && available
-        && same_gate
-}
-
 pub(crate) fn mix_presence_route_is_current(
     state: &AppState,
     full_jid: &str,
@@ -5922,21 +5892,12 @@ pub(crate) fn mix_presence_route_is_current(
     expected_gate: &Arc<tokio::sync::Mutex<()>>,
     require_available: bool,
 ) -> bool {
-    state.sessions.get(full_jid).is_some_and(|entry| {
-        entry.connection_id == expected_connection_id
-            && Arc::ptr_eq(&entry.mix_presence_gate, expected_gate)
-            && entry.routable.load(std::sync::atomic::Ordering::Acquire)
-            && (!require_available || entry.available.load(std::sync::atomic::Ordering::Acquire))
-            && !entry.disconnect.is_cancelled()
-            && entry.lifecycle.load(std::sync::atomic::Ordering::Acquire) == 0
-    })
-}
-
-fn mix_presence_fallback_is_suppressed(
-    suppressed: &dashmap::DashSet<String>,
-    channel_jid: &str,
-) -> bool {
-    suppressed.contains("*") || suppressed.contains(channel_jid)
+    state.local_mix_presence_route_is_current(
+        full_jid,
+        expected_connection_id,
+        expected_gate,
+        require_available,
+    )
 }
 
 pub(crate) fn start_mix_presence_recovery(

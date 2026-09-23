@@ -1231,6 +1231,22 @@ impl MucRepository for PostgresMucRepository {
         .into())
     }
 
+    async fn disconnect_local_cluster_occupancy(
+        &self,
+        operation_id: Uuid,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+    ) -> Result<ClusterMucTransitionOutcome> {
+        Ok(db::disconnect_cluster_muc_occupancy(
+            &self.pool,
+            operation_id,
+            &target.into(),
+            owner_node_id,
+        )
+        .await?
+        .into())
+    }
+
     async fn rename_local_cluster_occupancy(
         &self,
         operation_id: Uuid,

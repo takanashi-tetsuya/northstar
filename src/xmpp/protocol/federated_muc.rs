@@ -613,20 +613,31 @@ async fn unregister_remote_occupant(
             .await?
             .context("federated MUC leave lost its exact PG occupancy")?;
         let operation_id = uuid::Uuid::new_v4();
-        match state
-            .muc_service()
-            .transition_local_cluster_occupancy(
-                operation_id,
-                &target,
-                "leave",
-                state.federated_muc_owner_node_id(),
-                None,
-                None,
-                departed.sm_session_id,
-                std::time::Duration::from_secs(90),
-            )
-            .await?
-        {
+        let outcome = if removal_status == Some(333) {
+            state
+                .muc_service()
+                .disconnect_local_cluster_occupancy(
+                    operation_id,
+                    &target,
+                    state.federated_muc_owner_node_id(),
+                )
+                .await?
+        } else {
+            state
+                .muc_service()
+                .transition_local_cluster_occupancy(
+                    operation_id,
+                    &target,
+                    "leave",
+                    state.federated_muc_owner_node_id(),
+                    None,
+                    None,
+                    departed.sm_session_id,
+                    std::time::Duration::from_secs(90),
+                )
+                .await?
+        };
+        match outcome {
             ClusterMucTransitionOutcome::Applied | ClusterMucTransitionOutcome::Replay => {}
             other => anyhow::bail!("federated MUC leave was rejected by PG authority: {other:?}"),
         }

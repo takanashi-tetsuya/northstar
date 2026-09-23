@@ -1456,9 +1456,62 @@ pub async fn transition_cluster_muc_occupancy(
     sm_session_id: Option<Uuid>,
     lease: Duration,
 ) -> Result<ClusterMucTransitionOutcome> {
+    transition_cluster_muc_occupancy_with_status(
+        pool,
+        operation_id,
+        target,
+        transition,
+        owner_node_id,
+        new_connection_uuid,
+        new_connection_epoch,
+        sm_session_id,
+        lease,
+        None,
+    )
+    .await
+}
+
+pub async fn disconnect_cluster_muc_occupancy(
+    pool: &PgPool,
+    operation_id: Uuid,
+    target: &ClusterMucOccupancyTarget,
+    owner_node_id: &str,
+) -> Result<ClusterMucTransitionOutcome> {
+    transition_cluster_muc_occupancy_with_status(
+        pool,
+        operation_id,
+        target,
+        "leave",
+        owner_node_id,
+        None,
+        None,
+        None,
+        Duration::from_secs(90),
+        Some(333),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn transition_cluster_muc_occupancy_with_status(
+    pool: &PgPool,
+    operation_id: Uuid,
+    target: &ClusterMucOccupancyTarget,
+    transition: &str,
+    owner_node_id: &str,
+    new_connection_uuid: Option<Uuid>,
+    new_connection_epoch: Option<i64>,
+    sm_session_id: Option<Uuid>,
+    lease: Duration,
+    removal_status: Option<u16>,
+) -> Result<ClusterMucTransitionOutcome> {
     anyhow::ensure!(
         matches!(transition, "suspend" | "resume" | "leave"),
         "unsupported MUC self transition"
+    );
+    anyhow::ensure!(
+        removal_status.is_none() || (transition == "leave" && removal_status == Some(333)),
+        "MUC transport failure status is only valid on a leave"
     );
     validate_node_id(owner_node_id)?;
     let lease_seconds = validate_lease(lease)?;
@@ -1470,7 +1523,7 @@ pub async fn transition_cluster_muc_occupancy(
             "MUC resume requires a newer exact connection and SM session"
         );
     }
-    let digest = request_digest(&SelfTransitionDigest {
+    let transition_digest = SelfTransitionDigest {
         room_id: target.room_id,
         room_epoch: target.room_epoch,
         occupant_incarnation: target.occupant_incarnation,
@@ -1483,7 +1536,14 @@ pub async fn transition_cluster_muc_occupancy(
         new_connection_uuid,
         new_connection_epoch,
         sm_session_id,
-    })?;
+    };
+    let digest = match removal_status {
+        Some(status) => request_digest(&json!({
+            "transition": transition_digest,
+            "removal_status": status,
+        }))?,
+        None => request_digest(&transition_digest)?,
+    };
     let mut tx = pool.begin().await?;
     if existing_operation(&mut tx, operation_id, transition, &digest)
         .await?
@@ -1605,12 +1665,15 @@ pub async fn transition_cluster_muc_occupancy(
         "connection_uuid": target.connection_uuid,
         "connection_epoch": target.connection_epoch,
     });
-    let details = json!({
+    let mut details = json!({
         "state": new_state,
         "new_connection_uuid": new_connection_uuid,
         "new_connection_epoch": new_connection_epoch,
         "sm_session_id": sm_session_id,
     });
+    if let Some(status) = removal_status {
+        details["status"] = json!(status);
+    }
     let actor_bare_jid = muc_address_bare_jid(&target.full_jid)?;
     insert_operation_and_outbox(
         &mut tx,
@@ -6678,37 +6741,40 @@ mod tests {
         assert_eq!(departing, carol_target);
         let leave_id = Uuid::new_v4();
         assert_eq!(
-            transition_cluster_muc_occupancy(
-                &pool,
-                leave_id,
-                &departing,
-                "leave",
-                "batch-node",
-                None,
-                None,
-                None,
-                Duration::from_secs(90),
-            )
-            .await
-            .unwrap(),
+            disconnect_cluster_muc_occupancy(&pool, leave_id, &departing, "batch-node")
+                .await
+                .unwrap(),
             ClusterMucTransitionOutcome::Applied
         );
+        let disconnect_details: serde_json::Value =
+            sqlx::query_scalar("SELECT details FROM cluster_muc_operations WHERE operation_id=$1")
+                .bind(leave_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(disconnect_details["status"], 333);
+        let outbox_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM cluster_muc_event_outbox WHERE operation_id=$1",
+        )
+        .bind(leave_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(outbox_rows > 0);
         assert_eq!(
-            transition_cluster_muc_occupancy(
-                &pool,
-                leave_id,
-                &departing,
-                "leave",
-                "batch-node",
-                None,
-                None,
-                None,
-                Duration::from_secs(90),
-            )
-            .await
-            .unwrap(),
+            disconnect_cluster_muc_occupancy(&pool, leave_id, &departing, "batch-node")
+                .await
+                .unwrap(),
             ClusterMucTransitionOutcome::Replay
         );
+        let replay_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM cluster_muc_event_outbox WHERE operation_id=$1",
+        )
+        .bind(leave_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(replay_rows, outbox_rows);
         assert!(cluster_muc_occupancy_target_for_disconnect(
             &pool,
             "admin-batch",

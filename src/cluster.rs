@@ -7333,6 +7333,40 @@ fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<'_>) -> Res
     Ok(())
 }
 
+fn render_cluster_muc_departure_presence(
+    target: &crate::state::SerializableMucOccupant,
+    recipient: &crate::state::SerializableMucOccupant,
+    event_id: &str,
+    room_non_anonymous: bool,
+    operation_kind: &str,
+    details: &serde_json::Value,
+) -> Result<String> {
+    let status = if operation_kind == "leave" {
+        match details.get("status") {
+            None => None,
+            Some(value) => {
+                anyhow::ensure!(value.as_u64() == Some(333), "invalid MUC leave status");
+                Some(333)
+            }
+        }
+    } else {
+        None
+    };
+    let self_presence = target.full_jid == recipient.full_jid;
+    Ok(crate::xmpp::xml_util::muc_presence_stanza_with_status(
+        target,
+        &recipient.full_jid,
+        true,
+        self_presence,
+        false,
+        Some(event_id),
+        room_non_anonymous || recipient.role == "moderator",
+        status,
+        None,
+        None,
+    ))
+}
+
 async fn deliver_cluster_muc_event(
     worker: &crate::state::cluster_muc_outbox_worker::ClusterMucOutboxWorkerContext,
     delivery: &crate::db::ClusterMucOutboxDelivery,
@@ -7536,15 +7570,14 @@ async fn deliver_cluster_muc_event(
         "leave" | "expire" | "account_delete" => {
             let target = target.context("MUC departure event has no exact target")?;
             let self_presence = target.full_jid == recipient.full_jid;
-            stanzas.push(crate::xmpp::xml_util::muc_presence_stanza(
+            stanzas.push(render_cluster_muc_departure_presence(
                 &target,
-                &recipient.full_jid,
-                true,
-                self_presence,
-                false,
-                Some(&event_id),
-                context.room_non_anonymous || recipient.role == "moderator",
-            ));
+                &recipient_serializable,
+                &event_id,
+                context.room_non_anonymous,
+                &context.operation_kind,
+                &context.details,
+            )?);
             if self_presence {
                 endpoints.revoke_exact_recipient(&target);
             }
@@ -9408,6 +9441,47 @@ mod muc_routing_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn muc_disconnect_outbox_renders_status_333_on_every_attempt() {
+        let target = rename_occupant(uuid::Uuid::from_u128(1), "GatewayBot");
+        let mut recipient = rename_occupant(uuid::Uuid::from_u128(2), "Alice");
+        recipient.full_jid = "alice@example.test/Phone".to_owned();
+        let details = serde_json::json!({"status": 333});
+        let first = render_cluster_muc_departure_presence(
+            &target,
+            &recipient,
+            "operation-id",
+            true,
+            "leave",
+            &details,
+        )
+        .unwrap();
+        let replay = render_cluster_muc_departure_presence(
+            &target,
+            &recipient,
+            "operation-id",
+            true,
+            "leave",
+            &details,
+        )
+        .unwrap();
+        assert_eq!(first, replay);
+        assert!(first.contains("type='unavailable'"));
+        assert!(first.contains("code='333'"));
+        assert!(first.contains("id='operation-id'"));
+
+        let voluntary = render_cluster_muc_departure_presence(
+            &target,
+            &recipient,
+            "ordinary-leave",
+            true,
+            "leave",
+            &serde_json::json!({}),
+        )
+        .unwrap();
+        assert!(!voluntary.contains("code='333'"));
+    }
 
     #[test]
     fn muc_admin_batch_preflights_every_projection_before_delivery() {

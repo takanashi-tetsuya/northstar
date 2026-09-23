@@ -812,6 +812,12 @@ pub(crate) trait MucRepository:
         sm_session_id: Option<Uuid>,
         lease: Duration,
     ) -> impl std::future::Future<Output = Result<ClusterMucTransitionOutcome>> + Send;
+    fn disconnect_local_cluster_occupancy(
+        &self,
+        operation_id: Uuid,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+    ) -> impl std::future::Future<Output = Result<ClusterMucTransitionOutcome>> + Send;
     fn rename_local_cluster_occupancy(
         &self,
         operation_id: Uuid,
@@ -1594,6 +1600,17 @@ impl<R: MucRepository> MucService<R> {
                 sm_session_id,
                 lease,
             )
+            .await
+    }
+
+    pub(crate) async fn disconnect_local_cluster_occupancy(
+        &self,
+        operation_id: Uuid,
+        target: &ClusterMucOccupancyTarget,
+        owner_node_id: &str,
+    ) -> Result<ClusterMucTransitionOutcome> {
+        self.repository
+            .disconnect_local_cluster_occupancy(operation_id, target, owner_node_id)
             .await
     }
 

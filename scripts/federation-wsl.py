@@ -1163,20 +1163,46 @@ def run(server_pids: tuple[int, ...] = ()) -> None:
     resumed_message, _ = alice.receive_until("sm-muc-resumed", timeout=20)
     fixture.check(f"from='{federated_room}/RemoteBob'" in resumed_message, "S2S resumption lost federated room occupancy")
     print("S2S outbound resumption preserved federated room occupancy without rejoining")
+    # A same-domain FIFO marker drains any earlier roster/subject replay from
+    # the resumed Alice-to-Bob S2S stream before checking a fresh join reply.
+    alice.send(
+        "<message xmlns='jabber:client' to='bob_fed@remote.localhost/bob-federation' "
+        "type='chat' id='fed-muc-resync-barrier'><body>Resync barrier</body></message>"
+    )
+    bob.receive_until("fed-muc-resync-barrier", timeout=20)
     bob.send(
         f"<presence xmlns='jabber:client' id='fed-muc-resync' to='{federated_room}/RemoteBob'>"
         "<x xmlns='http://jabber.org/protocol/muc'><history maxstanzas='0'/></x></presence>"
     )
-    _, remote_resync_frames = bob.receive_until("Federated Subject", timeout=20)
+    # The interrupted S2S stream may replay an earlier subject before this
+    # join's response. Wait for this request's self-presence before accepting
+    # a subject as the end of the repeated-join sequence.
+    remote_resync_frames = []
+    remote_resync_deadline = time.monotonic() + 20
+    resync_self_index = None
+    resync_subject_index = None
+    while time.monotonic() < remote_resync_deadline:
+        try:
+            frame = bob.receive(max(0.1, remote_resync_deadline - time.monotonic()))
+        except (TimeoutError, socket.timeout):
+            break
+        remote_resync_frames.append(frame)
+        if "id='fed-muc-resync'" in frame and "code='110'" in frame:
+            resync_self_index = len(remote_resync_frames) - 1
+        if resync_self_index is not None and "Federated Subject" in frame:
+            resync_subject_index = len(remote_resync_frames) - 1
+            break
     remote_resync = "".join(remote_resync_frames)
     fixture.check(
-        f"from='{federated_room}/LocalAlice'" in remote_resync
-        and "id='fed-muc-resync'" in remote_resync
-        and "code='110'" in remote_resync
-        and remote_resync.index(f"from='{federated_room}/LocalAlice'")
-        < remote_resync.index("code='110'")
-        < remote_resync.index("Federated Subject"),
-        "federated repeated tagged join did not return roster, self-presence, then subject",
+        resync_self_index is not None
+        and resync_subject_index is not None
+        and any(
+            f"from='{federated_room}/LocalAlice'" in frame
+            for frame in remote_resync_frames[:resync_self_index]
+        )
+        and resync_self_index < resync_subject_index,
+        "federated repeated tagged join did not return roster, self-presence, then subject: "
+        + repr(remote_resync[:4096]),
     )
     bob.send(
         f"<presence xmlns='jabber:client' id='fed-muc-rename' to='{federated_room}/RemoteBobRenamed'/>"

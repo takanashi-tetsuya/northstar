@@ -1,16 +1,13 @@
 use crate::api::*;
-use axum::http::HeaderMap;
 use axum::{extract::State, response::Response, Json};
 use serde_json::json;
 use serde_json::Value;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::api::models::{
     BooleanToggle, BroadcastRequest, MucRoomView, OfflineMessagesStats, SessionView,
 };
 use crate::error::{AppError, Result};
-use crate::state::AppState;
 
 pub async fn admin_stats(
     State(state): State<crate::state::ApiQueryContext>,
@@ -301,11 +298,9 @@ pub async fn admin_revoke_invitation(
 }
 
 pub async fn admin_nuke(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _actor: ApiAdmin,
     Json(_body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let _actor = admin(&state, &headers).await?;
     Err(AppError::OperationDisabled(
         "REST factory reset is disabled; use the staged operator recovery procedure".into(),
     ))

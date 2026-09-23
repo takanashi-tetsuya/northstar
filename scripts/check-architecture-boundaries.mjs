@@ -2241,6 +2241,28 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(registrationHttpContext)
     || !/pub async fn register\(\s*State\(context\): State<HttpRegistrationEndpointContext>/.test(read('src/api/auth_routes.rs'))) {
   throw new Error('HTTP registration must use scoped account admission authority');
 }
+const challengeHttpContext = structBody(read('src/state/http_challenge_endpoint.rs'), 'pub(crate) struct HttpChallengeEndpointContext');
+if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(challengeHttpContext)
+    || !/pub async fn anti_abuse_challenge\(\s*State\(context\): State<HttpChallengeEndpointContext>,\s*State\(queries\): State<crate::state::ApiQueryContext>/.test(read('src/api/auth_routes.rs'))) {
+  throw new Error('anti-abuse challenge issuance must use scoped HTTP authority');
+}
+const uploadDeleteContext = structBody(read('src/state/upload_http_delete.rs'), 'pub(crate) struct UploadHttpDeleteContext');
+if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(uploadDeleteContext)
+    || !/pub async fn upload_delete\(\s*State\(state\): State<UploadHttpDeleteContext>,\s*State\(queries\): State<crate::state::ApiQueryContext>/.test(read('src/api/upload.rs'))) {
+  throw new Error('upload deletion must use scoped lifecycle and bearer authority');
+}
+const accountGenerationTeardown = read('src/state/account_generation_teardown.rs');
+const teardownSequence = structBody(accountGenerationTeardown, 'pub(crate) struct AccountGenerationTeardownSequence');
+if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownSequence)
+    || !/self\.routes\s*\.\s*revoke\s*\(/.test(accountGenerationTeardown)
+    || !/revoke_durable_sm\(\)\.await[\s\S]+notify_cluster\(\)\.await/.test(accountGenerationTeardown)) {
+  throw new Error('generation teardown sequence must fence local routes before SM and cluster effects');
+}
+const disabledFactoryReset = structBody(read('src/api/admin.rs'), 'pub async fn admin_nuke(');
+if (!/pub async fn admin_nuke\(\s*_actor: ApiAdmin/.test(read('src/api/admin.rs'))
+    || /Arc<AppState>/.test(disabledFactoryReset)) {
+  throw new Error('disabled factory reset must authenticate without broad application state');
+}
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passkeyAccountContext)
     || !/pub\(super\) async fn list\(\s*State\(state\): State<PasskeyAccountHttpContext>,\s*State\(queries\): State<crate::state::ApiQueryContext>/s.test(passkeyApiSource)
     || !/pub\(super\) async fn register_finish\(\s*State\(state\): State<PasskeyAccountHttpContext>,\s*State\(queries\): State<crate::state::ApiQueryContext>/s.test(passkeyApiSource)) {
@@ -3250,12 +3272,12 @@ if ([mucClaimTurn, mucPreclaim, mucClaim, mucClaimDatabaseTurn, mucClaimCall, mu
 }
 const clusterMucOutboxSettlementService = read('src/services/cluster_muc_outbox_settlement.rs');
 const clusterMucDelivery = structBody(read('src/cluster.rs'), 'async fn deliver_cluster_muc_event(');
-const mucContextTurn = clusterMucDelivery.indexOf('let _database_turn = state.durable_outbox_database_turn().await;');
+const mucContextTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;');
 const mucContextRead = clusterMucDelivery.indexOf('.event_context(delivery.operation_id)', mucContextTurn);
 const mucCacheBranch = clusterMucDelivery.indexOf('let recipient = if exact_cached', mucContextRead);
-const mucSnapshotTurn = clusterMucDelivery.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', mucCacheBranch);
+const mucSnapshotTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', mucCacheBranch);
 const mucSnapshotRead = clusterMucDelivery.indexOf('.recipient_snapshot(delivery)', mucSnapshotTurn);
-const mucCurrentTurn = clusterMucDelivery.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', mucSnapshotRead);
+const mucCurrentTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', mucSnapshotRead);
 const mucCurrentRead = clusterMucDelivery.indexOf('.audience_is_current(delivery)', mucCurrentTurn);
 const mucAbsentCheck = clusterMucDelivery.indexOf('let Some(snapshot) = snapshot else', mucSnapshotRead);
 if ([mucContextTurn, mucContextRead, mucCacheBranch, mucSnapshotTurn, mucSnapshotRead,
@@ -3266,10 +3288,10 @@ if ([mucContextTurn, mucContextRead, mucCacheBranch, mucSnapshotTurn, mucSnapsho
     || /crate::db::(?:cluster_muc_event_context|cluster_muc_delivery_recipient_snapshot|cluster_muc_delivery_audience_is_current)\s*\(/.test(clusterMucDelivery)) {
   throw new Error('cluster MUC event and audience reads must keep independent database turns and the cached-recipient fast path');
 }
-const itemReadTurn = clusterMucDelivery.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', clusterMucDelivery.indexOf('let stable_item_id ='));
+const itemReadTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', clusterMucDelivery.indexOf('let stable_item_id ='));
 const itemCompleted = clusterMucDelivery.indexOf('.completed(delivery.delivery_id, ordinal, &stable_item_id)', itemReadTurn);
 const itemTransport = clusterMucDelivery.indexOf('.deliver_to_muc_occupant_with_receipt(', itemCompleted);
-const itemWriteTurn = clusterMucDelivery.indexOf('let _database_turn = state.durable_outbox_database_turn().await;', itemTransport);
+const itemWriteTurn = clusterMucDelivery.indexOf('let _database_turn = worker.database_turn().await;', itemTransport);
 const itemCompleteExact = clusterMucDelivery.indexOf('.complete_exact(delivery, ordinal, &stable_item_id)', itemWriteTurn);
 if ([itemReadTurn, itemCompleted, itemTransport, itemWriteTurn, itemCompleteExact].some((offset) => offset < 0)
     || /crate::db::(?:cluster_muc_delivery_item_completed|complete_cluster_muc_delivery_item)\s*\(/.test(clusterMucDelivery)) {
@@ -3602,8 +3624,6 @@ const stateServiceAccessors = [
   'api_session_service',
   'cluster_authority_service',
   'cluster_instance_release_service',
-  'cluster_muc_delivery_item_service',
-  'cluster_muc_delivery_read_service',
   'cluster_muc_occupancy_maintenance_service',
   'challenge_issue_service',
   'challenge_cleanup_service',

@@ -6183,7 +6183,7 @@ async fn run_muc_outbox_delivery(
                 }
                 let outcome = tokio::time::timeout(
                     MUC_OUTBOX_DELIVERY_BUDGET,
-                    deliver_cluster_muc_event(&state, &delivery),
+                    deliver_cluster_muc_event(&state, &context, &delivery),
                 )
                 .await
                 .map_err(|_| anyhow::anyhow!("cluster MUC delivery exceeded its time budget"))
@@ -6361,6 +6361,7 @@ fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<'_>) -> Res
 
 async fn deliver_cluster_muc_event(
     state: &Arc<AppState>,
+    worker: &crate::state::cluster_muc_outbox_worker::ClusterMucOutboxWorkerContext,
     delivery: &crate::db::ClusterMucOutboxDelivery,
 ) -> Result<()> {
     anyhow::ensure!(
@@ -6383,9 +6384,9 @@ async fn deliver_cluster_muc_event(
         "cluster MUC outbox payload identity is not exactly bound"
     );
     let context = {
-        let _database_turn = state.durable_outbox_database_turn().await;
-        state
-            .cluster_muc_delivery_read_service()
+        let _database_turn = worker.database_turn().await;
+        worker
+            .delivery_read
             .event_context(delivery.operation_id)
             .await?
             .context("cluster MUC outbox operation is missing")?
@@ -6401,11 +6402,7 @@ async fn deliver_cluster_muc_event(
             .is_none_or(|value| matches!(value, "owner" | "admin" | "member" | "outcast" | "none")),
         "cluster MUC operation contains an invalid actor affiliation"
     );
-    let room_jid = format!(
-        "{}@conference.{}",
-        context.room_localpart,
-        state.local_domain()
-    );
+    let room_jid = format!("{}@conference.{}", context.room_localpart, worker.domain);
     let Some(recipient_nick) = delivery.recipient_nick.as_deref() else {
         // node_pull rows are wake hints only; the worker has completed the
         // authoritative PostgreSQL pull by reaching this point.
@@ -6426,19 +6423,13 @@ async fn deliver_cluster_muc_event(
         // immutable outbox audience tuple; never revive membership or trust a
         // Redis nickname cache. The stable event ID remains the retry key.
         let snapshot = {
-            let _database_turn = state.durable_outbox_database_turn().await;
-            state
-                .cluster_muc_delivery_read_service()
-                .recipient_snapshot(delivery)
-                .await?
+            let _database_turn = worker.database_turn().await;
+            worker.delivery_read.recipient_snapshot(delivery).await?
         };
         let Some(snapshot) = snapshot else {
             let audience_is_current = {
-                let _database_turn = state.durable_outbox_database_turn().await;
-                state
-                    .cluster_muc_delivery_read_service()
-                    .audience_is_current(delivery)
-                    .await?
+                let _database_turn = worker.database_turn().await;
+                worker.delivery_read.audience_is_current(delivery).await?
             };
             if audience_is_current {
                 anyhow::bail!("authoritative MUC audience snapshot disappeared");
@@ -6684,9 +6675,9 @@ async fn deliver_cluster_muc_event(
             i32::try_from(ordinal).context("MUC event has too many stanza projections")?;
         let stable_item_id = format!("{}:{ordinal}", delivery.event_id);
         let completed = {
-            let _database_turn = state.durable_outbox_database_turn().await;
-            state
-                .cluster_muc_delivery_item_service()
+            let _database_turn = worker.database_turn().await;
+            worker
+                .delivery_item
                 .completed(delivery.delivery_id, ordinal, &stable_item_id)
                 .await?
         };
@@ -6700,9 +6691,9 @@ async fn deliver_cluster_muc_event(
             "exact MUC audience transport did not reach a durable ownership/write boundary"
         );
         let completed = {
-            let _database_turn = state.durable_outbox_database_turn().await;
-            state
-                .cluster_muc_delivery_item_service()
+            let _database_turn = worker.database_turn().await;
+            worker
+                .delivery_item
                 .complete_exact(delivery, ordinal, &stable_item_id)
                 .await?
         };

@@ -18,6 +18,7 @@ pub(crate) trait ChallengeIssueRepository: Send + Sync {
     ) -> impl Future<Output = Result<PowChallenge>> + Send;
 }
 
+#[derive(Clone)]
 pub(crate) struct ChallengeIssueService<R> {
     repository: R,
 }

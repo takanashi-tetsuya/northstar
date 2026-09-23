@@ -9,6 +9,7 @@ use tokio::sync::OwnedSemaphorePermit;
 
 pub(crate) struct ClusterMucOutboxWorkerContext {
     pub(crate) signal: ClusterMucOutboxSignal,
+    pub(crate) domain: String,
     pub(crate) preclaim: services::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService<
         db::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository,
     >,
@@ -20,6 +21,12 @@ pub(crate) struct ClusterMucOutboxWorkerContext {
     >,
     pub(crate) housekeeping: services::cluster_muc_outbox_housekeeping::ClusterMucOutboxHousekeepingService<
         db::cluster_muc_outbox_housekeeping_repository::PostgresClusterMucOutboxHousekeepingRepository,
+    >,
+    pub(crate) delivery_read: services::cluster_muc_delivery_read::ClusterMucDeliveryReadService<
+        db::cluster_muc_delivery_read_repository::PostgresClusterMucDeliveryReadRepository,
+    >,
+    pub(crate) delivery_item: services::cluster_muc_delivery_item::ClusterMucDeliveryItemService<
+        db::cluster_muc_delivery_item_repository::PostgresClusterMucDeliveryItemRepository,
     >,
     admission: services::durable_outbox::DurableOutboxDatabaseAdmission,
     metrics: Arc<Metrics>,
@@ -62,6 +69,7 @@ impl AppState {
     pub(crate) fn cluster_muc_outbox_worker_context(&self) -> ClusterMucOutboxWorkerContext {
         ClusterMucOutboxWorkerContext {
             signal: self.cluster.muc_outbox_signal(),
+            domain: self.local_domain().to_owned(),
             preclaim: services::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService::new(
                 db::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository::new(
                     self.pool.clone(),
@@ -79,6 +87,16 @@ impl AppState {
             ),
             housekeeping: services::cluster_muc_outbox_housekeeping::ClusterMucOutboxHousekeepingService::new(
                 db::cluster_muc_outbox_housekeeping_repository::PostgresClusterMucOutboxHousekeepingRepository::new(
+                    self.pool.clone(),
+                ),
+            ),
+            delivery_read: services::cluster_muc_delivery_read::ClusterMucDeliveryReadService::new(
+                db::cluster_muc_delivery_read_repository::PostgresClusterMucDeliveryReadRepository::new(
+                    self.pool.clone(),
+                ),
+            ),
+            delivery_item: services::cluster_muc_delivery_item::ClusterMucDeliveryItemService::new(
+                db::cluster_muc_delivery_item_repository::PostgresClusterMucDeliveryItemRepository::new(
                     self.pool.clone(),
                 ),
             ),

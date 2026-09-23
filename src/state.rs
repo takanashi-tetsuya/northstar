@@ -135,15 +135,18 @@ impl axum::extract::FromRef<Arc<AppState>> for OmemoRecoveryPollContext {
 }
 pub(crate) mod api_queries;
 pub(crate) mod api_session_http;
+pub(crate) mod http_challenge_endpoint;
 mod http_login_endpoint;
 pub(crate) mod http_registration_endpoint;
 pub(crate) use http_login_endpoint::HttpLoginEndpointContext;
 mod passkey_login_finish;
 pub(crate) use passkey_login_finish::PasskeyLoginFinishContext;
+pub(crate) mod upload_http_delete;
 mod upload_http_read;
 pub(crate) use upload_http_read::UploadHttpReadContext;
 mod metrics_context;
 pub(crate) use metrics_context::MetricsContext;
+mod account_generation_teardown;
 mod admin_cluster_queries;
 pub(crate) mod cluster_failure_supervisor;
 pub(crate) mod cluster_maintenance;
@@ -3287,12 +3290,6 @@ impl AppState {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_http_challenge_requested(&self) {
-        self.metrics
-            .anti_abuse_challenges_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
     pub(crate) fn record_http_authentication_backend_failure(&self) {
         self.metrics
             .authentication_backend_failures_total
@@ -3417,30 +3414,6 @@ impl AppState {
     > {
         crate::services::muc::ClusterMucOccupancyMaintenanceService::new(
             db::room::PostgresClusterMucOccupancyMaintenanceRepository::new(self.pool.clone()),
-        )
-    }
-
-    pub(crate) fn cluster_muc_delivery_item_service(
-        &self,
-    ) -> crate::services::cluster_muc_delivery_item::ClusterMucDeliveryItemService<
-        db::cluster_muc_delivery_item_repository::PostgresClusterMucDeliveryItemRepository,
-    > {
-        crate::services::cluster_muc_delivery_item::ClusterMucDeliveryItemService::new(
-            db::cluster_muc_delivery_item_repository::PostgresClusterMucDeliveryItemRepository::new(
-                self.pool.clone(),
-            ),
-        )
-    }
-
-    pub(crate) fn cluster_muc_delivery_read_service(
-        &self,
-    ) -> crate::services::cluster_muc_delivery_read::ClusterMucDeliveryReadService<
-        db::cluster_muc_delivery_read_repository::PostgresClusterMucDeliveryReadRepository,
-    > {
-        crate::services::cluster_muc_delivery_read::ClusterMucDeliveryReadService::new(
-            db::cluster_muc_delivery_read_repository::PostgresClusterMucDeliveryReadRepository::new(
-                self.pool.clone(),
-            ),
         )
     }
 
@@ -5854,10 +5827,6 @@ impl AppState {
         &self.mix_service
     }
 
-    pub(crate) async fn durable_outbox_database_turn(&self) -> OwnedSemaphorePermit {
-        self.durable_outbox_database_admission.acquire().await
-    }
-
     pub(crate) fn extdisco_service(&self) -> &crate::services::extdisco::ExtDiscoService {
         &self.extdisco_service
     }
@@ -7753,45 +7722,26 @@ impl AppState {
         bare_account_jid: &str,
         auth_generation_exclusive: i64,
     ) {
-        if auth_generation_exclusive <= 0 {
-            tracing::error!(
-                %user_id,
-                auth_generation = auth_generation_exclusive,
-                "refused invalid account authorization teardown fence"
-            );
-            return;
-        }
-        self.revoke_local_account_routes(
-            user_id,
-            bare_account_jid,
-            Some(auth_generation_exclusive),
-        );
-        if let Err(error) = self
-            .revoke_user_sm_sessions_before_auth_generation_with_teardown(
+        self.account_generation_teardown_sequence()
+            .run(
                 user_id,
+                bare_account_jid,
                 auth_generation_exclusive,
+                || {
+                    self.revoke_user_sm_sessions_before_auth_generation_with_teardown(
+                        user_id,
+                        auth_generation_exclusive,
+                    )
+                },
+                || {
+                    self.cluster.send_account_generation_teardown(
+                        bare_account_jid,
+                        user_id,
+                        auth_generation_exclusive,
+                    )
+                },
             )
-            .await
-        {
-            tracing::error!(
-                ?error,
-                %user_id,
-                auth_generation = auth_generation_exclusive,
-                "failed to revoke generation-fenced durable SM sessions"
-            );
-        }
-        if let Err(error) = self
-            .cluster
-            .send_account_generation_teardown(bare_account_jid, user_id, auth_generation_exclusive)
-            .await
-        {
-            tracing::error!(
-                ?error,
-                %user_id,
-                auth_generation = auth_generation_exclusive,
-                "generation-fenced cross-node account revocation was not acknowledged"
-            );
-        }
+            .await;
     }
 
     pub async fn revoke_user_sm_sessions_with_teardown(

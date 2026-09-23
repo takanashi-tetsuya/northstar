@@ -349,8 +349,13 @@ checks. Authenticated Passkey listing/registration completion and OMEMO
 recovery read/write routes use scoped HTTP contexts. `AppState` still exposes
 the cluster capability. Public registration, logout and Passkey challenge
 starts also use scoped contexts; the PubSub listener has a separate transport
-and self-loop handle. Its message dispatch, the MUC outbox renderer and some
-account teardown HTTP handlers still receive broader state than they need. Database role
+and self-loop handle. Anti-abuse challenge issuance and upload deletion use
+scoped HTTP contexts, while MUC outbox database reads and item completion use
+the worker's existing bounded admission. Account-generation teardown now
+centralizes local-route, durable-SM and cluster ordering. Listener message
+dispatch, MUC endpoint rendering and post-commit account teardown still need
+independent runtime capabilities before the last broad state references can
+be removed. Database role
 separation, MUC batch commands and storage/restore tooling follow after these
 Stage 1 boundaries pass CI.
 

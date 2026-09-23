@@ -216,7 +216,7 @@ pub struct Metrics {
     pub component_connections_active: AtomicU64,
     pub component_deliveries_total: AtomicU64,
     pub component_failures_total: AtomicU64,
-    pub anti_abuse_challenges_total: AtomicU64,
+    pub anti_abuse_challenges_total: Arc<AtomicU64>,
     pub rate_limited_total: Arc<AtomicU64>,
     pub omemo_recovery_poll_requests_total: AtomicU64,
     pub omemo_recovery_poll_rate_limited_total: AtomicU64,

@@ -10,7 +10,6 @@ use axum::{
 use serde_json::json;
 use serde_json::Value;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use zeroize::Zeroizing;
 
 use crate::abuse::AbuseAction;
@@ -19,9 +18,8 @@ use crate::db;
 use crate::error::{AppError, Result};
 use crate::services::challenge_issuance::ChallengeIssueRequest;
 use crate::state::{
-    api_session_http::ApiSessionHttpContext,
-    http_registration_endpoint::HttpRegistrationEndpointContext, AppState,
-    HttpLoginEndpointContext,
+    api_session_http::ApiSessionHttpContext, http_challenge_endpoint::HttpChallengeEndpointContext,
+    http_registration_endpoint::HttpRegistrationEndpointContext, HttpLoginEndpointContext,
 };
 
 pub async fn register(
@@ -228,14 +226,16 @@ pub async fn logout(
 }
 
 pub async fn anti_abuse_challenge(
-    State(state): State<Arc<AppState>>,
+    State(context): State<HttpChallengeEndpointContext>,
+    State(queries): State<crate::state::ApiQueryContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<ChallengeRequest>,
 ) -> Result<Json<Value>, AppError> {
     let action = AbuseAction::parse(&body.action)
         .ok_or_else(|| AppError::BadRequest("unknown anti-abuse action".into()))?;
-    let peer_ip = client_ip(peer.ip(), &headers, &state);
+    let peer_ip =
+        super::client_ip_with_trusted_proxies(peer.ip(), &headers, context.trusted_proxies());
     let (subject, actors) = match action {
         AbuseAction::Registration => abuse_identity(action, peer_ip, None),
         AbuseAction::Login => login_abuse_identity(
@@ -246,7 +246,7 @@ pub async fn anti_abuse_challenge(
         )
         .ok_or_else(|| AppError::BadRequest("login username is invalid".into()))?,
         _ => {
-            let user = current_user(&state, &headers).await?;
+            let user = current_user_with_queries(&queries, &headers).await?;
             let (mut subject, actors) = abuse_identity(action, peer_ip, Some(&user));
             if action == AbuseAction::PasswordChange
                 && body
@@ -259,15 +259,14 @@ pub async fn anti_abuse_challenge(
             (subject, actors)
         }
     };
-    state.record_http_challenge_requested();
+    context.requested();
     let intent = body
         .intent
         .as_ref()
         .map(|requested| crate::abuse::PowIntent::from_request(action, requested))
         .transpose()
         .map_err(|error| AppError::BadRequest(error.to_string()))?;
-    let issued = state
-        .challenge_issue_service()
+    let issued = context
         .issue(ChallengeIssueRequest {
             action,
             subject: &subject,
@@ -280,7 +279,7 @@ pub async fn anti_abuse_challenge(
         Err(error) => {
             if let Some(capacity) = error.downcast_ref::<crate::abuse::ChallengeCapacityExceeded>()
             {
-                state.record_http_rate_limited();
+                context.capacity_exhausted();
                 return Err(AppError::TooManyRequests {
                     message: "proof-of-work challenge capacity reached; try again later".into(),
                     retry_after: capacity.retry_after_seconds(),

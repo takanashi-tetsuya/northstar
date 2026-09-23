@@ -993,10 +993,6 @@ impl Deref for ApiUser {
     }
 }
 
-pub async fn current_user(state: &AppState, headers: &HeaderMap) -> Result<ApiUser, AppError> {
-    current_user_with_queries(&state.api_query_context(), headers).await
-}
-
 pub(crate) async fn current_user_with_queries(
     state: &crate::state::ApiQueryContext,
     headers: &HeaderMap,
@@ -1059,24 +1055,6 @@ where
             },
         })
     }
-}
-
-pub async fn admin(state: &AppState, headers: &HeaderMap) -> Result<ApiAdmin, AppError> {
-    let token = bearer_token(headers)?;
-    let user = state
-        .api_query_service()
-        .principal(token)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-    if !user.is_admin {
-        return Err(AppError::Forbidden);
-    }
-    Ok(ApiAdmin {
-        user: ApiUser {
-            user,
-            session_token: zeroize::Zeroizing::new(token.to_owned()),
-        },
-    })
 }
 
 pub async fn serve(

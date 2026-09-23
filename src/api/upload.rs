@@ -23,7 +23,7 @@ use crate::services::upload::{
     UserUploadDeleteOutcome,
 };
 use crate::services::upload_safety::UploadIoClass;
-use crate::state::{AppState, UploadHttpReadContext};
+use crate::state::{upload_http_delete::UploadHttpDeleteContext, AppState, UploadHttpReadContext};
 
 const UPLOAD_LEASE_SECONDS: i64 = 90;
 const UPLOAD_RENEW_SECONDS: u64 = 30;
@@ -627,19 +627,19 @@ pub async fn upload_get(
 }
 
 pub async fn upload_delete(
-    State(state): State<Arc<AppState>>,
+    State(state): State<UploadHttpDeleteContext>,
+    State(queries): State<crate::state::ApiQueryContext>,
     axum::Extension(request_id): axum::Extension<crate::api::ApiRequestId>,
     crate::api::ApiPath(id): crate::api::ApiPath<Uuid>,
     headers: HeaderMap,
 ) -> Result<StatusCode, AppError> {
-    let _operation_timer = state.start_upload_operation_timer();
-    let user = crate::api::current_user(&state, &headers).await?;
+    let _operation_timer = state.operation_timer();
+    let user = crate::api::current_user_with_queries(&queries, &headers).await?;
     // DELETE is deliberately idempotent and non-enumerating: a missing slot
     // or another user's UUID returns the same 204 while changing no state.
     // An owned row is atomically removed from the public namespace, audited,
     // and queued for retryable object-store cleanup.
     match state
-        .upload_service()
         .delete_authorized(
             user.id,
             user.auth_generation,

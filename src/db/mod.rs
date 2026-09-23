@@ -111,6 +111,7 @@ pub mod session_identity;
 pub(crate) mod session_termination_authority_repository;
 pub mod sm;
 pub mod sm_repository;
+pub(crate) mod sm_teardown_repository;
 pub mod upload;
 pub mod upload_admin;
 pub mod users;

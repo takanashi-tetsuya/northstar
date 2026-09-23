@@ -1,4 +1,4 @@
-//! Public proof-of-work issuance with only bearer lookup and challenge authority.
+//! Public proof-of-work issuance; bearer lookup remains with the API query context.
 
 use super::AppState;
 use crate::{

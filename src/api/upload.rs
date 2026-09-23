@@ -23,7 +23,10 @@ use crate::services::upload::{
     UserUploadDeleteOutcome,
 };
 use crate::services::upload_safety::UploadIoClass;
-use crate::state::{upload_http_delete::UploadHttpDeleteContext, AppState, UploadHttpReadContext};
+use crate::state::{
+    upload_http_delete::UploadHttpDeleteContext, AppState, UploadHttpReadContext,
+    UploadHttpReplayReadContext,
+};
 
 const UPLOAD_LEASE_SECONDS: i64 = 90;
 const UPLOAD_RENEW_SECONDS: u64 = 30;
@@ -43,6 +46,7 @@ async fn write_with_lease<T>(
 
 pub async fn upload_put(
     State(state): State<Arc<AppState>>,
+    State(replay_read): State<UploadHttpReplayReadContext>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     crate::api::ApiPath(id): crate::api::ApiPath<Uuid>,
     headers: HeaderMap,
@@ -99,7 +103,7 @@ pub async fn upload_put(
                     "upload slot already contains different bytes".into(),
                 ));
             }
-            let stored_digest = stored_object_digest(&state, &slot).await?;
+            let stored_digest = stored_object_digest(&replay_read, &slot).await?;
             if stored_digest != content_sha256 {
                 return Err(AppError::Internal(anyhow::anyhow!(
                     "stored upload content does not match its committed digest"
@@ -401,8 +405,11 @@ async fn digest_body(body: Body, expected_size: u64) -> Result<[u8; 32], AppErro
     Ok(digest.finalize().into())
 }
 
-async fn stored_object_digest(state: &AppState, slot: &UploadSlot) -> Result<[u8; 32], AppError> {
-    if state.upload_store().backend() != slot.storage_backend {
+async fn stored_object_digest(
+    state: &UploadHttpReplayReadContext,
+    slot: &UploadSlot,
+) -> Result<[u8; 32], AppError> {
+    if state.backend() != slot.storage_backend {
         return Err(AppError::Internal(anyhow::anyhow!(
             "committed upload belongs to a different storage backend"
         )));
@@ -411,10 +418,8 @@ async fn stored_object_digest(state: &AppState, slot: &UploadSlot) -> Result<[u8
         AppError::Internal(anyhow::anyhow!("committed upload has no object locator"))
     })?;
     let Some(stored) = tokio::time::timeout(
-        state.upload_download_read_timeout(),
-        state
-            .upload_store()
-            .get(object_key, slot.storage_object_version.as_deref()),
+        state.read_timeout(),
+        state.get(object_key, slot.storage_object_version.as_deref()),
     )
     .await
     .map_err(|_| AppError::Internal(anyhow::anyhow!("upload object lookup timed out")))?
@@ -440,8 +445,8 @@ async fn stored_object_digest(state: &AppState, slot: &UploadSlot) -> Result<[u8
     let mut digest = Sha256::new();
     let mut total = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
-    let total_deadline = tokio::time::Instant::now() + state.upload_download_max_duration();
-    let idle_timeout = state.upload_download_read_timeout();
+    let total_deadline = tokio::time::Instant::now() + state.max_duration();
+    let idle_timeout = state.read_timeout();
     loop {
         let deadline = (tokio::time::Instant::now() + idle_timeout).min(total_deadline);
         let read = tokio::time::timeout_at(deadline, reader.read(&mut buffer))

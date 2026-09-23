@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::db;
 use crate::error::{AppError, Result};
-use crate::state::AppState;
+use crate::state::{password_change_http::PasswordChangeHttpContext, AppState};
 
 pub async fn me(
     State(state): State<crate::state::ApiQueryContext>,
@@ -28,7 +28,8 @@ pub async fn me(
 }
 
 pub async fn change_password(
-    State(state): State<Arc<AppState>>,
+    State(state): State<PasswordChangeHttpContext>,
+    State(teardown_state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     mut request: ApiJson<PasswordChange>,
@@ -40,9 +41,10 @@ pub async fn change_password(
     let current_password =
         zeroize::Zeroizing::new(std::mem::take(&mut request.value.current_password));
     let new_password = zeroize::Zeroizing::new(std::mem::take(&mut request.value.new_password));
-    let peer_ip = client_ip(peer.ip(), &headers, &state);
+    let peer_ip =
+        super::client_ip_with_trusted_proxies(peer.ip(), &headers, state.trusted_proxies());
     let outcome = state
-        .password_change_service()
+        .service()
         .execute(PasswordChangeCommand {
             idempotency: request.idempotency(
                 None,
@@ -65,14 +67,14 @@ pub async fn change_password(
             crate::api::idempotency::stored_api_response(response)
         }
         PasswordChangeResult::RateLimited(response) => {
-            state.record_http_rate_limited();
+            state.abuse_denied();
             crate::api::idempotency::stored_api_response(response)
         }
         PasswordChangeResult::Changed(response, account) => {
-            state
+            teardown_state
                 .disconnect_account(
                     account.user_id,
-                    &format!("{}@{}", account.username, state.local_domain()),
+                    &format!("{}@{}", account.username, state.domain()),
                 )
                 .await;
             crate::api::idempotency::stored_api_response(response)
@@ -93,13 +95,13 @@ pub async fn change_password(
             "password-change capacity is temporarily exhausted; retry later".into(),
         )),
         PasswordChangeResult::VerifierUnavailable => {
-            state.record_http_authentication_backend_failure();
+            state.backend_unavailable();
             Err(AppError::Unavailable(
                 "password authentication backend is temporarily unavailable; retry later".into(),
             ))
         }
         PasswordChangeResult::PublicationUnavailable => {
-            state.record_http_authentication_backend_failure();
+            state.backend_unavailable();
             Err(AppError::Unavailable(
                 "password-change backend is temporarily unavailable; retry later".into(),
             ))

@@ -83,6 +83,56 @@ impl UploadHttpReadContext {
     }
 }
 
+/// Exact, guarded object reads used to verify a claimed upload replay.
+/// The caller already holds write admission; this capability has no public
+/// file lookup or independent download admission.
+#[derive(Clone)]
+pub(crate) struct UploadHttpReplayReadContext {
+    guarded_store: Option<Arc<dyn UploadStore>>,
+    read_timeout: Duration,
+    max_duration: Duration,
+}
+
+impl axum::extract::FromRef<Arc<AppState>> for UploadHttpReplayReadContext {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        Self {
+            // AppState stores only GuardedUploadStore implementations here.
+            guarded_store: state.upload_store.as_ref().map(Arc::clone),
+            read_timeout: Duration::from_secs(state.config.upload_download_read_timeout_seconds),
+            max_duration: Duration::from_secs(state.config.upload_download_max_seconds),
+        }
+    }
+}
+
+impl UploadHttpReplayReadContext {
+    pub(crate) fn backend(&self) -> &'static str {
+        self.guarded_store
+            .as_ref()
+            .expect("upload routes and workers require an enabled or draining runtime")
+            .backend()
+    }
+
+    pub(crate) async fn get(
+        &self,
+        object_key: &str,
+        object_version: Option<&str>,
+    ) -> anyhow::Result<Option<StoredUploadReader>> {
+        self.guarded_store
+            .as_ref()
+            .expect("upload routes and workers require an enabled or draining runtime")
+            .get(object_key, object_version)
+            .await
+    }
+
+    pub(crate) fn read_timeout(&self) -> Duration {
+        self.read_timeout
+    }
+
+    pub(crate) fn max_duration(&self) -> Duration {
+        self.max_duration
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::UploadAdmission;

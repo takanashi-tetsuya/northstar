@@ -1087,7 +1087,7 @@ pub(crate) struct ClusterFailureSupervisorAuthority {
 /// The maintenance worker may observe readiness and record a failed Redis
 /// projection without receiving signing or publication authority.
 #[derive(Clone)]
-struct ClusterMaintenanceControl {
+pub(crate) struct ClusterMaintenanceControl {
     node_id: String,
     enabled: bool,
     peer_authority: ClusterFailureSupervisorAuthority,
@@ -1099,7 +1099,7 @@ struct ClusterMaintenanceControl {
 /// PostgreSQL-fenced maintenance of disposable Redis projections. This handle
 /// has no signer, publication gate, PubSub client, or delivery route.
 #[derive(Clone)]
-struct ClusterMaintenanceRedis {
+pub(crate) struct ClusterMaintenanceRedis {
     pool: Option<Pool<RedisConnectionManager>>,
     authority_pool: Arc<std::sync::OnceLock<sqlx::PgPool>>,
     namespace: String,
@@ -2342,7 +2342,7 @@ impl ClusterManager {
         }
     }
 
-    fn maintenance_control(&self) -> ClusterMaintenanceControl {
+    pub(crate) fn maintenance_control(&self) -> ClusterMaintenanceControl {
         ClusterMaintenanceControl {
             node_id: self.node_id.clone(),
             enabled: self.is_enabled(),
@@ -2353,7 +2353,7 @@ impl ClusterManager {
         }
     }
 
-    fn maintenance_redis(&self) -> ClusterMaintenanceRedis {
+    pub(crate) fn maintenance_redis(&self) -> ClusterMaintenanceRedis {
         ClusterMaintenanceRedis {
             pool: self.pool.clone(),
             authority_pool: Arc::clone(&self.authority_pool),
@@ -5797,8 +5797,7 @@ pub async fn run_maintenance(
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
 ) -> Result<()> {
-    let control = state.cluster.maintenance_control();
-    let redis = state.cluster.maintenance_redis();
+    let (control, redis) = state.cluster_maintenance_handles();
     let locals = state.cluster_maintenance_locals();
     let mut interval =
         tokio::time::interval(Duration::from_secs(CLUSTER_MAINTENANCE_INTERVAL_SECONDS));

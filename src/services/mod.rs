@@ -55,6 +55,7 @@ pub(crate) mod session_cleanup;
 pub(crate) mod session_termination_authority;
 pub(crate) mod sm;
 pub(crate) mod sm_capacity;
+pub(crate) mod sm_teardown;
 pub(crate) mod upload;
 pub(crate) mod upload_admin;
 pub(crate) mod upload_safety;

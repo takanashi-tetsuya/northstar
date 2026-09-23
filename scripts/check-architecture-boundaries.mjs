@@ -2251,12 +2251,31 @@ if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(uploadDeleteContext)
     || !/pub async fn upload_delete\(\s*State\(state\): State<UploadHttpDeleteContext>,\s*State\(queries\): State<crate::state::ApiQueryContext>/.test(read('src/api/upload.rs'))) {
   throw new Error('upload deletion must use scoped lifecycle and bearer authority');
 }
+const uploadReplayReadContext = structBody(read('src/state/upload_http_read.rs'), 'pub(crate) struct UploadHttpReplayReadContext');
+if (/\b(?:AppState|ClusterManager|PgPool|UploadHttpReadContext)\b/.test(uploadReplayReadContext)
+    || !/pub async fn upload_put\(\s*State\(state\): State<Arc<AppState>>,\s*State\(replay_read\): State<UploadHttpReplayReadContext>/.test(read('src/api/upload.rs'))) {
+  throw new Error('upload replay readback must use exact guarded object-read authority');
+}
+const passwordChangeContext = structBody(read('src/state/password_change_http.rs'), 'pub(crate) struct PasswordChangeHttpContext');
+if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(passwordChangeContext)
+    || !/pub async fn change_password\(\s*State\(state\): State<PasswordChangeHttpContext>/.test(read('src/api/users.rs'))) {
+  throw new Error('password change admission must use scoped HTTP authority');
+}
 const accountGenerationTeardown = read('src/state/account_generation_teardown.rs');
 const teardownSequence = structBody(accountGenerationTeardown, 'pub(crate) struct AccountGenerationTeardownSequence');
 if (/\b(?:AppState|ClusterManager|PgPool)\b/.test(teardownSequence)
     || !/self\.routes\s*\.\s*revoke\s*\(/.test(accountGenerationTeardown)
     || !/revoke_durable_sm\(\)\.await[\s\S]+notify_cluster\(\)\.await/.test(accountGenerationTeardown)) {
   throw new Error('generation teardown sequence must fence local routes before SM and cluster effects');
+}
+const smTeardownService = read('src/services/sm_teardown.rs');
+if (/\b(?:sqlx|PgPool|AppState|ClusterManager)\b/.test(smTeardownService.split('#[cfg(test)]')[0])
+    || !smTeardownService.includes('render(snapshot).await?;')
+    || !smTeardownService.includes('self.repository.finalize(lease).await?')
+    || !smTeardownService.includes('batch.pending == 0')
+    || !smTeardownService.includes('Duration::from_millis(25)')
+    || !read('src/state.rs').includes('.revoke_before_generation(user_id, auth_generation_exclusive,')) {
+  throw new Error('durable SM generation teardown must retain fenced claims and post-effect finalization');
 }
 const disabledFactoryReset = structBody(read('src/api/admin.rs'), 'pub async fn admin_nuke(');
 if (!/pub async fn admin_nuke\(\s*_actor: ApiAdmin/.test(read('src/api/admin.rs'))
@@ -3628,7 +3647,6 @@ const stateServiceAccessors = [
   'challenge_issue_service',
   'challenge_cleanup_service',
   'sasl_login_abuse_service',
-  'password_change_service',
   'operation_muc_destroy_service',
   'locked_muc_expiry_service',
   'operation_effect_fence_service',

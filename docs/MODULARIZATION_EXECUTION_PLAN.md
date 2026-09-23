@@ -355,7 +355,11 @@ the worker's existing bounded admission. Account-generation teardown now
 centralizes local-route, durable-SM and cluster ordering. Listener message
 dispatch, MUC endpoint rendering and post-commit account teardown still need
 independent runtime capabilities before the last broad state references can
-be removed. Database role
+be removed. Durable SM generation teardown now has its own lease/finalize
+repository service; the existing runtime still supplies Presence, MUC and
+delivery effects between claim and finalization. Upload PUT replay verifies
+the exact stored object version through a scoped guarded-read capability,
+and password-change admission uses a scoped HTTP context. Database role
 separation, MUC batch commands and storage/restore tooling follow after these
 Stage 1 boundaries pass CI.
 

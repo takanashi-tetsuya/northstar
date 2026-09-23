@@ -144,6 +144,7 @@ pub(crate) use passkey_login_finish::PasskeyLoginFinishContext;
 pub(crate) mod upload_http_delete;
 mod upload_http_read;
 pub(crate) use upload_http_read::UploadHttpReadContext;
+pub(crate) use upload_http_read::UploadHttpReplayReadContext;
 mod metrics_context;
 pub(crate) use metrics_context::MetricsContext;
 mod account_generation_teardown;
@@ -162,6 +163,7 @@ pub(crate) mod muc_cluster_routing;
 mod notification_routing;
 pub(crate) mod omemo_recovery_http;
 pub(crate) mod passkey_http;
+pub(crate) mod password_change_http;
 mod presence_cluster_routing;
 mod s2s_cluster_routing;
 mod session_cluster_route;
@@ -3284,18 +3286,6 @@ fn ephemeral_api_control_secret() -> [u8; 64] {
 }
 
 impl AppState {
-    pub(crate) fn record_http_rate_limited(&self) {
-        self.metrics
-            .rate_limited_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_http_authentication_backend_failure(&self) {
-        self.metrics
-            .authentication_backend_failures_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
     pub(crate) fn start_upload_operation_timer(&self) -> crate::metrics::DurationTimer<'_> {
         self.metrics.upload_operation_duration_seconds.start_timer()
     }
@@ -5635,14 +5625,6 @@ impl AppState {
         self.config.upload_retention_seconds
     }
 
-    pub(crate) fn upload_download_read_timeout(&self) -> Duration {
-        Duration::from_secs(self.config.upload_download_read_timeout_seconds)
-    }
-
-    pub(crate) fn upload_download_max_duration(&self) -> Duration {
-        Duration::from_secs(self.config.upload_download_max_seconds)
-    }
-
     pub(crate) fn admin_gateway_authentication_enabled(&self) -> bool {
         self.web_admin_gateway_token.is_some()
     }
@@ -5967,14 +5949,6 @@ impl AppState {
     ) -> &crate::services::account::AccountService<db::account_repository::PostgresAccountRepository>
     {
         &self.account_service
-    }
-
-    pub(crate) fn password_change_service(
-        &self,
-    ) -> &crate::services::password_change::PasswordChangeService<
-        db::password_change_repository::PostgresPasswordChangeRepository,
-    > {
-        &self.password_change_service
     }
 
     pub(crate) fn operation_muc_destroy_service(
@@ -7774,39 +7748,14 @@ impl AppState {
         user_id: uuid::Uuid,
         auth_generation_exclusive: i64,
     ) -> anyhow::Result<usize> {
-        let lease = self.config.sm_claim_lease_seconds.max(1);
-        let deadline =
-            tokio::time::Instant::now() + std::time::Duration::from_secs(lease.saturating_add(2));
-        let mut total = 0usize;
-        loop {
-            let batch = db::take_user_sm_sessions_before_auth_generation_for_teardown(
-                &self.pool,
-                user_id,
-                auth_generation_exclusive,
-                lease,
-            )
-            .await?;
-            total = total.saturating_add(batch.snapshots.len());
-            for snapshot in batch.snapshots {
-                self.perform_and_finalize_sm_teardown(snapshot).await?;
-            }
-            if batch.pending == 0
-                && db::count_user_sm_rows_before_auth_generation(
-                    &self.pool,
-                    user_id,
-                    auth_generation_exclusive,
-                )
-                .await?
-                    == 0
-            {
-                return Ok(total);
-            }
-            anyhow::ensure!(
-                tokio::time::Instant::now() < deadline,
-                "generation-fenced SM teardown claims did not quiesce before the deadline"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
+        crate::services::sm_teardown::SmTeardownService::new(
+            db::sm_teardown_repository::PostgresSmTeardownRepository::new(self.pool.clone()),
+            self.config.sm_claim_lease_seconds,
+        )
+        .revoke_before_generation(user_id, auth_generation_exclusive, |snapshot| async move {
+            self.teardown_sm_snapshot(&snapshot).await
+        })
+        .await
     }
 
     /// Atomically acquire and tear down every expired durable SM stream.
@@ -7885,13 +7834,14 @@ impl AppState {
         &self,
         snapshot: db::SmTeardownSnapshot,
     ) -> anyhow::Result<()> {
-        self.teardown_sm_snapshot(&snapshot).await?;
-        anyhow::ensure!(
-            db::finalize_sm_teardown(&self.pool, snapshot.session_id, snapshot.teardown_token)
-                .await?,
-            "durable SM teardown lease was lost before finalization"
-        );
-        Ok(())
+        crate::services::sm_teardown::SmTeardownService::new(
+            db::sm_teardown_repository::PostgresSmTeardownRepository::new(self.pool.clone()),
+            self.config.sm_claim_lease_seconds,
+        )
+        .finish(snapshot, |snapshot| async move {
+            self.teardown_sm_snapshot(&snapshot).await
+        })
+        .await
     }
 
     async fn teardown_sm_snapshot(&self, snapshot: &db::SmTeardownSnapshot) -> anyhow::Result<()> {

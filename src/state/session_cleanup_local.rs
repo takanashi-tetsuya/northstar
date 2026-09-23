@@ -7,7 +7,10 @@ use super::{
     SuspendedMucEndpoint,
 };
 use dashmap::DashMap;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use uuid::Uuid;
 
 pub(crate) struct SessionCleanupLocal {
@@ -17,7 +20,7 @@ pub(crate) struct SessionCleanupLocal {
     caps_effect_dispatcher: Arc<northstar_protocol_runtime::caps::CapsEffectDispatcher>,
     caps_by_jid: Arc<northstar_protocol_runtime::caps::CapsResourceIndex>,
     pending_caps: Arc<northstar_protocol_runtime::caps::PendingCapsIndex>,
-    metrics: Arc<crate::metrics::Metrics>,
+    active_sessions: Arc<AtomicU64>,
 }
 
 impl AppState {
@@ -29,7 +32,7 @@ impl AppState {
             caps_effect_dispatcher: Arc::clone(&self.caps_effect_dispatcher),
             caps_by_jid: Arc::clone(&self.caps_by_jid),
             pending_caps: Arc::clone(&self.pending_caps),
-            metrics: Arc::clone(&self.metrics),
+            active_sessions: Arc::clone(&self.metrics.active_sessions),
         }
     }
 }
@@ -101,7 +104,7 @@ impl SessionCleanupLocal {
         self.pending_caps
             .remove_local_resource(key, removed.connection_id);
         if removed.metrics_counted.swap(false, Ordering::AcqRel) {
-            self.metrics.active_sessions.fetch_sub(1, Ordering::Relaxed);
+            self.active_sessions.fetch_sub(1, Ordering::Relaxed);
         }
         Some(removed)
     }

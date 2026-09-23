@@ -1,12 +1,9 @@
 //! Public discovery data and HTTP entry policies without application authority.
-use crate::{
-    config::{RegistrationMode, UploadMode},
-    metrics::Metrics,
-};
+use crate::config::{RegistrationMode, UploadMode};
 use std::{
     net::IpAddr,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -91,14 +88,14 @@ impl PublicDiscoveryContext {
 #[derive(Clone)]
 pub(crate) struct HttpTransportPolicy {
     trusted_proxies: Arc<[IpAddr]>,
-    metrics: Arc<Metrics>,
+    insecure_rejections: Arc<AtomicU64>,
 }
 
 impl HttpTransportPolicy {
-    pub(super) fn new(trusted_proxies: Vec<IpAddr>, metrics: Arc<Metrics>) -> Self {
+    pub(super) fn new(trusted_proxies: Vec<IpAddr>, insecure_rejections: Arc<AtomicU64>) -> Self {
         Self {
             trusted_proxies: trusted_proxies.into(),
-            metrics,
+            insecure_rejections,
         }
     }
 
@@ -107,8 +104,7 @@ impl HttpTransportPolicy {
     }
 
     pub(crate) fn record_insecure_rejection(&self) -> u64 {
-        self.metrics
-            .http_insecure_requests_rejected_total
+        self.insecure_rejections
             .fetch_add(1, Ordering::Relaxed)
             .saturating_add(1)
     }
@@ -220,12 +216,15 @@ mod tests {
 
     #[test]
     fn transport_rejections_use_the_original_process_counter() {
-        let metrics = Arc::new(Metrics::default());
+        let metrics = Arc::new(crate::metrics::Metrics::default());
         metrics
             .http_insecure_requests_rejected_total
             .store(7, Ordering::Relaxed);
         let proxy: IpAddr = "127.0.0.1".parse().unwrap();
-        let policy = HttpTransportPolicy::new(vec![proxy], Arc::clone(&metrics));
+        let policy = HttpTransportPolicy::new(
+            vec![proxy],
+            Arc::clone(&metrics.http_insecure_requests_rejected_total),
+        );
         assert_eq!(policy.trusted_proxies(), &[proxy]);
         assert_eq!(policy.clone().record_insecure_rejection(), 8);
         assert_eq!(policy.record_insecure_rejection(), 9);

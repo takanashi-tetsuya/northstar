@@ -28,25 +28,47 @@ struct OmemoRecoveryPollRuntime<R> {
     service: OmemoRecoveryPollService<R>,
     domain: String,
     trusted_proxies: Vec<IpAddr>,
-    metrics: Arc<Metrics>,
+    counters: OmemoRecoveryPollCounters,
     requests: Arc<Semaphore>,
     requests_by_ip: DashMap<IpAddr, VecDeque<Instant>>,
     ip_admission: Mutex<()>,
     request_checks: AtomicU64,
 }
+
+#[derive(Clone)]
+pub(crate) struct OmemoRecoveryPollCounters {
+    requests: Arc<AtomicU64>,
+    not_found: Arc<AtomicU64>,
+    rate_limited: Arc<AtomicU64>,
+    concurrency_rejected: Arc<AtomicU64>,
+}
+
+impl OmemoRecoveryPollCounters {
+    pub(crate) fn from_metrics(metrics: &Metrics) -> Self {
+        Self {
+            requests: Arc::clone(&metrics.omemo_recovery_poll_requests_total),
+            not_found: Arc::clone(&metrics.omemo_recovery_poll_not_found_total),
+            rate_limited: Arc::clone(&metrics.omemo_recovery_poll_rate_limited_total),
+            concurrency_rejected: Arc::clone(
+                &metrics.omemo_recovery_poll_concurrency_rejected_total,
+            ),
+        }
+    }
+}
+
 impl<R: OmemoRecoveryPollRepository> OmemoRecoveryPollContext<R> {
     pub(super) fn new(
         service: OmemoRecoveryPollService<R>,
         domain: String,
         trusted_proxies: Vec<IpAddr>,
-        metrics: Arc<Metrics>,
+        counters: OmemoRecoveryPollCounters,
     ) -> Self {
         Self {
             inner: Arc::new(OmemoRecoveryPollRuntime {
                 service,
                 domain,
                 trusted_proxies,
-                metrics,
+                counters,
                 requests: Arc::new(Semaphore::new(OMEMO_POLL_CONCURRENCY)),
                 requests_by_ip: DashMap::new(),
                 ip_admission: Mutex::new(()),
@@ -58,15 +80,12 @@ impl<R: OmemoRecoveryPollRepository> OmemoRecoveryPollContext<R> {
         &self.inner.trusted_proxies
     }
     pub(crate) fn record_request(&self) {
-        self.inner
-            .metrics
-            .omemo_recovery_poll_requests_total
-            .fetch_add(1, Ordering::Relaxed);
+        self.inner.counters.requests.fetch_add(1, Ordering::Relaxed);
     }
     pub(crate) fn record_not_found(&self) {
         self.inner
-            .metrics
-            .omemo_recovery_poll_not_found_total
+            .counters
+            .not_found
             .fetch_add(1, Ordering::Relaxed);
     }
     pub(crate) async fn poll(
@@ -91,8 +110,8 @@ impl<R: OmemoRecoveryPollRepository> OmemoRecoveryPollContext<R> {
             OMEMO_POLL_MAX_ACTIVE_IPS,
         ) {
             self.inner
-                .metrics
-                .omemo_recovery_poll_rate_limited_total
+                .counters
+                .rate_limited
                 .fetch_add(1, Ordering::Relaxed);
             return None;
         }
@@ -100,8 +119,8 @@ impl<R: OmemoRecoveryPollRepository> OmemoRecoveryPollContext<R> {
             Ok(permit) => Some(permit),
             Err(_) => {
                 self.inner
-                    .metrics
-                    .omemo_recovery_poll_concurrency_rejected_total
+                    .counters
+                    .concurrency_rejected
                     .fetch_add(1, Ordering::Relaxed);
                 None
             }
@@ -133,7 +152,7 @@ mod tests {
             OmemoRecoveryPollService::new(UnusedRepository),
             "localhost".into(),
             Vec::new(),
-            Arc::clone(&metrics),
+            OmemoRecoveryPollCounters::from_metrics(&metrics),
         );
         let extracted = context.clone();
         let mut permits = Vec::new();

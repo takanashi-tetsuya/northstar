@@ -4143,7 +4143,7 @@ impl AppState {
     pub(crate) fn http_transport_policy(&self) -> HttpTransportPolicy {
         HttpTransportPolicy::new(
             self.config.trusted_proxy_ips.clone(),
-            Arc::clone(&self.metrics),
+            Arc::clone(&self.metrics.http_insecure_requests_rejected_total),
         )
     }
 
@@ -5187,7 +5187,7 @@ impl AppState {
             ),
             config.domain.clone(),
             config.trusted_proxy_ips.clone(),
-            Arc::clone(&metrics),
+            omemo_poll::OmemoRecoveryPollCounters::from_metrics(&metrics),
         );
         let admin_mutations = db::admin_mutations::AdminMutationStore::new(
             pool.clone(),

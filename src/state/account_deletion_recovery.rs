@@ -16,14 +16,17 @@ use crate::{
 };
 use anyhow::Result;
 use dashmap::DashMap;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use uuid::Uuid;
 
 pub(crate) struct RosterPushDelivery {
     sessions: Arc<DashMap<String, OnlineSession>>,
     routes: ClusterListenerPresenceRoutes,
     sender: ClusterNodeDelivery,
-    metrics: Arc<crate::metrics::Metrics>,
+    post_accept_failures: Arc<AtomicU64>,
     domain: String,
 }
 
@@ -37,9 +40,7 @@ impl RosterPushDelivery {
     }
 
     pub(crate) fn record_failure(&self) {
-        self.metrics
-            .post_accept_side_effect_failures_total
-            .fetch_add(1, Ordering::Relaxed);
+        self.post_accept_failures.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) async fn route_remote_push(
@@ -128,7 +129,7 @@ impl AppState {
             sessions: Arc::clone(&self.sessions),
             routes: self.cluster.listener_presence_routes(),
             sender: self.cluster.node_delivery(),
-            metrics: Arc::clone(&self.metrics),
+            post_accept_failures: Arc::clone(&self.metrics.post_accept_side_effect_failures_total),
             domain: self.config.domain.clone(),
         }
     }

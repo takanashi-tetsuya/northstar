@@ -359,7 +359,9 @@ have dedicated handles. The composition root builds `OperationWorkerRuntime`
 before `serve` starts. Roster's deferred flush retains one failure counter;
 the S2S outbox worker uses a dispatch context for claims, policy, retry and
 bounce. New outbound connections still enter the broad TLS/DNS/SM transport
-actor. Other broad worker and transport paths remain, so
+actor. HTTP transport rejection, OMEMO recovery polling, account-deletion
+roster push and local session cleanup now retain only their required shared
+counters. Other broad worker and transport paths remain, so
 this is not the Stage 1 exit. Database roles, MUC batch commands and
 storage/restore tooling follow after the Stage 1 boundary checks pass.
 

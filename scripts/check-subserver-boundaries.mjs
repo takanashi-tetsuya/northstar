@@ -72,7 +72,7 @@ export function verifySubserverBoundaries({ main, subservers, retention, subscri
     'maintenance_bind', 'mam_retention_days', 'muc_mam_retention_days', 'offline_message_ttl_days',
     'audit_log_retention_days', 'retention_cleanup_batch_size', 'retention_cleanup_interval_seconds',
   ]);
-  exactFields(retention, 'struct RetentionContext', ['repository', 'policy', 'metrics', 'readiness']);
+  exactFields(retention, 'struct RetentionContext', ['repository', 'policy', 'counters', 'readiness']);
   exactFields(subscriptionCleanup, 'struct SubscriptionCleanupContext', ['repository', 'metrics', 'readiness']);
   // Mask only the known test module and retain later production items.
   const testStart = subscriptionCleanup.indexOf('#[cfg(test)]');

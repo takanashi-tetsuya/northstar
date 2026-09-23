@@ -1984,6 +1984,10 @@ pub struct AppState {
         crate::services::cluster_muc_outbox_claim::ClusterMucOutboxClaimService<
             db::cluster_muc_outbox_claim_repository::PostgresClusterMucOutboxClaimRepository,
         >,
+    cluster_muc_outbox_preclaim_service:
+        crate::services::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService<
+            db::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository,
+        >,
     session_termination_authority_service:
         crate::services::session_termination_authority::SessionTerminationAuthorityService<
             db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository,
@@ -2271,6 +2275,25 @@ impl AppState {
         )
     }
 
+    pub(crate) fn pep_telemetry(&self) -> crate::xmpp::capabilities::PepTelemetry<'_> {
+        crate::xmpp::capabilities::PepTelemetry::new(
+            &self.metrics.pep_items_published_total,
+            &self.metrics.pep_items_retracted_total,
+            &self.metrics.pep_retrievals_total,
+        )
+    }
+
+    pub(crate) fn pubsub_outbox_telemetry(
+        &self,
+    ) -> crate::xmpp::capabilities::PubSubOutboxTelemetry<'_> {
+        crate::xmpp::capabilities::PubSubOutboxTelemetry::new(
+            &self.metrics.outbox_delivery_duration_seconds,
+            &self.metrics.pubsub_event_outbox_pending_rows,
+            &self.metrics.pubsub_event_outbox_pending_bytes,
+            &self.metrics.pubsub_event_outbox_dead_letter_rows,
+        )
+    }
+
     pub(crate) fn component_telemetry(&self) -> crate::components::ComponentTelemetry<'_> {
         crate::components::ComponentTelemetry::new(
             &self.metrics.component_connections_active,
@@ -2300,6 +2323,37 @@ impl AppState {
     ) -> crate::s2s::telemetry::OutboxDeliveryTelemetry<'_> {
         crate::s2s::telemetry::OutboxDeliveryTelemetry::new(
             &self.metrics.outbox_delivery_duration_seconds,
+        )
+    }
+
+    pub(crate) fn s2s_inbound_connection_telemetry(
+        &self,
+    ) -> crate::s2s::telemetry::InboundConnectionTelemetry<'_> {
+        crate::s2s::telemetry::InboundConnectionTelemetry::new(
+            &self.metrics.federation_inbound_connections_total,
+            &self.metrics.federation_inbound_active,
+        )
+    }
+
+    pub(crate) fn s2s_inbound_delivery_telemetry(
+        &self,
+    ) -> crate::s2s::telemetry::InboundDeliveryTelemetry<'_> {
+        crate::s2s::telemetry::InboundDeliveryTelemetry::new(
+            &self.metrics.post_accept_side_effect_failures_total,
+            &self.metrics.messages_routed_total,
+        )
+    }
+
+    pub(crate) fn s2s_outbound_disposition_telemetry(
+        &self,
+    ) -> crate::s2s::telemetry::OutboundDispositionTelemetry<'_> {
+        crate::s2s::telemetry::OutboundDispositionTelemetry::new(
+            &self.metrics.federation_failures_total,
+            &self.metrics.s2s_outbox_lease_lost_total,
+            &self.metrics.federation_outbound_deliveries_total,
+            &self.metrics.s2s_outbox_permanent_failures_total,
+            &self.metrics.s2s_outbox_expired_total,
+            &self.metrics.s2s_outbox_retries_total,
         )
     }
 
@@ -3613,6 +3667,12 @@ impl AppState {
                     pool.clone(),
                 ),
             );
+        let cluster_muc_outbox_preclaim_service =
+            crate::services::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService::new(
+                db::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository::new(
+                    pool.clone(),
+                ),
+            );
         let session_termination_authority_service =
             crate::services::session_termination_authority::SessionTerminationAuthorityService::new(
                 db::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository::new(
@@ -3687,6 +3747,7 @@ impl AppState {
             cluster_replay_maintenance_service,
             cluster_muc_outbox_settlement_service,
             cluster_muc_outbox_claim_service,
+            cluster_muc_outbox_preclaim_service,
             session_termination_authority_service,
             bosh,
             sessions,
@@ -4241,6 +4302,14 @@ impl AppState {
         db::cluster_muc_outbox_claim_repository::PostgresClusterMucOutboxClaimRepository,
     > {
         &self.cluster_muc_outbox_claim_service
+    }
+
+    pub(crate) fn cluster_muc_outbox_preclaim_service(
+        &self,
+    ) -> &crate::services::cluster_muc_outbox_preclaim::ClusterMucOutboxPreclaimService<
+        db::cluster_muc_outbox_preclaim_repository::PostgresClusterMucOutboxPreclaimRepository,
+    > {
+        &self.cluster_muc_outbox_preclaim_service
     }
 
     pub(crate) fn session_termination_authority_service(

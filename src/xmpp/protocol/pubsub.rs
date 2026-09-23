@@ -2705,9 +2705,9 @@ pub(crate) fn start_pubsub_event_outbox_delivery(
                         _ = tokio::time::sleep(Duration::from_millis(250)) => {}
                     }
                     let claimed = state.pubsub_service().claim_pubsub_outbox(256).await?;
+                    let telemetry = state.pubsub_outbox_telemetry();
                     for item in claimed {
-                        let _delivery_timer =
-                            state.metrics.outbox_delivery_duration_seconds.start_timer();
+                        let _delivery_timer = telemetry.start_delivery_timer();
                         if !state
                             .pubsub_service()
                             .renew_pubsub_outbox_lease(item.delivery_id, item.lease_token)
@@ -2785,17 +2785,10 @@ pub(crate) fn start_pubsub_event_outbox_delivery(
                             .cleanup_idle_pubsub_event_streams(1_000)
                             .await?;
                         let snapshot = state.pubsub_service().pubsub_outbox_snapshot().await?;
-                        state.metrics.pubsub_event_outbox_pending_rows.store(
-                            u64::try_from(snapshot.pending_rows.max(0)).unwrap_or(u64::MAX),
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
-                        state.metrics.pubsub_event_outbox_pending_bytes.store(
-                            u64::try_from(snapshot.pending_bytes.max(0)).unwrap_or(u64::MAX),
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
-                        state.metrics.pubsub_event_outbox_dead_letter_rows.store(
-                            u64::try_from(snapshot.dead_letter_rows.max(0)).unwrap_or(u64::MAX),
-                            std::sync::atomic::Ordering::Relaxed,
+                        telemetry.publish_snapshot(
+                            snapshot.pending_rows,
+                            snapshot.pending_bytes,
+                            snapshot.dead_letter_rows,
                         );
                     }
                     heartbeat.ok();

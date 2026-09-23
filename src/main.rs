@@ -594,7 +594,7 @@ async fn run() -> Result<()> {
         let retention_context = Arc::new(retention::RetentionContext::new(
             db::retention::PostgresMaintenanceRepository::new(state.pool.clone()),
             retention::RetentionPolicy::from_config(&state.config),
-            Arc::clone(&state.metrics),
+            retention::RetentionCounters::from_metrics(&state.metrics),
         ));
         let retention_cancel = cancel.clone();
         let retention_max_silence = std::time::Duration::from_secs(

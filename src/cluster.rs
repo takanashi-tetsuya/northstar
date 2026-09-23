@@ -5875,8 +5875,10 @@ async fn run_muc_outbox_delivery(
         }
         {
             let _database_turn = state.durable_outbox_database_turn().await;
-            crate::db::expire_cluster_muc_occupancies(&state.pool, 32).await?;
-            crate::db::dead_letter_expired_cluster_muc_outbox(&state.pool, 256).await?;
+            state
+                .cluster_muc_outbox_preclaim_service()
+                .prepare_pass(32, 256)
+                .await?;
         }
         let pass_started = Instant::now();
         'batches: for _ in 0..MUC_OUTBOX_MAX_BATCHES_PER_PASS {

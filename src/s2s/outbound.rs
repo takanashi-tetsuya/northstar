@@ -195,9 +195,8 @@ pub(crate) fn get_or_create_outbound(
             }
             Ok(Err(error)) => {
                 state_clone
-                    .metrics
-                    .federation_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                    .s2s_outbound_disposition_telemetry()
+                    .connection_failed();
                 tracing::warn!(
                     domain = %domain_clone,
                     ?error,
@@ -206,9 +205,8 @@ pub(crate) fn get_or_create_outbound(
             }
             Err(_) => {
                 state_clone
-                    .metrics
-                    .federation_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                    .s2s_outbound_disposition_telemetry()
+                    .connection_failed();
             }
             Ok(Ok(())) => {}
         }
@@ -963,10 +961,7 @@ async fn deliver_envelope_inner<S: AsyncWrite + Unpin>(
             .complete(envelope.outbox_id, envelope.lock_token)
             .await?
         {
-            state
-                .metrics
-                .s2s_outbox_lease_lost_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.s2s_outbound_disposition_telemetry().lease_lost();
             tracing::warn!(
                 outbox_id = %envelope.outbox_id,
                 domain = %envelope.target_domain,
@@ -976,10 +971,7 @@ async fn deliver_envelope_inner<S: AsyncWrite + Unpin>(
     } else if !envelope.is_durable() {
         envelope.complete_volatile_delivery();
     }
-    state
-        .metrics
-        .federation_outbound_deliveries_total
-        .fetch_add(1, Ordering::Relaxed);
+    state.s2s_outbound_disposition_telemetry().delivered();
     Ok(())
 }
 
@@ -1031,29 +1023,19 @@ pub(crate) async fn fail_envelope(
     {
         Ok(OutboxFailureDisposition::Dropped) => {
             state
-                .metrics
-                .s2s_outbox_permanent_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+                .s2s_outbound_disposition_telemetry()
+                .permanent_failure();
             bounce_delivery_failure_with_condition(state, envelope, bounce_condition);
         }
         Ok(OutboxFailureDisposition::Expired) => {
-            state
-                .metrics
-                .s2s_outbox_expired_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.s2s_outbound_disposition_telemetry().expired();
             bounce_delivery_failure_with_condition(state, envelope, bounce_condition);
         }
         Ok(OutboxFailureDisposition::RetryScheduled) => {
-            state
-                .metrics
-                .s2s_outbox_retries_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.s2s_outbound_disposition_telemetry().retry();
         }
         Ok(OutboxFailureDisposition::LeaseLost) => {
-            state
-                .metrics
-                .s2s_outbox_lease_lost_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.s2s_outbound_disposition_telemetry().lease_lost();
         }
         Err(database_error) => tracing::error!(
             outbox_id = %envelope.outbox_id,
@@ -1532,10 +1514,7 @@ async fn recover_authenticated_route_heads(
 
 pub(crate) async fn dispatch_due_outbox(state: &Arc<AppState>) -> Result<()> {
     for expired in state.s2s_outbox_dispatch_service().expire().await? {
-        state
-            .metrics
-            .s2s_outbox_expired_total
-            .fetch_add(1, Ordering::Relaxed);
+        state.s2s_outbound_disposition_telemetry().expired();
         tracing::warn!(
             outbox_id = %expired.id,
             domain = %expired.target_domain,

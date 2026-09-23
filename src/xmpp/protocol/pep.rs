@@ -517,10 +517,9 @@ impl ProtocolSession {
                 hash.as_deref(),
             );
         }
-        self.state.metrics.pep_items_published_total.fetch_add(
-            normalized.len() as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        self.state
+            .pep_telemetry()
+            .published(normalized.len() as u64);
 
         if assigned_ids.is_empty() {
             Ok(Action::Send(iq_result(id, "")))
@@ -931,10 +930,7 @@ impl ProtocolSession {
                 return Ok(Action::Send(iq_error(id, "conflict")));
             }
         };
-        self.state
-            .metrics
-            .pep_items_retracted_total
-            .fetch_add(retracted, std::sync::atomic::Ordering::Relaxed);
+        self.state.pep_telemetry().retracted(retracted);
         Ok(Action::Send(iq_result(id, "")))
     }
 
@@ -1271,10 +1267,7 @@ impl ProtocolSession {
         let payload = XmlElement::namespaced("pubsub", NS_PUBSUB)
             .child(items)
             .finish();
-        self.state
-            .metrics
-            .pep_retrievals_total
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.state.pep_telemetry().retrieved();
         if let Some(from) = from {
             Ok(Action::Send(iq_result_from(id, from, &payload)))
         } else {

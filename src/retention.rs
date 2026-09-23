@@ -1,7 +1,7 @@
 use crate::{config::Config, metrics::Metrics};
 use chrono::Utc;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
 use std::time::Duration;
@@ -140,21 +140,86 @@ impl RetentionReadiness {
     }
 }
 
+/// Only the counter cells needed by archive retention. Clones share the
+/// process metrics without granting the worker access to unrelated gauges.
+#[derive(Clone)]
+pub(crate) struct RetentionCounters {
+    personal_mam_deleted: Arc<AtomicU64>,
+    muc_mam_deleted: Arc<AtomicU64>,
+    offline_messages_deleted: Arc<AtomicU64>,
+    personal_delivery_admissions_deleted: Arc<AtomicU64>,
+    legal_hold_snapshots_deleted: Arc<AtomicU64>,
+    audit_log_deleted: Arc<AtomicU64>,
+    governance_export_leases_deleted: Arc<AtomicU64>,
+    omemo_recovery_transfers_deleted: Arc<AtomicU64>,
+    cleanup_failures: Arc<AtomicU64>,
+    background_maintenance_failures: Arc<AtomicU64>,
+}
+
+impl RetentionCounters {
+    pub(crate) fn from_metrics(metrics: &Metrics) -> Self {
+        Self {
+            personal_mam_deleted: Arc::clone(&metrics.retention_personal_mam_deleted_total),
+            muc_mam_deleted: Arc::clone(&metrics.retention_muc_mam_deleted_total),
+            offline_messages_deleted: Arc::clone(&metrics.retention_offline_messages_deleted_total),
+            personal_delivery_admissions_deleted: Arc::clone(
+                &metrics.retention_personal_delivery_admissions_deleted_total,
+            ),
+            legal_hold_snapshots_deleted: Arc::clone(
+                &metrics.retention_legal_hold_snapshots_deleted_total,
+            ),
+            audit_log_deleted: Arc::clone(&metrics.retention_audit_log_deleted_total),
+            governance_export_leases_deleted: Arc::clone(
+                &metrics.retention_governance_export_leases_deleted_total,
+            ),
+            omemo_recovery_transfers_deleted: Arc::clone(
+                &metrics.retention_omemo_recovery_transfers_deleted_total,
+            ),
+            cleanup_failures: Arc::clone(&metrics.retention_cleanup_failures_total),
+            background_maintenance_failures: Arc::clone(
+                &metrics.background_maintenance_failures_total,
+            ),
+        }
+    }
+
+    fn failures_total(&self) -> u64 {
+        self.cleanup_failures.load(Ordering::Relaxed)
+    }
+
+    fn record_failure(&self) {
+        self.cleanup_failures.fetch_add(1, Ordering::Relaxed);
+        self.background_maintenance_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_deleted(&self, store: RetentionStore, deleted: u64) {
+        let counter = match store {
+            RetentionStore::PersonalMam => &self.personal_mam_deleted,
+            RetentionStore::MucMam => &self.muc_mam_deleted,
+            RetentionStore::OfflineMessages => &self.offline_messages_deleted,
+            RetentionStore::PersonalDeliveryAdmissions => {
+                &self.personal_delivery_admissions_deleted
+            }
+        };
+        counter.fetch_add(deleted, Ordering::Relaxed);
+    }
+}
+
 /// Shared by embedded and standalone retention workers. It carries no
 /// listener, routing or content-key capabilities.
 pub(crate) struct RetentionContext<R> {
     repository: R,
     policy: RetentionPolicy,
-    metrics: Arc<Metrics>,
+    counters: RetentionCounters,
     readiness: RetentionReadiness,
 }
 
 impl<R: RetentionRepository> RetentionContext<R> {
-    pub(crate) fn new(repository: R, policy: RetentionPolicy, metrics: Arc<Metrics>) -> Self {
+    pub(crate) fn new(repository: R, policy: RetentionPolicy, counters: RetentionCounters) -> Self {
         Self {
             repository,
             policy,
-            metrics,
+            counters,
             readiness: RetentionReadiness::default(),
         }
     }
@@ -171,7 +236,7 @@ pub(crate) async fn run_once_context<R: RetentionRepository>(
     run_once_with(
         &context.repository,
         &context.policy,
-        &context.metrics,
+        &context.counters,
         Some(&context.readiness),
     )
     .await;
@@ -185,7 +250,7 @@ pub(crate) async fn serve_context<R: RetentionRepository>(
 ) -> anyhow::Result<()> {
     serve_with(
         &context.policy,
-        &context.metrics,
+        &context.counters,
         || run_once_context(&context),
         cancel,
         heartbeat,
@@ -202,16 +267,14 @@ struct RetentionTarget {
 async fn run_once_with<R: RetentionRepository>(
     repository: &R,
     policy: &RetentionPolicy,
-    metrics: &Metrics,
+    counters: &RetentionCounters,
     readiness: Option<&RetentionReadiness>,
 ) {
     // Cancellation or a panic cannot publish an unfinished pass as healthy.
     if let Some(readiness) = readiness {
         readiness.ready.store(false, Ordering::Release);
     }
-    let failures_before = metrics
-        .retention_cleanup_failures_total
-        .load(Ordering::Relaxed);
+    let failures_before = counters.failures_total();
     let now = Utc::now();
     let targets = [
         RetentionTarget {
@@ -246,20 +309,7 @@ async fn run_once_with<R: RetentionRepository>(
             .await
         {
             Ok(deleted) => {
-                match target.store {
-                    RetentionStore::PersonalMam => metrics
-                        .retention_personal_mam_deleted_total
-                        .fetch_add(deleted, Ordering::Relaxed),
-                    RetentionStore::MucMam => metrics
-                        .retention_muc_mam_deleted_total
-                        .fetch_add(deleted, Ordering::Relaxed),
-                    RetentionStore::OfflineMessages => metrics
-                        .retention_offline_messages_deleted_total
-                        .fetch_add(deleted, Ordering::Relaxed),
-                    RetentionStore::PersonalDeliveryAdmissions => metrics
-                        .retention_personal_delivery_admissions_deleted_total
-                        .fetch_add(deleted, Ordering::Relaxed),
-                };
+                counters.record_deleted(target.store, deleted);
                 if deleted > 0 {
                     tracing::info!(
                         store = target.store.label(),
@@ -271,12 +321,7 @@ async fn run_once_with<R: RetentionRepository>(
                 }
             }
             Err(error) => {
-                metrics
-                    .retention_cleanup_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
-                metrics
-                    .background_maintenance_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                counters.record_failure();
                 // Continue with the next store. Each target is independently
                 // retryable on the following tick and never blocks listeners.
                 tracing::error!(
@@ -297,18 +342,13 @@ async fn run_once_with<R: RetentionRepository>(
         .await
     {
         Ok(deleted) if deleted > 0 => {
-            metrics
-                .retention_legal_hold_snapshots_deleted_total
+            counters
+                .legal_hold_snapshots_deleted
                 .fetch_add(deleted, Ordering::Relaxed);
         }
         Ok(_) => {}
         Err(error) => {
-            metrics
-                .retention_cleanup_failures_total
-                .fetch_add(1, Ordering::Relaxed);
-            metrics
-                .background_maintenance_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            counters.record_failure();
             tracing::error!(?error, "released legal-hold snapshot cleanup failed");
         }
     }
@@ -321,18 +361,13 @@ async fn run_once_with<R: RetentionRepository>(
         .await
     {
         Ok(deleted) if deleted > 0 => {
-            metrics
-                .retention_audit_log_deleted_total
+            counters
+                .audit_log_deleted
                 .fetch_add(deleted, Ordering::Relaxed);
         }
         Ok(_) => {}
         Err(error) => {
-            metrics
-                .retention_cleanup_failures_total
-                .fetch_add(1, Ordering::Relaxed);
-            metrics
-                .background_maintenance_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            counters.record_failure();
             tracing::error!(?error, "bounded audit-log cleanup failed");
         }
     }
@@ -345,18 +380,13 @@ async fn run_once_with<R: RetentionRepository>(
         .await
     {
         Ok(deleted) if deleted > 0 => {
-            metrics
-                .retention_governance_export_leases_deleted_total
+            counters
+                .governance_export_leases_deleted
                 .fetch_add(deleted, Ordering::Relaxed);
         }
         Ok(_) => {}
         Err(error) => {
-            metrics
-                .retention_cleanup_failures_total
-                .fetch_add(1, Ordering::Relaxed);
-            metrics
-                .background_maintenance_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            counters.record_failure();
             tracing::error!(?error, "bounded governance-export lease cleanup failed");
         }
     }
@@ -366,18 +396,13 @@ async fn run_once_with<R: RetentionRepository>(
         .await
     {
         Ok(deleted) if deleted > 0 => {
-            metrics
-                .retention_omemo_recovery_transfers_deleted_total
+            counters
+                .omemo_recovery_transfers_deleted
                 .fetch_add(deleted, Ordering::Relaxed);
         }
         Ok(_) => {}
         Err(error) => {
-            metrics
-                .retention_cleanup_failures_total
-                .fetch_add(1, Ordering::Relaxed);
-            metrics
-                .background_maintenance_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            counters.record_failure();
             tracing::error!(?error, "bounded OMEMO recovery-transfer cleanup failed");
         }
     }
@@ -391,27 +416,19 @@ async fn run_once_with<R: RetentionRepository>(
         }
         Ok(_) => {}
         Err(error) => {
-            metrics
-                .retention_cleanup_failures_total
-                .fetch_add(1, Ordering::Relaxed);
-            metrics
-                .background_maintenance_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            counters.record_failure();
             tracing::error!(?error, "bounded personal-retraction intent cleanup failed");
         }
     }
     if let Some(readiness) = readiness {
-        let successful = metrics
-            .retention_cleanup_failures_total
-            .load(Ordering::Relaxed)
-            == failures_before;
+        let successful = counters.failures_total() == failures_before;
         readiness.ready.store(successful, Ordering::Release);
     }
 }
 
 async fn serve_with<F, Fut>(
     policy: &RetentionPolicy,
-    metrics: &Metrics,
+    counters: &RetentionCounters,
     mut run_pass: F,
     cancel: CancellationToken,
     heartbeat: crate::workers::WorkerHeartbeat,
@@ -429,13 +446,9 @@ where
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {
-                let failures_before = metrics
-                    .retention_cleanup_failures_total
-                    .load(Ordering::Relaxed);
+                let failures_before = counters.failures_total();
                 run_pass().await?;
-                let failures_after = metrics
-                    .retention_cleanup_failures_total
-                    .load(Ordering::Relaxed);
+                let failures_after = counters.failures_total();
                 if failures_after == failures_before {
                     heartbeat.ok();
                 } else {
@@ -449,6 +462,186 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{collections::BTreeSet, sync::Mutex};
+
+    #[derive(Default)]
+    struct RecordingRepository {
+        calls: Mutex<Vec<&'static str>>,
+        failures: Mutex<BTreeSet<&'static str>>,
+    }
+
+    impl RecordingRepository {
+        fn record(&self, name: &'static str, deleted: u64) -> anyhow::Result<u64> {
+            self.calls.lock().unwrap().push(name);
+            if self.failures.lock().unwrap().contains(name) {
+                anyhow::bail!("{name} failed");
+            }
+            Ok(deleted)
+        }
+    }
+
+    impl RetentionRepository for RecordingRepository {
+        async fn purge_resolved_retention_batch(
+            &self,
+            store: RetentionStore,
+            _now: chrono::DateTime<Utc>,
+            _days: i64,
+            _batch_size: i64,
+        ) -> anyhow::Result<u64> {
+            match store {
+                RetentionStore::PersonalMam => self.record("personal_mam", 1),
+                RetentionStore::MucMam => self.record("muc_mam", 2),
+                RetentionStore::OfflineMessages => self.record("offline", 3),
+                RetentionStore::PersonalDeliveryAdmissions => self.record("admissions", 4),
+            }
+        }
+
+        async fn purge_released_hold_snapshots_batch(
+            &self,
+            _days: i64,
+            _batch_size: i64,
+        ) -> anyhow::Result<u64> {
+            self.record("legal_hold", 5)
+        }
+
+        async fn purge_audit_log_batch(&self, _days: i64, _batch_size: i64) -> anyhow::Result<u64> {
+            self.record("audit", 6)
+        }
+
+        async fn purge_governance_export_leases_batch(
+            &self,
+            _days: i64,
+            _batch_size: i64,
+        ) -> anyhow::Result<u64> {
+            self.record("export_leases", 7)
+        }
+
+        async fn cleanup_omemo_recovery_transfers(&self, _batch_size: i64) -> anyhow::Result<u64> {
+            self.record("omemo", 8)
+        }
+
+        async fn purge_expired_retraction_intents(&self, _batch_size: i64) -> anyhow::Result<u64> {
+            self.record("retractions", 9)
+        }
+    }
+
+    #[tokio::test]
+    async fn narrow_counters_keep_per_target_results_and_readiness_retry() {
+        let metrics = Metrics::default();
+        let repository = RecordingRepository::default();
+        repository
+            .failures
+            .lock()
+            .unwrap()
+            .extend(["offline", "audit", "retractions"]);
+        let context = RetentionContext::new(
+            repository,
+            RetentionPolicy {
+                mam_retention_days: 30,
+                muc_mam_retention_days: 30,
+                offline_message_ttl_days: 30,
+                audit_log_retention_days: 30,
+                retention_cleanup_batch_size: 25,
+                retention_cleanup_interval_seconds: 60,
+            },
+            RetentionCounters::from_metrics(&metrics),
+        );
+
+        run_once_context(&context).await.unwrap();
+        assert!(!context.readiness().is_ready());
+        assert_eq!(
+            *context.repository.calls.lock().unwrap(),
+            [
+                "personal_mam",
+                "muc_mam",
+                "offline",
+                "admissions",
+                "legal_hold",
+                "audit",
+                "export_leases",
+                "omemo",
+                "retractions"
+            ]
+        );
+        assert_eq!(
+            metrics
+                .retention_personal_mam_deleted_total
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics
+                .retention_muc_mam_deleted_total
+                .load(Ordering::Relaxed),
+            2
+        );
+        assert_eq!(
+            metrics
+                .retention_offline_messages_deleted_total
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            metrics
+                .retention_personal_delivery_admissions_deleted_total
+                .load(Ordering::Relaxed),
+            4
+        );
+        assert_eq!(
+            metrics
+                .retention_legal_hold_snapshots_deleted_total
+                .load(Ordering::Relaxed),
+            5
+        );
+        assert_eq!(
+            metrics
+                .retention_audit_log_deleted_total
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            metrics
+                .retention_governance_export_leases_deleted_total
+                .load(Ordering::Relaxed),
+            7
+        );
+        assert_eq!(
+            metrics
+                .retention_omemo_recovery_transfers_deleted_total
+                .load(Ordering::Relaxed),
+            8
+        );
+        assert_eq!(context.counters.failures_total(), 3);
+        assert_eq!(
+            metrics
+                .background_maintenance_failures_total
+                .load(Ordering::Relaxed),
+            3
+        );
+
+        context.repository.failures.lock().unwrap().clear();
+        run_once_context(&context).await.unwrap();
+        assert!(context.readiness().is_ready());
+        assert_eq!(context.counters.failures_total(), 3);
+        assert_eq!(
+            metrics
+                .background_maintenance_failures_total
+                .load(Ordering::Relaxed),
+            3
+        );
+        assert_eq!(
+            metrics
+                .retention_offline_messages_deleted_total
+                .load(Ordering::Relaxed),
+            3
+        );
+        assert_eq!(
+            metrics
+                .retention_audit_log_deleted_total
+                .load(Ordering::Relaxed),
+            6
+        );
+    }
 
     #[test]
     fn all_automated_targets_exclude_evidence_and_policy_tables() {

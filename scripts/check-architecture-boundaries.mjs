@@ -336,6 +336,7 @@ for (const field of [
   'cluster_replay_maintenance_service',
   'cluster_muc_outbox_settlement_service',
   'cluster_muc_outbox_claim_service',
+  'cluster_muc_outbox_preclaim_service',
   'locked_muc_expiry_service',
   'session_termination_authority_service',
   'operation_journal_worker_service',
@@ -3109,14 +3110,25 @@ if (
   throw new Error('cluster MUC PostgreSQL maintenance must remain unconditionally composed');
 }
 const clusterMucOutboxWorker = structBody(read('src/cluster.rs'), 'async fn run_muc_outbox_delivery(');
+const mucPreclaimService = read('src/services/cluster_muc_outbox_preclaim.rs');
+const mucPreclaimRepository = read('src/db/cluster_muc_outbox_preclaim_repository.rs');
+if (!mucPreclaimService.includes('self.repository.expire_occupancies(room_limit).await?;')
+    || !mucPreclaimService.includes('self.repository.dead_letter_expired(outbox_limit).await?;')
+    || !mucPreclaimRepository.includes('db::expire_cluster_muc_occupancies(&self.pool, room_limit).await')
+    || !mucPreclaimRepository.includes('db::dead_letter_expired_cluster_muc_outbox(&self.pool, limit).await')) {
+  throw new Error('cluster MUC preclaim maintenance must preserve ordered independent database operations');
+}
 const mucClaimTurn = clusterMucOutboxWorker.indexOf('let _database_turn = state.durable_outbox_database_turn().await;');
+const mucPreclaim = clusterMucOutboxWorker.indexOf('.cluster_muc_outbox_preclaim_service()', mucClaimTurn);
 const mucClaim = clusterMucOutboxWorker.indexOf('.cluster_muc_outbox_claim_service()', mucClaimTurn);
 const mucClaimLease = clusterMucOutboxWorker.indexOf('Duration::from_secs(30)', mucClaim);
 const mucClaimCommit = clusterMucOutboxWorker.indexOf('if deliveries.is_empty()', mucClaimLease);
 const mucDeliveryStart = clusterMucOutboxWorker.indexOf('for delivery in deliveries', mucClaimCommit);
-if ([mucClaimTurn, mucClaim, mucClaimLease, mucClaimCommit, mucDeliveryStart].some((offset) => offset < 0)
+if ([mucClaimTurn, mucPreclaim, mucClaim, mucClaimLease, mucClaimCommit, mucDeliveryStart].some((offset) => offset < 0)
+    || mucPreclaim >= mucClaim
+    || /crate::db::(?:expire_cluster_muc_occupancies|dead_letter_expired_cluster_muc_outbox)\s*\(/.test(clusterMucOutboxWorker)
     || /crate::db::claim_cluster_muc_outbox\s*\(/.test(clusterMucOutboxWorker)) {
-  throw new Error('cluster MUC outbox claim must commit under the bounded database turn before delivery');
+  throw new Error('cluster MUC preclaim maintenance and claim must complete under the bounded database turn before delivery');
 }
 const clusterMucOutboxSettlementService = read('src/services/cluster_muc_outbox_settlement.rs');
 const clusterMucOutboxSettlementRepository = read('src/db/cluster_muc_outbox_settlement_repository.rs');
@@ -3220,8 +3232,22 @@ if (!componentTransport.includes('struct ComponentTelemetry')
 }
 const s2sTelemetry = read('src/s2s/telemetry.rs');
 if (!s2sTelemetry.includes('struct OnlineQueueAcceptanceTelemetry')
-    || /\b(?:AppState|Metrics|PgPool)\b/.test(s2sTelemetry)) {
+    || !s2sTelemetry.includes('struct InboundConnectionTelemetry')
+    || !s2sTelemetry.includes('struct OutboundDispositionTelemetry')
+    || /\b(?:AppState|Metrics|PgPool)\b/.test(s2sTelemetry)
+    || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(read('src/s2s/inbound.rs'))
+    || /\b(?:state|state_clone)\s*\.\s*metrics\b/.test(read('src/s2s/outbound.rs'))) {
   throw new Error('S2S ingress and egress must use narrow telemetry cells');
+}
+for (const protocol of ['pep.rs', 'pubsub.rs']) {
+  if (/\bstate\s*\.\s*metrics\b/.test(read(`src/xmpp/protocol/${protocol}`))) {
+    throw new Error(`${protocol} must use a narrow telemetry capability`);
+  }
+}
+const retentionContext = structBody(read('src/retention.rs'), 'pub(crate) struct RetentionContext');
+if (!retentionContext.includes('counters: RetentionCounters')
+    || retentionContext.includes('Arc<Metrics>')) {
+  throw new Error('archive retention must carry only its operation counters');
 }
 const housekeepingContext = structBody(read('src/services/background_housekeeping.rs'), 'pub(crate) struct BackgroundHousekeepingContext');
 if (!housekeepingContext.includes('counters: BackgroundHousekeepingCounters')
@@ -3277,6 +3303,7 @@ const stateServiceAccessors = [
   'cluster_replay_maintenance_service',
   'cluster_muc_outbox_settlement_service',
   'cluster_muc_outbox_claim_service',
+  'cluster_muc_outbox_preclaim_service',
   'session_termination_authority_service',
   'operation_journal_worker_service',
   's2s_roster_authorization_service',

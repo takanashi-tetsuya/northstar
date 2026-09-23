@@ -98,7 +98,7 @@ Supported split deployment runs one core and one maintenance process against a
 shared PostgreSQL runtime role. This is process/secret separation, while the
 runtime credential retains the existing broad database grants. It is not
 per-domain database privilege isolation. The archive context holds repository
-operations, immutable retention policy, metrics and a readiness handle. The
+operations, immutable retention policy, ten shared counter cells and a readiness handle. The
 subscription cleanup context holds its own repository port, narrow counters and
 readiness handle. Their PostgreSQL adapters share the existing maintenance pool.
 The health server receives only the two read-only
@@ -460,6 +460,7 @@ copy that coupling.
 | `cluster_replay_maintenance_service()` | periodic cluster replay-capacity maintenance | bounded replay cleanup followed by authority validation through a PostgreSQL repository | refreshing instance authority after a failed replay check |
 | `cluster_muc_outbox_settlement_service()` | clustered-MUC audience delivery settlement | exact claim-token ACK and existing retry/dead-letter transition through the PostgreSQL repository | socket delivery, DB admission timing, timeout, metrics or heartbeat before settlement |
 | `cluster_muc_outbox_claim_service()` | clustered-MUC audience delivery claim | node-scoped atomic PostgreSQL claim with bounded batch and lease | starting network delivery before the claim commits |
+| `cluster_muc_outbox_preclaim_service()` | clustered-MUC preclaim maintenance | expire stale occupancies, then dead-letter expired audience events through two independently committed repository calls | claiming or delivering before maintenance succeeds; treating the two calls as one atomic transaction |
 | `locked_muc_expiry_service()` | abandoned locked-room expiry | one PostgreSQL transaction for tombstones and terminal outbox records | local occupant cleanup or presence before commit |
 | `session_termination_authority_service()` | exact cluster route authorization for session termination | PostgreSQL route read and post-read owner comparison | local disconnect or ACK before durable authority is checked |
 | `operation_journal_worker_service()` | administrator operation target claim | parent lease renewal, target claim and cancellation acknowledgement through fenced transactions | executing an effect before target claim commits |

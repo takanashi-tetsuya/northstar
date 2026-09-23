@@ -319,14 +319,7 @@ async fn inbound_xmpps_actor(
     actor_shutdown: tokio_util::sync::CancellationToken,
 ) {
     let _connection_permit = connection_permit;
-    state
-        .metrics
-        .federation_inbound_connections_total
-        .fetch_add(1, Ordering::Relaxed);
-    state
-        .metrics
-        .federation_inbound_active
-        .fetch_add(1, Ordering::Relaxed);
+    state.s2s_inbound_connection_telemetry().started();
     let connection = AssertUnwindSafe(inbound_xmpps_connection(
         stream,
         Arc::clone(&state),
@@ -344,10 +337,7 @@ async fn inbound_xmpps_actor(
     if let Ok(Err(error)) = &result {
         tracing::debug!(%peer, ?error, "inbound XMPPS federation stream closed");
     }
-    state
-        .metrics
-        .federation_inbound_active
-        .fetch_sub(1, Ordering::Relaxed);
+    state.s2s_inbound_connection_telemetry().finished();
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
@@ -363,14 +353,7 @@ async fn inbound_starttls_actor(
     actor_shutdown: tokio_util::sync::CancellationToken,
 ) {
     let _connection_permit = connection_permit;
-    state
-        .metrics
-        .federation_inbound_connections_total
-        .fetch_add(1, Ordering::Relaxed);
-    state
-        .metrics
-        .federation_inbound_active
-        .fetch_add(1, Ordering::Relaxed);
+    state.s2s_inbound_connection_telemetry().started();
     let connection = AssertUnwindSafe(inbound_connection(
         stream,
         Arc::clone(&state),
@@ -388,10 +371,7 @@ async fn inbound_starttls_actor(
     if let Ok(Err(error)) = &result {
         tracing::debug!(%peer, ?error, "inbound federation stream closed");
     }
-    state
-        .metrics
-        .federation_inbound_active
-        .fetch_sub(1, Ordering::Relaxed);
+    state.s2s_inbound_connection_telemetry().finished();
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
@@ -2026,10 +2006,7 @@ pub(crate) async fn route_inbound_presence(
             )
             .await
             {
-                state
-                    .metrics
-                    .post_accept_side_effect_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                state.s2s_inbound_delivery_telemetry().post_accept_failed();
                 tracing::warn!(?error, recipient_id = %recipient.id, contact = %contact, %kind, "federated roster transition was committed but roster push failed");
             }
         }
@@ -2040,10 +2017,7 @@ pub(crate) async fn route_inbound_presence(
             if let Err(error) =
                 crate::xmpp::protocol::misc::send_push_notification(state, recipient.id).await
             {
-                state
-                    .metrics
-                    .post_accept_side_effect_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                state.s2s_inbound_delivery_telemetry().post_accept_failed();
                 tracing::warn!(?error, recipient_id = %recipient.id, contact = %contact, "federated subscription was committed but push notification failed");
             }
         }
@@ -2098,10 +2072,7 @@ async fn send_unavailable_presence_to_remote(state: &AppState, owner: &str, cont
             .send(&remote_domain, stanza, None)
             .await
         {
-            state
-                .metrics
-                .post_accept_side_effect_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.s2s_inbound_delivery_telemetry().post_accept_failed();
             tracing::warn!(owner = %owner, contact = %contact, "failed to admit required federated unavailable presence after subscription removal");
         }
     }
@@ -2144,10 +2115,7 @@ async fn send_current_presence_to_remote(state: &AppState, owner: &str, contact:
             .send(&remote_domain, stanza, None)
             .await
         {
-            state
-                .metrics
-                .post_accept_side_effect_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.s2s_inbound_delivery_telemetry().post_accept_failed();
             tracing::warn!(owner = %owner, contact = %contact, "failed to admit current presence after federated subscription approval");
         }
     }
@@ -3441,10 +3409,7 @@ pub(crate) async fn route_inbound_message(
                     live_delivery.is_some(),
                 ) =>
             {
-                state
-                    .metrics
-                    .post_accept_side_effect_failures_total
-                    .fetch_add(1, Ordering::Relaxed);
+                state.s2s_inbound_delivery_telemetry().post_accept_failed();
                 tracing::warn!(
                     recipient_id = %recipient.id,
                     target = %to,
@@ -3480,10 +3445,7 @@ pub(crate) async fn route_inbound_message(
                     Ok(true) => allowed_fallback.push(target),
                     Ok(false) => {}
                     Err(error) if live_delivery.is_some() => {
-                        state
-                            .metrics
-                            .post_accept_side_effect_failures_total
-                            .fetch_add(1, Ordering::Relaxed);
+                        state.s2s_inbound_delivery_telemetry().post_accept_failed();
                         tracing::warn!(
                             ?error,
                             target = %target.0,
@@ -3587,20 +3549,14 @@ pub(crate) async fn route_inbound_message(
                 .await;
             }
         }
-        state
-            .metrics
-            .messages_routed_total
-            .fetch_add(1, Ordering::Relaxed);
+        state.s2s_inbound_delivery_telemetry().routed();
         return Ok(None);
     }
     if durable_c2s_delivery.is_some() {
         if let Err(error) =
             crate::xmpp::protocol::misc::send_push_notification(state, recipient.id).await
         {
-            state
-                .metrics
-                .post_accept_side_effect_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.s2s_inbound_delivery_telemetry().post_accept_failed();
             tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "durable inbound C2S message was accepted but push notification failed");
         }
         return Ok(None);
@@ -3641,10 +3597,7 @@ pub(crate) async fn route_inbound_message(
                 if let Err(error) =
                     crate::xmpp::protocol::misc::send_push_notification(state, recipient.id).await
                 {
-                    state
-                        .metrics
-                        .post_accept_side_effect_failures_total
-                        .fetch_add(1, Ordering::Relaxed);
+                    state.s2s_inbound_delivery_telemetry().post_accept_failed();
                     tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "MAM-backed inbound message was accepted but offline quota and push delivery both failed");
                 }
                 return Ok(None);
@@ -3671,10 +3624,7 @@ pub(crate) async fn route_inbound_message(
         if let Err(error) =
             crate::xmpp::protocol::misc::send_push_notification(state, recipient.id).await
         {
-            state
-                .metrics
-                .post_accept_side_effect_failures_total
-                .fetch_add(1, Ordering::Relaxed);
+            state.s2s_inbound_delivery_telemetry().post_accept_failed();
             tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "inbound offline message was accepted but push notification failed");
         }
         return Ok(None);

@@ -471,17 +471,19 @@ validation use a separate ordered port before the route check. C2S post-action s
 receives only its five counters, including the abort and drop paths; the
 unused broad C2S runtime wrapper has been removed.
 Clustered-MUC audience delivery keeps its network timeout, database admission
-turn and result counters in the worker, while atomic node-scoped claims and
-exact ACK/retry settlement use dedicated repository ports. Locked-room expiry
+turn and result counters in the worker, while ordered preclaim maintenance,
+atomic node-scoped claims and exact ACK/retry settlement use dedicated
+repository ports. Locked-room expiry
 also commits tombstones and terminal outbox records through one service port;
 the worker cleans up local occupants only after that transaction succeeds.
 Component transports receive only active-connection and outbox-duration metric
 cells. Session presence and binding paths release map guards before awaiting
 privacy checks or lease cleanup, then recheck the exact connection before
 delivery.
-Background housekeeping receives only its two shared counters; S2S ingress
-and outbox delivery use borrowed counters and timers instead of the complete
-metrics registry.
+Background housekeeping receives only its two shared counters. Archive
+retention holds ten shared counter cells rather than the metrics registry.
+S2S ingress/egress and PEP/PubSub delivery use borrowed counters and timers
+instead of the complete registry.
 Remaining work includes live-session and account-recovery workers and the six
 broad AppState capabilities.
 TLS now sits behind a private context with immutable handshake snapshots and

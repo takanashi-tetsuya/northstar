@@ -46,6 +46,7 @@ pub(crate) mod challenge_issuance_repository;
 pub mod cluster_keys;
 pub mod cluster_muc;
 pub(crate) mod cluster_muc_outbox_claim_repository;
+pub(crate) mod cluster_muc_outbox_preclaim_repository;
 pub(crate) mod cluster_muc_outbox_settlement_repository;
 pub(crate) mod cluster_replay_maintenance_repository;
 pub(crate) mod cluster_session_route_maintenance_repository;

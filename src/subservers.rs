@@ -257,7 +257,7 @@ pub(crate) async fn run_maintenance() -> Result<()> {
     let retention = Arc::new(RetentionContext::new(
         db::retention::PostgresMaintenanceRepository::new(pool.clone()),
         policy,
-        Arc::clone(&metrics),
+        crate::retention::RetentionCounters::from_metrics(&metrics),
     ));
     let retention_readiness = retention.readiness();
     let worker_cancel = cancel.clone();
